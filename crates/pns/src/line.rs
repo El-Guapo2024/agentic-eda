@@ -88,6 +88,45 @@ impl Line {
         std::mem::swap(&mut self.via_at_start, &mut self.via_at_end);
     }
 
+    /// `LINE::HasLoops`: some point comes back to an earlier non-adjacent one.
+    pub fn has_loops(&self) -> bool {
+        (0..self.pts.len()).any(|i| ((i + 2)..self.pts.len()).any(|j| self.pts[i] == self.pts[j]))
+    }
+
+    /// `SHAPE_LINE_CHAIN::Find( p )`: the index of the vertex that is exactly `p`.
+    pub fn find(&self, p: Point) -> Option<usize> {
+        self.pts.iter().position(|&q| q == p)
+    }
+
+    /// `LINE::DragCorner( aP, aIndex )` in its default 45-degree mode
+    /// (`dragCorner45` with no preferred ending direction): move vertex
+    /// `index` to `p` and re-solve the legs next to it so the line stays on
+    /// 45-degree headings, instead of leaving an arbitrary-angle leg.
+    pub fn drag_corner45(&mut self, p: Point, index: usize) {
+        let n_segs = self.pts.len().saturating_sub(1);
+        let width = self.width;
+        let new_pts = if index == 0 {
+            let mut rev = self.pts.clone();
+            rev.reverse();
+            let mut out = drag_corner_internal(&rev, p);
+            out.reverse();
+            out
+        } else if index >= n_segs {
+            drag_corner_internal(&self.pts, p)
+        } else {
+            let mut path = drag_corner_internal(&self.pts[..=index], p);
+            let mut tail: Vec<Point> = self.pts[index..].to_vec();
+            tail.reverse();
+            let mut tail = drag_corner_internal(&tail, p);
+            tail.reverse();
+            path.extend(tail);
+            path
+        };
+        self.pts = new_pts;
+        self.width = width;
+        self.simplify();
+    }
+
     /// Drop consecutive duplicate/collinear points -- `SHAPE_LINE_CHAIN::
     /// Simplify()`'s collinear-removal half (arc simplification doesn't
     /// apply; this port has no arc geometry). Exact collinearity only
@@ -110,6 +149,64 @@ impl Line {
         out.push(*self.pts.last().unwrap());
         out.dedup();
         self.pts = out;
+    }
+}
+
+/// `dragCornerInternal` (`pns_line.cpp:668`): re-route the chain `origin`
+/// so its last vertex ends at `p`, keeping 45-degree headings. Walks back
+/// from the last segment looking for the first vertex from which a 45-degree
+/// trace to `p` leaves in that segment's own heading, or at least turns
+/// obtusely from the previous one; falls back to a fresh trace from the
+/// chain's first point.
+fn drag_corner_internal(origin: &[Point], p: Point) -> Vec<Point> {
+    use crate::direction45::{AngleType, CornerMode, Direction45};
+    let trace = |from: Point, diag: bool| Direction45::Undefined.build_initial_trace(from, p, diag, CornerMode::Mitered45);
+    if origin.len() == 1 {
+        return trace(origin[0], false);
+    }
+    if origin.len() == 2 {
+        // `DIRECTION_45 dir( P0 - P1 )`: note the reversed vector, as KiCad has it.
+        let dir = Direction45::from_vector(origin[0].x - origin[1].x, origin[0].y - origin[1].y);
+        return trace(origin[0], dir.is_diagonal());
+    }
+    let n_segs = origin.len() - 1;
+    let mut picked: Option<Vec<Point>> = None;
+    let mut i = n_segs as isize - 1;
+    while i >= 0 {
+        let iu = i as usize;
+        let d_start = Direction45::from_seg(origin[iu], origin[iu + 1]);
+        let p_start = origin[iu];
+        let d_prev = if iu > 0 { Direction45::from_seg(origin[iu - 1], origin[iu]) } else { Direction45::Undefined };
+        // `paths[j] = d_start.BuildInitialTrace( p_start, aP, j )`
+        let mut paths: Vec<(Vec<Point>, Direction45)> = Vec::new();
+        for j in 0..2 {
+            let path = d_start.build_initial_trace(p_start, p, j == 1, CornerMode::Mitered45);
+            if path.len() < 2 {
+                continue;
+            }
+            let dir = Direction45::from_seg(path[0], path[1]);
+            paths.push((path, dir));
+        }
+        picked = paths.iter().find(|(_, d)| *d == d_start).map(|(pp, _)| pp.clone());
+        if picked.is_none() {
+            picked = paths.iter().find(|(_, d)| d.angle_to(&d_prev) == AngleType::Obtuse).map(|(pp, _)| pp.clone());
+        }
+        if picked.is_some() {
+            break;
+        }
+        i -= 1;
+    }
+    match picked {
+        Some(path) => {
+            let mut out = origin[..=(i as usize)].to_vec();
+            out.extend(path.into_iter().skip(1)); // `Append` drops the duplicated joint
+            out
+        }
+        None => {
+            let n = origin.len();
+            let dir = Direction45::from_vector(origin[n - 1].x - origin[n - 2].x, origin[n - 1].y - origin[n - 2].y);
+            trace(origin[0], dir.is_diagonal())
+        }
     }
 }
 

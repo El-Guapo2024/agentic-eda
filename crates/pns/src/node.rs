@@ -48,6 +48,71 @@ use std::collections::HashMap;
 
 use crate::index::Index;
 
+/// `ITEM::PnsKind` masks (`SOLID_T | SEGMENT_T | VIA_T`): which kinds of item a
+/// search takes into account (`COLLISION_SEARCH_OPTIONS::m_kindMask`).
+pub mod kind_mask {
+    pub const SOLID: u8 = 1;
+    pub const SEGMENT: u8 = 2;
+    pub const VIA: u8 = 4;
+    pub const ANY: u8 = SOLID | SEGMENT | VIA;
+}
+
+/// The `kind_mask` bit of one [`Kind`].
+pub fn kind_bit(k: Kind) -> u8 {
+    match k {
+        Kind::Solid => kind_mask::SOLID,
+        Kind::Segment => kind_mask::SEGMENT,
+        Kind::Via => kind_mask::VIA,
+    }
+}
+
+/// `COLLISION_SEARCH_OPTIONS`, narrowed to what this port's callers set:
+/// the kind mask, a per-item filter (the walkaround's `RestrictToCluster`,
+/// the shove's `SHP_IGNORE`) and the clearance epsilon switch.
+#[derive(Clone, Copy)]
+pub struct QueryOpts<'a> {
+    pub kind_mask: u8,
+    pub filter: Option<&'a dyn Fn(ItemId) -> bool>,
+    pub use_epsilon: bool,
+}
+
+impl Default for QueryOpts<'_> {
+    fn default() -> Self {
+        QueryOpts { kind_mask: kind_mask::ANY, filter: None, use_epsilon: true }
+    }
+}
+
+/// `NODE::NearestObstacle`'s result: the obstacle and where along the
+/// searched line its hull is first entered.
+#[derive(Debug, Clone)]
+pub struct NearestHit {
+    pub id: ItemId,
+    pub kind: Kind,
+    /// `OBSTACLE::m_distFirst`: path length from the line's start to the first
+    /// hull crossing (`INT_MAX`, here `i64::MAX`, when no crossing was found).
+    pub dist_first: i64,
+    /// `OBSTACLE::m_ipFirst`.
+    pub ip: Point,
+}
+
+/// What [`Node::assemble_line_with`] may walk across (`NODE::AssembleLine`'s
+/// `aFollowLockedSegments` / `aAllowSegmentSizeMismatch`).
+#[derive(Debug, Clone, Copy)]
+pub struct AssembleOpts {
+    /// Continue through locked segments (`JOINT::NextSegment( .., aAllowLockedSegs )`).
+    pub follow_locked_segments: bool,
+    /// Continue through a change of track width. When false the line stops at the
+    /// joint where the width changes, so a line never has two widths.
+    pub allow_width_mismatch: bool,
+}
+
+impl Default for AssembleOpts {
+    /// What the plain [`Node::assemble_line`] has always done: through everything.
+    fn default() -> Self {
+        AssembleOpts { follow_locked_segments: true, allow_width_mismatch: true }
+    }
+}
+
 /// `PNS::OBSTACLE`, trimmed to the fields this port actually uses.
 #[derive(Debug, Clone)]
 pub struct Obstacle {
@@ -186,7 +251,7 @@ impl Node {
     /// `Solid`/`Via` present at all (KiCad's rule: a pad or via at a joint
     /// is *always* a hard stop, even if a valid segment candidate also
     /// exists there -- see `pns_joint.h`'s `NextSegment`).
-    fn next_segment(&self, joint: &Joint, current: ItemId, current_net: &Net, current_layers: LayerRange) -> Option<ItemId> {
+    fn next_segment(&self, joint: &Joint, current: ItemId, current_net: &Net, current_layers: LayerRange, follow_locked: bool) -> Option<ItemId> {
         let mut candidate = None;
         for &id in &joint.links {
             if id == current {
@@ -198,7 +263,11 @@ impl Node {
                         if candidate.is_some() {
                             return None; // branch point: more than one same-net candidate
                         }
-                        candidate = Some(id);
+                        // `JOINT::NextSegment`: a locked neighbour is skipped as the
+                        // continuation (but still counted above as a branch).
+                        if !s.locked || follow_locked {
+                            candidate = Some(id);
+                        }
                     }
                 }
                 Some(Item::Solid(_)) | Some(Item::Via(_)) => return None, // pad/via: always a hard stop
@@ -215,6 +284,14 @@ impl Node {
     /// assemble -- callers that want via continuity read `Item::Via`
     /// directly).
     pub fn assemble_line(&self, start: ItemId) -> Option<Line> {
+        self.assemble_line_with(start, AssembleOpts::default())
+    }
+
+    /// [`Self::assemble_line`] with the two `NODE::AssembleLine` switches a
+    /// shove needs: stop in front of a locked segment, and stop where the
+    /// track width changes (so the line, and every segment the shove puts
+    /// back, keeps one width -- see `shove.rs`'s note on `D10`).
+    pub fn assemble_line_with(&self, start: ItemId, opts: AssembleOpts) -> Option<Line> {
         let Item::Segment(seg0) = self.items.get(&start)? else { return None };
         let (net, layer, width) = (seg0.net.clone(), seg0.layer, seg0.width);
         let layers = LayerRange::single(layer);
@@ -231,8 +308,11 @@ impl Node {
         let guard = seg0.b;
         let mut guard_hit = false;
         while let Some(joint) = self.joint_at(cur_end, &net) {
-            if let Some(next_id) = self.next_segment(joint, cur, &net, layers) {
+            if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
                 let Item::Segment(ns) = &self.items[&next_id] else { break };
+                if !opts.allow_width_mismatch && ns.width != width {
+                    break; // the line ends where the track width changes
+                }
                 let other_end = if ns.a == cur_end { ns.b } else { ns.a };
                 if next_id == start || other_end == guard || fwd_pts.len() >= ASSEMBLE_MAX_VERTS {
                     if next_id == start || other_end == guard {
@@ -261,8 +341,11 @@ impl Node {
         let mut via_start = None;
         while !guard_hit {
             let Some(joint) = self.joint_at(cur_end, &net) else { break };
-            if let Some(next_id) = self.next_segment(joint, cur, &net, layers) {
+            if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
                 let Item::Segment(ns) = &self.items[&next_id] else { break };
+                if !opts.allow_width_mismatch && ns.width != width {
+                    break;
+                }
                 let other_end = if ns.a == cur_end { ns.b } else { ns.a };
                 if next_id == start || back_pts.len() >= ASSEMBLE_MAX_VERTS {
                     break;
@@ -377,6 +460,13 @@ impl Node {
     /// query's own in-flight items, so a line never collides with its own
     /// soon-to-be-replaced segments).
     pub fn all_colliding(&self, shape: &Shape, net: &Net, layers: LayerRange, rules: &BoardRules, exclude: &[ItemId]) -> Vec<Obstacle> {
+        self.colliding_with(shape, net, layers, rules, exclude, QueryOpts::default())
+    }
+
+    /// [`Self::all_colliding`] with `COLLISION_SEARCH_OPTIONS`: the kind mask
+    /// and filter are tested first (`DEFAULT_OBSTACLE_VISITOR::operator()`),
+    /// and `use_epsilon` switches `m_useClearanceEpsilon`.
+    pub fn colliding_with(&self, shape: &Shape, net: &Net, layers: LayerRange, rules: &BoardRules, exclude: &[ItemId], opts: QueryOpts) -> Vec<Obstacle> {
         let margin = eda_drc::constraints::worst_case_clearance(rules);
         let bbox = shape.bbox(margin);
         let mut out = Vec::new();
@@ -385,6 +475,14 @@ impl Node {
                 continue;
             }
             let Some(item) = self.items.get(&id) else { continue };
+            if kind_bit(item.kind()) & opts.kind_mask == 0 {
+                continue;
+            }
+            if let Some(filter) = opts.filter {
+                if !filter(id) {
+                    continue;
+                }
+            }
             if !item.layers().overlaps(&layers) {
                 continue;
             }
@@ -397,7 +495,7 @@ impl Node {
             // epsilon is one µm -- the same "a hull-hugging path is not a
             // collision" tolerance at this IR's resolution.
             let clearance = Self::clearance(rules, net, item.net());
-            let clearance = if clearance > 0 { (clearance - CLEARANCE_EPSILON).max(0) } else { clearance };
+            let clearance = if opts.use_epsilon && clearance > 0 { (clearance - CLEARANCE_EPSILON).max(0) } else { clearance };
             // A multilayer item (a via) may present a different shape per
             // layer in a fuller port; this one shape per item is exact for
             // every kind we construct (see `Item::shape`'s own doc note).
@@ -407,6 +505,142 @@ impl Node {
             }
         }
         out
+    }
+
+    /// `NODE::NearestObstacle( aLine, aOpts )`: query every leg of `line` (and
+    /// its `via`, if the line ends in one), then pick the obstacle whose
+    /// clearance hull the line enters first -- by path length along the line,
+    /// not by distance. `exclude` are the line's own segments in this node.
+    pub fn nearest_obstacle(&self, line: &Line, via: Option<&crate::item::Via>, rules: &BoardRules, exclude: &[ItemId], opts: QueryOpts) -> Option<NearestHit> {
+        let layers = LayerRange::single(line.layer);
+        // `OBSTACLES` is a `std::set`: one entry per item, a stable order here by id.
+        let mut found: std::collections::BTreeMap<ItemId, Obstacle> = std::collections::BTreeMap::new();
+        for (a, b) in line.segs() {
+            let shape = Shape::Stadium { a, b, r: line.width / 2 };
+            for o in self.colliding_with(&shape, &line.net, layers, rules, exclude, opts) {
+                found.entry(o.id).or_insert(o);
+            }
+        }
+        if let Some(v) = via {
+            let shape = Shape::Circle { c: v.pos, r: v.diameter / 2 };
+            for o in self.colliding_with(&shape, &v.net, v.layers, rules, exclude, opts) {
+                found.entry(o.id).or_insert(o);
+            }
+        }
+        if found.is_empty() {
+            return None;
+        }
+        let eps = |c: Um| if opts.use_epsilon && c > 0 { (c - CLEARANCE_EPSILON).max(0) } else { c };
+        let first_entry = |hull: &[Point]| -> Option<(i64, Point)> {
+            crate::line_walk::hull_intersection(hull, &line.pts).into_iter().map(|(p, idx)| (path_length(&line.pts, p, idx), p)).min_by_key(|&(d, _)| d)
+        };
+        let mut best: Option<NearestHit> = None;
+        for (id, o) in &found {
+            let item = &self.items[id];
+            // `GetClearance( item, aLine ) + aLine->Width() / 2`, hull thickness 0.
+            let hull = item.hull(eps(Self::clearance(rules, &line.net, item.net())) + line.width / 2, 0, line.layer);
+            let mut dist: Option<(i64, Point)> = first_entry(&hull);
+            if let Some(v) = via {
+                let via_hull = item.hull(eps(Self::clearance(rules, &v.net, item.net())) + v.diameter / 2, 0, line.layer);
+                if let Some(d) = first_entry(&via_hull) {
+                    if dist.is_none_or(|(bd, _)| d.0 < bd) {
+                        dist = Some(d);
+                    }
+                }
+            }
+            if let Some((d, ip)) = dist {
+                if best.as_ref().is_none_or(|b| d < b.dist_first) {
+                    best = Some(NearestHit { id: o.id, kind: o.kind, dist_first: d, ip });
+                    if d == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        // `if( nearest.m_distFirst == INT_MAX ) nearest = obstacles[0];`
+        best.or_else(|| found.values().next().map(|o| NearestHit { id: o.id, kind: o.kind, dist_first: i64::MAX, ip: o.pos }))
+    }
+
+    /// `QueryColliding` with `m_differentNetsOnly = false` and
+    /// `m_overrideClearance = 0` (what `TOPOLOGY::AssembleCluster` asks): every
+    /// item, whatever its net, whose shape touches `shape` on `layers`.
+    pub fn overlapping(&self, shape: &Shape, layers: LayerRange, exclude: &[ItemId]) -> Vec<ItemId> {
+        let bbox = shape.bbox(0);
+        let mut out = Vec::new();
+        for id in self.index.query(bbox) {
+            if exclude.contains(&id) {
+                continue;
+            }
+            let Some(item) = self.items.get(&id) else { continue };
+            if !item.layers().overlaps(&layers) {
+                continue;
+            }
+            if shape.collides(&item.shape(item.layers().start()), 0).is_some() {
+                out.push(id);
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// `TOPOLOGY::AssembleCluster( aStart, aLayer, aAreaExpansionLimit,
+    /// aExcludedNet )` (`pns_topology.cpp:1142`): the blob of items that touch
+    /// `start`, transitively -- pads, vias, and the tracks attached to them --
+    /// that a line must go around as a whole. `skip` are items that never
+    /// join (the head's own segments, `MK_HEAD`). The cluster is returned in
+    /// the order the breadth-first walk found it, `start` first.
+    pub fn assemble_cluster(&self, start: ItemId, layer: i32, area_expansion_limit: f64, excluded_net: Option<&Net>, skip: &dyn Fn(ItemId) -> bool) -> Vec<ItemId> {
+        let Some(start_item) = self.items.get(&start) else { return Vec::new() };
+        let mut cluster: Vec<ItemId> = Vec::new();
+        let mut pending: std::collections::VecDeque<ItemId> = std::collections::VecDeque::new();
+        pending.push_back(start);
+        let bbox_of_shape = |it: &Item| it.shape(layer).bbox(0);
+        let merge = |a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
+        let area = |b: (Um, Um, Um, Um)| (b.2 - b.0) as i128 * (b.3 - b.1) as i128;
+        let mut cluster_bbox = bbox_of_shape(start_item);
+        let initial_area = area(cluster_bbox);
+        let mut processed: std::collections::HashSet<ItemId> = std::collections::HashSet::new();
+        while let Some(top) = pending.pop_front() {
+            if !processed.contains(&top) {
+                cluster.push(top);
+            }
+            processed.insert(top);
+            let Some(top_item) = self.items.get(&top) else { continue };
+            let top_shape = top_item.shape(layer);
+            let touching = self.overlapping(&top_shape, top_item.layers(), &[top]);
+            for obs_id in touching {
+                let Some(obs) = self.items.get(&obs_id) else { continue };
+                // different-net track-on-track contact is not a cluster
+                let track_on_track = !same_net_exact(obs.net(), top_item.net()) && matches!(obs, Item::Segment(_)) && matches!(top_item, Item::Segment(_));
+                if track_on_track {
+                    continue;
+                }
+                if let Some(ex) = excluded_net {
+                    if ex.is_some() && obs.net() == ex {
+                        continue;
+                    }
+                }
+                if matches!(obs, Item::Segment(_)) && obs.layers().overlaps_layer(layer) {
+                    if let Some(l) = self.assemble_line(obs_id) {
+                        if let Some(b) = line_bbox(&l) {
+                            cluster_bbox = merge(cluster_bbox, b);
+                        }
+                    }
+                } else {
+                    cluster_bbox = merge(cluster_bbox, bbox_of_shape(obs));
+                }
+                let ratio = area(cluster_bbox) as f64 / (initial_area + 1) as f64;
+                if area_expansion_limit > 0.0 && ratio > area_expansion_limit {
+                    break;
+                }
+                if !processed.contains(&obs_id) && obs.layers().overlaps_layer(layer) && !skip(obs_id) {
+                    processed.insert(obs_id);
+                    cluster.push(obs_id);
+                    pending.push_back(obs_id);
+                }
+            }
+        }
+        cluster
     }
 
     /// First (any) obstacle -- `NODE::CheckColliding`'s "does one exist"
@@ -482,6 +716,49 @@ impl Node {
             }
         }
         best.map(|(id, _)| id)
+    }
+}
+
+/// `Net` equality as `ITEM::Net() == ITEM::Net()` (a pointer compare): two
+/// unconnected (`None`) items are on the same "net" here.
+fn same_net_exact(a: &Net, b: &Net) -> bool {
+    a == b
+}
+
+/// Bounding box of a line's points, inflated by half its width.
+fn line_bbox(l: &Line) -> Option<(Um, Um, Um, Um)> {
+    let first = l.pts.first()?;
+    let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
+    for p in &l.pts {
+        x0 = x0.min(p.x);
+        y0 = y0.min(p.y);
+        x1 = x1.max(p.x);
+        y1 = y1.max(p.y);
+    }
+    Some((x0, y0, x1, y1))
+}
+
+/// `SHAPE_LINE_CHAIN::PathLength( aP, aIndex )`: the length along the chain
+/// from its start to `p`, where `p` lies on segment `index` (or at vertex
+/// `index`, which is the start of segment `index`; `index == segments` means
+/// the last segment). Segment lengths are rounded like `SEG::Length()`.
+pub(crate) fn path_length(pts: &[Point], p: Point, index: usize) -> i64 {
+    let n_segs = pts.len().saturating_sub(1);
+    let dist = |a: Point, b: Point| -> i64 { (((b.x - a.x) as f64).powi(2) + ((b.y - a.y) as f64).powi(2)).sqrt().round() as i64 };
+    let mut sum = 0;
+    for i in 0..n_segs {
+        let hit = if index == n_segs { i == n_segs - 1 } else { i == index };
+        if hit {
+            return sum + dist(p, pts[i]);
+        }
+        sum += dist(pts[i], pts[i + 1]);
+    }
+    -1
+}
+
+impl std::fmt::Debug for Node {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Node({} items, {} joints)", self.items.len(), self.joints.len())
     }
 }
 
