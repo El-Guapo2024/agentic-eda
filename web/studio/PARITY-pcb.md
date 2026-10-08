@@ -302,7 +302,7 @@ _A snapshot from an early session: most of these are wired since. The current st
 | `common.Control.toggleGridOverrides` | Ctrl+Shift+G | Grid Overrides |
 | `common.Control.updatePcbFromSchematic` | F8 | Update PCB from Schematic... (no schematic editing to update from) |
 | `common.Control.zoomTool` | Ctrl+F5 | Zoom to Selection Area (drag-to-zoom-box; see section 1) |
-| `common.Interactive.cut`/`pasteSpecial`/`copyAsText` | Ctrl+X/Shift+V/Shift+C | `copy`/`paste`/`duplicate` done this session (section 5) -- `cut` (trivially "copy then delete") wasn't wired; `pasteSpecial`/`copyAsText` have no real analogue in this app (no "paste without net/position" variant, no text-serialized clipboard format) |
+| `common.Interactive.cut`/`pasteSpecial`/`copyAsText` | Ctrl+X/Shift+V/Shift+C | `copy`/`paste`/`duplicate` done this session (section 5) -- `cut` (trivially "copy then delete") wasn't wired; `pasteSpecial`/`copyAsText` have no real analogue on the PCB (no "paste without net/position" variant, no text-serialized clipboard format); the Schematic tab has Paste Special (`PARITY-sch.md` section 15) |
 | `common.Interactive.cycleArcEditMode` | Ctrl+Space | Cycle Arc Editing Mode |
 | `common.Interactive.find`/`findAndReplace`/`findNext`/`findPrevious`/`findNextMarker` | Ctrl+F, ... | Find/Replace |
 | `common.Interactive.finish` | End | Finish (generic "end the current interactive action") |
@@ -801,7 +801,7 @@ The third group of `docs/parity/UI-ACTIONS.md`'s hotkeyed-and-missing list (the 
 | `common.Control.new` (`Ctrl+N`), `common.Control.open` (`Ctrl+O`) | **missing: needs project management** | the studio serves the one project directory it was launched on and has no verb to create, open or switch projects |
 | `common.Control.toggleGridOverrides` (`Ctrl+Shift+G`) | **missing: needs per-item-type grid overrides** | `PCB_GRID_HELPER::GetGridSize` consults five category grids (connected items, wires, vias, text, graphics), set in the Edit Grids dialog; the studio's Edit Grids dialog (`PARITY-common.md` section 10) has the list and the fast grids but not the overrides, and there is no category-aware snapping, so the toggle would switch off nothing. `Ctrl+Shift+G` stays Ungroup here (an earlier brief's binding; KiCad leaves Ungroup unbound) |
 | `common.Interactive.cycleArcEditMode` (`Ctrl+Space`) | **missing: needs the arc point editor** | `PCB_POINT_EDITOR::changeArcEditMode` only switches how arc handles behave; the studio's point editor drags zone corners only |
-| `common.Interactive.pasteSpecial` (`Ctrl+Shift+V`) | **missing: nothing to special-case yet** | `PCB_CONTROL::Paste`'s dialog offers annotation modes for pasted footprints and clearing pasted nets; the clipboard holds no footprints (tracks, vias, zones, shapes, text only), copper must name a net, and the schematic has no copy/paste |
+| `common.Interactive.pasteSpecial` (`Ctrl+Shift+V`) | **Schematic tab: wired; PCB: nothing to special-case yet** | `PCB_CONTROL::Paste`'s dialog offers annotation modes for pasted footprints and clearing pasted nets; the clipboard holds no footprints (tracks, vias, zones, shapes, text only) and copper must name a net; on the Schematic tab the action is wired (`PARITY-sch.md` section 15) |
 
 Counts after this section: 3 of the 8 are wired, the other 5 carry a reason. Across the three groups: 23 of the 43
 hotkeyed-and-missing actions are wired (pcbnew 9, eeschema 11, common 3) and 20 are recorded with reasons (5, 10, 5).

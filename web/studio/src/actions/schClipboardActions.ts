@@ -146,8 +146,8 @@ export function registerSchClipboardActions(registry: ActionMap, ctx: SchEditCon
   // Ctrl+V -- SCH_EDITOR_CONTROL::Paste: the unique-reference mode (`annotation.automatic` is on by default).
   m.set("common.Interactive.paste", () => void startPaste(ctx, { mode: "unique", duplicate: false }));
 
-  // Ctrl+Shift+V -- the same through DIALOG_PASTE_SPECIAL.
-  m.set("common.Interactive.pasteSpecial", () => openPasteSpecial());
+  // Ctrl+Shift+V -- the same through DIALOG_PASTE_SPECIAL. The board editor's Paste Special (clear the nets of pasted copper) has no counterpart here: say so.
+  registry.set("common.Interactive.pasteSpecial", () => (state.tab === "schematic" ? openPasteSpecial() : toast(dispatch, "Paste Special is only offered on the Schematic tab.")));
 
   // Ctrl+D -- SCH_EDITOR_CONTROL::Duplicate: `doCopy( true )` into the buffer of its own, then Paste.
   m.set("common.Interactive.duplicate", () => {

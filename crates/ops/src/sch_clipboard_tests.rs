@@ -217,7 +217,10 @@ fn the_command_reads_from_and_writes_to_the_json_the_studio_sends() {
     let cmd = paste(&f, 2_540, 0, PasteMode::Remove);
     let text = serde_json::to_string(&cmd).unwrap();
     assert!(text.contains("\"op\":\"paste_sch\"") && text.contains("\"mode\":\"remove\""), "{text}");
-    let back: Cmd = serde_json::from_str(&text).unwrap();
+    // The studio reads a command from a parsed body (`serde_json::from_value`, as `/api/cmd` does): with `serde_json`'s `arbitrary_precision` on (the `eda` build gets it
+    // from starlark) a fractional number inside an internally tagged enum only reads from a `Value`, not straight from text -- the library symbols of the fragment have them.
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let back: Cmd = serde_json::from_value(value).unwrap();
     assert_eq!(back, cmd);
     // dx, dy and mode default
     let minimal = serde_json::json!({ "op": "paste_sch", "fragment": serde_json::to_value(&f).unwrap() });

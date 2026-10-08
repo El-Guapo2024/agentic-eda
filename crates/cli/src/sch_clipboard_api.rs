@@ -255,7 +255,8 @@ mod tests {
 
         // Paste it, 40 mm to the right and 30 below: one command, one undo step.
         let (dx, dy) = (40_640, 30_480);
-        let cmd = Cmd::PasteSch { fragment: serde_json::from_value(parsed["fragment"].clone()).expect("the fragment is a Cmd payload"), dx, dy, mode: PasteMode::Unique };
+        // The command as the studio posts it (`/api/cmd` reads a parsed body with `from_value`): the fragment travels inside it, library symbols and all.
+        let cmd: Cmd = serde_json::from_value(json!({ "op": "paste_sch", "fragment": parsed["fragment"].clone(), "dx": dx, "dy": dy, "mode": "unique" })).expect("the studio's paste_sch command reads");
         board::step(&dir, cmd, false, "test").unwrap();
         let (_, pasted, model) = board::load(&dir).unwrap();
         let sch = pasted.schematic.as_ref().unwrap();
