@@ -1,17 +1,25 @@
-// Renders one toolbar from src/kicad/toolbars.json (main/options/drawing/
-// auxiliary -- see App.tsx for where each is docked). Data-driven, same
-// as MenuBar: empty until tools/extract-toolbars.js has real output.
+// Renders one toolbar of one editor from its extracted KiCad configuration: src/kicad/toolbars.json (board editor), sch_toolbars.json (schematic editor),
+// fp_toolbars.json (footprint editor), sym_toolbars.json (symbol editor) -- each with main/options/drawing (the board editor also auxiliary), in KiCad's
+// order, with its separators, dropdown groups and combo controls. Data-driven, same as MenuBar. Every button shows the icon KiCad gives its action
+// (tools/lib/toolbarIcons.test.js keeps that true); the 3D viewer's toolbar is components/viewer3d/Viewer3DToolbar.tsx, built on the same pieces.
+import { useState } from "react";
 import toolbarsData from "../kicad/toolbars.json";
 import schToolbarsData from "../kicad/sch_toolbars.json";
+import fpToolbarsData from "../kicad/fp_toolbars.json";
+import symToolbarsData from "../kicad/sym_toolbars.json";
+import editorSupportData from "../kicad/editor_toolbar_support.json";
 import actionsData from "../kicad/actions.json";
 import iconsData from "../kicad/icons.json";
 import type { ToolbarsFile, ToolbarId, ActionsFile, IconsFile, ToolbarItem } from "../kicad/types";
 import { useActionRunner } from "../actions/useActionRunner";
-import { effectiveHotkey } from "../actions/hotkeys";
+import { useChecked } from "../actions/useChecked";
+import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength } from "../state/units";
 import { DEFAULT_PCB_GRIDS_UM } from "../kicad-port/grid";
+import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
+import { FootprintToolbarControl, SymbolToolbarControl } from "./toolbar/EditorToolbarControls";
 
 /**
  * KiCad's real default PCB grid list (app_settings.cpp
@@ -31,25 +39,40 @@ export const GRID_OPTIONS_UM = DEFAULT_PCB_GRIDS_UM;
 const ZOOM_PRESET_PERCENTS = [25, 50, 100, 200, 400, 800];
 const scaleForZoomPercent = (pct: number) => (pct / 100) * 0.01;
 
-const toolbarsFile = toolbarsData as ToolbarsFile;
-// eeschema has no auxiliary toolbar at all (toolbars_sch_editor.cpp's
-// TOOLBAR_LOC::TOP_AUX case returns std::nullopt) -- sch_toolbars.json
-// only ever has main/options/drawing, so an "auxiliary" lookup on it
-// naturally falls through to Toolbar's own "not extracted" empty state
-// below, which is the honest thing to show for a toolbar that simply
-// doesn't exist in the editor being viewed.
-const schToolbarsFile = schToolbarsData as ToolbarsFile;
+export type ToolbarEditor = "pcb" | "schematic" | "footprint" | "symbol";
+
+const FILES: Record<ToolbarEditor, ToolbarsFile> = {
+  pcb: toolbarsData as ToolbarsFile,
+  // eeschema has no auxiliary toolbar at all (toolbars_sch_editor.cpp's TOOLBAR_LOC::TOP_AUX case returns std::nullopt) -- sch_toolbars.json only ever
+  // has main/options/drawing, so an "auxiliary" lookup on it falls through to the "no such toolbar" empty state below, the honest thing to show.
+  schematic: schToolbarsData as ToolbarsFile,
+  footprint: fpToolbarsData as ToolbarsFile,
+  symbol: symToolbarsData as ToolbarsFile,
+};
 const actionsFile = actionsData as ActionsFile;
 const iconsFile = iconsData as IconsFile;
 const actionsByName = new Map(actionsFile.actions.map((a) => [a.name, a]));
+const SUPPORT = editorSupportData as unknown as { footprint: Record<string, string>; symbol: Record<string, string> };
 
-function ActionIcon({ iconName }: { iconName: string | null }) {
+/** The editor a tab's toolbars belong to: the 3D tab keeps the board editor's. */
+function editorOfTab(tab: string): ToolbarEditor {
+  return tab === "schematic" ? "schematic" : tab === "footprint" ? "footprint" : tab === "symbol" ? "symbol" : "pcb";
+}
+
+/** The KiCad icon of a BITMAPS name, drawn at KiCad's default toolbar size; a blank square only for a name with no icon (which the icon test forbids on any toolbar). */
+export function ActionIcon({ iconName, size = 24 }: { iconName: string | null; size?: number }) {
   const scheme = useColorScheme();
   const file = iconName ? iconsFile.icons[iconName] : null;
   if (!file) return <span className="icon-placeholder" aria-hidden />;
   // KiCad's default toolbar icon size (common/settings/common_settings.cpp:
   // "appearance.toolbar_icon_size", default 24, options 16/24/32).
-  return <img src={`/icons/${scheme}/${file}`} width={24} height={24} alt="" draggable={false} />;
+  return <img src={`/icons/${scheme}/${file}`} width={size} height={size} alt="" draggable={false} />;
+}
+
+/** Why a button is dead, for its tooltip: the recorded reason on the library editors' toolbars, "not ported yet" elsewhere. */
+function deadReason(editor: ToolbarEditor, name: string): string {
+  const reason = editor === "footprint" ? SUPPORT.footprint[name] : editor === "symbol" ? SUPPORT.symbol[name] : undefined;
+  return reason && reason !== "supported" ? reason : "not ported yet";
 }
 
 /**
@@ -59,7 +82,7 @@ function ActionIcon({ iconName }: { iconName: string | null }) {
  * there's no command to change them, only GET /api/state's board_rules
  * to read them from (see that field's comment in api/types.ts).
  */
-function ToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "control" }> }) {
+function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "control" }> }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
 
@@ -144,59 +167,106 @@ function ToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "control"
   );
 }
 
-function ToolbarItemView({ item }: { item: ToolbarItem }) {
-  const { run, isEnabled, isChecked } = useActionRunner();
+function ToolbarControl({ item, editor }: { item: Extract<ToolbarItem, { type: "control" }>; editor: ToolbarEditor }) {
+  if (editor === "footprint") return <FootprintToolbarControl control={item.control} />;
+  if (editor === "symbol") return <SymbolToolbarControl control={item.control} />;
+  return <BoardToolbarControl item={item} />;
+}
+
+/** The members a group's choice is remembered for (per editor and group), the way KiCad's group button keeps showing the last tool picked from it. */
+const groupChoice = new Map<string, string>();
+
+/**
+ * KiCad's group button: it shows the icon of the member picked last (the first, to begin with) and runs it on a click; the small corner arrow, or a
+ * right click, opens the list of members, each with its icon, to pick another (`ACTION_TOOLBAR::onToolRightClick` / the group's palette).
+ */
+function GroupButton({ item, editor }: { item: Extract<ToolbarItem, { type: "group" }>; editor: ToolbarEditor }) {
+  const { run, isEnabled } = useActionRunner();
+  const checked = useChecked();
+  const [, bump] = useState(0);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const key = `${editor}/${item.label}`;
+  const usable = (name: string) => isEnabled(name) && (editor !== "footprint" && editor !== "symbol" ? true : SUPPORT[editor][name] === "supported");
+  const remembered = groupChoice.get(key);
+  const shown = (remembered && item.items.includes(remembered) && usable(remembered) ? remembered : item.items.find(usable)) ?? null;
+  const shownAction = shown ? actionsByName.get(shown) : null;
+  const label = shownAction?.label ?? item.label;
+  const entries = (): MenuEntry[] =>
+    item.items.map((name) => {
+      const a = actionsByName.get(name);
+      return {
+        label: [a?.label ?? name, a ? displayHotkey(effectiveHotkey(a).hotkey ?? "") : ""].filter(Boolean).join("    "),
+        icon: <ActionIcon iconName={a?.icon ?? null} size={16} />,
+        disabled: !usable(name),
+        checked: name === shown,
+        onSelect: () => {
+          groupChoice.set(key, name);
+          bump((n) => n + 1);
+          run(name);
+        },
+      };
+    });
+  const pressed = shown ? checked(shown) : undefined;
+  return (
+    <>
+      <button
+        className={`toolbar-button has-menu${pressed ? " active" : ""}`}
+        aria-pressed={pressed}
+        disabled={!shown}
+        title={shown ? `${label} (${item.label}: right click or the corner arrow for the others)` : `${item.label} (${deadReason(editor, item.items[0] ?? "")})`}
+        onClick={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          // The corner arrow opens the list instead of running the member.
+          if (e.clientX > r.right - 10 && e.clientY > r.bottom - 10) setMenu({ x: r.left, y: r.bottom });
+          else if (shown) run(shown);
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          const r = e.currentTarget.getBoundingClientRect();
+          setMenu({ x: r.left, y: r.bottom });
+        }}
+      >
+        <ActionIcon iconName={shownAction?.icon ?? item.icon} />
+      </button>
+      {menu && <ContextMenu x={menu.x} y={menu.y} entries={entries()} onClose={() => setMenu(null)} />}
+    </>
+  );
+}
+
+function ToolbarItemView({ item, editor }: { item: ToolbarItem; editor: ToolbarEditor }) {
+  const { run, isEnabled } = useActionRunner();
+  const checked = useChecked();
 
   if (item.type === "separator") return <div className="toolbar-separator" role="separator" />;
 
-  if (item.type === "control") return <ToolbarControl item={item} />;
+  if (item.type === "control") return <ToolbarControl item={item} editor={editor} />;
 
-  if (item.type === "group") {
-    // Real KiCad renders this as a split button: the main icon runs the
-    // group's current/primary action, a small dropdown arrow picks a
-    // different member. This app has no per-group "current selection"
-    // state and no dropdown menu widget, so the main click runs the
-    // first enabled member instead -- a real, working default (this
-    // button used to have no onClick at all, so clicking it did
-    // nothing) rather than a full split-button UI.
-    const firstEnabled = item.items.find((a) => isEnabled(a));
-    const label = firstEnabled ? (actionsByName.get(firstEnabled)?.label ?? firstEnabled) : item.label;
-    return (
-      <button
-        className="toolbar-button"
-        disabled={!firstEnabled}
-        title={firstEnabled ? label : `${item.label} (not ported yet)`}
-        onClick={() => firstEnabled && run(firstEnabled)}
-      >
-        <ActionIcon iconName={item.icon} />
-      </button>
-    );
-  }
+  if (item.type === "group") return <GroupButton item={item} editor={editor} />;
 
   const action = actionsByName.get(item.action);
-  const enabled = isEnabled(item.action);
+  // The library editors' toolbars also check the recorded support table: an action the table calls unsupported is dead on their tab whatever else registered it.
+  const enabled = isEnabled(item.action) && (editor !== "footprint" && editor !== "symbol" ? true : SUPPORT[editor][item.action] === "supported");
   const label = action?.label ?? item.action;
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
-  const tooltip = enabled ? [label, hotkey].filter(Boolean).join(" — ") : `${label} (not ported yet)`;
-  const checked = enabled ? isChecked(item.action) : undefined;
+  const tooltip = enabled ? [label, hotkey ? displayHotkey(hotkey) : null].filter(Boolean).join(" — ") : `${label} (${deadReason(editor, item.action)})`;
+  const pressed = enabled ? checked(item.action) : undefined;
   return (
-    <button className={checked ? "toolbar-button active" : "toolbar-button"} aria-pressed={checked} disabled={!enabled} title={tooltip} onClick={() => run(item.action)}>
+    <button className={`toolbar-button${pressed ? " active" : ""}`} aria-pressed={pressed} disabled={!enabled} title={tooltip} onClick={() => run(item.action)}>
       <ActionIcon iconName={action?.icon ?? null} />
     </button>
   );
 }
 
-export function Toolbar({ id }: { id: ToolbarId }) {
+export function Toolbar({ id, editor: editorProp }: { id: ToolbarId; editor?: ToolbarEditor }) {
   const state = useStudioState();
-  const schematic = state.tab === "schematic";
-  const config = (schematic ? schToolbarsFile : toolbarsFile).toolbars.find((t) => t.id === id);
+  const editor = editorProp ?? editorOfTab(state.tab);
+  const config = FILES[editor].toolbars.find((t) => t.id === id);
   const orientation = config?.orientation ?? (id === "options" || id === "drawing" ? "vertical" : "horizontal");
 
   if (!config || config.items.length === 0) {
-    // eeschema genuinely has no auxiliary toolbar (see schToolbarsFile's
-    // comment above) -- render nothing for it, not an "extraction
-    // missing" notice that would be wrong for this editor.
-    if (schematic && id === "auxiliary") return null;
+    // The editors that have no auxiliary toolbar in KiCad (eeschema, the footprint and symbol editors) render nothing for it, not an "extraction
+    // missing" notice that would be wrong for them.
+    if (editor !== "pcb" && id === "auxiliary") return null;
     return (
       <div className={`toolbar${orientation === "vertical" ? " vertical" : ""}`} data-toolbar={id}>
         {id === "main" && <span style={{ color: "var(--chrome-text-dim)", fontStyle: "italic", padding: "0 6px" }}>KiCad toolbar data not extracted yet (tools/extract-toolbars.js)</span>}
@@ -205,9 +275,9 @@ export function Toolbar({ id }: { id: ToolbarId }) {
   }
 
   return (
-    <div className={`toolbar${orientation === "vertical" ? " vertical" : ""}`} data-toolbar={id}>
+    <div className={`toolbar${orientation === "vertical" ? " vertical" : ""}`} data-toolbar={id} data-editor={editor}>
       {config.items.map((item, i) => (
-        <ToolbarItemView key={i} item={item} />
+        <ToolbarItemView key={i} item={item} editor={editor} />
       ))}
     </div>
   );

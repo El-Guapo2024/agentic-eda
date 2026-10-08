@@ -33,6 +33,9 @@ fn outline(dir: &std::path::Path) -> Vec<serde_json::Value> {
 
 #[test]
 fn pipeline_with_no_flags_fits_a_board_for_an_intent_without_one() {
+    if slow_tests_off() {
+        return;
+    }
     // `star_net`, `ldo` and `two_pin_nets` are 3 of `eda-bench`'s own corpus
     // `KNOWN_FAIL(Schematic)` cases (see `crates/bench/tests/corpus.rs`'s
     // `default_expect` doc comment): real library-symbol geometry's smaller,
@@ -81,6 +84,9 @@ fn pipeline_with_no_flags_fits_a_board_for_an_intent_without_one() {
 /// only -- routing mcu_board_30plus alone takes most of 20 seconds.
 #[test]
 fn default_placer_places_every_example_without_an_outline() {
+    if slow_tests_off() {
+        return;
+    }
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let mut names: Vec<String> = std::fs::read_dir(&dir)
         .expect("examples/")
@@ -109,6 +115,9 @@ fn default_placer_places_every_example_without_an_outline() {
 
 #[test]
 fn board_new_fits_a_board_for_an_intent_without_one() {
+    if slow_tests_off() {
+        return;
+    }
     // `eda board new` seeds the shared board through the same function.
     let out = scratch("board_new_ldo");
     let run = Command::new(env!("CARGO_BIN_EXE_eda"))
@@ -120,4 +129,15 @@ fn board_new_fits_a_board_for_an_intent_without_one() {
         .expect("run eda");
     assert!(run.status.success(), "eda board new failed:\n{}", String::from_utf8_lossy(&run.stderr));
     assert_eq!(outline(&out).len(), 4, "no fitted outline in the new board");
+}
+
+/// Places every example without an outline: most of a minute in release and many minutes in debug, so it
+/// runs only when `EDA_SLOW_TESTS` is set. `tools/check.sh full`, the check
+/// before a merge lands on main, sets it.
+fn slow_tests_off() -> bool {
+    let off = std::env::var_os("EDA_SLOW_TESTS").is_none();
+    if off {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+    }
+    off
 }

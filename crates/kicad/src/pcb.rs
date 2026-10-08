@@ -661,7 +661,12 @@ fn write_footprint(
     // it straight out of the source library file, and footprint::
     // builtin_model_path already writes it in KiCad's own
     // `${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step` form.
-    if let Some(model_path) = &footprint.model {
+    //
+    // A footprint with no model of its own -- a project-library entry, a `.kicad_mod` read for its pads -- gets the one the part's generic package name
+    // stands for (`eda_model::footprint::kicad_footprint_for`: `0603` on an `R` is `Resistor_SMD:R_0603_1608Metric`, `SOIC-16` is
+    // `Package_SO:SOIC-16_3.9x9.9mm_P1.27mm`, ...): without a `(model ...)` kicad-cli's 3D export leaves the part out altogether.
+    let model_path = footprint.model.clone().or_else(|| eda_model::footprint::model_path_for_part(part));
+    if let Some(model_path) = &model_path {
         writeln!(out, "\t\t(model {}", sexpr_str(model_path)).unwrap();
         writeln!(out, "\t\t\t(offset\n\t\t\t\t(xyz 0 0 0)\n\t\t\t)").unwrap();
         writeln!(out, "\t\t\t(scale\n\t\t\t\t(xyz 1 1 1)\n\t\t\t)").unwrap();

@@ -1,0 +1,381 @@
+{
+  "meta": {
+    "generated": true,
+    "kicadCommit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+    "kicadCommitDate": "2026-05-04T07:39:57+03:00",
+    "extractedAt": "2026-10-08T04:49:22.792Z",
+    "sourceFiles": [
+      "3d-viewer/3d_viewer/toolbars_3d.cpp",
+      "common/tool/action_toolbar.cpp",
+      "pcbnew/tools/pcb_actions.cpp",
+      "common/tool/actions.cpp",
+      "pcbnew/router/router_tool.cpp",
+      "common/hotkey_store.cpp",
+      "eeschema/tools/sch_actions.cpp",
+      "3d-viewer/3d_viewer/tools/eda_3d_actions.cpp"
+    ],
+    "note": "group icons are a stand-in (first member's icon) -- TOOLBAR_GROUP_CONFIG has no .Icon() call; TOOLBAR_LOC::TOP_AUX returns std::nullopt in source: this editor has no auxiliary toolbar; control labels are the real source strings (ACTION_TOOLBAR_CONTROL's 2nd constructor argument) where the constructor is in common/tool/action_toolbar.cpp or the editor's own file, else the enumerator name; LEFT, RIGHT and TOP_AUX return std::nullopt in source: the 3D viewer has only the top toolbar"
+  },
+  "toolbars": [
+    {
+      "id": "main",
+      "orientation": "horizontal",
+      "items": [
+        {
+          "type": "action",
+          "action": "3DViewer.Control.reloadBoard"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.copyToClipboard"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.toggleRaytacing"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomRedraw"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomInCenter"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomOutCenter"
+        },
+        {
+          "type": "action",
+          "action": "common.Control.zoomFitScreen"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.rotateXclockwise"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.rotateXcounterclockwise"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.rotateYclockwise"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.rotateYcounterclockwise"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.rotateZclockwise"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.rotateZcounterclockwise"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.flipView"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.moveLeft"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.moveRight"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.moveUp"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.moveDown"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.toggleOrtho"
+        },
+        {
+          "type": "separator"
+        },
+        {
+          "type": "action",
+          "action": "3DViewer.Control.showLayersManager"
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "name": "3DViewer.Control.reloadBoard",
+      "label": "Reload board",
+      "tooltip": "Reload board and refresh 3D view",
+      "hotkey": null,
+      "icon": "import3d",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.toggleRaytacing",
+      "label": "Use raytracing",
+      "tooltip": "Render current view using Raytracing",
+      "hotkey": null,
+      "icon": "ray_tracing",
+      "toggle": true
+    },
+    {
+      "name": "3DViewer.Control.copyToClipboard",
+      "label": "Copy 3D image to clipboard",
+      "tooltip": "Copy the current 3D image to the clipboard",
+      "hotkey": null,
+      "icon": "copy",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.rotateXclockwise",
+      "label": "Rotate X Clockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "icon": "rotate_cw_x",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.rotateXcounterclockwise",
+      "label": "Rotate X Counterclockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "icon": "rotate_ccw_x",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.rotateYclockwise",
+      "label": "Rotate Y Clockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "icon": "rotate_cw_y",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.rotateYcounterclockwise",
+      "label": "Rotate Y Counterclockwise",
+      "tooltip": "",
+      "hotkey": null,
+      "icon": "rotate_ccw_y",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.rotateZclockwise",
+      "label": "Rotate Z Clockwise",
+      "tooltip": "",
+      "hotkey": "Shift+R",
+      "icon": "rotate_cw_z",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.rotateZcounterclockwise",
+      "label": "Rotate Z Counterclockwise",
+      "tooltip": "",
+      "hotkey": "R",
+      "icon": "rotate_ccw_z",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.moveLeft",
+      "label": "Move Board Left",
+      "tooltip": "",
+      "hotkey": "Left",
+      "icon": "left",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.moveRight",
+      "label": "Move Board Right",
+      "tooltip": "",
+      "hotkey": "Right",
+      "icon": "right",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.moveUp",
+      "label": "Move Board Up",
+      "tooltip": "",
+      "hotkey": "Up",
+      "icon": "up",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.moveDown",
+      "label": "Move Board Down",
+      "tooltip": "",
+      "hotkey": "Down",
+      "icon": "down",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.flipView",
+      "label": "Flip Board",
+      "tooltip": "Flip the board view",
+      "hotkey": "F",
+      "icon": "flip_board",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.toggleOrtho",
+      "label": "Toggle Orthographic Projection",
+      "tooltip": "Enable/disable orthographic projection",
+      "hotkey": null,
+      "icon": "ortho",
+      "toggle": true
+    },
+    {
+      "name": "3DViewer.Control.showLayersManager",
+      "label": "Show Appearance Manager",
+      "tooltip": "Show/hide the appearance manager",
+      "hotkey": null,
+      "icon": "layers_manager",
+      "toggle": true
+    }
+  ],
+  "otherActions": [
+    {
+      "name": "3DViewer.Control.exportImage",
+      "label": "Export Image...",
+      "tooltip": "Export the Current View as an image file",
+      "hotkey": null,
+      "icon": "export_file",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.viewFront",
+      "label": "View Front",
+      "tooltip": "",
+      "hotkey": "Y",
+      "icon": "axis3d_front",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.viewBack",
+      "label": "View Back",
+      "tooltip": "",
+      "hotkey": "Shift+Y",
+      "icon": "axis3d_back",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.viewLeft",
+      "label": "View Left",
+      "tooltip": "",
+      "hotkey": "Shift+X",
+      "icon": "axis3d_left",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.viewRight",
+      "label": "View Right",
+      "tooltip": "",
+      "hotkey": "X",
+      "icon": "axis3d_right",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.viewTop",
+      "label": "View Top",
+      "tooltip": "",
+      "hotkey": "Z",
+      "icon": "axis3d_top",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.viewBottom",
+      "label": "View Bottom",
+      "tooltip": "",
+      "hotkey": "Shift+Z",
+      "icon": "axis3d_bottom",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.attributesTHT",
+      "label": "Show Through Hole 3D Models",
+      "tooltip": "Show 3D models for 'Through hole' type footprints",
+      "hotkey": "T",
+      "icon": "show_tht",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.attributesSMD",
+      "label": "Show SMD 3D Models",
+      "tooltip": "Show 3D models for 'Surface mount' type footprints",
+      "hotkey": "S",
+      "icon": "show_smt",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.attributesOther",
+      "label": "Show Unspecified 3D Models",
+      "tooltip": "Show 3D models for 'unspecified' type footprints",
+      "hotkey": "V",
+      "icon": "show_other",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.attribute_not_in_posfile",
+      "label": "Show 3D Models not in POS File",
+      "tooltip": "Show 3D models even if not found in .pos file",
+      "hotkey": "P",
+      "icon": "show_not_in_posfile",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.attribute_dnp",
+      "label": "Show 3D Models marked DNP",
+      "tooltip": "Show 3D models even if marked 'Do Not Place'",
+      "hotkey": "D",
+      "icon": "show_dnp",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.showBoundingBoxes",
+      "label": "Show Model Bounding Boxes",
+      "tooltip": "Show 3D model bounding boxes in realtime renderer",
+      "hotkey": null,
+      "icon": "ortho",
+      "toggle": false
+    },
+    {
+      "name": "3DViewer.Control.showNavigator",
+      "label": "Show 3D Navigator",
+      "tooltip": "",
+      "hotkey": null,
+      "icon": "axis3d_front",
+      "toggle": false
+    }
+  ]
+}

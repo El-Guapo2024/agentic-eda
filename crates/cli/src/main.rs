@@ -19,11 +19,13 @@
 mod board;
 mod board_control_api;
 mod board_output_api;
+mod body_api;
 mod bom_plugins;
 mod cleanup_api;
 mod convert_api;
 mod fab_api;
 mod library_api;
+mod library_index;
 mod sch_api;
 mod sch_control_api;
 mod sch_export_api;

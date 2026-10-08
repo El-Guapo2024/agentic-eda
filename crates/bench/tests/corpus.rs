@@ -273,6 +273,9 @@ fn expected_stage(expect: Expect) -> Stage {
 
 #[test]
 fn corpus_runs_every_seed() {
+    if slow_tests_off() {
+        return;
+    }
     let dir = examples_dir();
     let mut stems: Vec<String> = std::fs::read_dir(&dir)
         .unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
@@ -367,4 +370,15 @@ fn corpus_runs_every_seed() {
     std::fs::write(out_dir.join("scorecard.md"), format!("# Bench corpus scorecard\n\n{scorecard}\n")).expect("write scorecard.md");
 
     assert!(unexpected.is_empty(), "unexpected outcomes:\n{}", unexpected.join("\n"));
+}
+
+/// Runs every seed of every example: most of a minute in release and many minutes in debug, so it
+/// runs only when `EDA_SLOW_TESTS` is set. `tools/check.sh full`, the check
+/// before a merge lands on main, sets it.
+fn slow_tests_off() -> bool {
+    let off = std::env::var_os("EDA_SLOW_TESTS").is_none();
+    if off {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+    }
+    off
 }
