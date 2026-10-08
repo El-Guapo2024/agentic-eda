@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Pad, Part } from "../api/types";
 import { collectBoxSelection, DEFAULT_SELECTION_FILTER, padHitDistance, pickSelectionCandidates } from "../components/canvas/selectionCandidates";
+import { pcbItemBoxes } from "./itemBoxes";
 
 const pad = (num: string, x: number, y: number, w = 600, h = 600, round = false, th = false): Pad => ({ num, net: null, x, y, w, h, round, th });
 const part = (ref: string, at: [number, number], pads: Pad[], side: "top" | "bottom" = "top"): Part =>
@@ -75,4 +76,11 @@ test("pads of one number repeat with #k, so each is its own pick", () => {
   const b = board([part("U1", [0, 0], [pad("1", -1000, 0), pad("1", 1000, 0)])]);
   const hit = pickSelectionCandidates(b, 1000, 0, 150, 10, DEFAULT_SELECTION_FILTER, {}, null, false, new Set(), false, false);
   assert.deepEqual(hit.map((c) => c.id), ["U1.1#2"]);
+});
+
+test("pcbItemBoxes: every pad has its own box, so Zoom to Selection and the lasso find a selected pad", () => {
+  const boxes = pcbItemBoxes(board([u1]));
+  assert.deepEqual(boxes.get("U1.1"), [-1300, -300, -700, 300]);
+  assert.deepEqual(boxes.get("U1.2"), [400, -300, 1600, 300]);
+  assert.ok(boxes.has("U1"), "the footprint keeps its own box");
 });
