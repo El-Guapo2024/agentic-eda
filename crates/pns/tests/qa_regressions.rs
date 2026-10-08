@@ -12,6 +12,7 @@ use eda_pns::line::Line;
 use eda_pns::node::Node;
 use std::collections::HashSet;
 use eda_pns::line_placer::LinePlacer;
+use eda_pns::dragger::{DragKind, DragPreview, Dragger};
 use eda_pns::router::{RouteCommit, Router};
 use eda_pns::settings::{Mode, OptEffort, RoutingSettings};
 use std::path::PathBuf;
@@ -76,6 +77,20 @@ fn violations(node: &Node, rules: &eda_model::BoardRules) -> HashSet<(String, St
         for o in node.all_colliding(&item.shape(item.layers().start()), item.net(), item.layers(), rules, &[id]) {
             let (a, b) = (name(id), name(o.id));
             out.insert(if a < b { (a, b) } else { (b, a) });
+        }
+    }
+    out
+}
+
+/// The collisions of the items `after` has and `before` does not -- what a change newly puts in violation.
+fn new_item_violations(before: &Node, after: &Node, rules: &eda_model::BoardRules) -> Vec<String> {
+    let mut out = Vec::new();
+    for (id, item) in after.iter() {
+        if before.contains(id) {
+            continue;
+        }
+        for o in after.all_colliding(&item.shape(item.layers().start()), item.net(), item.layers(), rules, &[id]) {
+            out.push(format!("{:?} against {:?}", item.shape(item.layers().start()), after.get(o.id).map(|i| i.shape(i.layers().start()))));
         }
     }
     out
@@ -217,4 +232,149 @@ fn backspace1_ends_with_the_one_fixed_run_kicad_recorded() {
         assert!(ours.iter().any(|o| same_segment(e, o, 2)), "recorded segment {e:?} missing from {ours:?}");
     }
     assert!(commit.tracks.iter().all(|t| t.width == width));
+}
+
+/// issue22749: a route started from the end of a track in Shove mode, pushing the neighbour's track around its head.
+#[test]
+fn issue22749_pushes_the_same_5_tracks_and_leaves_the_board_clean() {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    let (design, model, log, settings) = route_events(&root, "issue22749-shove-weird-drag-track-end", "pic_programmer");
+    let (node, _) = build_node(&design, &model);
+    let mut router = Router::new(&design, &model);
+    router.settings = settings;
+    let events = log["events"].as_array().unwrap();
+    let start = pt(&events[0]["position"]);
+    let net = node.nearest_anchor(start, eda_pns::layer::LayerRange::single(1), 500, None).and_then(|(id, _)| node.get(id).and_then(|i| i.net().clone())).expect("a track end with a net");
+    router.start(start, "B.Cu", model.board.width_of(&net)).expect("starts on the track end");
+    let mut last = None;
+    for e in &events[1..] {
+        last = router.preview(pt(&e["position"]));
+    }
+    let pv = last.unwrap();
+    assert!(!pv.colliding);
+    let removed = pv.displaced_lines.iter().filter_map(|d| d.source_track.clone()).collect::<std::collections::BTreeSet<_>>().len();
+    assert_eq!(removed, log["removedItems"].as_array().unwrap().len(), "KiCad pushed 5 tracks");
+    let ours: Vec<(String, Point, Point)> = pv.displaced_lines.iter().flat_map(|d| d.line.segs().map(|(a, b)| (d.line.net.as_deref().unwrap_or("").to_string(), a, b)).collect::<Vec<_>>()).collect();
+    let expected = recorded_segments(&log);
+    let hit = expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, 3))).count();
+    assert!(hit >= 4, "{hit} of {} recorded segments reproduced within 3 um", expected.len());
+    let before = violations(&node, &model.board);
+    let after = violations(&committed(&node, &pv), &model.board);
+    let new_ones: Vec<_> = after.difference(&before).collect();
+    assert!(new_ones.is_empty(), "new violations: {new_ones:#?}");
+
+    // The same through the commit the studio applies (`Cmd::CommitRoute`): the pushed tracks are
+    // replaced by their new shapes, nothing is left behind or doubled, the board stays clean.
+    let commit = router.finish(pt(&events.last().unwrap()["position"])).expect("the pushed route can be finished");
+    let ids: HashSet<&String> = design.routing.as_ref().unwrap().tracks.iter().map(|t| &t.id).collect();
+    assert!(commit.remove_track_ids.iter().all(|id| ids.contains(id)), "every removed track exists: {:?}", commit.remove_track_ids);
+    let committed_design = apply_commit(&design, &commit);
+    let (after_node, _) = build_node(&committed_design, &model);
+    let length_of = |d: &eda_model::ir::Design, net: &str| -> i64 { d.routing.as_ref().unwrap().tracks.iter().filter(|t| t.net == net).map(|t| t.pts.windows(2).map(|w| (((w[1].x - w[0].x) as f64).powi(2) + ((w[1].y - w[0].y) as f64).powi(2)).sqrt() as i64).sum::<i64>()).sum() };
+    // the pushed net is still one run from end to end, not the old track plus a copy of it
+    assert!(length_of(&committed_design, "/VPP{slash}MCLR") < 2 * length_of(&design, "/VPP{slash}MCLR"), "the pushed track was replaced, not duplicated");
+    let after_new = violations(&after_node, &model.board);
+    let new_after_commit: Vec<_> = after_new.difference(&before).collect();
+    assert!(new_after_commit.is_empty(), "new violations after the commit: {new_after_commit:#?}");
+}
+
+/// The board after a drag preview is committed.
+fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
+    let mut w = node.branch();
+    let tracks: HashSet<String> = pv.displaced_lines.iter().filter_map(|x| x.source_track.clone()).collect();
+    let doomed: Vec<ItemId> = w.iter().filter(|(_, it)| matches!(it, Item::Segment(s) if s.source_track.as_ref().is_some_and(|(t, _)| tracks.contains(t)))).map(|(id, _)| id).collect();
+    for id in doomed {
+        w.remove(id);
+    }
+    for x in &pv.displaced_lines {
+        if x.line.point_count() >= 2 {
+            w.add_line(&x.line, None, false);
+        }
+    }
+    match d.kind {
+        DragKind::Corner => {
+            w.remove_line_segments(&d.original);
+            w.add_line(&Line::from_points(d.net.clone(), d.layer, d.width, pv.pts.clone()), None, false);
+        }
+        DragKind::Via => {
+            if let Some(id) = d.via_id {
+                w.remove(id);
+            }
+            w.add(Item::Via(eda_pns::item::Via { net: d.net.clone(), layers: eda_pns::layer::LayerRange::new(0, 1), pos: to, diameter: d.via_diameter, drill: d.via_drill, source_via: d.source_via.clone(), locked: false }));
+            for l in &pv.fanout {
+                w.remove_line_segments(l);
+                w.add_line(l, None, false);
+            }
+        }
+    }
+    for v in &pv.displaced_vias {
+        let found = w.iter().find_map(|(id, it)| match it {
+            Item::Via(x) if x.source_via.as_deref() == Some(v.source_via.as_str()) => Some((id, x.clone())),
+            _ => None,
+        });
+        if let Some((id, mut x)) = found {
+            w.remove(id);
+            x.pos = v.pos;
+            w.add(Item::Via(x));
+        }
+    }
+    w
+}
+
+/// Replays a recorded drag with this port's `Dragger` (which drags the nearest end of a track, where KiCad
+/// slides the whole segment): no panic, and whenever the drag is accepted the board it leaves is clean.
+fn replay_drag(case: &str, board: &str) -> (usize, usize) {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return (0, 0);
+    };
+    let (design, model, log, settings) = route_events(&root, case, board);
+    let (node, layers) = build_node(&design, &model);
+    let events = log["events"].as_array().unwrap();
+    let start = pt(&events[0]["position"]);
+    // the dragged item's own layer (the event's is the router's active one)
+    let layer = log["headItems"].as_array().and_then(|h| h.first()).map(|h| h["layers"][0].as_i64().unwrap() as i32).unwrap_or_else(|| events[0]["layer"].as_i64().unwrap() as i32);
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300).unwrap_or_else(|| panic!("nothing to drag at {start:?} on {}", layers.name_of(layer)));
+    let dragger = Dragger::start_with(&node, start, id, false).expect("a track or via");
+    let (mut accepted, mut shoved) = (0, 0);
+    for e in &events[1..] {
+        let to = pt(&e["position"]);
+        let pv = dragger.preview(&node, &model.board, &settings, to);
+        if pv.colliding {
+            continue;
+        }
+        accepted += 1;
+        if !pv.displaced_lines.is_empty() || !pv.displaced_vias.is_empty() {
+            shoved += 1;
+        }
+        let new_ones = new_item_violations(&node, &dragged(&node, &dragger, &pv, to), &model.board);
+        assert!(new_ones.is_empty(), "dragging to {to:?} leaves new violations: {new_ones:#?}");
+    }
+    (accepted, shoved)
+}
+
+#[test]
+fn issue23449_dragging_a_lone_via_does_not_crash_and_keeps_the_board_clean() {
+    let (accepted, shoved) = replay_drag("issue23449-shove-lone-via-drag-crash", "stickhub-extra-via");
+    eprintln!("accepted {accepted} previews, {shoved} of them shoved something");
+}
+
+/// `video-v10.kicad_pcb` is 6 MB: a debug build takes about a minute, so it runs with the slow tier.
+#[test]
+fn simple_drag_shove_singlelayer_keeps_the_board_clean() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped (set EDA_SLOW_TESTS=1): video-v10.kicad_pcb takes about a minute in a debug build");
+        return;
+    }
+    let (accepted, shoved) = replay_drag("simple-drag-shove-singlelayer", "video-v10");
+    eprintln!("accepted {accepted} previews, {shoved} of them shoved something");
+}
+
+#[test]
+fn walk_drag_seg_against_board_edge_keeps_the_board_clean() {
+    let (accepted, shoved) = replay_drag("walk_drag_seg_against_board_edge", "ultrasound");
+    eprintln!("accepted {accepted} previews, {shoved} of them shoved something");
 }
