@@ -6,6 +6,7 @@ pub mod bezier;
 pub mod board;
 pub mod floorplan;
 pub mod footprint;
+pub mod gensym;
 pub mod ir;
 pub mod kicad_font;
 pub mod kicad_geom;
@@ -1051,7 +1052,19 @@ impl ConstraintModel {
     /// -- keeps that guarantee without each of this method's many call
     /// sites having to re-derive it.
     pub fn real_symbol_of(&self, lib_id: &str, part: &Part) -> Option<LibSymbol> {
-        if lib_id.is_empty() || symbol::is_synthetic_lib_id(lib_id) {
+        if lib_id.is_empty() {
+            return None;
+        }
+        // a generated symbol is made from the part (`gensym`), unless the Symbol Editor has published one of its own under the same id
+        if gensym::is_generated_lib_id(lib_id) {
+            if let Some(s) = self.symbols.iter().find(|s| s.lib_id == lib_id) {
+                if part.pins.iter().all(|p| s.pin_by_number(&p.number).is_some()) {
+                    return Some(s.clone());
+                }
+            }
+            return Some(gensym::generate(part, lib_id));
+        }
+        if symbol::is_synthetic_lib_id(lib_id) {
             return None;
         }
         let sym = self.symbol_of(lib_id)?;

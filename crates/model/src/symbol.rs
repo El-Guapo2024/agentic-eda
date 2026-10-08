@@ -243,7 +243,13 @@ pub fn resolve_lib_id(part: &crate::Part) -> String {
             return lib_id.to_string();
         }
     }
-    let synthetic = || format!("eda:{}", part.reference);
+    // no library symbol: a generated one (`crate::gensym`). The id says which kind of drawing the schematic holds: a design written before
+    // generated symbols has `eda:<ref>`, the box the layout engine sized, and keeps drawing that.
+    let synthetic = || format!("{}{}", crate::gensym::GENERATED_PREFIX, part.reference);
+
+    // the generic symbols of the library number their pins 1, 2, 3 ...: a part whose pins have other numbers (a USB-C receptacle's A1 ..
+    // B12 and SH) has no library symbol to take them, and gets a generated one
+    let numbered_from_one = (1..=part.pins.len()).all(|n| part.pins.iter().any(|p| p.number == n.to_string()));
 
     let first_letter = |s: &str| s.trim_start_matches(['+', '-']).chars().next().map(|c| c.to_ascii_uppercase());
     let kind_letter = [Some(part.reference.as_str()), part.package.as_deref(), part.value.as_deref()]
@@ -251,7 +257,7 @@ pub fn resolve_lib_id(part: &crate::Part) -> String {
         .flatten()
         .find_map(first_letter);
 
-    if part.pins.len() == 2 {
+    if part.pins.len() == 2 && numbered_from_one {
         match kind_letter {
             Some('R') => return "Device:R".to_string(),
             Some('C') => return "Device:C".to_string(),
@@ -265,7 +271,7 @@ pub fn resolve_lib_id(part: &crate::Part) -> String {
     }
 
     let ref_upper = part.reference.to_ascii_uppercase();
-    if ref_upper.starts_with('J') && (1..=40).contains(&part.pins.len()) {
+    if ref_upper.starts_with('J') && (1..=40).contains(&part.pins.len()) && numbered_from_one {
         return format!("Connector_Generic:Conn_01x{:02}", part.pins.len());
     }
 
@@ -290,7 +296,7 @@ fn known_mpn_symbol(mpn: &str) -> Option<&'static str> {
 /// the loader (skip resolution, go straight to a synthesized generic box)
 /// and the writer.
 pub fn is_synthetic_lib_id(lib_id: &str) -> bool {
-    lib_id.starts_with("eda:")
+    lib_id.starts_with("eda:") || crate::gensym::is_generated_lib_id(lib_id)
 }
 
 /// Built-in library symbols: a small, self-contained set covering every
@@ -602,10 +608,27 @@ mod tests {
     }
 
     #[test]
+    fn pins_the_generic_symbols_do_not_number_get_a_generated_symbol() {
+        // the generic connector and the Device symbols number their pins 1, 2, 3 ...
+        let mut j = part("J1", None, None, 3);
+        for (p, n) in j.pins.iter_mut().zip(["A1", "A4", "SH"]) {
+            p.number = n.to_string();
+        }
+        assert_eq!(resolve_lib_id(&j), "gen:J1");
+        let mut d = part("D1", None, None, 2);
+        d.pins[0].number = "A".into();
+        d.pins[1].number = "K".into();
+        assert_eq!(resolve_lib_id(&d), "gen:D1");
+        let mut r = part("R1", None, None, 2);
+        r.pins.swap(0, 1);
+        assert_eq!(resolve_lib_id(&r), "Device:R", "the order of the pins does not matter");
+    }
+
+    #[test]
     fn multi_pin_ic_falls_back_to_synthetic() {
         let id = resolve_lib_id(&part("U1", None, None, 20));
         assert!(is_synthetic_lib_id(&id));
-        assert_eq!(id, "eda:U1");
+        assert_eq!(id, "gen:U1");
     }
 
     #[test]
