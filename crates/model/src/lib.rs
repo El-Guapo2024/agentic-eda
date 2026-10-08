@@ -7,6 +7,7 @@ pub mod board;
 pub mod floorplan;
 pub mod footprint;
 pub mod ir;
+pub mod kicad_font;
 pub mod modules;
 pub mod sch_extras;
 pub mod symbol;

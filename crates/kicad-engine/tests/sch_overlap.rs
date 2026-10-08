@@ -1,0 +1,103 @@
+//! Nothing on a derived sheet overlaps anything else, as KiCad draws it: every example and `mcu_board_30plus` (the board
+//! the studio shows), derived flat and as module sheets, written as `.kicad_sch` files and measured with `eda_kicad::sch_overlap`
+//! (the bounding-box rules of eeschema, ported). No kicad-cli is needed.
+
+use eda_engine::{derive_schematic, derive_schematic_modules, EngineOptions};
+use eda_kicad::sch_overlap::{check_tree, SheetReport};
+use eda_kicad::{export_kicad_sch_tree, ExportMeta};
+use eda_model::ir::Design;
+use eda_model::ConstraintModel;
+use std::path::{Path, PathBuf};
+
+fn examples_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples")
+}
+
+/// Every intent under `examples/` (and `examples/ladder/`), sorted.
+fn example_files() -> Vec<PathBuf> {
+    let dir = examples_dir();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "yaml")).collect();
+    files.extend(std::fs::read_dir(dir.join("ladder")).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "yaml")));
+    files.sort();
+    files
+}
+
+/// The model of an intent, with the symbols of the installed KiCad libraries resolved when KiCad is installed (as the studio does),
+/// else the built-in ones.
+fn model_of(path: &Path) -> Option<ConstraintModel> {
+    let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let root = eda_kicad::default_symbol_library_root();
+    if root.is_dir() {
+        let _ = eda_kicad::resolve_library_symbols(&mut model, &root);
+    }
+    Some(model)
+}
+
+fn reports_of(design: &Design, model: &ConstraintModel) -> Vec<SheetReport> {
+    let files = export_kicad_sch_tree(design, model, &ExportMeta { date: "2026-10-08", title: "t" }, "root.kicad_sch").expect("the design exports");
+    check_tree(&files).expect("the exported sheets read back")
+}
+
+fn summary(reports: &[SheetReport]) -> usize {
+    reports.iter().map(SheetReport::count).sum()
+}
+
+fn print(name: &str, how: &str, reports: &[SheetReport]) {
+    println!("{name} ({how}): {} finding(s) on {} sheet(s)", summary(reports), reports.len());
+    for r in reports.iter().filter(|r| r.count() > 0) {
+        print!("{}", r.render());
+    }
+}
+
+/// `examples/<file>` -> (flat, module sheets), findings counted.
+fn measure(path: &Path) -> Option<(usize, usize)> {
+    let model = model_of(path)?;
+    let name = path.file_name()?.to_string_lossy().to_string();
+    let opts = EngineOptions::new(1, "t");
+    let flat = derive_schematic(&model, &opts).ok().map(|d| reports_of(&d, &model));
+    let modules = derive_schematic_modules(&model, &opts).ok().map(|d| reports_of(&d, &model));
+    if let Some(r) = &flat {
+        print(&name, "flat", r);
+    }
+    if let Some(r) = &modules {
+        print(&name, "module sheets", r);
+    }
+    Some((flat.as_deref().map(summary).unwrap_or(0), modules.as_deref().map(summary).unwrap_or(0)))
+}
+
+/// What each example has today, (flat, module sheets). Every step of the cleanup lowers these; they end at zero. Measured before any
+/// of it, with the fields of every symbol stacked at the page's corner, the labels reading over the pin names, the generated symbols
+/// with their pins one grid apart and their texts on one another.
+const KNOWN: &[(&str, usize, usize)] = &[
+    ("all_power_ground_net.yaml", 46, 49),
+    ("dense_small_outline.yaml", 36, 30),
+    ("l1_usb_mcu.yaml", 2147, 957),
+    ("l2_sensor_hub.yaml", 5298, 1414),
+    ("l3_motor_hub.yaml", 15262, 2238),
+    ("l4_control_hub.yaml", 37401, 3617),
+    ("ldo.yaml", 142, 140),
+    ("ldo_proximity_heavy.yaml", 217, 167),
+    ("mcu_board_30plus.yaml", 3100, 1536),
+    ("mixed_track_widths.yaml", 142, 140),
+    ("nc_pins.yaml", 67, 68),
+    ("opamp_filter.yaml", 153, 168),
+    ("passive_divider_ladder.yaml", 91, 86),
+    ("star_net.yaml", 51, 42),
+    ("through_hole_headers.yaml", 104, 94),
+    ("two_pin_nets.yaml", 14, 12),
+    ("unroutable_tiny_outline.yaml", 56, 56),
+];
+
+#[test]
+fn no_overlap_on_any_example_flat_or_as_module_sheets() {
+    let mut off = Vec::new();
+    for f in example_files() {
+        let name = f.file_name().unwrap().to_string_lossy().to_string();
+        let Some((flat, modules)) = measure(&f) else { continue };
+        let (kflat, kmod) = KNOWN.iter().find(|(n, _, _)| *n == name).map(|(_, a, b)| (*a, *b)).unwrap_or((0, 0));
+        if flat != kflat || modules != kmod {
+            off.push(format!("{name}: flat {flat} (KNOWN says {kflat}), module sheets {modules} (KNOWN says {kmod})"));
+        }
+    }
+    assert!(off.is_empty(), "the findings changed; a lower number is progress, so write it into KNOWN:\n{}", off.join("\n"));
+}

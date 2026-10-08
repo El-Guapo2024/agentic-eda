@@ -46,6 +46,7 @@ mod bus;
 pub use bus::expand_bus_members;
 
 mod sch_extras_io;
+pub mod sch_overlap;
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
 
