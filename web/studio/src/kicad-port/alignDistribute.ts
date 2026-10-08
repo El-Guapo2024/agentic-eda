@@ -2,20 +2,18 @@
 // submenu, no default hotkeys in source either) and libs/kimath/src/
 // geometry/distribute.cpp's two gap-math helpers it calls.
 //
-// Scope: this app applies these to placed footprints only (same scope
-// rotate/flip already have -- see state/store.tsx's rotateSelection/
-// flipSelection), not vias/shapes/text, which source's generic
-// BOARD_ITEM::Move would also cover. Also not ported: source's "prefer a
-// locked item, else the item under the cursor" override when picking the
-// alignment target (`ALIGN_DISTRIBUTE_TOOL::selectTarget`) -- this app has
-// no locked-item concept, and reading the cursor's position at
-// context-menu-click time adds a second input path for a one-line
-// behavioral nuance; the *extreme* item in the selection (topmost/
-// bottommost/leftmost/rightmost/the one with the smallest center) is
-// always the fallback target in source too once neither override applies,
-// so that's what this always uses. Source also special-cases a mirrored
-// view (swaps Align Left/Right) -- this app's view never mirrors.
-import type { Um } from "../api/types";
+// Every kind of item aligns and distributes, as in source (`BOARD_ITEM::Move`): placed footprints (by their courtyard, standing in for
+// `FOOTPRINT::GetBoundingBox( false )`), tracks, vias, zones, graphics, text, dimensions and groups. A pad selected on its own stands for its
+// footprint but aligns by the pad's box (`GetSelections`' `addToList( list, pad, parentFp )`).
+//
+// Locks are KiCad's two rules (`GetSelections`, `selectTarget`, `DistributeItems`): Align leaves a locked item where it is and moves
+// everything else onto IT -- "prefer locked items to unlocked items" -- while Distribute leaves locked items out altogether
+// (`FilterCollectorForLockedItems`). Without a locked item the alignment target is the extreme item of the selection unless the cursor sits
+// inside one item's box, in which case that item is the target ("secondly, prefer items under the cursor"). Source's mirrored-view swap of Align
+// Left/Right is not ported: this app's view never mirrors a PCB.
+import type { BoardState, Cmd, Um } from "../api/types";
+import { itemBounds, itemKind, padParent } from "./pcbItems";
+import { editableSelection, groupOf, isLocked } from "./pcbTransform";
 
 export type AlignEdge = "top" | "bottom" | "left" | "right" | "centerX" | "centerY";
 
@@ -120,3 +118,115 @@ export function getDeltasForDistributeByPoints(itemPositions: readonly number[])
   }
   return deltas;
 }
+
+
+// ---------------------------------------------------------------------------
+// The tool half: which items, which target, which moves.
+
+/** One item the tool works on: what it moves (`id`), the box it is aligned by, and whether a lock keeps it where it is. */
+export interface AlignItem {
+  id: string;
+  box: Box;
+  locked: boolean;
+}
+
+/** A move the tool makes: the item `id` by `(dx, dy)`. */
+export interface AlignMove {
+  id: string;
+  dx: number;
+  dy: number;
+}
+
+type Pt = readonly [number, number];
+
+const contains = (box: Box, p: Pt): boolean => p[0] >= box[0] && p[0] <= box[2] && p[1] >= box[1] && p[1] <= box[3];
+
+/** The sort each Align action gives `GetSelections`' lists: top/left/centres ascending, bottom/right descending (the extreme item first). */
+function sortedFor(items: readonly AlignItem[], edge: AlignEdge): AlignItem[] {
+  const sign = isMinExtreme(edge) ? 1 : -1;
+  return [...items].sort((a, b) => sign * (edgeValue(a.box, edge) - edgeValue(b.box, edge)));
+}
+
+/**
+ * `ALIGN_DISTRIBUTE_TOOL::selectTarget`: a locked item wins (the one under the cursor, else the first), else the item under the cursor,
+ * else the first of the sorted list -- the extreme one.
+ */
+function targetValue(unlocked: readonly AlignItem[], locked: readonly AlignItem[], edge: AlignEdge, cursor: Pt | null | undefined): number {
+  const pool = locked.length > 0 ? locked : unlocked;
+  const under = cursor ? pool.find((it) => contains(it.box, cursor)) : undefined;
+  return edgeValue((under ?? pool[0]!).box, edge);
+}
+
+/** `AlignTop` ... `AlignCenterY`: what moves, and by how much, to put `items` on the target's edge. Nothing moves when everything is locked. */
+export function planAlign(items: readonly AlignItem[], edge: AlignEdge, cursor?: Pt | null): AlignMove[] {
+  const unlocked = sortedFor(items.filter((it) => !it.locked), edge);
+  const locked = sortedFor(items.filter((it) => it.locked), edge);
+  if (unlocked.length === 0) return [];
+  const target = targetValue(unlocked, locked, edge, cursor);
+  const axis = alignAxis(edge);
+  const out: AlignMove[] = [];
+  for (const it of unlocked) {
+    const d = target - edgeValue(it.box, edge);
+    if (d !== 0) out.push({ id: it.id, dx: axis === "x" ? d : 0, dy: axis === "y" ? d : 0 });
+  }
+  return out;
+}
+
+/**
+ * `DistributeItems`: the items spaced evenly along `axis`, the two at the ends staying where they are. Locked items were already taken out
+ * (the caller filters them, `FilterCollectorForLockedItems`); fewer than three items distribute nothing.
+ */
+export function planDistribute(items: readonly AlignItem[], axis: "x" | "y", mode: "gaps" | "centers"): AlignMove[] {
+  if (items.length < 3) return [];
+  const start = (b: Box): number => (axis === "x" ? b[0] : b[1]);
+  const end = (b: Box): number => (axis === "x" ? b[2] : b[3]);
+  const sorted = [...items].sort((a, b) => (mode === "gaps" ? start(a.box) - start(b.box) : (start(a.box) + end(a.box)) / 2 - (start(b.box) + end(b.box)) / 2));
+  const deltas = mode === "gaps" ? getDeltasForDistributeByGaps(sorted.map((it) => [start(it.box), end(it.box)] as [number, number])) : getDeltasForDistributeByPoints(sorted.map((it) => (start(it.box) + end(it.box)) / 2));
+  const out: AlignMove[] = [];
+  for (let i = 1; i < sorted.length - 1; i++) {
+    const d = deltas[i]!;
+    if (d !== 0) out.push({ id: sorted[i]!.id, dx: axis === "x" ? d : 0, dy: axis === "y" ? d : 0 });
+  }
+  return out;
+}
+
+/**
+ * `ALIGN_DISTRIBUTE_TOOL::GetSelections`' list for a selection: every item with its box and lock. A selected pad is listed as its footprint
+ * (once, by the first pad's box); an item that belongs to a group that is selected too is left to the group, which moves it.
+ */
+export function alignItems(board: BoardState, selection: readonly string[]): AlignItem[] {
+  const out: AlignItem[] = [];
+  const listed = new Set<string>();
+  const chosen = new Set(selection);
+  for (const raw of selection) {
+    const isPad = itemKind(board, raw) === "pad";
+    const id = isPad ? padParent(board, raw) : raw;
+    if (id == null || listed.has(id) || itemKind(board, id) == null) continue;
+    const group = groupOf(board, id);
+    if (group != null && chosen.has(group)) continue;
+    const box = isPad ? itemBounds(board, raw) : itemBounds(board, id);
+    if (!box) continue;
+    listed.add(id);
+    out.push({ id, box: [box[0], box[1], box[2], box[3]], locked: isLocked(board, id) });
+  }
+  return out;
+}
+
+const moveCmds = (moves: readonly AlignMove[]): Cmd[] => moves.map((m): Cmd => ({ op: "move_items", ids: [m.id], dx: Math.round(m.dx), dy: Math.round(m.dy) }));
+
+/** Align the selection (`cursor` is where the pointer is, which can pick the target): the commands, to be sent as one undo step. */
+export function planAlignSelection(board: BoardState, selection: readonly string[], edge: AlignEdge, cursor?: Pt | null): Cmd[] {
+  return moveCmds(planAlign(alignItems(board, selection), edge, cursor));
+}
+
+/** Distribute the selection: locked items left out, a pad standing for its footprint. */
+export function planDistributeSelection(board: BoardState, selection: readonly string[], axis: "x" | "y", mode: "gaps" | "centers"): Cmd[] {
+  const { ids } = editableSelection(board, selection);
+  return moveCmds(planDistribute(alignItems(board, ids), axis, mode));
+}
+
+/** Whether a selection has enough to align (two) or distribute (three) -- the menu conditions `MoreThan( 1 )` / `MoreThan( 2 )`. */
+export function alignable(board: BoardState, selection: readonly string[]): number {
+  return alignItems(board, selection).length;
+}
+

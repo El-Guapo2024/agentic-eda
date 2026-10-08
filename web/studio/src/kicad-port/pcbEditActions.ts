@@ -135,31 +135,42 @@ export function grabNearestUnconnectedFootprints(parts: readonly UnconnectedPart
 
 // --------------------------------------------------------- move anchors
 
-export type MovableKind = "part" | "via" | "shape" | "text";
+/** Every kind of item the move tools carry: a footprint, track, via, zone, graphic, text, dimension or group. */
+export type MovableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group";
+
+type XY = readonly [number, number];
 
 export interface AnchorBoard {
-  parts: readonly { ref: string; placed: boolean; at?: readonly [number, number] }[];
-  routing?: { vias: readonly { id: string; x: number; y: number }[] } | null;
+  parts: readonly { ref: string; placed: boolean; at?: XY }[];
+  routing?: {
+    vias: readonly { id: string; x: number; y: number }[];
+    tracks?: readonly { id: string; pts: readonly XY[] }[];
+    zones?: readonly { id: string; outline: readonly XY[] }[];
+  } | null;
   drawings?: {
-    shapes: readonly ({ id: string } & ({ kind: "segment" | "rect" | "arc" | "bezier"; start: readonly [number, number] } | { kind: "circle"; center: readonly [number, number] } | { kind: "polygon"; pts: readonly (readonly [number, number])[] }))[];
+    shapes: readonly ({ id: string } & ({ kind: "segment" | "rect" | "arc" | "bezier"; start: XY } | { kind: "circle"; center: XY } | { kind: "polygon"; pts: readonly XY[] }))[];
     texts: readonly { id: string; x: number; y: number }[];
+    dimensions?: readonly { id: string; start: XY }[];
+    groups?: readonly { id: string; member_ids: readonly string[] }[];
   } | null;
 }
 
 /**
- * What `BOARD_ITEM::GetPosition()` is for the kinds this app can move
- * (tracks and zones have no move Cmd, so they are not movable here): a
- * footprint's anchor, a via/text position, a shape's first defining point
- * (`PCB_SHAPE::GetPosition()` is its start/center). `Move Individually`
- * glues each item's anchor to the cursor, so it needs this. Null = not an
- * item the move tool carries here (dimensions included: the pointer-move
- * path builds no dimension move preview).
+ * What `BOARD_ITEM::GetPosition()` is for any item the move tools carry: a footprint's anchor, a track's start, a via's centre, a zone's
+ * first corner, a shape's first defining point (`PCB_SHAPE::GetPosition()` is its start/centre), a text's position, a dimension's first
+ * feature point, a group's box centre (here the centre of the box around its members' own anchors). `Move Individually` glues each item's
+ * anchor to the cursor, and `Position Relative` measures from it. Null = not something the move tool carries (an unplaced footprint, an
+ * unknown id; a pad moves with its footprint).
  */
 export function movableItem(board: AnchorBoard, id: string): { kind: MovableKind; at: [number, number] } | null {
   const part = board.parts.find((p) => p.ref === id);
   if (part?.placed && part.at) return { kind: "part", at: [part.at[0], part.at[1]] };
+  const track = board.routing?.tracks?.find((t) => t.id === id);
+  if (track?.pts[0]) return { kind: "track", at: [track.pts[0][0], track.pts[0][1]] };
   const via = board.routing?.vias.find((v) => v.id === id);
   if (via) return { kind: "via", at: [via.x, via.y] };
+  const zone = board.routing?.zones?.find((z) => z.id === id);
+  if (zone?.outline[0]) return { kind: "zone", at: [zone.outline[0][0], zone.outline[0][1]] };
   const shape = board.drawings?.shapes.find((s) => s.id === id);
   if (shape) {
     const p = shape.kind === "circle" ? shape.center : shape.kind === "polygon" ? shape.pts[0] : shape.start;
@@ -167,6 +178,16 @@ export function movableItem(board: AnchorBoard, id: string): { kind: MovableKind
   }
   const text = board.drawings?.texts.find((t) => t.id === id);
   if (text) return { kind: "text", at: [text.x, text.y] };
+  const dim = board.drawings?.dimensions?.find((d) => d.id === id);
+  if (dim) return { kind: "dimension", at: [dim.start[0], dim.start[1]] };
+  const group = board.drawings?.groups?.find((g) => g.id === id);
+  if (group) {
+    const anchors = group.member_ids.map((m) => (m === id ? null : movableItem(board, m))).filter((m): m is NonNullable<typeof m> => m != null);
+    if (anchors.length === 0) return null;
+    const xs = anchors.map((a) => a.at[0]);
+    const ys = anchors.map((a) => a.at[1]);
+    return { kind: "group", at: [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2] };
+  }
   return null;
 }
 

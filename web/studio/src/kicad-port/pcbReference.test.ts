@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { AnchorBoard } from "./pcbEditActions";
+import { movableItem, type AnchorBoard } from "./pcbEditActions";
 import { interactiveOffsetMove, itemPosition, moveSelectionCommands, offsetVector, pasteMoveOrigin, type PositionBoard } from "./pcbReference";
 
 const board: AnchorBoard = {
@@ -36,15 +36,23 @@ test("a new offset puts the picked item point at reference + offset", () => {
   assert.deepEqual({ x: first.x + move.x, y: first.y + move.y }, { x: second.x + edited.x, y: second.y + edited.y });
 });
 
-test("moveSelectionBy: each kind gets its own verb, unplaced parts and unknown ids are skipped", () => {
+test("moveSelectionBy: every movable item moves by the one vector in one command, unplaced parts and unknown ids are skipped", () => {
   const cmds = moveSelectionCommands(board, ["U1", "R1", "v1", "s1", "s2", "t1", "nope"], { x: 100, y: -50 });
-  assert.deepEqual(cmds, [
-    { op: "move_to", part: "U1", x: 1100, y: 1950 },
-    { op: "move_via", id: "v1", x: 600, y: 550 },
-    { op: "move_shape", id: "s1", dx: 100, dy: -50 },
-    { op: "move_shape", id: "s2", dx: 100, dy: -50 },
-    { op: "move_text", id: "t1", x: 107, y: -42 },
-  ]);
+  assert.deepEqual(cmds, [{ op: "move_items", ids: ["U1", "v1", "s1", "s2", "t1"], dx: 100, dy: -50 }]);
+});
+
+test("moveSelectionBy: tracks, zones, dimensions and groups move too", () => {
+  const full: AnchorBoard = {
+    ...board,
+    routing: { vias: [], tracks: [{ id: "trk", pts: [[1, 2], [3, 4]] }], zones: [{ id: "zn", outline: [[10, 20], [30, 40], [50, 60]] }] },
+    drawings: { shapes: [], texts: [], dimensions: [{ id: "dim", start: [5, 5] }], groups: [{ id: "grp", member_ids: ["trk", "zn"] }] },
+  };
+  assert.deepEqual(moveSelectionCommands(full, ["trk", "zn", "dim", "grp"], { x: 1, y: 1 }), [{ op: "move_items", ids: ["trk", "zn", "dim", "grp"], dx: 1, dy: 1 }]);
+  assert.deepEqual(movableItem(full, "trk"), { kind: "track", at: [1, 2] });
+  assert.deepEqual(movableItem(full, "zn"), { kind: "zone", at: [10, 20] });
+  assert.deepEqual(movableItem(full, "dim"), { kind: "dimension", at: [5, 5] });
+  assert.deepEqual(movableItem(full, "grp"), { kind: "group", at: [5.5, 11] }, "the centre of the box around its members' anchors");
+  assert.equal(movableItem(full, "R1"), null);
 });
 
 test("moveSelectionBy: a zero vector is no command at all", () => {

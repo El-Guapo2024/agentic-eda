@@ -38,42 +38,17 @@ export function interactiveOffsetMove(itemPoint: Vec, referencePoint: Vec, edite
 }
 
 /**
- * `moveSelectionBy`: every movable item of `refs` by the one vector `v`. Parts, vias and texts are moved to their
- * new position, shapes by the offset -- the same verbs `commitMove` uses. Items this app cannot move (tracks, zones,
- * dimensions) are skipped, like the move tool itself.
+ * `moveSelectionBy`: every movable item of `refs` by the one vector `v`, as one `move_items` -- a footprint, track, via, zone, graphic, text,
+ * dimension or group. Ids that are no item the move tool carries (an unplaced footprint, an unknown id) are skipped, like the move tool itself.
  */
 export function moveSelectionCommands(board: AnchorBoard, refs: readonly string[], v: Vec): Cmd[] {
-  const cmds: Cmd[] = [];
-  if (v.x === 0 && v.y === 0) return cmds;
-  for (const ref of refs) {
-    const item = movableItem(board, ref);
-    if (!item) continue;
-    switch (item.kind) {
-      case "part":
-        cmds.push({ op: "move_to", part: ref, x: item.at[0] + v.x, y: item.at[1] + v.y });
-        break;
-      case "via":
-        cmds.push({ op: "move_via", id: ref, x: item.at[0] + v.x, y: item.at[1] + v.y });
-        break;
-      case "shape":
-        cmds.push({ op: "move_shape", id: ref, dx: v.x, dy: v.y });
-        break;
-      case "text":
-        cmds.push({ op: "move_text", id: ref, x: item.at[0] + v.x, y: item.at[1] + v.y });
-        break;
-    }
-  }
-  return cmds;
+  if (v.x === 0 && v.y === 0) return [];
+  const ids = refs.filter((ref) => movableItem(board, ref));
+  return ids.length === 0 ? [] : [{ op: "move_items", ids, dx: v.x, dy: v.y }];
 }
 
-/** The board items `itemPosition` can place: what `movableItem` knows, plus tracks and zones. */
-export interface PositionBoard extends AnchorBoard {
-  routing?: {
-    vias: readonly { id: string; x: number; y: number }[];
-    tracks?: readonly { id: string; pts: readonly (readonly [number, number])[] }[];
-    zones?: readonly { id: string; outline: readonly (readonly [number, number])[] }[];
-  } | null;
-}
+/** The board items `itemPosition` can place: everything `movableItem` knows. */
+export type PositionBoard = AnchorBoard;
 
 /**
  * `BOARD_ITEM::GetPosition()` of a picked item (`DIALOG_POSITION_RELATIVE::UpdatePickedItem` anchors on it): a
@@ -81,12 +56,7 @@ export interface PositionBoard extends AnchorBoard {
  */
 export function itemPosition(board: PositionBoard, id: string): Vec | null {
   const movable = movableItem(board, id);
-  if (movable) return { x: movable.at[0], y: movable.at[1] };
-  const track = board.routing?.tracks?.find((t) => t.id === id);
-  if (track?.pts[0]) return { x: track.pts[0][0], y: track.pts[0][1] };
-  const zone = board.routing?.zones?.find((z) => z.id === id);
-  if (zone?.outline[0]) return { x: zone.outline[0][0], y: zone.outline[0][1] };
-  return null;
+  return movable ? { x: movable.at[0], y: movable.at[1] } : null;
 }
 
 /**
