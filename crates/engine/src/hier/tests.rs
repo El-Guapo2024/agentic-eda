@@ -291,11 +291,12 @@ fn a_part_keeps_its_fields_when_the_sheets_are_derived_again() {
     let model = model_of("mcu_board_30plus.yaml");
     let modules = infer_modules(&model, &[]);
     let mut keep = Keep::default();
-    let mut r1 = eda_model::ir::SymbolInstance { id: "R1".into(), at: Point { x: 0, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: resolve_lib_id(model.part("R1").unwrap()), unit: 1, value: "470".into(), footprint: "Resistor_SMD:R_0603".into(), datasheet: "http://x".into() };
+    let mut r1 = eda_model::ir::SymbolInstance { id: "R1".into(), at: Point { x: 0, y: 0 }, rot: 0, mirrored: false, mirror_y: false, lib_id: resolve_lib_id(model.part("R1").unwrap()), unit: 1, value: "470".into(), footprint: "Resistor_SMD:R_0603".into(), datasheet: "http://x".into(), dnp: true, exclude_from_bom: true, exclude_from_board: false, exclude_from_sim: true };
     keep.symbols.insert("R1".into(), r1.clone());
     r1.value = "ignored".into();
     let d = derive_hierarchy(&model, &opts(), &modules, &keep).unwrap();
     let child = d.sheet_contents.as_ref().unwrap().values().find(|s| s.symbols.iter().any(|x| x.id == "R1")).unwrap();
     let s = child.symbols.iter().find(|x| x.id == "R1").unwrap();
     assert_eq!((s.value.as_str(), s.footprint.as_str(), s.datasheet.as_str()), ("470", "Resistor_SMD:R_0603", "http://x"));
+    assert_eq!((s.dnp, s.exclude_from_bom, s.exclude_from_board, s.exclude_from_sim), (true, true, false, true), "the attributes the user set stay with the part");
 }

@@ -214,7 +214,7 @@ pub fn layout_root(modules: &[FunctionalModule], files: &[String], crossing: &[V
             pins.push(SheetPin { id: String::new(), name: p.net.clone(), shape: LabelShape::Bidirectional, at: pt });
             items.rects.push(sheet_pin_rect(pt, false, &p.net));
         }
-        sheets.push(SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (b.w, b.h), pins });
+        sheets.push(SheetInstance { id: String::new(), name: modules[m].name.clone(), file: files[m].clone(), at, size: (b.w, b.h), pins, page: String::new() });
         // the symbol, its name above and its file below
         let name_w = text_w(SHEET_NAME_FONT, &modules[m].name);
         let file_base = at.y + b.h + 400 + SHEET_FILE_FONT;

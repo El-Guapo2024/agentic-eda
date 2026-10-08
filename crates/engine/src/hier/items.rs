@@ -239,6 +239,11 @@ impl Items {
             value: kept.map(|k| k.value.clone()).unwrap_or_else(|| p.part.value.clone().unwrap_or_default()),
             footprint: kept.map(|k| k.footprint.clone()).unwrap_or_else(|| p.part.footprint.clone().unwrap_or_default()),
             datasheet: kept.map(|k| k.datasheet.clone()).unwrap_or_else(|| p.part.datasheet.clone().unwrap_or_default()),
+            // the attributes the user set (Do Not Populate, left out of the BOM / board / simulation) go with the part
+            dnp: kept.is_some_and(|k| k.dnp),
+            exclude_from_bom: kept.is_some_and(|k| k.exclude_from_bom),
+            exclude_from_board: kept.is_some_and(|k| k.exclude_from_board),
+            exclude_from_sim: kept.is_some_and(|k| k.exclude_from_sim),
         });
         let keep = p.keepout();
         self.rects.push(keep);

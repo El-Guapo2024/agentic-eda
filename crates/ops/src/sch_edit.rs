@@ -516,7 +516,7 @@ mod tests {
     fn deleting_a_sheet_removes_its_symbol_and_pins_but_not_the_file_content() {
         use eda_model::ir::{LabelShape, SheetInstance, SheetPin};
         let mut sch = empty_sheet();
-        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (10_000, 10_000), pins: vec![SheetPin { id: "pin_a".into(), name: "X".into(), shape: LabelShape::Input, at: p(0, 5_000) }] });
+        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(0, 0), size: (10_000, 10_000), pins: vec![SheetPin { id: "pin_a".into(), name: "X".into(), shape: LabelShape::Input, at: p(0, 5_000) }], page: String::new() });
         let model = ConstraintModel::default();
         let mut design = design_with_schematic(sch);
         design.sheet_contents = Some([("a.kicad_sch".to_string(), empty_sheet())].into_iter().collect());
@@ -529,7 +529,7 @@ mod tests {
 
     fn board_with_sheet() -> (ConstraintModel, Design) {
         let mut sch = empty_sheet();
-        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(10_000, 10_000), size: (20_000, 10_000), pins: vec![] });
+        sch.sheets.push(SheetInstance { id: "sheet_a".into(), name: "A".into(), file: "a.kicad_sch".into(), at: p(10_000, 10_000), size: (20_000, 10_000), pins: vec![], page: String::new() });
         (ConstraintModel::default(), design_with_schematic(sch))
     }
 
@@ -571,7 +571,7 @@ mod tests {
     fn change_symbol_swaps_the_library_symbol_of_every_unit_and_refuses_what_cannot_be() {
         use eda_model::ir::SymbolInstance;
         let mut sch = empty_sheet();
-        let mk = |id: &str, lib: &str, unit: u32| SymbolInstance { id: id.into(), at: p(0, 0), rot: 0, mirrored: false, mirror_y: false, lib_id: lib.into(), unit, value: "10k".into(), footprint: String::new(), datasheet: String::new() };
+        let mk = |id: &str, lib: &str, unit: u32| SymbolInstance { id: id.into(), at: p(0, 0), rot: 0, mirrored: false, mirror_y: false, lib_id: lib.into(), unit, value: "10k".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
         sch.symbols.push(mk("R1", "Device:R", 1));
         let model = ConstraintModel::default();
         let mut b = Board::new(design_with_schematic(sch), &model, 100, 300);

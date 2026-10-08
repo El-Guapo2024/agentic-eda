@@ -123,6 +123,8 @@ export type ToolId =
   | "sch_sheet"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol"
+  /** `eeschema.EditorControl.highlightNetTool` (Highlight Nets): each click highlights the net under it, the tool stays armed -- see SchematicView.tsx. */
+  | "sch_highlight_net"
   /** The schematic's shape tools (`SCH_DRAWING_TOOLS::DrawShape` / `DrawRuleArea` / `TwoClickPlace` for a directive label): kicad-port/schShapeEdit.ts, polygonGeom.ts. */
   | "sch_rect"
   | "sch_circle"
@@ -171,6 +173,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_line: "Line: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   sch_sheet: "Hierarchical Sheet: click one corner, then the opposite one, then name the sheet. Esc to cancel",
   sch_place_symbol: "Place Symbol: click where to place it",
+  sch_highlight_net: "Highlight Nets: click a wire, label or power symbol to highlight its net (click empty space to clear), Esc to leave",
   sch_rect: "Rectangle: click one corner, then the opposite one. Esc to cancel",
   sch_circle: "Circle: click the centre, then a point on the circle. Esc to cancel",
   sch_arc: "Arc: click the start, then the end. Esc to cancel",

@@ -235,7 +235,17 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let y = mm(sym.at.y);
         let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
         writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {})", sexpr_str(&lib_id), sym.unit).unwrap();
-        writeln!(out, "\t\t(exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no)").unwrap();
+        // The attributes `SCH_EDIT_TOOL::SetAttribute` toggles (Do not Populate, Exclude from BOM / Board / Simulation): kicad-cli's BOM, netlist and ERC read them from here.
+        let yes_no = |b: bool| if b { "yes" } else { "no" };
+        writeln!(
+            out,
+            "\t\t(exclude_from_sim {}) (in_bom {}) (on_board {}) (dnp {})",
+            yes_no(sym.exclude_from_sim),
+            yes_no(!sym.exclude_from_bom),
+            yes_no(!sym.exclude_from_board),
+            yes_no(sym.dnp)
+        )
+        .unwrap();
         if sch.extras.is_locked(&sym.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
@@ -512,8 +522,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
-        // The sheet is filed under the path of the screen it is drawn on (its parent), with its own page number.
-        writeln!(out, "\t\t\t\t(path \"{}\" (page \"{page}\"))", ctx.instance_paths.first().map(String::as_str).unwrap_or("/")).unwrap();
+        // The sheet is filed under the path of the screen it is drawn on (its parent), with its own page number: the one the
+        // user set (Edit Sheet Page Number), else the sheet's place in the hierarchy.
+        let page = if s.page.is_empty() { page.to_string() } else { s.page.clone() };
+        writeln!(out, "\t\t\t\t(path \"{}\" (page {}))", ctx.instance_paths.first().map(String::as_str).unwrap_or("/"), sexpr_str(&page)).unwrap();
         writeln!(out, "\t\t\t)").unwrap();
         writeln!(out, "\t\t)").unwrap();
         writeln!(out, "\t)").unwrap();
@@ -1397,6 +1409,7 @@ mod tests {
                 at: Point { x: 10_000, y: 10_000 },
                 size: (20_000, 20_000),
                 pins: vec![SheetPin { id: String::new(), name: "AD0".into(), shape: LabelShape::Passive, at: Point { x: 15_000, y: 30_000 } }],
+                page: String::new(),
             }],
             instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             imported_from_kicad: false,

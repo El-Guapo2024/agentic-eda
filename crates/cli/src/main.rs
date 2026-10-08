@@ -19,11 +19,14 @@
 mod board;
 mod board_control_api;
 mod board_output_api;
+mod bom_plugins;
 mod cleanup_api;
 mod convert_api;
 mod fab_api;
 mod library_api;
 mod sch_api;
+mod sch_control_api;
+mod sch_export_api;
 mod fab_cmd;
 mod import_kicad;
 mod route_api;
