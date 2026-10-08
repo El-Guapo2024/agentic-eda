@@ -1,0 +1,219 @@
+//! A hierarchical schematic: one sheet per module, a sheet symbol for each on the root.
+//!
+//! `derive_hierarchy` is the module-sheet counterpart of `derive_schematic`. The cut into modules comes from
+//! `eda_model::modules::infer_modules`; what is drawn on each sheet is `sheet.rs`, the root is `root.rs`, and `kit.rs` /
+//! `items.rs` are the measuring and bookkeeping they share.
+//!
+//! Power nets are never sheet pins: a supply or ground rail is a power symbol at each pin on whichever sheet the pin is, and the
+//! names join them across sheets, as in any KiCad design. One `PWR_FLAG` per rail that needs a source goes on the first sheet that
+//! has a pin on it.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use eda_model::ir::{Design, PowerSymbol, Provenance, SchematicSection, TitleBlock};
+use eda_model::modules::{infer_modules, is_ground_net_name, FunctionalModule};
+use eda_model::{CheckResult, ConstraintModel, PinKind};
+
+pub mod items;
+pub mod kit;
+pub mod root;
+pub mod sheet;
+
+#[cfg(test)]
+mod tests;
+
+pub use items::Keep;
+use items::Ctx;
+use kit::Paper;
+
+use crate::EngineOptions;
+
+/// A file name for a module's sheet: its name in lower case, anything but letters and digits an underscore.
+pub fn sheet_file_name(name: &str, taken: &BTreeSet<String>) -> String {
+    let mut s = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c.to_ascii_lowercase());
+        } else if !s.ends_with('_') {
+            s.push('_');
+        }
+    }
+    let s = s.trim_matches('_').to_string();
+    let base = if s.is_empty() { "sheet".to_string() } else { s };
+    let mut candidate = format!("{base}.kicad_sch");
+    let mut n = 1;
+    while taken.contains(&candidate) {
+        n += 1;
+        candidate = format!("{base}_{n}.kicad_sch");
+    }
+    candidate
+}
+
+fn validate(model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut errors = Vec::new();
+    let mut seen = BTreeSet::new();
+    for p in &model.parts {
+        if !seen.insert(p.reference.clone()) {
+            errors.push(CheckResult::fail("engine.duplicate_reference", p.reference.clone(), "duplicate part reference"));
+        }
+    }
+    for net in &model.nets {
+        for pin_ref in &net.pins {
+            let (r, n) = pin_ref.split_once('.').unwrap_or((pin_ref.as_str(), ""));
+            if model.part(r).and_then(|p| p.pins.iter().find(|x| x.number == n)).is_none() {
+                errors.push(CheckResult::fail("engine.unresolved_pin", format!("{}:{pin_ref}", net.name), "pin reference does not resolve to a known part/pin"));
+            }
+        }
+    }
+    errors
+}
+
+/// Nets that need a `PWR_FLAG`: a power or ground pin on them and no power output (a regulator's output), exactly the rule
+/// `derive_schematic` uses.
+fn flag_nets(ctx: &Ctx) -> Vec<(String, Vec<String>)> {
+    let mut nets = ctx.model.nets.clone();
+    nets.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut out = Vec::new();
+    for net in &nets {
+        let mut has_in = ctx.is_rail(&net.name);
+        let mut has_out = false;
+        for pin_ref in &net.pins {
+            let (r, n) = pin_ref.split_once('.').unwrap_or((pin_ref.as_str(), ""));
+            let Some(pin) = ctx.model.part(r).and_then(|p| p.pins.iter().find(|x| x.number == n)) else { continue };
+            let is_out = pin.kind == PinKind::Power && pin.name.as_deref().unwrap_or("").to_ascii_uppercase().contains("OUT");
+            match pin.kind {
+                PinKind::Power if is_out => has_out = true,
+                PinKind::Power | PinKind::Ground => has_in = true,
+                _ => {}
+            }
+        }
+        if has_in && !has_out {
+            let mut pins = net.pins.clone();
+            pins.sort();
+            out.push((net.name.clone(), pins));
+        }
+    }
+    out
+}
+
+/// The sheets of a hierarchical schematic and the paper each is drawn on.
+pub struct Derived {
+    pub design: Design,
+    pub papers: BTreeMap<String, Paper>,
+}
+
+/// Derive a root sheet and one sheet per module.
+pub fn derive_hierarchy(model: &ConstraintModel, opts: &EngineOptions, modules: &[FunctionalModule], keep: &Keep) -> Result<Design, Vec<CheckResult>> {
+    derive_hierarchy_full(model, opts, modules, keep).map(|d| d.design)
+}
+
+pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modules: &[FunctionalModule], keep: &Keep) -> Result<Derived, Vec<CheckResult>> {
+    let errors = validate(model);
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let ctx = Ctx::new(model, keep);
+
+    let mut taken: BTreeSet<String> = BTreeSet::new();
+    let mut files: Vec<String> = Vec::new();
+    for m in modules {
+        let f = sheet_file_name(&m.name, &taken);
+        taken.insert(f.clone());
+        files.push(f);
+    }
+    let crossing: Vec<Vec<String>> = modules.iter().map(|m| sheet::crossing_nets(&ctx, m)).collect();
+
+    let mut outs: Vec<sheet::SheetOut> = modules.iter().map(|m| sheet::layout_module(&ctx, m)).collect();
+
+    // Power symbols are numbered across the whole design, in sheet order.
+    let mut n = 0;
+    for o in outs.iter_mut() {
+        for p in o.items.power.iter_mut() {
+            n += 1;
+            p.id = format!("#PWR{n:02}");
+        }
+    }
+    // One PWR_FLAG per net that needs a source, on the first sheet with a pin on it.
+    let mut flag_n = n;
+    for (net, pins) in flag_nets(&ctx) {
+        let ground = is_ground_net_name(&net);
+        'find: for pin_ref in &pins {
+            for (mi, m) in modules.iter().enumerate() {
+                let r = pin_ref.split('.').next().unwrap_or("");
+                if !m.refs.iter().any(|x| x == r) {
+                    continue;
+                }
+                let Some(tip) = outs[mi].items.tips.get(pin_ref).copied() else { continue };
+                flag_n += 1;
+                outs[mi].items.power.push(PowerSymbol { id: format!("#FLG{flag_n:02}"), lib_id: "power:PWR_FLAG".to_string(), at: tip, rot: if ground { 180_000 } else { 0 }, net: net.clone(), pin: String::new() });
+                break 'find;
+            }
+        }
+    }
+
+    let root = root::layout_root(modules, &files, &crossing);
+
+    // ---- assemble ----
+    let mut papers: BTreeMap<String, Paper> = BTreeMap::new();
+    let mut contents: BTreeMap<String, SchematicSection> = BTreeMap::new();
+    for (mi, m) in modules.iter().enumerate() {
+        let o = &mut outs[mi];
+        let user_fields: BTreeMap<String, BTreeMap<String, String>> = m.refs.iter().filter_map(|r| keep.user_fields.get(r).map(|f| (r.clone(), f.clone()))).collect();
+        let sec = SchematicSection {
+            symbols: std::mem::take(&mut o.items.symbols),
+            wires: std::mem::take(&mut o.items.wires),
+            labels: std::mem::take(&mut o.items.labels),
+            power_symbols: std::mem::take(&mut o.items.power),
+            no_connects: std::mem::take(&mut o.items.ncs),
+            user_fields,
+            title_block: Some(TitleBlock { title: m.name.clone(), paper: o.paper.name.to_string(), ..Default::default() }),
+            ..Default::default()
+        };
+        papers.insert(files[mi].clone(), o.paper);
+        contents.insert(files[mi].clone(), sec);
+    }
+    let mut root_items = root.items;
+    let title_block = Some(match keep.title_block.clone() {
+        Some(mut tb) => {
+            tb.paper = root.paper.name.to_string();
+            tb
+        }
+        None => TitleBlock { paper: root.paper.name.to_string(), ..Default::default() },
+    });
+    let root_section = SchematicSection {
+        wires: std::mem::take(&mut root_items.wires),
+        labels: std::mem::take(&mut root_items.labels),
+        sheets: root.sheets,
+        erc_exclusions: keep.erc_exclusions.clone(),
+        erc_pin_map: keep.erc_pin_map.clone(),
+        title_block,
+        ..Default::default()
+    };
+    papers.insert(String::new(), root.paper);
+
+    let mut design = Design {
+        schema: 1,
+        provenance: Provenance { engine_version: opts.engine_version.clone(), intent_hash: opts.intent_hash.clone(), seed: opts.seed, stage_hashes: Vec::new() },
+        schematic: Some(root_section),
+        nets: None,
+        placement: None,
+        routing: None,
+        drawings: None,
+        footprint_library: None,
+        sheet_contents: Some(contents),
+        bus_aliases: vec![],
+        symbol_library: None,
+    };
+    design.assign_missing_ids();
+    Ok(Derived { design, papers })
+}
+
+/// The module-sheet schematic of `model`: modules inferred from the netlist (or taken from `recorded`, a placement's modules);
+/// a design with only one module stays one flat sheet.
+pub fn derive_schematic_modules_with(model: &ConstraintModel, opts: &EngineOptions, recorded: &[eda_model::ir::ModuleRegion]) -> Result<Design, Vec<CheckResult>> {
+    let modules = infer_modules(model, recorded);
+    if modules.len() < 2 {
+        return crate::derive_schematic(model, opts);
+    }
+    derive_hierarchy(model, opts, &modules, &Keep::default())
+}

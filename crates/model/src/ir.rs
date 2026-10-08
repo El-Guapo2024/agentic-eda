@@ -692,6 +692,10 @@ pub struct TitleBlock {
     /// KiCad's `comment 1`..`comment 9`, in that order (index 0 = comment 1).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comments: Vec<String>,
+    /// The paper this sheet is drawn on ("A4", "A3", ..., KiCad's name; landscape). KiCad's Page Settings dialog edits it together
+    /// with the title block, and so does this field. Empty is A4, what every sheet before this field existed was.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub paper: String,
 }
 
 /// A child hierarchical sheet, as placed on its parent sheet (GAPS.md #6).

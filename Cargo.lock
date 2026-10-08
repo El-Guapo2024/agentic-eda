@@ -564,6 +564,7 @@ dependencies = [
  "eda-layout",
  "eda-model",
  "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]

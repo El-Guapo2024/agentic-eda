@@ -107,6 +107,11 @@ pub fn is_connector_part(part: &Part) -> bool {
     p == "J" || p == "P" || p == "CN" || part.edge == Some(true)
 }
 
+/// A part a block is built around: an IC or a connector (everything else is a satellite that serves one).
+pub fn is_anchor_part(part: &Part) -> bool {
+    is_connector_part(part) || is_ic_part(part)
+}
+
 /// An IC: a `U`, or any non-connector with enough pins to anchor a block.
 fn is_ic_part(part: &Part) -> bool {
     if is_connector_part(part) {

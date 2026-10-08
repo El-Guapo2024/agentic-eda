@@ -7,3 +7,6 @@ edition = "2021"
 serde_json = { workspace = true }
 eda-model = { path = "../model" }
 eda-layout = { path = "../layout" }
+
+[dev-dependencies]
+serde_yaml = { workspace = true }

@@ -13,6 +13,17 @@ use eda_model::ir::{Design, LabelKind, NetLabel, NoConnect, Point, PowerSymbol, 
 use eda_model::{resolve_lib_id, CheckResult, ConstraintModel, Part, Pin, PinKind};
 
 pub mod geometry;
+pub mod hier;
+pub mod nets;
+pub mod placed;
+
+pub use hier::{derive_hierarchy, derive_schematic_modules_with, Keep};
+
+/// The schematic of `model` as module sheets (one sheet per functional module, a sheet symbol for each on the root); a design that
+/// is one module stays one flat sheet. What a new derivation should call.
+pub fn derive_schematic_modules(model: &ConstraintModel, opts: &EngineOptions) -> Result<Design, Vec<CheckResult>> {
+    derive_schematic_modules_with(model, opts, &[])
+}
 
 /// Grid used by the layout engine; ports and node sizes are chosen as
 /// multiples of this so everything lands on-grid. (Used by tests below;

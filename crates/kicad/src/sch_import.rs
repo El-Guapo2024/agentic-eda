@@ -513,7 +513,11 @@ pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, Sc
 }
 
 fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
-    let tb = sexpr::find(root, "title_block")?;
+    // `(paper "A3")` sits next to the title block in the file and travels with it here; plain A4 is the default and is not stored.
+    let paper = sexpr::find(root, "paper").and_then(|p| sexpr::txt(p, 1)).filter(|p| !p.eq_ignore_ascii_case("A4")).unwrap_or("").to_string();
+    let Some(tb) = sexpr::find(root, "title_block") else {
+        return (!paper.is_empty()).then(|| TitleBlock { paper, ..Default::default() });
+    };
     let text = |tag: &str| sexpr::find(tb, tag).and_then(|f| sexpr::txt(f, 1)).unwrap_or("").to_string();
     let mut comments = Vec::new();
     for c in sexpr::find_all(tb, "comment") {
@@ -529,7 +533,7 @@ fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
     while comments.last().is_some_and(|s: &String| s.is_empty()) {
         comments.pop();
     }
-    Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments })
+    Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments, paper })
 }
 
 /// A symbol instance's own `(property "Name" "Value" ...)` text, by name.
