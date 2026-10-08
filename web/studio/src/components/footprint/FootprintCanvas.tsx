@@ -31,6 +31,7 @@ import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "../canvas/curve
 /** The footprint editor's fixed graphic line width (`footprintToShapeArg`'s own 150 um). */
 const DRAW_STROKE_WIDTH_UM = 150;
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
+import { useFootprintGridOrigin } from "../../state/gridOrigin";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
@@ -169,6 +170,7 @@ export function FootprintCanvas() {
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
+  const gridOrigin = useFootprintGridOrigin();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -267,13 +269,16 @@ export function FootprintCanvas() {
       selection: session ? new Set([...state.selection, ...session.assigned.keys()]) : state.selection,
       gridUm: state.gridUm,
       gridVisible: state.gridVisible,
+      gridOrigin: [gridOrigin.x, gridOrigin.y],
       drawState: state.drawState,
       cursorUm: state.cursorUm,
       movePreview: state.movePreview,
+      highContrast: state.highContrast,
+      activeLayer: state.activeLayer,
     });
     ctx.restore();
     ctx.restore();
-  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, state.drawState, state.cursorUm, state.movePreview, state.enumerate, containerSize]);
+  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

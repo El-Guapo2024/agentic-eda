@@ -16,7 +16,7 @@ import type { ChamferCorners, CmdShape, CmdText, LibraryPad, Um } from "../../ap
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineUm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
-import { circleThrough, normalizeSweep } from "../canvas/painter";
+import { circleThrough, drawGridOrigin, normalizeSweep } from "../canvas/painter";
 import { drawArcPreview } from "../canvas/arcPreview";
 import { drawBezierPreview } from "../canvas/bezierPreview";
 import { BEZIER_MAX_ERROR_UM } from "../canvas/itemHitTest";
@@ -31,12 +31,13 @@ function realLayerKey(layer: string): string {
   return layer.replace(/\./g, "_");
 }
 
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number) {
+function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0]) {
   const visible = computeVisibleGridSize(gridUm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return;
-  const x0 = -view.x / view.scale;
-  const y0 = -view.y / view.scale;
+  // The grid is anchored at the grid origin (`GAL::SetGridOrigin`): dots at `origin + i * visible`.
+  const x0 = -view.x / view.scale - origin[0];
+  const y0 = -view.y / view.scale - origin[1];
   const wUm = widthPx / view.scale;
   const hUm = heightPx / view.scale;
   const firstIndexX = Math.floor(x0 / visible) - 1;
@@ -47,10 +48,10 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
   const minorR = hairlineUm(view, stepPx < 8 ? 0.6 : 1);
   const majorR = minorR * MAJOR_GRID_LINE_WIDTH_RATIO;
   for (let i = firstIndexX; i <= lastIndexX; i++) {
-    const x = i * visible;
+    const x = origin[0] + i * visible;
     const tickX = isMajorGridLine(i);
     for (let j = firstIndexY; j <= lastIndexY; j++) {
-      const y = j * visible;
+      const y = origin[1] + j * visible;
       ctx.beginPath();
       ctx.arc(x, y, tickX && isMajorGridLine(j) ? majorR : minorR, 0, Math.PI * 2);
       ctx.fill();
@@ -322,9 +323,26 @@ export interface FpPaintOptions {
   selection: Set<string>;
   gridUm: number;
   gridVisible: boolean;
+  /** The point the grid is anchored at (`common.Control.gridSetOrigin` in this editor): the dots follow it and its marker is drawn when it is not at (0, 0). */
+  gridOrigin?: [number, number] | null;
   drawState: FpPaintDrawState | null;
   cursorUm: { x: number; y: number } | null;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  /** High Contrast Mode (`common.Control.highContrastMode`): what is not on `activeLayer` is drawn dimmed. */
+  highContrast?: boolean;
+  activeLayer?: string;
+}
+
+/** What High Contrast Mode leaves of an item off the active layer (the board painter's `layerAlpha` uses the same 0.25). */
+const DIMMED_ALPHA = 0.25;
+
+/**
+ * `PCB_PAINTER`'s `m_contrastModeDisplay == DIMMED`: with High Contrast Mode on, an item not on the active layer is dimmed. A pad is copper (and mask and paste)
+ * and this editor's layer box offers only silkscreen, fab and courtyard, so its pads are always off the active layer.
+ */
+function contrastAlpha(opts: FpPaintOptions, layer: string | null): number {
+  if (!opts.highContrast || !opts.activeLayer) return 1;
+  return layer === opts.activeLayer ? 1 : DIMMED_ALPHA;
 }
 
 /** The slice of `FpDrawState` the painter reads. */
@@ -343,7 +361,8 @@ export function paintFootprint(
   footprint: { pads: LibraryPad[]; graphics: CmdShape[]; texts: CmdText[] } | null,
   opts: FpPaintOptions
 ) {
-  if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm);
+  if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]);
+  drawGridOrigin(ctx, view, opts.gridOrigin, "#1a1a1a"); // the canvas is filled with this colour (FootprintCanvas.tsx)
   if (!footprint) {
     drawAnchor(ctx, view);
     return;
@@ -356,6 +375,7 @@ export function paintFootprint(
   for (const g of footprint.graphics) {
     const mv = moved(g.id);
     ctx.save();
+    ctx.globalAlpha *= contrastAlpha(opts, g.layer);
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""));
     ctx.restore();
@@ -363,6 +383,7 @@ export function paintFootprint(
   for (const t of footprint.texts) {
     const mv = moved(t.id);
     ctx.save();
+    ctx.globalAlpha *= contrastAlpha(opts, t.layer);
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     drawText(ctx, view, t, opts.selection.has(t.id ?? ""));
     ctx.restore();
@@ -370,6 +391,7 @@ export function paintFootprint(
   for (const p of footprint.pads) {
     const mv = moved(p.id);
     ctx.save();
+    ctx.globalAlpha *= contrastAlpha(opts, null);
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? "") });
     ctx.restore();

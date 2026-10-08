@@ -5,6 +5,7 @@
 // runs `PCB_ACTIONS::properties`, the same action E invokes.
 import type { Dispatch } from "react";
 import type { Action, StudioApi } from "../../state/store";
+import { openGroupDialog } from "../../state/commonDialogs";
 
 export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch<Action>): void {
   if (api.textById(id)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id } });
@@ -18,4 +19,9 @@ export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch
   else if (api.dimensionById(id)) dispatch({ type: "SET_DIMENSION_EDIT_ID", id });
   else if (api.trackById(id) || api.viaById(id) || api.shapeById(id)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id });
   else if (api.partByRef(id)) dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+  // `PCB_GROUP` properties are the group tool's (`ACTIONS::groupProperties`, common.Groups.groupProperties): the name and the member list.
+  else {
+    const group = api.groupById(id);
+    if (group) openGroupDialog({ id, name: group.name, members: [...group.member_ids] });
+  }
 }

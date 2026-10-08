@@ -203,6 +203,9 @@ Old #17 (open) and #18 (partial). Hit: every drag. Blocks: no. WP3 for the PCB, 
   (`toggleGridOverrides` is recorded unwired); the schematic grid is a constant (`components/schematic/layout.ts` `GRID`) with no
   pin or anchor snap in Move. A press followed by a one-grid jitter counts as a drag, because `drag.moved` is set when the snapped
   delta is non-zero (`Canvas.tsx`); KiCad starts a drag after 8 px of travel (on macOS also after 300 ms held).
+- Done since: the board, footprint and symbol editors have an editable grid list, fast grids and Edit Grids... (`PARITY-common.md`
+  section 10) and a grid origin the server's placement snap follows. The schematic's constant grid means it offers none of the grid
+  list, Next / Previous Grid, fast grids or Edit Grids; a grid choice there waits for the schematic's own snapping work.
 - Port from: `pcbnew/tools/pcb_grid_helper.cpp`, `common/tool/grid_helper.cpp`, `eeschema/tools/ee_grid_helper.cpp`, `common/tool/tool_dispatcher.cpp`.
 
 ### 15. Interaction details that differ
@@ -226,8 +229,9 @@ Old #30. **Partial.** Hit: constantly. Blocks: no. WP3, size S-M.
 ### 17. Groups
 Old #27. **Partial.** Hit: sometimes. Blocks: no. WP3, with WP1 for the schematic, size S-M.
 - Exists: Group, Ungroup, whole-group selection, enter and leave (`Cmd::Group`, `state/store.tsx` `withGroupSubstitution`).
-- Missing: Add Items, Remove Items and Group Properties (unwired); group-aware move, rotate, flip and delete; nested groups; the
-  entered-group overlay; export (item 2); no groups in the schematic.
+- Done since: Add Items, Remove Items and Group Properties on the board (`PARITY-common.md` section 4: one undo step, `Cmd::EditGroup`).
+- Missing: group-aware move, rotate, flip and delete; nested groups; the entered-group overlay; export (item 2); no groups in the
+  schematic or the footprint editor (their Group / Ungroup and the group dialogs are dimmed or do nothing there).
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
 
 ### 18. Appearance and display options

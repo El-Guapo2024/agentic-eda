@@ -17,20 +17,8 @@ import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
 import { useColorScheme } from "../hooks/useColorScheme";
 import { useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength } from "../state/units";
-import { DEFAULT_PCB_GRIDS_UM } from "../kicad-port/grid";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
-import { FootprintToolbarControl, SymbolToolbarControl } from "./toolbar/EditorToolbarControls";
-
-/**
- * KiCad's real default PCB grid list (app_settings.cpp
- * APP_SETTINGS_BASE::DefaultGridSizeList) -- see kicad-port/grid.ts's own
- * header comment for why this is declaration order, not sorted by size
- * (a deliberate jump from 1 mil to 5.0 mm partway through). The dropdown
- * below renders it in exactly that order, same as KiCad's own grid
- * dropdown and N/Shift+N cycling (common.Control.gridNext/gridPrev,
- * useActionRunner.ts).
- */
-export const GRID_OPTIONS_UM = DEFAULT_PCB_GRIDS_UM;
+import { FootprintToolbarControl, GridSelect, SymbolToolbarControl } from "./toolbar/EditorToolbarControls";
 
 // No source-verified "100% = this many px/mm" reference for KiCad's own
 // zoom percentage readout either; this defines 100% as 1 screen px per
@@ -86,19 +74,9 @@ function BoardToolbarControl({ item }: { item: Extract<ToolbarItem, { type: "con
   const state = useStudioState();
   const dispatch = useStudioDispatch();
 
-  if (item.control === "gridSelect") {
-    return (
-      <div className="toolbar-control" title="Grid">
-        <select value={state.gridUm} onChange={(e) => dispatch({ type: "SET_GRID_UM", um: Number(e.target.value) })}>
-          {GRID_OPTIONS_UM.map((um) => (
-            <option key={um} value={um}>
-              {formatLength(um, state.units)}
-            </option>
-          ))}
-        </select>
-      </div>
-    );
-  }
+  // The board editor's own grid list (state/gridSettings.ts), in KiCad's order, which is declaration order and not sorted by size (kicad-port/grid.ts says why);
+  // "Edit Grids..." at the end of the box edits it.
+  if (item.control === "gridSelect") return <GridSelect editor="pcb" gridUm={state.gridUm} onChange={(um) => dispatch({ type: "SET_GRID_UM", um })} />;
 
   if (item.control === "zoomSelect") {
     const currentPercent = Math.round((state.view.scale / 0.01) * 100);
@@ -233,9 +211,21 @@ function GroupButton({ item, editor }: { item: Extract<ToolbarItem, { type: "gro
   );
 }
 
+/**
+ * The right-click menus of toolbar buttons (`TOOLBAR_ITEM_REF::WithContextMenu`, toolbars_pcb_editor.cpp and its siblings): the Show Grid button's offers Edit Grids...
+ * and, in the editors that have a grid origin, Grid Origin.... (The other buttons with a context menu are the routing and drawing tools'.)
+ */
+const BUTTON_MENUS: Record<ToolbarEditor, Record<string, string[]>> = {
+  pcb: { "common.Control.toggleGrid": ["common.Control.editGrids", "common.Control.editGridOrigin"] },
+  schematic: { "common.Control.toggleGrid": ["common.Control.editGrids"] },
+  footprint: { "common.Control.toggleGrid": ["common.Control.editGrids", "common.Control.editGridOrigin"] },
+  symbol: { "common.Control.toggleGrid": ["common.Control.editGrids"] },
+};
+
 function ToolbarItemView({ item, editor }: { item: ToolbarItem; editor: ToolbarEditor }) {
   const { run, isEnabled } = useActionRunner();
   const checked = useChecked();
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
 
   if (item.type === "separator") return <div className="toolbar-separator" role="separator" />;
 
@@ -250,10 +240,36 @@ function ToolbarItemView({ item, editor }: { item: ToolbarItem; editor: ToolbarE
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
   const tooltip = enabled ? [label, hotkey ? displayHotkey(hotkey) : null].filter(Boolean).join(" — ") : `${label} (${deadReason(editor, item.action)})`;
   const pressed = enabled ? checked(item.action) : undefined;
+  const menuActions = BUTTON_MENUS[editor][item.action];
   return (
-    <button className={`toolbar-button${pressed ? " active" : ""}`} aria-pressed={pressed} disabled={!enabled} title={tooltip} onClick={() => run(item.action)}>
-      <ActionIcon iconName={action?.icon ?? null} />
-    </button>
+    <>
+      <button
+        className={`toolbar-button${pressed ? " active" : ""}`}
+        aria-pressed={pressed}
+        disabled={!enabled}
+        title={tooltip}
+        onClick={() => run(item.action)}
+        onContextMenu={
+          menuActions
+            ? (e) => {
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                setMenu({ x: r.left, y: r.bottom });
+              }
+            : undefined
+        }
+      >
+        <ActionIcon iconName={action?.icon ?? null} />
+      </button>
+      {menu && menuActions && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          entries={menuActions.map((name) => ({ label: actionsByName.get(name)?.label ?? name, disabled: !isEnabled(name), onSelect: () => run(name) }))}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </>
   );
 }
 

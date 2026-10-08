@@ -28,11 +28,15 @@ pub struct SchExtras {
     /// multi-unit part locks together, the way the studio selects them together).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locked: Vec<String>,
+    /// `SCH_SCREEN::GetPageSettings()`: the sheet's paper (Page Settings, `common.Control.pageSettings`), written as `(paper ...)`.
+    /// `None` is KiCad's default, A4 landscape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<crate::page::PageSettings>,
 }
 
 impl SchExtras {
     pub fn is_empty(&self) -> bool {
-        self.graphics.is_empty() && self.locked.is_empty()
+        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none()
     }
 
     /// True when `id` is locked.

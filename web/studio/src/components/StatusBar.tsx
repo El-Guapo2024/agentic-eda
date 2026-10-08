@@ -9,6 +9,8 @@
 // task brief's stated field order) -- not a full transcription, but
 // field 6 (tool message) is real and now backed by state.activeTool.
 import { TOOL_MESSAGES, useStudioDispatch, useStudioState } from "../state/store";
+import { useFpState } from "../state/footprintEditorStore";
+import { useSymState } from "../state/symbolEditorStore";
 import type { LengthUnit } from "../state/units";
 import { formatLength, formatXY, toPolar } from "../state/units";
 import { isStale, statusNotes } from "../kicad-port/checkRevision";
@@ -16,6 +18,10 @@ import { isStale, statusNotes } from "../kicad-port/checkRevision";
 export function StatusBar() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
+  const fp = useFpState();
+  const sym = useSymState();
+  // The Footprint Editor and the Symbol Editor keep their own cursor, view and grid; their status line shows them (`EDA_DRAW_FRAME::UpdateStatusBar`).
+  const lib = state.tab === "footprint" ? fp : state.tab === "symbol" ? sym : null;
 
   // Cursor position/dx-dy-dist and the active copper layer only ever get
   // real values from the PCB canvas's own pointer handlers (Canvas.tsx)
@@ -24,7 +30,9 @@ export function StatusBar() {
   // wrong the longer you stay away from it. "–" is honest; a stale
   // number that used to be true isn't.
   const onPcb = state.tab === "pcb";
-  const cursor = onPcb ? state.cursorUm : null;
+  const cursor = onPcb ? state.cursorUm : lib ? lib.cursorUm : null;
+  // Polar coordinates are the board editor's and the Footprint Editor's (`PCB_BASE_FRAME::m_polarCoords`); eeschema has none.
+  const polar = state.polar && state.tab !== "symbol" && state.tab !== "schematic";
   // pcb_base_frame.cpp UpdateStatusBar: dx/dy/dist is always relative to
   // m_LocalOrigin (Space to reset it; default (0,0)), NOT the move tool's
   // own drag anchor (state.moveOriginUm) -- KiCad's move tool never
@@ -37,7 +45,7 @@ export function StatusBar() {
   // state.schematicView) -- showing the PCB view's scale while looking
   // at the schematic would report a number that has nothing to do with
   // what's on screen. 3D's camera has no comparable "zoom %" concept.
-  const zoomScale = state.tab === "schematic" ? state.schematicView.scale : state.tab === "pcb" ? state.view.scale : 0;
+  const zoomScale = state.tab === "schematic" ? state.schematicView.scale : state.tab === "pcb" ? state.view.scale : lib ? lib.view.scale : 0;
   // Unlike grid/autopan/layer above, the tool message (field 6) is real
   // and meaningful on the Schematic tab too -- SchematicView.tsx has its
   // own `state.activeTool` (move/drag/wire/the `L`/`P`/`T`/`Q` placement
@@ -57,7 +65,7 @@ export function StatusBar() {
   return (
     <div className="status-bar">
       <span className="field">Z {zoomScale > 0 ? (zoomScale * 25.4).toFixed(2) : "–"}</span>
-      <span className="field">{cursor ? (state.polar ? `r ${toPolar(cursor.x, cursor.y, state.units).r}  θ ${toPolar(cursor.x, cursor.y, state.units).theta}` : formatXY(cursor.x, cursor.y, state.units)) : "–"}</span>
+      <span className="field">{cursor ? (polar ? `r ${toPolar(cursor.x, cursor.y, state.units).r}  θ ${toPolar(cursor.x, cursor.y, state.units).theta}` : formatXY(cursor.x, cursor.y, state.units)) : "–"}</span>
       <span className="field">
         {dx !== null && dy !== null
           ? state.polar
@@ -65,7 +73,7 @@ export function StatusBar() {
             : `dx ${formatLength(dx, state.units)}  dy ${formatLength(dy, state.units)}  dist ${formatLength(Math.hypot(dx, dy), state.units)}`
           : "dx –  dy –  dist –"}
       </span>
-      {onPcb && <span className="field">grid {formatLength(state.gridUm, state.units)}</span>}
+      {(onPcb || lib) && <span className="field">grid {formatLength(lib ? lib.gridUm : state.gridUm, state.units)}</span>}
       <label className="toggle" title="Polar coordinates">
         <input type="checkbox" checked={state.polar} onChange={() => dispatch({ type: "TOGGLE_POLAR" })} />
         polar

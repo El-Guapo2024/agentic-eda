@@ -306,6 +306,17 @@ pub fn set_aux_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<
     Ok(())
 }
 
+/// `PCB_CONTROL::DoSetGridOrigin`: the point the editing grid is anchored at; `None` (or (0, 0)) is `GridResetOrigin`'s reset.
+pub fn set_grid_origin(design: &mut Design, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
+    let at = at.filter(|p| p.x != 0 || p.y != 0);
+    let current = design.drawings.as_ref().and_then(|d| d.grid_origin);
+    if current == at {
+        return Err(fail("ops_grid_origin", "grid_origin", if at.is_some() { "the grid origin is already there" } else { "the grid origin is already at (0, 0)" }));
+    }
+    design.drawings.get_or_insert_with(Default::default).grid_origin = at;
+    Ok(())
+}
+
 // -------------------------------------------------------------------- repair
 
 /// What `RepairBoard` did, in KiCad's words.
@@ -610,6 +621,22 @@ mod tests {
         set_aux_origin(&mut d, Some(pt(5, 5))).unwrap();
         set_aux_origin(&mut d, Some(pt(0, 0))).unwrap();
         assert_eq!(d.drawings.as_ref().unwrap().aux_origin, None);
+    }
+
+    #[test]
+    fn the_grid_origin_is_set_and_reset_and_setting_what_is_there_is_refused() {
+        let mut d = design(vec![]);
+        set_grid_origin(&mut d, Some(pt(1_250, 2_500))).unwrap();
+        assert_eq!(d.drawings.as_ref().unwrap().grid_origin, Some(pt(1_250, 2_500)));
+        assert!(set_grid_origin(&mut d, Some(pt(1_250, 2_500))).is_err());
+        set_grid_origin(&mut d, None).unwrap();
+        assert_eq!(d.drawings.as_ref().unwrap().grid_origin, None);
+        assert!(set_grid_origin(&mut d, None).is_err(), "already at (0, 0)");
+        // (0, 0) is a reset, not a stored origin, and the grid origin is not the drill/place file origin.
+        set_grid_origin(&mut d, Some(pt(5, 5))).unwrap();
+        assert_eq!(d.drawings.as_ref().unwrap().aux_origin, None);
+        set_grid_origin(&mut d, Some(pt(0, 0))).unwrap();
+        assert_eq!(d.drawings.as_ref().unwrap().grid_origin, None);
     }
 
     #[test]
