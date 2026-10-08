@@ -84,8 +84,8 @@ test("an id on two lists has the kind of the first", () => {
 });
 
 test("the board and the schematic lists carry every kind the editors select", () => {
-  const b = boardLists({ parts: [{ ref: "U1" }], routing: { tracks: [{ id: "t" }], vias: [{ id: "v" }], zones: [{ id: "z" }] }, drawings: { shapes: [{ id: "s" }], texts: [{ id: "x" }], dimensions: [{ id: "d" }], groups: [{ id: "g" }] } });
-  assert.deepEqual(b, { footprint: ["U1"], track: ["t"], via: ["v"], zone: ["z"], shape: ["s"], text: ["x"], dimension: ["d"], group: ["g"] });
+  const b = boardLists({ parts: [{ ref: "U1", pads: [{ num: "1" }, { num: "1" }] }], routing: { tracks: [{ id: "t" }], vias: [{ id: "v" }], zones: [{ id: "z" }] }, drawings: { shapes: [{ id: "s" }], texts: [{ id: "x" }], dimensions: [{ id: "d" }], groups: [{ id: "g" }] } });
+  assert.deepEqual(b, { footprint: ["U1"], pad: ["U1.1", "U1.1#2"], track: ["t"], via: ["v"], zone: ["z"], shape: ["s"], text: ["x"], dimension: ["d"], group: ["g"] });
   assert.deepEqual(Object.values(boardLists(null)).flat(), []);
   const s = schematicLists({ symbols: [{ id: "R1" }], wires: [{ id: "w" }], labels: [{ id: "l" }] });
   assert.deepEqual([s.symbol, s.wire, s.label], [["R1"], ["w"], ["l"]]);

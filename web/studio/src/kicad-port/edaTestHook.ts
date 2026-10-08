@@ -18,6 +18,7 @@
 // studio does; with the page open `window.__eda` is just there. This file is the pure model (unit tested, no React and no DOM); the page glue is
 // actions/useEdaTestHook.ts.
 import { isActionEnabledForTab } from "./actionTabGate";
+import { padIds } from "./pcbItems";
 
 // ------------------------------------------------------------------------------------------------------------------------------------ errors
 
@@ -128,7 +129,7 @@ type IdItems = readonly { id?: string }[] | undefined;
 
 /** The board's state JSON as far as the hook reads it. */
 export interface BoardLike {
-  parts?: readonly { ref: string }[];
+  parts?: readonly { ref: string; pads?: readonly { num: string }[] }[];
   routing?: { tracks?: IdItems; vias?: IdItems; zones?: IdItems } | null;
   drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems } | null;
 }
@@ -153,6 +154,7 @@ const ids = (items: IdItems): string[] => (items ?? []).flatMap((i) => (i.id ? [
 export function boardLists(board: BoardLike | null | undefined): ItemLists {
   return {
     footprint: (board?.parts ?? []).map((p) => p.ref),
+    pad: (board?.parts ?? []).flatMap((p) => padIds(p)),
     track: ids(board?.routing?.tracks),
     via: ids(board?.routing?.vias),
     zone: ids(board?.routing?.zones),
