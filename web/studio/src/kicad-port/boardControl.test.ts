@@ -115,8 +115,8 @@ test("highlightedNets / isHighlighted: the first net plus the rest; a single nam
 
 const board = {
   parts: [
-    { ref: "U1", pads: [{ net: "VCC" }, { net: "GND" }, { net: null }, { net: "VCC" }] },
-    { ref: "R1", pads: [{ net: "SIG" }] },
+    { ref: "U1", pads: [{ num: "1", net: "VCC" }, { num: "2", net: "GND" }, { num: "3", net: null }, { num: "1", net: "VCC" }] },
+    { ref: "R1", pads: [{ num: "1", net: "SIG" }] },
     { ref: "H1", pads: [] },
   ],
   routing: { tracks: [{ id: "trk_1", net: "SIG" }], vias: [{ id: "via_1", net: "GND" }], zones: [{ id: "zon_1", net: "" }, { id: "zon_2", net: "VCC" }] },
@@ -127,6 +127,10 @@ test("netsOfSelection: the nets of the selected connected items in first-seen or
   assert.deepEqual(netsOfSelection(["R1", "trk_1", "via_1"], board), ["SIG", "GND"]);
   assert.deepEqual(netsOfSelection(["zon_1", "zon_2"], board), ["VCC"], "a zone with no net adds none");
   assert.deepEqual(netsOfSelection(["H1", "nope"], board), []);
+  // a selected pad is its own item (REF.NUMBER, #k for a repeat): its net alone
+  assert.deepEqual(netsOfSelection(["U1.2"], board), ["GND"]);
+  assert.deepEqual(netsOfSelection(["U1.1#2", "R1.1"], board), ["VCC", "SIG"]);
+  assert.deepEqual(netsOfSelection(["U1.3"], board), [], "an unconnected pad has no net");
   assert.deepEqual(netsOfSelection(new Set(["trk_1"]), { parts: [], routing: null }), []);
 });
 

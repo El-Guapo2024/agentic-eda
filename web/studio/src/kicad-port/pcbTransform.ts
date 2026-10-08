@@ -181,6 +181,40 @@ export function planCarry(board: BoardState, selection: readonly string[], dx: n
   return { cmds, ids, lockedOut };
 }
 
+/** `ROTATION_ANCHOR` of `DIALOG_MOVE_EXACT`: each item about its own anchor, the selection's centre (after the move), or the local coordinates origin. */
+export type MoveExactAnchor = "item" | "center" | "origin";
+
+/**
+ * `EDIT_TOOL::MoveExact` ("Move Exactly...", Shift+M): every item of the selection is moved by `(dx, dy)` and then turned by `angleDegCcw` (the dialog's
+ * angle, counter-clockwise on the screen) about its own anchor, the centre of the selection's box (measured before the move, then moved with it: "make sure
+ * the rotation is from the right reference point"), or the local origin -- the whole thing one batch, so one undo step. The same items as any Move
+ * (locked ones stay, a pad stands for its footprint), whatever their kind.
+ */
+export function planMoveExact(board: BoardState, selection: readonly string[], dx: number, dy: number, angleDegCcw: number, anchor: MoveExactAnchor, localOrigin: Pt = [0, 0]): TransformPlan {
+  const { ids, lockedOut } = editableSelection(board, selection);
+  if (ids.length === 0) return { ...EMPTY, lockedOut };
+  const cmds: Cmd[] = [];
+  const [mx, my] = [Math.round(dx), Math.round(dy)];
+  if (mx !== 0 || my !== 0) cmds.push({ op: "move_items", ids, dx: mx, dy: my });
+  const angle = Math.round(-angleDegCcw * 1000); // the backend turns clockwise for a positive angle
+  if (angle !== 0) {
+    if (anchor === "item") {
+      // `boardItem->Rotate( boardItem->GetPosition(), angle )` after the item was moved
+      for (const id of ids) {
+        const at = itemPosition(board, id);
+        if (at) cmds.push({ op: "rotate_items", ids: [id], pivot: toXY([at[0] + mx, at[1] + my]), angle_millideg: angle });
+      }
+    } else {
+      const centre = anchor === "center" ? selectionCenter(board, ids) : [localOrigin[0], localOrigin[1]];
+      if (centre) {
+        const [sx, sy] = anchor === "center" ? [mx, my] : [0, 0];
+        cmds.push({ op: "rotate_items", ids, pivot: toXY([centre[0]! + sx!, centre[1]! + sy!]), angle_millideg: angle });
+      }
+    }
+  }
+  return { cmds, ids, lockedOut };
+}
+
 // ------------------------------------------------------------- picking up
 
 export interface CarryStart {

@@ -18,7 +18,7 @@ export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "d
  * shares the number (a shield tab, several pads on one pin). Pads have no id of their own in the board state; the footprint's reference makes
  * this one unique, and a pad is always found through its footprint.
  */
-export function padIds(part: Part): string[] {
+export function padIds(part: { ref: string; pads?: readonly { num: string }[] }): string[] {
   const seen = new Map<string, number>();
   return (part.pads ?? []).map((pad) => {
     const n = (seen.get(pad.num) ?? 0) + 1;

@@ -6,11 +6,13 @@
 // about its own position, EDIT_TOOL::MoveExact's
 // `boardItem->Rotate(boardItem->GetPosition(), angle)`, evaluated per
 // item so a multi-selection with this anchor still spins each one about
-// its own anchor, not a shared point -- encoded here as the backend's
-// `pivot: null`), "selection center" (default for 2+ items: one shared
-// point, the bbox center *after* the translation -- source: `selCenter
-// = rp + translation`), or "local coordinates origin" (the status bar's
-// Space-settable point, state.localOriginUm, untouched by translation).
+// its own anchor, not a shared point -- one rotate_items per item,
+// kicad-port/pcbTransform.ts `planMoveExact`), "selection center" (default
+// for 2+ items: one shared point, the bbox center *after* the translation
+// -- source: `selCenter = rp + translation`), or "local coordinates origin"
+// (the status bar's Space-settable point, state.localOriginUm, untouched by
+// translation). Any kind of item, locked ones left alone, the whole thing
+// one undo step.
 // KiCad's fourth choice, "drill/place origin" (a board-wide aux origin
 // setting), has no equivalent in this app's model and is left out.
 //
@@ -27,8 +29,9 @@
 // turns a part the same visual direction +90 would in the status bar's
 // polar readout.
 import { useEffect, useState } from "react";
-import { selectionBoundsCenter, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom } from "../state/units";
+import { editableSelection, planMoveExact } from "../kicad-port/pcbTransform";
 
 type Anchor = "item" | "center" | "origin";
 
@@ -38,8 +41,8 @@ export function MoveExactDialog() {
   const api = useStudioApi();
   const open = state.moveExactDialogOpen;
 
-  const refs = [...state.selection];
-  const placedParts = state.board ? refs.filter((r) => api.partByRef(r)?.placed) : [];
+  // `RequestSelection` with the free-pad and locked-item filters: any kind of item, a pad standing for its footprint, locked ones staying where they are.
+  const items = state.board ? editableSelection(state.board, [...state.selection]).ids : [];
 
   const [polar, setPolar] = useState(false);
   const [moveX, setMoveX] = useState(0); // display units
@@ -58,11 +61,11 @@ export function MoveExactDialog() {
     setAngleDeg(0);
     setRotate(0);
     // EDIT_TOOL::MoveExact: `selection.Size() > 1 ? ROTATE_AROUND_SEL_CENTER : ROTATE_AROUND_ITEM_ANCHOR`.
-    setAnchor(placedParts.length > 1 ? "center" : "item");
+    setAnchor(items.length > 1 ? "center" : "item");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  if (!open || placedParts.length === 0) return null;
+  if (!open || items.length === 0) return null;
 
   const close = () => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: false });
 
@@ -70,13 +73,11 @@ export function MoveExactDialog() {
   // Polar input uses the same CCW-positive/Y-down bridge as toPolar's own inverse.
   const dyUm = polar ? -umFrom(distance, state.units) * Math.sin((angleDeg * Math.PI) / 180) : umFrom(moveY, state.units);
 
-  const center = selectionBoundsCenter(state.board?.parts ?? [], placedParts);
-  const pivot = anchor === "item" ? null : anchor === "center" ? (center ? { x: center.x + dxUm, y: center.y + dyUm } : null) : state.localOriginUm;
-
   const submit = async () => {
-    // Negate for the backend's clockwise-positive convention -- see this file's header comment.
-    const ok = await api.moveExact(placedParts, Math.round(dxUm), Math.round(dyUm), Math.round(-rotate * 1000), pivot);
-    if (ok) close();
+    // One move_items and the turn(s) as one batch (kicad-port/pcbTransform.ts `planMoveExact`); the dialog's angle is counter-clockwise, the backend's clockwise.
+    if (!state.board) return;
+    const plan = planMoveExact(state.board, items, dxUm, dyUm, rotate, anchor, [state.localOriginUm.x, state.localOriginUm.y]);
+    if (plan.cmds.length === 0 || (await api.cmdBatch(plan.cmds))) close();
   };
 
   const clear = (setter: (v: number) => void) => setter(0);
@@ -119,13 +120,13 @@ export function MoveExactDialog() {
           <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr", marginTop: 8 }}>
             <span>Rotate around:</span>
             <select value={anchor} onChange={(e) => setAnchor(e.target.value as Anchor)}>
-              <option value="item">{placedParts.length > 1 ? "Each item's own anchor" : "Item anchor"}</option>
+              <option value="item">{items.length > 1 ? "Each item's own anchor" : "Item anchor"}</option>
               <option value="center">Selection center</option>
               <option value="origin">Local coordinates origin</option>
             </select>
           </div>
           <div style={{ fontSize: 11, opacity: 0.7, marginTop: 6 }}>
-            {placedParts.length} part{placedParts.length === 1 ? "" : "s"} · units: {state.units}
+            {items.length} item{items.length === 1 ? "" : "s"} · units: {state.units}
           </div>
         </div>
         <div className="dialog-footer">

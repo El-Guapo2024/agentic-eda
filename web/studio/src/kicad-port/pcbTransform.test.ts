@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Dimension, Part, Pad } from "../api/types";
-import { carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
+import { carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planMoveExact, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
 import { padById, padIds, padParent, itemKind, itemPosition, itemBounds } from "./pcbItems";
 
 function board(partial: Partial<BoardState>): BoardState {
@@ -169,4 +169,34 @@ test("carryStart: the editable selection with the points a turn and a flip act a
   assert.deepEqual(start.flipPivotUm, [5000, 2000]);
   assert.deepEqual(carryStart(b, ["U3"]), { refs: [], lockedOut: true });
   assert.deepEqual(carryStart(b, ["U2"]).pivotUm, [9000, 2000], "a lone item turns about its own position");
+});
+
+test("planMoveExact: move first, then turn about the item's own moved anchor -- one batch for any kind of item", () => {
+  const b = board({ parts: [part("U1", [1000, 2000])], routing: routing([track("t1", [[300, 5000], [700, 5000]])]), locked: [] });
+  const plan = planMoveExact(b, ["U1", "t1"], 500, -200, 90, "item");
+  assert.deepEqual(plan.cmds, [
+    { op: "move_items", ids: ["U1", "t1"], dx: 500, dy: -200 },
+    { op: "rotate_items", ids: ["U1"], pivot: { x: 1500, y: 1800 }, angle_millideg: -90_000 },
+    { op: "rotate_items", ids: ["t1"], pivot: { x: 800, y: 4800 }, angle_millideg: -90_000 },
+  ]);
+});
+
+test("planMoveExact: the selection's centre is measured before the move and travels with it; the local origin stays", () => {
+  const b = board({ parts: [part("U1", [1000, 2000]), part("U2", [9000, 2000])] });
+  // box x 0..10000, y 1500..2500: centre (5000, 2000)
+  const centre = planMoveExact(b, ["U1", "U2"], 100, 0, -90, "center");
+  assert.deepEqual(centre.cmds, [
+    { op: "move_items", ids: ["U1", "U2"], dx: 100, dy: 0 },
+    { op: "rotate_items", ids: ["U1", "U2"], pivot: { x: 5100, y: 2000 }, angle_millideg: 90_000 },
+  ]);
+  const origin = planMoveExact(b, ["U1", "U2"], 100, 0, 90, "origin", [10, 20]);
+  assert.deepEqual(origin.cmds[1], { op: "rotate_items", ids: ["U1", "U2"], pivot: { x: 10, y: 20 }, angle_millideg: -90_000 });
+});
+
+test("planMoveExact: nothing to do for a zero move and turn, locked items stay, a pad stands for its footprint", () => {
+  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 0, 2000)]), part("U2", [9000, 2000])], locked: ["U2"] });
+  assert.deepEqual(planMoveExact(b, ["U1"], 0, 0, 0, "item").cmds, []);
+  const plan = planMoveExact(b, ["U1.1", "U2"], 100, 0, 0, "item");
+  assert.deepEqual(plan.cmds, [{ op: "move_items", ids: ["U1"], dx: 100, dy: 0 }]);
+  assert.equal(plan.lockedOut, true);
 });

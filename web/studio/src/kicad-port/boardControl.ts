@@ -3,6 +3,7 @@
 // so `npm run test:unit` covers it; `actions/boardControlActions.ts` is the thin layer that reads the store and dispatches.
 
 import type { FillReport, RatsnestEdge } from "../api/types";
+import { padIds } from "./pcbItems";
 
 // ------------------------------------------------------------------- ratsnest
 
@@ -103,7 +104,7 @@ export function isHighlighted(net: string | null | undefined, highlight: string 
 }
 
 export interface BoardNets {
-  parts: ReadonlyArray<{ ref: string; pads?: ReadonlyArray<{ net: string | null }> }>;
+  parts: ReadonlyArray<{ ref: string; pads?: ReadonlyArray<{ num: string; net: string | null }> }>;
   routing: { tracks: ReadonlyArray<{ id: string; net: string }>; vias: ReadonlyArray<{ id: string; net: string }>; zones: ReadonlyArray<{ id: string; net: string }> } | null;
 }
 
@@ -121,9 +122,13 @@ export function netsOfSelection(selection: Iterable<string>, board: BoardNets): 
   const tracks = new Map((board.routing?.tracks ?? []).map((t) => [t.id, t.net]));
   const vias = new Map((board.routing?.vias ?? []).map((v) => [v.id, v.net]));
   const zones = new Map((board.routing?.zones ?? []).map((z) => [z.id, z.net]));
+  // A selected pad is its own item (`REF.NUMBER`, kicad-port/pcbItems.ts `padIds`): its own net alone.
+  const pads = new Map<string, string | null>();
+  for (const p of board.parts) padIds(p).forEach((id, i) => pads.set(id, p.pads![i]!.net));
   for (const id of selection) {
     const p = part.get(id);
     if (p) p.pads?.forEach((pad) => add(pad.net));
+    else if (pads.has(id)) add(pads.get(id));
     else add(tracks.get(id) ?? vias.get(id) ?? zones.get(id));
   }
   return nets;
