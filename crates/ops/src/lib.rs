@@ -41,7 +41,7 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
 use eda_model::rules::{Constraints, MaskPaste, NetClassSettings, StackupSettings, TextGraphicsDefaults};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
@@ -51,6 +51,7 @@ pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
 pub mod library_editors;
+mod review;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
@@ -599,6 +600,20 @@ pub enum Cmd {
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
     SetCustomRules { text: String },
+
+    // ------------------------------------------------------- DRC and ERC review
+    //
+    // `pcbnew/dialogs/dialog_drc.cpp` and `eeschema/dialogs/dialog_erc.cpp`: waiving a violation, and the schematic's per-check
+    // severities (`common/dialogs/panel_setup_severities.cpp`). See `review`.
+    /// "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
+    /// Marker) on the board: waive the DRC violations `exclusions` name, as one step. An exclusion whose `(check, items)` is waived already
+    /// is replaced by this one (that edits its comment). Refused when `exclusions` is empty or one names no check or no item.
+    AddDrcExclusions { exclusions: Vec<DrcExclusion> },
+    /// "Remove exclusion for this violation": put the violations `exclusions` name back in the report. Refused when none of them is waived.
+    DeleteDrcExclusions { exclusions: Vec<DrcExclusionKey> },
+    /// Schematic Setup > Violation Severity: the ERC checks reported at a severity other than their default, by settings key
+    /// (`eda_model::erc_checks`) -> `error` | `warning` | `ignore`. Whole table in, whole table replaced.
+    SetErcSeverities { severities: BTreeMap<String, String> },
 
     /// Task item 8: `GLOBAL_EDIT_TOOL::SwapLayers`/`DIALOG_SWAP_LAYERS`.
     /// `mapping` is "move items on this layer to that one" pairs (a
@@ -1499,6 +1514,7 @@ impl Cmd {
             | Cmd::ReplaceText { .. }
             | Cmd::SetErcPinMapCell { .. }
             | Cmd::ResetErcPinMap
+            | Cmd::SetErcSeverities { .. }
             | Cmd::SetSchematicPage { .. }
             | Cmd::Annotate { .. }
             | Cmd::SetSymbolAttrs { .. }
@@ -1564,6 +1580,8 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
+            // A severity table is about the report, not the drawing.
+            Cmd::SetErcSeverities { .. } => false,
             _ => true,
         }
     }
@@ -1628,6 +1646,9 @@ impl Cmd {
             Cmd::SetStackup { .. } => vec!["stackup"],
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
+            Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
@@ -2030,6 +2051,9 @@ impl<'a> Board<'a> {
             Cmd::SetTextGraphicsDefaults { settings } => board_setup::set_text_graphics(&mut self.design, settings),
             Cmd::SetStackup { settings } => board_setup::set_stackup(&mut self.design, self.model, settings),
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
+            Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
+            Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
+            Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
@@ -5363,6 +5387,8 @@ mod tests;
 mod sch_control_tests;
 #[cfg(test)]
 mod board_setup_tests;
+#[cfg(test)]
+mod review_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 

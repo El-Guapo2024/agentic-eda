@@ -15,7 +15,7 @@
 
 use crate::ir::{Millideg, Point, Um};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Items and annotations beyond the core schematic content -- see the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,11 +32,17 @@ pub struct SchExtras {
     /// `None` is KiCad's default, A4 landscape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<crate::page::PageSettings>,
+    /// Schematic Setup > Violation Severity (`ERC_SETTINGS::m_ERCSeverities`, `panel_setup_severities.cpp`): the ERC checks reported at a
+    /// severity other than KiCad's default for them, by settings key (`pin_not_connected`, ...) -> `error` | `warning` | `ignore`.
+    /// Written to the derived project as `erc.rule_severities`, so kicad-cli's ERC reports each check at the severity chosen. Absent:
+    /// KiCad's defaults. `crate::erc_checks` lists the keys. Additive.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub erc_severities: BTreeMap<String, String>,
 }
 
 impl SchExtras {
     pub fn is_empty(&self) -> bool {
-        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none()
+        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none() && self.erc_severities.is_empty()
     }
 
     /// True when `id` is locked.

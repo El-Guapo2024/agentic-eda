@@ -689,6 +689,58 @@ pub struct ErcExclusion {
     pub location: String,
 }
 
+/// A waived DRC violation: `BOARD_DESIGN_SETTINGS::m_DrcExclusions` with its `m_DrcExclusionComments`
+/// (`dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", Exclude Marker).
+///
+/// KiCad keys an exclusion by the marker's serialization (`PCB_MARKER::SerializeToString`): the check's settings key, the marker's
+/// position and the uuids of the items it names. The derived project writes these as `board.design_settings.drc_exclusions`, so
+/// kicad-cli reports the violation as excluded and leaves it out of a report that does not ask for exclusions. Here the identity of a
+/// violation is `(check, items)` -- the uuids of the derived board's own items, which `eda_kicad::export_kicad_pcb_mapped` mints
+/// deterministically, so the key survives an export and a restart -- and the report is judged against it by the studio too, since
+/// kicad-cli's report carries no marker position (see [`positions_nm`](Self::positions_nm)).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrcExclusion {
+    /// The check's KiCad settings key (`clearance`, `unconnected_items`, ...): `RC_ITEM::GetSettingsKey`.
+    pub check: String,
+    /// The uuids of the items the violation names in the derived board, main item first (`RC_ITEM::GetMainItemID` then
+    /// `GetAuxItemID`); never empty.
+    pub items: Vec<String>,
+    /// Our ids for the same items, in the same order (`R1.2`, a track id, ...): what the studio selects. Empty when unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<String>,
+    /// Where kicad-cli's marker for this violation may sit, in nanometres (KiCad's board unit). KiCad matches an exclusion to a marker by
+    /// the exact serialization, position included, and kicad-cli's report does not say where a marker is -- only where its items are. So
+    /// these are the positions worth trying (the items' own, a track's middle, the middle of the first two items): the derived project
+    /// lists one serialization for each, and the one that is the marker's is the one kicad-cli matches (the rest are dropped on load,
+    /// as KiCad drops an exclusion no marker matches). Empty: the exclusion is the studio's alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions_nm: Vec<[i64; 2]>,
+    /// `PCB_MARKER::GetComment`: why it was waived. Empty for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
+}
+
+impl DrcExclusion {
+    /// What identifies the violation: the check and the items it names.
+    pub fn key(&self) -> DrcExclusionKey {
+        DrcExclusionKey { check: self.check.clone(), items: self.items.clone() }
+    }
+
+    /// Whether this waives the violation `(check, items)`.
+    pub fn matches(&self, check: &str, items: &[String]) -> bool {
+        self.check == check && self.items == items
+    }
+}
+
+/// The identity of a [`DrcExclusion`]: what `Cmd::DeleteDrcExclusions` names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrcExclusionKey {
+    pub check: String,
+    pub items: Vec<String>,
+}
+
 /// Title block. Every field optional/empty by default; the exporter falls
 /// back to its `ExportMeta` argument for `title`/`date` when this whole
 /// section is absent, so existing callers are unaffected.
@@ -2137,6 +2189,11 @@ pub struct DrawingsSection {
     /// `design.json` reads as "the intent's rules stand".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<crate::rules::RulesOverlay>,
+    /// The DRC violations the user waived (`dialog_drc.cpp`'s "Exclude this violation"): `BOARD_DESIGN_SETTINGS::m_DrcExclusions`, written
+    /// to the derived `.kicad_pro` as `board.design_settings.drc_exclusions`. Sorted by key, one entry per `(check, items)`. Additive:
+    /// absent in an older `design.json` reads as "nothing waived". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drc_exclusions: Vec<DrcExclusion>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no

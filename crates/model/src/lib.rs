@@ -5,6 +5,7 @@
 pub mod bezier;
 pub mod board;
 mod drc_checks;
+pub mod erc_checks;
 pub mod floorplan;
 pub mod footprint;
 pub mod ir;
