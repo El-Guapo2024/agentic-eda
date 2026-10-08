@@ -13,3 +13,13 @@ allocative = "0.3"
 anyhow = "1"
 blake3 = "1"
 
+
+# Dev builds: line tables for our own crates (backtraces keep file:line),
+# no debug info for dependencies. Agents compile in parallel on one laptop
+# and nobody steps through third-party code; full debug info for ~400
+# dependency crates roughly doubled compile and link time for nothing.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
