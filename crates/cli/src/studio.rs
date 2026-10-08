@@ -606,9 +606,9 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/footprint") => {
-            let query = target.split('?').nth(1).unwrap_or("");
-            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
-            let v = footprint_json(dir, name).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // Percent-decoded, like the symbol routes: the client sends `encodeURIComponent( name )`, and a `Lib:Name` arrives as `Lib%3AName`.
+            let name = query_value(target, "name");
+            let v = footprint_json(dir, &name).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/footprint_library") => {
@@ -616,9 +616,8 @@ fn handle(
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/footprint/export") => {
-            let query = target.split('?').nth(1).unwrap_or("");
-            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
-            match footprint_kicad_mod(dir, name) {
+            let name = query_value(target, "name");
+            match footprint_kicad_mod(dir, &name) {
                 Ok(text) => respond(stream, "200 OK", "text/plain; charset=utf-8", text.as_bytes()),
                 Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
             }
@@ -646,6 +645,19 @@ fn handle(
         // The library editors' read-only lookups of ANY symbol / footprint (project entry or resolved), for Duplicate, Save Copy As, Copy.
         ("GET", "/api/library/symbol") => respond(stream, "200 OK", "application/json", crate::library_api::symbol(dir, &query_value(target, "lib_id")).to_string().as_bytes()),
         ("GET", "/api/library/footprint") => respond(stream, "200 OK", "application/json", crate::library_api::footprint(dir, &query_value(target, "name")).to_string().as_bytes()),
+        // The installed KiCad libraries (155 footprint, 223 symbol libraries) for the library trees: names only, one library at a time, cached
+        // (`crate::library_index`) -- the libraries are too big to send or parse whole.
+        ("GET", "/api/library/index" | "/api/library/items" | "/api/library/all") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => match path {
+                    "/api/library/index" => crate::library_index::libraries(kind),
+                    "/api/library/items" => crate::library_index::items(kind, &query_value(target, "lib")),
+                    _ => crate::library_index::all(kind),
+                },
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
@@ -1612,10 +1624,11 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
 /// OpenFootprintForEdit`, issued once when the tab/footprint opens,
 /// through the ordinary `/api/cmd` route) -- this route never
 /// materializes one on its own, matching every other GET route here being
-/// a pure read of `design.json`. `name` is sent unencoded in the query
-/// string, same convention (and the same reasoning -- a real footprint
-/// name is plain ASCII letters/digits/`_.:-`, nothing a query string needs
-/// to escape) as `/api/3dmodel?name=...`.
+/// a pure read of `design.json`. `name` is percent-decoded
+/// (`query_value`): the client sends `encodeURIComponent( name )`, which
+/// makes a library footprint's `Lib:Name` arrive as `Lib%3AName` -- read
+/// raw, as this route once did, no footprint with a library nickname
+/// (every installed KiCad one) could be fetched back after opening it.
 fn footprint_json(dir: &Path, name: &str) -> Result<Value, Vec<CheckResult>> {
     let (_, design, _) = board::load(dir)?;
     let fp = design
@@ -1866,6 +1879,8 @@ mod tests {
     #[test]
     fn a_lib_id_query_value_is_percent_decoded() {
         assert_eq!(query_value("/api/symbol?lib_id=Device%3AR", "lib_id"), "Device:R");
+        // The footprint routes read `name` the same way: the client encodes the `:` of a library footprint's `Lib:Name`.
+        assert_eq!(query_value("/api/footprint?name=Package_SO%3ASOIC-16_3.9x9.9mm_P1.27mm", "name"), "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm");
         assert_eq!(query_value("/api/symbol?x=1&lib_id=eda%3AMy%20Part", "lib_id"), "eda:My Part");
         assert_eq!(query_value("/api/symbol?lib_id=Device:R", "lib_id"), "Device:R", "an unescaped colon still works");
         assert_eq!(query_value("/api/symbol?lib_idx=1", "lib_id"), "", "a longer key is not the key");

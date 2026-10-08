@@ -2,7 +2,7 @@
 // "native file dialog" stand-ins (a hidden file input for Open, a Blob + anchor for Save) and the clipboard. Kept apart from
 // `client.ts` so the two library editors' own additions never grow that shared file.
 import type { LibraryFootprint, LibrarySymbol } from "./types";
-import { ApiError } from "./client";
+import { ApiError, postCmd } from "./client";
 import { withDefaults } from "../kicad-port/libraryDefaults";
 
 export interface ParsedSymbols {
@@ -140,6 +140,35 @@ export async function fetchAnyFootprint(name: string): Promise<{ footprint: Libr
   const r = await getLibrary<{ footprint: LibraryFootprint; in_project: boolean; error?: string }>(`/api/library/footprint?name=${encodeURIComponent(name)}`);
   const f = r.footprint;
   return { footprint: { ...f, pads: f.pads ?? [], graphics: f.graphics ?? [], texts: f.texts ?? [], fields: f.fields ?? [] }, inProject: r.in_project };
+}
+
+/**
+ * Opening a library footprint (`Lib:Name`) that the project library does not hold yet -- one of KiCad's installed libraries, or what the board's own model
+ * resolved -- first copies it in, as one undoable `put_library_footprint`: `open_footprint_for_edit` knows only the project library, the model and the
+ * built-in table, and starts a BLANK footprint for any other name, so without this an installed footprint would open empty. `overwrite`, because the
+ * model may resolve the same name (a part that uses it) and a plain put treats that as taken. A name nothing resolves is left to that verb.
+ */
+export async function ensureFootprintInProject(name: string): Promise<void> {
+  if (!name.includes(":")) return;
+  try {
+    const { footprint, inProject } = await fetchAnyFootprint(name);
+    if (inProject) return;
+    await postCmd({ op: "put_library_footprint", footprint, overwrite: true }, false);
+  } catch {
+    /* nothing installed or known under this name: the open verb starts a blank footprint */
+  }
+}
+
+/** The symbol sibling of [`ensureFootprintInProject`]: an installed `Lib:Name` is put into the project library before the editor opens it. */
+export async function ensureSymbolInProject(libId: string): Promise<void> {
+  if (!libId.includes(":")) return;
+  try {
+    const { symbol, inProject } = await fetchAnySymbol(libId);
+    if (inProject) return;
+    await postCmd({ op: "put_library_symbol", symbol, overwrite: true }, false);
+  } catch {
+    /* nothing installed or known under this id: the open verb starts a blank symbol */
+  }
 }
 
 /** `GET /api/symbol/export?lib_id=` text (the derived `.kicad_sym`), for Copy and Export. */

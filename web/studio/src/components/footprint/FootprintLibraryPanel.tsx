@@ -34,7 +34,7 @@ export function FootprintLibraryPanel() {
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
-  const { items } = useLibraryNames("footprint");
+  const names = useLibraryNames("footprint");
   const { run, isEnabled } = useActionRunner();
 
   const selected = useMemo(() => (state.treeSelection ? [state.treeSelection] : []), [state.treeSelection]);
@@ -52,7 +52,13 @@ export function FootprintLibraryPanel() {
   return (
     <LibraryTree
       title="Footprint Libraries"
-      items={items}
+      items={names.items}
+      installed={names.installed}
+      loaded={names.loaded}
+      loading={names.loading}
+      onLoadLibrary={names.load}
+      onSearch={names.ensureSearchIndex}
+      searchIndex={names.searchIndex}
       selected={selected}
       current={state.name}
       onSelect={(names) => dispatch({ type: "SET_TREE_SELECTION", name: names[0] ?? null })}
