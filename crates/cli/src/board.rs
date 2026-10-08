@@ -2886,7 +2886,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Dragging, moving, turning or mirroring any one symbol -- each of the 30 -- leaves the net list alone, on the user's board and on mcu30
+    /// Dragging, moving, turning or mirroring any one symbol -- each of the 30 -- leaves the net list alone, through the symbol verbs and through the
+    /// one that moves any item (`SchMove`), on the user's board and on mcu30
     /// reorganized into module sheets (where the drag takes the wires of the sheet along).
     #[test]
     fn moving_or_dragging_any_one_symbol_leaves_the_nets_alone() {
@@ -2939,11 +2940,19 @@ mod tests {
                     None => cmd,
                     Some(sid) => Cmd::OnSheet { sheet: sid.clone(), cmd: Box::new(cmd) },
                 };
+                let verb = |cmd: eda_ops::sch_move::SchMoveCmd| on(Cmd::SchMove(cmd));
+                let one = vec![id.clone()];
                 let commands = [
                     on(Cmd::DragSymbol { id: id.clone(), x: at.x + dx, y: at.y + dy, attached_wire_endpoints: attached, unit: None }),
                     on(Cmd::MoveSymbol { id: id.clone(), x: at.x, y: at.y, unit: None }),
                     on(Cmd::RotateSymbol { id: id.clone(), quarter_turns: 1, unit: None }),
                     on(Cmd::MirrorSymbol { id: id.clone(), unit: None }),
+                    // the same four through the verb that moves any item: the wires follow the drag, the net list stays
+                    verb(eda_ops::sch_move::SchMoveCmd::Drag { ids: one.clone(), vertices: Default::default(), dx, dy, ortho: true, grid: 0 }),
+                    verb(eda_ops::sch_move::SchMoveCmd::Move { ids: one.clone(), dx: -dx, dy: -dy }),
+                    verb(eda_ops::sch_move::SchMoveCmd::Rotate { ids: one.clone(), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+                    verb(eda_ops::sch_move::SchMoveCmd::Mirror { ids: one.clone(), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+                    verb(eda_ops::sch_move::SchMoveCmd::AlignToGrid { ids: one.clone(), grid: 0 }),
                 ];
                 for cmd in commands {
                     step(&dir, cmd, true, "ui").unwrap_or_else(|e| panic!("{id}: {}", reasons(&e)));
@@ -2954,6 +2963,118 @@ mod tests {
                     }
                 }
             }
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Every kind of schematic item moved, dragged, turned or mirrored by the one verb is a single undo step: the sheet changes, and one Undo
+    /// brings back exactly what was there, the wires the drag added and the junctions it moved included.
+    #[test]
+    fn every_schematic_move_verb_is_one_undo_step_for_every_kind_of_item() {
+        use eda_ops::sch_move::SchMoveCmd as V;
+        let dir = scratch("sch_move_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let pt = |x: Um, y: Um| Point { x, y };
+            // R1.1 is at (10_000, 10_000) and R2.1 at (20_000, 10_000): wires to both, a label and a junction on them, and one of everything else
+            sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000, 10_000), pt(10_000, 30_000)], bus: false });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_b".into(), net: "N2".into(), pins: vec![], pts: vec![pt(20_000, 10_000), pt(20_000, 40_000), pt(30_000, 40_000)], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000, 20_000), kind: eda_model::ir::LabelKind::Local });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000, 40_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_um: 1_270 });
+            sch.no_connects.push(eda_model::ir::NoConnect { id: "nc_a".into(), at: pt(60_000, 10_000), pin: String::new() });
+            sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000, 10_000), size: pt(2_540, 2_540) });
+            sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000, 10_000) });
+            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_um: 0 });
+            sch.power_symbols.push(eda_model::ir::PowerSymbol { id: "#PWR01".into(), lib_id: "power:GND".into(), at: pt(10_000, 30_000), rot: 0, net: "N1".into(), pin: String::new() });
+            sch.extras.graphics.push(eda_model::sch_extras::SchGraphic::new(eda_model::sch_extras::SchGraphicKind::Rectangle { start: pt(70_000, 30_000), end: pt(80_000, 40_000), corner_radius_um: 0 }));
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![eda_model::ir::SheetPin { id: "shpin_a".into(), name: "IN".into(), shape: eda_model::ir::LabelShape::Input, at: pt(90_000, 15_000) }], page: String::new() });
+            sch.assign_missing_ids();
+        }
+        save(&dir, &design).unwrap();
+        let everything = |extra: &[&str]| -> Vec<String> {
+            let mut v: Vec<String> = ["R1", "R2", "wire_a", "wire_b", "lbl_a", "lbl_g", "txt_a", "nc_a", "bent_a", "jct_a", "sln_a", "#PWR01", "sheet_a"].iter().map(|s| s.to_string()).collect();
+            v.extend(extra.iter().map(|s| s.to_string()));
+            v
+        };
+        let graphic_id = load(&dir).unwrap().1.schematic.as_ref().unwrap().extras.graphics[0].id.clone();
+        let all = everything(&[&graphic_id]);
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value(d.schematic.as_ref().unwrap()).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        let commands = vec![
+            Cmd::SchMove(V::Move { ids: all.clone(), dx: 2_540, dy: -1_270 }),
+            Cmd::SchMove(V::Drag { ids: vec!["R1".into(), "lbl_g".into(), "sheet_a".into()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0 }),
+            Cmd::SchMove(V::Drag { ids: vec!["wire_b".into()], vertices: [("wire_b".to_string(), vec![0usize])].into_iter().collect(), dx: 0, dy: 2_540, ortho: true, grid: 0 }),
+            Cmd::SchMove(V::Rotate { ids: all.clone(), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(V::Rotate { ids: vec!["lbl_a".into()], vertices: Default::default(), ccw: false, about: None, grid: 0 }),
+            Cmd::SchMove(V::Mirror { ids: all.clone(), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+            Cmd::SchMove(V::Mirror { ids: all, vertices: Default::default(), vertical: true, about: None, grid: 0 }),
+            Cmd::SchMove(V::AlignToGrid { ids: vec!["R1".into(), "txt_a".into()], grid: 0 }),
+        ];
+        for cmd in commands {
+            // each is wrapped to the sheet in view, as the studio sends it
+            let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
+            step(&dir, wrapped, false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let moved = sheet_of(&load(&dir).unwrap().1);
+            assert_ne!(moved, start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let back = sheet_of(&load(&dir).unwrap().1);
+            assert_eq!(back, start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Dragging a symbol with the verb that moves any item takes the wires on its pins along: after the drag every wire end that was on one of its
+    /// pins is on that pin where it now is, on the user's board (flat) and on mcu30 as module sheets, for each of the 30 symbols.
+    #[test]
+    fn dragging_a_symbol_keeps_the_wires_on_its_pins() {
+        for hierarchical in [false, true] {
+            let dir = scratch(if hierarchical { "drag_wires_hier" } else { "drag_wires_flat" });
+            setup_mcu30_users_board(&dir);
+            let (_, mut design, model) = load(&dir).unwrap();
+            design.routing = None;
+            if hierarchical {
+                let fresh = eda_engine::derive_schematic_modules(&model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+                design.schematic = fresh.schematic;
+                design.sheet_contents = fresh.sheet_contents;
+            }
+            save(&dir, &design).unwrap();
+            let (_, start, _) = load(&dir).unwrap();
+            let root = start.schematic.as_ref().unwrap();
+            let mut placed: Vec<(String, Option<String>)> = root.symbols.iter().map(|s| (s.id.clone(), None)).collect();
+            for sheet in &root.sheets {
+                placed.extend(start.sheet_contents.as_ref().unwrap()[&sheet.file].symbols.iter().map(|s| (s.id.clone(), Some(sheet.id.clone()))));
+            }
+            assert_eq!(placed.len(), 30);
+            // how many wire ends sit on this symbol's pins
+            let ends_on_pins = |d: &eda_model::ir::Design, model: &ConstraintModel, id: &str, sheet: &Option<String>| -> usize {
+                let screen = match sheet {
+                    None => d.schematic.clone().unwrap(),
+                    Some(sid) => d.sheet_contents.as_ref().unwrap()[&d.schematic.as_ref().unwrap().sheets.iter().find(|s| &s.id == sid).unwrap().file].clone(),
+                };
+                let sym = screen.symbols.iter().find(|s| s.id == id).unwrap();
+                let part = model.part(id).unwrap();
+                let tips: Vec<Point> = eda_engine::placed::pin_points(sym, part, model.real_symbol_of(&sym.lib_id, part).as_ref()).into_iter().map(|(_, at)| at).collect();
+                screen.wires.iter().flat_map(|w| w.pts.windows(2).flat_map(|q| [q[0], q[1]]).collect::<Vec<_>>()).filter(|p| tips.contains(p)).count()
+            };
+            let mut wired = 0;
+            for (id, sheet) in placed {
+                let (_, now, model_now) = load(&dir).unwrap();
+                let before = ends_on_pins(&now, &model_now, &id, &sheet);
+                wired += (before > 0) as usize;
+                let cmd = Cmd::SchMove(eda_ops::sch_move::SchMoveCmd::Drag { ids: vec![id.clone()], vertices: Default::default(), dx: 5_080, dy: 2_540, ortho: true, grid: 0 });
+                let cmd = match &sheet {
+                    None => cmd,
+                    Some(sid) => Cmd::OnSheet { sheet: sid.clone(), cmd: Box::new(cmd) },
+                };
+                step(&dir, cmd, true, "ui").unwrap_or_else(|e| panic!("{id}: {}", reasons(&e)));
+                let (_, after, model_after) = load(&dir).unwrap();
+                assert!(ends_on_pins(&after, &model_after, &id, &sheet) >= before, "{id} (hierarchical: {hierarchical}): a wire was left behind when the symbol was dragged");
+            }
+            eprintln!("hierarchical {hierarchical}: {wired} of 30 symbols have a wire on a pin");
+            assert!(wired >= 10, "the board must have wired symbols for this to mean anything: {wired}");
             let _ = std::fs::remove_dir_all(&dir);
         }
     }
