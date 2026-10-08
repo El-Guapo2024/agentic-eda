@@ -51,8 +51,10 @@ pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
 pub mod library_editors;
+mod pcb_transform;
 pub mod sch_control;
 mod sheets;
+pub use pcb_transform::{flip_layer, FlipDirection};
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
@@ -782,6 +784,25 @@ pub enum Cmd {
     /// resolves to an actual board point since this crate has no
     /// selection/UI-origin concept of its own.
     MoveExact { parts: Vec<String>, dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point> },
+
+    // --------------------------------------------- move, rotate, flip: any item
+    //
+    // `EDIT_TOOL::Move` / `Rotate` / `Flip` (`pcbnew/tools/edit_tool.cpp`) for every kind of item at once, as one undo
+    // step each -- see [`pcb_transform`] for what each item class does with the transform. `ids` are placed parts'
+    // references and track, via, zone, shape, text, dimension and group ids, mixed freely; a group stands for its
+    // members. Which items a selection holds, which of them a lock keeps out, and about which point a turn or a flip
+    // happens are the tool's rules, which the studio applies before it sends one of these
+    // (`web/studio/src/kicad-port/pcbTransform.ts`).
+    /// Translate every item by `(dx, dy)`. Tracks keep their ids and shapes, a footprint lands on the placement grid.
+    MoveItems { ids: Vec<String>, dx: Um, dy: Um },
+    /// Turn every item about `pivot` by `angle_millideg`, positive clockwise on the screen (the sense of `MoveExact`'s
+    /// `rotate_millideg`). Each item turns about the one shared point, and its own orientation follows: a footprint's
+    /// `rot`, a text's and a dimension's text angle.
+    RotateItems { ids: Vec<String>, pivot: Point, angle_millideg: i64 },
+    /// `Change Side / Flip`: mirror every item across the axis through `pivot` and put it on the other side of the
+    /// board -- a footprint's side, a track's, zone's, shape's, text's and dimension's layer (`::FlipLayer`), a blind or
+    /// buried via's layer pair.
+    FlipItems { ids: Vec<String>, pivot: Point, direction: FlipDirection },
 
     /// Apply `cmds` in order as ONE command: one undo step, one activity
     /// entry, all-or-nothing (the first refused sub-command restores the
@@ -1591,6 +1612,7 @@ impl Cmd {
             Cmd::OnSheet { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -1735,6 +1757,18 @@ impl Cmd {
                 // errs the same safe direction `MoveExact` already does.
                 | Cmd::CreateArray { .. }
         )
+    }
+
+    /// [`Cmd::clears_routing`], told what the board holds: the commands that move, turn or flip *any* kind of item
+    /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`]) leave the routing alone unless one of the items
+    /// they name is a placed footprint (directly, or as a member of a group), because only a footprint can be moved
+    /// out from under a track. `design` is the board as it was before the command.
+    pub fn clears_routing_in(&self, design: &Design) -> bool {
+        match self {
+            Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(design)),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => pcb_transform::names_placed_part(design, ids),
+            other => other.clears_routing(),
+        }
     }
 }
 
@@ -2108,6 +2142,9 @@ impl<'a> Board<'a> {
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
+            Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
+            Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
+            Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
                 for c in cmds {
@@ -5344,6 +5381,8 @@ mod tests;
 mod sch_control_tests;
 #[cfg(test)]
 mod board_setup_tests;
+#[cfg(test)]
+mod pcb_transform_tests;
 
 pub mod board_control;
 pub mod page_settings;

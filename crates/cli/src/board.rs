@@ -783,6 +783,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     }
     let before = all_failures(&board, &model);
     let was = board.fork();
+    // What the command clears is judged against the board it found: a move of copper alone leaves the routing be, one that
+    // takes a footprint with it does not (`Cmd::clears_routing_in`).
+    let clears_routing = cmd.clears_routing_in(was.design());
 
     // A refused command is not a crash: it is an answer. The caller
     // asked whether this move is possible and the gates said no, with a
@@ -841,7 +844,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // a part edit does -- a part edit can move a footprint out from under
     // a track, a copper/drawing edit cannot invalidate anything by
     // construction. See `Cmd::clears_routing`.
-    let stale = if cmd.clears_routing() { design.routing.take().is_some() } else { false };
+    let stale = if clears_routing { design.routing.take().is_some() } else { false };
     // Schematic connectivity only needs retracing after a schematic edit
     // -- see `reconcile_schematic`'s own doc on why this is the entire
     // "one netlist" mechanism and why it never touches a PCB-only board.
@@ -994,6 +997,9 @@ fn cmd_line(c: &Cmd) -> String {
             *rotate_millideg as f64 / 1000.0,
             pivot.map_or("self".to_string(), |p| format!("{},{}", mm(p.x), mm(p.y)))
         ),
+        Cmd::MoveItems { ids, dx, dy } => format!("move-items {} --by {},{}", ids.join(" "), mm(*dx), mm(*dy)),
+        Cmd::RotateItems { ids, pivot, angle_millideg } => format!("rotate-items {} --by {:.3} --pivot {},{}", ids.join(" "), *angle_millideg as f64 / 1000.0, mm(pivot.x), mm(pivot.y)),
+        Cmd::FlipItems { ids, pivot, direction } => format!("flip-items {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
 
         // No real `eda board` CLI subcommand parses these yet (the studio
         // UI is their only caller so far) -- this text exists purely for
@@ -1214,6 +1220,9 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::CommitRoute { .. } => "route",
         Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
+        Cmd::MoveItems { .. } => "move-items",
+        Cmd::RotateItems { .. } => "rotate-items",
+        Cmd::FlipItems { .. } => "flip-items",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",
