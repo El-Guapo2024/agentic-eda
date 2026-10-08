@@ -224,3 +224,54 @@ fn the_command_reads_from_and_writes_to_the_json_the_studio_sends() {
     let back: Cmd = serde_json::from_value(minimal).unwrap();
     assert!(matches!(back, Cmd::PasteSch { dx: 0, dy: 0, mode: PasteMode::Unique, .. }));
 }
+
+/// A two-unit symbol the way a library has it: pins 1 and 2 on unit 1, pins 3 and 4 on unit 2.
+fn dual() -> LibrarySymbol {
+    use eda_model::ir::LibrarySymbolPin;
+    let pin = |number: &str, unit: u32, y: f64| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint { x: 0.0, y }, angle_deg: 270.0, length_mm: 2.54, unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None };
+    let mut s = LibrarySymbol { lib_id: "Test:Dual".into(), reference_prefix: "U".into(), unit_count: 2, pins: vec![pin("1", 1, 2.54), pin("2", 1, -2.54), pin("3", 2, 2.54), pin("4", 2, -2.54)], ..LibrarySymbol::default() };
+    s.assign_missing_ids();
+    s
+}
+
+#[test]
+fn the_units_of_one_part_pasted_together_keep_one_number_and_a_unit_the_part_lacks_joins_it() {
+    let m = ConstraintModel::default();
+    let unit = |u: u32, x: Um| SymbolInstance { unit: u, ..symbol("U1", "Test:Dual", "74HC00", p(x, 0)) };
+    let mut f = fragment(|s| s.symbols.extend([unit(1, 0), unit(2, 20_000)]));
+    f.lib_symbols.push(dual());
+    // Both units of U1 are placed already: a copy of both is a part of its own.
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    b.apply(&paste(&f, 0, 0, PasteMode::Unique)).unwrap();
+    b.apply(&paste(&f, 0, 50_000, PasteMode::Unique)).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    let placed: Vec<(String, u32)> = sch.symbols.iter().map(|s| (s.id.clone(), s.unit)).collect();
+    assert_eq!(placed, vec![("U1".to_string(), 1), ("U1".to_string(), 2), ("U2".to_string(), 1), ("U2".to_string(), 2)]);
+    // One unit alone, when the part has the other: it is the missing unit of that part, not a part.
+    let mut one = fragment(|s| s.symbols.push(unit(2, 0)));
+    one.lib_symbols.push(dual());
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut first = fragment(|s| s.symbols.push(unit(1, 0)));
+    first.lib_symbols.push(dual());
+    b.apply(&paste(&first, 0, 0, PasteMode::Unique)).unwrap();
+    b.apply(&paste(&one, 0, 40_000, PasteMode::Unique)).unwrap();
+    let placed: Vec<(String, u32)> = b.design().schematic.as_ref().unwrap().symbols.iter().map(|s| (s.id.clone(), s.unit)).collect();
+    assert_eq!(placed, vec![("U1".to_string(), 1), ("U1".to_string(), 2)]);
+}
+
+#[test]
+fn two_generated_boxes_that_draw_the_same_share_one_library_symbol() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let box_of = |name: &str| LibrarySymbol { lib_id: name.into(), ..dual() };
+    let mut f = fragment(|s| {
+        s.symbols.push(symbol("U1", "eda:U1", "a", p(0, 0)));
+        s.symbols.push(symbol("U2", "eda:U2", "b", p(30_000, 0)));
+    });
+    f.lib_symbols.extend([box_of("eda:U1"), box_of("eda:U2")]);
+    b.apply(&paste(&f, 0, 0, PasteMode::Keep)).unwrap();
+    let lib = b.design().symbol_library.as_ref().unwrap();
+    assert_eq!(lib.symbols.len(), 1, "{:?}", lib.symbols.iter().map(|s| &s.lib_id).collect::<Vec<_>>());
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert!(sch.symbols.iter().all(|s| s.lib_id == lib.symbols[0].lib_id));
+}

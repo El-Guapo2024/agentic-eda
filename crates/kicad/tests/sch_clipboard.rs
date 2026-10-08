@@ -170,10 +170,21 @@ fn forms_taken_from_real_kicad_files_read_as_the_file_does() {
         let f = parse_clipboard(&fragment).unwrap_or_else(|e| panic!("{name}: {e}"));
         let s = &f.section;
         assert_eq!(
-            (s.symbols.len(), s.power_symbols.len(), s.wires.len(), s.labels.len(), s.texts.len(), s.no_connects.len(), s.junctions.len(), s.bus_entries.len(), s.lines.len(), s.extras.graphics.len()),
-            (file.symbols.len(), file.power_symbols.len(), file.wires.len(), file.labels.len(), file.texts.len(), file.no_connects.len(), file.junctions.len(), file.bus_entries.len(), file.lines.len(), file.extras.graphics.len()),
+            (s.symbols.len(), s.power_symbols.len(), s.labels.len(), s.texts.len(), s.no_connects.len(), s.junctions.len(), s.bus_entries.len(), s.lines.len(), s.extras.graphics.len()),
+            (file.symbols.len(), file.power_symbols.len(), file.labels.len(), file.texts.len(), file.no_connects.len(), file.junctions.len(), file.bus_entries.len(), file.lines.len(), file.extras.graphics.len()),
             "{name}: the same items as the file"
         );
+        // The wires: segments that meet at a plain bend come back as one polyline, so compare them as the segments they are.
+        let segments = |wires: &[eda_model::ir::Wire]| {
+            let mut out: Vec<(bool, (i64, i64), (i64, i64))> = wires
+                .iter()
+                .flat_map(|w| w.pts.windows(2).map(|p| (w.bus, (p[0].x, p[0].y), (p[1].x, p[1].y))).collect::<Vec<_>>())
+                .map(|(bus, a, b)| if a <= b { (bus, a, b) } else { (bus, b, a) })
+                .collect();
+            out.sort();
+            out
+        };
+        assert_eq!(segments(&s.wires), segments(&file.wires), "{name}: the same wires");
         let mut mine: Vec<_> = s.symbols.iter().map(|x| (x.id.clone(), x.lib_id.clone(), x.at, x.rot, x.unit)).collect();
         let mut theirs: Vec<_> = file.symbols.iter().map(|x| (x.id.clone(), x.lib_id.clone(), x.at, x.rot, x.unit)).collect();
         mine.sort();

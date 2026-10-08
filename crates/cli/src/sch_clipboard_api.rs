@@ -221,13 +221,9 @@ mod tests {
         f(dir, body.to_string().as_bytes())
     }
 
-    /// A segment as an unordered pair of points, for comparing wires that were split or joined.
-    fn segments(wires: &[eda_model::ir::Wire], dx: i64, dy: i64) -> Vec<((i64, i64), (i64, i64))> {
-        let mut out: Vec<_> = wires
-            .iter()
-            .flat_map(|w| w.pts.windows(2).map(|p| ((p[0].x + dx, p[0].y + dy), (p[1].x + dx, p[1].y + dy))).collect::<Vec<_>>())
-            .map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
-            .collect();
+    /// Wires as polylines of points (moved by `(dx, dy)`), with whether each is a bus, in a fixed order.
+    fn polylines(wires: &[eda_model::ir::Wire], dx: i64, dy: i64) -> Vec<(bool, Vec<(i64, i64)>)> {
+        let mut out: Vec<_> = wires.iter().map(|w| (w.bus, w.pts.iter().map(|p| (p.x + dx, p.y + dy)).collect())).collect();
         out.sort();
         out
     }
@@ -280,7 +276,7 @@ mod tests {
         }
         // Wires, power symbols and flags came with them.
         let new_wires: Vec<_> = sch.wires.iter().filter(|w| !orig.wires.iter().any(|o| o.id == w.id)).cloned().collect();
-        assert_eq!(segments(&new_wires, 0, 0), segments(&orig.wires, dx, dy));
+        assert_eq!(polylines(&new_wires, 0, 0), polylines(&orig.wires, dx, dy), "the wires came back as the polylines they were");
         assert_eq!(sch.power_symbols.len(), orig.power_symbols.len() * 2);
         assert_eq!(sch.no_connects.len(), orig.no_connects.len() * 2);
         // Every power symbol and flag has its copy, of the same library symbol and net, on the same spot moved by the offset (a ground and its

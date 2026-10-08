@@ -78,7 +78,10 @@ impl<'a> Board<'a> {
             // A generated symbol is a box drawn from its part's pins and named `eda:<ref>`; the design has no part for the copy yet, so it
             // gets a library symbol of its own under a real name.
             let base = if is_synthetic_lib_id(lib_id) { format!("clipboard:{}", lib_id.rsplit(':').next().unwrap_or(lib_id)) } else { lib_id.to_string() };
-            let mut name = base.clone();
+            let published_before = self.design.symbol_library.iter().flat_map(|l| l.symbols.iter()).chain(publish.iter());
+            // Another box that draws exactly the same (two resistors' generated boxes do) is the same library symbol.
+            let twin = if is_synthetic_lib_id(lib_id) { published_before.clone().find(|e| e.lib_id.starts_with("clipboard:") && same_drawing(e, &theirs)).map(|e| e.lib_id.clone()) } else { None };
+            let mut name = twin.unwrap_or_else(|| base.clone());
             let mut n = 2;
             loop {
                 let existing = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(&name)).or_else(|| publish.iter().find(|p| p.lib_id == name));

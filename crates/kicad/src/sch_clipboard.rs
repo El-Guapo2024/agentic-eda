@@ -125,9 +125,70 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
     section.instance_overrides.clear();
     section.extras.locked.clear();
     section.imported_from_kicad = true;
+    join_bends(&mut section);
     notes.sort();
     notes.dedup();
     Ok(SchFragment { section, lib_symbols, notes })
+}
+
+/// KiCad has one segment to a wire, and a polyline this studio drew is written as one wire per segment. Read back, the segments that meet at a plain
+/// bend -- exactly two wire ends there, of the same kind (wire or bus), and nothing else at that point: no junction, label, no-connect, bus entry or
+/// power symbol -- are one polyline again, in the order they were written, so a copy of this studio's own wires pastes as the wires it copied.
+fn join_bends(section: &mut SchematicSection) {
+    use eda_model::ir::Wire;
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut busy: BTreeSet<Point> = BTreeSet::new();
+    busy.extend(section.junctions.iter().map(|j| j.at));
+    busy.extend(section.no_connects.iter().map(|n| n.at));
+    busy.extend(section.labels.iter().map(|l| l.at));
+    busy.extend(section.bus_entries.iter().flat_map(|b| [b.at, Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }]));
+    busy.extend(section.power_symbols.iter().map(|p| p.at));
+    let wires = std::mem::take(&mut section.wires);
+    let ends = |w: &Wire| (*w.pts.first().unwrap(), *w.pts.last().unwrap());
+    let mut count: BTreeMap<(bool, Point), usize> = BTreeMap::new();
+    for w in wires.iter().filter(|w| w.pts.len() >= 2) {
+        let (a, b) = ends(w);
+        *count.entry((w.bus, a)).or_default() += 1;
+        *count.entry((w.bus, b)).or_default() += 1;
+    }
+    let plain_bend = |bus: bool, p: Point| !busy.contains(&p) && count.get(&(bus, p)) == Some(&2);
+    let mut used = vec![false; wires.len()];
+    for i in 0..wires.len() {
+        if used[i] || wires[i].pts.len() < 2 {
+            continue;
+        }
+        used[i] = true;
+        let bus = wires[i].bus;
+        let mut pts = wires[i].pts.clone();
+        // On from the last point ...
+        loop {
+            let end = *pts.last().unwrap();
+            if !plain_bend(bus, end) {
+                break;
+            }
+            let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && (ends(&wires[j]).0 == end || ends(&wires[j]).1 == end)) else { break };
+            used[j] = true;
+            if ends(&wires[j]).0 == end {
+                pts.extend(wires[j].pts[1..].iter().copied());
+            } else {
+                pts.extend(wires[j].pts.iter().rev().skip(1).copied());
+            }
+        }
+        // ... and back from the first one (the segment before it may come later in the text).
+        loop {
+            let start = pts[0];
+            if !plain_bend(bus, start) {
+                break;
+            }
+            let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && (ends(&wires[j]).0 == start || ends(&wires[j]).1 == start)) else { break };
+            used[j] = true;
+            let mut before: Vec<Point> = if ends(&wires[j]).1 == start { wires[j].pts[..wires[j].pts.len() - 1].to_vec() } else { wires[j].pts.iter().rev().copied().take(wires[j].pts.len() - 1).collect() };
+            before.extend(pts);
+            pts = before;
+        }
+        section.wires.push(Wire { id: String::new(), net: String::new(), pins: Vec::new(), pts, bus });
+    }
+    section.assign_missing_ids();
 }
 
 // ---------------------------------------------------------------- writing
@@ -668,6 +729,22 @@ mod tests {
         assert!(f.lib_symbols[0].pin_numbers_hidden && !f.lib_symbols[0].pin_names_hidden);
         assert_eq!(f.section.user_fields.get("R1").and_then(|m| m.get("MPN")).map(String::as_str), Some("RC0603FR-0710KL"), "custom fields come across");
         assert!(f.section.imported_from_kicad && f.notes.is_empty(), "{:?}", f.notes);
+    }
+
+    #[test]
+    fn segments_that_meet_at_a_plain_bend_are_one_polyline_again_and_anything_else_stays_apart() {
+        let wire = |a: (f64, f64), b: (f64, f64)| format!("(wire (pts (xy {} {}) (xy {} {})) (stroke (width 0) (type default)) (uuid \"6a2e1b0c-5a3a-4a41-9d7e-0d5e5c2e0004\"))\n", a.0, a.1, b.0, b.1);
+        // A three-point polyline written as two wires in order; a lone wire; two wires that meet at a point with a junction on it.
+        let text = [wire((0.0, 0.0), (10.0, 0.0)), wire((10.0, 0.0), (10.0, 5.0)), wire((30.0, 0.0), (40.0, 0.0)), wire((40.0, 0.0), (40.0, 9.0)), "(junction (at 40 0) (diameter 0) (color 0 0 0 0) (uuid \"6a2e1b0c-5a3a-4a41-9d7e-0d5e5c2e0005\"))\n".to_string()].concat();
+        let f = parse_clipboard(&text).unwrap();
+        let mut polylines: Vec<Vec<(i64, i64)>> = f.section.wires.iter().map(|w| w.pts.iter().map(|p| (p.x, p.y)).collect()).collect();
+        polylines.sort();
+        assert_eq!(polylines, vec![vec![(0, 0), (10_000, 0), (10_000, 5_000)], vec![(30_000, 0), (40_000, 0)], vec![(40_000, 0), (40_000, 9_000)]]);
+        // Written in the other order the polyline is the same, from whichever end its first written segment starts.
+        let backwards = [wire((10.0, 0.0), (10.0, 5.0)), wire((0.0, 0.0), (10.0, 0.0))].concat();
+        let f = parse_clipboard(&backwards).unwrap();
+        assert_eq!(f.section.wires.len(), 1);
+        assert_eq!(f.section.wires[0].pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), vec![(0, 0), (10_000, 0), (10_000, 5_000)]);
     }
 
     #[test]
