@@ -56,7 +56,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
     writeln!(out, "\t(generator_version \"9.0\")").unwrap();
     writeln!(out, "\t(general").unwrap();
-    writeln!(out, "\t\t(thickness 1.6)").unwrap();
+    // `(general (thickness ..))`: the board's thickness (`BOARD_DESIGN_SETTINGS::GetBoardThickness()`), KiCad's 1.6 mm unless Board Setup's
+    // Physical Stackup says otherwise.
+    writeln!(out, "\t\t(thickness {})", mm(model.board.board_thickness_um)).unwrap();
     writeln!(out, "\t\t(legacy_teardrops no)").unwrap();
     writeln!(out, "\t)").unwrap();
     writeln!(out, "\t(paper \"A4\")").unwrap();
@@ -96,8 +98,22 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     let via_dia_mm = mm(model.board.via_diameter);
     let via_drill_mm = mm(model.board.via_drill);
     writeln!(out, "\t(setup").unwrap();
-    writeln!(out, "\t\t(pad_to_mask_clearance 0.0)").unwrap();
-    writeln!(out, "\t\t(allow_soldermask_bridges_in_footprints no)").unwrap();
+    // The physical stackup, when the model has one (Board Setup's Physical Stackup, or an imported board's own).
+    write_stackup(&mut out, model);
+    // Solder mask and paste (`PCB_IO_KICAD_SEXPR::formatSetup`): the mask expansion is always written, the rest when set.
+    let sm = &model.board.solder_mask;
+    writeln!(out, "\t\t(pad_to_mask_clearance {})", mm(sm.expansion_um)).unwrap();
+    if sm.min_width_um != 0 {
+        writeln!(out, "\t\t(solder_mask_min_width {})", mm(sm.min_width_um)).unwrap();
+    }
+    if sm.paste_margin_um != 0 {
+        writeln!(out, "\t\t(pad_to_paste_clearance {})", mm(sm.paste_margin_um)).unwrap();
+    }
+    if sm.paste_margin_ratio != 0.0 {
+        writeln!(out, "\t\t(pad_to_paste_clearance_ratio {})", fmt_mm_f(sm.paste_margin_ratio)).unwrap();
+    }
+    writeln!(out, "\t\t(allow_soldermask_bridges_in_footprints {})", if sm.allow_bridges_in_footprints { "yes" } else { "no" }).unwrap();
+    writeln!(out, "\t\t(tenting (front {}) (back {}))", if sm.tent_vias_front { "yes" } else { "no" }, if sm.tent_vias_back { "yes" } else { "no" }).unwrap();
     // The drill/place file origin (`pcbnew.EditorControl.drillOrigin`): what kicad-cli measures drill, position and
     // (when asked) Gerber coordinates from.
     let aux = design.drawings.as_ref().and_then(|d| d.aux_origin).unwrap_or(eda_model::ir::Point { x: 0, y: 0 });
@@ -163,8 +179,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     writeln!(out, "\t\t(trace_width {track_mm})").unwrap();
     writeln!(out, "\t\t(via_dia {via_dia_mm})").unwrap();
     writeln!(out, "\t\t(via_drill {via_drill_mm})").unwrap();
-    writeln!(out, "\t\t(uvia_dia 0.3)").unwrap();
-    writeln!(out, "\t\t(uvia_drill 0.1)").unwrap();
+    write_class_micro_and_pair(&mut out, model.board.default_class.as_ref());
     for name in &default_nets {
         writeln!(out, "\t\t(add_net {})", sexpr_str(name)).unwrap();
     }
@@ -188,8 +203,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         writeln!(out, "\t\t(trace_width {class_track_mm})").unwrap();
         writeln!(out, "\t\t(via_dia {class_via_dia_mm})").unwrap();
         writeln!(out, "\t\t(via_drill {class_via_drill_mm})").unwrap();
-        writeln!(out, "\t\t(uvia_dia 0.3)").unwrap();
-        writeln!(out, "\t\t(uvia_drill 0.1)").unwrap();
+        write_class_micro_and_pair(&mut out, Some(class));
         for name in &nets_in_class {
             writeln!(out, "\t\t(add_net {})", sexpr_str(name)).unwrap();
         }
@@ -416,6 +430,62 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     Ok(out)
 }
 
+/// A net class's microvia size and differential-pair width and gap: `(uvia_dia ..) (uvia_drill ..)` always (KiCad's
+/// 0.3 / 0.1 when the class sets none), `(diff_pair_width ..) (diff_pair_gap ..)` when it does -- what
+/// `parseNETCLASS` reads.
+fn write_class_micro_and_pair(out: &mut String, class: Option<&eda_model::NetClass>) {
+    writeln!(out, "\t\t(uvia_dia {})", class.and_then(|c| c.microvia_diameter).map_or("0.3".to_string(), mm)).unwrap();
+    writeln!(out, "\t\t(uvia_drill {})", class.and_then(|c| c.microvia_drill).map_or("0.1".to_string(), mm)).unwrap();
+    if let Some(w) = class.and_then(|c| c.diff_pair_width) {
+        writeln!(out, "\t\t(diff_pair_width {})", mm(w)).unwrap();
+    }
+    if let Some(g) = class.and_then(|c| c.diff_pair_gap) {
+        writeln!(out, "\t\t(diff_pair_gap {})", mm(g)).unwrap();
+    }
+}
+
+/// `BOARD_STACKUP::FormatBoardStackup`: `(stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..)` inside `(setup ..)`.
+/// Written only for a stackup whose every layer says what kind it is (one Board Setup or a board file made): the layers of
+/// a stackup an intent listed by name and thickness alone are not enough to describe the board to KiCad.
+fn write_stackup(out: &mut String, model: &ConstraintModel) {
+    let Some(stackup) = &model.stackup else { return };
+    if stackup.layers.is_empty() || stackup.layers.iter().any(|l| l.kind.is_none()) {
+        return;
+    }
+    writeln!(out, "\t\t(stackup").unwrap();
+    for l in &stackup.layers {
+        write!(out, "\t\t\t(layer {} (type {})", sexpr_str(&l.name), sexpr_str(l.kind.as_deref().unwrap_or(""))).unwrap();
+        if let Some(t) = l.thickness_mm {
+            write!(out, " (thickness {})", fmt_mm_f(t)).unwrap();
+        }
+        if let Some(m) = &l.material {
+            write!(out, " (material {})", sexpr_str(m)).unwrap();
+        }
+        if l.material.is_some() || l.epsilon_r.is_some() {
+            if let Some(e) = l.epsilon_r {
+                write!(out, " (epsilon_r {})", fmt_mm_f(e)).unwrap();
+            }
+        }
+        if l.material.is_some() || l.loss_tangent.is_some() {
+            if let Some(t) = l.loss_tangent {
+                write!(out, " (loss_tangent {})", fmt_mm_f(t)).unwrap();
+            }
+        }
+        writeln!(out, ")").unwrap();
+    }
+    if let Some(f) = &stackup.copper_finish {
+        writeln!(out, "\t\t\t(copper_finish {})", sexpr_str(f)).unwrap();
+    }
+    writeln!(out, "\t\t\t(dielectric_constraints {})", if stackup.dielectric_constraints { "yes" } else { "no" }).unwrap();
+    if stackup.edge_connector > 0 {
+        writeln!(out, "\t\t\t(edge_connector {})", if stackup.edge_connector > 1 { "bevelled" } else { "yes" }).unwrap();
+    }
+    if stackup.edge_plating {
+        writeln!(out, "\t\t\t(edge_plating yes)").unwrap();
+    }
+    writeln!(out, "\t\t)").unwrap();
+}
+
 /// The `.kicad_pro` project file `kicad-cli pcb drc` reads its design-rule
 /// *constraint floors* from (minimum track width, minimum clearance,
 /// minimum hole clearance, ...) -- a different thing from the per-net-class
@@ -437,29 +507,91 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
 /// enough to clear anything a 2-layer board like this routes, and not
 /// something narrowing a signal net's clearance has any bearing on.
 pub fn export_kicad_pro(model: &ConstraintModel) -> String {
-    let min_clearance = model.board.net_classes.iter().filter_map(|c| c.clearance).fold(model.board.clearance, Um::min);
-    let min_track_width = model.board.net_classes.iter().filter_map(|c| c.track_width).fold(model.board.track_width, Um::min);
-    // The router keeps every pad -- through-hole or not -- at least the
-    // board's own default clearance from copper on another net (see
-    // `crates/freeroute`'s clearance matrix); that is the real guarantee
-    // behind a hole on this board, so it is what the hole-clearance floor
-    // should ask for, never more.
-    let min_hole_clearance = model.board.clearance;
-    // Per-type DRC severities: the imported project's own, plus "ignore" for
-    // the two library-link checks -- every footprint here is embedded in the
-    // board file (`eda:<name>`), so there is no library for KiCad to compare
-    // it against and each one would report a meaningless warning.
-    let mut severities: BTreeMap<&str, &str> = BTreeMap::from([("lib_footprint_issues", "ignore"), ("lib_footprint_mismatch", "ignore")]);
-    for (key, value) in &model.board.rule_severities {
-        severities.insert(key.as_str(), value.as_str());
+    let b = &model.board;
+    let mm_f = |um: Um| um as f64 / 1000.0;
+    let rules = if b.constraints_explicit {
+        // The constraints were stated -- by the project the board came from or by Board Setup -- so they are written
+        // exactly (`BOARD_DESIGN_SETTINGS`'s `rules.*` keys, `pcbnew/board_design_settings.cpp`).
+        serde_json::json!({
+            "max_error": mm_f(b.max_error_um),
+            "min_clearance": mm_f(b.min_clearance_um),
+            "min_connection": mm_f(b.min_connection_um),
+            "min_copper_edge_clearance": mm_f(b.copper_edge_clearance_um.unwrap_or(eda_model::KICAD_EDGE_CLEARANCE_UM)),
+            "min_groove_width": mm_f(b.min_groove_width_um),
+            "min_hole_clearance": mm_f(b.hole_clearance_um),
+            "min_hole_to_hole": mm_f(b.hole_to_hole_min_um),
+            "min_microvia_diameter": mm_f(b.microvia_diameter_min_um),
+            "min_microvia_drill": mm_f(b.microvia_drill_min_um),
+            "min_resolved_spokes": b.min_resolved_spokes,
+            "min_silk_clearance": mm_f(b.silk_clearance_um),
+            "min_text_height": mm_f(b.min_silk_text_height_um),
+            "min_text_thickness": mm_f(b.min_silk_text_thickness_um),
+            "min_through_hole_diameter": mm_f(b.via_drill_min_um),
+            "min_track_width": mm_f(b.track_width_min_um),
+            "min_via_annular_width": mm_f(b.annular_width_min_um),
+            "min_via_diameter": mm_f(b.via_diameter_min_um),
+            "solder_mask_to_copper_clearance": mm_f(b.solder_mask.to_copper_clearance_um),
+            "use_height_for_length_calcs": b.use_height_for_length_calcs,
+        })
+    } else {
+        // A board built from an intent states no minimums, so the floors are lowered to what the board itself asks of
+        // them: the narrowest class it routes. The router keeps every pad -- through-hole or not -- at least the
+        // board's own default clearance from copper on another net (see `crates/freeroute`'s clearance matrix); that is
+        // the real guarantee behind a hole on this board, so it is what the hole-clearance floor should ask for, never
+        // more.
+        let min_clearance = b.net_classes.iter().filter_map(|c| c.clearance).fold(b.clearance, Um::min);
+        let min_track_width = b.net_classes.iter().filter_map(|c| c.track_width).fold(b.track_width, Um::min);
+        serde_json::json!({
+            "min_clearance": mm_f(min_clearance),
+            "min_track_width": mm_f(min_track_width),
+            "min_via_annular_width": 0.1,
+            "min_via_diameter": 0.3,
+            "min_hole_clearance": mm_f(b.clearance),
+            "min_hole_to_hole": 0.25,
+            "min_through_hole_diameter": 0.2,
+            "min_microvia_diameter": 0.2,
+            "min_microvia_drill": 0.1,
+        })
+    };
+    let t = &b.text_graphics;
+    let class = |prefix: &str, c: &eda_model::rules::LayerClassDefaults| -> Vec<(String, serde_json::Value)> {
+        vec![
+            (format!("{prefix}_line_width"), serde_json::json!(mm_f(c.line_width_um))),
+            (format!("{prefix}_text_size_h"), serde_json::json!(mm_f(c.text_width_um))),
+            (format!("{prefix}_text_size_v"), serde_json::json!(mm_f(c.text_height_um))),
+            (format!("{prefix}_text_thickness"), serde_json::json!(mm_f(c.text_thickness_um))),
+            (format!("{prefix}_text_italic"), serde_json::json!(c.italic)),
+            (format!("{prefix}_text_upright"), serde_json::json!(c.upright)),
+        ]
+    };
+    // `defaults.*`: the Text & Graphics grid (the zone and pad defaults are left to KiCad's own).
+    let mut defaults = serde_json::Map::new();
+    for (k, v) in class("silk", &t.silk).into_iter().chain(class("copper", &t.copper)).chain(class("fab", &t.fab)).chain(class("other", &t.others)) {
+        defaults.insert(k, v);
     }
-    format!(
-        "{{\n  \"board\": {{\n    \"design_settings\": {{\n      \"rule_severities\": {},\n      \"rules\": {{\n        \"min_clearance\": {},\n        \"min_track_width\": {},\n        \"min_via_annular_width\": 0.1,\n        \"min_via_diameter\": 0.3,\n        \"min_hole_clearance\": {},\n        \"min_hole_to_hole\": 0.25,\n        \"min_through_hole_diameter\": 0.2,\n        \"min_microvia_diameter\": 0.2,\n        \"min_microvia_drill\": 0.1\n      }}\n    }}\n  }}\n}}\n",
-        serde_json::to_string(&severities).unwrap_or_else(|_| "{}".into()),
-        mm(min_clearance),
-        mm(min_track_width),
-        mm(min_hole_clearance),
-    )
+    defaults.insert("board_outline_line_width".into(), serde_json::json!(mm_f(t.edge_cuts_line_width_um)));
+    defaults.insert("courtyard_line_width".into(), serde_json::json!(mm_f(t.courtyard_line_width_um)));
+
+    let mut design_settings = serde_json::json!({ "rule_severities": effective_rule_severities(model), "rules": rules });
+    if b.constraints_explicit || !t.is_default() {
+        design_settings["defaults"] = serde_json::Value::Object(defaults);
+    }
+    let project = serde_json::json!({ "board": { "design_settings": design_settings } });
+    let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
+    text.push('\n');
+    text
+}
+
+/// The per-type DRC severities the derived project holds: the imported project's own or Board Setup's, with "ignore"
+/// for the two library-link checks -- every footprint here is embedded in the board file (`eda:<name>`), so there is
+/// no library for KiCad to compare it against and each one would report a meaningless warning -- unless the table
+/// says otherwise. Keyed by the DRC settings key, valued `error` | `warning` | `ignore`.
+pub fn effective_rule_severities(model: &ConstraintModel) -> BTreeMap<String, String> {
+    let mut severities: BTreeMap<String, String> = BTreeMap::from([("lib_footprint_issues".to_string(), "ignore".to_string()), ("lib_footprint_mismatch".to_string(), "ignore".to_string())]);
+    for (key, value) in &model.board.rule_severities {
+        severities.insert(key.clone(), value.clone());
+    }
+    severities
 }
 
 /// The design's own ERC pin-to-pin conflict matrix (Schematic Setup > ERC
@@ -1348,6 +1480,99 @@ mod tests {
         let zones = &back.routing.as_ref().unwrap().zones;
         assert_eq!(zones.iter().filter(|z| z.parent_footprint.as_deref() == Some("U1")).count(), 1);
         assert_eq!(zones.iter().filter(|z| z.parent_footprint.is_none()).count(), 1);
+    }
+
+    #[test]
+    fn a_board_with_stated_constraints_writes_them_exactly_and_one_without_keeps_its_lowered_floors() {
+        let (_, mut model) = fixture();
+        model.board.net_classes.push(eda_model::NetClass { name: "escape".into(), nets: vec!["VIN".into()], track_width: Some(150), clearance: Some(150), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 });
+        // An intent states no minimums: the floors follow the narrowest class, so the escape routing is not a violation of rules nobody wrote.
+        let legacy: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
+        let rules = &legacy["board"]["design_settings"]["rules"];
+        assert_eq!((rules["min_track_width"].as_f64(), rules["min_clearance"].as_f64()), (Some(0.15), Some(0.15)));
+        assert!(rules["min_copper_edge_clearance"].is_null(), "KiCad's own default applies, as it always did");
+
+        // Stated minimums (Board Setup's Constraints, or the project the board came from) are written as they are.
+        model.board.constraints_explicit = true;
+        model.board.track_width_min_um = 250;
+        model.board.min_clearance_um = 300;
+        model.board.copper_edge_clearance_um = Some(350);
+        model.board.annular_width_min_um = 130;
+        model.board.min_silk_text_height_um = 1_000;
+        model.board.solder_mask.to_copper_clearance_um = 40;
+        let exact: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
+        let rules = &exact["board"]["design_settings"]["rules"];
+        assert_eq!(rules["min_track_width"], 0.25, "the stated floor, not the narrowest class");
+        assert_eq!(rules["min_clearance"], 0.3);
+        assert_eq!(rules["min_copper_edge_clearance"], 0.35);
+        assert_eq!(rules["min_via_annular_width"], 0.13);
+        assert_eq!(rules["min_text_height"], 1.0);
+        assert_eq!(rules["solder_mask_to_copper_clearance"], 0.04);
+        assert_eq!(rules["max_error"], 0.005);
+        assert_eq!(rules["min_resolved_spokes"], 2);
+        assert_eq!(exact["board"]["design_settings"]["defaults"]["silk_text_size_h"], 1.0, "the Text & Graphics grid rides along");
+
+        // And the importer reads every one back from that project.
+        let mut back = ConstraintModel::default();
+        crate::merge_project_design_rules(&mut back, &export_kicad_pro(&model));
+        assert!(back.board.constraints_explicit);
+        assert_eq!((back.board.track_width_min_um, back.board.min_clearance_um, back.board.copper_edge_clearance_um, back.board.annular_width_min_um), (250, 300, Some(350), 130));
+        assert_eq!((back.board.max_error_um, back.board.min_resolved_spokes, back.board.min_silk_text_height_um), (5, 2, 1_000));
+    }
+
+    #[test]
+    fn solder_mask_paste_the_stackup_and_the_board_thickness_are_written_and_read_back() {
+        let (design, mut model) = fixture();
+        model.board.solder_mask = eda_model::SolderMaskRules { expansion_um: 50, min_width_um: 120, to_copper_clearance_um: 0, allow_bridges_in_footprints: true, tent_vias_front: false, tent_vias_back: true, paste_margin_um: -40, paste_margin_ratio: -0.05 };
+        let stackup = eda_model::rules::default_stackup(4, 1_600);
+        model.board.board_thickness_um = eda_model::rules::stackup_thickness_um(&stackup);
+        model.stackup = Some(stackup.clone());
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in [
+            "(pad_to_mask_clearance 0.05)",
+            "(solder_mask_min_width 0.12)",
+            "(pad_to_paste_clearance -0.04)",
+            "(pad_to_paste_clearance_ratio -0.05)",
+            "(allow_soldermask_bridges_in_footprints yes)",
+            "(tenting (front no) (back yes))",
+            "(stackup",
+            "(layer \"In2.Cu\" (type \"copper\") (thickness 0.035))",
+            "(layer \"dielectric 1\" (type \"core\") (thickness",
+            "(material \"FR4\") (epsilon_r 4.5) (loss_tangent 0.02)",
+            "(dielectric_constraints no)",
+        ] {
+            assert!(out.contains(want), "missing {want}:\n{}", &out[..out.len().min(2500)]);
+        }
+        assert!(out.contains(&format!("(thickness {})", mm(model.board.board_thickness_um))), "the board's thickness is the stackup's sum");
+
+        let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.board.solder_mask, model.board.solder_mask);
+        assert_eq!(back.board.board_thickness_um, model.board.board_thickness_um);
+        let got = back.stackup.expect("the stackup comes back");
+        assert_eq!(got.layers.len(), stackup.layers.len());
+        assert_eq!(got.layers.iter().map(|l| (l.name.as_str(), l.kind.as_deref())).collect::<Vec<_>>(), stackup.layers.iter().map(|l| (l.name.as_str(), l.kind.as_deref())).collect::<Vec<_>>());
+        let near = |a: Option<f64>, b: Option<f64>| a.zip(b).map_or(a == b, |(x, y)| (x - y).abs() < 1e-4);
+        assert!(got.layers.iter().zip(&stackup.layers).all(|(g, w)| near(g.thickness_mm, w.thickness_mm) && g.material == w.material));
+    }
+
+    #[test]
+    fn a_stackup_the_intent_listed_by_name_alone_is_not_written() {
+        // `StackupLayer`s without a type (the older shape: name, material, thickness) do not describe the board to KiCad.
+        let (design, mut model) = fixture();
+        model.stackup = Some(eda_model::Stackup { layers: vec![eda_model::StackupLayer { name: "F.Cu".into(), material: Some("copper".into()), thickness_mm: Some(0.035), kind: None, epsilon_r: None, loss_tangent: None }], copper_finish: None, dielectric_constraints: false, edge_connector: 0, edge_plating: false });
+        assert!(!export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(stackup"));
+    }
+
+    #[test]
+    fn a_net_class_writes_its_microvia_and_pair_sizes_and_they_read_back() {
+        let (design, mut model) = fixture();
+        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["VIN".into()], track_width: Some(200), clearance: Some(200), via_diameter: None, via_drill: None, microvia_diameter: Some(250), microvia_drill: Some(110), diff_pair_width: Some(120), diff_pair_gap: Some(150), diff_pair_via_gap: None, priority: 0 });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(uvia_dia 0.25)") && out.contains("(uvia_drill 0.11)") && out.contains("(diff_pair_width 0.12)") && out.contains("(diff_pair_gap 0.15)"), "{out}");
+        assert_eq!(out.matches("(uvia_dia 0.3)").count(), 1, "the Default class keeps KiCad's own microvia");
+        let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
+        let usb = back.board.net_classes.iter().find(|c| c.name == "usb").expect("the class comes back");
+        assert_eq!((usb.microvia_diameter, usb.microvia_drill, usb.diff_pair_width, usb.diff_pair_gap), (Some(250), Some(110), Some(120), Some(150)));
     }
 
     #[test]

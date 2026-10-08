@@ -22,7 +22,7 @@ use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
 mod pcb_items;
-pub use pcb::{custom_erc_pin_map, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
+pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
 mod import;

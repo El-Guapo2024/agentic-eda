@@ -2112,6 +2112,14 @@ pub struct DrawingsSection {
     /// reads as "no origin set".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aux_origin: Option<Point>,
+    /// Board Setup's edits to the board's rules (net classes, constraints, solder mask and paste, text defaults,
+    /// the stackup, violation severities, custom rules): laid over the intent's rules each time the board is
+    /// loaded (`crate::rules::RulesOverlay::apply`, `crates/cli/src/board.rs::load`), the way `Design::nets` is.
+    /// It lives here and not on `Design` because this is the one optional board-level section that derives
+    /// `Default` -- `Design` is written out field by field in some fifty places. Additive: absent in an older
+    /// `design.json` reads as "the intent's rules stand".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<crate::rules::RulesOverlay>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no

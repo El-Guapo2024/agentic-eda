@@ -186,7 +186,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets,
         clusters: vec![],
         placement_rules: vec![],
-        stackup: None,
+        stackup: import_stackup(root),
         impedance_targets: vec![],
         footprints: explicit_footprints.into_values().collect(),
         symbols: vec![],
@@ -296,7 +296,9 @@ fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)]) 
 /// net class becomes one of our `NetClass`es, matched by its literal
 /// member list rather than a glob (an exact list is what KiCad wrote).
 fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
-    let mut board = BoardRules { layers: layers.to_vec(), ..BoardRules::default() };
+    // A board file is a board somebody judged with KiCad's rules: its minimums are KiCad's (the project's, or the factory
+    // ones when it has none), stated -- not the unstated ones of an intent (`BoardRules::constraints_explicit`).
+    let mut board = BoardRules { layers: layers.to_vec(), constraints_explicit: true, ..BoardRules::default() };
     // Legacy boards keep the copper-to-edge clearance in `(setup (edge_clearance ..))`.
     if let Some(v) = sexpr::find(root, "setup").and_then(|st| sexpr::find(st, "edge_clearance")).and_then(|e| sexpr::num(e, 1)) {
         board.copper_edge_clearance_um = Some(mm_to_um(v));
@@ -318,6 +320,7 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
         if let Some(v) = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)) {
             board.via_drill = mm_to_um(v);
         }
+        board.default_class = default_class_extras(nc);
     }
 
     board.net_classes = classes
@@ -334,12 +337,28 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
             let clearance = sexpr::find(nc, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
             let via_diameter = sexpr::find(nc, "via_dia").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
             let via_drill = sexpr::find(nc, "via_drill").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
-            Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 })
+            let extras = default_class_extras(nc);
+            let (microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap) = extras.map_or((None, None, None, None), |e| (e.microvia_diameter, e.microvia_drill, e.diff_pair_width, e.diff_pair_gap));
+            Some(NetClass { name, nets, track_width, clearance, via_diameter, via_drill, microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap, diff_pair_via_gap: None, priority: 0 })
         })
         .collect();
     import_legacy_setup_minimums(root, &mut board);
     import_solder_mask_setup(root, &mut board);
     board
+}
+
+/// A `(net_class ..)` block's microvia size and differential-pair sizes (`uvia_dia`, `uvia_drill`, `diff_pair_width`,
+/// `diff_pair_gap`), as a class with only those set -- `None` when the class has none. KiCad's own 0.3 / 0.1 mm microvia
+/// (what the writer gives a class that sets none) reads back as unset, so a board that never set one round-trips unchanged.
+fn default_class_extras(nc: &[Sexpr]) -> Option<NetClass> {
+    let um = |key: &str| sexpr::find(nc, key).and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+    let microvia_diameter = um("uvia_dia").filter(|v| *v != 300);
+    let microvia_drill = um("uvia_drill").filter(|v| *v != 100);
+    let (diff_pair_width, diff_pair_gap) = (um("diff_pair_width"), um("diff_pair_gap"));
+    if microvia_diameter.is_none() && microvia_drill.is_none() && diff_pair_width.is_none() && diff_pair_gap.is_none() {
+        return None;
+    }
+    Some(NetClass { name: "Default".into(), nets: vec![], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter, microvia_drill, diff_pair_width, diff_pair_gap, diff_pair_via_gap: None, priority: 0 })
 }
 
 /// `(front yes) (back no)` / legacy bare `front back none` tenting list, as
@@ -398,6 +417,52 @@ fn import_solder_mask_setup(root: &[Sexpr], board: &mut BoardRules) {
         board.solder_mask.tent_vias_front = front.unwrap_or(false);
         board.solder_mask.tent_vias_back = back.unwrap_or(false);
     }
+    // `m_SolderPasteMargin` / `m_SolderPasteMarginRatio`.
+    if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance").and_then(|f| sexpr::num(f, 1)) {
+        board.solder_mask.paste_margin_um = mm_to_um(v);
+    }
+    if let Some(v) = sexpr::find(setup, "pad_to_paste_clearance_ratio").and_then(|f| sexpr::num(f, 1)) {
+        board.solder_mask.paste_margin_ratio = v;
+    }
+    // `(general (thickness ..))`: `BOARD_DESIGN_SETTINGS::SetBoardThickness`.
+    if let Some(v) = sexpr::find(root, "general").and_then(|g| sexpr::find(g, "thickness")).and_then(|f| sexpr::num(f, 1)) {
+        board.board_thickness_um = mm_to_um(v);
+    }
+}
+
+/// `PCB_IO_KICAD_SEXPR_PARSER::parseBoardStackup`: `(setup (stackup (layer "F.Cu" (type "copper") (thickness 0.035)) ..
+/// (copper_finish "ENIG") (dielectric_constraints yes) ..))`. A layer with several sublayers (`addsublayer`) is read as its
+/// first. `None` when the board has no stackup block.
+fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
+    let st = sexpr::find(root, "setup").and_then(|setup| sexpr::find(setup, "stackup"))?;
+    let layers: Vec<eda_model::StackupLayer> = sexpr::find_all(st, "layer")
+        .filter_map(|l| {
+            let name = sexpr::txt(l, 1)?.to_string();
+            let kind = sexpr::find(l, "type").and_then(|t| sexpr::txt(t, 1)).map(String::from);
+            Some(eda_model::StackupLayer {
+                name,
+                material: sexpr::find(l, "material").and_then(|m| sexpr::txt(m, 1)).map(String::from),
+                thickness_mm: sexpr::find(l, "thickness").and_then(|t| sexpr::num(t, 1)),
+                kind,
+                epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
+                loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
+            })
+        })
+        .collect();
+    if layers.is_empty() {
+        return None;
+    }
+    Some(eda_model::Stackup {
+        layers,
+        copper_finish: sexpr::find(st, "copper_finish").and_then(|f| sexpr::txt(f, 1)).map(String::from),
+        dielectric_constraints: sexpr::find(st, "dielectric_constraints").and_then(|f| sexpr::txt(f, 1)) == Some("yes"),
+        edge_connector: match sexpr::find(st, "edge_connector").and_then(|f| sexpr::txt(f, 1)) {
+            Some("yes") => 1,
+            Some("bevelled") => 2,
+            _ => 0,
+        },
+        edge_plating: sexpr::find(st, "edge_plating").and_then(|f| sexpr::txt(f, 1)) == Some("yes"),
+    })
 }
 
 /// Board-wide *minimum* constraints (`BOARD_DESIGN_SETTINGS`'s `rules.min_*`
@@ -575,11 +640,16 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else {
         return;
     };
-    let Some(rules) = root.get("board").and_then(|b| b.get("design_settings")).and_then(|d| d.get("rules")) else {
+    let Some(design_settings) = root.get("board").and_then(|b| b.get("design_settings")) else {
+        return;
+    };
+    let Some(rules) = design_settings.get("rules") else {
         return;
     };
     let mm = |key: &str| rules.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
     let b = &mut model.board;
+    // The project stated its minimums: they are exact, and written back exactly (`BoardRules::constraints_explicit`).
+    b.constraints_explicit = true;
     if let Some(v) = mm("min_track_width") {
         b.track_width_min_um = v;
     }
@@ -616,6 +686,66 @@ pub fn merge_project_design_rules(model: &mut eda_model::ConstraintModel, projec
     // `m_SolderMaskToCopperClearance` lives only in the project file.
     if let Some(v) = mm("solder_mask_to_copper_clearance") {
         b.solder_mask.to_copper_clearance_um = v;
+    }
+    // The rest of Board Setup > Constraints.
+    if let Some(v) = mm("min_connection") {
+        b.min_connection_um = v;
+    }
+    if let Some(v) = mm("min_microvia_diameter") {
+        b.microvia_diameter_min_um = v;
+    }
+    if let Some(v) = mm("min_microvia_drill") {
+        b.microvia_drill_min_um = v;
+    }
+    if let Some(v) = mm("min_groove_width") {
+        b.min_groove_width_um = v;
+    }
+    if let Some(v) = mm("max_error") {
+        b.max_error_um = v.max(1);
+    }
+    if let Some(v) = rules.get("min_resolved_spokes").and_then(|v| v.as_u64()) {
+        b.min_resolved_spokes = v.min(99) as u32;
+    }
+    if let Some(v) = rules.get("use_height_for_length_calcs").and_then(|v| v.as_bool()) {
+        b.use_height_for_length_calcs = v;
+    }
+    if let Some(v) = design_settings.get("zones_allow_external_fillets").and_then(|v| v.as_bool()) {
+        b.zones_allow_external_fillets = v;
+    }
+    // Text & Graphics > Defaults (`defaults.<class>_line_width`, `_text_size_h/_v`, `_text_thickness`, `_text_italic`, `_text_upright`).
+    if let Some(def) = design_settings.get("defaults") {
+        let num = |key: &str| def.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+        let flag = |key: &str| def.get(key).and_then(|v| v.as_bool());
+        let class = |prefix: &str, c: &mut eda_model::rules::LayerClassDefaults| {
+            if let Some(v) = num(&format!("{prefix}_line_width")) {
+                c.line_width_um = v;
+            }
+            if let Some(v) = num(&format!("{prefix}_text_size_h")) {
+                c.text_width_um = v;
+            }
+            if let Some(v) = num(&format!("{prefix}_text_size_v")) {
+                c.text_height_um = v;
+            }
+            if let Some(v) = num(&format!("{prefix}_text_thickness")) {
+                c.text_thickness_um = v;
+            }
+            if let Some(v) = flag(&format!("{prefix}_text_italic")) {
+                c.italic = v;
+            }
+            if let Some(v) = flag(&format!("{prefix}_text_upright")) {
+                c.upright = v;
+            }
+        };
+        class("silk", &mut b.text_graphics.silk);
+        class("copper", &mut b.text_graphics.copper);
+        class("fab", &mut b.text_graphics.fab);
+        class("other", &mut b.text_graphics.others);
+        if let Some(v) = num("board_outline_line_width") {
+            b.text_graphics.edge_cuts_line_width_um = v;
+        }
+        if let Some(v) = num("courtyard_line_width") {
+            b.text_graphics.courtyard_line_width_um = v;
+        }
     }
 }
 
