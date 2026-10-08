@@ -22,9 +22,8 @@ import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta
 import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic } from "../api/client";
-import { formatLength } from "../state/units";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
-import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, gridPresetIndex, fastGridCycleTarget, DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2, type CursorDir } from "../kicad-port/cursorControl";
+import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
@@ -39,7 +38,6 @@ import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging"
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
-import { GRID_OPTIONS_UM } from "../components/Toolbar";
 import { computeDragAttachment } from "../components/schematic/wireAttachment";
 import { findNextMatch } from "../components/schematic/findNavigation";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
@@ -62,6 +60,11 @@ import { refDesPrefix } from "../kicad-port/packFootprints";
 import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { registerCommonActions, type ActionHandler } from "./commonActions";
+import { makeEditorAdapter } from "./editorAdapter";
+import { cancelAreaTool, getCommonTool } from "../state/commonTool";
+import { commonChecked } from "../kicad-port/commonChecked";
+import { useCommonOptions } from "../state/commonOptions";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { registerSchControlActions, schControlChecked } from "./schControlActions";
@@ -102,6 +105,8 @@ export function useActionRunner() {
   const fpDispatch = useFpDispatch();
   const schControl = useSchControlState();
   const schControlDispatch = useSchControlDispatch();
+  // The shared tools' toggles (Always Show Crosshairs, Library Tree ...), read by `isChecked`; being subscribed here re-renders a menu or a toolbar when one changes.
+  const commonOptions = useCommonOptions();
   /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
   const markerCursor = useRef<string | null>(null);
   /** The net navigator's own tree selection (`m_netNavigator->GetSelection()`): which item of the highlighted net Tab/Shift+Tab last landed on. */
@@ -109,7 +114,7 @@ export function useActionRunner() {
 
   const registry = useMemo(() => {
     // A handler may take the one parameter an action carries (`TOOL_EVENT::Parameter`), e.g. the sheet path of `NavigateTool.changeSheet`.
-    const m = new Map<string, (param?: unknown) => void>();
+    const m = new Map<string, ActionHandler>();
     // Rotate/move/rip/the footprint-properties dialog/the PCB view's own
     // pan-zoom actions all read or write PCB-only state (api.*Selection,
     // state.view, .pcb-canvas-container's rect) -- and that CSS class is
@@ -786,7 +791,7 @@ export function useActionRunner() {
     // also empty does it clear the net highlight).
     m.set("common.Interactive.cancel", () => {
       // PICKER_TOOL::Main: Escape ends a running pick session (reference point, offset tool, a dialog's "Select ...") and nothing else.
-      if (picker.cancel()) return;
+      if (picker.cancel() || cancelAreaTool()) return;
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the
@@ -834,8 +839,7 @@ export function useActionRunner() {
     // rather than inventing a third state painter.ts doesn't implement.
     m.set("common.Control.highContrastModeCycle", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
     m.set("common.Control.togglePolarCoords", () => dispatch({ type: "TOGGLE_POLAR" }));
-    m.set("common.Control.cursorFullCrosshairs", () => dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: true }));
-    m.set("common.Control.cursorSmallCrosshairs", () => dispatch({ type: "SET_FULLSCREEN_CROSSHAIR", value: false }));
+    // cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs: actions/commonActions.ts (one setting, all four canvases).
 
     m.set("common.Control.metricUnits", () => dispatch({ type: "SET_UNITS", units: "mm" }));
     m.set("common.Control.imperialUnits", () => dispatch({ type: "SET_UNITS", units: "in" }));
@@ -1030,7 +1034,7 @@ export function useActionRunner() {
     });
     // `common.Control.saveAs` (ACTIONS::saveAs, Ctrl+Shift+S): "Save current document to another location". design.json is the only
     // master, so what is saved is the editor's derived KiCad file(s) -- `.kicad_pcb`, or the `.kicad_sch` (+ one per sub-sheet) --
-    // handed to the browser's Save (kicad-port/saveAs.ts). Not live on the library editors (tab gate).
+    // handed to the browser's Save (kicad-port/saveAs.ts). The Footprint Editor's Save As is `commonSuiteActions.ts`'s (a library copy); the Symbol Editor has none (tab gate).
     m.set("common.Control.saveAs", () => {
       const name = state.board?.name ?? "board";
       const saved = (files: string[]) => dispatch({ type: "TOAST", message: `Saved ${files.join(", ")} (derived from design.json).`, kind: "info" });
@@ -1041,14 +1045,7 @@ export function useActionRunner() {
     m.set("pcbnew.EditorControl.generateDrillFiles", pcbOnly(() => dispatch({ type: "SET_GENERATE_DRILL_DIALOG_OPEN", open: true })));
     m.set("pcbnew.EditorControl.generatePosFile", pcbOnly(() => dispatch({ type: "SET_FOOTPRINT_POSITION_DIALOG_OPEN", open: true })));
 
-    // common_tools.cpp GridNext/GridPrev: `currentGrid++; if (>= size) = 0` / `--; if (< 0) = size - 1` -- wraps.
-    const cycleGrid = (dir: 1 | -1) => {
-      const i = GRID_OPTIONS_UM.indexOf(state.gridUm);
-      const next = GRID_OPTIONS_UM[wrapStep(i, GRID_OPTIONS_UM.length, dir)]!;
-      dispatch({ type: "SET_GRID_UM", um: next });
-    };
-    m.set("common.Control.gridNext", () => cycleGrid(1));
-    m.set("common.Control.gridPrev", () => cycleGrid(-1));
+    // Next / Previous Grid, the grid presets and the fast grids work on the editor's grid list (state/gridSettings.ts): actions/commonGridListActions.ts.
 
     // common.Interactive.search: this app has no KiCad Search panel --
     // the task put Search on the non-KiCad Activity tab instead (see
@@ -1511,7 +1508,8 @@ export function useActionRunner() {
     m.set(
       "common.Interactive.finish",
       canvasOnly(() => {
-        if (state.drawState) dblClickAtCursor();
+        // End also closes a lasso being drawn (`selectLasso`: `evt->IsAction( &ACTIONS::finishInteractive )`).
+        if (state.drawState || getCommonTool().lasso) dblClickAtCursor();
       })
     );
 
@@ -1529,26 +1527,8 @@ export function useActionRunner() {
     m.set("common.Control.panLeft", panView("left"));
     m.set("common.Control.panRight", panView("right"));
 
-    // common_tools.cpp COMMON_TOOLS::GridFast1/GridFast2/GridFastCycle -> GridPreset(idx, fromHotkey=true)
-    // -> OnGridChanged: clamp the index into the grid list, apply it, put the
-    // cursor on the new grid (SetCrossHairCursorPosition( GetCursorPosition(true) )),
-    // and show the hotkey feedback. PCB tab only: the schematic's grid here is a
-    // fixed 50 mil (layout.ts GRID) with no grid list to index into.
+    // The fast grids (common_tools.cpp GridFast1/GridFast2/GridFastCycle) are commonGridListActions.ts's. PCB tab only from here: the board's snap mode.
     if (state.tab === "pcb") {
-      const applyGridPreset = (idx: number) => {
-        const i = gridPresetIndex(idx, GRID_OPTIONS_UM.length);
-        const um = GRID_OPTIONS_UM[i]!;
-        dispatch({ type: "SET_GRID_UM", um });
-        if (state.cursorUm) {
-          const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, um, { x: 0, y: 0 }, { ctrlOrCmd: false });
-          dispatch({ type: "SET_CURSOR", at: { x: p.x, y: p.y } });
-        }
-        dispatch({ type: "TOAST", message: `Grid: ${formatLength(um, state.units)}`, kind: "info" });
-      };
-      m.set("common.Control.gridFast1", () => applyGridPreset(DEFAULT_FAST_GRID_1));
-      m.set("common.Control.gridFast2", () => applyGridPreset(DEFAULT_FAST_GRID_2));
-      m.set("common.Control.gridFastCycle", () => applyGridPreset(fastGridCycleTarget(GRID_OPTIONS_UM.indexOf(state.gridUm), DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2)));
-
       // pcb_control.cpp PCB_CONTROL::SnapMode (magneticSnapToggle, Shift+S):
       // `settings.allLayers = !settings.allLayers`; SnapModeFeedback pops up
       // "Object Snapping: Active Layer / All Layers". The setting feeds
@@ -2230,7 +2210,25 @@ export function useActionRunner() {
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
+    // The shared actions that work in every editor (actions/commonActions.ts). The adapter is built when an action runs: the
+    // library editors' stores change without this registry being rebuilt.
+    registerCommonActions(m, {
+      tab: state.tab,
+      getAdapter: () => {
+        const studio = api.getState();
+        return makeEditorAdapter({ tab: studio.tab, studio, fp: fpApi.getState(), sym: symApi.getState(), dispatch, fpDispatch, symDispatch, api, fpApi, symApi });
+      },
+      state,
+      dispatch,
+      api,
+      fpApi,
+      fpDispatch,
+      symApi,
+      symDispatch,
+    });
+
     // The frame-wide actions (zoom, grid, save, print, library tree, select) of those two editors, on their own canvas and store, and the unregistering of the toolbar actions they do not support.
+    // After the shared actions above: on those two tabs the frame's own handler is the one that stands where both have one.
     registerEditorFrameActions(m, { tab: state.tab, fpApi, fpDispatch, symApi, symDispatch });
 
     // The schematic editor's control actions (eeschema.EditorControl / NavigateTool / InspectionTool / Interactive.increment*).
@@ -2267,6 +2265,7 @@ export function useActionRunner() {
   // vice versa) -- arguably more honest ("usable right now" instead of
   // "usable somewhere"), not a regression.
   const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)), [registry, state.tab]);
+  /** `param` is the event parameter KiCad's parameterised actions carry (`zoomPreset`'s entry, `selectItems`' items, `changeSheet`'s path ...). */
   const run = useCallback((name: string, param?: unknown) => registry.get(name)?.(param), [registry]);
   /**
    * The check a menu entry or toolbar button shows for a toggle action (View > Show Hidden Pins, the Net Navigator panel, Edit > Attributes > Do not
@@ -2274,6 +2273,11 @@ export function useActionRunner() {
    */
   const isChecked = useCallback(
     (name: string): boolean | undefined => {
+      // The shared tools' toggles (Always Show Crosshairs, the crosshair mode, Draw Bounding Boxes, the selection mode, Library Tree), in every editor.
+      if (registry.has(name)) {
+        const shared = commonChecked(name, commonOptions);
+        if (shared !== undefined) return shared;
+      }
       if (state.tab !== "schematic" || !registry.has(name)) return undefined;
       const selection = state.selection;
       const sch = state.schematic;
@@ -2283,7 +2287,9 @@ export function useActionRunner() {
         requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
       });
     },
-    [registry, schControl, state]
+    [registry, schControl, state, commonOptions]
   );
-  return { run, isEnabled, isChecked };
+  /** Every action id the registry has a handler for on this tab (the scripted test hook, `window.__eda`, lists them). */
+  const actionNames = useMemo(() => [...registry.keys()], [registry]);
+  return { run, isEnabled, isChecked, actionNames };
 }

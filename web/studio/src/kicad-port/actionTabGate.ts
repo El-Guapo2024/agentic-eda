@@ -60,9 +60,15 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
 
 /**
  * `common.*` actions that act on a whole document and exist for the two document editors only: the board editor and
- * the schematic editor. The Symbol Editor's Ctrl+Shift+S is `saveLibraryAs` (above), so Save As must not be live there.
+ * the schematic editor.
  */
-export const BOARD_AND_SCHEMATIC_ONLY: ReadonlySet<string> = new Set(["common.Control.saveAs", "common.Control.updatePcbFromSchematic"]);
+export const BOARD_AND_SCHEMATIC_ONLY: ReadonlySet<string> = new Set(["common.Control.updatePcbFromSchematic"]);
+
+/**
+ * Save As (`ACTIONS::saveAs`) is the File menu's entry of the board editor, the schematic editor and the Footprint Editor
+ * (`FOOTPRINT_EDITOR_CONTROL::SaveAs`). The Symbol Editor's Ctrl+Shift+S is `saveLibraryAs` (above), so Save As must not be live there.
+ */
+export const SAVE_AS = "common.Control.saveAs";
 
 /**
  * The tool groups that exist for one library editor only: `FOOTPRINT_EDITOR_CONTROL` (`pcbnew.ModuleEditor.*`) and `PAD_TOOL` (`pcbnew.PadTool.*`,
@@ -92,6 +98,7 @@ export function isActionEnabledForTab(name: string, tab: string, registered: boo
   if (SYMBOL_EDITOR_TOOL_PREFIXES.some((p) => name.startsWith(p))) return tab === "symbol";
   if (SCHEMATIC_AND_SYMBOL_EDITOR.has(name)) return tab === "schematic" || tab === "symbol";
   if (BOARD_AND_SCHEMATIC_ONLY.has(name)) return tab === "pcb" || tab === "schematic";
+  if (name === SAVE_AS) return tab === "pcb" || tab === "schematic" || tab === "footprint";
   if (BOARD_AND_FOOTPRINT.has(name)) return tab === "pcb" || tab === "footprint";
   if (name.startsWith("pcbnew.")) return tab === "pcb";
   if (name.startsWith("eeschema.")) return tab === "schematic";

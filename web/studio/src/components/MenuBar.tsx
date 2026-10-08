@@ -18,6 +18,7 @@ import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
 import { useActionRunner } from "../actions/useActionRunner";
 import { useChecked } from "../actions/useChecked";
 import { useStudioState } from "../state/store";
+import { HELP_MENU } from "../kicad-port/helpMenu";
 
 const menusFile = menusData as MenusFile;
 /** The schematic editor's menus with this studio's own entries appended (kicad/menuExtras.ts). */
@@ -100,7 +101,7 @@ export function MenuBar() {
 
   return (
     <div className="menubar" ref={ref}>
-      {activeMenus.menus.map((menu, i) => (
+      {[...activeMenus.menus, HELP_MENU].map((menu, i) => (
         <div key={menu.label} className={`menubar-item${openIndex === i ? " open" : ""}`} onClick={() => setOpenIndex(openIndex === i ? null : i)} onMouseEnter={() => openIndex !== null && setOpenIndex(i)}>
           {menu.label}
           {openIndex === i && (

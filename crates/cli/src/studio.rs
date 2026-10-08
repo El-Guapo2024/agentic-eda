@@ -1088,6 +1088,11 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "locked": design.drawings.as_ref().map(|d| d.locked_ids.clone()).unwrap_or_default(),
         // The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`), `[x, y]` um, or null at (0, 0).
         "aux_origin": design.drawings.as_ref().and_then(|d| d.aux_origin).map(|p| json!([p.x, p.y])),
+        // The point the editing grid is anchored at (`BOARD_DESIGN_SETTINGS::GetGridOrigin`), `[x, y]` um, or null at (0, 0).
+        "grid_origin": design.drawings.as_ref().and_then(|d| d.grid_origin).map(|p| json!([p.x, p.y])),
+        // The board's paper and title block (Page Settings); null is A4 landscape / an empty title block.
+        "page": design.drawings.as_ref().and_then(|d| d.page.as_ref()).map(crate::page_json::page_json),
+        "title_block": design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(crate::page_json::title_block_json),
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
@@ -1416,7 +1421,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin }))
         .collect();
     let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
-    let title_block = sch.title_block.as_ref().map(|t| json!({ "title": t.title, "date": t.date, "rev": t.rev, "company": t.company, "comments": t.comments }));
+    let title_block = sch.title_block.as_ref().map(crate::page_json::title_block_json);
 
     // Resolved library-symbol graphics for every distinct lib_id this sheet
     // uses, so the frontend can draw KiCad's actual symbols instead of a
@@ -1467,12 +1472,14 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         })
         .collect();
     let sheet_path: Vec<Value> = breadcrumb.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect();
-    // The paper this sheet is drawn on (KiCad's names; A4 unless the sheet says otherwise).
-    let paper = eda_engine::hier::kit::paper_named(sch.title_block.as_ref().map(|t| t.paper.as_str()).filter(|p| !p.is_empty()).unwrap_or("A4"));
+    // The paper this sheet is drawn on: its full Page Settings when it has them (portrait, a user size), else the name its title block carries
+    // (the layout engine writes it per sheet); A4 landscape when neither.
+    let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
+    let (paper_w, paper_h) = page.size_um().unwrap_or((297_000, 210_000));
     let file = viewed_file(&design, &breadcrumb);
 
     Ok(json!({
-        "paper": { "name": paper.name, "width_um": paper.w, "height_um": paper.h },
+        "paper": { "name": page.paper, "width_um": paper_w, "height_um": paper_h },
         "file": file,
         "symbols": symbols,
         "wires": wires,
@@ -1486,6 +1493,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "graphics": graphics,
         "locked": locked,
         "title_block": title_block,
+        "page": crate::page_json::page_json(&page),
         "lib_symbols": lib_symbols,
         "sheets": sheets,
         "sheet_path": sheet_path,

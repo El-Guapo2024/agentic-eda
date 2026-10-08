@@ -14,6 +14,7 @@ import { convertAvailability } from "../kicad-port/pcbConvert";
 import { activeEditPoint, canRemoveCorner } from "../kicad-port/pcbPointEdit";
 import { handleToleranceUm, pointItemOf, pointsOfItem, ringOf } from "./pcbPointEditSweep";
 import { routeQueueActive } from "../components/canvas/routeQueue";
+import { planAddToGroup, planRemoveFromGroup } from "../kicad-port/groupEdit";
 
 const LABELS = new Map<string, string>((actionsData as { actions: { name: string; label: string }[] }).actions.map((a) => [a.name, a.label]));
 
@@ -43,6 +44,12 @@ export function pcbSweepMenuEntries(state: StudioState, api: StudioApi, refs: re
   add("pcbnew.InteractiveSelection.SelectNet", has((i) => kinds[i] === "track" || kinds[i] === "via" || kinds[i] === "zone"));
   add("pcbnew.InteractiveSelection.SelectSameSheet", count === 1 && kinds[0] === "part");
   add("pcbnew.InteractiveSelection.SelectOnSchematic", has((i) => kinds[i] === "part"));
+
+  // GROUP_CONTEXT_MENU's "Grouping" (common/tool/group_tool.cpp), flat: Group Properties for one group; Add Items for one group plus ungrouped items; Remove Items for members.
+  const groups = board.drawings?.groups ?? [];
+  add("common.Groups.groupProperties", count === 1 && groups.some((g) => g.id === refs[0]));
+  add("common.Interactive.addToGroup", planAddToGroup(refs, groups) !== null);
+  add("common.Interactive.removeFromGroup", planRemoveFromGroup(refs, groups).length > 0);
 
   // Break Track / Fillet Tracks (trackTypes = track, arc, via)
   add("pcbnew.InteractiveRouter.BreakTrack", count === 1 && kinds[0] === "track");

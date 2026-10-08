@@ -608,7 +608,7 @@ export interface StudioState {
   /** Which of the Symbol Fields Table / Find / Find and Replace / Schematic Setup dialogs is open (eeschema's editSymbolFields / find / findAndReplace / schematicSetup actions) -- one slot because they are never open together. */
   schDialog: SchDialog;
   /** Find / Replace's last search (`SCH_EDIT_FRAME::GetFindReplaceData`) plus its `m_afterItem` cursor (the key of the last visited match) -- shared by the dialog and F3 / Shift+F3 so Find Next works with the dialog closed. */
-  schFind: { search: SchSearchData; cursor: string | null; status: string };
+  schFind: { search: SchSearchData; cursor: string | null; status: string; /** `searchSelectedOnly`: restrict Find / Replace to the selection. */ selectedOnly: boolean; /** The Find dialog's "Backward" direction, which Replace and Find Next continues in. */ backward: boolean };
   /** Schematic tab's File > Plot... (`common.Control.plot`, DIALOG_PLOT_SCHEMATIC), see PlotSchematicDialog.tsx. */
   schPlotDialogOpen: boolean;
   /** Schematic tab's File > Export > Netlist... (`eeschema.EditorControl.exportNetlist`, DIALOG_EXPORT_NETLIST), see ExportNetlistDialog.tsx. */
@@ -872,7 +872,7 @@ const initialState: StudioState = {
   symbolProperties: null,
   annotateDialogOpen: false,
   schDialog: null,
-  schFind: { search: defaultSearch(), cursor: null, status: "" },
+  schFind: { search: defaultSearch(), cursor: null, status: "", selectedOnly: false, backward: false },
   schPlotDialogOpen: false,
   exportNetlistDialogOpen: false,
   lastLabelText: "",

@@ -9,7 +9,9 @@ import { useActionRunner } from "../../actions/useActionRunner";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
 import type { MenuEntry } from "../canvas/ContextMenu";
 import { LibraryTree } from "../library/LibraryTree";
+import { hideTreeEntry, pinEntries } from "../library/libraryTreeMenu";
 import { useLibraryNames } from "../library/useLibraryNames";
+import { useLibraryTree } from "../../state/libraryTree";
 
 const labelOf = new Map((actionsData as ActionsFile).actions.map((a) => [a.name, a.label]));
 
@@ -39,18 +41,23 @@ export function FootprintLibraryPanel() {
 
   const selected = useMemo(() => (state.treeSelection ? [state.treeSelection] : []), [state.treeSelection]);
 
-  const menu = (): MenuEntry[] => {
-    const entries: MenuEntry[] = [];
+  const { pinned } = useLibraryTree("footprint");
+
+  // `LIBRARY_EDITOR_CONTROL::AddContextMenuItems` adds Pin / Unpin Library before `FOOTPRINT_EDITOR_CONTROL::Init`'s entries and Hide Library Tree after them.
+  const menu = (_sel: string[], libs: string[]): MenuEntry[] => {
+    const entries: MenuEntry[] = pinEntries(libs, pinned, run, isEnabled);
     for (const name of MENU) {
       if (name === null) continue; // `ContextMenu` has no separators; the order keeps the groups together
       const enabled = isEnabled(name);
       entries.push({ label: enabled ? (labelOf.get(name) ?? name) : `${labelOf.get(name) ?? name} (not ported yet)`, disabled: !enabled, onSelect: () => run(name) });
     }
+    entries.push(hideTreeEntry(run, isEnabled));
     return entries;
   };
 
   return (
     <LibraryTree
+      kind="footprint"
       title="Footprint Libraries"
       items={names.items}
       installed={names.installed}

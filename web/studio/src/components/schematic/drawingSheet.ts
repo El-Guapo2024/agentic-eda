@@ -72,16 +72,10 @@ export interface TitleBlockInfo {
   rev: string;
   fileName: string;
   sheetPath: string;
-  /**
-   * From GET /api/schematic's `title_block.company`, once that field is
-   * populated by the Eeschema-port merge -- real KiCad draws it above
-   * Size/Date/Rev, sharing the Title row's own width. Not drawn yet:
-   * left for whoever adds the real row-position numbers (this session
-   * had no source-verified geometry for it, unlike every other title-
-   * block position here -- see this file's header comment on where
-   * those came from).
-   */
+  /** `${COMPANY}`, drawn bold above the comments. */
   company?: string;
+  /** `${COMMENT1}`..`${COMMENT4}`: the default drawing sheet shows the first four comments (`drawing_sheet_default_description.cpp`). */
+  comments?: readonly string[];
 }
 
 function frameLine(ctx: CanvasRenderingContext2D, hair: number) {
@@ -214,6 +208,15 @@ export function drawTitleBlock(ctx: CanvasRenderingContext2D, view: ViewTransfor
   text(`Rev: ${info.rev}`, TB_COL_DATE_REV_SPLIT + 2_000, TB_ROW_SIZEDATEREV_BOTTOM - 650, 2_000);
   text(`KiCad E.D.A. eda studio`, 1_000, TB_HEIGHT_UM - 1_350, 2_000);
   text(`Id: 1/1`, TB_COL_DATE_REV_SPLIT + 2_000, TB_HEIGHT_UM - 1_350, 2_000);
+
+  // `${COMPANY}` (bold) and `${COMMENT1}`..`${COMMENT4}` are the default sheet's `(tbtext ... (pos 109 20))` ... `(pos 109 32)`: 3 mm apart in the rows above
+  // Sheet. A `pos` is the text's centre in mm above the margin corner, 2 mm below the block's bottom edge; the baseline is half the 1.5 mm text
+  // below it -- the same relation the Title (`pos 10.7`, 2 mm) and File (`pos 14.3`) rows above use.
+  const row = (s: string | undefined, posMm: number, bold = false) => {
+    if (s) text(s, 1_000, TB_HEIGHT_UM - (posMm - 2.75) * 1_000, 2_000, bold);
+  };
+  row(info.company, 20, true);
+  for (let i = 0; i < 4; i++) row(info.comments?.[i], 23 + 3 * i);
 }
 
 /**

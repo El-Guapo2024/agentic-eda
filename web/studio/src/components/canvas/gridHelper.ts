@@ -18,14 +18,28 @@
 
 import { computeNearest, bestSnapPoint, collectAnchors, DEFAULT_MAGNETIC_SETTINGS, type AnchorSourceBoard, type GridSnapModifiers, type SnapAnchor, type SnapLayerFilter } from "../../kicad-port/gridSnap";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
+import { NO_ORIGIN, snapAxis, type Origin } from "../../kicad-port/gridOrigin";
 
 export function snap(valueUm: number, gridUm: number): number {
   if (gridUm <= 0) return Math.round(valueUm);
   return Math.round(valueUm / gridUm) * gridUm;
 }
 
+// The point the editing grid of the editor on screen is anchored at (`common.Control.gridSetOrigin`): the board's own in the PCB editor, the
+// session's in the Footprint Editor, (0, 0) elsewhere. `actions/useSnapOrigin.ts` keeps it current; every tool that snaps a click through
+// `snapPoint` / `snapWithAnchors` reads it here, so none of them has to be told.
+let snapOrigin: Origin = NO_ORIGIN;
+
+export function setSnapOrigin(at: Origin): void {
+  snapOrigin = at;
+}
+
+export function getSnapOrigin(): Origin {
+  return snapOrigin;
+}
+
 export function snapPoint(xUm: number, yUm: number, gridUm: number): [number, number] {
-  return [snap(xUm, gridUm), snap(yUm, gridUm)];
+  return [snapAxis(xUm, gridUm, snapOrigin.x), snapAxis(yUm, gridUm, snapOrigin.y)];
 }
 
 export type { GridSnapModifiers, SnapAnchor };
@@ -40,7 +54,7 @@ export type { GridSnapModifiers, SnapAnchor };
 export function snapWithAnchors(xUm: number, yUm: number, gridUm: number, scalePxPerUm: number, board: AnchorSourceBoard, modifiers: GridSnapModifiers, excludeOwnerId?: string, layerFilter?: SnapLayerFilter): { x: number; y: number; snappedTo: SnapAnchor | null } {
   const anchors = collectAnchors(board, DEFAULT_MAGNETIC_SETTINGS, excludeOwnerId, layerFilter);
   const visibleGridUm = computeVisibleGridSize(gridUm, scalePxPerUm);
-  const { point, snappedTo } = bestSnapPoint({ x: xUm, y: yUm }, gridUm, { x: 0, y: 0 }, scalePxPerUm, visibleGridUm, anchors, modifiers);
+  const { point, snappedTo } = bestSnapPoint({ x: xUm, y: yUm }, gridUm, snapOrigin, scalePxPerUm, visibleGridUm, anchors, modifiers);
   return { x: point.x, y: point.y, snappedTo };
 }
 

@@ -58,15 +58,16 @@ test("isActionEnabledForTab: the Symbol Editor's stacked-pin tools are enabled o
   }
 });
 
-test("isActionEnabledForTab: Save As and Update PCB from Schematic exist for the board and schematic editors only, so Ctrl+Shift+S on the Symbol tab reaches saveLibraryAs", () => {
+test("isActionEnabledForTab: Update PCB from Schematic exists for the board and schematic editors only; Save As also for the Footprint Editor, so Ctrl+Shift+S on the Symbol tab reaches saveLibraryAs", () => {
   for (const name of ["common.Control.saveAs", "common.Control.updatePcbFromSchematic"]) {
     assert.equal(isActionEnabledForTab(name, "pcb", true), true, name);
     assert.equal(isActionEnabledForTab(name, "schematic", true), true, name);
     assert.equal(isActionEnabledForTab(name, "symbol", true), false, name);
-    assert.equal(isActionEnabledForTab(name, "footprint", true), false, name);
     assert.equal(isActionEnabledForTab(name, "3d", true), false, name);
     assert.equal(isActionEnabledForTab(name, "pcb", false), false, "unregistered stays disabled");
   }
+  assert.equal(isActionEnabledForTab("common.Control.saveAs", "footprint", true), true, "FOOTPRINT_EDITOR_CONTROL::SaveAs");
+  assert.equal(isActionEnabledForTab("common.Control.updatePcbFromSchematic", "footprint", true), false);
   const onSymbol = ["common.Control.saveAs", "eeschema.SymbolLibraryControl.saveLibraryAs"].find((n) => isActionEnabledForTab(n, "symbol", true));
   assert.equal(onSymbol, "eeschema.SymbolLibraryControl.saveLibraryAs");
 });

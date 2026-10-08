@@ -44,6 +44,13 @@ export interface PickerSession {
   onCancel?: (activated: boolean) => void;
   /** `SetFinalizeHandler`: the session is over, however it ended. */
   onFinalize?: () => void;
+  /**
+   * `SetMotionHandler` of a session that highlights what a click would take (the interactive delete tool's `BrightenItem`): the id under the
+   * pointer, or null when there is nothing -- or more than one thing -- there. The host (components/CommonToolHost.tsx) draws it.
+   */
+  hover?: (at: PickPoint) => string | null;
+  /** `SetCursor`: the pointer over the canvas while the session runs; the delete tool asks for `REMOVE`. */
+  cursor?: "default" | "remove";
 }
 
 export class PickerHost {

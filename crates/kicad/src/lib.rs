@@ -18,6 +18,7 @@ use std::fmt::Write as _;
 
 use eda_layout::{Port, Side};
 use eda_model::ir::{Design, NetLabel, NoConnect, PowerSymbol, SchematicText, SymbolInstance, Wire};
+use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
@@ -25,6 +26,7 @@ mod pcb_items;
 pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
+mod page;
 mod import;
 mod import_items;
 pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
@@ -175,7 +177,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     writeln!(out, "\t(generator \"eda-kicad\")").unwrap();
     writeln!(out, "\t(generator_version \"9.0\")").unwrap();
     writeln!(out, "\t(uuid \"{file_uuid}\")").unwrap();
-    writeln!(out, "\t(paper \"{paper}\")").unwrap();
+    // The sheet's paper: the full settings when it has them (portrait, a user size), else the name its title block carries (A4 landscape when neither).
+    writeln!(out, "\t{}", PageSettings::of_sheet(sch.extras.page.as_ref(), paper).to_sexpr()).unwrap();
     writeln!(out, "\t(title_block").unwrap();
     let tb = sch.title_block.as_ref();
     let title = tb.map(|t| t.title.as_str()).filter(|s| !s.is_empty()).unwrap_or(meta.title);
@@ -189,6 +192,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         writeln!(out, "\t\t(company {})", sexpr_str(&t.company)).unwrap();
     }
     if let Some(t) = tb.filter(|t| !t.comments.is_empty()) {
+        // A title block with comments of its own (Page Settings, an imported file): those; without any, the provenance below.
         for (i, c) in t.comments.iter().enumerate() {
             writeln!(out, "\t\t(comment {} {})", i + 1, sexpr_str(c)).unwrap();
         }
@@ -1226,6 +1230,30 @@ mod tests {
         let design = derive_schematic(model, &EngineOptions::new(1, "hash")).unwrap();
         let meta = ExportMeta { date: "2026-01-01", title: "LDO test" };
         export_kicad_sch(&design, model, &meta).unwrap()
+    }
+
+    #[test]
+    fn the_sheets_paper_and_title_block_are_written_and_read_back_by_the_importer() {
+        let model = ldo_model();
+        let mut design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
+        let meta = ExportMeta { date: "2026-01-01", title: "LDO test" };
+        let plain = export_kicad_sch(&design, &model, &meta).unwrap();
+        assert!(plain.contains("(paper \"A4\")"), "never set: A4 landscape");
+        assert!(plain.contains("(comment 1 \"engine_version:"), "no comments of its own: the provenance comments, as before");
+
+        let sch = design.schematic.as_mut().unwrap();
+        sch.extras.page = Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_um: None });
+        sch.title_block = Some(eda_model::ir::TitleBlock { title: "Mine".into(), comments: vec!["only".into()], ..Default::default() });
+        let out = export_kicad_sch(&design, &model, &meta).unwrap();
+        assert!(out.contains("(paper \"USLetter\" portrait)"), "{out}");
+        assert!(out.contains("(comment 1 \"only\")") && !out.contains("engine_version:"), "a title block of its own has its own comments only");
+
+        let (back, _, _) = import_kicad_sch(&out).unwrap();
+        let sch = back.schematic.unwrap();
+        assert_eq!(sch.extras.page, Some(eda_model::page::PageSettings { paper: "USLetter".into(), portrait: true, user_size_um: None }));
+        assert_eq!(sch.title_block.map(|t| t.title), Some("Mine".to_string()));
+        let (default_back, _, _) = import_kicad_sch(&plain).unwrap();
+        assert!(default_back.schematic.unwrap().extras.page.is_none(), "A4 landscape is the default and is not kept");
     }
 
     fn balanced_parens(s: &str) -> bool {

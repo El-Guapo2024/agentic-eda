@@ -276,6 +276,7 @@ export function SchematicView() {
         date: tb?.date ?? new Date().toISOString().slice(0, 10),
         rev: tb?.rev ?? "",
         company: tb?.company,
+        comments: tb?.comments,
         fileName: sch.file || `${state.board?.name || "schematic"}.kicad_sch`,
         sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
       },

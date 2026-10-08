@@ -6,7 +6,7 @@ import { fileStem } from "../kicad-port/saveAs";
 import { samePath } from "../kicad-port/sheetPages";
 import { saveBlob, saveTextFile } from "../api/libraryClient";
 import { layerColor } from "../components/canvas/layers";
-import { drawPageAndFrame, drawTitleBlock, drawZoneReferences, PAGE_HEIGHT_UM, PAGE_WIDTH_UM } from "../components/schematic/drawingSheet";
+import { drawPageAndFrame, drawTitleBlock, drawZoneReferences, pageOf } from "../components/schematic/drawingSheet";
 import { paintSchematic } from "../components/schematic/painter";
 import { DEFAULT_SCH_DISPLAY } from "../components/schematic/displayOptions";
 
@@ -44,9 +44,10 @@ export function renderSheetImage(ctx: SchControlContext): HTMLCanvasElement | nu
   const sch = ctx.state.schematic;
   if (!sch) return null;
   const scale = SHEET_PX_PER_MM / 1000;
+  const page = pageOf(sch.paper);
   const canvas = document.createElement("canvas");
-  canvas.width = Math.round(PAGE_WIDTH_UM * scale);
-  canvas.height = Math.round(PAGE_HEIGHT_UM * scale);
+  canvas.width = Math.round(page.widthUm * scale);
+  canvas.height = Math.round(page.heightUm * scale);
   const g = canvas.getContext("2d");
   if (!g) return null;
   const view = { x: 0, y: 0, scale };
@@ -55,17 +56,24 @@ export function renderSheetImage(ctx: SchControlContext): HTMLCanvasElement | nu
   g.save();
   // like the editor's own canvas: the context carries the scale, and the painters get the same view to size their hairlines by
   g.scale(scale, scale);
-  drawPageAndFrame(g, view);
-  drawZoneReferences(g, view);
+  drawPageAndFrame(g, view, page);
+  drawZoneReferences(g, view, page);
   const tb = sch.title_block;
-  drawTitleBlock(g, view, {
-    title: tb?.title || ctx.state.board?.name || "untitled",
-    date: tb?.date ?? new Date().toISOString().slice(0, 10),
-    rev: tb?.rev ?? "",
-    company: tb?.company,
-    fileName: `${ctx.state.board?.name || "schematic"}.kicad_sch`,
-    sheetPath: "/",
-  });
+  const crumbs = sch.sheet_path ?? [];
+  drawTitleBlock(
+    g,
+    view,
+    {
+      title: tb?.title || ctx.state.board?.name || "untitled",
+      date: tb?.date ?? new Date().toISOString().slice(0, 10),
+      rev: tb?.rev ?? "",
+      company: tb?.company,
+      comments: tb?.comments,
+      fileName: sch.file || `${ctx.state.board?.name || "schematic"}.kicad_sch`,
+      sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
+    },
+    page
+  );
   paintSchematic(g, view, sch, { selection: new Set(), netHighlight: null, display: ctx.control.display ?? DEFAULT_SCH_DISPLAY });
   g.restore();
   return canvas;

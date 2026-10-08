@@ -24,6 +24,9 @@ import { ErcDialog } from "./components/ErcDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
+import { CommonOverlay } from "./components/CommonOverlay";
+import { CommonToolHost } from "./components/CommonToolHost";
+import { CommonDialogs } from "./components/CommonDialogs";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
@@ -66,6 +69,8 @@ import { Viewer3D, type Viewer3DApi } from "./components/viewer3d/Viewer3D";
 import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { Viewer3DAppearancePanel } from "./components/viewer3d/Viewer3DAppearancePanel";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
+import { useEdaTestHook } from "./actions/useEdaTestHook";
+import { useSnapOrigin } from "./actions/useSnapOrigin";
 import "./styles/global.css";
 import "./styles/layout.css";
 import "./styles/panels.css";
@@ -104,6 +109,8 @@ function Toast() {
 function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
+  useEdaTestHook(); // window.__eda: the scripted test hook (actions/useEdaTestHook.ts)
+  useSnapOrigin(); // the point the grid snapping is anchored at (the grid origin of the PCB / Footprint editor on screen)
   useFootprintEditHotkey();
   useOpenDockWithNetNavigator();
   // Ctrl+Shift+E / Ctrl+E on the Schematic tab are now the registered actions
@@ -180,6 +187,8 @@ function StudioFrame() {
           {isFootprint && <FootprintEditorView />}
           {isSymbolEditor && <SymbolEditorView />}
           {is3d && <Viewer3D onReady={setViewer3d} />}
+          {!is3d && <CommonOverlay />}
+          {!is3d && <CommonToolHost />}
           <Toast />
         </div>
         {!hideBoardChrome && (
@@ -256,6 +265,7 @@ function StudioFrame() {
       <FootprintPositionDialog />
       <SchControlHost />
       <BoardControlDialogs />
+      <CommonDialogs />
     </div>
   );
 }

@@ -692,7 +692,7 @@ pub struct ErcExclusion {
 /// Title block. Every field optional/empty by default; the exporter falls
 /// back to its `ExportMeta` argument for `title`/`date` when this whole
 /// section is absent, so existing callers are unaffected.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TitleBlock {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -2116,6 +2116,19 @@ pub struct DrawingsSection {
     /// reads as "no origin set".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aux_origin: Option<Point>,
+    /// `BOARD::GetPageSettings()`: the board's paper (Page Settings, `common.Control.pageSettings`), written to the
+    /// derived `.kicad_pcb` as `(paper ...)`. `None` is KiCad's default, A4 landscape. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<crate::page::PageSettings>,
+    /// `BOARD::GetTitleBlock()`: the board's title block (Page Settings), written as `(title_block ...)`. `None` is an empty
+    /// one. Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_block: Option<TitleBlock>,
+    /// `BOARD_DESIGN_SETTINGS::GetGridOrigin()`: the point the editing grid is anchored at (`common.Control.gridSetOrigin` /
+    /// `gridResetOrigin` / `editGridOrigin`), so a grid point is `origin + n * grid`. `None` is KiCad's default, (0, 0). Written to the
+    /// derived `.kicad_pcb` as `(grid_origin x y)`. Additive: absent in an older `design.json` reads as "no origin set".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid_origin: Option<Point>,
     /// Board Setup's edits to the board's rules (net classes, constraints, solder mask and paste, text defaults,
     /// the stackup, violation severities, custom rules): laid over the intent's rules each time the board is
     /// loaded (`crate::rules::RulesOverlay::apply`, `crates/cli/src/board.rs::load`), the way `Design::nets` is.

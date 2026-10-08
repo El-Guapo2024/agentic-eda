@@ -527,6 +527,12 @@ pub enum Cmd {
     /// `GROUP_TOOL::RemoveFromGroup`'s own `if (group->GetItems().size() <
     /// 2) group->RemoveAll()` rule, ported exactly.
     RemoveFromGroup { ids: Vec<String> },
+    /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow` (`ACTIONS::groupProperties`, Group Properties...): rename the group `id` and
+    /// make its members exactly `member_ids` -- each one pulled out of whatever other group it was in (an item is in one group at a
+    /// time), the group's own previous members that are not listed released. A group left with fewer than 2 members dissolves, as
+    /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's other two fields (locked, design-block link) have no
+    /// counterpart in this model. A group cannot hold itself or another group (no nested groups).
+    EditGroup { id: String, name: String, member_ids: Vec<String> },
 
     // ------------------------------------------------------------ arrays
     //
@@ -647,6 +653,15 @@ pub enum Cmd {
     /// `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin`: the drill/place file origin
     /// (`DrawingsSection::aux_origin`); `None` is the reset to (0, 0).
     SetAuxOrigin { at: Option<Point> },
+    /// `common.Control.gridSetOrigin` / `gridResetOrigin` / `editGridOrigin` (`PCB_CONTROL::DoSetGridOrigin`): the point the editing grid is anchored
+    /// at (`DrawingsSection::grid_origin`); `None` is the reset to (0, 0). The placement snap of the verbs below follows it.
+    SetGridOrigin { at: Option<Point> },
+    /// `common.Control.pageSettings` on the board (`BOARD_EDITOR_CONTROL::PageSettings`): the board's paper and title block, set
+    /// together as one undo step -- see [`page_settings::set_board_page`]. Refused when nothing changes.
+    SetBoardPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
+    /// `common.Control.pageSettings` on the schematic (`SCH_EDITOR_CONTROL::PageSetup`): the same for the schematic -- see
+    /// [`page_settings::set_schematic_page`].
+    SetSchematicPage { page: eda_model::page::PageSettings, title_block: eda_model::ir::TitleBlock },
     /// `pcbnew.Control.repairBoard` (`BOARD_EDITOR_CONTROL::RepairBoard`): see [`board_control::repair_board`].
     /// Refused when there is nothing to repair, so no empty undo step is pushed.
     RepairBoard,
@@ -1467,6 +1482,7 @@ impl Cmd {
             | Cmd::ReplaceText { .. }
             | Cmd::SetErcPinMapCell { .. }
             | Cmd::ResetErcPinMap
+            | Cmd::SetSchematicPage { .. }
             | Cmd::Annotate { .. }
             | Cmd::SetSymbolAttrs { .. }
             | Cmd::SetSheetPage { .. }
@@ -1583,6 +1599,7 @@ impl Cmd {
             Cmd::AddAllTeardrops | Cmd::RemoveAllTeardrops => vec!["teardrops"],
             Cmd::Group { ids } | Cmd::Ungroup { ids } | Cmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
+            Cmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
             Cmd::CreateArray { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::AddDimension { .. } => vec!["dimension"],
             Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
@@ -1602,6 +1619,8 @@ impl Cmd {
             Cmd::MergeZones { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::SetZonePriority { id, .. } => vec![id.as_str()],
             Cmd::SetAuxOrigin { .. } => vec!["aux_origin"],
+            Cmd::SetGridOrigin { .. } => vec!["grid_origin"],
+            Cmd::SetBoardPage { .. } | Cmd::SetSchematicPage { .. } => vec!["page"],
             Cmd::RepairBoard => vec!["repair_board"],
 
             Cmd::MoveSymbol { id, .. }
@@ -1794,6 +1813,18 @@ impl<'a> Board<'a> {
         &self.design
     }
 
+    /// `BOARD_DESIGN_SETTINGS::GetGridOrigin()`: where the editing grid is anchored, (0, 0) unless the board has set one.
+    fn grid_origin(&self) -> Point {
+        self.design.drawings.as_ref().and_then(|d| d.grid_origin).unwrap_or(Point { x: 0, y: 0 })
+    }
+
+    /// A point on the placement grid: whole snap steps from the grid origin, not from (0, 0), so a position the editor snapped to the grid it
+    /// draws (`origin + n * grid`) is the position the verb stores.
+    fn snap_point(&self, x: Um, y: Um) -> Point {
+        let o = self.grid_origin();
+        Point { x: snap(x - o.x, self.snap) + o.x, y: snap(y - o.y, self.snap) + o.y }
+    }
+
     pub fn model(&self) -> &'a ConstraintModel {
         self.model
     }
@@ -1968,6 +1999,7 @@ impl<'a> Board<'a> {
             Cmd::Ungroup { ids } => self.ungroup_items(ids),
             Cmd::AddToGroup { group_id, ids } => self.add_to_group(group_id, ids),
             Cmd::RemoveFromGroup { ids } => self.remove_from_group(ids),
+            Cmd::EditGroup { id, name, member_ids } => self.edit_group(id, name, member_ids),
             Cmd::CreateArray { ids, geometry, arrange } => self.create_array(ids, geometry, *arrange),
             Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
             Cmd::DeleteDimension { id } => self.delete_dimension(id),
@@ -1989,6 +2021,9 @@ impl<'a> Board<'a> {
             Cmd::MergeZones { ids } => board_control::merge_zones(&mut self.design, ids).map(|_| ()),
             Cmd::SetZonePriority { id, to } => board_control::set_zone_priority(&mut self.design, id, *to),
             Cmd::SetAuxOrigin { at } => board_control::set_aux_origin(&mut self.design, *at),
+            Cmd::SetGridOrigin { at } => board_control::set_grid_origin(&mut self.design, *at),
+            Cmd::SetBoardPage { page, title_block } => page_settings::set_board_page(&mut self.design, page, title_block),
+            Cmd::SetSchematicPage { page, title_block } => page_settings::set_schematic_page(&mut self.design, page, title_block),
             Cmd::RepairBoard => {
                 let report = board_control::repair_board(&mut self.design, &self.model.nets);
                 if report.repaired == 0 {
@@ -2356,7 +2391,7 @@ impl<'a> Board<'a> {
                     continue; // centred is one position, not two
                 }
                 let off = sign * step as i64 * self.snap;
-                let at = Point { x: snap(base.0 + sx * off, self.snap), y: snap(base.1 + sy * off, self.snap) };
+                let at = self.snap_point(base.0 + sx * off, base.1 + sy * off);
                 let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
@@ -2404,7 +2439,7 @@ impl<'a> Board<'a> {
                 v
             };
             for (ox, oy) in offsets {
-                let at = Point { x: snap(centre.0 + ox, self.snap), y: snap(centre.1 + oy, self.snap) };
+                let at = self.snap_point(centre.0 + ox, centre.1 + oy);
                 let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
                 let Ok(cr) = self.courtyard_at(part, &fp) else { continue };
                 if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
@@ -2493,7 +2528,7 @@ impl<'a> Board<'a> {
             Dir::West => Point { x: bb.0 + half_w + step.max(w), y: along(bb.1 + n, bb.3 - s, half_h) },
             Dir::East => Point { x: bb.2 - half_w - step.max(e), y: along(bb.1 + n, bb.3 - s, half_h) },
         };
-        let at = Point { x: snap(at.x, self.snap), y: snap(at.y, self.snap) };
+        let at = self.snap_point(at.x, at.y);
         let fp = FootprintInstance { id: part.into(), at, rot, side: Side::Top, label: LabelSide::Above };
         // A part longer than the edge it was given does not fit on it,
         // and saying so is the whole point. The other two resolvers
@@ -2538,7 +2573,7 @@ impl<'a> Board<'a> {
     fn place_at(&mut self, part: &str, x: Um, y: Um) -> Result<(), Vec<CheckResult>> {
         self.require_unplaced(part)?;
         let bb = self.board_bbox();
-        let at = Point { x: snap(x, self.snap), y: snap(y, self.snap) };
+        let at = self.snap_point(x, y);
         let fp = FootprintInstance { id: part.into(), at, rot: 0, side: Side::Top, label: LabelSide::Above };
         let cr = self.courtyard_at(part, &fp)?;
         if cr.0 <= bb.0 || cr.1 <= bb.1 || cr.2 >= bb.2 || cr.3 >= bb.3 {
@@ -2591,9 +2626,10 @@ impl<'a> Board<'a> {
     }
 
     fn set_pose(&mut self, part: &str, at: Point, rot: u32) -> Result<(), Vec<CheckResult>> {
+        let at = self.snap_point(at.x, at.y);
         let fps = &mut self.design.placement.as_mut().unwrap().footprints;
         let i = fps.iter().position(|f| f.id == part).expect("caller checked the part is placed");
-        fps[i].at = Point { x: snap(at.x, self.snap), y: snap(at.y, self.snap) };
+        fps[i].at = at;
         fps[i].rot = rot;
         Ok(())
     }
@@ -3137,6 +3173,27 @@ impl<'a> Board<'a> {
             }
             prune_empty_groups(dr);
         }
+        Ok(())
+    }
+
+    /// `Cmd::EditGroup`.
+    fn edit_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        let dr = self.drawings_mut();
+        if !dr.groups.iter().any(|g| g.id == id) {
+            return Err(vec![CheckResult::fail("ops_unknown_group", id, "no group with this id")]);
+        }
+        if member_ids.iter().any(|m| m == id || dr.groups.iter().any(|g| &g.id == m)) {
+            return Err(vec![CheckResult::fail("ops_bad_group", id, "a group cannot hold a group")]);
+        }
+        let mut seen = BTreeSet::new();
+        let members: Vec<String> = member_ids.iter().filter(|m| seen.insert((*m).clone())).cloned().collect();
+        for g in dr.groups.iter_mut().filter(|g| g.id != id) {
+            g.member_ids.retain(|m| !members.contains(m));
+        }
+        let g = dr.groups.iter_mut().find(|g| g.id == id).expect("the group was checked present");
+        g.name = name.to_string();
+        g.member_ids = members;
+        prune_empty_groups(dr);
         Ok(())
     }
 
@@ -5289,6 +5346,7 @@ mod sch_control_tests;
 mod board_setup_tests;
 
 pub mod board_control;
+pub mod page_settings;
 pub mod build;
 pub mod fields_table;
 pub mod convert;

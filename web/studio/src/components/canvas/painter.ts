@@ -14,9 +14,11 @@ import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
 import { drawStrokeText } from "../text/strokeFont";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
+import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
-import { formatLength, type LengthUnit } from "../../state/units";
+import type { LengthUnit } from "../../state/units";
+import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { drawArcPreview } from "./arcPreview";
 import { drawBezierPreview } from "./bezierPreview";
@@ -93,6 +95,8 @@ export interface PaintOptions {
   showPadNumbers?: boolean;
   /** The drill/place file origin (`pcbnew.EditorControl.drillOrigin`), drawn as KiCad's red circle-and-cross when it is not at (0, 0). */
   auxOrigin?: [number, number] | null;
+  /** The point the grid is anchored at (`common.Control.gridSetOrigin`): the grid dots follow it and its marker is drawn when it is not at (0, 0). */
+  gridOrigin?: [number, number] | null;
   /** pcbnew.EditorControl.viaSizeInc/Dec's current pick (useActionRunner.ts), for the via tool's ghost -- null until the hotkey's first press, same board-default fallback `Canvas.tsx`'s own via-placement click uses. */
   currentViaPreset: { diameter: number; drill: number } | null;
   /** common.Interactive.measureTool's ruler label, same unit the status bar shows. */
@@ -744,12 +748,13 @@ function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges:
  * (computeVisibleGridSize) is the behaviorally important part and IS
  * ported exactly; see PARITY-pcb.md.
  */
-function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number) {
+function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, gridUm: number, origin: readonly [number, number] = [0, 0]) {
   const visible = computeVisibleGridSize(gridUm, view.scale, DEFAULT_GRID_STYLE);
   const stepPx = visible * view.scale;
   if (!(stepPx > 0)) return; // gridUm <= 0 or a degenerate scale -- nothing sane to draw
-  const x0 = -view.x / view.scale;
-  const y0 = -view.y / view.scale;
+  // The grid is anchored at the grid origin (`GAL::SetGridOrigin`): dots at `origin + i * visible`.
+  const x0 = -view.x / view.scale - origin[0];
+  const y0 = -view.y / view.scale - origin[1];
   const wUm = widthPx / view.scale;
   const hUm = heightPx / view.scale;
   const firstIndexX = Math.floor(x0 / visible) - 1;
@@ -760,15 +765,35 @@ function drawGrid(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: n
   const minorR = hairlineUm(view, stepPx < 8 ? 0.6 : 1);
   const majorR = minorR * MAJOR_GRID_LINE_WIDTH_RATIO;
   for (let i = firstIndexX; i <= lastIndexX; i++) {
-    const x = i * visible;
+    const x = origin[0] + i * visible;
     const tickX = isMajorGridLine(i);
     for (let j = firstIndexY; j <= lastIndexY; j++) {
-      const y = j * visible;
+      const y = origin[1] + j * visible;
       ctx.beginPath();
       ctx.arc(x, y, tickX && isMajorGridLine(j) ? majorR : minorR, 0, Math.PI * 2);
       ctx.fill();
     }
   }
+}
+
+/**
+ * The grid origin marker (`ORIGIN_VIEWITEM` of `PCB_CONTROL::Reset`): a 16 px circle with an X in the grid colour, darkened on a bright background and
+ * brightened on a dark one, at the point the grid is anchored at -- not drawn while that is (0, 0).
+ */
+export function drawGridOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform, at: readonly [number, number] | null | undefined, background: string): void {
+  if (!at || (at[0] === 0 && at[1] === 0)) return;
+  const r = hairlineUm(view, 16);
+  ctx.save();
+  ctx.strokeStyle = originMarkerColor(layerColor("grid"), background);
+  ctx.lineWidth = hairlineUm(view, 1);
+  ctx.beginPath();
+  ctx.arc(at[0], at[1], r, 0, Math.PI * 2);
+  ctx.moveTo(at[0] - r, at[1] - r);
+  ctx.lineTo(at[0] + r, at[1] + r);
+  ctx.moveTo(at[0] - r, at[1] + r);
+  ctx.lineTo(at[0] + r, at[1] - r);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function strokeDashedPolyline(ctx: CanvasRenderingContext2D, view: ViewTransform, pts: [number, number][], color: string, width: number, closed: boolean) {
@@ -911,8 +936,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
     if (end) {
       const [x0, y0] = pts[0]!;
       const [x1, y1] = end;
-      const dist = Math.hypot(x1 - x0, y1 - y0);
-      const label = `${formatLength(dist, opts.units)}  (dx ${formatLength(Math.abs(x1 - x0), opts.units)}, dy ${formatLength(Math.abs(y1 - y0), opts.units)})`;
+      const label = measureLabel([x0, y0], [x1, y1], opts.units);
       drawStrokeText(ctx, label, (x0 + x1) / 2, (y0 + y1) / 2 - hairlineUm(view, 8), { sizeUm: hairlineUm(view, 12), justify: "center", color, thicknessUm: hairlineUm(view, 1.4) });
     }
   }
@@ -1012,7 +1036,7 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, fin
  */
 export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, widthPx: number, heightPx: number, board: BoardState, opts: PaintOptions) {
   const byLayer: Record<string, () => void> = {
-    grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm),
+    grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]),
     background: () => drawOutline(ctx, view, board.outline),
     b_cu: () => {
       drawZones(ctx, view, board, opts, "b_cu");
@@ -1041,6 +1065,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   drawTexts(ctx, view, board, opts);
   drawDimensions(ctx, view, board, opts);
   if (opts.auxOrigin) drawAuxOrigin(ctx, view, opts.auxOrigin);
+  drawGridOrigin(ctx, view, opts.gridOrigin, layerColor("background"));
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, board, opts);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
