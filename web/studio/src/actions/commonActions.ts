@@ -23,6 +23,8 @@ import { LIBRARY_EDITOR_FIT_MARGIN, boxCentre, centerViewOn, setScaleAboutCentre
 import { canvasRect, emitCanvasEvent } from "./canvasEvents";
 import { registerSelectionActions } from "./commonSelectionActions";
 import { registerGroupActions } from "./commonGroupActions";
+import { registerCheckerActions } from "./commonCheckerActions";
+import { replaceAll, replaceAndFindNext, updateFind } from "../components/schematic/findReplaceOps";
 import { gridPresetIndex } from "../kicad-port/cursorControl";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { formatLength } from "../state/units";
@@ -196,6 +198,17 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   m.set("common.Control.updateUnits", refreshPreview);
   m.set("common.Control.updatePreferences", refreshPreview);
 
+  // ACTIONS::activatePointEditor -- posted by a tool that has just finished drawing or editing something, so the point editor starts again and
+  // `makePoints` builds the handles for what is selected now (PCB_POINT_EDITOR::Main, SCH_POINT_EDITOR::Main). The studio's point editor keeps no
+  // running tool: it works out the one selected zone or shape (`pointItemOf`, `SCH_POINT_EDITOR`'s polygon and rule area) from the selection every
+  // time it draws its handles or an action reads them, so there is nothing to start again -- the event is satisfied by construction.
+  m.set("common.Control.activatePointEditor", () => {});
+  // ACTIONS::updateMenu -- `SELECTION_TOOL::UpdateMenu( menu )`: the selection tool re-evaluates a context menu's conditions for the current
+  // selection (`CONDITIONAL_MENU::Evaluate`, `ACTION_MENU::UpdateAll`) just before it opens. The studio's menus are built from the selection each
+  // time they open (`pcbSweepMenuEntries`, `schContextMenu`) and the menu bar's entries read their state on every render, so no menu holds a stale
+  // condition to refresh -- satisfied by construction.
+  m.set("common.Interactive.updateMenu", () => {});
+
   // ACTIONS::showContextMenu -- COMMON_TOOLS::CursorControl( CURSOR_RIGHT_CLICK ): a right-click event at the pointer, which
   // opens the tool's context menu.
   m.set(
@@ -205,8 +218,18 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
     })
   );
 
+  // The schematic's Find and Replace actions (eeschema/tools/sch_find_replace_tool.cpp): the dialog's Replace and Replace All buttons run
+  // them, they work with the dialog closed (F3 and Shift+F3 are the Find Next / Previous registered in `useActionRunner.ts`), and
+  // `updateFind` brightens every match of the search text while the dialog is open (components/schematic/findReplaceOps.ts).
+  if (tab === "schematic") {
+    m.set("common.Interactive.replaceAndFindNext", () => void replaceAndFindNext(ctx.api, dispatch));
+    m.set("common.Interactive.replaceAll", () => void replaceAll(ctx.api, dispatch));
+    m.set("common.Control.updateFind", () => void updateFind(ctx.api));
+  }
+
   // The selection tool's modes and events, the interactive delete tool and the picker (commonSelectionActions.ts), the group tool's
   // membership edits (commonGroupActions.ts).
   registerSelectionActions(m, ctx);
   registerGroupActions(m, ctx);
+  registerCheckerActions(m, ctx);
 }

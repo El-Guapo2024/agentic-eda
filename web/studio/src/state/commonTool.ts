@@ -31,9 +31,11 @@ export interface CommonToolState {
   hover: string | null;
   lasso: LassoSession | null;
   menu: SelectionMenu | null;
+  /** The items every match of the open Find dialog's search text sits on, brightened (`SCH_FIND_REPLACE_TOOL::UpdateFind`). */
+  findHighlights: readonly string[];
 }
 
-const IDLE: CommonToolState = { hover: null, lasso: null, menu: null };
+const IDLE: CommonToolState = { hover: null, lasso: null, menu: null, findHighlights: [] };
 
 let current: CommonToolState = IDLE;
 const listeners = new Set<() => void>();
@@ -63,6 +65,11 @@ export function setPickerHover(id: string | null): void {
 
 export function setLasso(lasso: LassoSession | null): void {
   set({ ...current, lasso });
+}
+
+export function setFindHighlights(ids: readonly string[]): void {
+  const same = ids.length === current.findHighlights.length && ids.every((id, i) => id === current.findHighlights[i]);
+  if (!same) set({ ...current, findHighlights: ids });
 }
 
 /** Where the pointer last was, in client pixels (`KIPLATFORM::UI::GetMousePosition()`): a menu opened from an action appears there. */

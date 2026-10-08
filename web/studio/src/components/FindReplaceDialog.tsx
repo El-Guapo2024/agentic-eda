@@ -18,23 +18,34 @@
 // Replace All are the undoable `replace_text` verb: one match key for
 // "Replace" (then Find Next, like ReplaceAndFindNext), all keys (or
 // none, i.e. everything) for "Replace All".
-import { useState } from "react";
-import { fetchSchFind } from "../api/client";
+import { useEffect } from "react";
 import type { SchSearchData } from "../api/types";
-import { scopeFromSelection } from "../kicad-port/schFind";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { useActionRunner } from "../actions/useActionRunner";
+import { setFindHighlights } from "../state/commonTool";
 import { findNextMatch } from "./schematic/findNavigation";
+import { updateFind } from "./schematic/findReplaceOps";
 
 export function FindReplaceDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  const [selectedOnly, setSelectedOnly] = useState(false);
-  const [backward, setBackward] = useState(false);
-
-  if (state.schDialog !== "find" && state.schDialog !== "replace") return null;
-  const replaceMode = state.schDialog === "replace";
+  const { run } = useActionRunner();
+  const open = state.schDialog === "find" || state.schDialog === "replace";
+  const { selectedOnly, backward } = state.schFind;
   const search = state.schFind.search;
+
+  // `DIALOG_SCH_FIND::OnSearchForText` / `SCH_BASE_FRAME::OnFindDialogClose` -> `ACTIONS::updateFind`: every match of the text is brightened while the dialog is
+  // open and put back when the text changes or the dialog closes (common.Control.updateFind).
+  useEffect(() => {
+    if (!open) return;
+    void updateFind(api);
+    return () => setFindHighlights([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, search, selectedOnly, state.schDialog]);
+
+  if (!open) return null;
+  const replaceMode = state.schDialog === "replace";
   const close = () => dispatch({ type: "SET_SCH_DIALOG", dialog: null });
 
   /** Any change to the search resets the wrap cursor (`m_afterItem`), like editing the find text does in the source. */
@@ -43,47 +54,6 @@ export function FindReplaceDialog() {
   const findNext = (reversed: boolean) => {
     if (search.find === "") return;
     void findNextMatch(state, dispatch, reversed);
-  };
-
-  /** `ReplaceAndFindNext`: replace the current match (when there is one), then move on. Without a current match it is just a Find Next. */
-  const replaceCurrent = async () => {
-    const cursor = state.schFind.cursor;
-    if (search.find === "") return;
-    if (cursor === null) {
-      findNext(backward);
-      return;
-    }
-    const before = await fetchSchFind({ ...search, search_and_replace: true });
-    const at = before.matches.findIndex((m) => m.key === cursor);
-    if (at === -1) {
-      findNext(backward);
-      return;
-    }
-    const prevKey = at > 0 ? (before.matches[at - 1]?.key ?? null) : null;
-    const ok = await api.cmd({ op: "replace_text", search, items: [cursor] });
-    if (!ok) return;
-    // Continue after where the replaced item was: its own key if it still
-    // matches (so it is skipped, as `m_afterItem` is), else the match before it.
-    const after = await fetchSchFind({ ...search, search_and_replace: false });
-    const next = after.matches.some((m) => m.key === cursor) ? cursor : after.matches.some((m) => m.key === prevKey) ? prevKey : null;
-    await findNextMatch(state, dispatch, backward, next);
-  };
-
-  /** `ReplaceAll`. */
-  const replaceAll = async () => {
-    if (search.find === "") return;
-    let items: string[] | null = null;
-    const scope = scopeFromSelection(state.selection, selectedOnly);
-    if (scope) {
-      const found = await fetchSchFind({ ...search, search_and_replace: true }, scope);
-      items = found.matches.map((m) => m.key);
-      if (items.length === 0) {
-        dispatch({ type: "SET_SCH_FIND", find: { status: "Nothing to replace in the selection." } });
-        return;
-      }
-    }
-    const ok = await api.cmd({ op: "replace_text", search, items });
-    dispatch({ type: "SET_SCH_FIND", find: { cursor: null, status: ok ? "Replaced." : "Nothing replaced." } });
   };
 
   const modeValue = search.mode;
@@ -145,7 +115,7 @@ export function FindReplaceDialog() {
               Search net names
             </label>
             <label className="toggle">
-              <input type="checkbox" checked={selectedOnly} onChange={(e) => setSelectedOnly(e.target.checked)} />
+              <input type="checkbox" checked={selectedOnly} onChange={(e) => dispatch({ type: "SET_SCH_FIND", find: { selectedOnly: e.target.checked } })} />
               Search only selected objects
             </label>
             {replaceMode && (
@@ -158,11 +128,11 @@ export function FindReplaceDialog() {
           <div style={{ display: "flex", gap: 14, marginTop: 10, fontSize: 11 }}>
             <span style={{ color: "var(--chrome-text-dim)" }}>Direction:</span>
             <label className="toggle">
-              <input type="radio" checked={!backward} onChange={() => setBackward(false)} />
+              <input type="radio" checked={!backward} onChange={() => dispatch({ type: "SET_SCH_FIND", find: { backward: false } })} />
               Forward
             </label>
             <label className="toggle">
-              <input type="radio" checked={backward} onChange={() => setBackward(true)} />
+              <input type="radio" checked={backward} onChange={() => dispatch({ type: "SET_SCH_FIND", find: { backward: true } })} />
               Backward
             </label>
           </div>
@@ -178,10 +148,10 @@ export function FindReplaceDialog() {
           </button>
           {replaceMode && (
             <>
-              <button disabled={search.find === ""} onClick={() => void replaceCurrent()}>
+              <button disabled={search.find === ""} onClick={() => run("common.Interactive.replaceAndFindNext")}>
                 Replace
               </button>
-              <button className="primary" disabled={search.find === ""} onClick={() => void replaceAll()}>
+              <button className="primary" disabled={search.find === ""} onClick={() => run("common.Interactive.replaceAll")}>
                 Replace All
               </button>
             </>
