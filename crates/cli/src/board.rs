@@ -146,6 +146,8 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     }
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
     fold_unknown_symbols(&design, &mut model);
+    // A footprint copied onto the board has no part in the intent either; `board_parts` is where it lives.
+    fold_board_parts(&design, &mut model);
     Ok((meta, design, model))
 }
 
@@ -190,6 +192,61 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
             body_um: None,
             edge: None,
         });
+    }
+}
+
+/// A `Part` in `model` for every footprint that lives only on the board (`DrawingsSection::board_parts`): the copies Duplicate and
+/// Paste make. [`load`] calls it after the intent is read, so a copy is a part like any other for everything downstream -- the
+/// gates, the router, the exports. Its pads join the nets it was copied on (a net the board has not got yet is made, as
+/// KiCad's Paste makes one), and a footprint nothing else resolves under that name takes the copy's own pads and courtyard.
+/// A reference the model already has is left alone: the intent's part wins.
+fn fold_board_parts(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+    let Some(dr) = design.drawings.as_ref() else { return };
+    for bp in &dr.board_parts {
+        if model.part(&bp.reference).is_some() {
+            continue;
+        }
+        if let Some(def) = &bp.definition {
+            if model.footprints.iter().all(|f| f.name != bp.footprint) {
+                let mut fp = def.to_engine_footprint();
+                fp.name = bp.footprint.clone();
+                model.footprints.push(fp);
+            }
+        }
+        let mut part = eda_model::Part {
+            reference: bp.reference.clone(),
+            mpn: None,
+            lcsc: None,
+            value: bp.value.clone(),
+            package: None,
+            footprint: Some(bp.footprint.clone()),
+            symbol: None,
+            datasheet: None,
+            pins: vec![],
+            body_um: None,
+            edge: None,
+        };
+        // The part's pins are its electrical pads: one per number, a non-plated hole is none.
+        if let Some(fp) = model.footprint_of(&part) {
+            let mut seen = std::collections::BTreeSet::new();
+            for pad in fp.pads.iter().filter(|p| p.kind != eda_model::PadKind::NonPlatedHole) {
+                if seen.insert(pad.number.clone()) {
+                    part.pins.push(eda_model::Pin { number: pad.number.clone(), name: None, kind: eda_model::PinKind::Passive });
+                }
+            }
+        }
+        model.parts.push(part);
+        for (pad, net) in &bp.pad_nets {
+            let pin = format!("{}.{pad}", bp.reference);
+            match model.nets.iter_mut().find(|n| &n.name == net) {
+                Some(n) => {
+                    if !n.pins.contains(&pin) {
+                        n.pins.push(pin);
+                    }
+                }
+                None => model.nets.push(eda_model::Net { name: net.clone(), pins: vec![pin] }),
+            }
+        }
     }
 }
 
@@ -792,11 +849,22 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // reason -- which is exactly the signal a decision layer needs.
     board.apply(cmd)?;
 
-    let after = all_failures(&board, &model);
+    // A command that made footprints of its own (Duplicate, Paste) added parts the model loaded before it ran has not heard of;
+    // the board that results is judged against a model that has them, as the next load will have.
+    let board_parts = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.board_parts.clone()).unwrap_or_default();
+    let refolded: Option<ConstraintModel> = (board_parts(board.design()) != board_parts(was.design())).then(|| {
+        let mut m = model.clone();
+        fold_board_parts(board.design(), &mut m);
+        m
+    });
+    let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
+    let board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_um, meta.spacing_um) } else { board };
+
+    let after = all_failures(&board, judged);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
     if strictness != Strictness::Off && after > before {
-        let new: Vec<String> = all_checks(&board, &model)
+        let new: Vec<String> = all_checks(&board, judged)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
             .filter(|c| !all_checks(&was, &model).iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
@@ -815,7 +883,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
             return Err(fail("kicad_cli_missing", "kicad-cli", "--strict judges a move with KiCad's own gates (courtyard overlap, edge clearance), which need kicad-cli; set EDA_KICAD_CLI or install KiCad"));
         }
         let was_all = judged_checks(&was, &model);
-        let now_all = judged_checks(&board, &model);
+        let now_all = judged_checks(&board, judged);
         let (strict_before, strict_after) = (failures_in(&was_all), failures_in(&now_all));
         if strict_after > strict_before {
             let new: Vec<String> = now_all
@@ -832,9 +900,10 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
         }
     }
 
-    let (done, placed, failures) = progress(&board, &model);
+    let (done, placed, failures) = progress(&board, judged);
+    let n_parts = judged.parts.len();
     let mut design = board.design().clone();
-    // `board` borrows `model` for its whole lifetime (pad/pin lookups,
+    // `board` borrows the model for its whole lifetime (pad/pin lookups,
     // decoupling pairs); `reconcile_schematic` below needs `model` back
     // mutably (a brand-new symbol can add a `Part` nothing else has heard
     // of yet), so this drop makes that borrow's end explicit rather than
@@ -855,7 +924,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     Ok(format!(
         "{}: {placed}/{} placed ({:.0}%), {failures} failure(s){}{}",
         cmd_name(cmd),
-        model.parts.len(),
+        n_parts,
         done * 100.0,
         match after as i64 - before as i64 {
             0 => String::new(),
@@ -989,6 +1058,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
             format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
         }
+        Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), text.len()),
         Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => format!(
             "move-exact {} --by {},{} --rotate {:.3} --pivot {}",
             parts.join(" "),
@@ -1216,7 +1286,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetBoardPage { .. } => "page",
         Cmd::SetSchematicPage { .. } => "schematic-page",
         Cmd::RepairBoard => "repair",
-        Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
+        Cmd::Duplicate { .. } | Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
@@ -1919,6 +1989,76 @@ mod tests {
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let after = counts(&dir);
         assert_eq!(after.get("shorting_items").copied().unwrap_or(0) + after.get("clearance").copied().unwrap_or(0), 0, "Undo puts the track back: {after:?}");
+    }
+
+    /// A footprint Duplicate makes is a part like the intent's: `load` gives it back after every command, the gates and the writer
+    /// that kicad-cli reads see it, its pads are on the original's nets, and Undo takes the copy and its part away together.
+    #[test]
+    fn a_duplicated_footprint_is_a_part_of_the_board_until_undo() {
+        let dir = scratch("duplicate_footprint");
+        setup(&dir);
+        let msg = step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, true, "test").expect("a duplicate in place opens no in-process gate failure");
+        assert!(msg.contains("3/3 placed"), "the copy is a part the board counts: {msg}");
+
+        let (_, design, model) = load(&dir).unwrap();
+        let u3 = model.part("U3").expect("board::load folds the copy in as a part");
+        assert_eq!(u3.pins.len(), 2, "its pads are its pins");
+        let on = |net: &str| model.nets.iter().find(|n| n.name == net).unwrap().pins.clone();
+        assert!(on("GND").contains(&"U3.1".to_string()) && on("VCC").contains(&"U3.2".to_string()), "same nets as U1: {:?}", model.nets);
+        let u1 = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().clone();
+        let copy = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U3").unwrap().clone();
+        assert_eq!((copy.at, copy.rot, copy.side), (u1.at, u1.rot, u1.side));
+
+        // The file kicad-cli reads has it.
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        assert!(pcb.contains("(property \"Reference\" \"U3\""), "{pcb}");
+
+        // Move the copy away and its pads become U3's: a real part, on a real net.
+        step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 6_000 }, false, "test").unwrap();
+        let (_, moved, _) = load(&dir).unwrap();
+        assert_eq!(moved.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U3").unwrap().at, Point { x: 5_000, y: 11_000 });
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, model) = load(&dir).unwrap();
+        assert!(model.part("U3").is_none() && back.drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "Undo takes the copy and its part away together");
+        assert!(back.placement.as_ref().unwrap().footprints.iter().all(|f| f.id != "U3"));
+    }
+
+    /// Copy on one board, Paste on another, through the same text KiCad itself would put on the clipboard: the copper arrives where
+    /// the paste point is, on the nets of the same name, as one undo step.
+    #[test]
+    fn a_copy_pastes_on_another_board_through_kicads_text() {
+        let a = scratch("copy_from");
+        setup(&a);
+        step(&a, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&a, Cmd::AddVia { net: "VCC".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        let (track, via) = {
+            let (_, d, _) = load(&a).unwrap();
+            let rt = d.routing.unwrap();
+            (rt.tracks[0].id.clone(), rt.vias[0].id.clone())
+        };
+        let body = serde_json::json!({ "ids": [track, via, "U1"], "reference": { "x": 2_000, "y": 12_000 } }).to_string();
+        let reply = crate::clipboard_api::copy(&a, body.as_bytes());
+        assert_eq!(reply["ok"], true, "{reply}");
+        let text = reply["text"].as_str().unwrap().to_string();
+        assert!(text.starts_with("(kicad_pcb"), "{text}");
+
+        let b = scratch("paste_into");
+        setup(&b);
+        step(&b, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 8_000, y: 16_000 } }, false, "test").unwrap();
+        let (_, d, model) = load(&b).unwrap();
+        let rt = d.routing.as_ref().unwrap();
+        assert_eq!((rt.tracks.len(), rt.tracks[0].net.as_str(), rt.tracks[0].pts.clone()), (1, "GND", vec![Point { x: 8_000, y: 16_000 }, Point { x: 18_000, y: 16_000 }]));
+        assert_eq!((rt.vias[0].net.as_str(), rt.vias[0].at), ("VCC", Point { x: 18_000, y: 16_000 }));
+        // U1 was copied along with the copper, and U1 is already on this board: the paste made a part of its own.
+        assert!(model.part("U3").is_some(), "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
+        undo(&b, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, model) = load(&b).unwrap();
+        assert!(back.routing.is_none() && model.part("U3").is_none(), "one undo step takes the whole paste back");
+
+        // The other direction: text that is not KiCad's is refused, and the board is as it was.
+        assert!(step(&b, Cmd::PasteClipboard { text: "not kicad".into(), at: Point { x: 0, y: 0 } }, false, "test").is_err());
     }
 
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a

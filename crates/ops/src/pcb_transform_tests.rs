@@ -6,21 +6,21 @@ use eda_model::footprint::{placed_pads, PlacedPad};
 use eda_model::ir::{ArrowDirection, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, PlacementSection, Provenance};
 use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
-fn p(x: Um, y: Um) -> Point {
+pub(super) fn p(x: Um, y: Um) -> Point {
     Point { x, y }
 }
 
-fn id(s: &str) -> String {
+pub(super) fn id(s: &str) -> String {
     s.to_string()
 }
 
 /// Three pads, none on an axis of symmetry, so a mirror image cannot be mistaken for the original.
-fn lopsided() -> Footprint {
+pub(super) fn lopsided() -> Footprint {
     let pad = |n: &str, at: (Um, Um)| Pad { opposite_side: false, number: n.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
     Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (-1500, -600)), pad("2", (1500, 0)), pad("3", (-1500, 700))], courtyard: Some((4000, 2400)), model: None, courtyard_outlines: vec![] }
 }
 
-fn part(r: &str) -> Part {
+pub(super) fn part(r: &str) -> Part {
     Part {
         reference: r.into(),
         mpn: None,
@@ -36,7 +36,7 @@ fn part(r: &str) -> Part {
     }
 }
 
-fn model(layers: &[&str]) -> ConstraintModel {
+pub(super) fn model(layers: &[&str]) -> ConstraintModel {
     let mut m = ConstraintModel {
         parts: vec![part("U1"), part("U2")],
         nets: vec![Net { name: "GND".into(), pins: vec!["U1.1".into()] }, Net { name: "VCC".into(), pins: vec!["U1.2".into()] }],
@@ -47,19 +47,19 @@ fn model(layers: &[&str]) -> ConstraintModel {
     m
 }
 
-fn track(id: &str, layer: &str, pts: &[(Um, Um)]) -> Track {
+pub(super) fn track(id: &str, layer: &str, pts: &[(Um, Um)]) -> Track {
     Track { id: id.into(), net: "GND".into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.iter().map(|&(x, y)| p(x, y)).collect(), arc_mid_offset: None }
 }
 
-fn via(id: &str, at: (Um, Um), from: &str, to: &str) -> Via {
+pub(super) fn via(id: &str, at: (Um, Um), from: &str, to: &str) -> Via {
     Via { id: id.into(), net: "GND".into(), at: p(at.0, at.1), drill: 300, diameter: 600, from_layer: from.into(), to_layer: to.into() }
 }
 
-fn zone(id: &str, layer: &str, outline: &[(Um, Um)]) -> Zone {
+pub(super) fn zone(id: &str, layer: &str, outline: &[(Um, Um)]) -> Zone {
     Zone { id: id.into(), net: "GND".into(), layer: layer.into(), outline: outline.iter().map(|&(x, y)| p(x, y)).collect(), ..Default::default() }
 }
 
-fn dimension(id: &str, kind: DimensionKind, start: Point, end: Point) -> Dimension {
+pub(super) fn dimension(id: &str, kind: DimensionKind, start: Point, end: Point) -> Dimension {
     Dimension {
         id: id.into(),
         layer: "Dwgs.User".into(),
@@ -86,12 +86,12 @@ fn dimension(id: &str, kind: DimensionKind, start: Point, end: Point) -> Dimensi
     }
 }
 
-fn text(id: &str, layer: &str, at: (Um, Um), angle: Millideg) -> Text {
+pub(super) fn text(id: &str, layer: &str, at: (Um, Um), angle: Millideg) -> Text {
     Text { id: id.into(), content: "T".into(), at: p(at.0, at.1), angle, layer: layer.into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }
 }
 
 /// A board with one of everything, on the given copper layers.
-fn design() -> Design {
+pub(super) fn design() -> Design {
     Design {
         footprint_library: None,
         sheet_contents: None,
@@ -130,28 +130,28 @@ fn design() -> Design {
     }
 }
 
-fn board(m: &ConstraintModel) -> Board<'_> {
+pub(super) fn board(m: &ConstraintModel) -> Board<'_> {
     Board::new(design(), m, 100, 300)
 }
 
-fn routing<'a>(b: &'a Board<'_>) -> &'a RoutingSection {
+pub(super) fn routing<'a>(b: &'a Board<'_>) -> &'a RoutingSection {
     b.design().routing.as_ref().unwrap()
 }
-fn drawings<'a>(b: &'a Board<'_>) -> &'a DrawingsSection {
+pub(super) fn drawings<'a>(b: &'a Board<'_>) -> &'a DrawingsSection {
     b.design().drawings.as_ref().unwrap()
 }
-fn pose(b: &Board<'_>, r: &str) -> FootprintInstance {
+pub(super) fn pose(b: &Board<'_>, r: &str) -> FootprintInstance {
     b.design().placement.as_ref().unwrap().footprints.iter().find(|f| f.id == r).unwrap().clone()
 }
-fn pads_of(b: &Board<'_>, m: &ConstraintModel, r: &str) -> Vec<PlacedPad> {
+pub(super) fn pads_of(b: &Board<'_>, m: &ConstraintModel, r: &str) -> Vec<PlacedPad> {
     placed_pads(m, m.part(r).unwrap(), &pose(b, r)).unwrap()
 }
 
-fn ids(list: &[&str]) -> Vec<String> {
+pub(super) fn ids(list: &[&str]) -> Vec<String> {
     list.iter().map(|s| s.to_string()).collect()
 }
 
-fn everything() -> Vec<String> {
+pub(super) fn everything() -> Vec<String> {
     ids(&["U1", "U2", "trk_a", "via_a", "zone_a", "shp_seg", "shp_rect", "shp_arc", "txt_a", "dim_a"])
 }
 
