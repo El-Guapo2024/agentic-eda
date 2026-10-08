@@ -43,11 +43,13 @@ use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footpr
 use eda_model::ir::{
     Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
+use eda_model::rules::{Constraints, MaskPaste, NetClassSettings, StackupSettings, TextGraphicsDefaults};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
+pub mod board_setup;
 pub mod library_editors;
 pub mod sch_control;
 
@@ -569,6 +571,26 @@ pub enum Cmd {
     /// to new dimensions from then on -- never retroactively, matching
     /// source's own `StyleFromSettings` being called once, at creation.
     SetDimensionSettings { settings: DimensionSettings },
+
+    // ------------------------------------------------------- Board Setup
+    //
+    // `pcbnew/dialogs/dialog_board_setup.cpp`'s pages: each stores one page of the dialog in the design
+    // (`eda_model::rules::RulesOverlay`), which the loader lays over the intent's rules -- see `board_setup`.
+    // Whole page in, whole page replaced, validated like the page's own panel.
+    /// Design Rules > Net Classes: the Default class's sizes and the classes with their net-name patterns.
+    SetNetClasses { settings: NetClassSettings },
+    /// Design Rules > Constraints: the board-wide minimums (clearance, track width, annular ring, holes, edge, ...).
+    SetConstraints { constraints: Constraints },
+    /// Board Stackup > Solder Mask/Paste.
+    SetMaskPaste { settings: MaskPaste },
+    /// Text & Graphics > Defaults.
+    SetTextGraphicsDefaults { settings: TextGraphicsDefaults },
+    /// Board Stackup > Physical Stackup: the copper layer count and the layers' thickness.
+    SetStackup { settings: StackupSettings },
+    /// Design Rules > Violation Severity: DRC settings key -> `error` | `warning` | `ignore`.
+    SetRuleSeverities { severities: BTreeMap<String, String> },
+    /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
+    SetCustomRules { text: String },
 
     /// Task item 8: `GLOBAL_EDIT_TOOL::SwapLayers`/`DIALOG_SWAP_LAYERS`.
     /// `mapping` is "move items on this layer to that one" pairs (a
@@ -1534,6 +1556,13 @@ impl Cmd {
             Cmd::AddDimension { .. } => vec!["dimension"],
             Cmd::DeleteDimension { id } | Cmd::MoveDimension { id, .. } | Cmd::EditDimension { id, .. } => vec![id.as_str()],
             Cmd::SetDimensionSettings { .. } => vec!["dimension_settings"],
+            Cmd::SetNetClasses { .. } => vec!["net_classes"],
+            Cmd::SetConstraints { .. } => vec!["constraints"],
+            Cmd::SetMaskPaste { .. } => vec!["mask_paste"],
+            Cmd::SetTextGraphicsDefaults { .. } => vec!["text_graphics"],
+            Cmd::SetStackup { .. } => vec!["stackup"],
+            Cmd::SetRuleSeverities { .. } => vec!["severities"],
+            Cmd::SetCustomRules { .. } => vec!["custom_rules"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
@@ -1906,6 +1935,13 @@ impl<'a> Board<'a> {
             Cmd::MoveDimension { id, dx, dy } => self.move_dimension(id, *dx, *dy),
             Cmd::EditDimension { id, dimension } => self.edit_dimension(id, dimension.clone()),
             Cmd::SetDimensionSettings { settings } => self.set_dimension_settings(*settings),
+            Cmd::SetNetClasses { settings } => board_setup::set_net_classes(&mut self.design, settings),
+            Cmd::SetConstraints { constraints } => board_setup::set_constraints(&mut self.design, constraints),
+            Cmd::SetMaskPaste { settings } => board_setup::set_mask_paste(&mut self.design, settings),
+            Cmd::SetTextGraphicsDefaults { settings } => board_setup::set_text_graphics(&mut self.design, settings),
+            Cmd::SetStackup { settings } => board_setup::set_stackup(&mut self.design, self.model, settings),
+            Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
+            Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
@@ -5113,6 +5149,8 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 mod tests;
 #[cfg(test)]
 mod sch_control_tests;
+#[cfg(test)]
+mod board_setup_tests;
 
 pub mod board_control;
 pub mod build;
