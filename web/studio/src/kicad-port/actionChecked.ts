@@ -20,6 +20,10 @@ export interface CheckedContext {
   dock: DockLayout;
   /** The board editor's right dock tab. */
   rightDockTab: string;
+  /** The active editor's High Contrast Mode (the board's and the Footprint Editor's own switch). */
+  highContrast?: boolean;
+  /** The zoom tool is the tool in force (the rubber-band zoom is armed). */
+  zoomArmed?: boolean;
 }
 
 /** The Footprint Editor's tool-arming actions and the tool each arms (`FpToolId`). */
@@ -54,6 +58,12 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
   switch (name) {
     case "common.Control.toggleGrid":
       return c.gridVisible;
+    // `ACTIONS::highContrastMode` is a check item of the board and Footprint Editor menus (the schematic and symbol editors have no layers to contrast).
+    case "common.Control.highContrastMode":
+      return c.tab === "pcb" || c.tab === "footprint" ? c.highContrast === true : undefined;
+    // The zoom tool, like any tool, is drawn pressed while it runs.
+    case "common.Control.zoomTool":
+      return c.zoomArmed === true;
     case "common.Control.metricUnits":
       return c.units === "mm";
     case "common.Control.imperialUnits":

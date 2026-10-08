@@ -30,7 +30,8 @@ where it does something -- an action an editor does not offer stays dimmed there
 |---|---|---|
 | Small, Full-window and 45-degree crosshair | identical | `COMMON_TOOLS::CursorSmallCrosshairs` / `CursorFullCrosshairs` / `Cursor45Crosshairs`: `CommonOverlay` draws the mode over all four canvases (the small cross is KiCad's 80 px); one setting for the four canvases (`state/commonOptions.ts`, kept in local storage; KiCad keeps one per window) |
 | Always Show Crosshairs, Show Bounding Boxes | identical | `ToggleCursor` (`m_forceDisplayCursor`) / `ToggleBoundingBoxes` (`SetDrawBoundingBoxes`) |
-| High Contrast Mode, Object Snapping (active / all layers) | identical (PCB) | `PCB_CONTROL::HighContrastMode` / `SnapMode`; the library editors have no layers to dim and no object snapping (their clicks snap to the grid only), so they do not offer them |
+| High Contrast Mode (Inactive Layer View Mode) | identical (PCB), partial (Footprint Editor) | `PCB_CONTROL::HighContrastMode`: what is not on the active layer is drawn dimmed (the same 0.25 on both canvases); the Footprint Editor's own switch dims graphics and text off the layer box's layer and, since this editor's layer box has only silkscreen, fab and courtyard, always the copper pads. Checked in the menus and drawn pressed on the toolbars. The Symbol Editor has no layers |
+| Object Snapping (active / all layers) | identical (PCB) | `PCB_CONTROL::SnapMode`; the library editors have no object snapping (their clicks snap to the grid only), so they do not offer it |
 | Update Units / Update Preferences / Refresh Preview / Show Context Menu | identical in effect | the running tool recomputes its assistant at the cursor; everything else reads the units and preferences from state |
 | Check marks | identical | the crosshair mode, Always Show Crosshairs, bounding boxes, selection mode and Library Tree show whether they are on in the menus and toolbars of every editor (`commonChecked.ts`) |
 
@@ -80,6 +81,7 @@ where it does something -- an action an editor does not offer stays dimmed there
 | Pin Library, Unpin Library | identical | `changeSelectedPinStatus`: the selected library rows are pinned or let go; a pinned library is listed first with the star glyph (`LIB_TREE_NODE::Compare`); the state is `state/libraryTree.ts`, so the tree and the actions agree |
 | Expand All, Collapse All | identical | `ACTIONS::expandAll` / `collapseAll` over the tree (an explicit choice of a library wins over the mode until the next Expand / Collapse All) |
 | Library Tree Search | identical | `LIBRARY_EDITOR_CONTROL::LibraryTreeSearch` (Ctrl+L): shows the tree when it is hidden, then focuses its search box |
+| Show Datasheet (Footprint Editor) | identical | `FOOTPRINT_EDITOR_CONTROL::ShowDatasheet` / `GetFootprintDocumentationURL`: the footprint's Datasheet field, else the first web address in its description (read up to a character a URI cannot hold, a closing bracket without its opener, trailing punctuation dropped), opened in a new browser tab; none says "No datasheet found in the footprint." (`kicad-port/footprintDatasheet.ts`). The Symbol Editor's and the schematic's are `editorFrameActions.ts`'s and `useActionRunner.ts`'s |
 | Footprint / Symbol Library Browsers | partial | `COMMON_CONTROL::ShowPlayer( FRAME_FOOTPRINT_VIEWER / FRAME_SCH_VIEWER )`: KiCad's read-only viewer window; here the browser is the editor with its library tree shown (the editors are the one place the libraries are listed) |
 
 ## 8. Text

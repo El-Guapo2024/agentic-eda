@@ -273,10 +273,12 @@ export function FootprintCanvas() {
       drawState: state.drawState,
       cursorUm: state.cursorUm,
       movePreview: state.movePreview,
+      highContrast: state.highContrast,
+      activeLayer: state.activeLayer,
     });
     ctx.restore();
     ctx.restore();
-  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, containerSize]);
+  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

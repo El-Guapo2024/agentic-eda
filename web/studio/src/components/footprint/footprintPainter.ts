@@ -328,6 +328,21 @@ export interface FpPaintOptions {
   drawState: FpPaintDrawState | null;
   cursorUm: { x: number; y: number } | null;
   movePreview: { refs: string[]; dxUm: number; dyUm: number } | null;
+  /** High Contrast Mode (`common.Control.highContrastMode`): what is not on `activeLayer` is drawn dimmed. */
+  highContrast?: boolean;
+  activeLayer?: string;
+}
+
+/** What High Contrast Mode leaves of an item off the active layer (the board painter's `layerAlpha` uses the same 0.25). */
+const DIMMED_ALPHA = 0.25;
+
+/**
+ * `PCB_PAINTER`'s `m_contrastModeDisplay == DIMMED`: with High Contrast Mode on, an item not on the active layer is dimmed. A pad is copper (and mask and paste)
+ * and this editor's layer box offers only silkscreen, fab and courtyard, so its pads are always off the active layer.
+ */
+function contrastAlpha(opts: FpPaintOptions, layer: string | null): number {
+  if (!opts.highContrast || !opts.activeLayer) return 1;
+  return layer === opts.activeLayer ? 1 : DIMMED_ALPHA;
 }
 
 /** The slice of `FpDrawState` the painter reads. */
@@ -360,6 +375,7 @@ export function paintFootprint(
   for (const g of footprint.graphics) {
     const mv = moved(g.id);
     ctx.save();
+    ctx.globalAlpha *= contrastAlpha(opts, g.layer);
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     drawGraphic(ctx, view, g, opts.selection.has(g.id ?? ""));
     ctx.restore();
@@ -367,6 +383,7 @@ export function paintFootprint(
   for (const t of footprint.texts) {
     const mv = moved(t.id);
     ctx.save();
+    ctx.globalAlpha *= contrastAlpha(opts, t.layer);
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     drawText(ctx, view, t, opts.selection.has(t.id ?? ""));
     ctx.restore();
@@ -374,6 +391,7 @@ export function paintFootprint(
   for (const p of footprint.pads) {
     const mv = moved(p.id);
     ctx.save();
+    ctx.globalAlpha *= contrastAlpha(opts, null);
     if (mv) ctx.translate(mv.dxUm, mv.dyUm);
     drawPad(ctx, view, p, { selected: opts.selection.has(p.id ?? "") });
     ctx.restore();

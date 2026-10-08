@@ -69,6 +69,8 @@ export interface FootprintEditorState {
   gridVisible: boolean;
   /** Which of F.SilkS/F.Fab/F.CrtYd a graphics/text tool draws on. */
   activeLayer: string;
+  /** `common.Control.highContrastMode` (`PCB_CONTROL::HighContrastMode`): what is not on the active layer is drawn dimmed. */
+  highContrast: boolean;
   /** "E" on a selected pad, or double-click -- which pad's Pad Properties dialog is open. */
   padPropertiesId: string | null;
   footprintPropertiesOpen: boolean;
@@ -118,6 +120,7 @@ const initialState: FootprintEditorState = {
   gridUm: 250, // 0.25mm -- a reasonable footprint-editor-scale default (KiCad's own fp-editor grid list starts finer than the board editor's)
   gridVisible: true,
   activeLayer: "F.SilkS",
+  highContrast: false,
   padPropertiesId: null,
   footprintPropertiesOpen: false,
   renumberDialogOpen: false,
@@ -153,6 +156,7 @@ export type FpAction =
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_GRID_UM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
+  | { type: "TOGGLE_HIGH_CONTRAST" }
   | { type: "SET_ACTIVE_LAYER"; layer: string }
   | { type: "SET_PAD_PROPERTIES_ID"; id: string | null }
   | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
@@ -183,6 +187,7 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
         name: action.name,
         gridUm: state.gridUm,
         gridVisible: state.gridVisible,
+        highContrast: state.highContrast,
         defaultPad: state.defaultPad,
         enumerateParams: state.enumerateParams,
         treeSelection: state.treeSelection,
@@ -220,6 +225,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, cursorUm: action.at };
     case "SET_GRID_UM":
       return { ...state, gridUm: action.um };
+    case "TOGGLE_HIGH_CONTRAST":
+      return { ...state, highContrast: !state.highContrast };
     case "TOGGLE_GRID_VISIBLE":
       return { ...state, gridVisible: !state.gridVisible };
     case "SET_ACTIVE_LAYER":

@@ -146,8 +146,10 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   m.set("common.Control.toggleBoundingBoxes", () => setCommonOptions({ drawBoundingBoxes: !getCommonOptions().drawBoundingBoxes }));
 
   // ACTIONS::highContrastMode -- PCB_CONTROL::HighContrastMode: `m_ContrastModeDisplay = NORMAL ? DIMMED : NORMAL`
-  // (the inactive layers dimmed or not). The board's high contrast is that switch.
+  // (the inactive layers dimmed or not). The board's high contrast is that switch, and so is the Footprint Editor's own (what is not on its active layer is
+  // dimmed). The Symbol Editor has no layers.
   if (tab === "pcb") m.set("common.Control.highContrastMode", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
+  else if (tab === "footprint") m.set("common.Control.highContrastMode", () => ctx.fpDispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
 
   // PCB_ACTIONS::magneticSnapActiveLayer / magneticSnapAllLayers -- PCB_CONTROL::SnapMode: `settings.allLayers = false / true`
   // (the third, magneticSnapToggle, is registered in `useActionRunner.ts`); SnapModeFeedback says which.

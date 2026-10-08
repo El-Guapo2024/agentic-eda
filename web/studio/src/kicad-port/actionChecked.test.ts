@@ -63,6 +63,20 @@ test("in the Symbol Editor the active tool and the view toggles are pressed", ()
   for (const action of Object.keys(SYM_TOOL_OF_ACTION)) assert.equal(typeof actionChecked(action, sym), "boolean", action);
 });
 
+test("High Contrast Mode is checked on the board and in the Footprint Editor, which have layers to contrast", () => {
+  assert.equal(actionChecked("common.Control.highContrastMode", base), false);
+  assert.equal(actionChecked("common.Control.highContrastMode", { ...base, highContrast: true }), true);
+  assert.equal(actionChecked("common.Control.highContrastMode", { ...base, tab: "footprint", highContrast: true }), true);
+  assert.equal(actionChecked("common.Control.highContrastMode", { ...base, tab: "symbol", highContrast: true }), undefined);
+  assert.equal(actionChecked("common.Control.highContrastMode", { ...base, tab: "schematic" }), undefined);
+});
+
+test("the zoom tool's button is pressed while the rubber-band zoom is armed", () => {
+  assert.equal(actionChecked("common.Control.zoomTool", base), false);
+  assert.equal(actionChecked("common.Control.zoomTool", { ...base, zoomArmed: true }), true);
+  assert.equal(actionChecked("common.Control.zoomTool", { ...base, tab: "symbol", zoomArmed: true }), true);
+});
+
 test("an action that does not toggle has no pressed state at all", () => {
   assert.equal(actionChecked("common.Interactive.undo", base), undefined);
   assert.equal(actionChecked("common.Control.zoomFitScreen", { ...base, tab: "footprint" }), undefined);
