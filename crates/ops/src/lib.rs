@@ -1552,6 +1552,7 @@ impl Cmd {
             Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
+            Cmd::SchEdit(c) => c.edits_connectivity(),
             _ => true,
         }
     }
@@ -5366,6 +5367,9 @@ pub mod flash;
 pub mod sch_edit;
 pub mod sch_move;
 mod sch_drag;
+mod sch_props;
 mod sch_scene;
 #[cfg(test)]
 mod sch_move_tests;
+#[cfg(test)]
+mod sch_props_tests;

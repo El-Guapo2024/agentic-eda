@@ -3026,6 +3026,51 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Properties (`E`) on a label, a free text, a sheet, a wire, a bus entry, a graphic line and a junction: each dialog's OK is a single undo step that
+    /// changes the sheet, and one Undo brings back exactly what was there (the stroke annotations and a moved sheet file included).
+    #[test]
+    fn every_schematic_properties_verb_is_one_undo_step() {
+        use eda_model::sch_extras::{SchColor, SchLineStyle};
+        use eda_ops::sch_edit::SchCmd as V;
+        let dir = scratch("sch_props_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let pt = |x: Um, y: Um| Point { x, y };
+            sch.wires.push(eda_model::ir::Wire { id: "wire_a".into(), net: "N1".into(), pins: vec![], pts: vec![pt(10_000, 10_000), pt(10_000, 30_000)], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_a".into(), net: "N1".into(), at: pt(10_000, 20_000), kind: eda_model::ir::LabelKind::Local });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_g".into(), net: "N2".into(), at: pt(30_000, 40_000), kind: eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Input } });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "note".into(), at: pt(50_000, 10_000), angle: 0, size_um: 1_270 });
+            sch.bus_entries.push(eda_model::ir::BusEntry { id: "bent_a".into(), at: pt(70_000, 10_000), size: pt(2_540, 2_540) });
+            sch.junctions.push(eda_model::ir::Junction { id: "jct_a".into(), at: pt(80_000, 10_000) });
+            sch.lines.push(eda_model::ir::SchLine { id: "sln_a".into(), pts: vec![pt(50_000, 30_000), pt(60_000, 30_000)], width_um: 0 });
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![], page: String::new() });
+            sch.assign_missing_ids();
+        }
+        design.sheet_contents = Some([("sub.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
+        save(&dir, &design).unwrap();
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
+        let commands = vec![
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up) },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None },
+            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000) },
+            V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
+            V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
+        ];
+        for cmd in commands {
+            let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(Cmd::SchEdit(cmd.clone())) };
+            step(&dir, wrapped, false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let after = sheet_of(&load(&dir).unwrap().1);
+            assert_ne!(after, start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the design back exactly after {cmd:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Dragging a symbol with the verb that moves any item takes the wires on its pins along: after the drag every wire end that was on one of its
     /// pins is on that pin where it now is, on the user's board (flat) and on mcu30 as module sheets, for each of the 30 symbols.
     #[test]
