@@ -9,6 +9,8 @@
 // board sizes this project deals with). Angles in `rot` are degrees
 // (the backend already divides millidegrees by 1000 before sending).
 
+import type { SchEditCmd, SchGraphic } from "./schEditTypes";
+
 export type Um = number;
 export type Degrees = number;
 
@@ -65,6 +67,8 @@ export interface Track {
   layer: string;
   width: Um;
   pts: [Um, Um][];
+  /** The arc's mid point when this track is a KiCad arc (`PCB_ARC`; `pts` is then its tessellation), else null/absent. */
+  arc_mid?: [Um, Um] | null;
 }
 
 export interface Via {
@@ -511,6 +515,8 @@ export interface BoardState {
   checks: Check[];
   /** `BOARD_ITEM::IsLocked()` for every kind at once: a placed part's ref, or a track/via/zone/shape/text id (`DrawingsSection::locked_ids`, set by `set_locked`). Absent from an older backend = nothing locked. */
   locked?: string[];
+  /** The drill/place file origin (`BOARD_DESIGN_SETTINGS::GetAuxOrigin`, `pcbnew.EditorControl.drillOrigin`), `[x, y]` µm; null/absent = (0, 0). */
+  aux_origin?: [Um, Um] | null;
   /** Most recent 60 activity.jsonl entries, newest first. */
   activity: Activity[];
   /** "idle" | "running" | a one-line result of the last route. */
@@ -629,6 +635,15 @@ export interface CmdTrack {
   width: Um;
   pts: PointXY[];
 }
+/** `crates/model/src/ir.rs` `Track` as `commit_route` takes it (ids are assigned server side). `arc_mid_offset` is the arc's mid point relative to `pts[0]`; `pts` must then be the arc's tessellation (`kicad-port/trackArc.ts`). */
+export interface CmdRouteTrack {
+  net: string;
+  layer: string;
+  width: Um;
+  pts: PointXY[];
+  pins?: string[];
+  arc_mid_offset?: PointXY;
+}
 export interface CmdVia {
   id?: string;
   net: string;
@@ -653,6 +668,8 @@ export interface CmdZone extends Partial<ZoneSettingsFields>, Partial<RuleAreaFi
   layer: string;
   outline: PointXY[];
 }
+
+export type ZonePriorityMove = "top" | "raise" | "lower" | "bottom";
 
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
@@ -725,14 +742,24 @@ export type Cmd =
   | { op: "set_dimension_settings"; settings: DimensionSettings }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
-  /** Removal-only use of `Cmd::CommitRoute`: delete several tracks/vias as ONE undo step (unknown ids tolerated) -- what `unrouteSegment`/`deleteFull` send. */
-  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[] }
+  /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
+  | { op: "commit_route"; remove_track_ids: string[]; remove_via_ids: string[]; tracks?: CmdRouteTrack[]; vias?: CmdVia[] }
+  /** `EDIT_TOOL::BooleanPolygons`: merge/subtract/intersect rectangles, circles and polygons (`ids` in routine order, the base first). */
+  | { op: "boolean_shapes"; operation: "merge" | "subtract" | "intersect"; ids: string[] }
   /** `BOARD_EDITOR_CONTROL::modifyLockSelected` -- lock/unlock every id (part ref or track/via/zone/shape/text id). */
   | { op: "set_locked"; ids: string[]; locked: boolean }
   /** `EDIT_TOOL::Swap` -- cyclic pose shift across `parts` in selection order (position, rotation, side). */
   | { op: "swap_chain"; parts: string[] }
   /** `ZONE_CREATE_HELPER::performZoneCutout` -- subtract a closed polygon from one zone's outline. */
   | { op: "zone_cutout"; id: string; cutout: PointXY[] }
+  /** `pcbnew.EditorControl.zoneMerge` -- the zones among `ids` (selection order) that touch the first one, merged into it. */
+  | { op: "merge_zones"; ids: string[] }
+  /** `pcbnew.EditorControl.zonePriority{MoveToTop,Raise,Lower,MoveToBottom}` -- `to` is top | raise | lower | bottom. */
+  | { op: "set_zone_priority"; id: string; to: ZonePriorityMove }
+  /** `pcbnew.EditorControl.drillOrigin` / `drillResetOrigin` -- the drill/place file origin; `null` resets it to (0, 0). */
+  | { op: "set_aux_origin"; at: PointXY | null }
+  /** `pcbnew.Control.repairBoard` -- refused ("No board problems found.") when there is nothing to repair; `POST /api/repair_board` wraps it with KiCad's report. */
+  | { op: "repair_board" }
   | { op: "add_zone"; net: string; layer: string; outline: PointXY[] }
   | { op: "delete_zone"; id: string }
   /**
@@ -806,6 +833,8 @@ export type Cmd =
   | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Um, Um] }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
+  /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
+  | ({ op: "sch_edit" } & SchEditCmd)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }
   | { op: "delete_label"; id: string }
   | { op: "add_sch_text"; content: string; at: PointXY; angle_millideg: number; size_um: Um }
@@ -1147,6 +1176,11 @@ export interface RatsnestEdge {
   net: string;
   from: [Um, Um];
   to: [Um, Um];
+  /** The items the two ends join (a pad is `REF.NUMBER`, anything else its own id), and the copper layers each spans (inclusive indexes into `BoardState.layers`) -- what the Local Ratsnest tool and the visible-layers ratsnest mode read, as `RATSNEST_VIEW_ITEM::ViewDraw` does. Absent from an older backend. */
+  from_id?: string;
+  to_id?: string;
+  from_layers?: [number, number];
+  to_layers?: [number, number];
 }
 
 export interface Ratsnest {
@@ -1170,6 +1204,8 @@ export interface FillZone {
   layer: string;
   area_um2: number;
   fragments: [Um, Um][][];
+  /** Only with `GET /api/fill?polys=1`: the same fill unfractured, one outline and its holes per island (what the triangulation display needs). */
+  polys?: { outline: [Um, Um][]; holes: [Um, Um][][] }[];
 }
 
 export interface FillReport {
@@ -1440,6 +1476,10 @@ export interface Schematic {
   junctions?: SchJunction[];
   /** Graphic lines on the notes layer (`I`) -- see `SchLine`. Absent from a backend built before they existed. */
   lines?: SchLine[];
+  /** Drawn shapes, text boxes, rule areas and directive labels -- see `SchGraphic` (api/schEditTypes.ts). Absent from a backend built before they existed. */
+  graphics?: SchGraphic[];
+  /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
+  locked?: string[];
   /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */

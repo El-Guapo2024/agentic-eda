@@ -153,6 +153,15 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         drawings: if shapes.is_empty() && texts.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, footprint_extras, via_tenting, silk_texts, copper_texts, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
+    // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
+    if let Some(aux) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "aux_axis_origin")) {
+        if let (Some(x), Some(y)) = (sexpr::num(aux, 1), sexpr::num(aux, 2)) {
+            let at = Point { x: mm_to_um(x), y: mm_to_um(y) };
+            if at.x != 0 || at.y != 0 {
+                design.drawings.get_or_insert_with(Default::default).aux_origin = Some(at);
+            }
+        }
+    }
     // Every track/via this parse just built, and every shape/text, has no
     // id yet (the file does not carry ours) -- assign the same
     // deterministic ids a fresh route or a hand-add would get, so an

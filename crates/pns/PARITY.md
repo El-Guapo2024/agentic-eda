@@ -42,6 +42,8 @@ exists rather than letting you rediscover it.
    to a straight axis-aligned single-segment track and driven by a
    dialog rather than a live mouse session; see those stages' own
    sections for exactly why and what each still is.
+   **Status (2026-10-07):** diff-pair length and skew tuning (`8`, `9`) are
+   ported since (Stage 8b below).
 5. **Units**: integer micrometers throughout (`eda_model::ir::Um`), like
    the rest of this workspace, not KiCad's internal nanometers.
 
@@ -494,6 +496,12 @@ axis-aligned run** (one 2-point track each) side by side on one layer.
   meeting point rather than hunting for a fresh lower-cost bypass, which
   can collapse a long obtuse "staircase" (common after a walkaround) in
   one step). `SMART_PADS`/`FANOUT_CLEANUP` remain unported.
+  **Status (2026-10-07): closed** -- both are ported in `src/optimizer.rs`
+  (`smart_pads_single`, `run_smart_pads`, `fanout_cleanup`), and
+  `RoutingSettings::smart_pads` (default on) now gates smart pads in
+  `line_placer.rs`. The placer never passes the `FANOUT_CLEANUP` flag
+  (`docs/parity/CODE-COMPARE-router.md` section D). The other settings
+  fields named below are still never read.
   `RoutingSettings::smart_pads` exists as a field but, like
   `shove_vias`/`jump_over_obstacles`/`optimizer_effort`/
   `fix_all_segments`/`walkaround_hug_length_threshold`, is never read by

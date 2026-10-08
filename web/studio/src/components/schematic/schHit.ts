@@ -3,6 +3,7 @@
 import type { Schematic } from "../../api/types";
 import { symbolBounds } from "./painter";
 import { nearestPointOnSegment } from "../../kicad-port/schBusUnfold";
+import { graphicBounds } from "../../kicad-port/schItemGeom";
 import { PAGE_WIDTH_UM, PAGE_HEIGHT_UM } from "./drawingSheet";
 
 /**
@@ -23,6 +24,10 @@ export function schematicBounds(sch: Schematic): Array<[number, number]> {
   }
   for (const w of sch.wires) pts.push(...w.pts);
   for (const l of sch.lines ?? []) pts.push(...l.pts);
+  for (const g of sch.graphics ?? []) {
+    const b = graphicBounds(g);
+    pts.push([b.minX, b.minY], [b.maxX, b.maxY]);
+  }
   for (const j of sch.junctions ?? []) pts.push(j.at);
   for (const l of sch.labels) pts.push(l.at);
   for (const ps of sch.power_symbols) pts.push(ps.at);

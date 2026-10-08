@@ -42,7 +42,14 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
 ]);
 
 /** Symbol-editor-frame-only actions (`SYMBOL_EDIT_FRAME`'s tools): enabled on the Symbol tab only. */
-export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set(["eeschema.SymbolDrawing.placeSymbolPin", "eeschema.SymbolLibraryControl.newSymbol", "eeschema.SymbolLibraryControl.saveLibraryAs"]);
+export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
+  "eeschema.SymbolDrawing.placeSymbolPin",
+  "eeschema.SymbolLibraryControl.newSymbol",
+  "eeschema.SymbolLibraryControl.saveLibraryAs",
+  // `SYMBOL_EDITOR_EDIT_TOOL`'s stacked-pin tools.
+  "eeschema.InteractiveEdit.convertStackedPins",
+  "eeschema.InteractiveEdit.explodeStackedPin",
+]);
 
 /**
  * `common.*` actions that act on a whole document and exist for the two document editors only: the board editor and

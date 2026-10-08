@@ -48,6 +48,11 @@ function LayersTab() {
         <input type="checkbox" checked={state.highContrast} onChange={() => dispatch({ type: "TOGGLE_HIGH_CONTRAST" })} />
         High contrast (dim inactive layers)
       </label>
+      {/* The Appearance panel's "Flip board view" (m_cbFlipBoard): the same switch as View > Flip Board View. */}
+      <label className="filter-row">
+        <input type="checkbox" checked={state.bcx.boardFlipped} onChange={() => dispatch({ type: "BCX", patch: { boardFlipped: !state.bcx.boardFlipped } })} />
+        Flip board view
+      </label>
     </div>
   );
 }
@@ -61,9 +66,19 @@ function ObjectsTab() {
         <input type="checkbox" checked={state.showRatsnest} onChange={() => dispatch({ type: "TOGGLE_RATSNEST" })} />
         Ratsnest
       </label>
+      {/* `m_RatsnestMode`, the second state of pcbnew.Control.ratsnestModeCycle: lines only between items on a copper layer that is shown. */}
+      <label className="filter-row">
+        <input type="checkbox" checked={state.bcx.ratsnestMode === "visible"} onChange={() => dispatch({ type: "BCX", patch: { ratsnestMode: state.bcx.ratsnestMode === "visible" ? "all" : "visible" } })} />
+        Ratsnest: visible layers only
+      </label>
       <label className="filter-row">
         <input type="checkbox" checked={state.gridVisible} onChange={() => dispatch({ type: "TOGGLE_GRID_VISIBLE" })} />
         Grid
+      </label>
+      {/* Preferences > Display Options "Show pad numbers" (`m_DisplayPadNumbers`), the switch pcbnew.Control.showPadNumbers flips. */}
+      <label className="filter-row">
+        <input type="checkbox" checked={state.bcx.showPadNumbers} onChange={() => dispatch({ type: "BCX", patch: { showPadNumbers: !state.bcx.showPadNumbers } })} />
+        Pad numbers
       </label>
     </div>
   );

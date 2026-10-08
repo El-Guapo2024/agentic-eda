@@ -19,11 +19,21 @@ import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
+import { keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
+import { pasteMoveOrigin } from "../kicad-port/pcbReference";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
+import { keepOnSheet } from "../kicad-port/schSelectionPrune";
+import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
+import type { SchToolDialog } from "../api/schEditTypes";
+import type { ShapeEdit } from "../kicad-port/schShapeEdit";
+import type { PolyGeom } from "../kicad-port/polygonGeom";
+import type { BreakState } from "../kicad-port/schBreak";
+import type { PinPlacement } from "../components/schematic/schPinTool";
 import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -112,8 +122,24 @@ export type ToolId =
   | "sch_sheet"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol"
+  /** The schematic's shape tools (`SCH_DRAWING_TOOLS::DrawShape` / `DrawRuleArea` / `TwoClickPlace` for a directive label): kicad-port/schShapeEdit.ts, polygonGeom.ts. */
+  | "sch_rect"
+  | "sch_circle"
+  | "sch_arc"
+  | "sch_bezier"
+  | "sch_textbox"
+  | "sch_rule_area"
+  | "sch_directive"
+  /** Break / Slice (`SCH_MOVE_TOOL`'s `BREAK` / `SLICE` modes): the cut wire's new end follows the cursor until the click that drops it -- kicad-port/schBreak.ts. */
+  | "sch_break"
+  /** Place Pins from Sheet (`TwoClickPlace` with `placeSheetPin`): each click drops the next hierarchical label of the sheet's file as a pin on its border -- components/schematic/schPinTool.ts. */
+  | "sch_sheet_pin"
   /** `common.Control.zoomTool` (Ctrl+F5, zoom_tool.cpp): drag a rectangle to zoom to it -- see components/ZoomAreaOverlay.tsx. */
-  | "zoom_area";
+  | "zoom_area"
+  /** `pcbnew.EditorControl.drillOrigin` (Place > Drill/Place File Origin): one click sets the origin and the tool ends (`DrillOrigin`'s picker: "a one-shot"). */
+  | "drill_origin"
+  /** `pcbnew.Control.localRatsnestTool`: click a pad (or, failing that, a footprint) to show or hide its ratsnest lines; clicking off everything resets them; Esc leaves. */
+  | "local_ratsnest";
 export const TOOL_MESSAGES: Record<ToolId, string> = {
   select: "Select item(s)",
   move: "Move item(s)",
@@ -144,7 +170,18 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_line: "Line: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   sch_sheet: "Hierarchical Sheet: click one corner, then the opposite one, then name the sheet. Esc to cancel",
   sch_place_symbol: "Place Symbol: click where to place it",
+  sch_rect: "Rectangle: click one corner, then the opposite one. Esc to cancel",
+  sch_circle: "Circle: click the centre, then a point on the circle. Esc to cancel",
+  sch_arc: "Arc: click the start, then the end. Esc to cancel",
+  sch_bezier: "Bezier curve: click the start, the end, then control points 1 and 2. Esc to cancel",
+  sch_textbox: "Text Box: click one corner, then the opposite one, then enter the text. Esc to cancel",
+  sch_rule_area: "Rule Area: click the corners, double-click or press End to close it, Backspace to remove the last corner. Esc to cancel",
+  sch_directive: "Directive Label: click where to place it",
+  sch_break: "Break / Slice: move the new end of the wire, click to drop it, Esc to cancel",
+  sch_sheet_pin: "Place Pins from Sheet: click over a sheet, then click along its border to drop each pin. Esc to cancel",
   zoom_area: "Zoom to Selection Area: drag a rectangle (left button zooms in, right button zooms out), Esc to cancel",
+  drill_origin: "Drill/Place File Origin: click to place it, Esc to cancel",
+  local_ratsnest: "Local Ratsnest: click a pad or footprint to show or hide its ratsnest, click empty space to reset, Esc to leave",
 };
 
 /**
@@ -159,6 +196,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
 export type DrawState =
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
   | { kind: "sheet"; start: [Um, Um] }
+  /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, arc, Bezier curve or text box, `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */
+  | { kind: "sch_shape"; shape?: ShapeEdit; poly?: PolyGeom; brk?: BreakState; pin?: PinPlacement }
   | {
       kind: "route";
       net: string;
@@ -504,10 +543,12 @@ export interface StudioState {
    * fill data (`zoneFill` above) paints -- solid copper, or just its
    * outline. A zone with no fill data yet always shows its outline
    * regardless of this mode, same as source (nothing to fill with).
-   * KiCad's other two modes (fracture-borders/triangulation) are
-   * developer debug views, not ported -- see PARITY-pcb.md.
+   * `fractured` / `triangulated` are `SHOW_FRACTURE_BORDERS` /
+   * `SHOW_TRIANGULATION` (`pcbnew.Control.zoneDisplayOutlines` /
+   * `zoneDisplayTesselation`): the fill drawn with the edges of its
+   * fractured ring, or with the triangles it is cut into.
    */
-  zoneDisplayMode: "filled" | "outline";
+  zoneDisplayMode: "filled" | "outline" | "fractured" | "triangulated";
   /** Board Setup... (dialog_board_setup.cpp) -- net classes/track-via sizing/rules/etc, see BoardSetupDialog.tsx. */
   boardSetupDialogOpen: boolean;
   /** Which `BoardSetupDialog.tsx` page to land on next time it opens --
@@ -551,6 +592,8 @@ export interface StudioState {
   schPowerPending: { at: [Um, Um] } | null;
   /** `T`: a just-clicked point waiting for SchTextDialog to confirm the content. */
   schTextPending: { at: [Um, Um] } | null;
+  /** The dialog one of the schematic edit/drawing tools has open (text box text, directive label fields, ...): components/SchToolDialogs.tsx. */
+  schToolDialog: SchToolDialog | null;
   /** `A`: SymbolChooserDialog's own open/closed flag. */
   symbolChooserOpen: boolean;
   /** `E`/`U`/`V`/`F` on a selected symbol: SymbolPropertiesDialog's own open/closed+focus state -- `field` picks which input autofocuses (`E` opens the same dialog with nothing singled out). */
@@ -566,7 +609,7 @@ export interface StudioState {
   /** Schematic tab's File > Export > Netlist... (`eeschema.EditorControl.exportNetlist`, DIALOG_EXPORT_NETLIST), see ExportNetlistDialog.tsx. */
   exportNetlistDialogOpen: boolean;
   /** `A`: the symbol SymbolChooserDialog confirmed, waiting for a canvas click to place it (`sch_place_symbol` tool) -- `referencePrefix` seeds `nextReference`'s own next-free-number placement (this app's own choice: a real id immediately, not a "U?" placeholder -- see `Cmd::AddSymbol`'s doc and PARITY-sch.md). `unit`: which unit of a multi-unit symbol to place (the chooser's own unit picker, shown when `SymbolLibraryEntry.unit_count > 1`; omitted/1 for a single-unit part). */
-  armedSymbol: { libId: string; referencePrefix: string; unit?: number } | null;
+  armedSymbol: { libId: string; referencePrefix: string; unit?: number; /** Place Next Symbol Unit: the unit goes in under this existing reference (and value/footprint), once, instead of taking the next free reference. */ ref?: string; value?: string; footprint?: string } | null;
   /** `createNewLabel`'s own "last text used" (`m_lastTextOrientation`-style session memory, see `incrementLabelText`) -- seeds the next LabelDialog with an auto-incremented suggestion instead of starting blank every time, so placing a same-shaped bus of labels (DATA0, DATA1, DATA2...) doesn't mean re-typing the whole name each click. */
   lastLabelText: string;
   /** `P`'s own last-chosen rail (e.g. "power:GND") -- seeds PowerSymbolDialog so placing several of the same rail in a row (common -- a row of decoupling caps all going to GND) only needs one pick. */
@@ -608,6 +651,8 @@ export interface StudioState {
    * equivalent for.
    */
   selectionFilter: SelectionFilter;
+  /** The schematic's own (panel_sch_selection_filter.cpp): what a click/box/Select All on the sheet may pick (kicad-port/schSelectionFilter.ts). */
+  schSelectionFilter: SchSelectionFilter;
 
   /** Refuse a move/edit that adds gate failures. Not a KiCad feature -- see the task's Strict toggle. */
   strict: boolean;
@@ -723,6 +768,8 @@ export interface StudioState {
   lengthTuningMode: TuneMode;
   /** The "pcbnew parity" action batch's own state (move-individually queue, zone cutout/similar mode, parity dialogs, angle snap, ...) -- see kicad-port/pcbParityState.ts. Patched by the single `PCBX` action. */
   pcbx: PcbParityState;
+  /** The board-control actions' state (sketch modes, ratsnest/highlight sets, partial zone fill, board flip, their dialogs) -- see kicad-port/boardControlState.ts. Patched by the single `BCX` action. */
+  bcx: BoardControlState;
   /**
    * `pcbnew.InteractiveDrawing.ruleArea` vs `.zone` (task item 3): both
    * arm the same outline-drawing tool (`activeTool === "zone"`); this is
@@ -814,6 +861,7 @@ const initialState: StudioState = {
   schRepeat: [],
   schPowerPending: null,
   schTextPending: null,
+  schToolDialog: null,
   symbolChooserOpen: false,
   armedSymbol: null,
   symbolProperties: null,
@@ -846,6 +894,7 @@ const initialState: StudioState = {
   layerVisible: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, true])),
   layerOpacity: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, 1])),
   selectionFilter: DEFAULT_SELECTION_FILTER,
+  schSelectionFilter: DEFAULT_SCH_SELECTION_FILTER,
   strict: true,
   drcDialogOpen: false,
   hotkeysDialogOpen: false,
@@ -883,6 +932,7 @@ const initialState: StudioState = {
   lengthTuningDialogOpen: false,
   lengthTuningMode: "single",
   pcbx: DEFAULT_PCB_PARITY,
+  bcx: DEFAULT_BOARD_CONTROL,
   nextZoneIsRuleArea: false,
   cleanupTracksDialogOpen: false,
   editTracksAndViasDialogOpen: false,
@@ -936,6 +986,7 @@ export type Action =
   | { type: "SET_LAYER_VISIBLE"; layer: string; visible: boolean }
   | { type: "SET_LAYER_OPACITY"; layer: string; opacity: number }
   | { type: "SET_SELECTION_FILTER"; filter: Partial<StudioState["selectionFilter"]> }
+  | { type: "SET_SCH_SELECTION_FILTER"; filter: SchSelectionFilter }
   | { type: "SET_STRICT"; strict: boolean }
   | { type: "SET_DRC_OPEN"; open: boolean }
   | { type: "SET_HOTKEYS_DIALOG_OPEN"; open: boolean }
@@ -957,6 +1008,8 @@ export type Action =
   | { type: "DRC_RUNNING" }
   | { type: "DRC_OK"; drc: DrcReport; /** The revision the report was computed on (kicad-port/checkRevision.ts's `revisionOf`). */ version: string | null }
   | { type: "DRC_ERR"; message: string }
+  /** `BOARD::DeleteMARKERs` (Global Deletions > Delete Markers): the last report and its markers go. */
+  | { type: "DRC_CLEAR" }
   | { type: "SET_DRC_REFILL"; refill: boolean }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
@@ -976,7 +1029,7 @@ export type Action =
   | { type: "SET_DIMENSION_EDIT_ID"; id: string | null }
   | { type: "FILL_OK"; fill: FillReport }
   | { type: "CLEAR_ZONE_FILL" }
-  | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" }
+  | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" | "fractured" | "triangulated" }
   | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
   | { type: "SET_BOARD_SETUP_INITIAL_PAGE"; page: string | null }
   | { type: "SET_PLOT_DIALOG_OPEN"; open: boolean }
@@ -992,6 +1045,7 @@ export type Action =
   | { type: "SET_SCH_REPEAT"; cmds: Cmd[] }
   | { type: "SET_SCH_POWER_PENDING"; pending: StudioState["schPowerPending"] }
   | { type: "SET_SCH_TEXT_PENDING"; pending: StudioState["schTextPending"] }
+  | { type: "SET_SCH_TOOL_DIALOG"; dialog: SchToolDialog | null }
   | { type: "SET_LAST_LABEL_TEXT"; text: string }
   | { type: "SET_LAST_POWER_LIB_ID"; libId: string }
   | { type: "SET_SYMBOL_CHOOSER_OPEN"; open: boolean }
@@ -1008,6 +1062,9 @@ export type Action =
   | { type: "SET_ROUTER_SETTINGS"; settings: StudioState["routerSettings"] }
   | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean; mode?: TuneMode }
   | { type: "PCBX"; patch: Partial<PcbParityState> }
+  | { type: "BCX"; patch: Partial<BoardControlState> }
+  /** `highlightNetSelection`: several nets highlighted at once (the first is `netHighlight`, the rest `bcx.netHighlightMore`); empty clears. */
+  | { type: "SET_NET_HIGHLIGHT_SET"; nets: string[] }
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
@@ -1046,9 +1103,13 @@ function reducer(state: StudioState, action: Action): StudioState {
         if (!(l in layerVisible)) layerVisible[l] = true;
         if (!(l in layerOpacity)) layerOpacity[l] = 1;
       }
-      // Drop selection/hot refs for parts that no longer exist (ripped, renamed).
+      // Drop selection/hot refs for parts that no longer exist (ripped, renamed) and for items that were deleted or re-created under a
+      // new id -- but keep a selected track/via/zone/shape/text/group that is still there (every refresh used to drop all of those).
       const refs = new Set(action.board.parts.map((p) => p.ref));
-      const selection = new Set([...state.selection].filter((r) => refs.has(r)));
+      // On the schematic tab the selection also holds the sheet's wires, labels, shapes... which are no parts: SCHEMATIC_OK prunes those against the sheet.
+      const live = allItemIds(action.board);
+      for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
+      const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };
     }
@@ -1141,6 +1202,8 @@ function reducer(state: StudioState, action: Action): StudioState {
           armedSymbol: null,
           symbolProperties: null,
           pcbx: { ...state.pcbx, moveQueue: [], movingIndividually: false, zoneDrawMode: null },
+          // `LocalRatsnestTool`'s finalize handler: leaving the picker with Esc puts every pad's local ratsnest flag back to the global state.
+          bcx: state.activeTool === "local_ratsnest" ? { ...state.bcx, localRatsnestPads: [] } : state.bcx,
         };
       }
       if (state.selection.size > 0) {
@@ -1156,12 +1219,14 @@ function reducer(state: StudioState, action: Action): StudioState {
         return { ...state, enteredGroupId: null, selection: new Set([leftId]) };
       }
       // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
-      return { ...state, netHighlight: null };
+      return { ...state, netHighlight: null, bcx: withHighlight(state.bcx, state.netHighlight, []) };
     }
     case "SET_HOT":
       return { ...state, hot: new Set(action.refs) };
     case "SET_NET_HIGHLIGHT":
-      return { ...state, netHighlight: action.net };
+      return { ...state, netHighlight: action.net, bcx: withHighlight(state.bcx, state.netHighlight, action.net ? [action.net] : []) };
+    case "SET_NET_HIGHLIGHT_SET":
+      return { ...state, netHighlight: action.nets[0] ?? null, bcx: withHighlight(state.bcx, state.netHighlight, action.nets) };
     case "SET_ARMED":
       return { ...state, armed: action.ref, selection: new Set() };
     case "SET_MOVE_PREVIEW":
@@ -1189,7 +1254,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_FULLSCREEN_CROSSHAIR":
       return { ...state, fullscreenCrosshair: action.value };
     case "TOGGLE_RATSNEST":
-      return { ...state, showRatsnest: !state.showRatsnest };
+      // `SetElementVisibility( LAYER_RATSNEST )` sets every pad's local-ratsnest flag to the new global state: the Local Ratsnest tool's clicks are forgotten.
+      return { ...state, showRatsnest: !state.showRatsnest, bcx: { ...state.bcx, localRatsnestPads: [] } };
     case "TOGGLE_RATSNEST_CURVED":
       return { ...state, ratsnestCurved: !state.ratsnestCurved };
     case "TOGGLE_SKETCH_PADS":
@@ -1208,6 +1274,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, layerOpacity: { ...state.layerOpacity, [action.layer]: action.opacity } };
     case "SET_SELECTION_FILTER":
       return { ...state, selectionFilter: { ...state.selectionFilter, ...action.filter } };
+    case "SET_SCH_SELECTION_FILTER":
+      return { ...state, schSelectionFilter: action.filter };
     case "SET_STRICT":
       return { ...state, strict: action.strict };
     case "SET_DRC_OPEN":
@@ -1239,7 +1307,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_PREFERENCES_DIALOG_OPEN":
       return { ...state, preferencesDialogOpen: action.open };
     case "SCHEMATIC_OK":
-      return { ...state, schematic: action.schematic, schematicError: null };
+      return { ...state, schematic: action.schematic, schematicError: null, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":
@@ -1252,6 +1320,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drc: action.drc, drcRunning: false, drcError: null, drcVersion: action.version, drcSelected: null };
     case "DRC_ERR":
       return { ...state, drcRunning: false, drcError: action.message };
+    case "DRC_CLEAR":
+      return { ...state, drc: null, drcVersion: null, drcSelected: null };
     case "SET_DRC_REFILL":
       return { ...state, drcRefillZones: action.refill };
     case "SET_DRC_SELECTED":
@@ -1294,12 +1364,13 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_DIMENSION_EDIT_ID":
       return { ...state, dimensionEditId: action.id };
     case "FILL_OK":
-      return { ...state, zoneFill: action.fill };
+      // Only the zones that are filled show a fill: all of them after Fill All, the named ones after a draft fill of a selection.
+      return { ...state, zoneFill: keepFilled(action.fill, state.bcx.zoneFilled) };
     case "CLEAR_ZONE_FILL":
       // zone_filler_tool.cpp ZoneUnfillAll: discards the computed fill;
       // the canvas falls back to outline-only (painter.ts), same as a
       // zone that has never been filled at all.
-      return { ...state, zoneFill: null };
+      return { ...state, zoneFill: null, bcx: { ...state.bcx, zoneFilled: null } };
     case "SET_ZONE_DISPLAY_MODE":
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
@@ -1332,6 +1403,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, schPowerPending: action.pending };
     case "SET_SCH_TEXT_PENDING":
       return { ...state, schTextPending: action.pending };
+    case "SET_SCH_TOOL_DIALOG":
+      return { ...state, schToolDialog: action.dialog };
     case "SET_LAST_LABEL_TEXT":
       return { ...state, lastLabelText: action.text };
     case "SET_LAST_POWER_LIB_ID":
@@ -1364,6 +1437,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, lengthTuningDialogOpen: action.open, lengthTuningMode: action.mode ?? state.lengthTuningMode };
     case "PCBX":
       return { ...state, pcbx: { ...state.pcbx, ...action.patch } };
+    case "BCX":
+      return { ...state, bcx: { ...state.bcx, ...action.patch } };
     case "SET_NEXT_ZONE_IS_RULE_AREA":
       // Arming a plain zone/rule-area draw also drops any pending cutout/similar mode (pcbx.zoneDrawMode).
       return { ...state, nextZoneIsRuleArea: action.value, pcbx: { ...state.pcbx, zoneDrawMode: null } };
@@ -1459,7 +1534,7 @@ export interface StudioApi {
   ungroupSelection: () => Promise<void>;
   /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
   /** `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback. */
-  copySelection: (refs?: readonly string[]) => void;
+  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => void;
   /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
@@ -1572,7 +1647,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
 
   const refreshFill = useCallback(async () => {
     try {
-      const fill = await fetchFill();
+      // The triangulation display needs each island's holes (`?polys=1`); every other mode draws the fractured ring it already has.
+      const fill = await fetchFill(stateRef.current.zoneDisplayMode === "triangulated");
       dispatch({ type: "FILL_OK", fill });
     } catch {
       // same reasoning as refreshDrc -- keep the last good report.
@@ -2061,7 +2137,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = allItemIds(board);
       const ok = await runCmd({ op: "duplicate", ids });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // The board as the backend has it now: `stateRef` only catches up on the next render, so the copies would not be in it yet
+      // and the Move tool would never pick them up.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
       if (newIds.length === 0) return;
@@ -2097,12 +2175,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: members });
     },
     addZone: async (net, layer, outline, settings) => {
-      const board = stateRef.current.board;
+      // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
+      const board = await fetchState().catch(() => null);
       if (!board) return;
       const before = allItemIds(board);
       const ok = await runCmd({ op: "add_zone", net, layer, outline: outline.map(([x, y]) => ({ x, y })) });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // Read the board from the backend: `stateRef` only catches up on the next render, which is after this continuation, so the new
+      // zone would not be in it yet and its settings (a rule area's flags, say) would never be applied.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newId = [...allItemIds(after)].find((id) => !before.has(id));
       if (!newId) return;
@@ -2112,11 +2193,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
-    copySelection: (refs) => {
+    copySelection: (refs, reference) => {
       const board = stateRef.current.board;
       if (!board) return;
       const clipboard = collectClipboardContents(board, refs ? new Set(refs) : stateRef.current.selection);
-      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard });
+      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard: reference ? { ...clipboard, reference } : clipboard });
     },
     pasteClipboard: async () => {
       const clip = stateRef.current.clipboard;
@@ -2125,13 +2206,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = allItemIds(board);
       const ok = await runCmd({ op: "paste_items", tracks: clip.tracks, vias: clip.vias, zones: clip.zones, shapes: clip.shapes, texts: clip.texts });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // As in `duplicateSelection`: read the board from the backend, `stateRef` is still the one from before the paste.
+      const after = await fetchState().catch(() => null);
       if (!after) return;
       const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
       if (newIds.length === 0) return;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-      dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
+      // A copy made with a reference point is carried by that point (see kicad-port/pcbReference.ts).
+      dispatch({ type: "SET_MOVE_ORIGIN", at: pasteMoveOrigin(clip.reference, stateRef.current.cursorUm) });
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });

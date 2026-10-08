@@ -89,6 +89,8 @@ export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Sch
     bus_entries: s.bus_entries ?? [],
     junctions: s.junctions ?? [],
     lines: s.lines ?? [],
+    graphics: s.graphics ?? [],
+    locked: s.locked ?? [],
     // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
     // existed has no such field at all, not even `false`.
     wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),
@@ -158,8 +160,9 @@ export async function fetchLint(): Promise<LintReport> {
 }
 
 /** `crates/zone-filler`'s real KiCad fill algorithm, run fresh server-side on every call (B/Ctrl+B -- see state/store.tsx's `zoneFill`). */
-export async function fetchFill(): Promise<FillReport> {
-  const r = await getJson<FillReport & { error?: string }>("/api/fill");
+export async function fetchFill(withPolys = false): Promise<FillReport> {
+  // `polys` (the fill unfractured, outline + holes per island) is what the "Draw Zone Fill Triangulation" display triangulates.
+  const r = await getJson<FillReport & { error?: string }>(withPolys ? "/api/fill?polys=1" : "/api/fill");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
@@ -247,12 +250,14 @@ export interface FabReply {
   revision?: string;
 }
 
-export function postFabGerbers(layers?: string[]): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", layers && layers.length > 0 ? { layers } : {});
+/** `useAuxOrigin`: the Plot dialog's "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
+export function postFabGerbers(layers?: string[], useAuxOrigin = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
 }
 
-export function postFabDrill(separateTh: boolean): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh });
+/** `useAuxOrigin`: the drill dialog's Origin choice, "Drill/place file origin" instead of "Absolute". */
+export function postFabDrill(separateTh: boolean, useAuxOrigin = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/drill", { separate_th: separateTh, ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
 }
 
 export interface FabPosOptions {
@@ -261,6 +266,8 @@ export interface FabPosOptions {
   units_mm: boolean;
   smd_only: boolean;
   exclude_fp_th: boolean;
+  /** "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
+  use_aux_origin?: boolean;
 }
 
 export function postFabPos(opts: FabPosOptions): Promise<FabReply> {
@@ -459,6 +466,23 @@ export function routeCancel(): Promise<{ ok: boolean }> {
   return postJson("/api/route/cancel", {});
 }
 
+/** `POST /api/convert/polys` (crates/ops/src/convert.rs): the polygons `CONVERT_TOOL::CreatePolys` builds from `ids` with a strategy, and the ids that contributed. */
+export interface ConvertPolysReply {
+  ok: boolean;
+  message?: string;
+  rings: [Um, Um][][];
+  consumed: string[];
+}
+
+export function convertPolys(ids: readonly string[], strategy: "copy_linewidth" | "centerline" | "bounding_hull", gap: Um): Promise<ConvertPolysReply> {
+  return postJson("/api/convert/polys", { ids, strategy, gap: Math.round(gap) });
+}
+
+/** `ROUTER_TOOL::ChangeRouterMode`/`CycleRouterMode` on the session that is running now (`ok: false` when none is: the studio keeps the mode for the next one). */
+export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
+  return postJson("/api/route/mode", { mode });
+}
+
 // `D`: drag an existing track segment/corner or via, keeping its
 // connections (gap #7 stage 5) -- wired into Canvas.tsx's own drag tool,
 // see components/canvas/dragging.ts. `routeCancel` above already ends a
@@ -489,8 +513,13 @@ export function routeDragFinish(x: Um, y: Um): Promise<CmdReply> {
 // Canvas.tsx's own diff-pair tool, see components/canvas/diffPairRouting.ts.
 // `routeCancel` above already ends a dp session too (same backend session).
 
-export function dpStart(x: Um, y: Um, layer: string): Promise<DiffPairPreview> {
-  return postJson("/api/route/dp_start", { x, y, layer });
+export function dpStart(x: Um, y: Um, layer: string, dims?: { width: Um; gap: Um }): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_start", dims ? { x, y, layer, width: Math.round(dims.width), gap: Math.round(dims.gap) } : { x, y, layer });
+}
+
+/** `ROUTER_TOOL::DpDimensionsDialog` while a pair is being routed: the new width and gap apply from the next move (`ok: false` when no pair is running). */
+export function dpSetDims(width: Um, gap: Um): Promise<{ ok: boolean }> {
+  return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap) });
 }
 
 export function dpMove(x: Um, y: Um, flipPosture?: boolean): Promise<DiffPairPreview> {

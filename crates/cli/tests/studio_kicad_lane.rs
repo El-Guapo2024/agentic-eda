@@ -51,6 +51,9 @@ echo "end $1-$2" >> "$FAKE_KICAD_LOG"
     std::fs::write(&path, script).unwrap();
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // The first run of a new executable can take a second on macOS (the system scans it first):
+    // run it once here, so a test with a short time limit is not timing that.
+    let _ = Command::new(&path).arg("version").output();
     path
 }
 
@@ -64,6 +67,11 @@ struct Studio {
 
 impl Studio {
     fn start(name: &str, kicad_cli_secs: u32) -> Studio {
+        Studio::start_with(name, kicad_cli_secs, &[])
+    }
+
+    /// [`Studio::start`] with more environment for the server (and so for its kicad-cli).
+    fn start_with(name: &str, kicad_cli_secs: u32, env: &[(&str, &str)]) -> Studio {
         let dir = std::env::temp_dir().join(format!("eda_cli_lane_{}_{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -82,6 +90,7 @@ impl Studio {
             .args(["board", "serve", "-C", board.to_str().unwrap(), "--port", &free.to_string(), "--ui", dir.join("no-ui").to_str().unwrap()])
             .env("EDA_KICAD_CLI", fake_kicad_cli(&dir, kicad_cli_secs))
             .env("FAKE_KICAD_LOG", dir.join("kicad-cli.log"))
+            .envs(env.iter().copied())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
             .spawn()
@@ -293,4 +302,40 @@ fn edits_made_at_the_same_time_during_a_drc_still_take_turns() {
         assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["ok"], true, "{body}");
     }
     assert_eq!(studio.rotation_of("R1"), 0.0);
+}
+
+#[test]
+fn a_hung_kicad_cli_is_killed_with_a_clear_error_and_the_lane_goes_on() {
+    // The fake kicad-cli sleeps 30 s; the server gives a run two seconds (`EDA_KICAD_TIMEOUT_SECS`,
+    // standing in for the two minutes a real DRC gets, `eda_kicad_engine::REPORT_TIMEOUT`).
+    let studio = Studio::start_with("hung", 30, &[("EDA_KICAD_TIMEOUT_SECS", "2")]);
+    let (status, body, took) = studio.request("GET", "/api/drc", "");
+    assert_eq!(status, 200, "{body}");
+    let reply: Value = serde_json::from_str(&body).unwrap();
+    let said = reply["error"].as_str().unwrap_or_else(|| panic!("a DRC that hangs answers with an error: {reply}"));
+    assert!(said.contains("kicad-cli pcb drc did not finish within 2 s and was killed"), "{said}");
+    assert!(took >= Duration::from_secs(2) && took < Duration::from_secs(20), "the DRC answered after its limit, not after kicad-cli's 30 s: {took:?}");
+    assert!(reply["revision"].is_string(), "the error is stamped like any other reply: {reply}");
+
+    // The lane is free again: a different request starts at once and is held to the same limit,
+    // instead of waiting behind a DRC that never ends.
+    let (status, body, took) = studio.request("GET", "/api/erc", "");
+    assert_eq!(status, 200, "{body}");
+    let said = serde_json::from_str::<Value>(&body).unwrap()["error"].as_str().unwrap_or_default().to_string();
+    assert!(said.contains("kicad-cli sch erc did not finish within 2 s and was killed"), "{said}");
+    assert!(took < Duration::from_secs(20), "{took:?}");
+    // An export is held to a limit too, and says so the way the Plot dialog reads it.
+    let (status, body, _) = studio.request("POST", "/api/fab/drill", "{}");
+    assert_eq!(status, 200, "{body}");
+    let reply: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert!(reply["message"].as_str().unwrap_or_default().contains("kicad-cli pcb export drill did not finish within 2 s and was killed"), "{reply}");
+
+    let log = studio.kicad_cli_log();
+    assert_eq!((studio.kicad_cli_runs("pcb-drc"), studio.kicad_cli_runs("sch-erc")), (1, 1), "{log:?}");
+    assert!(!log.iter().any(|l| l.starts_with("end")), "no run finished: they were killed: {log:?}");
+    // And the studio never stopped answering.
+    let (status, _, took) = studio.request("GET", "/api/version", "");
+    assert_eq!(status, 200);
+    assert!(took < Duration::from_secs(2), "{took:?}");
 }

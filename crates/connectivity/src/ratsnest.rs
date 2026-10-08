@@ -35,6 +35,25 @@ pub struct RatsnestEdge {
     pub net: String,
     pub from: Point,
     pub to: Point,
+    /// The items whose anchors the line joins. `RATSNEST_VIEW_ITEM::ViewDraw` reads them (`sourceNode->Parent()`) to
+    /// decide whether to draw a line: the item's local-ratsnest flag, and the copper layers it is on.
+    pub from_item: ItemRef,
+    pub to_item: ItemRef,
+    /// The copper layer span of each end, inclusive, as indexes into `board.layers`.
+    pub from_layers: (i32, i32),
+    pub to_layers: (i32, i32),
+}
+
+impl RatsnestEdge {
+    /// An item's id as the studio names it: a pad is `REF.NUMBER`, anything else its own item id.
+    pub fn item_id(item: &ItemRef) -> String {
+        match item {
+            ItemRef::Pad { reference, number } => format!("{reference}.{number}"),
+            ItemRef::TrackSeg { track_id, .. } => track_id.clone(),
+            ItemRef::Via { via_id } => via_id.clone(),
+            ItemRef::ZoneOutline { zone_id } => zone_id.clone(),
+        }
+    }
 }
 
 fn dist(a: Point, b: Point) -> f64 {
@@ -69,6 +88,12 @@ struct NodeInfo {
     cluster: usize,
     layer_lo: i32,
     layer_hi: i32,
+    item: ItemRef,
+}
+
+/// The edge between two nodes (see [`RatsnestEdge`]).
+fn edge_between(net: &str, a: &NodeInfo, b: &NodeInfo) -> RatsnestEdge {
+    RatsnestEdge { net: net.to_string(), from: a.pos, to: b.pos, from_item: a.item.clone(), to_item: b.item.clone(), from_layers: (a.layer_lo, a.layer_hi), to_layers: (b.layer_lo, b.layer_hi) }
 }
 
 /// `RN_NET` for one net: `AddCluster` for every cluster on it, then
@@ -88,7 +113,7 @@ fn net_ratsnest(graph: &ConnGraph, net: &str, clusters: &[&Cluster]) -> Vec<Rats
             let n_anchors = if matches!(it.item, ItemRef::ZoneOutline { .. }) { it.anchors.len().min(1) } else { it.anchors.len() };
             for &pos in &it.anchors[..n_anchors] {
                 let node_idx = nodes.len();
-                nodes.push(NodeInfo { pos, cluster: ci, layer_lo: it.layer_lo, layer_hi: it.layer_hi });
+                nodes.push(NodeInfo { pos, cluster: ci, layer_lo: it.layer_lo, layer_hi: it.layer_hi, item: it.item.clone() });
                 match first {
                     None => first = Some(node_idx),
                     Some(f) => board_edges.push((f, node_idx)),
@@ -102,7 +127,7 @@ fn net_ratsnest(graph: &ConnGraph, net: &str, clusters: &[&Cluster]) -> Vec<Rats
         // to connect; with exactly 2, a ratsnest edge is needed only if
         // they are *not* already in the same cluster (no board edge
         // between them).
-        return if board_edges.is_empty() && nodes.len() == 2 { vec![RatsnestEdge { net: net.to_string(), from: nodes[0].pos, to: nodes[1].pos }] } else { Vec::new() };
+        return if board_edges.is_empty() && nodes.len() == 2 { vec![edge_between(net, &nodes[0], &nodes[1])] } else { Vec::new() };
     }
 
     let mut weighted: Vec<(usize, usize, f64)> = board_edges.into_iter().map(|(a, b)| (a, b, 0.0)).collect();
@@ -114,7 +139,7 @@ fn net_ratsnest(graph: &ConnGraph, net: &str, clusters: &[&Cluster]) -> Vec<Rats
     let mut out = Vec::new();
     for (a, b, w) in weighted {
         if dsu.unite(a, b) && w > 0.0 {
-            out.push(RatsnestEdge { net: net.to_string(), from: nodes[a].pos, to: nodes[b].pos });
+            out.push(edge_between(net, &nodes[a], &nodes[b]));
         }
     }
     out

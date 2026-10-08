@@ -7,7 +7,7 @@
 // list: this app's version offers exactly the actions it actually
 // implements for the current selection, everything else the same
 // "(not ported yet)" a disabled menu item gets elsewhere.
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface MenuEntry {
   label: string;
@@ -17,6 +17,18 @@ export interface MenuEntry {
 
 export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; entries: MenuEntry[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
+  /** Where the menu really goes: the click point, moved back inside the window when it would run off the right or bottom edge (a long menu then scrolls). */
+  const [at, setAt] = useState({ left: x, top: y });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const margin = 4;
+    setAt({
+      left: Math.max(margin, Math.min(x, window.innerWidth - r.width - margin)),
+      top: Math.max(margin, Math.min(y, window.innerHeight - r.height - margin)),
+    });
+  }, [x, y, entries]);
 
   useEffect(() => {
     const onDocDown = (e: MouseEvent) => {
@@ -33,8 +45,11 @@ export function ContextMenu({ x, y, entries, onClose }: { x: number; y: number; 
     };
   }, [onClose]);
 
+  // The menu is a React child of the canvas, whose `onPointerDown` closes the menu (and clears or re-targets the selection) -- so a press on an entry used to
+  // unmount the menu before its `click` could fire, and the entry never ran. Presses and releases inside the menu stay inside it.
+  const keep = (e: { stopPropagation: () => void }) => e.stopPropagation();
   return (
-    <div ref={ref} className="menubar-dropdown" style={{ position: "fixed", left: x, top: y, minWidth: 180, zIndex: 4000 }}>
+    <div ref={ref} className="menubar-dropdown" style={{ position: "fixed", left: at.left, top: at.top, minWidth: 180, maxHeight: "calc(100vh - 8px)", overflowY: "auto", zIndex: 4000 }} onPointerDown={keep} onPointerUp={keep}>
       {entries.map((entry, i) => (
         <div
           key={i}

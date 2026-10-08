@@ -22,8 +22,9 @@ use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus, Output, Stdio};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 fn fail(check: &str, location: &str, msg: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, location, msg.into())]
@@ -50,6 +51,114 @@ fn need_cli() -> Result<PathBuf, Vec<CheckResult>> {
     find_cli().ok_or_else(|| fail("kicad_cli_missing", "kicad-cli", "kicad-cli not found (set EDA_KICAD_CLI, or install KiCad nightly with tools/install-kicad-nightly.sh)"))
 }
 
+// ------------------------------------------------------------- the time limit
+
+/// How long a `kicad-cli pcb drc` or `sch erc` may run before it is killed. A
+/// DRC takes about 4 s on a 30-part board and an ERC about 2.5 s, so a run that
+/// is still going after two minutes is stuck, not slow. Without a limit it
+/// would hold the studio's one kicad-cli lane (`crates/cli/src/kicad_lane.rs`),
+/// and every DRC, ERC and export queued behind it, for good.
+pub const REPORT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long a `kicad-cli ... export` (Gerbers, drill, positions, plots, STEP,
+/// statistics, ...) may run before it is killed. A STEP export of a board with
+/// real 3D models is the slow one (OpenCascade loads every model), hence more
+/// than a DRC.
+pub const EXPORT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// `kicad-cli version` answers at once; one that does not is not going to.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Seconds (fractions allowed) that replace [`REPORT_TIMEOUT`], [`EXPORT_TIMEOUT`]
+/// and the version probe's limit: a slow machine with a big board asking for
+/// more time, or a test with a fake kicad-cli that hangs asking for less.
+pub const TIMEOUT_ENV: &str = "EDA_KICAD_TIMEOUT_SECS";
+
+fn limit(default: Duration) -> Duration {
+    std::env::var(TIMEOUT_ENV).ok().and_then(|s| s.trim().parse::<f64>().ok()).filter(|s| s.is_finite() && *s > 0.0).map(Duration::from_secs_f64).unwrap_or(default)
+}
+
+/// The subcommand a command runs, for a message: `pcb export gerbers`.
+fn describe(cmd: &Command) -> String {
+    cmd.get_args().map(|a| a.to_string_lossy().into_owned()).take_while(|a| !a.starts_with('-')).collect::<Vec<_>>().join(" ")
+}
+
+/// Signal kicad-cli's whole process group (it is spawned as the leader of its
+/// own, below), not just its pid: whatever it started -- a helper, a `sleep` in
+/// a stand-in script -- would otherwise outlive it, still holding the pipes and
+/// the scratch files. Shells out to `kill` rather than adding a libc
+/// dependency for one syscall; `Child::kill` follows for the pid itself.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill").arg("-9").arg("--").arg(format!("-{}", child.id())).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    let _ = child.kill();
+}
+
+/// Read a child's pipe to the end on a thread of its own: a chatty kicad-cli
+/// that fills an undrained pipe blocks on its own write, which looks exactly
+/// like a hang. The bytes arrive on the channel when the pipe closes.
+fn drain(pipe: Option<impl std::io::Read + Send + 'static>) -> std::sync::mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        if let Some(mut pipe) = pipe {
+            let _ = pipe.read_to_end(&mut bytes);
+        }
+        let _ = tx.send(bytes);
+    });
+    rx
+}
+
+/// `cmd.output()` with a clock on it: a run still going after `limit` is
+/// killed (its whole process group) and answers with a `kicad_cli_timeout`
+/// failure naming the command and the limit, so the caller, and the lane behind
+/// it, go on instead of waiting for good.
+fn output_within(mut cmd: Command, limit: Duration) -> Result<Output, Vec<CheckResult>> {
+    let what = describe(&cmd);
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd.spawn().map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
+    let (stdout, stderr) = (drain(child.stdout.take()), drain(child.stderr.take()));
+    let deadline = Instant::now() + limit;
+    let exited: Option<ExitStatus> = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() >= deadline => {
+                kill_tree(&mut child);
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(e) => {
+                kill_tree(&mut child);
+                let _ = child.wait();
+                return Err(fail("kicad_cli_run", "kicad-cli", format!("waiting for kicad-cli {what}: {e}")));
+            }
+        }
+    };
+    // The pipes close with the process; a grandchild that kept one open must not hold this up.
+    let bytes = |rx: std::sync::mpsc::Receiver<Vec<u8>>| rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+    let (stdout, stderr) = (bytes(stdout), bytes(stderr));
+    match exited {
+        Some(status) => Ok(Output { status, stdout, stderr }),
+        None => {
+            let said: String = String::from_utf8_lossy(&stderr).trim().chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect();
+            Err(fail(
+                "kicad_cli_timeout",
+                "kicad-cli",
+                format!(
+                    "kicad-cli {what} did not finish within {} s and was killed (a stuck run; set {TIMEOUT_ENV} to give a slow one more time){}",
+                    limit.as_secs_f64(),
+                    if said.is_empty() { String::new() } else { format!(": {said}") }
+                ),
+            ))
+        }
+    }
+}
+
 fn per_cli<T: Clone>(cache: &'static OnceLock<Mutex<HashMap<PathBuf, T>>>, cli: &Path, compute: impl FnOnce() -> T) -> T {
     let m = cache.get_or_init(Default::default);
     if let Some(v) = m.lock().ok().and_then(|g| g.get(cli).cloned()) {
@@ -66,7 +175,11 @@ fn per_cli<T: Clone>(cache: &'static OnceLock<Mutex<HashMap<PathBuf, T>>>, cli: 
 /// run of this program.
 pub fn cli_version(cli: &Path) -> String {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
-    per_cli(&CACHE, cli, || Command::new(cli).arg("version").output().map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default())
+    per_cli(&CACHE, cli, || {
+        let mut cmd = Command::new(cli);
+        cmd.arg("version");
+        output_within(cmd, limit(VERSION_TIMEOUT)).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
+    })
 }
 
 // ----------------------------------------------------------- the derived files
@@ -245,9 +358,9 @@ impl DrcReport {
     }
 }
 
-fn run_report(mut cmd: Command, report: &Path, what: &str) -> Result<Value, Vec<CheckResult>> {
+fn run_report(cmd: Command, report: &Path, what: &str) -> Result<Value, Vec<CheckResult>> {
     let _ = std::fs::remove_file(report);
-    let out = cmd.output().map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
+    let out = output_within(cmd, limit(REPORT_TIMEOUT))?;
     let text = std::fs::read_to_string(report).map_err(|_| fail(&format!("kicad_cli_{what}"), "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))?;
     serde_json::from_str(&text).map_err(|e| fail(&format!("kicad_cli_{what}"), &report.display().to_string(), e.to_string()))
 }
@@ -386,7 +499,8 @@ pub fn stats(design: &Design, model: &ConstraintModel, work: &Path, opts: StatsO
     if opts.subtract_holes_from_copper {
         cmd.arg("--subtract-holes-from-copper");
     }
-    let out = cmd.arg("-o").arg(&out_file).arg(&pcb).output().map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
+    cmd.arg("-o").arg(&out_file).arg(&pcb);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
     std::fs::read_to_string(&out_file).map_err(|_| fail("kicad_cli_stats", "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))))
 }
 
@@ -423,6 +537,22 @@ fn pcb_ext(kind: &str) -> &'static str {
     }
 }
 
+/// The extension kicad-cli's output carries for these arguments. ODB++ and IPC-2581 are named by the compression asked
+/// for, since kicad-cli writes whatever name it is given: an ODB++ is a `.zip` or a `.tgz`, or (`--compression none`) a
+/// folder with no extension; an IPC-2581 is an `.xml`, or a `.zip` when compressed.
+fn pcb_ext_for(kind: &str, args: &[String]) -> &'static str {
+    let value = |flag: &str| args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1)).map(String::as_str);
+    match kind {
+        "odb" => match value("--compression") {
+            Some("tgz") => "tgz",
+            Some("none") => "",
+            _ => "zip",
+        },
+        "ipc2581" if args.iter().any(|a| a == "--compress") => "zip",
+        _ => pcb_ext(kind),
+    }
+}
+
 fn sch_ext(kind: &str) -> &'static str {
     match kind {
         "netlist" => "net",
@@ -444,12 +574,23 @@ const SCH_DIR_KINDS: &[&str] = &["svg", "dxf", "png", "ps"];
 fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path, out_dir: &Path, dir_kind: bool, ext: &str, stem: &str, root: &Path) -> Result<Value, Vec<CheckResult>> {
     std::fs::create_dir_all(out_dir).map_err(|e| fail("kicad_engine_dir", "export", e.to_string()))?;
     let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
-    let target = if dir_kind { out_dir.to_path_buf() } else { out_dir.join(format!("{stem}.{ext}")) };
+    // An output with no extension is a folder kicad-cli creates itself (ODB++, uncompressed): one left by the last run is cleared first.
+    let target = if dir_kind {
+        out_dir.to_path_buf()
+    } else if ext.is_empty() {
+        let folder = out_dir.join(stem);
+        let _ = std::fs::remove_dir_all(&folder);
+        folder
+    } else {
+        out_dir.join(format!("{stem}.{ext}"))
+    };
     let mut out_arg = target.to_string_lossy().to_string();
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
     }
-    let out = Command::new(cli).args([scope, "export", kind]).args(args).arg("-o").arg(&out_arg).arg(input).output().map_err(|e| fail("kicad_cli_run", "kicad-cli", e.to_string()))?;
+    let mut cmd = Command::new(cli);
+    cmd.args([scope, "export", kind]).args(args).arg("-o").arg(&out_arg).arg(input);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
     let mut files: Vec<String> = std::fs::read_dir(out_dir)
         .into_iter()
         .flatten()
@@ -486,7 +627,7 @@ pub fn export_pcb(design: &Design, model: &ConstraintModel, work: &Path, root: &
     let stem = file_stem(name);
     let (pcb, _) = export_board(design, model, work, &stem)?;
     let out_dir = root.join("export").join("kicad").join(kind);
-    run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext(kind), &stem, root)
+    run_export(&cli, "pcb", kind, args, &pcb, &out_dir, DIR_KINDS.contains(&kind), pcb_ext_for(kind, args), &stem, root)
 }
 
 /// `kicad-cli sch export <kind> [args...]` on `design`'s schematic, into
@@ -559,5 +700,154 @@ mod tests {
         let b = with_scratch(|d| d.to_path_buf());
         assert_ne!(a, b);
         assert!(!a.exists());
+    }
+
+    // ---------------------------------------------------------- the time limit
+
+    #[test]
+    fn odb_and_ipc2581_outputs_are_named_by_the_compression_asked_for() {
+        let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(pcb_ext_for("odb", &a(&[])), "zip");
+        assert_eq!(pcb_ext_for("odb", &a(&["--compression", "zip"])), "zip");
+        assert_eq!(pcb_ext_for("odb", &a(&["--compression", "tgz"])), "tgz");
+        assert_eq!(pcb_ext_for("odb", &a(&["--units", "mm", "--compression", "none"])), "", "a folder: no extension");
+        assert_eq!(pcb_ext_for("ipc2581", &a(&[])), "xml");
+        assert_eq!(pcb_ext_for("ipc2581", &a(&["--units", "in", "--compress"])), "zip");
+        assert_eq!(pcb_ext_for("step", &a(&["--compress"])), "step", "only those two are named by their options");
+        assert_eq!(pcb_ext_for("gencad", &a(&[])), "cad");
+    }
+
+    #[test]
+    fn the_limits_are_two_minutes_for_a_report_and_five_for_an_export() {
+        assert_eq!(REPORT_TIMEOUT, Duration::from_secs(120));
+        assert_eq!(EXPORT_TIMEOUT, Duration::from_secs(300));
+    }
+
+    /// An empty design with a placement and a schematic: enough for every run to get as far as kicad-cli.
+    /// Built from JSON so a field added to the IR later (with its serde default) does not break this.
+    fn empty_design() -> (Design, ConstraintModel) {
+        let design = serde_json::from_value(json!({
+            "schema": 1,
+            "provenance": { "engine_version": "0", "intent_hash": "x", "seed": 0 },
+            "placement": { "outline": [{ "x": 0, "y": 0 }, { "x": 10000, "y": 0 }, { "x": 10000, "y": 10000 }, { "x": 0, "y": 10000 }], "footprints": [] },
+            "schematic": { "symbols": [], "wires": [] },
+        }))
+        .unwrap();
+        (design, ConstraintModel::default())
+    }
+
+    /// A stand-in kicad-cli: answers `version`, otherwise runs `body`.
+    fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nif [ \"$1\" = version ]; then echo 10.99.0-fake; exit 0; fi\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The first run of a new executable can take a second on macOS (the system scans it first):
+        // run it once here, so a test with a short time limit is not timing that.
+        let _ = Command::new(&path).arg("version").output();
+        path
+    }
+
+    /// Sets environment variables for one test and puts them back however it ends. The environment
+    /// is the process's, shared by every test thread, so only one of these lives at a time.
+    struct Env {
+        keys: Vec<&'static str>,
+        _only_one: std::sync::MutexGuard<'static, ()>,
+    }
+    impl Env {
+        fn take() -> Env {
+            static ONE: Mutex<()> = Mutex::new(());
+            Env { keys: vec![], _only_one: ONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
+        }
+        fn set(&mut self, key: &'static str, value: impl AsRef<std::ffi::OsStr>) {
+            std::env::set_var(key, value);
+            self.keys.push(key);
+        }
+    }
+    impl Drop for Env {
+        fn drop(&mut self) {
+            for key in &self.keys {
+                std::env::remove_var(key);
+            }
+        }
+    }
+
+    /// Whether `pid` is gone (a killed process is a zombie for a moment until its parent is reaped).
+    fn gone(pid: &str) -> bool {
+        let alive = || Command::new("kill").args(["-0", pid]).stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+        let until = Instant::now() + Duration::from_secs(3);
+        while alive() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        !alive()
+    }
+
+    fn timeout_of(r: Result<impl std::fmt::Debug, Vec<CheckResult>>, what: &str) -> String {
+        let e = r.expect_err(what);
+        assert_eq!(e[0].check, "kicad_cli_timeout", "{what}: {e:?}");
+        e[0].hint.clone().unwrap()
+    }
+
+    #[test]
+    fn a_kicad_cli_that_hangs_is_killed_with_a_clear_error_for_a_drc_an_erc_and_every_export() {
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_timeout_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (design, model) = empty_design();
+        let mut env = Env::take();
+        env.set(TIMEOUT_ENV, "1");
+        // Says something, starts a helper (like a real kicad-cli might) and waits for it for two minutes.
+        env.set("EDA_KICAD_CLI", script(&dir, "hangs.sh", "echo \"still thinking\" >&2\nsleep 120 &\necho $! > \"$FAKE_KICAD_PID\"\nwait"));
+        let pid_file = dir.join("pid");
+        env.set("FAKE_KICAD_PID", &pid_file);
+        let work = dir.join("work");
+        let helper = || std::fs::read_to_string(&pid_file).unwrap().trim().to_string();
+
+        let started = Instant::now();
+        let said = timeout_of(drc(&design, &model, &work, false), "a hung DRC");
+        assert!(said.contains("kicad-cli pcb drc did not finish within 1 s and was killed"), "{said}");
+        assert!(said.contains("still thinking"), "what kicad-cli said before it was killed is kept: {said}");
+        assert!(said.contains(TIMEOUT_ENV), "the message says how to give a slow run more time: {said}");
+        assert!(gone(&helper()), "the kill reaches what kicad-cli started, not only kicad-cli");
+
+        let said = timeout_of(erc(&design, &model, &work), "a hung ERC");
+        assert!(said.contains("kicad-cli sch erc did not finish within 1 s"), "{said}");
+        assert!(gone(&helper()));
+        let said = timeout_of(export_pcb(&design, &model, &work, &dir, "board", "gerbers", &["--layers".into(), "F.Cu".into()]), "hung Gerbers");
+        assert!(said.contains("kicad-cli pcb export gerbers did not finish within 1 s"), "{said}");
+        let said = timeout_of(export_sch(&design, &model, &work, &dir, "board", "bom", &[]), "a hung BOM");
+        assert!(said.contains("kicad-cli sch export bom did not finish"), "{said}");
+        let said = timeout_of(stats(&design, &model, &work, StatsOptions::default(), true), "hung statistics");
+        assert!(said.contains("kicad-cli pcb export stats did not finish"), "{said}");
+        assert!(gone(&helper()));
+        // Five killed runs, each after its second: a hang costs the limit, not minutes.
+        assert!(started.elapsed() < Duration::from_secs(30), "{:?}", started.elapsed());
+
+        // The limit is only for a run that does not finish: a quick kicad-cli is answered as ever.
+        env.set("EDA_KICAD_CLI", script(&dir, "quick.sh", "out=\"\"; prev=\"\"\nfor a in \"$@\"; do if [ \"$prev\" = \"-o\" ]; then out=\"$a\"; fi; prev=\"$a\"; done\necho '{\"coordinate_units\":\"mm\",\"kicad_version\":\"10.99.0-fake\",\"violations\":[],\"unconnected_items\":[]}' > \"$out\""));
+        let report = drc(&design, &model, &work, false).expect("a DRC that finishes in time");
+        assert_eq!(report.engine, "kicad-cli 10.99.0-fake");
+        assert!(report.violations.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn output_within_keeps_what_a_chatty_process_writes_and_does_not_stall_on_a_full_pipe() {
+        // 300 kB on each stream is far more than a pipe holds: undrained, the child would block on its own write.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "head -c 300000 /dev/zero; head -c 300000 /dev/zero >&2; exit 3"]);
+        let out = output_within(cmd, Duration::from_secs(60)).expect("it finishes by itself");
+        assert_eq!((out.stdout.len(), out.stderr.len(), out.status.code()), (300_000, 300_000, Some(3)));
+    }
+
+    #[test]
+    fn a_limit_from_the_environment_must_be_a_positive_number_of_seconds() {
+        let mut env = Env::take();
+        for (value, expected) in [("2", 2.0), ("0.25", 0.25), (" 30 ", 30.0), ("0", 9.0), ("-1", 9.0), ("soon", 9.0), ("inf", 9.0), ("", 9.0)] {
+            env.set(TIMEOUT_ENV, value);
+            assert_eq!(limit(Duration::from_secs(9)), Duration::from_secs_f64(expected), "{value:?}");
+        }
+        std::env::remove_var(TIMEOUT_ENV);
+        assert_eq!(limit(Duration::from_secs(9)), Duration::from_secs(9), "unset: the default");
     }
 }
