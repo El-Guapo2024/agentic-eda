@@ -67,7 +67,8 @@ rust() {
     fi
     local scope=(--workspace)
     [ ${#crates[@]} -gt 0 ] && scope=("${crates[@]}")
-    nice cargo test "${profile[@]}" "${scope[@]}" --no-fail-fast > "$logs/rust-test.log" 2>&1
+    # `${profile[@]+...}`: macOS's bash 3.2 reports an empty array as unbound under `set -u`.
+    nice cargo test ${profile[@]+"${profile[@]}"} "${scope[@]}" --no-fail-fast > "$logs/rust-test.log" 2>&1
     local rc=$?
     local totals
     totals=$(grep -oE '[0-9]+ passed; [0-9]+ failed; [0-9]+ ignored' "$logs/rust-test.log" | awk '{p+=$1; f+=$3; i+=$5} END {print p " passed, " f " failed, " i " ignored"}')
