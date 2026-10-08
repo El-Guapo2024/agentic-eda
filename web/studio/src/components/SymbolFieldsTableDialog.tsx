@@ -28,6 +28,8 @@
 // symbols), saved view presets, and the sidebar field-name templates.
 import { useEffect, useRef, useState } from "react";
 import { exportBom, fetchFieldsTable } from "../api/client";
+import { postBomFile } from "../api/schControlClient";
+import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import type { BomFmt, FieldsTableReply, FieldsTableRow, FieldsTableSpec } from "../api/types";
 import {
   bomFmtPresets,
@@ -75,10 +77,13 @@ export function SymbolFieldsTableDialog() {
 
   const requestId = useRef(0);
 
-  // A fresh open starts from the dialog's default view with nothing staged.
+  // A fresh open starts from the dialog's default view with nothing staged -- on the Export tab when Generate Bill of Materials opened it (`ShowExportTab`).
+  const schControl = useSchControlState();
+  const schControlDispatch = useSchControlDispatch();
   useEffect(() => {
     if (!open) return;
-    setTab("edit");
+    setTab(schControl.fieldsTableOnExport ? "export" : "edit");
+    if (schControl.fieldsTableOnExport) schControlDispatch({ type: "SET_FIELDS_TABLE_ON_EXPORT", on: false });
     setSpec(null);
     setChanges(emptyChanges());
     setTable(null);
@@ -135,13 +140,14 @@ export function SymbolFieldsTableDialog() {
   const updateSpec = (patch: Partial<FieldsTableSpec>) => setSpec((s) => (s ? { ...s, ...patch } : s));
   const setColumn = (name: string, patch: { show?: boolean; group_by?: boolean }) => setSpec((s) => (s ? { ...s, columns: s.columns.map((c) => (c.name === name ? { ...c, ...patch } : c)) } : s));
 
-  const apply = async () => {
-    if (!dirty) return;
+  const apply = async (): Promise<boolean> => {
+    if (!dirty) return true;
     const ok = await api.cmd({ op: "set_symbol_fields", edits: changes.edits, add_fields: changes.add_fields, rename_fields: changes.rename_fields, remove_fields: changes.remove_fields });
     if (ok) {
       setChanges(emptyChanges());
       dispatch({ type: "TOAST", message: "Symbol fields updated.", kind: "info" });
     }
+    return ok;
   };
 
   const commitCell = (row: FieldsTableRow, field: string, value: string) => {
@@ -398,7 +404,7 @@ export function SymbolFieldsTableDialog() {
                 </label>
                 <div className="kv-grid" style={{ gridTemplateColumns: "120px 1fr", marginTop: 10 }}>
                   <span>Output file</span>
-                  <input value={outPath} placeholder="export/bom.csv" onChange={(e) => setOutPath(e.target.value)} />
+                  <input value={outPath} placeholder="export/bom.csv" title="A file inside this board's export/ folder; kicad-cli writes it from the saved design" onChange={(e) => setOutPath(e.target.value)} />
                 </div>
                 {exportMsg && <div style={{ marginTop: 8, fontSize: 11, color: "var(--chrome-text-dim)" }}>{exportMsg}</div>}
               </div>
@@ -417,9 +423,18 @@ export function SymbolFieldsTableDialog() {
               disabled={!spec || outPath.trim() === ""}
               onClick={async () => {
                 if (!spec) return;
-                if (dirty && !window.confirm("Changes have not yet been applied. Export unsaved data?")) return;
-                const reply = await exportBom(spec, fmt, dirty ? changes : null, outPath.trim());
-                setExportMsg(reply.ok ? `Wrote BOM output to '${reply.file ?? outPath}'` : (reply.message ?? "Export failed."));
+                // The file is kicad-cli's (`kicad-cli sch export bom`, run on the saved design): edits that have not been applied would not be in it.
+                if (dirty) {
+                  if (!window.confirm("Changes have not yet been applied. Apply them and export?")) return;
+                  if (!(await apply())) return;
+                }
+                setExportMsg("Exporting with kicad-cli...");
+                try {
+                  const reply = await postBomFile({ spec, fmt, path: outPath.trim() });
+                  setExportMsg(reply.ok ? `Wrote BOM output to '${reply.files?.[0] ?? outPath}'${reply.engine ? ` (${reply.engine})` : ""}` : (reply.message ?? "Export failed."));
+                } catch (e) {
+                  setExportMsg(`Export failed: ${e instanceof Error ? e.message : String(e)}`);
+                }
               }}
             >
               Export

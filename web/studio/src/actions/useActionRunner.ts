@@ -62,6 +62,8 @@ import { refDesPrefix } from "../kicad-port/packFootprints";
 import { updatePcbMessage } from "../kicad-port/updatePcb";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
+import { registerSchControlActions, schControlChecked } from "./schControlActions";
+import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
 import { allItems, hitItems } from "../components/schematic/schItems";
@@ -96,13 +98,16 @@ export function useActionRunner() {
   const symDispatch = useSymDispatch();
   const fpApi = useFpApi();
   const fpDispatch = useFpDispatch();
+  const schControl = useSchControlState();
+  const schControlDispatch = useSchControlDispatch();
   /** `m_afterItem` of find-next-marker (SCH_FIND_REPLACE_TOOL): the last ERC marker visited, so the next press continues from it. */
   const markerCursor = useRef<string | null>(null);
   /** The net navigator's own tree selection (`m_netNavigator->GetSelection()`): which item of the highlighted net Tab/Shift+Tab last landed on. */
   const netNavKey = useRef<string | null>(null);
 
   const registry = useMemo(() => {
-    const m = new Map<string, () => void>();
+    // A handler may take the one parameter an action carries (`TOOL_EVENT::Parameter`), e.g. the sheet path of `NavigateTool.changeSheet`.
+    const m = new Map<string, (param?: unknown) => void>();
     // Rotate/move/rip/the footprint-properties dialog/the PCB view's own
     // pan-zoom actions all read or write PCB-only state (api.*Selection,
     // state.view, .pcb-canvas-container's rect) -- and that CSS class is
@@ -2213,8 +2218,11 @@ export function useActionRunner() {
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
 
+    // The schematic editor's control actions (eeschema.EditorControl / NavigateTool / InspectionTool / Interactive.increment*).
+    registerSchControlActions(m, { tab: state.tab, state, api, dispatch, requestSelection, symApi, symDispatch, control: schControl, controlDispatch: schControlDispatch });
+
     return m;
-  }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch]);
+  }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);
 
   // `registry.has(name)` alone used to be the whole check, but the
   // registry holds EVERY action's handler regardless of tab (every
@@ -2244,6 +2252,23 @@ export function useActionRunner() {
   // vice versa) -- arguably more honest ("usable right now" instead of
   // "usable somewhere"), not a regression.
   const isEnabled = useCallback((name: string) => isActionEnabledForTab(name, state.tab, registry.has(name)), [registry, state.tab]);
-  const run = useCallback((name: string) => registry.get(name)?.(), [registry]);
-  return { run, isEnabled };
+  const run = useCallback((name: string, param?: unknown) => registry.get(name)?.(param), [registry]);
+  /**
+   * The check a menu entry or toolbar button shows for a toggle action (View > Show Hidden Pins, the Net Navigator panel, Edit > Attributes > Do not
+   * Populate ...): `true`/`false` for a toggle, `undefined` for an action that has none.
+   */
+  const isChecked = useCallback(
+    (name: string): boolean | undefined => {
+      if (state.tab !== "schematic" || !registry.has(name)) return undefined;
+      const selection = state.selection;
+      const sch = state.schematic;
+      return schControlChecked(name, {
+        control: schControl,
+        state,
+        requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
+      });
+    },
+    [registry, schControl, state]
+  );
+  return { run, isEnabled, isChecked };
 }

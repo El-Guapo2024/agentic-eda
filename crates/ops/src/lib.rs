@@ -49,6 +49,7 @@ use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
 pub mod library_editors;
+pub mod sch_control;
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
@@ -1033,6 +1034,37 @@ pub enum Cmd {
         ids: Option<Vec<String>>,
     },
 
+    // ----------------------------------------- schematic control (sch_control.rs)
+    /// `eeschema.EditorControl.setDNP` / `setExcludeFromBOM` / `setExcludeFromBoard` / `setExcludeFromSimulation`
+    /// (`SCH_EDIT_TOOL::SetAttribute`): sets the given attributes (`None` leaves one alone) on every placed unit of every
+    /// reference in `ids`. Refused for an empty `ids` or a reference that is not on the sheet.
+    SetSymbolAttrs {
+        ids: Vec<String>,
+        #[serde(default)]
+        dnp: Option<bool>,
+        #[serde(default)]
+        exclude_from_bom: Option<bool>,
+        #[serde(default)]
+        exclude_from_board: Option<bool>,
+        #[serde(default)]
+        exclude_from_sim: Option<bool>,
+    },
+    /// `eeschema.EditorControl.editPageNumber` (`SCH_EDIT_TOOL::EditPageNumber`): the page number of the placement `sheet` (a
+    /// `SheetInstance::id`). Letters and digits only; empty puts the sheet back to its place in the hierarchy.
+    SetSheetPage { sheet: String, page: String },
+    /// `eeschema.Interactive.increment*` (`SCH_TOOL_BASE::Increment`): the new text of a label (its net name) or a free text, by id.
+    SetSchItemText { id: String, text: String },
+    /// `eeschema.EditorControl.editSymbolLibraryLinks` (`DIALOG_EDIT_SYMBOLS_LIBID`): every symbol linked to a `from` library id is linked to
+    /// the paired `to` id instead (`update_fields`: the Datasheet follows the library symbol). Refused for an invalid or unknown `to`.
+    SetSymbolLibIds {
+        changes: Vec<(String, String)>,
+        #[serde(default)]
+        update_fields: bool,
+    },
+    /// `eeschema.EditorControl.incrementAnnotations` (`SCH_EDITOR_CONTROL::IncrementAnnotations`): every reference with the start
+    /// reference's letters and a number at least its own moves by `increment`.
+    IncrementAnnotations { start: String, increment: i32 },
+
     // -------------------------------------------------- footprint editor
     //
     // GAPS.md #8. A `Domain::FootprintEditor` command set (see `Cmd::
@@ -1399,7 +1431,12 @@ impl Cmd {
             | Cmd::ReplaceText { .. }
             | Cmd::SetErcPinMapCell { .. }
             | Cmd::ResetErcPinMap
-            | Cmd::Annotate { .. } => Domain::Schematic,
+            | Cmd::Annotate { .. }
+            | Cmd::SetSymbolAttrs { .. }
+            | Cmd::SetSheetPage { .. }
+            | Cmd::SetSchItemText { .. }
+            | Cmd::SetSymbolLibIds { .. }
+            | Cmd::IncrementAnnotations { .. } => Domain::Schematic,
             Cmd::OpenFootprintForEdit { .. }
             | Cmd::NewFootprint { .. }
             | Cmd::DeleteLibraryFootprint { .. }
@@ -1537,6 +1574,11 @@ impl Cmd {
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
             Cmd::Annotate { .. } => vec!["annotate"],
+            Cmd::SetSymbolAttrs { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::SetSheetPage { sheet, .. } => vec![sheet.as_str()],
+            Cmd::SetSchItemText { id, .. } => vec![id.as_str()],
+            Cmd::SetSymbolLibIds { .. } => vec!["symbol_lib_ids"],
+            Cmd::IncrementAnnotations { start, .. } => vec![start.as_str()],
             Cmd::SetSymbolFields { .. } => vec!["symbol_fields"],
             Cmd::ReplaceText { .. } => vec!["replace_text"],
             Cmd::SetErcPinMapCell { .. } | Cmd::ResetErcPinMap => vec!["erc_pin_map"],
@@ -1997,6 +2039,11 @@ impl<'a> Board<'a> {
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
+            Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
+            Cmd::SetSheetPage { sheet, page } => self.set_sheet_page(sheet, page),
+            Cmd::SetSchItemText { id, text } => self.set_sch_item_text(id, text),
+            Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
+            Cmd::IncrementAnnotations { start, increment } => self.increment_annotations(start, *increment),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
             Cmd::ReplaceText { search, items } => self.replace_text(search, items.as_deref()),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
@@ -3997,7 +4044,7 @@ impl<'a> Board<'a> {
         if sch.sheets.iter().any(|s| s.name == name) {
             return Err(vec![CheckResult::fail("ops_sheet_name_taken", name, format!("a sheet named '{name}' already exists on this sheet"))]);
         }
-        sch.sheets.push(SheetInstance { id: String::new(), name: name.to_string(), file: file.clone(), at, size, pins: vec![] });
+        sch.sheets.push(SheetInstance { id: String::new(), name: name.to_string(), file: file.clone(), at, size, pins: vec![], page: String::new() });
         sch.assign_missing_ids();
         // a file nothing uses yet gets its own empty screen; one that is already there is shared
         self.design.sheet_contents.get_or_insert_with(BTreeMap::new).entry(file).or_insert_with(empty_schematic_section);
@@ -4171,7 +4218,7 @@ impl<'a> Board<'a> {
         if sch.symbols.iter().any(|s| s.id == id && s.unit == unit) {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", id, format!("reference '{id}' already has unit {unit} on the sheet"))]);
         }
-        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new() });
+        sch.symbols.push(SymbolInstance { id: id.into(), at, rot, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: footprint.into(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false });
         Ok(())
     }
 
@@ -5060,6 +5107,8 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod sch_control_tests;
 
 pub mod board_control;
 pub mod build;

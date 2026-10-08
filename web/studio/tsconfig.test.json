@@ -56,6 +56,11 @@
     "src/components/schematic/boxSelection.ts",
     "src/components/schematic/boxSelection.test.ts",
     "src/components/schematic/junctions.ts",
-    "src/components/schematic/junctions.test.ts"
+    "src/components/schematic/junctions.test.ts",
+    // The View menu's display toggles and the marks on a DNP / simulation-excluded symbol -- pure data and geometry.
+    "src/components/schematic/displayOptions.ts",
+    "src/components/schematic/displayOptions.test.ts",
+    "src/components/schematic/symbolMarkers.ts",
+    "src/components/schematic/symbolMarkers.test.ts"
   ]
 }
