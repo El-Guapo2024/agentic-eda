@@ -969,6 +969,8 @@ export type Cmd =
   | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Um, Um] }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
+  /** Ctrl+V / Ctrl+Shift+V / Ctrl+D (`SCH_EDITOR_CONTROL::Paste`): the `fragment` `POST /api/sch/clipboard/parse` returned, added to the sheet in view moved by (`dx`, `dy`); `mode` is Paste Special's reference-designator choice. One undo step. */
+  | { op: "paste_sch"; fragment: unknown; dx?: Um; dy?: Um; mode?: "unique" | "keep" | "remove" }
   /** The schematic editor's other tool verbs (lock, break, convert text, shapes, sheet pins, ...) -- see api/schEditTypes.ts. */
   | ({ op: "sch_edit" } & SchEditCmd)
   | { op: "add_label"; net: string; at: PointXY; kind: CmdLabelKind }

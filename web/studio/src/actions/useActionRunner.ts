@@ -76,6 +76,8 @@ import { deleteCmds } from "../kicad-port/schDelete";
 import { withoutLocked } from "../kicad-port/schLock";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { registerSchEditActions } from "./schEditActions";
+import { registerSchClipboardActions } from "./schClipboardActions";
+import { cancelSchPaste } from "../state/schPasteStore";
 import { deleteLastPoint } from "../components/schematic/schShapeTools";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
@@ -792,6 +794,8 @@ export function useActionRunner() {
     m.set("common.Interactive.cancel", () => {
       // PICKER_TOOL::Main: Escape ends a running pick session (reference point, offset tool, a dialog's "Select ...") and nothing else.
       if (picker.cancel() || cancelAreaTool()) return;
+      // `SCH_EDITOR_CONTROL::Paste`'s move: Escape throws the paste away (`commit.Revert()`).
+      if (cancelSchPaste()) return;
       // Tell the backend's router session to end too (fire-and-forget --
       // see cancelInteractiveRoute's own doc comment) before the ordinary
       // ESCAPE reducer case clears `drawState` locally; otherwise the
@@ -2205,6 +2209,8 @@ export function useActionRunner() {
     // The schematic edit and drawing tools (Lock, Change To, Break, shapes, sheet pins, ...) -- actions/schEditActions.ts. Registered before the library editors'
     // below: both chain on a name they share (drawRectangle, drawCircle, drawArc) so each editor keeps its own tab's handler, in either order.
     registerSchEditActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
+    // Cut, Copy, Paste, Paste Special and Duplicate on the Schematic tab, in KiCad's clipboard format -- actions/schClipboardActions.ts.
+    registerSchClipboardActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
     // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
     registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
 
