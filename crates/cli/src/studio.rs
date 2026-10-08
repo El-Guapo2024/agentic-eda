@@ -1411,12 +1411,11 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
     let sheet_path: Vec<Value> = breadcrumb.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect();
     // The paper this sheet is drawn on (KiCad's names; A4 unless the sheet says otherwise).
     let paper = eda_engine::hier::kit::paper_named(sch.title_block.as_ref().map(|t| t.paper.as_str()).filter(|p| !p.is_empty()).unwrap_or("A4"));
-    // Every sheet of the design, depth first from the root: the Hierarchy panel's tree.
-    let hierarchy = hierarchy_json(&design);
+    let file = viewed_file(&design, &breadcrumb);
 
     Ok(json!({
         "paper": { "name": paper.name, "width_um": paper.w, "height_um": paper.h },
-        "hierarchy": hierarchy,
+        "file": file,
         "symbols": symbols,
         "wires": wires,
         "labels": labels,
@@ -1435,30 +1434,17 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
     }))
 }
 
-/// Every sheet placed anywhere in the design, depth first from the root, as `{ id, path, name, file, depth }`: `path` is the
-/// root-to-here list of `SheetInstance::id`s that `GET /api/schematic?sheet=` takes. A screen placed twice is listed twice (each
-/// placement has its own path); one that is placed inside itself is not followed again.
-fn hierarchy_json(design: &eda_model::ir::Design) -> Vec<Value> {
-    fn walk(design: &eda_model::ir::Design, sch: &eda_model::ir::SchematicSection, path: &mut Vec<String>, files: &mut Vec<String>, out: &mut Vec<Value>) {
-        for sh in &sch.sheets {
-            if files.contains(&sh.file) {
-                continue;
-            }
-            path.push(sh.id.clone());
-            out.push(json!({ "id": sh.id, "path": path.clone(), "name": sh.name, "file": sh.file, "depth": path.len() }));
-            if let Some(child) = design.sheet_contents.as_ref().and_then(|c| c.get(&sh.file)) {
-                files.push(sh.file.clone());
-                walk(design, child, path, files, out);
-                files.pop();
-            }
-            path.pop();
-        }
+/// The file of the screen the breadcrumb ends on (`""` for the root): the title block of the sheet in view names it. The sheets
+/// of the whole design are `GET /api/sch/hierarchy`.
+fn viewed_file(design: &eda_model::ir::Design, breadcrumb: &[(String, String)]) -> String {
+    let mut here = design.schematic.as_ref();
+    let mut file = String::new();
+    for (id, _) in breadcrumb {
+        let Some(sheet) = here.and_then(|s| s.sheets.iter().find(|s| &s.id == id)) else { break };
+        file = sheet.file.clone();
+        here = design.sheet_contents.as_ref().and_then(|c| c.get(&sheet.file));
     }
-    let mut out = Vec::new();
-    if let Some(root) = &design.schematic {
-        walk(design, root, &mut Vec::new(), &mut Vec::new(), &mut out);
-    }
-    out
+    file
 }
 
 /// `A`'s symbol chooser's own catalog -- GET /api/symbol_library. "The

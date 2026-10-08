@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { Cmd } from "../api/types";
-import { isSchematicCmd, onCurrentSheet } from "./schSheetCmd";
+import { onCurrentSheet } from "./schSheetCmd";
 
 const move: Cmd = { op: "move_symbol", id: "U1", x: 1, y: 2 };
 
@@ -18,17 +18,13 @@ test("a batch of schematic commands is one command on the sheet, so it stays one
   assert.deepEqual(onCurrentSheet(batch, ["s1"]), { op: "on_sheet", sheet: "s1", cmd: batch });
 });
 
-test("a PCB command, a command already on a sheet and Reorganize are never re-addressed", () => {
-  const pcb: Cmd = { op: "move_to", part: "R1", x: 0, y: 0 };
-  assert.deepEqual(onCurrentSheet(pcb, ["s1"]), pcb);
+test("a command that is already on a sheet and Reorganize are never re-addressed", () => {
   const already: Cmd = { op: "on_sheet", sheet: "s2", cmd: move };
   assert.deepEqual(onCurrentSheet(already, ["s1"]), already);
   assert.deepEqual(onCurrentSheet({ op: "reorganize_sheets" }, ["s1"]), { op: "reorganize_sheets" });
 });
 
-test("the schematic ops are the ones Cmd::domain files under the schematic editor", () => {
-  assert.equal(isSchematicCmd({ op: "add_label", net: "A", at: { x: 0, y: 0 }, kind: { scope: "local" } } as Cmd), true);
-  assert.equal(isSchematicCmd({ op: "sch_edit", verb: "set_locked", ids: [], locked: true } as unknown as Cmd), true);
-  assert.equal(isSchematicCmd({ op: "route" } as unknown as Cmd), false);
-  assert.equal(isSchematicCmd({ op: "batch", cmds: [] }), false);
+test("the commands the schematic control adds (attributes, page numbers, text increments) are addressed too, whatever their name", () => {
+  const attrs = { op: "set_symbol_attrs", ids: ["R1"], dnp: true } as unknown as Cmd;
+  assert.deepEqual(onCurrentSheet(attrs, ["s1"]), { op: "on_sheet", sheet: "s1", cmd: attrs });
 });

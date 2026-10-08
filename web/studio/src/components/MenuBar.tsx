@@ -14,11 +14,12 @@ import symMenusData from "../kicad/sym_menus.json";
 import actionsData from "../kicad/actions.json";
 import type { MenusFile, MenuNode, ActionsFile, KicadAction } from "../kicad/types";
 import { displayHotkey, effectiveHotkey } from "../actions/hotkeys";
+import { SCH_STUDIO_MENU_ITEMS, withStudioItems } from "../kicad-port/studioMenuItems";
 import { useActionRunner } from "../actions/useActionRunner";
 import { useStudioState } from "../state/store";
 
 const menusFile = menusData as MenusFile;
-const schMenusFile = schMenusData as MenusFile;
+const schMenusFile = withStudioItems(schMenusData as MenusFile, SCH_STUDIO_MENU_ITEMS);
 const fpMenusFile = fpMenusData as MenusFile;
 const symMenusFile = symMenusData as MenusFile;
 const actionsFile = actionsData as ActionsFile;
@@ -44,8 +45,9 @@ export function MenuNodeView({ node }: { node: MenuNode }) {
   }
   const action = actionsByName.get(node.action);
   const enabled = isEnabled(node.action);
-  const label = action?.label ?? node.action;
-  const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""} (not ported yet)`.trim();
+  const label = node.label ?? action?.label ?? node.action;
+  const tip = node.tooltip ?? action?.tooltip;
+  const tooltip = enabled ? tip : `${tip ?? ""} (not ported yet)`.trim();
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
   // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate ...) shows its state as a check mark.
   const checked = enabled ? isChecked(node.action) : undefined;

@@ -267,7 +267,6 @@ export function SchematicView() {
     drawZoneReferences(ctx, state.schematicView, page);
     const tb = sch.title_block;
     const crumbs = sch.sheet_path ?? [];
-    const here = crumbs.length > 0 ? sch.hierarchy?.find((h) => h.path.length === crumbs.length && h.path.every((id, i) => id === crumbs[i]!.id)) : undefined;
     drawTitleBlock(
       ctx,
       state.schematicView,
@@ -276,7 +275,7 @@ export function SchematicView() {
         date: tb?.date ?? new Date().toISOString().slice(0, 10),
         rev: tb?.rev ?? "",
         company: tb?.company,
-        fileName: here?.file ?? `${state.board?.name || "schematic"}.kicad_sch`,
+        fileName: sch.file || `${state.board?.name || "schematic"}.kicad_sch`,
         sheetPath: crumbs.length === 0 ? "/" : `/${crumbs.map((c) => c.name).join("/")}/`,
       },
       page

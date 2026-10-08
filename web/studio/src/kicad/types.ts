@@ -86,7 +86,8 @@ export interface ToolbarsFile {
 
 // --------------------------------------------------------------- menus
 
-export type MenuNode = { type: "separator" } | { type: "item"; action: string } | { type: "submenu"; label: string; items: MenuNode[] };
+/** `label` and `tooltip` are for the studio's own entries (`studio.*` actions, kicad-port/studioMenuItems.ts): KiCad's come from `actions.json`. */
+export type MenuNode = { type: "separator" } | { type: "item"; action: string; label?: string; tooltip?: string } | { type: "submenu"; label: string; items: MenuNode[] };
 
 export interface MenuConfig {
   label: string;

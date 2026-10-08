@@ -12,6 +12,7 @@ import { alignToGrid } from "../kicad-port/gridSnap";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
+import { registerSchModuleSheetActions } from "./schModuleSheetActions";
 import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
@@ -215,6 +216,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
 
   registerSchSheetPinActions(registry, ctx);
+  registerSchModuleSheetActions(registry, ctx);
   registerSchSymbolActions(registry, ctx);
   registerStackedPinActions(registry, ctx);
 }

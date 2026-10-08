@@ -1489,15 +1489,6 @@ export interface SchematicPaper {
   height_um: Um;
 }
 
-/** One sheet of the whole design, in tree order from the root (`GET /api/schematic`'s `hierarchy`): `path` is what `?sheet=` takes. */
-export interface HierarchyEntry {
-  id: string;
-  path: string[];
-  name: string;
-  file: string;
-  depth: number;
-}
-
 export interface Schematic {
   /** Empty object on a board with no schematic yet, never absent -- see api/client.ts's fetchSchematic for the defensive `?? {}` this file's other optional-till-populated collections already use. */
   lib_symbols: LibSymbols;
@@ -1524,8 +1515,8 @@ export interface Schematic {
   sheet_path: SheetPathEntry[];
   /** The paper this sheet is drawn on; absent from a backend built before sheets chose their own. */
   paper?: SchematicPaper;
-  /** Every sheet of the design in tree order, for the Hierarchy panel; absent from a backend built before it was sent. */
-  hierarchy?: HierarchyEntry[];
+  /** The file of the screen shown (empty for the root sheet): the title block names it. The design's whole tree is `fetchHierarchy` (`GET /api/sch/hierarchy`). */
+  file?: string;
 }
 
 // ---------------------------------------------------------------- Symbol library

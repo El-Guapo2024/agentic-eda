@@ -72,12 +72,7 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
     if (ctx.tab === "symbol") fn();
   };
   const toast = (message: string, kind: "info" | "error" = "info") => dispatch({ type: "TOAST", message, kind });
-  const inSubSheet = () => state.currentSheetPath.length > 0;
-  /** Every schematic verb edits the root sheet (`Board::schematic_mut`); while a sub-sheet is on screen an edit would land on the wrong sheet, so say so instead. */
-  const rootOnly = (fn: () => void) => () => {
-    if (inSubSheet()) return toast("Editing a sub-sheet is not supported yet: go back to the root sheet first.", "error");
-    fn();
-  };
+  // Every schematic edit these actions send is addressed to the sheet in view (`api.cmd`, kicad-port/schSheetCmd.ts), so they act on that sheet's items.
   const open = (dialog: SchControlState["dialog"]) => dialog && controlDispatch({ type: "OPEN_DIALOG", dialog });
 
   // ============================================================================================ SCH_NAVIGATE_TOOL (hierarchy navigation)
@@ -173,15 +168,13 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   // multi-unit symbol) goes to one state -- set when any of it lacks the attribute, cleared when all of it has it.
   const setAttribute = (name: string) => {
     const key: SymbolAttrKey = ATTRIBUTE_ACTIONS[name]!;
-    return onSchematic(
-      rootOnly(() => {
-        if (!sch) return;
-        const ids = [...new Set(ctx.requestSelection().filter((id) => api.symbolById(id)))];
-        if (ids.length === 0) return;
-        const items = sch.symbols.filter((s) => ids.includes(s.id));
-        void api.cmd({ op: "set_symbol_attrs", ids, [key]: nextAttributeState(items, key) });
-      })
-    );
+    return onSchematic(() => {
+      if (!sch) return;
+      const ids = [...new Set(ctx.requestSelection().filter((id) => api.symbolById(id)))];
+      if (ids.length === 0) return;
+      const items = sch.symbols.filter((s) => ids.includes(s.id));
+      void api.cmd({ op: "set_symbol_attrs", ids, [key]: nextAttributeState(items, key) });
+    });
   };
   m.set("eeschema.EditorControl.setDNP", setAttribute("eeschema.EditorControl.setDNP"));
   m.set("eeschema.EditorControl.setExcludeFromBOM", setAttribute("eeschema.EditorControl.setExcludeFromBOM"));
@@ -189,7 +182,7 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   m.set("eeschema.EditorControl.setExcludeFromSimulation", setAttribute("eeschema.EditorControl.setExcludeFromSimulation"));
 
   // Increment Annotations From... -- `IncrementAnnotations`: asks for the first reference and the step, then moves every reference with those letters from that number up.
-  m.set("eeschema.EditorControl.incrementAnnotations", onSchematic(rootOnly(() => open({ kind: "increment_annotations" }))));
+  m.set("eeschema.EditorControl.incrementAnnotations", onSchematic(() => open({ kind: "increment_annotations" })));
   // Edit Sheet Page Number... -- `SCH_EDIT_TOOL::EditPageNumber`: the selected sheet's page, else the page of the sheet being shown.
   m.set(
     "eeschema.EditorControl.editPageNumber",
@@ -204,11 +197,11 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
     })
   );
   // Bulk Edit Symbol Library Links... -- `EditSymbolLibraryLinks` -> `InvokeDialogEditSymbolsLibId`.
-  m.set("eeschema.EditorControl.editSymbolLibraryLinks", onSchematic(rootOnly(() => open({ kind: "library_links" }))));
+  m.set("eeschema.EditorControl.editSymbolLibraryLinks", onSchematic(() => open({ kind: "library_links" })));
   // Assign Footprints... -- `ShowCvpcb` -> `OnOpenCvpcb`: the footprint assignment tool (CvPcb); here a dialog of the same three lists.
-  m.set("eeschema.EditorControl.assignFootprints", onSchematic(rootOnly(() => open({ kind: "assign_footprints" }))));
+  m.set("eeschema.EditorControl.assignFootprints", onSchematic(() => open({ kind: "assign_footprints" })));
   // Import Footprint Assignments... -- `ImportFPAssignments` -> `processCmpToFootprintLinkFile`: a `.cmp` file's footprints go to the symbols it names.
-  m.set("eeschema.EditorControl.importFPAssignments", onSchematic(rootOnly(() => void importFootprintAssignments(ctx))));
+  m.set("eeschema.EditorControl.importFPAssignments", onSchematic(() => void importFootprintAssignments(ctx)));
   // Generate Bill of Materials... -- `GenerateBOM`: the Symbol Fields Table on its Export tab (`ShowExportTab`).
   m.set(
     "eeschema.EditorControl.generateBOM",
@@ -270,16 +263,14 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   // `delta` in their `index`-th incrementable part; a selection of mixed kinds does nothing. `RequestSelection( incrementable )` is the selection, else the item under the cursor.
   const increment = (name: string) => {
     const { delta, index } = INCREMENT_PARAMS[name]!;
-    return onSchematic(
-      rootOnly(() => {
-        if (!sch) return;
-        const targets = incrementTargets(ctx);
-        const plan = planIncrement(targets, delta, index, { skipIOSQXZ: false });
-        if (!plan || plan.length === 0) return;
-        const cmds: Cmd[] = plan.map((p) => ({ op: "set_sch_item_text", id: p.id, text: p.text }));
-        void api.cmdBatch(cmds);
-      })
-    );
+    return onSchematic(() => {
+      if (!sch) return;
+      const targets = incrementTargets(ctx);
+      const plan = planIncrement(targets, delta, index, { skipIOSQXZ: false });
+      if (!plan || plan.length === 0) return;
+      const cmds: Cmd[] = plan.map((p) => ({ op: "set_sch_item_text", id: p.id, text: p.text }));
+      void api.cmdBatch(cmds);
+    });
   };
   m.set("eeschema.Interactive.increment", increment("eeschema.Interactive.increment"));
   m.set("eeschema.Interactive.incrementPrimary", increment("eeschema.Interactive.incrementPrimary"));
