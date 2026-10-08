@@ -2866,6 +2866,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Tools > Reorganize into Module Sheets on the user's own board: the old flat drawing reads as loose pins, so the new sheets are drawn from the
+    /// intent's nets -- and every one of them, with its name, is still a net the tracks are on. The board stays routable.
+    #[test]
+    fn reorganizing_the_users_board_keeps_every_net_a_track_is_on() {
+        let dir = scratch("users_board_reorganize");
+        setup_mcu30_users_board(&dir);
+        let (_, _, model_before) = load(&dir).unwrap();
+        let intent = joined(&model_before.nets);
+        step(&dir, Cmd::ReorganizeSheets, true, "ui").unwrap();
+        let (_, after, model_after) = load(&dir).unwrap();
+        assert_eq!(after.schematic.as_ref().unwrap().sheets.len(), 3);
+        assert_eq!(joined(&model_after.nets), intent);
+        assert!(model_after.nets.iter().all(|n| !n.name.starts_with("NET_")));
+        assert_every_routed_net_exists(&after, &model_after);
+        // and the next edit, on a sheet, keeps them
+        let mcu = after.schematic.as_ref().unwrap().sheets.iter().find(|s| s.name.starts_with("MCU")).unwrap().id.clone();
+        let note = Cmd::AddSchText { content: "checked".into(), at: Point { x: 20_000, y: 20_000 }, angle_millideg: 0, size_um: 1_270 };
+        step(&dir, Cmd::OnSheet { sheet: mcu, cmd: Box::new(note) }, true, "ui").unwrap();
+        let (_, noted, model_noted) = load(&dir).unwrap();
+        assert_eq!(joined(&model_noted.nets), intent);
+        assert_every_routed_net_exists(&noted, &model_noted);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Reorganize into Module Sheets, end to end through `step`: the nets stored with the design after it are the design's nets (the same nets with the same
     /// pins, traced back across the new sheets, not the root sheet's alone), an edit inside a sheet reaches that sheet alone and moves the nets the way the
     /// drawing says, and Undo puts each step back -- the sheet edit, then the reorganization.
