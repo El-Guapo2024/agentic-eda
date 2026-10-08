@@ -204,20 +204,6 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // group's `(members ..)` names.
     let mut written: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
-    // ---- footprints ----
-    for fp in &footprints {
-        let part = parts_by_ref[fp.id.as_str()];
-        let Some(footprint) = model.footprint_of(part) else {
-            errors.push(CheckResult::fail("kicad.no_footprint", fp.id.clone(), "part has no resolvable footprint geometry"));
-            continue;
-        };
-        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, is_locked(&fp.id));
-        written.entry(fp.id.clone()).or_default().push(uuid);
-    }
-    if !errors.is_empty() {
-        return Err(errors);
-    }
-
     // Net 0 is KiCad's *unconnected* net. Defaulting a track, via or zone
     // to it does not lose the copper -- it exports copper that claims to
     // belong to nothing, so the board KiCad checks is not the board our
@@ -227,7 +213,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // in the netlist or the export fails. An item the design says has no
     // net at all (an empty name: a rule area, or copper an imported board
     // drew with no net) is KiCad's net 0 on purpose, and says so.
-    let mut errors: Vec<CheckResult> = Vec::new();
+    let mut net_errors: Vec<CheckResult> = Vec::new();
     let mut net_of = |what: &str, where_: &str, net: &str| -> usize {
         if net.is_empty() {
             return 0;
@@ -235,7 +221,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         match net_num.get(net) {
             Some(n) => *n,
             None => {
-                errors.push(CheckResult::fail(
+                net_errors.push(CheckResult::fail(
                     "kicad.unknown_net",
                     where_.to_string(),
                     format!("{what} is on net {net:?}, which is not in the netlist; KiCad would import it as net 0 (unconnected)"),
@@ -244,6 +230,55 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             }
         }
     };
+
+    // ---- copper pours, rule areas, teardrops: rendered up front ----
+    // The outline is ours; so is the fill now (`eda_zone_filler`, stage 3/4 of the zone-filling port) --
+    // computed fresh here and written as `filled_polygon`, so KiCad shows (and plots/exports gerbers for) our
+    // fill directly without needing its own refill pass. A zone that belongs to a footprint (a rule area a
+    // footprint carries) is written inside that footprint, where KiCad keeps it: a footprint's own rule area
+    // does not test the footprint itself (`intersectsArea`'s `aArea->GetParent() == item`), so written at board
+    // level it would report the footprint that owns it as a keepout violation.
+    let mut zone_blocks: Vec<(Option<String>, String)> = Vec::new();
+    if let Some(routing) = &design.routing {
+        let mut zones: Vec<&Zone> = routing.zones.iter().collect();
+        zones.sort_by(|a, b| (&a.net, &a.layer).cmp(&(&b.net, &b.layer)));
+        let drc_board_for_fill = eda_drc::board::build(design, model);
+        let fills = eda_drc::fill::fill_all_zones(&drc_board_for_fill, &model.board);
+        for z in &zones {
+            if z.outline.len() < 3 {
+                continue;
+            }
+            // A rule area has no net at all, whatever its `net` says (`ZONE::GetIsRuleArea()`); asking the
+            // net check about it rejected the whole export with `kicad.unknown_net`.
+            let n = if z.is_rule_area { 0 } else { net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net) };
+            // Seeded by the zone's own id: two pours on one net and layer must not share a uuid.
+            let uuid = crate::duid_for(&if z.id.is_empty() { format!("zone:{}:{}", z.net, z.layer) } else { format!("zone:{}", z.id) }, &z.id);
+            written.entry(z.id.clone()).or_default().push(uuid.clone());
+            // Every disjoint fragment of the fill, as the one ring `(filled_polygon ..)` stores.
+            let fill: Vec<Vec<(i64, i64)>> = fills
+                .get(&z.id)
+                .map(|f| f.polys.iter().filter_map(|poly| poly.first()).filter(|ring| ring.len() >= 3).map(|ring| ring.iter().map(|p| (p.x, p.y)).collect()).collect())
+                .unwrap_or_default();
+            let mut block = String::new();
+            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fill: &fill });
+            zone_blocks.push((z.parent_footprint.clone(), block));
+        }
+    }
+
+    // ---- footprints ----
+    for fp in &footprints {
+        let part = parts_by_ref[fp.id.as_str()];
+        let Some(footprint) = model.footprint_of(part) else {
+            errors.push(CheckResult::fail("kicad.no_footprint", fp.id.clone(), "part has no resolvable footprint geometry"));
+            continue;
+        };
+        let own_zones: String = zone_blocks.iter().filter(|(parent, _)| parent.as_deref() == Some(fp.id.as_str())).map(|(_, text)| text.as_str()).collect();
+        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, is_locked(&fp.id), &own_zones);
+        written.entry(fp.id.clone()).or_default().push(uuid);
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
 
     // ---- routing: segments + vias ----
     if let Some(routing) = &design.routing {
@@ -304,35 +339,11 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             .unwrap();
         }
 
-        // ---- copper pours ----
-        // The outline is ours; so is the fill now (`eda_zone_filler`,
-        // stage 3/4 of the zone-filling port) -- computed fresh here and
-        // written as `filled_polygon`, so KiCad shows (and plots/exports
-        // gerbers for) our fill directly without needing its own refill
-        // pass. `(filled_areas_thickness no)` tells KiCad the polygon
-        // itself is already the final min-thickness-correct shape (true
-        // for every fill `eda_zone_filler::fill_zone` produces), not a
-        // centerline needing a stroke width added.
-        let mut zones: Vec<&Zone> = routing.zones.iter().collect();
-        zones.sort_by(|a, b| (&a.net, &a.layer).cmp(&(&b.net, &b.layer)));
-        let drc_board_for_fill = eda_drc::board::build(design, model);
-        let fills = eda_drc::fill::fill_all_zones(&drc_board_for_fill, &model.board);
-        for z in &zones {
-            if z.outline.len() < 3 {
-                continue;
+        // ---- board-level zones (the ones rendered above that no footprint owns) ----
+        for (parent, block) in &zone_blocks {
+            if parent.is_none() {
+                out.push_str(block);
             }
-            // A rule area has no net at all, whatever its `net` says (`ZONE::GetIsRuleArea()`); asking the
-            // net check about it rejected the whole export with `kicad.unknown_net`.
-            let n = if z.is_rule_area { 0 } else { net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net) };
-            // Seeded by the zone's own id: two pours on one net and layer must not share a uuid.
-            let uuid = crate::duid_for(&if z.id.is_empty() { format!("zone:{}:{}", z.net, z.layer) } else { format!("zone:{}", z.id) }, &z.id);
-            written.entry(z.id.clone()).or_default().push(uuid.clone());
-            // Every disjoint fragment of the fill, as the one ring `(filled_polygon ..)` stores.
-            let fill: Vec<Vec<(i64, i64)>> = fills
-                .get(&z.id)
-                .map(|f| f.polys.iter().filter_map(|poly| poly.first()).filter(|ring| ring.len() >= 3).map(|ring| ring.iter().map(|p| (p.x, p.y)).collect()).collect())
-                .unwrap_or_default();
-            write_zone(&mut out, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fill: &fill });
         }
     }
 
@@ -399,8 +410,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     writeln!(out, ")").unwrap();
-    if !errors.is_empty() {
-        return Err(errors);
+    if !net_errors.is_empty() {
+        return Err(net_errors);
     }
     Ok(out)
 }
@@ -483,6 +494,7 @@ fn write_footprint(
     net_num: &BTreeMap<&str, usize>,
     model: &ConstraintModel,
     locked: bool,
+    zones: &str,
 ) -> String {
     let layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
     let x = mm(fp.at.x);
@@ -674,6 +686,8 @@ fn write_footprint(
         writeln!(out, "\t\t)").unwrap();
     }
 
+    // The footprint's own zones (rule areas it carries), after its pads and graphics as KiCad writes them.
+    out.push_str(zones);
     writeln!(out, "\t)").unwrap();
     uuid
 }
@@ -1304,6 +1318,36 @@ mod tests {
         assert!(!z.contains("thermal_gap"), "a teardrop has no thermal relief: {z}");
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         assert!(back.routing.unwrap().zones[0].teardrop, "the teardrop flag comes back");
+    }
+
+    #[test]
+    fn a_zone_a_footprint_owns_is_written_inside_that_footprint_and_read_back_as_its_own() {
+        // A footprint's own rule area does not test the footprint that owns it (`intersectsArea`'s
+        // `aArea->GetParent() == item`). Written at board level it reported that footprint as a keepout
+        // violation, on every real board that carries such an area (found on four connectors of one).
+        let (mut design, model) = fixture();
+        let rule_area = |id: &str, parent: Option<&str>, at: Um| Zone {
+            id: id.into(),
+            layer: "F.Cu".into(),
+            outline: square(at, at, 2_000),
+            is_rule_area: true,
+            keepout_pads: true,
+            parent_footprint: parent.map(String::from),
+            ..Default::default()
+        };
+        design.routing.as_mut().unwrap().zones = vec![rule_area("own", Some("U1"), 4_000), rule_area("free", None, 12_000)];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(zone").count(), 2, "both zones are written once");
+        // Footprints come first (C1, then U1, which owns the zone at 4,4), then the tracks, then board-level zones.
+        let (own_at, free_at, segment_at) = (out.find("(xy 4 4)").unwrap(), out.find("(xy 12 12)").unwrap(), out.find("\t(segment ").unwrap());
+        let u1_at = out.find("(property \"Reference\" \"U1\"").unwrap();
+        assert!(u1_at < own_at && own_at < segment_at, "the zone U1 owns sits inside U1's block, before the tracks");
+        assert!(free_at > segment_at, "a zone nothing owns stays at board level, after the tracks");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let zones = &back.routing.as_ref().unwrap().zones;
+        assert_eq!(zones.iter().filter(|z| z.parent_footprint.as_deref() == Some("U1")).count(), 1);
+        assert_eq!(zones.iter().filter(|z| z.parent_footprint.is_none()).count(), 1);
     }
 
     #[test]
