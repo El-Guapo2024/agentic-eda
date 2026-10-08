@@ -392,7 +392,7 @@ KiCad spends one iteration per obstacle *cluster*; ours one per item, with the s
 
 ### D18. Other gaps worth tracking
 
-Mark-obstacles hull snap (`rhMarkObstacles`), `SplitAdjacentSegments` (cannot end mid-segment), shove `viaOnEnd` hull and `shoveLineFromLoneVia`, `ShoveTimeLimit`, `LockJoint`/locked joints, `findRedundantSegment` (duplicate segments), `from_ir` never sets `Segment.locked`, diff-pair shove/walkaround/via, meander shape (45-degree accordion vs U-shape) and interactivity.
+Mark-obstacles hull snap (`rhMarkObstacles`), `SplitAdjacentSegments` (cannot end mid-segment), (shove `viaOnEnd` hull and `shoveLineFromLoneVia`: done by the shove port), `ShoveTimeLimit`, `LockJoint`/locked joints, `findRedundantSegment` (duplicate segments), `from_ir` never sets `Segment.locked`, diff-pair shove/walkaround/via, meander shape (45-degree accordion vs U-shape) and interactivity. **Added with the shove port: the board outline is not an obstacle** (KiCad: `PNS_KICAD_IFACE_BASE::syncGraphicalItem` adds `Edge.Cuts`/`Margin` graphics as items on every copper layer; ours adds none and has no copper-to-edge clearance), so a shoved track can end inside `min_copper_edge_clearance` (kicad-cli `copper_edge_clearance`, seen driving a shove on `mcu30`).
 
 ## Stale or misleading documentation found
 

@@ -152,6 +152,7 @@ skipped when the corpus is absent):
 | `backspace1` (9 fixes undone by Backspace, one redone) | one run, 2 segments | the same 2 segments (needed the posture to return to the initial one after the last undo) |
 | `issue22749-shove-weird-drag-track-end` (a route from a track end, Shove) | 5 tracks pushed, 11 segments | the same **5** tracks; 4 of 11 within 3 um (the wrap around the head's diagonal is ~70 um further out in KiCad's), 0 new violations, also through the `RouteCommit` |
 | `issue23449` (lone via drag), `walk_drag_seg_against_board_edge`, `simple-drag-shove-singlelayer` (drags) | no violation recorded | replayed with this port's corner drag (KiCad slides the segment; D7): no panic, 0 new violations on every accepted preview. `video-v10` is a slow-tier test (about a minute in a debug build). |
+| a scratch copy of `work/mcu30` (133 tracks, 12 vias) driven through the studio's own `POST /api/route/{start,move,finish}` in Shove mode | -- | 60 random routes from track ends; 12 of them push something (up to 7 IR tracks and a via). The studio's `--strict` gates accepted 2 of the 12 and refused 10 (`routing_clearance` measures a pad by its bounding rectangle, so a track hugging a round pad's real outline at the clearance is "too close"; also `routing_pass_through_pad`, `routing_over_refdes`, `routing_via_in_pad`). The same gates refuse the Walkaround route for one of the two moves compared, and a refused LED5 shove committed with `strict: false` has no clearance violation in **kicad-cli's** DRC. The 2 accepted commits were one undo step each (a line on 3 IR tracks became 1 track + 2 removals, no duplicated segment), `Undo` restored the board exactly, and kicad-cli reported no copper clearance violation; what it did report is `track_dangling` (the free-hand end I chose) and `copper_edge_clearance` on a shoved track pushed toward the board edge (see the gap below). |
 | random routes from random pads (`simple`, `pic_programmer`, `backspace1`, `dp_test`) and random corner drags in Shove mode | -- | 0 new violations: 250 routes per board while writing it, 50 per board in the committed test; Shove never failed where Walkaround succeeded. Dragging a *via* is the exception and is not new: the dragged via itself is never shoved against (`DRAGGER::dragViaWalkaround`/`propagateViaForces`, D7), so a via dropped onto a track leaves a violation (6 of 200 random via drags on `simple`). |
 
 Fixtures that do not need the corpus: `tests/shove_scenarios.rs` (a track
@@ -562,6 +563,14 @@ axis-aligned run** (one 2-point track each) side by side on one layer.
   the head). `fix_all_segments`, `walkaround_hug_length_threshold` and
   `via_force_prop_iteration_limit` are still never read, and the settings
   dialog still exposes only `mode` and `remove_loops`.
+- **The board outline is not an obstacle.** KiCad adds `Edge.Cuts` (and `Margin`)
+  graphics to the router's world as items on every copper layer
+  (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`); `from_ir::build_node` adds
+  none, and `Node::clearance` only knows net classes, not the copper-to-edge
+  rule. A route or a shoved track can therefore end closer to the board edge
+  than `min_copper_edge_clearance` (found driving a shove on `mcu30`: kicad-cli
+  `copper_edge_clearance` on a pushed track). Shove makes it easier to hit than
+  Walkaround because it moves tracks that were already near the edge.
 - `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints
   (every candidate is still collision-checked, which is the one
   constraint that must never be skipped; the others are refinements).
