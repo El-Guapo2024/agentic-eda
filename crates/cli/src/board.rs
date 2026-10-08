@@ -1821,6 +1821,106 @@ mod tests {
         assert_eq!(load(&dir).unwrap().2.board.clearance, model.board.clearance);
     }
 
+    fn track_ids(dir: &Path) -> Vec<(String, String, Vec<Point>)> {
+        let (_, design, _) = load(dir).unwrap();
+        design.routing.map(|r| r.tracks.iter().map(|t| (t.id.clone(), t.net.clone(), t.pts.clone())).collect()).unwrap_or_default()
+    }
+
+    /// Move, Rotate and Flip of any selection are one command and so one undo step: Undo puts every item back, and
+    /// only that step goes -- the track and via added before it stay.
+    #[test]
+    fn moving_copper_is_one_undo_step_and_leaves_the_routing_alone() {
+        let dir = scratch("move_items_undo");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        let (_, before, _) = load(&dir).unwrap();
+        let (track, via) = (before.routing.as_ref().unwrap().tracks[0].id.clone(), before.routing.as_ref().unwrap().vias[0].id.clone());
+
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), via.clone()], dx: 1_500, dy: -500 }, false, "test").unwrap();
+        assert!(!msg.contains("routing cleared"), "copper alone leaves the routing be: {msg}");
+        let (_, moved, _) = load(&dir).unwrap();
+        let rt = moved.routing.as_ref().unwrap();
+        assert_eq!((rt.tracks[0].id.as_str(), rt.tracks[0].pts[0], rt.vias[0].at), (track.as_str(), Point { x: 3_500, y: 11_500 }, Point { x: 13_500, y: 11_500 }));
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, _) = load(&dir).unwrap();
+        assert_eq!(back.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts, "the whole move undone in one step");
+        assert_eq!(back.routing.as_ref().unwrap().vias.len(), 1, "and no more than the move");
+        assert_eq!(back.routing.as_ref().unwrap().vias[0].at, before.routing.as_ref().unwrap().vias[0].at);
+
+        // A footprint among the items is what clears the routing, as it always has.
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track, "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
+        assert!(msg.contains("routing cleared"), "{msg}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 1, "Undo brings the routing back");
+    }
+
+    /// Turn a selection about a point and flip it: each is one step, each undoes, and the same two verbs reach the file kicad-cli reads.
+    #[test]
+    fn rotating_and_flipping_a_mix_of_items_each_undo_in_one_step() {
+        let dir = scratch("transform_items_undo");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddText { text: eda_model::ir::Text { id: String::new(), content: "hi".into(), at: Point { x: 8_000, y: 16_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false } }, false, "test").unwrap();
+        let (_, before, _) = load(&dir).unwrap();
+        let (track, text) = (before.routing.as_ref().unwrap().tracks[0].id.clone(), before.drawings.as_ref().unwrap().texts[0].id.clone());
+        let pivot = Point { x: 10_000, y: 10_000 };
+
+        step(&dir, Cmd::RotateItems { ids: vec![track.clone(), text.clone()], pivot, angle_millideg: -90_000 }, false, "test").unwrap();
+        let (_, turned, _) = load(&dir).unwrap();
+        // Counter-clockwise on the screen: (dx, dy) -> (dy, -dx).
+        assert_eq!(turned.routing.as_ref().unwrap().tracks[0].pts, vec![Point { x: 12_000, y: 18_000 }, Point { x: 12_000, y: 8_000 }]);
+        assert_eq!((turned.drawings.as_ref().unwrap().texts[0].at, turned.drawings.as_ref().unwrap().texts[0].angle), (Point { x: 16_000, y: 12_000 }, 90_000));
+
+        step(&dir, Cmd::FlipItems { ids: vec![track.clone(), text.clone()], pivot, direction: eda_ops::FlipDirection::LeftRight }, false, "test").unwrap();
+        let (_, flipped, _) = load(&dir).unwrap();
+        assert_eq!(flipped.routing.as_ref().unwrap().tracks[0].layer, "B.Cu");
+        assert_eq!((flipped.drawings.as_ref().unwrap().texts[0].layer.as_str(), flipped.drawings.as_ref().unwrap().texts[0].mirror), ("B.SilkS", true));
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].layer, "F.Cu", "the flip is undone");
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].pts[0], Point { x: 12_000, y: 18_000 }, "and the turn before it is not");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts);
+    }
+
+    /// A track moved with `MoveItems` is where kicad-cli finds it: the move reaches the derived `.kicad_pcb`. Two tracks of
+    /// different nets 2 mm apart are clean; one moved onto the other shorts, and kicad-cli reports the moved track at its new
+    /// place; Undo takes the move back and the board is clean again.
+    #[test]
+    fn a_moved_track_is_where_kicad_cli_finds_it() {
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("move_items_drc");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 14_000 }, Point { x: 12_000, y: 14_000 }] }, false, "test").unwrap();
+        let counts = |dir: &Path| drc_counts(dir);
+        let clean = counts(&dir);
+        assert_eq!(clean.get("shorting_items").copied().unwrap_or(0) + clean.get("clearance").copied().unwrap_or(0), 0, "2 mm apart is fine: {clean:?}");
+
+        let mover = track_ids(&dir).into_iter().find(|(_, net, _)| net == "VCC").unwrap().0;
+        step(&dir, Cmd::MoveItems { ids: vec![mover.clone()], dx: 500, dy: -2_000 }, false, "test").unwrap();
+        let report = crate::kicad_engine::drc(&dir, false).unwrap();
+        let hits: Vec<(f64, f64)> = report["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|v| v["items"].as_array().cloned().unwrap_or_default())
+            .filter(|i| i["id"].as_str().is_some_and(|id| id.starts_with(&mover)))
+            .map(|i| (i["pos"][0].as_f64().unwrap(), i["pos"][1].as_f64().unwrap()))
+            .collect();
+        assert!(!hits.is_empty(), "kicad-cli must report the moved track now that it sits on the other net's copper: {report}");
+        assert!(hits.iter().all(|(_, y)| (y - 12_000.0).abs() <= 200.0), "reported at its new place (y 12000), not where it was (y 14000): {hits:?}");
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let after = counts(&dir);
+        assert_eq!(after.get("shorting_items").copied().unwrap_or(0) + after.get("clearance").copied().unwrap_or(0), 0, "Undo puts the track back: {after:?}");
+    }
+
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a
     /// pattern, a minimum track width, a violation severity and a custom rule each change the report, and each Undo
     /// takes its edit back.
