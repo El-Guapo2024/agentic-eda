@@ -85,3 +85,40 @@ test("a stored layout is read back leniently: wrong types and missing fields fal
   assert.equal(stored.shown.hierarchy, true, "a non-boolean is ignored");
   assert.equal(stored.folded.selectionFilter, true);
 });
+
+test("in a narrow window the two side columns share it: unfolding one folds the other; a wide window keeps both", () => {
+  let l = defaultDockLayout(800); // both folded
+  l = setColumnCollapsed(l, "left", false, 800);
+  assert.equal(l.leftCollapsed, false);
+  assert.equal(l.rightCollapsed, true);
+  l = setColumnCollapsed(l, "right", false, 800);
+  assert.equal(l.rightCollapsed, false);
+  assert.equal(l.leftCollapsed, true, "a drawer: opening the second closes the first, or the canvas is 160 px wide");
+  l = setColumnCollapsed(l, "right", true, 800);
+  assert.equal(l.leftCollapsed, true, "folding a column does not open the other");
+  let wide = defaultDockLayout(1600);
+  wide = setColumnCollapsed(setColumnCollapsed(wide, "left", true, 1600), "left", false, 1600);
+  assert.equal(wide.rightCollapsed, false, "a wide window has room for both");
+  assert.equal(setColumnCollapsed(defaultDockLayout(1600), "right", false).leftCollapsed, false, "no width given: no rule");
+});
+
+test("showing a pane in a narrow window folds the right column; the library editors' tree column is outside that rule", () => {
+  let l = defaultDockLayout(800);
+  l = setColumnCollapsed(l, "right", false, 800); // Appearance open, left folded
+  assert.equal(l.leftCollapsed, true);
+  l = togglePane(togglePane(l, "properties", 800), "properties", 800); // hide, then show again
+  assert.equal(l.leftCollapsed, false);
+  assert.equal(l.rightCollapsed, true);
+  const tree = setColumnCollapsed(setColumnCollapsed(defaultDockLayout(800), "left", false, 800), "tree", false, 800);
+  assert.equal(tree.leftCollapsed, false, "the tree is a different pane: unfolding it leaves the left column alone");
+});
+
+test("a layout stored in a wide window with both columns open comes back with only the left one open in a narrow window", () => {
+  const stored = { leftCollapsed: false, rightCollapsed: false };
+  const narrow = parseDockLayout(stored, 800);
+  assert.equal(narrow.leftCollapsed, false);
+  assert.equal(narrow.rightCollapsed, true);
+  const wide = parseDockLayout(stored, 1600);
+  assert.equal(wide.rightCollapsed, false, "a wide window keeps what was stored");
+  assert.equal(parseDockLayout({ leftCollapsed: true, rightCollapsed: false }, 800).rightCollapsed, false, "one column open is fine");
+});

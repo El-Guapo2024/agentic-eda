@@ -60,7 +60,7 @@ export function useDockLayout(): DockLayout {
 
 /** A pane's toolbar toggle: shows or hides it (showing it unfolds it and opens its column). */
 export function toggleDockPane(id: DockPaneId): void {
-  commit(togglePane(current, id));
+  commit(togglePane(current, id, windowWidth()));
 }
 
 /** The caption chevron: roll a pane up to its caption or open it again. */
@@ -69,7 +69,7 @@ export function toggleDockPaneFolded(id: DockPaneId): void {
 }
 
 export function setDockColumnCollapsed(column: DockColumnId, collapsed: boolean): void {
-  commit(setColumnCollapsed(current, column, collapsed));
+  commit(setColumnCollapsed(current, column, collapsed, windowWidth()));
 }
 
 /** Test and "reset layout" hook: back to the first-run layout of this window. */

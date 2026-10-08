@@ -13,7 +13,8 @@
 //
 // What a browser window adds that wxAUI's does not need: an 800 px window cannot hold 300 px of properties next to a canvas, so each column
 // can be folded to a handle (`leftCollapsed` / `rightCollapsed`) and each pane to its caption (`folded`), and a window narrower than
-// `NARROW_WINDOW_PX` starts with both columns folded, so the canvas keeps most of the width. The studio's own panes (the Appearance dock)
+// `NARROW_WINDOW_PX` starts with both columns folded, so the canvas keeps most of the width, and keeps at most ONE of them open (opening the
+// second folds the first, like a drawer: both open leave a 160 px canvas in an 800 px window). The studio's own panes (the Appearance dock)
 // follow the same two switches.
 
 export type DockPaneId = "netNavigator" | "hierarchy" | "properties" | "selectionFilter";
@@ -78,12 +79,12 @@ export function paneVisible(layout: DockLayout, id: DockPaneId, netNavigatorOpen
  * A pane's toolbar toggle (`ACTIONS::showProperties`, `SCH_ACTIONS::showHierarchy`: `PANE_INFO.Show( !IsShown() )`): showing a pane also unfolds it
  * and brings its column back, because a pane that is "shown" inside a folded column would look like the button did nothing.
  */
-export function togglePane(layout: DockLayout, id: DockPaneId): DockLayout {
+export function togglePane(layout: DockLayout, id: DockPaneId, windowWidth = Infinity): DockLayout {
   const show = !layout.shown[id];
   const next: DockLayout = { ...layout, shown: { ...layout.shown, [id]: show } };
   if (show) {
     next.folded = { ...layout.folded, [id]: false };
-    next.leftCollapsed = false; // every pane here is docked in the left column
+    return setColumnCollapsed(next, "left", false, windowWidth); // every pane here is docked in the left column
   }
   return next;
 }
@@ -93,12 +94,17 @@ export function toggleFolded(layout: DockLayout, id: DockPaneId): DockLayout {
   return { ...layout, folded: { ...layout.folded, [id]: !layout.folded[id] } };
 }
 
-export function setColumnCollapsed(layout: DockLayout, column: DockColumnId, collapsed: boolean): DockLayout {
+/**
+ * Fold or unfold a column. In a window narrower than `NARROW_WINDOW_PX` (`windowWidth`; omitted = wide enough for everything) the frame's two side columns
+ * do not fit next to the canvas together, so unfolding one folds the other. The library editors' tree column is a different pane and stays out of that.
+ */
+export function setColumnCollapsed(layout: DockLayout, column: DockColumnId, collapsed: boolean, windowWidth = Infinity): DockLayout {
+  const narrow = windowWidth < NARROW_WINDOW_PX;
   switch (column) {
     case "left":
-      return { ...layout, leftCollapsed: collapsed };
+      return { ...layout, leftCollapsed: collapsed, rightCollapsed: narrow && !collapsed ? true : layout.rightCollapsed };
     case "right":
-      return { ...layout, rightCollapsed: collapsed };
+      return { ...layout, rightCollapsed: collapsed, leftCollapsed: narrow && !collapsed ? true : layout.leftCollapsed };
     case "tree":
       return { ...layout, treeCollapsed: collapsed };
   }
@@ -124,10 +130,13 @@ export function parseDockLayout(raw: unknown, windowWidth: number): DockLayout {
     }
     return out;
   };
+  const leftCollapsed = typeof o.leftCollapsed === "boolean" ? o.leftCollapsed : base.leftCollapsed;
+  const rightCollapsed = typeof o.rightCollapsed === "boolean" ? o.rightCollapsed : base.rightCollapsed;
   return {
     treeCollapsed: typeof o.treeCollapsed === "boolean" ? o.treeCollapsed : base.treeCollapsed,
-    leftCollapsed: typeof o.leftCollapsed === "boolean" ? o.leftCollapsed : base.leftCollapsed,
-    rightCollapsed: typeof o.rightCollapsed === "boolean" ? o.rightCollapsed : base.rightCollapsed,
+    leftCollapsed,
+    // A layout stored in a wider window may have both columns open; a narrow one keeps the left and folds the right.
+    rightCollapsed: windowWidth < NARROW_WINDOW_PX && !leftCollapsed ? true : rightCollapsed,
     shown: flags(o.shown, base.shown),
     folded: flags(o.folded, base.folded),
   };
