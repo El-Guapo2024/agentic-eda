@@ -10,7 +10,9 @@ import { useActionRunner } from "../../actions/useActionRunner";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import type { MenuEntry } from "../canvas/ContextMenu";
 import { LibraryTree } from "../library/LibraryTree";
+import { hideTreeEntry, pinEntries } from "../library/libraryTreeMenu";
 import { notifyLibraryChanged, useLibraryNames } from "../library/useLibraryNames";
+import { useLibraryTree } from "../../state/libraryTree";
 
 const labelOf = new Map((actionsData as ActionsFile).actions.map((a) => [a.name, a.label]));
 
@@ -43,21 +45,25 @@ export function SymbolLibraryPanel() {
   const { run, isEnabled } = useActionRunner();
 
   const selected = useMemo(() => state.treeSelection, [state.treeSelection]);
+  const { pinned } = useLibraryTree("symbol");
 
-  const menu = (sel: string[]): MenuEntry[] => {
+  // `LIBRARY_EDITOR_CONTROL::AddContextMenuItems` adds Pin / Unpin Library before `Init`'s entries and Hide Library Tree after them.
+  const menu = (sel: string[], libs: string[]): MenuEntry[] => {
     const hasSymbol = sel.length > 0;
-    const entries: MenuEntry[] = [];
+    const entries: MenuEntry[] = pinEntries(libs, pinned, run, isEnabled);
     for (const { name, needs } of MENU) {
       if (needs === "symbol" && !hasSymbol) continue;
       const enabled = isEnabled(name);
       const label = labelOf.get(name) ?? name;
       entries.push({ label: enabled ? label : `${label} (not ported yet)`, disabled: !enabled, onSelect: () => run(name) });
     }
+    entries.push(hideTreeEntry(run, isEnabled));
     return entries;
   };
 
   return (
     <LibraryTree
+      kind="symbol"
       title="Symbol Libraries"
       items={items}
       selected={selected}
