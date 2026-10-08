@@ -472,6 +472,9 @@ impl RulesOverlay {
     }
 }
 
+/// `MAXIMUM_CLEARANCE`: 500 mm.
+pub const MAXIMUM_CLEARANCE_UM: Um = 500_000;
+
 /// Validate a Net Classes page: the names and the sizes.
 ///
 /// `panel_setup_netclasses.cpp` refuses an empty or duplicate class name, a class named like the
@@ -486,7 +489,8 @@ pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
         if c.name.trim().is_empty() {
             return bad("(unnamed)", "a net class needs a name".into());
         }
-        if !seen.insert(c.name.as_str()) {
+        // `validateNetclassName` compares without regard to case ("Power" and "power" are one name).
+        if !seen.insert(c.name.trim().to_lowercase()) {
             return bad(&c.name, format!("there are two net classes named {:?}", c.name));
         }
         if c.nets.iter().any(|p| p.trim().is_empty()) {
@@ -498,6 +502,10 @@ pub fn validate_net_classes(s: &NetClassSettings) -> Result<(), CheckResult> {
                     return bad(&c.name, format!("{what} is {v} um; sizes cannot be negative, and only a clearance can be zero"));
                 }
             }
+        }
+        // `MAXIMUM_CLEARANCE` (board_design_settings.h): a larger clearance overflows the integer maths in KiCad's engines.
+        if c.clearance.is_some_and(|v| v > MAXIMUM_CLEARANCE_UM) {
+            return bad(&c.name, format!("clearance is larger than {} mm", MAXIMUM_CLEARANCE_UM / 1000));
         }
         if let (Some(d), Some(drill)) = (c.via_diameter, c.via_drill) {
             if drill >= d {
@@ -565,6 +573,38 @@ mod tests {
         assert!(StackupSettings { copper_layers: 3, ..four.clone() }.validate().is_err(), "an odd copper layer count is refused");
     }
 
+    /// The Physical Stackup page rebuilds the table in the browser when the copper layer count changes
+    /// (`web/studio/src/kicad-port/boardSetupRules.ts`, a port of `default_stackup` and `with_copper_layers`).
+    /// Both languages are held to the same cases in `web/studio/src/kicad/default_stackups.json`, so they cannot drift:
+    /// this test fails when the file is not what this code produces (`EDA_WRITE_FIXTURES=1` rewrites it), and
+    /// `boardSetupRules.test.ts` fails when the TypeScript does not produce what the file says.
+    #[test]
+    fn the_web_pages_default_stackups_are_the_ones_computed_here() {
+        let defaults: Vec<serde_json::Value> = [(2usize, 1_600), (4, 1_600), (4, 1_000), (6, 1_600), (8, 2_400)]
+            .iter()
+            .map(|&(n, t)| serde_json::json!({ "copper_layers": n, "board_thickness_um": t, "stackup": default_stackup(n, t) }))
+            .collect();
+        let mut edited = StackupSettings::new(4, 1_600);
+        for (name, t) in [("F.Cu", 0.07), ("dielectric 1", 0.2), ("B.Mask", 0.02)] {
+            edited.stackup.layers.iter_mut().find(|l| l.name == name).unwrap().thickness_mm = Some(t);
+        }
+        edited.stackup.layers.iter_mut().find(|l| l.name == "dielectric 2").unwrap().material = Some("Polyimide".into());
+        edited.stackup.copper_finish = Some("ENIG".into());
+        edited.stackup.edge_plating = true;
+        let resizes: Vec<serde_json::Value> = [6usize, 2, 4]
+            .iter()
+            .map(|&to| serde_json::json!({ "from": edited, "to_copper_layers": to, "expected": edited.with_copper_layers(to) }))
+            .collect();
+        let fixture = serde_json::json!({ "defaults": defaults, "resizes": resizes });
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/studio/src/kicad/default_stackups.json");
+        if std::env::var_os("EDA_WRITE_FIXTURES").is_some() {
+            std::fs::write(&path, serde_json::to_string_pretty(&fixture).unwrap() + "\n").unwrap();
+        }
+        let on_disk: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap_or_default()).unwrap_or(serde_json::Value::Null);
+        assert_eq!(on_disk, fixture, "{} is stale: run `EDA_WRITE_FIXTURES=1 cargo test -p eda-model default_stackups` and commit it", path.display());
+    }
+
     #[test]
     fn the_overlay_replaces_a_page_at_a_time_and_leaves_the_rest_to_the_intent() {
         let mut model = ConstraintModel::default();
@@ -615,6 +655,8 @@ mod tests {
         assert!(validate_net_classes(&settings(vec![class("power", &["VBUS"]), class("signal", &["SPI_*"])])).is_ok());
         for (bad, why) in [
             (vec![class("a", &["X"]), class("a", &["Y"])], "duplicate"),
+            (vec![class("Power", &["X"]), class("power", &["Y"])], "duplicate without regard to case"),
+            (vec![NetClass { clearance: Some(500_001), ..class("huge", &["X"]) }], "a clearance over 500 mm"),
             (vec![class("", &["X"])], "unnamed"),
             (vec![class("Default", &["X"])], "named like the Default class"),
             (vec![class("a", &[""])], "empty pattern"),
