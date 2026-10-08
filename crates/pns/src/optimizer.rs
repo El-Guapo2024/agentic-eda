@@ -601,6 +601,39 @@ mod tests {
         assert!(corner_cost(&optimized.pts) <= corner_cost(&line.pts));
     }
 
+    /// `RESTRICT_AREA` (`AREA_CONSTRAINT`): a shortcut whose ends are outside the area the shove touched
+    /// is not taken; the same line with a big enough area is merged.
+    #[test]
+    fn a_restricted_area_keeps_the_optimizer_off_the_rest_of_the_line() {
+        let node = Node::new();
+        let rules = rules();
+        let zigzag = vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1500, y: 500 }, Point { x: 2500, y: 500 }, Point { x: 3000, y: 1000 }, Point { x: 4000, y: 1000 }];
+        let line = Line::from_points(net_of("SIG"), 0, 200, zigzag);
+        let free = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
+        assert!(free.pts.len() < line.pts.len(), "unrestricted, it merges: {:?}", free.pts);
+        let whole = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((-100, -100, 4100, 1100)));
+        assert_eq!(whole.pts, free.pts, "an area around the whole line changes nothing");
+        let elsewhere = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, Some((10_000, 10_000, 11_000, 11_000)));
+        assert_eq!(elsewhere.pts, line.pts, "an area the line never enters keeps it as it is");
+    }
+
+    /// `checkColliding( aLine, bypass )`: only the bypass is tested, so a line that already violates
+    /// something elsewhere can still be shortened where it is clear.
+    #[test]
+    fn a_violation_elsewhere_on_the_line_does_not_block_a_merge() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let mut node = Node::new();
+        // a pad the line's first leg already runs through
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 300 }, source: "U1.1".into() }));
+        let rules = rules();
+        let line = Line::from_points(net_of("SIG"), 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 3000, y: 0 }, Point { x: 3500, y: 500 }, Point { x: 5000, y: 500 }, Point { x: 5500, y: 1000 }, Point { x: 8000, y: 1000 }]);
+        let out = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
+        assert!(out.pts.len() < line.pts.len(), "{:?}", out.pts);
+        assert_eq!(out.pts.first(), line.pts.first());
+        assert_eq!(out.pts.last(), line.pts.last());
+    }
+
     #[test]
     fn never_introduces_a_collision() {
         use crate::item::{Item, Solid};

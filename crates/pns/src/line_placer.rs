@@ -608,6 +608,39 @@ mod tests {
         assert_eq!(displaced[0].0, "trkA");
     }
 
+    /// `rhShoveOnly`: with a pad on the straight line AND a track to push, Shove mode walks the head around the
+    /// pad first and then pushes the track -- it used to give up at the pad and fall back to Walkaround, which
+    /// leaves the track where it is and routes around that too.
+    #[test]
+    fn shove_mode_walks_around_a_pad_and_still_pushes_a_track() {
+        use crate::item::{Segment, Solid};
+        use crate::layer::LayerRange;
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2000, y: 0 }, shape: Shape::Circle { c: Point { x: 2000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: 4300, y: -2500 }, b: Point { x: 4300, y: -300 }, width: 200, source_track: Some(("trkP".into(), 0)), locked: false }));
+        let rules = rules();
+        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        let shove = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() }, Point { x: 8000, y: 0 });
+        assert!(!shove.colliding);
+        assert!(shove.head.point_count() > 2, "the head had to go around the pad: {:?}", shove.head.pts);
+        assert!(shove.head.pts.iter().any(|p| p.y.abs() > 500), "{:?}", shove.head.pts);
+        assert_eq!(shove.head.last(), Some(Point { x: 8000, y: 0 }));
+        // contrast: Walkaround routes around both and moves neither
+        let walk = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() }, Point { x: 8000, y: 0 });
+        assert!(walk.displaced_lines.is_empty());
+        assert!(walk.head.length() >= shove.head.length() - 1.0, "pushing the track needs no more detour than walking around it");
+    }
+
+    /// `OE_LOW` merges nothing in the head; the default merges segments.
+    #[test]
+    fn head_effort_follows_the_optimizer_setting() {
+        use crate::settings::OptEffort;
+        let low = RoutingSettings { optimizer_effort: OptEffort::Low, smart_pads: false, ..RoutingSettings::default() };
+        assert_eq!(head_effort(&low), 0);
+        let medium = RoutingSettings { optimizer_effort: OptEffort::Medium, smart_pads: true, ..RoutingSettings::default() };
+        assert_eq!(head_effort(&medium), optimizer::effort::MERGE_SEGMENTS | optimizer::effort::SMART_PADS);
+    }
+
     #[test]
     fn finishing_a_route_onto_an_already_connected_same_net_anchor_removes_the_redundant_old_path() {
         use crate::item::Segment;

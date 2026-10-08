@@ -398,6 +398,33 @@ mod tests {
         assert_eq!(preview.displaced_lines[0].source_track.as_deref(), Some("trkB"));
     }
 
+    /// A Shove-mode drag into a pad no longer gives up: the dragged line is walked around the pad
+    /// (`onCollidingSolid`), and the walked shape is the one the drag has -- committing the straight
+    /// line through the pad would be a violation.
+    #[test]
+    fn shove_mode_drag_into_a_pad_walks_the_dragged_line_around_it() {
+        use crate::item::Solid;
+        use crate::layer::LayerRange;
+        let mut node = Node::new();
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 1000, y: 0 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let dragger = Dragger::start(&node, Point { x: 1000, y: 0 }, seg_id).unwrap();
+        let preview = dragger.preview(&node, &rules, &settings, Point { x: 6000, y: 0 });
+        assert!(!preview.colliding);
+        assert!(preview.pts.len() > 2, "walked around the pad: {:?}", preview.pts);
+        assert_eq!(preview.pts.first(), Some(&Point { x: 0, y: 0 }));
+        assert_eq!(preview.pts.last(), Some(&Point { x: 6000, y: 0 }));
+        for w in preview.pts.windows(2) {
+            let leg = Shape::Stadium { a: w[0], b: w[1], r: 100 };
+            assert!(leg.collides(&Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, 199).is_none(), "{:?} touches the pad", w);
+        }
+        // and what finish() commits is that shape
+        let commit = dragger.finish(&node, &rules, &settings, Point { x: 6000, y: 0 }).expect("the walked drag is accepted");
+        assert_eq!(commit.tracks[0].pts, preview.pts);
+    }
+
     #[test]
     fn free_angle_drag_never_shoves_it_only_reports_the_collision() {
         let mut node = Node::new();

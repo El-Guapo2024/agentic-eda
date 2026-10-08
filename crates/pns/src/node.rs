@@ -868,6 +868,113 @@ mod tests {
         assert!(!child.contains(id));
     }
 
+    fn seg_item(net: &str, a: Point, b: Point, width: Um) -> Item {
+        Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width, source_track: None, locked: false })
+    }
+
+    fn pad_item(net: &str, c: Point, r: Um) -> Item {
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into() })
+    }
+
+    /// D12: `NearestObstacle` is the first hull the line enters, not the item it overlaps most.
+    #[test]
+    fn nearest_obstacle_is_the_first_hull_along_the_line_not_the_deepest_overlap() {
+        let mut n = Node::new();
+        let rules = rules();
+        // a pad dead on the line far along it (gap 0) ...
+        n.add(pad_item("A", p(6000, 0), 400));
+        // ... and a track whose end only grazes the line much earlier (gap 50 < 200)
+        let early = n.add(seg_item("B", p(2000, 250), p(2000, 3000), 200));
+        let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(10_000, 0)]);
+        let hit = n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).expect("obstacles");
+        assert_eq!(hit.id, early);
+        assert_eq!(hit.kind, Kind::Segment);
+        // the line enters the track's hull (200 + 100 + 100 from its centre line) at x = 2000 - 400 + a bit
+        assert!(hit.dist_first > 1500 && hit.dist_first < 2000, "{}", hit.dist_first);
+        // searching only pads skips the track, as `shoveIteration`'s per-kind search does
+        let only_pads = n.nearest_obstacle(&line, None, &rules, &[], QueryOpts { kind_mask: kind_mask::SOLID, ..QueryOpts::default() }).unwrap();
+        assert_eq!(only_pads.kind, Kind::Solid);
+    }
+
+    #[test]
+    fn nearest_obstacle_filter_and_exclude() {
+        let mut n = Node::new();
+        let rules = rules();
+        let a = n.add(pad_item("A", p(2000, 0), 300));
+        let b = n.add(pad_item("B", p(5000, 0), 300));
+        let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(8000, 0)]);
+        assert_eq!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).unwrap().id, a);
+        assert_eq!(n.nearest_obstacle(&line, None, &rules, &[a], QueryOpts::default()).unwrap().id, b);
+        let only_b = |id: ItemId| id == b;
+        assert_eq!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts { filter: Some(&only_b), ..QueryOpts::default() }).unwrap().id, b);
+        assert!(n.nearest_obstacle(&Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 3000), p(8000, 3000)]), None, &rules, &[], QueryOpts::default()).is_none());
+    }
+
+    /// A line ending in a via is searched for that via as well.
+    #[test]
+    fn nearest_obstacle_includes_the_vias_own_collisions() {
+        let mut n = Node::new();
+        let rules = rules();
+        let pad = n.add(pad_item("A", p(1000, 3000), 300));
+        let line = Line::from_points(net_of("SIG"), 0, 200, vec![p(0, 0), p(1000, 0)]);
+        assert!(n.nearest_obstacle(&line, None, &rules, &[], QueryOpts::default()).is_none(), "the track alone is clear of the pad");
+        let via = crate::item::Via { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: p(1000, 2500), diameter: 600, drill: 300, source_via: None, locked: false };
+        assert_eq!(n.nearest_obstacle(&line, Some(&via), &rules, &[], QueryOpts::default()).unwrap().id, pad);
+    }
+
+    #[test]
+    fn path_length_counts_whole_legs_before_the_hit_leg() {
+        let pts = [p(0, 0), p(1000, 0), p(1000, 500)];
+        assert_eq!(path_length(&pts, p(400, 0), 0), 400);
+        assert_eq!(path_length(&pts, p(1000, 200), 1), 1200);
+        assert_eq!(path_length(&pts, p(1000, 500), 2), 1500, "an index one past the last leg means the last leg");
+    }
+
+    /// D10: a shove assembles a line of one width, and never through a locked segment.
+    #[test]
+    fn strict_assembly_stops_at_a_width_change_and_in_front_of_a_locked_segment() {
+        let mut n = Node::new();
+        let a = n.add(seg_item("N", p(0, 0), p(1000, 0), 200));
+        let b = n.add(seg_item("N", p(1000, 0), p(2000, 0), 200));
+        let wide = n.add(seg_item("N", p(2000, 0), p(3000, 0), 500));
+        let locked = n.add(Item::Segment(Segment { net: net_of("N"), layer: 0, a: p(0, 0), b: p(-1000, 0), width: 200, source_track: None, locked: true }));
+        let loose = n.assemble_line(a).unwrap();
+        assert_eq!(loose.pts, vec![p(-1000, 0), p(0, 0), p(1000, 0), p(2000, 0), p(3000, 0)], "the plain assembly goes through everything");
+        let strict = n.assemble_line_with(a, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        assert_eq!(strict.pts, vec![p(0, 0), p(1000, 0), p(2000, 0)]);
+        assert_eq!(strict.segment_ids, vec![a, b]);
+        assert_eq!(strict.width, 200);
+        let from_wide = n.assemble_line_with(wide, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        assert_eq!(from_wide.pts, vec![p(2000, 0), p(3000, 0)], "the wide part is a line of its own");
+        // a line seeded on the locked segment itself still contains it (so `HasLockedSegments` can say so)
+        let from_locked = n.assemble_line_with(locked, AssembleOpts { follow_locked_segments: false, allow_width_mismatch: false }).unwrap();
+        assert!(from_locked.segment_ids.contains(&locked));
+    }
+
+    /// `TOPOLOGY::AssembleCluster`: what touches the pad, and what touches that.
+    #[test]
+    fn a_cluster_is_the_blob_of_touching_items() {
+        let mut n = Node::new();
+        let pad_a = n.add(pad_item("N1", p(0, 0), 500));
+        let attached = n.add(seg_item("N1", p(0, 0), p(3000, 0), 200));
+        let pad_b = n.add(pad_item("N2", p(3000, 350), 300)); // touches the track's end, other net
+        let crossing = n.add(seg_item("N3", p(1500, -1000), p(1500, 1000), 200)); // different-net track on the track: never joins
+        let far = n.add(pad_item("N4", p(0, 5000), 500));
+        let c = n.assemble_cluster(pad_a, 0, 0.0, None, &|_| false);
+        assert_eq!(c[0], pad_a);
+        let set: std::collections::HashSet<_> = c.iter().copied().collect();
+        assert!(set.contains(&attached) && set.contains(&pad_b), "{c:?}");
+        assert!(!set.contains(&far) && !set.contains(&crossing), "{c:?}");
+        // the walking line's own net never joins; `skip` items (the head) never do either
+        let ex = n.assemble_cluster(pad_a, 0, 0.0, Some(&net_of("N2")), &|_| false);
+        assert!(!ex.contains(&pad_b));
+        let sk = n.assemble_cluster(pad_a, 0, 0.0, None, &|id| id == attached);
+        assert!(!sk.contains(&attached));
+        // `aAreaExpansionLimit`: a blob that grows past ten times the first item's box stops growing
+        let capped = n.assemble_cluster(pad_a, 0, 1.5, None, &|_| false);
+        assert!(capped.len() < c.len(), "{capped:?} vs {c:?}");
+    }
+
     #[test]
     fn item_at_finds_a_track_by_its_middle_not_just_its_ends() {
         let mut n = Node::new();

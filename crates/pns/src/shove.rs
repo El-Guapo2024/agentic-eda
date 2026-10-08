@@ -1567,6 +1567,61 @@ mod tests {
         assert_eq!(outcome.head.last(), raw.last());
     }
 
+    /// `SHOVE::runOptimizer`: a shoved line with a needless bump is flattened again, in the shoved world.
+    #[test]
+    fn the_optimizer_flattens_a_shoved_line() {
+        let mut node = Node::new();
+        let id = node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 4000, y: 0 }, width: 200, source_track: Some(("t".into(), 0)), locked: false }));
+        let (rules, settings) = (rules(), RoutingSettings::default());
+        let mut sh = Shove::new(&node, &rules, &settings);
+        let old = sh.assemble(id).unwrap();
+        let bumpy = vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1500, y: 500 }, Point { x: 2500, y: 500 }, Point { x: 3000, y: 0 }, Point { x: 4000, y: 0 }];
+        let mut shoved = old.clone();
+        shoved.clear_links();
+        shoved.line.pts = bumpy;
+        sh.replace_line(&old, &mut shoved, true);
+        assert!(sh.push_line_stack(shoved, false));
+        sh.line_stack.clear();
+        sh.run_optimizer();
+        let seg = sh.node.iter().find_map(|(id, it)| matches!(it, Item::Segment(_)).then_some(id)).unwrap();
+        let after = sh.assemble(seg).unwrap();
+        assert_eq!(after.line.pts, vec![Point { x: 0, y: 0 }, Point { x: 4000, y: 0 }]);
+        // and the root line remembers where the track was, so the diff is against the original
+        assert_eq!(sh.roots.len(), 1);
+        assert_eq!(sh.roots[0].root_line.as_ref().unwrap().line.pts, vec![Point { x: 0, y: 0 }, Point { x: 4000, y: 0 }]);
+    }
+
+    /// A junction cuts an IR track into two lines; only one is shoved, and the other part of the
+    /// track is handed back as it was (the commit replaces whole IR tracks).
+    #[test]
+    fn the_part_of_a_track_a_shove_did_not_touch_is_handed_back() {
+        let mut node = Node::new();
+        for (i, (a, b)) in [(Point { x: 2500, y: -2000 }, Point { x: 2500, y: 0 }), (Point { x: 2500, y: 0 }, Point { x: 2500, y: 2000 }), (Point { x: 2500, y: 2000 }, Point { x: 2500, y: 4000 })].into_iter().enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a, b, width: 200, source_track: Some(("t".into(), i)), locked: false }));
+        }
+        // a second track of the same net leaves the middle joint: the first two segments and the last are different lines
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 2500, y: 2000 }, b: Point { x: 5000, y: 2000 }, width: 200, source_track: Some(("branch".into(), 0)), locked: false }));
+        let raw = vec![Point { x: 0, y: -1000 }, Point { x: 5000, y: -1000 }];
+        let out = shove_line(&node, &raw, &net_of("SIG"), 0, 200, &rules(), &RoutingSettings::default()).expect("the first line is pushed");
+        let of_t: Vec<_> = out.displaced_lines.iter().filter(|d| d.source_track.as_deref() == Some("t")).collect();
+        assert_eq!(of_t.len(), 2, "the pushed line and the part of t that was not: {of_t:?}");
+        assert!(of_t.iter().any(|d| d.line.pts == vec![Point { x: 2500, y: 2000 }, Point { x: 2500, y: 4000 }]), "the untouched part comes back as it was: {of_t:?}");
+        assert!(out.displaced_lines.iter().all(|d| d.source_track.as_deref() != Some("branch")));
+    }
+
+    /// `VIA::IsLocked()` -> `SH_TRY_WALK`: a locked via is walked around, not moved.
+    #[test]
+    fn a_locked_via_is_walked_around() {
+        use crate::item::Via;
+        let mut node = Node::new();
+        node.add(Item::Via(Via { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, diameter: 600, drill: 300, source_via: Some("viaA".into()), locked: true }));
+        let (rules, settings) = (rules(), RoutingSettings::default());
+        let raw = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
+        let out = shove_line(&node, &raw, &net_of("SIG"), 0, 200, &rules, &settings).expect("walks around");
+        assert!(out.displaced_vias.is_empty());
+        assert_ne!(out.head, raw);
+    }
+
     #[test]
     fn pushes_a_stitching_via_aside() {
         use crate::item::Via;

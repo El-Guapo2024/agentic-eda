@@ -232,6 +232,63 @@ mod tests {
         assert_eq!(l.pts.len(), 3);
     }
 
+    fn p(x: i64, y: i64) -> Point {
+        Point { x, y }
+    }
+
+    fn on_45(pts: &[Point]) -> bool {
+        pts.windows(2).all(|w| {
+            let (dx, dy) = ((w[1].x - w[0].x).abs(), (w[1].y - w[0].y).abs());
+            dx == 0 || dy == 0 || dx == dy
+        })
+    }
+
+    /// `LINE::DragCorner` (45-degree): dragging the end of a straight track just moves it along.
+    #[test]
+    fn drag_corner_keeps_a_straight_track_straight() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(2500, 3000), p(2500, 100)]);
+        l.drag_corner45(p(2500, 600), 1);
+        assert_eq!(l.pts, vec![p(2500, 3000), p(2500, 600)]);
+    }
+
+    /// The fan-out of a pushed via (`pushOrShoveVia`): a diagonal track whose via moved straight up gets a
+    /// new 45-degree leg and a straight one, never a leg at an odd angle.
+    #[test]
+    fn drag_corner_re_solves_the_last_leg_at_45_degrees() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(4500, 2100), p(2500, 100)]);
+        l.drag_corner45(p(2500, 600), 1);
+        assert_eq!(l.pts, vec![p(4500, 2100), p(3000, 600), p(2500, 600)]);
+        assert!(on_45(&l.pts));
+    }
+
+    #[test]
+    fn drag_corner_of_a_longer_line_only_changes_the_end() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(2000, 0), p(2000, 2000), p(2000, 3000)]);
+        l.drag_corner45(p(2600, 3200), 3);
+        assert!(on_45(&l.pts), "{:?}", l.pts);
+        assert_eq!(l.pts.first(), Some(&p(0, 0)));
+        assert_eq!(l.pts.last(), Some(&p(2600, 3200)));
+        assert!(l.pts.contains(&p(2000, 0)), "the part far from the corner is left alone: {:?}", l.pts);
+    }
+
+    #[test]
+    fn drag_corner_at_the_start_works_on_the_reversed_line() {
+        let mut l = Line::from_points(None, 0, 200, vec![p(0, 0), p(1000, 0), p(1000, 1000)]);
+        l.drag_corner45(p(-300, 100), 0);
+        assert!(on_45(&l.pts), "{:?}", l.pts);
+        assert_eq!(l.pts.first(), Some(&p(-300, 100)));
+        assert_eq!(l.pts.last(), Some(&p(1000, 1000)));
+    }
+
+    #[test]
+    fn has_loops_and_find() {
+        let l = Line::from_points(None, 0, 200, vec![p(0, 0), p(10, 0), p(10, 10), p(0, 10), p(0, 0)]);
+        assert!(l.has_loops());
+        assert!(!Line::from_points(None, 0, 200, vec![p(0, 0), p(10, 0), p(10, 10)]).has_loops());
+        assert_eq!(l.find(p(10, 10)), Some(2));
+        assert_eq!(l.find(p(7, 7)), None);
+    }
+
     #[test]
     fn reverse_swaps_via_ends() {
         let mut l = Line::from_points(None, 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 100, y: 0 }]);
