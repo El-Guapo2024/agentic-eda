@@ -150,6 +150,10 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   // dimmed). The Symbol Editor has no layers.
   if (tab === "pcb") m.set("common.Control.highContrastMode", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
   else if (tab === "footprint") m.set("common.Control.highContrastMode", () => ctx.fpDispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
+  // ACTIONS::highContrastModeCycle (`H`) -- PCB_CONTROL::HighContrastModeCycle: the same switch, which `useActionRunner.ts` registers for the board. In the Footprint
+  // Editor it is that editor's own; the schematic and the Symbol Editor have no layers, so it is not offered there.
+  if (tab === "footprint") m.set("common.Control.highContrastModeCycle", () => ctx.fpDispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
+  else if (tab === "schematic" || tab === "symbol") m.delete("common.Control.highContrastModeCycle");
 
   // PCB_ACTIONS::magneticSnapActiveLayer / magneticSnapAllLayers -- PCB_CONTROL::SnapMode: `settings.allLayers = false / true`
   // (the third, magneticSnapToggle, is registered in `useActionRunner.ts`); SnapModeFeedback says which.

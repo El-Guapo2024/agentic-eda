@@ -27,7 +27,7 @@
     "pcbnew.ModuleEditor.saveFootprintToBoard": "supported",
     "common.Control.toggleGrid": "supported",
     "common.Control.toggleGridOverrides": "not ported: grid overrides (per-item-type grids) do not exist in this studio",
-    "common.Control.togglePolarCoords": "not ported: the footprint editor's status line has no polar mode",
+    "common.Control.togglePolarCoords": "supported",
     "common.Control.metricUnits": "supported",
     "common.Control.imperialUnits": "supported",
     "common.Control.mils": "supported",

@@ -71,6 +71,13 @@ test("High Contrast Mode is checked on the board and in the Footprint Editor, wh
   assert.equal(actionChecked("common.Control.highContrastMode", { ...base, tab: "schematic" }), undefined);
 });
 
+test("Polar Coordinates is checked on the board and in the Footprint Editor only", () => {
+  assert.equal(actionChecked("common.Control.togglePolarCoords", base), false);
+  assert.equal(actionChecked("common.Control.togglePolarCoords", { ...base, polar: true }), true);
+  assert.equal(actionChecked("common.Control.togglePolarCoords", { ...base, tab: "footprint", polar: true }), true);
+  assert.equal(actionChecked("common.Control.togglePolarCoords", { ...base, tab: "schematic", polar: true }), undefined);
+});
+
 test("the zoom tool's button is pressed while the rubber-band zoom is armed", () => {
   assert.equal(actionChecked("common.Control.zoomTool", base), false);
   assert.equal(actionChecked("common.Control.zoomTool", { ...base, zoomArmed: true }), true);

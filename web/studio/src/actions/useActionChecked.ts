@@ -29,8 +29,9 @@ export function useActionChecked(): (name: string) => boolean | undefined {
     rightDockTab: state.rightDockTab,
     highContrast,
     zoomArmed,
+    polar: state.polar,
   };
   // The context is rebuilt every render; the callback only changes when a fact it reads does.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, dock, state.rightDockTab, highContrast, zoomArmed]);
+  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, dock, state.rightDockTab, highContrast, zoomArmed, state.polar]);
 }
