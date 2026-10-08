@@ -78,6 +78,7 @@ import { withoutLocked } from "../kicad-port/schLock";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { registerSchEditActions } from "./schEditActions";
 import { deleteLastPoint } from "../components/schematic/schShapeTools";
+import { openSchProperties } from "../components/schematic/schPropertiesOpen";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
 import { flipLocalX } from "../kicad-port/boardControl";
@@ -1135,7 +1136,14 @@ export function useActionRunner() {
         const id = schSymbols()[0];
         if (id) dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id, field } });
       });
-    m.set("eeschema.InteractiveEdit.properties", openSymbolProperties(null));
+    // `E` (`SCH_EDIT_TOOL::Properties`): the dialog of whatever is selected -- a symbol, label, text, sheet, shape, text box, directive label, or wires / buses /
+    // bus entries / junctions / graphic lines together (components/schematic/schPropertiesOpen.ts). A locked item has properties too.
+    m.set(
+      "eeschema.InteractiveEdit.properties",
+      schematicOnly(() => {
+        if (state.schematic) openSchProperties(state.schematic, requestSelection(), dispatch);
+      })
+    );
     m.set("eeschema.InteractiveEdit.symbolProperties", openSymbolProperties(null));
     m.set("eeschema.InteractiveEdit.editReference", openSymbolProperties("reference"));
     m.set("eeschema.InteractiveEdit.editValue", openSymbolProperties("value"));

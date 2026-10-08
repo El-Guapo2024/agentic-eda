@@ -87,3 +87,23 @@ test("a sheet's pins move with it", () => {
   assert.deepEqual(out.sheets[0]!.pins[0]!.at, [20, 40]);
   assert.equal(out.sheets[0]!.pins[0]!.name, "IN");
 });
+
+test("a preview keeps the net name a wire shows and the stroke and look items already have", () => {
+  const sch = sheet({
+    wires: [{ id: "wire_a", net: "VCC", pins: ["R1.1"], pts: [[0, 0], [10, 0]], bus: false, stroke: { width_um: 300, style: "dash" } }],
+    bus_entries: [{ id: "bent_a", at: [0, 0], size: [2, 2], stroke: { style: "dot" } }],
+    junctions: [{ id: "jct_a", at: [5, 0], look: { diameter_um: 900 } }],
+  });
+  const out = applyPatch(sch, {
+    ...emptyPatch(),
+    wires: [{ id: "wire_a", net: "NET_3", pts: [[0, 5], [10, 5]], bus: false }],
+    bus_entries: [{ id: "bent_a", at: [0, 5], size: [2, 2] }],
+    junctions: [{ id: "jct_a", at: [5, 5] }],
+  });
+  assert.equal(out.wires[0]!.net, "VCC", "the displayed name, not the stored one");
+  assert.deepEqual(out.wires[0]!.stroke, { width_um: 300, style: "dash" });
+  assert.deepEqual(out.wires[0]!.pts, [[0, 5], [10, 5]]);
+  assert.deepEqual(out.bus_entries[0]!.stroke, { style: "dot" });
+  assert.deepEqual(out.junctions![0]!.look, { diameter_um: 900 });
+  assert.deepEqual(out.junctions![0]!.at, [5, 5]);
+});

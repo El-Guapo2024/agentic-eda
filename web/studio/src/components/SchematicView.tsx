@@ -40,6 +40,7 @@ import type { SchMovePatch } from "../api/schEditTypes";
 import { nextReference } from "../kicad-port/nextReference";
 import { wireTail } from "../kicad-port/schLineMode";
 import { boxItems, hitItems } from "./schematic/schItems";
+import { openSchProperties } from "./schematic/schPropertiesOpen";
 import { SchContextMenu } from "./schematic/SchContextMenu";
 import { summarizeSelection } from "./schematic/schSelectionSummary";
 import { schContextMenu } from "../kicad-port/schContextMenu";
@@ -679,7 +680,8 @@ export function SchematicView() {
         setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale)) });
       }}
       onDoubleClick={(e) => {
-        // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`).
+        // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties
+        // (`SCH_ACTIONS::properties`): the selection the first click made, else the item under the pointer.
         if (sch && state.activeTool === "select" && state.drawState == null) {
           const [wx, wy] = toWorld(e.clientX, e.clientY);
           const sheetId = hitSheet(sch.sheets, wx, wy);
@@ -687,6 +689,10 @@ export function SchematicView() {
             void api.navigateToSheet([...state.currentSheetPath, sheetId]);
             return;
           }
+          const scale = state.schematicView.scale || 1;
+          const under = pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
+          const ids = state.selection.size > 0 ? [...state.selection] : under ? [under] : [];
+          if (openSchProperties(sch, ids, dispatch)) return;
         }
         const draw = state.drawState;
         // `IsDblClick( BUT_LEFT )` in DrawShape / DrawRuleArea: finish the shape as it stands, at the point that was clicked.

@@ -9,7 +9,7 @@
 // board sizes this project deals with). Angles in `rot` are degrees
 // (the backend already divides millidegrees by 1000 before sending).
 
-import type { SchEditCmd, SchGraphic, SchMoveCmd } from "./schEditTypes";
+import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
 
 export type Um = number;
 export type Degrees = number;
@@ -1544,6 +1544,8 @@ export interface NoConnect {
 export interface SchJunction {
   id: string;
   at: [Um, Um];
+  /** The diameter and colour Junction Properties set; absent or null is the default dot. */
+  look?: JunctionLook | null;
 }
 
 /** A graphic polyline on the schematic's notes layer (`SCH_LINE` on `LAYER_NOTES`, the `I` tool): decoration, never part of a net. `width_um` 0 is the default line width. */
@@ -1551,6 +1553,8 @@ export interface SchLine {
   id: string;
   pts: [Um, Um][];
   width_um: Um;
+  /** The style and colour Line Properties set (the width is `width_um`); absent or null is the default. */
+  stroke?: SchStroke | null;
 }
 
 export type LabelScope = "local" | "global" | "hierarchical";
@@ -1568,6 +1572,8 @@ export interface SchematicWire {
   bus: boolean;
   /** A bus's member nets (`D[0..3]` -> D0..D3, aliases and groups expanded) -- only sent for a bus wire; what the Unfold from Bus menu lists. */
   members?: string[];
+  /** The stroke Wire/Bus Properties set (width, style, colour); absent when the wire has the default one. */
+  stroke?: SchStroke;
 }
 
 /** A bus entry (`SCH_BUS_WIRE_ENTRY`, GAPS.md #20): a short diagonal stub tying one specific member net into a bus. `at` and `at + size` are its two endpoints -- which one is "the bus side" is never stored, only read off whichever endpoint lands on a bus wire. */
@@ -1575,6 +1581,8 @@ export interface BusEntry {
   id: string;
   at: [Um, Um];
   size: [Um, Um];
+  /** The stroke Wire/Bus Properties set; absent or null is the default one. */
+  stroke?: SchStroke | null;
 }
 
 export interface SchematicLabel {

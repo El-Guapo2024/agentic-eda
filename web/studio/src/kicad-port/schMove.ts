@@ -90,6 +90,8 @@ export function applyPatch(sch: Schematic, p: SchMovePatch): Schematic {
   const lines = new Map(p.lines.map((l) => [l.id, l]));
   const sheets = new Map(p.sheets.map((s) => [s.id, s]));
   const ncOld = new Map(sch.no_connects.map((n) => [n.id, n]));
+  const entriesOld = new Map(sch.bus_entries.map((b) => [b.id, b]));
+  const junctionsOld = new Map((sch.junctions ?? []).map((j) => [j.id, j]));
   return {
     ...sch,
     symbols: sch.symbols.map((s) => {
@@ -102,7 +104,8 @@ export function applyPatch(sch: Schematic, p: SchMovePatch): Schematic {
     }),
     wires: p.wires.map((w) => {
       const old = wiresOld.get(w.id);
-      return old ? { ...old, pts: w.pts, net: w.net, bus: w.bus } : { id: w.id, net: w.net, pins: [], pts: w.pts, bus: w.bus };
+      // A wire that was there keeps the net name the sheet shows (the patch carries the stored one) and its stroke; a new segment has the default stroke.
+      return old ? { ...old, pts: w.pts, bus: w.bus } : { id: w.id, net: w.net, pins: [], pts: w.pts, bus: w.bus };
     }),
     labels: sch.labels.map((l) => {
       const q = labels.get(l.id);
@@ -113,8 +116,8 @@ export function applyPatch(sch: Schematic, p: SchMovePatch): Schematic {
       return q ? { ...t, at: q.at, angle: q.angle } : t;
     }),
     no_connects: p.no_connects.map((n) => ({ ...(ncOld.get(n.id) ?? { id: n.id }), id: n.id, at: n.at })),
-    bus_entries: p.bus_entries.map((b) => ({ id: b.id, at: b.at, size: b.size })),
-    junctions: p.junctions.map((j) => ({ id: j.id, at: j.at })),
+    bus_entries: p.bus_entries.map((b) => ({ ...entriesOld.get(b.id), id: b.id, at: b.at, size: b.size })),
+    junctions: p.junctions.map((j) => ({ ...junctionsOld.get(j.id), id: j.id, at: j.at })),
     lines: (sch.lines ?? []).map((l) => {
       const q = lines.get(l.id);
       return q ? { ...l, pts: q.pts } : l;
