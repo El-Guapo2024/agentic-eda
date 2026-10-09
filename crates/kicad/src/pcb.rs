@@ -827,25 +827,26 @@ pub(crate) fn write_footprint(
         }
     }
 
-    // 3D model reference, identity offset/scale/rotate -- this app has no
-    // per-instance model adjustment to carry (KiCad's own UI lets a user
-    // nudge an individual footprint's model, but nothing here ever sets
-    // one), so every footprint that has a model at all gets the plain,
-    // unmodified reference its library (or the built-in package map)
-    // named. Path is written exactly as stored -- footprint_lib.rs reads
-    // it straight out of the source library file, and footprint::
-    // builtin_model_path already writes it in KiCad's own
-    // `${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step` form.
+    // 3D models: every `(model ...)` the footprint has, with the placement it gives each (`Footprint::models3d`: a library footprint's, an imported
+    // board's own), else the one its generic package name stands for -- the installed KiCad footprint's model with its own placement, fitted to the pads
+    // this footprint has (`part_models`). Without a `(model ...)` kicad-cli's 3D export leaves the part out altogether.
     //
-    // A footprint with no model of its own -- a project-library entry, a `.kicad_mod` read for its pads -- gets the one the part's generic package name
-    // stands for (`eda_model::footprint::kicad_footprint_for`: `0603` on an `R` is `Resistor_SMD:R_0603_1608Metric`, `SOIC-16` is
-    // `Package_SO:SOIC-16_3.9x9.9mm_P1.27mm`, ...): without a `(model ...)` kicad-cli's 3D export leaves the part out altogether.
-    let model_path = footprint.model.clone().or_else(|| eda_model::footprint::model_path_for_part(part));
-    if let Some(model_path) = &model_path {
-        writeln!(out, "\t\t(model {}", sexpr_str(model_path)).unwrap();
-        writeln!(out, "\t\t\t(offset\n\t\t\t\t(xyz 0 0 0)\n\t\t\t)").unwrap();
-        writeln!(out, "\t\t\t(scale\n\t\t\t\t(xyz 1 1 1)\n\t\t\t)").unwrap();
-        writeln!(out, "\t\t\t(rotate\n\t\t\t\t(xyz 0 0 0)\n\t\t\t)").unwrap();
+    // A bottom-side footprint is written the way KiCad stores one: mirrored in y and turned by `Ry(pi) Rz(pi)` in 3D, where this studio mirrors x. The
+    // half turn between the two goes into the model's own placement (`Model3d::flipped_frame`), so the model stands on the pads in KiCad's render as it
+    // does in the studio's. The path is written exactly as stored (`${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step`).
+    for m in crate::part_models(model, part, footprint).map(|p| p.models).unwrap_or_default() {
+        let m = if fp.side == Side::Bottom { m.flipped_frame() } else { m };
+        writeln!(out, "\t\t(model {}", sexpr_str(&m.path)).unwrap();
+        if !m.show {
+            writeln!(out, "\t\t\t(hide yes)").unwrap();
+        }
+        if m.opacity != 1.0 {
+            writeln!(out, "\t\t\t(opacity {})", fmt_mm_f(m.opacity)).unwrap();
+        }
+        let xyz = |tag: &str, v: [f64; 3]| format!("\t\t\t({tag}\n\t\t\t\t(xyz {} {} {})\n\t\t\t)", fmt_mm_f(v[0]), fmt_mm_f(v[1]), fmt_mm_f(v[2]));
+        writeln!(out, "{}", xyz("offset", m.offset)).unwrap();
+        writeln!(out, "{}", xyz("scale", m.scale)).unwrap();
+        writeln!(out, "{}", xyz("rotate", m.rotate)).unwrap();
         writeln!(out, "\t\t)").unwrap();
     }
 
@@ -1788,5 +1789,42 @@ mod tests {
         }
         // Reference and value of U1 (top) and C1 (bottom).
         assert_eq!(properties, 4);
+    }
+
+    /// What kicad-cli draws a footprint's 3D model at is the footprint's `(model ...)` placement, and KiCad turns a flipped footprint's model with
+    /// `Ry(pi) Rz(pi)` where this studio mirrors x: the half turn between them is written into the bottom-side footprint's model and taken out again when
+    /// the board is read, so the model stands on the pads in KiCad's render as it does in the studio (checked against kicad-cli's VRML export of a
+    /// pin header on both sides, which turns the model by `rotation 1 0 0 3.14159` on the back and not on the front).
+    #[test]
+    fn a_footprints_models_are_written_with_their_placement_and_a_bottom_one_in_kicads_frame() {
+        use eda_model::footprint::Model3d;
+        let (design, mut model) = fixture();
+        let placed = Model3d { path: "${KICAD10_3DMODEL_DIR}/X.3dshapes/X.step".into(), offset: [1.0, 2.0, 0.5], scale: [1.0, 1.0, 1.0], rotate: [90.0, 0.0, 30.0], opacity: 1.0, show: true };
+        for reference in ["U1", "C1"] {
+            let mut fp = model.footprint_of(model.part(reference).unwrap()).unwrap();
+            fp.name = format!("{reference}_FP");
+            fp.models3d = vec![placed.clone()];
+            model.footprints.push(fp);
+            model.parts.iter_mut().find(|p| p.reference == reference).unwrap().footprint = Some(format!("{reference}_FP"));
+        }
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let block = |reference: &str| -> String {
+            let start = out.find(&format!("(footprint \"eda:{reference}_FP\"")).unwrap_or_else(|| panic!("{reference}_FP is written:\n{out}"));
+            let rest = &out[start..];
+            let fp = &rest[..rest[1..].find("\n\t(footprint ").map_or(rest.len(), |i| i + 1)];
+            fp[fp.find("\t\t(model ").expect("a model is written")..].to_string()
+        };
+        let top = block("U1");
+        assert!(top.contains("(offset\n\t\t\t\t(xyz 1 2 0.5)") && top.contains("(rotate\n\t\t\t\t(xyz 90 0 30)"), "a top footprint's model is written as it is held: {top}");
+        let bottom = block("C1");
+        assert!(bottom.contains("(offset\n\t\t\t\t(xyz -1 -2 0.5)") && bottom.contains("(rotate\n\t\t\t\t(xyz 90 0 -150)"), "a bottom footprint's model carries the half turn about z: {bottom}");
+
+        let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
+        let held = |reference: &str| -> Vec<Model3d> {
+            let part = back.parts.iter().find(|p| p.reference == reference).unwrap();
+            back.footprint_of(part).unwrap().models3d
+        };
+        assert_eq!(held("U1"), vec![placed.clone()]);
+        assert_eq!(held("C1"), vec![placed], "read back, the bottom footprint's model is the one it was written from");
     }
 }

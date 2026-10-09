@@ -40,7 +40,10 @@ mod footprint_import;
 pub use footprint_import::{parse_library_footprint, ParsedFootprint};
 
 mod footprint_lib;
-pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, footprint_attributes, footprint_models, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+
+mod model3d;
+pub use model3d::{fit_pads, installed_footprint, installed_footprint_in, part_models, part_models_in, Fit, InstalledFootprint, ModelKind, PartModels};
 
 mod symbol_import;
 pub use symbol_import::{parse_library_symbols, ParsedSymbols};
