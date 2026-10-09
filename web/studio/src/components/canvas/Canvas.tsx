@@ -44,6 +44,7 @@ import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
+import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
 import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
 import { openPropertiesFor } from "./properties";
@@ -79,11 +80,10 @@ const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone",
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
-/** Screen-px movement past which a right-button press counts as a pan-drag rather than a click-to-open-the-context-menu. */
-const PAN_CLICK_TOLERANCE_PX = 4;
+// (A right-button press is a pan-drag rather than a click-to-open-the-context-menu, and a held press stops being a long press, by the dispatcher's rule:
+// kicad-port/dragThreshold.ts, tool_dispatcher.cpp -- more than 8 px of travel along an axis, or on macOS a motion after 300 ms held.)
 
 const LONG_PRESS_MS = 500;
-const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
 /** A click within this many board um of a pad/via/track-end counts as landing on it -- generous enough to be usable at a typical zoom without needing pixel-perfect precision, same idea as pcb_grid_helper's own anchor snapping (not ported here, see gridHelper.ts). */
 const ANCHOR_SNAP_UM = 500;
 /** No per-board "default graphic line width" setting exists (board_rules only covers track/via) -- a plain 0.15mm default, same order of magnitude as KiCad's own out-of-the-box default (0.15-0.2mm silkscreen line width, by version/theme). */
@@ -173,6 +173,8 @@ export function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag (kicad-port/dragThreshold.ts). Made at every press, read by the move, the up and the long press. */
+  const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   /** pcb_point_editor.cpp's live corner-drag preview -- local, like `marquee` above, since only this component's own render loop needs it. */
   const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][] } | null>(null);
@@ -531,6 +533,10 @@ export function Canvas() {
     } catch {
       /* synthetic pointer */
     }
+    const gesture = new ClickDragGesture(dragRuleFor(isMac()));
+    gesture.down(e.clientX, e.clientY, e.timeStamp);
+    gestureRef.current = gesture;
+    justPannedRef.current = false; // a new press: the last right-drag no longer vetoes the menu (the browsers that open it on the press fire it right after this)
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
     setPcbMenu(null);
@@ -910,10 +916,9 @@ export function Canvas() {
     const containerRectForAutoPan = containerRef.current?.getBoundingClientRect();
     if (containerRectForAutoPan) lastPointerScreenRef.current = { x: e.clientX - containerRectForAutoPan.left, y: e.clientY - containerRectForAutoPan.top };
 
-    if (longPressRef.current) {
-      const [sx, sy] = longPressRef.current.startScreen;
-      if (Math.hypot(e.clientX - sx, e.clientY - sy) > LONG_PRESS_MOVE_TOLERANCE_PX) clearLongPress();
-    }
+    // tool_dispatcher.cpp handleMouseButton: a held button becomes a drag after 8 px (or, on macOS, 300 ms) -- not at the first grid step of travel.
+    const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
+    if (longPressRef.current && motion?.dragging) clearLongPress();
 
     // Interactive router (gap #7) live preview: every move asks the
     // backend to re-resolve the head toward the cursor (walkaround/shove/
@@ -1010,23 +1015,28 @@ export function Canvas() {
     if (!drag) return;
     if (drag.kind === "pan") {
       userMovedRef.current = true;
-      if (Math.hypot(e.clientX - drag.startScreen[0], e.clientY - drag.startScreen[1]) > PAN_CLICK_TOLERANCE_PX) drag.moved = true;
+      if (motion?.dragging) drag.moved = true;
       dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + panDeltaX(state.bcx.boardFlipped, e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
     } else if (drag.kind === "move") {
+      // Until the press has become a drag it is a click that may still be released: nothing is picked up.
+      if (!motion?.dragging) return;
+      drag.moved = true;
       const [sx, sy] = snapRef(wx, wy, e, drag.refs.length === 1 ? drag.refs[0] : undefined);
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
-      if (dx !== 0 || dy !== 0) drag.moved = true;
       const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "pcb", dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped, pivotUm: drag.pivotUm, flipPivotUm: drag.flipPivotUm } : null });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped, pivotUm: drag.pivotUm, flipPivotUm: drag.flipPivotUm } });
     } else if (drag.kind === "zoneCorner") {
+      if (!motion?.dragging) return; // PCB_POINT_EDITOR::Main starts editing at the drag (`evt->IsDrag`), not at the press
       const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
       setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
     } else if (drag.kind === "shapePoint") {
+      if (!motion?.dragging) return;
       const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
       const next = moveShapePoint(drag.base, drag.point, [sx, sy], state.pcbx.arcEditMode);
       setShapePointPreview(next ? { id: drag.shapeId, shape: cmdShapeToShape(next, drag.shapeId) } : null);
     } else if (drag.kind === "box") {
+      if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
       const rect = containerRef.current!.getBoundingClientRect();
       const x0 = drag.startScreen[0] - rect.left,
         y0 = drag.startScreen[1] - rect.top;
@@ -1038,14 +1048,20 @@ export function Canvas() {
 
   const onPointerUp = (e: React.PointerEvent) => {
     clearLongPress();
+    gestureRef.current?.up();
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
     if (drag.kind === "pan") {
       justPannedRef.current = drag.button === 2 && drag.moved;
     } else if (drag.kind === "move") {
-      if (drag.moved && state.movePreview) {
-        api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped);
+      const held = state.movePreview;
+      if (drag.moved && held) {
+        // A drag that ended where it began (and turned and flipped nothing) leaves the board as it was: no undo step.
+        if (held.dxUm === 0 && held.dyUm === 0 && !held.rotateQuarterTurns && !held.flipped) dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        else api.commitMove(held.refs, held.dxUm, held.dyUm, held.kind, held.rotateQuarterTurns, held.flipped);
+      } else if (drag.moved) {
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       } else {
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
         // No real movement: this was a plain click, not a drag -- apply

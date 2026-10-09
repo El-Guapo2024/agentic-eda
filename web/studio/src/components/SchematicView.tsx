@@ -33,6 +33,7 @@ import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, pag
 import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, applyBoxSelectionModifiers, hasModifier } from "../kicad-port/selection";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
+import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
 import { applyPatch, heldCmd, holdPoint, pickedVertices, previewBody, wirePick } from "../kicad-port/schMove";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
@@ -80,14 +81,12 @@ type DragState =
    * handler (see this file's onPointerDown for the full port): KiCad's
    * real default for a plain drag on a movable item is "Drag" (rubber-
    * band), not "Move", so that's what this defaults to as well, same as
-   * `G` itself arms. `moved` is this app's existing click-vs-drag
-   * distinguisher (ported from Canvas.tsx's own identical PCB-side
-   * pattern -- "did the snapped position actually change" rather than
-   * tool_dispatcher.cpp's literal 8px/300ms thresholds, a documented
-   * simplification PARITY-pcb.md already notes for the PCB side): false
-   * until the live preview's delta is first nonzero, so a plain
-   * zero-movement click-release still falls through to an ordinary
-   * select instead of committing a no-op drag.
+   * `G` itself arms. `moved` is tool_dispatcher.cpp's click-versus-drag
+   * rule (kicad-port/dragThreshold.ts): false until the press has become
+   * a drag -- more than 8 px of travel along an axis, or on macOS a
+   * motion after 300 ms held -- so a click-release with a grid step of
+   * jitter still falls through to an ordinary select instead of
+   * committing a drag.
    */
   | { kind: "move"; refs: string[]; startWorld: [number, number]; moved: boolean; vertices?: Record<string, number[]> };
 
@@ -154,6 +153,8 @@ export function SchematicView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag. Made at every press. */
+  const gestureRef = useRef<ClickDragGesture | null>(null);
   const userMovedRef = useRef(false);
   /** Previous wire-preview elbow, for computeBreakPoint's "maintain current line shape" hint (kicad-port/schLineMode.ts). */
   const elbowRef = useRef<{ mid: readonly [number, number]; end: readonly [number, number] } | null>(null);
@@ -444,6 +445,9 @@ export function SchematicView() {
       style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
+        const gesture = new ClickDragGesture(dragRuleFor(isMac()));
+        gesture.down(e.clientX, e.clientY, e.timeStamp);
+        gestureRef.current = gesture;
         if (e.button === 1) {
           userMovedRef.current = true;
           (e.target as Element).setPointerCapture(e.pointerId);
@@ -660,6 +664,7 @@ export function SchematicView() {
         if (!sch) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+        const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
 
         if (armedKind && state.selection.size > 0) {
           const origin = state.moveOriginUm ?? { x: wx, y: wy };
@@ -678,6 +683,7 @@ export function SchematicView() {
           const dy = e.clientY - drag.startScreen[1];
           dispatch({ type: "SET_SCHEMATIC_VIEW", view: { ...state.schematicView, x: drag.startView[0] + dx, y: drag.startView[1] + dy } });
         } else if (drag.kind === "box") {
+          if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
           const rect = containerRef.current!.getBoundingClientRect();
           const x0 = drag.startScreen[0] - rect.left,
             y0 = drag.startScreen[1] - rect.top;
@@ -685,19 +691,13 @@ export function SchematicView() {
             y1 = e.clientY - rect.top;
           setMarquee({ x0, y0, x1, y1, crossing: isCrossingSelection(x0, x1) });
         } else if (drag.kind === "move") {
-          // The click-vs-drag distinguisher: "moved" flips true the first
-          // time the snapped position actually changes (see DragState's
-          // own doc on why this, not a literal 8px/300ms timer, is this
-          // app's existing threshold convention -- Canvas.tsx's identical
-          // PCB-side pattern). Until then the preview stays null, so a
-          // release here is still a plain click, not a committed no-op
-          // drag.
+          // The click-vs-drag distinguisher is tool_dispatcher.cpp's (kicad-port/dragThreshold.ts): until the press has become a drag -- more than 8 px
+          // of travel along an axis, or on macOS a motion after 300 ms held -- nothing is picked up, so the release is still a plain click.
+          if (!motion?.dragging) return;
+          drag.moved = true;
           const [sx, sy] = snapToGrid(wx, wy);
           const [ox, oy] = snapToGrid(drag.startWorld[0], drag.startWorld[1]);
-          const dx = sx - ox,
-            dy = sy - oy;
-          if (dx !== 0 || dy !== 0) drag.moved = true;
-          dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "sch_drag", dxUm: dx, dyUm: dy, vertices: drag.vertices, turns: state.movePreview?.turns } : null });
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "sch_drag", dxUm: sx - ox, dyUm: sy - oy, vertices: drag.vertices, turns: state.movePreview?.turns } });
         }
       }}
       onContextMenu={(e) => {
@@ -761,12 +761,15 @@ export function SchematicView() {
         dispatch({ type: "SET_DRAW_STATE", draw: null });
       }}
       onPointerUp={(e) => {
+        gestureRef.current?.up();
         const drag = dragRef.current;
         dragRef.current = null;
         if (!drag) return;
         if (drag.kind === "move") {
           if (drag.moved && state.movePreview) {
             void api.commitSchHeld(state.movePreview);
+          } else if (drag.moved) {
+            dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
           } else {
             // No real movement: a plain click, not a drag -- apply
             // whatever selection effect onPointerDown deferred (see
