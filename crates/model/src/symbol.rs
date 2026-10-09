@@ -159,7 +159,41 @@ pub struct LibPin {
     pub unit: u32,
 }
 
+/// The other body of a library symbol that has two body styles (KiCad's "De Morgan" one, `LIB_SYMBOL::HasAlternateBodyStyle`): the `graphics` and `pins` a placed
+/// symbol draws in the style the symbol itself is not in. In a `.kicad_sym` they are the `Name_<unit>_2` sub-blocks; the items both styles draw (`Name_<unit>_0`) are
+/// in both bodies, so each is complete for its style.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlternateBody {
+    /// The body style these `graphics` and `pins` are of: 2, the alternate one, in a library symbol as it is read. 1 in a symbol that [`LibSymbol::in_style`] has put in
+    /// style 2: its own `graphics` and `pins` are then the alternate body and this is the normal one it keeps, so the symbol's box (both bodies') does not depend on the
+    /// style it is in and the symbol does not move when its style does.
+    #[serde(default = "d_alternate_style", skip_serializing_if = "is_alternate_style")]
+    pub style: u32,
+    #[serde(default)]
+    pub graphics: Vec<SymbolGraphic>,
+    #[serde(default)]
+    pub pins: Vec<LibPin>,
+}
+
+fn d_alternate_style() -> u32 {
+    2
+}
+fn is_alternate_style(s: &u32) -> bool {
+    *s == 2
+}
+
+impl AlternateBody {
+    /// The alternate body (style 2) with these items.
+    pub fn new(graphics: Vec<SymbolGraphic>, pins: Vec<LibPin>) -> Self {
+        AlternateBody { style: 2, graphics, pins }
+    }
+}
+
 /// A library symbol: everything `lib_symbols` embeds for one `lib_id`.
+///
+/// `graphics` and `pins` are the symbol's normal body style (style 1: the `Name_<unit>_1` sub-blocks and the shared `_0` ones); a symbol that has an
+/// alternate one keeps it in [`alternate`](Self::alternate). [`in_style`](Self::in_style) is the symbol as a placed one in a given style draws it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibSymbol {
@@ -209,11 +243,74 @@ pub struct LibSymbol {
     /// the pin line. KiCad's default when the symbol says nothing is 0.508 (`DEFAULT_PIN_NAME_OFFSET`, 20 mils).
     #[serde(default = "d_pin_name_offset", skip_serializing_if = "is_default_pin_name_offset")]
     pub pin_name_offset_mm: f64,
+    /// The alternate ("De Morgan") body style: what a placed symbol in style 2 draws. `None` for a symbol with one body style, which every symbol was
+    /// until this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternate: Option<Box<AlternateBody>>,
 }
 
 impl LibSymbol {
     pub fn pin_by_number(&self, number: &str) -> Option<&LibPin> {
         self.pins.iter().find(|p| p.number == number)
+    }
+
+    /// `LIB_SYMBOL::HasAlternateBodyStyle`.
+    pub fn has_alternate_body(&self) -> bool {
+        self.alternate.is_some()
+    }
+
+    /// `LIB_SYMBOL::GetBodyStyleCount`: 2 for a symbol with an alternate body style, else 1.
+    pub fn body_style_count(&self) -> u32 {
+        if self.alternate.is_some() {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// The body style this symbol's own `graphics` and `pins` are of: 1, unless [`in_style`](Self::in_style) has put it in style 2.
+    pub fn drawn_style(&self) -> u32 {
+        match &self.alternate {
+            Some(a) if a.style == 1 => 2,
+            _ => 1,
+        }
+    }
+
+    /// Both bodies, by style: the `(graphics, pins)` of the normal one (style 1) and, for a symbol that has two, of the alternate one (style 2).
+    #[allow(clippy::type_complexity)]
+    pub fn bodies(&self) -> ((&[SymbolGraphic], &[LibPin]), Option<(&[SymbolGraphic], &[LibPin])>) {
+        match &self.alternate {
+            None => ((&self.graphics, &self.pins), None),
+            Some(a) if a.style == 1 => ((&a.graphics, &a.pins), Some((&self.graphics, &self.pins))),
+            Some(a) => ((&self.graphics, &self.pins), Some((&a.graphics, &a.pins))),
+        }
+    }
+
+    /// The symbol as a placed one in body style `style` draws it: style 2 of a symbol that has an alternate body has that body's `graphics` and `pins` in place of the
+    /// normal one's, and keeps the normal body as its `alternate`, so what depends on the box of the symbol as a whole (`real_symbol_bbox`: the corner a derived sheet
+    /// places it by) is the same in either style. Any other style (a symbol with one body style draws it whatever style it is placed in) is the symbol drawn in style 1.
+    /// Putting a symbol in the style it is in already changes nothing.
+    pub fn in_style(&self, style: u32) -> std::borrow::Cow<'_, LibSymbol> {
+        let want = if style == 2 { 2 } else { 1 };
+        match &self.alternate {
+            Some(alt) if self.drawn_style() != want => std::borrow::Cow::Owned(LibSymbol {
+                lib_id: self.lib_id.clone(),
+                graphics: alt.graphics.clone(),
+                pins: alt.pins.clone(),
+                power: self.power,
+                in_bom: self.in_bom,
+                on_board: self.on_board,
+                datasheet: self.datasheet.clone(),
+                description: self.description.clone(),
+                reference_prefix: self.reference_prefix.clone(),
+                unit_count: self.unit_count,
+                pin_names_hidden: self.pin_names_hidden,
+                pin_numbers_hidden: self.pin_numbers_hidden,
+                pin_name_offset_mm: self.pin_name_offset_mm,
+                alternate: Some(Box::new(AlternateBody { style: self.drawn_style(), graphics: self.graphics.clone(), pins: self.pins.clone() })),
+            }),
+            _ => std::borrow::Cow::Borrowed(self),
+        }
     }
 }
 
@@ -366,6 +463,7 @@ fn device_r() -> LibSymbol {
         pin_names_hidden: false,
         pin_numbers_hidden: true,
         pin_name_offset_mm: 0.0,
+        alternate: None,
     }
 }
 
@@ -388,6 +486,7 @@ fn device_c() -> LibSymbol {
         pin_names_hidden: false,
         pin_numbers_hidden: true,
         pin_name_offset_mm: 0.254,
+        alternate: None,
     }
 }
 
@@ -410,6 +509,7 @@ fn device_l() -> LibSymbol {
         pin_names_hidden: true,
         pin_numbers_hidden: true,
         pin_name_offset_mm: 1.016,
+        alternate: None,
     }
 }
 
@@ -437,6 +537,7 @@ fn device_d() -> LibSymbol {
         pin_names_hidden: true,
         pin_numbers_hidden: true,
         pin_name_offset_mm: 1.016,
+        alternate: None,
     }
 }
 
@@ -476,6 +577,7 @@ fn conn_01x(n: u32) -> LibSymbol {
         pin_names_hidden: true,
         pin_numbers_hidden: false,
         pin_name_offset_mm: 1.016,
+        alternate: None,
     }
 }
 
@@ -500,6 +602,7 @@ fn power_gnd() -> LibSymbol {
         pin_names_hidden: true,
         pin_numbers_hidden: true,
         pin_name_offset_mm: 0.0,
+        alternate: None,
     }
 }
 
@@ -526,6 +629,7 @@ fn power_flag() -> LibSymbol {
         pin_names_hidden: true,
         pin_numbers_hidden: true,
         pin_name_offset_mm: 0.0,
+        alternate: None,
     }
 }
 
@@ -553,6 +657,7 @@ fn power_rail(net: &str) -> LibSymbol {
         pin_names_hidden: true,
         pin_numbers_hidden: true,
         pin_name_offset_mm: 0.0,
+        alternate: None,
     }
 }
 

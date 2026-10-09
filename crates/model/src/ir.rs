@@ -858,6 +858,13 @@ pub struct SymbolPathOverride {
 }
 
 impl SchematicSection {
+    /// The body style `sym` is drawn in (`SCH_SYMBOL::GetBodyStyle`): 1, the normal one, unless `SchExtras::body_styles` says 2, the alternate ("De Morgan")
+    /// one. The style of a symbol whose library symbol has no alternate is whatever is stored; [`crate::symbol::LibSymbol::in_style`] draws the normal body
+    /// for it, as `SCH_SYMBOL::GetLibSymbolRef` draws a one-style symbol in any style.
+    pub fn body_style_of(&self, sym: &SymbolInstance) -> u32 {
+        self.extras.body_styles.get(&field_key(&sym.id, sym.unit)).copied().unwrap_or(1).max(1)
+    }
+
     /// Assign a deterministic id to every wire/label/no-connect whose `id`
     /// is still empty — same contract as `RoutingSection::assign_missing_ids`/
     /// `DrawingsSection::assign_missing_ids` (stable per-kind processing
@@ -3258,6 +3265,12 @@ impl LibrarySymbolGraphic {
             Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } => *body_style,
         }
     }
+    pub fn set_body_style(&mut self, style: u32) {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } => *body_style = style,
+        }
+    }
     /// Every point this graphic touches, local mm -- for `assign_missing_ids`'s seed and a move/translate.
     pub fn points(&self) -> Vec<crate::symbol::SPoint> {
         use LibrarySymbolGraphic::*;
@@ -3489,6 +3502,40 @@ impl LibrarySymbol {
     /// own resolution) -- what the Symbol Editor materializes the first
     /// time an edit touches a symbol not already in `SymbolLibrarySection`.
     pub fn from_engine_symbol(sym: &crate::symbol::LibSymbol) -> Self {
+        // A symbol with an alternate body: what both bodies draw alike (an item equal in the two) is shared (`body_style` 0, KiCad's `Name_<unit>_0`
+        // sub-block), the rest belongs to its own style -- the reverse of what `to_engine_symbol` does.
+        let (mut graphics, mut pins): (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>) = (Vec::new(), Vec::new());
+        let (normal, alternate) = sym.bodies();
+        match alternate {
+            None => {
+                graphics.extend(normal.0.iter().map(LibrarySymbolGraphic::from_engine_graphic));
+                pins.extend(normal.1.iter().map(LibrarySymbolPin::from_engine_pin));
+            }
+            Some(alt) => {
+                for (list, other, style) in [(normal.0, alt.0, 1u32), (alt.0, normal.0, 2u32)] {
+                    for g in list {
+                        let shared = other.contains(g);
+                        if shared && style == 2 {
+                            continue;
+                        }
+                        let mut item = LibrarySymbolGraphic::from_engine_graphic(g);
+                        item.set_body_style(if shared { 0 } else { style });
+                        graphics.push(item);
+                    }
+                }
+                for (list, other, style) in [(normal.1, alt.1, 1u32), (alt.1, normal.1, 2u32)] {
+                    for p in list {
+                        let shared = other.contains(p);
+                        if shared && style == 2 {
+                            continue;
+                        }
+                        let mut item = LibrarySymbolPin::from_engine_pin(p);
+                        item.body_style = if shared { 0 } else { style };
+                        pins.push(item);
+                    }
+                }
+            }
+        }
         LibrarySymbol {
             lib_id: sym.lib_id.clone(),
             reference_prefix: sym.reference_prefix.clone(),
@@ -3502,8 +3549,9 @@ impl LibrarySymbol {
             pin_numbers_hidden: sym.pin_numbers_hidden,
             pin_name_offset_mm: sym.pin_name_offset_mm,
             unit_count: sym.unit_count.max(1),
-            graphics: sym.graphics.iter().map(LibrarySymbolGraphic::from_engine_graphic).collect(),
-            pins: sym.pins.iter().map(LibrarySymbolPin::from_engine_pin).collect(),
+            has_alternate_body_style: sym.alternate.is_some(),
+            graphics,
+            pins,
             ..Default::default()
         }
     }
@@ -3512,18 +3560,17 @@ impl LibrarySymbol {
     /// `board::load`'s publish overlay and the derived `.kicad_sym` export:
     /// this symbol's graphics/pins as the engine's own `LibSymbol`.
     ///
-    /// Alternate-body-style (`body_style == 2`) items are dropped here,
-    /// not merged in: `crate::symbol::SymbolGraphic`/`LibPin` have no
-    /// `body_style` field at all (see this module's own intro), so the
-    /// only two honest choices are "merge both styles' graphics into one
-    /// unfilterable pile" (visually wrong -- a placed instance would show
-    /// both at once) or "publish the normal style only, alternate stays
-    /// authorable and exports correctly to `.kicad_sym` for real KiCad,
-    /// but this app's own placed-instance rendering never shows it". This
-    /// picks the second, documented in PARITY-symedit.md as a real,
-    /// narrow gap rather than silently drawing a broken double-exposure
-    /// symbol.
+    /// The normal body style is the items of `body_style` 0 (shared) and 1; a symbol that declares an alternate one (`has_alternate_body_style`)
+    /// also gets [`crate::symbol::LibSymbol::alternate`], the shared items and those of `body_style` 2, which is what a placed symbol in body style 2
+    /// draws and is written with (`LIB_SYMBOL::GetBodyStyleCount`). A symbol that declares none keeps no alternate even if a stray item is of
+    /// `body_style` 2: KiCad would not show it either.
     pub fn to_engine_symbol(&self) -> crate::symbol::LibSymbol {
+        let alternate = self.has_alternate_body_style.then(|| {
+            Box::new(crate::symbol::AlternateBody::new(
+                self.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == 2).map(|g| g.to_engine_graphic()).collect(),
+                self.pins.iter().filter(|p| p.body_style == 0 || p.body_style == 2).map(|p| p.to_engine_pin()).collect(),
+            ))
+        });
         crate::symbol::LibSymbol {
             lib_id: self.lib_id.clone(),
             graphics: self.graphics.iter().filter(|g| g.body_style() <= 1).map(|g| g.to_engine_graphic()).collect(),
@@ -3538,6 +3585,7 @@ impl LibrarySymbol {
             pin_names_hidden: self.pin_names_hidden,
             pin_numbers_hidden: self.pin_numbers_hidden,
             pin_name_offset_mm: self.pin_name_offset_mm,
+            alternate,
         }
     }
 
@@ -4056,21 +4104,58 @@ mod tests {
     }
 
     #[test]
-    fn symbol_library_to_engine_drops_alternate_body_style_only() {
-        // `to_engine_symbol` is the publish path a placed instance's
-        // rendering actually reads (`board::load`'s overlay) -- an
-        // alternate (DeMorgan, body_style 2) pin/graphic must not leak
-        // into it (see that method's own doc for why), while the normal
-        // (body_style 1) and common-to-both (0) items must survive.
+    fn symbol_library_to_engine_keeps_the_alternate_body_style_as_its_own_body() {
+        // `to_engine_symbol` is the publish path a placed instance's rendering reads (`board::load`'s overlay). The normal body style (`body_style` 0 and 1)
+        // is the symbol; the alternate one (0 and 2) is `LibSymbol::alternate`, which a placed symbol in style 2 draws -- never both at once.
         let mut sym = LibrarySymbol::new_empty("Test:Lib");
         sym.has_alternate_body_style = true;
         sym.pins = vec![lib_pin("1", 1, 0.0, 3.81), {
             let mut alt = lib_pin("1", 1, 0.0, 3.81);
             alt.body_style = 2;
+            alt.at.x = 1.27;
             alt
         }];
         let back = sym.to_engine_symbol();
-        assert_eq!(back.pins.len(), 1, "only the normal body style publishes");
+        assert_eq!(back.pins.len(), 1, "the normal body style publishes its own pins only");
+        let alt = back.alternate.as_ref().expect("a symbol that declares an alternate body style has one");
+        assert_eq!(alt.pins.len(), 1);
+        assert_eq!(alt.pins[0].at.x, 1.27, "the alternate body has the alternate style's pin");
+        assert_eq!(back.in_style(2).pins[0].at.x, 1.27, "a placed symbol in style 2 draws it");
+        assert_eq!(back.in_style(1).pins[0].at.x, back.pins[0].at.x);
+        // one that declares none has none, whatever stray item is of style 2
+        sym.has_alternate_body_style = false;
+        let single = sym.to_engine_symbol();
+        assert!(single.alternate.is_none());
+        assert_eq!(single.pins.len(), 1);
+        assert_eq!(single.in_style(2).pins.len(), 1, "a one-style symbol draws its body in any style");
+    }
+
+    #[test]
+    fn symbol_library_alternate_body_style_round_trips_through_the_engine_symbol() {
+        let mut sym = LibrarySymbol::new_empty("Test:Gate");
+        sym.has_alternate_body_style = true;
+        let rect = |style: u32, x: f64| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: crate::symbol::SPoint::new(-x, -1.0), end: crate::symbol::SPoint::new(x, 1.0), stroke_mm: 0.254, fill: LibraryFill::None };
+        // a shared outline, one body per style, a shared pin and one pin of the alternate style only
+        sym.graphics = vec![rect(0, 3.0), rect(1, 1.0), rect(2, 2.0)];
+        let mut pin_alt = lib_pin("2", 1, 0.0, 0.0);
+        pin_alt.body_style = 2;
+        let mut pin_shared = lib_pin("1", 1, 0.0, 3.81);
+        pin_shared.body_style = 0;
+        sym.pins = vec![pin_shared, pin_alt];
+        let engine = sym.to_engine_symbol();
+        assert_eq!(engine.graphics.len(), 2, "the shared outline and the normal body");
+        assert_eq!(engine.alternate.as_ref().unwrap().graphics.len(), 2, "the shared outline and the alternate body");
+        assert_eq!((engine.pins.len(), engine.alternate.as_ref().unwrap().pins.len()), (1, 2));
+        let back = LibrarySymbol::from_engine_symbol(&engine);
+        assert!(back.has_alternate_body_style);
+        let by_style = |style: u32| back.graphics.iter().filter(|g| g.body_style() == style).count();
+        assert_eq!((by_style(0), by_style(1), by_style(2)), (1, 1, 1), "shared stays shared");
+        let pins_by_style = |style: u32| back.pins.iter().filter(|p| p.body_style == style).count();
+        assert_eq!((pins_by_style(0), pins_by_style(1), pins_by_style(2)), (1, 0, 1));
+        // and publishing it again changes nothing
+        let again = back.to_engine_symbol();
+        assert_eq!((again.graphics.len(), again.pins.len()), (engine.graphics.len(), engine.pins.len()));
+        assert_eq!(again.alternate.as_ref().unwrap().pins.len(), 2);
     }
 
     #[test]

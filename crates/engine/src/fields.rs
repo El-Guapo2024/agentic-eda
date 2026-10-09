@@ -817,7 +817,7 @@ pub fn fill_layout(sch: &mut SchematicSection, model: &eda_model::ConstraintMode
         let key = field_key(&sym.id, sym.unit);
         let Some(part) = model.part(&sym.id) else { continue };
         let lib_id = if sym.lib_id.is_empty() { format!("eda:{}", sym.id) } else { sym.lib_id.clone() };
-        let resolved = model.real_symbol_of(&lib_id, part);
+        let resolved = model.real_symbol_in_style(&lib_id, part, sch.body_style_of(sym));
         let mut sym = sym.clone();
         sym.lib_id = lib_id;
         let geom = SymbolGeom::of(&sym, part, resolved.as_ref());

@@ -71,7 +71,7 @@ impl OwnerCtx {
             if sym.lib_id.is_empty() {
                 sym.lib_id = format!("eda:{}", sym.id);
             }
-            let resolved = model.real_symbol_of(&sym.lib_id, part);
+            let resolved = model.real_symbol_of_instance(sch, &sym, part);
             let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
             let specs = fields::symbol_specs(&sym, Some(part), resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
             return Some(OwnerCtx { kind: OwnerKind::Symbol, key: key.to_string(), at: sym.at, rot: sym.rot, mirrored: sym.mirrored, width: geom.width, specs, sym: Some(sym), geom: Some(geom), power: None, sheet: None });

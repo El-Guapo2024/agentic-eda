@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use eda_model::symbol::{LibPin, LibSymbol, SPoint, SymbolGraphic};
+use eda_model::symbol::{AlternateBody, LibPin, LibSymbol, SPoint, SymbolGraphic};
 use eda_model::{resolve_lib_id, ConstraintModel};
 
 use crate::sexpr::{self, Sexpr};
@@ -183,12 +183,12 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
     let base = extends.as_deref().and_then(|b| raw.get(b));
 
     let own = graphics_and_pins(item);
-    let (graphics, pins, unit_count) = match base {
+    let Bodies { graphics, pins, unit_count, alternate } = match base {
         // `extends` with no graphics/pins of its own (the common case --
         // AMS1117-3.3 only overrides properties): borrow the base's
         // wholesale. A derived symbol that *does* draw its own graphics
         // (rare, but legal -- an alternate body style) keeps them.
-        Some(base_item) if own.0.is_empty() && own.1.is_empty() => graphics_and_pins(base_item),
+        Some(base_item) if own.graphics.is_empty() && own.pins.is_empty() && own.alternate.is_none() => graphics_and_pins(base_item),
         _ => own,
     };
     let power = item.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power"))) || base.is_some_and(|b| b.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power"))));
@@ -230,20 +230,63 @@ fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> Li
         pin_names_hidden: pin_names.map(hidden).unwrap_or(false),
         pin_numbers_hidden: pin_numbers.map(hidden).unwrap_or(false),
         pin_name_offset_mm: pin_names.and_then(|p| sexpr::find(p, "offset")).and_then(|o| sexpr::num(o, 1)).unwrap_or(eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM),
+        alternate,
     }
 }
 
-/// Every graphic/pin across every unit sub-block of one symbol's own raw
-/// node (`(symbol "Name_0_1" ...)`, `(symbol "Name_1_1" ...)`, ...), plus
-/// the highest unit index seen.
-fn graphics_and_pins(item: &[Sexpr]) -> (Vec<SymbolGraphic>, Vec<LibPin>, u32) {
-    let mut graphics = Vec::new();
-    let mut pins = Vec::new();
+/// What one symbol's raw node draws: the normal body style (the `Name_<unit>_0` sub-blocks every style shares and the `Name_<unit>_1` ones), the alternate
+/// ("De Morgan") one when the symbol has `Name_<unit>_2` sub-blocks (`LIB_SYMBOL::HasLegacyAlternateBodyStyle`: any drawing of a body style above 1), and the
+/// highest unit index seen.
+struct Bodies {
+    graphics: Vec<SymbolGraphic>,
+    pins: Vec<LibPin>,
+    unit_count: u32,
+    alternate: Option<Box<AlternateBody>>,
+}
+
+/// Every graphic/pin across every unit/body-style sub-block of one symbol's own raw
+/// node (`(symbol "Name_0_1" ...)`, `(symbol "Name_1_1" ...)`, `(symbol "Name_1_2" ...)`, ...), split by body style the way KiCad reads them
+/// (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbol`: the second number of the sub-symbol's name is the body style of every item inside it, 0 for all of them),
+/// plus the highest unit index seen. A sub-block of a body style above 2 (a symbol with named body styles) is not drawn: only the normal style and the
+/// De Morgan pair are modelled.
+fn graphics_and_pins(item: &[Sexpr]) -> Bodies {
+    let mut normal = (Vec::new(), Vec::new());
+    let mut alt = (Vec::new(), Vec::new());
+    let mut has_alt = false;
     let mut max_unit = 1u32;
     for sub in sexpr::find_all(item, "symbol") {
         let Some(sub_name) = sexpr::txt(sub, 1) else { continue };
-        let unit = unit_of_subname(sub_name);
+        let (unit, style) = unit_and_style_of_subname(sub_name);
         max_unit = max_unit.max(unit);
+        let block = sub_symbol_items(sub, unit);
+        match style {
+            0 => {
+                // drawn in every body style
+                normal.0.extend(block.0.iter().cloned());
+                normal.1.extend(block.1.iter().cloned());
+                alt.0.extend(block.0);
+                alt.1.extend(block.1);
+            }
+            2 => {
+                has_alt = true;
+                alt.0.extend(block.0);
+                alt.1.extend(block.1);
+            }
+            1 => {
+                normal.0.extend(block.0);
+                normal.1.extend(block.1);
+            }
+            _ => {}
+        }
+    }
+    Bodies { graphics: normal.0, pins: normal.1, unit_count: max_unit, alternate: has_alt.then(|| Box::new(AlternateBody::new(alt.0, alt.1))) }
+}
+
+/// The graphics and pins of one `(symbol "Name_<unit>_<style>" ...)` sub-block, all of unit `unit`.
+fn sub_symbol_items(sub: &[Sexpr], unit: u32) -> (Vec<SymbolGraphic>, Vec<LibPin>) {
+    let mut graphics = Vec::new();
+    let mut pins = Vec::new();
+    {
         for r in sexpr::find_all(sub, "rectangle") {
             if let (Some(s), Some(e)) = (sexpr::find(r, "start"), sexpr::find(r, "end")) {
                 if let (Some(sx), Some(sy), Some(ex), Some(ey)) = (sexpr::num(s, 1), sexpr::num(s, 2), sexpr::num(e, 1), sexpr::num(e, 2)) {
@@ -288,16 +331,20 @@ fn graphics_and_pins(item: &[Sexpr]) -> (Vec<SymbolGraphic>, Vec<LibPin>, u32) {
             }
         }
     }
-    (graphics, pins, max_unit)
+    (graphics, pins)
 }
 
-/// `"R_0_1"` -> unit 0; `"R_1_1"` -> unit 1; a name with no trailing
+/// `"R_0_1"` -> unit 0, body style 1; `"R_1_2"` -> unit 1, body style 2; a name with no trailing
 /// `_<unit>_<style>` pair (should not happen in a real library, but this
-/// reader is tolerant, not a validator) defaults to unit 1.
-fn unit_of_subname(sub_name: &str) -> u32 {
+/// reader is tolerant, not a validator) defaults to unit 1, body style 1.
+fn unit_and_style_of_subname(sub_name: &str) -> (u32, u32) {
     let mut parts = sub_name.rsplitn(3, '_');
-    let _style = parts.next();
-    parts.next().and_then(|u| u.parse().ok()).unwrap_or(1)
+    let style = parts.next().and_then(|s| s.parse().ok());
+    let unit = parts.next().and_then(|u| u.parse().ok());
+    match (unit, style) {
+        (Some(u), Some(s)) => (u, s),
+        _ => (1, 1),
+    }
 }
 
 fn stroke_width(item: &[Sexpr]) -> f64 {
@@ -590,6 +637,77 @@ mod tests {
         assert_eq!(r.pins[0].electrical_type, "passive");
         assert!(matches!(r.graphics[0], SymbolGraphic::Rectangle { .. }));
         assert!(!r.power);
+    }
+
+    /// A gate with a second ("De Morgan") body: `_1_0` (body style 0) is drawn in both, `_1_1` only in the normal one, `_1_2` only in the alternate one
+    /// (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbol`: the second number of the sub-symbol's name is the body style of every item inside it).
+    const DEMORGAN_LIB: &str = r##"(kicad_symbol_lib (version 20241209) (generator "test")
+        (symbol "NAND" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+            (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+            (symbol "NAND_1_0"
+                (text "shared" (at 0 5.08 0) (effects (font (size 1.27 1.27))))
+            )
+            (symbol "NAND_1_1"
+                (rectangle (start -2.54 2.54) (end 2.54 -2.54) (stroke (width 0.254) (type default)) (fill (type background)))
+                (pin input line (at -7.62 1.27 0) (length 5.08) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+                (pin output line (at 7.62 0 180) (length 5.08) (name "Y" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+            )
+            (symbol "NAND_1_2"
+                (polyline (pts (xy -2.54 2.54) (xy 2.54 0) (xy -2.54 -2.54) (xy -2.54 2.54)) (stroke (width 0.254) (type default)) (fill (type none)))
+                (pin input inverted (at -7.62 1.27 0) (length 5.08) (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+                (pin output line (at 7.62 0 180) (length 5.08) (name "Y" (effects (font (size 1.27 1.27)))) (number "3" (effects (font (size 1.27 1.27)))))
+            )
+        )
+    )"##;
+
+    #[test]
+    fn a_symbol_with_a_second_body_style_keeps_each_body_apart() {
+        let table = parse_symbol_library(DEMORGAN_LIB).unwrap();
+        let nand = table.get("NAND").expect("NAND present");
+        // the normal body: the shared text and the rectangle, its two pins -- not the alternate body's items drawn over them
+        assert_eq!(nand.graphics.len(), 2);
+        assert!(nand.graphics.iter().any(|g| matches!(g, SymbolGraphic::Rectangle { .. })));
+        assert!(!nand.graphics.iter().any(|g| matches!(g, SymbolGraphic::Polyline { .. })));
+        assert_eq!(nand.pins.len(), 2);
+        assert!(nand.pins.iter().all(|p| p.shape == "line"));
+        // the alternate one: the shared text and its own outline and pins
+        let alt = nand.alternate.as_ref().expect("a sub-symbol of body style 2 makes an alternate body");
+        assert_eq!(alt.graphics.len(), 2);
+        assert!(alt.graphics.iter().any(|g| matches!(g, SymbolGraphic::Polyline { .. })));
+        assert!(!alt.graphics.iter().any(|g| matches!(g, SymbolGraphic::Rectangle { .. })));
+        assert_eq!(alt.pins.len(), 2);
+        assert!(alt.pins.iter().any(|p| p.number == "1" && p.shape == "inverted"), "the alternate body's pin 1 has the bubble");
+        assert_eq!(nand.body_style_count(), 2);
+        // a placed symbol in style 2 draws the alternate body, in style 1 (or any other) the normal one
+        assert!(nand.in_style(2).graphics.iter().any(|g| matches!(g, SymbolGraphic::Polyline { .. })));
+        assert!(nand.in_style(1).graphics.iter().any(|g| matches!(g, SymbolGraphic::Rectangle { .. })));
+        // a symbol with one body has no alternate
+        assert!(parse_symbol_library(MINI_LIB).unwrap().get("R").unwrap().alternate.is_none());
+    }
+
+    /// The real library, when KiCad is installed: 74xx's gates have a De Morgan body, and the normal one is no longer drawn doubled with it.
+    #[test]
+    fn the_installed_74xx_library_reads_its_de_morgan_bodies() {
+        let root = default_symbol_library_root();
+        let Some(path) = find_symbol_library_file(&root, "74xx") else { return };
+        let table = load_library_table(&path).unwrap();
+        let ls00 = table.get("74LS00").expect("74LS00 present");
+        let alt = ls00.alternate.as_ref().expect("a 74LS00 gate has a De Morgan body");
+        let (normal_box, alt_box) = (eda_engine_bbox(ls00), eda_engine_bbox(&ls00.in_style(2)));
+        assert_eq!(normal_box, alt_box, "the two bodies of a gate have the same pins, so the same box and the symbol does not move when its body style does");
+        assert!(!ls00.graphics.is_empty() && !alt.graphics.is_empty(), "each body draws something");
+        assert_ne!(ls00.graphics, alt.graphics, "and not the same thing");
+        // gate A's three pins in each body
+        let pins_of_unit = |pins: &[LibPin], u: u32| pins.iter().filter(|p| p.unit == u).count();
+        assert_eq!(pins_of_unit(&ls00.pins, 1), 3);
+        assert_eq!(pins_of_unit(&alt.pins, 1), 3);
+    }
+
+    /// The box of the pins of unit 1: what `eda_engine::geometry::real_symbol_bbox` takes the edges of a side with pins from.
+    fn eda_engine_bbox(sym: &LibSymbol) -> (i64, i64, i64, i64) {
+        let pins: Vec<&LibPin> = sym.pins.iter().filter(|p| p.unit == 0 || p.unit == 1).collect();
+        let r = |v: f64| (v * 1000.0).round() as i64;
+        (r(pins.iter().map(|p| p.at.x).fold(f64::INFINITY, f64::min)), r(pins.iter().map(|p| p.at.y).fold(f64::INFINITY, f64::min)), r(pins.iter().map(|p| p.at.x).fold(f64::NEG_INFINITY, f64::max)), r(pins.iter().map(|p| p.at.y).fold(f64::NEG_INFINITY, f64::max)))
     }
 
     #[test]

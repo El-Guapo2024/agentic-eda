@@ -11,7 +11,7 @@
 
 use eda_layout::{Node, Point as LPoint, Side};
 use eda_model::ir::{Point, SymbolInstance};
-use eda_model::symbol::{LibPin, LibSymbol, SPoint, SymbolGraphic};
+use eda_model::symbol::{AlternateBody, LibPin, LibSymbol, SPoint, SymbolGraphic};
 use eda_model::{Part, PinKind};
 
 use crate::geometry::{build_ports, nc_pin_local_points, node_size, real_symbol_bbox, STUB};
@@ -127,14 +127,25 @@ fn shift_graphic(g: &SymbolGraphic, dx: f64, dy: f64) -> SymbolGraphic {
 /// writer bakes instead: a real or built-in symbol shifted so the corner of `real_symbol_bbox` is the origin, or, for a part with
 /// no library symbol, the generic box (`node_size`) with every pin on the port `build_ports` gave it and its tip where the wire
 /// ends. Library frame: mm, +y up, so the box hangs below the origin.
+///
+/// A symbol with an alternate body style keeps it, moved the same way: the box is that of both bodies together (`real_symbol_bbox`), so a symbol in the
+/// alternate style sits by the same corner as in the normal one.
 pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, unit: u32) -> LibSymbol {
     if let Some(sym) = resolved {
         let (x0, _y0, _x1, y1) = real_symbol_bbox(sym, unit);
         let (dx, dy) = (-x0, -y1);
+        let alternate = sym.alternate.as_ref().map(|alt| {
+            Box::new(AlternateBody {
+                style: alt.style,
+                graphics: alt.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
+                pins: alt.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
+            })
+        });
         return LibSymbol {
             lib_id: lib_id.to_string(),
             graphics: sym.graphics.iter().map(|g| shift_graphic(g, dx, dy)).collect(),
             pins: sym.pins.iter().map(|p| LibPin { at: shift_point(p.at, dx, dy), ..p.clone() }).collect(),
+            alternate,
             ..sym.clone()
         };
     }
@@ -184,6 +195,7 @@ pub fn corner_symbol(lib_id: &str, part: &Part, resolved: Option<&LibSymbol>, un
         pin_names_hidden: false,
         pin_numbers_hidden: false,
         pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
+        alternate: None,
     }
 }
 

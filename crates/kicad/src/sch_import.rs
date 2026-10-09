@@ -101,6 +101,8 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         mirrored: bool,
         mirror_y: bool,
         unit: u32,
+        /// `(body_style N)` (`(convert N)` in a file before KiCad 10): 1, the normal body style, unless the symbol is placed in its alternate one.
+        body_style: u32,
         reference: String,
         value: String,
         footprint: String,
@@ -144,6 +146,8 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         let mirrored = mirror_tag == Some("y");
         let mirror_y = mirror_tag == Some("x");
         let unit = sexpr::find(item, "unit").and_then(|u| sexpr::num(u, 1)).unwrap_or(1.0).max(1.0) as u32;
+        // `SCH_IO_KICAD_SEXPR_PARSER::parseSchematicSymbol`: `case T_convert` (legacy) and `case T_body_style` both read `SetBodyStyle`
+        let body_style = sexpr::find(item, "body_style").or_else(|| sexpr::find(item, "convert")).and_then(|b| sexpr::num(b, 1)).unwrap_or(1.0).max(1.0) as u32;
         let at_um = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
 
@@ -168,7 +172,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         }
 
         overrides.extend(parse_instance_overrides(item, at_um));
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim });
     }
 
     // Group by reference, preserving first-sighting order (file order) so
@@ -185,6 +189,8 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         }
     }
 
+    // `(body_style 2)` of the symbols placed in the alternate body style of a library symbol that has one, by `field_key` (`SchExtras::body_styles`)
+    let mut body_style_entries: Vec<(String, u32)> = Vec::new();
     for reference in order {
         let idxs = &by_ref[&reference];
         // Every instance of one reference is the same real part (one
@@ -213,7 +219,10 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
                 let owner = idxs.iter().map(|&i| &raw[i]).find(|r| p.unit == 0 || p.unit == r.unit);
                 let kind = match owner {
                     Some(owner) => {
-                        let world = transform_local_point(p.at, owner.angle_deg, owner.mirrored, owner.mirror_y);
+                        // the pin where the owner's body style puts it (`SCH_SYMBOL::UpdatePins`: "the body style may have a different pin layout")
+                        let styled = (owner.body_style > 1 && resolved.has_alternate_body()).then(|| resolved.in_style(owner.body_style));
+                        let local = styled.as_ref().and_then(|s| s.pins.iter().find(|q| q.number == p.number && (q.unit == 0 || q.unit == owner.unit))).map_or(p.at, |q| q.at);
+                        let world = transform_local_point(local, owner.angle_deg, owner.mirrored, owner.mirror_y);
                         let at_pin = Point { x: owner.at_um.x + crate::import::mm_to_um(world.x), y: owner.at_um.y + crate::import::mm_to_um(world.y) };
                         pin_world.insert(format!("{reference}.{}", p.number), at_pin);
                         if nc_points.contains(&at_pin) {
@@ -242,6 +251,9 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         });
         for &i in idxs {
             let r = &raw[i];
+            if r.body_style > 1 && lib_table.get(r.lib_id.as_str()).is_some_and(|l| l.has_alternate_body()) {
+                body_style_entries.push((eda_model::ir::field_key(&reference, r.unit), r.body_style.min(2)));
+            }
             symbols.push(SymbolInstance {
                 id: reference.clone(),
                 at: r.at_um,
@@ -471,6 +483,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         for id in locked.into_iter().filter(|id| !id.is_empty()) {
             sch.extras.set_locked(&id, true);
         }
+        sch.extras.body_styles.extend(body_style_entries);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {
@@ -1191,6 +1204,7 @@ mod tests {
             pin_names_hidden: false,
             pin_numbers_hidden: false,
             pin_name_offset_mm: 0.508,
+            alternate: None,
         };
         let u1 = part(
             "U1",
@@ -1246,6 +1260,77 @@ mod tests {
         let unit2 = back_sch.symbols.iter().find(|s| s.unit == 2).unwrap();
         assert_eq!(unit1.at.x, 0);
         assert_eq!(unit2.at.x, 50_000);
+    }
+
+    /// A symbol placed in the alternate ("De Morgan") body style of its library symbol: the file carries both bodies (`Name_<unit>_1`, `Name_<unit>_2`) and
+    /// `(convert 2)` on the instance, and reading it back gives the alternate body, the style, and the pins where the alternate body has them.
+    #[test]
+    fn alternate_body_style_round_trips_through_export_and_import() {
+        use eda_model::symbol::{AlternateBody, LibPin, LibSymbol, SPoint, SymbolGraphic};
+        let p = |number: &str, name: &str, etype: &str, x: f64, y: f64, angle: f64| LibPin {
+            number: number.into(),
+            name: name.into(),
+            electrical_type: etype.into(),
+            shape: "line".into(),
+            at: SPoint::new(x, y),
+            angle_deg: angle,
+            length_mm: 2.54,
+            unit: 1,
+        };
+        let rect = |x0: f64, x1: f64| SymbolGraphic::Rectangle { unit: 1, start: SPoint::new(x0, 2.54), end: SPoint::new(x1, -2.54), stroke_mm: 0.254, filled: false };
+        // style 1: inputs on the left, the output on the right; style 2 (the same gate drawn with its bubbles): same pins, a wider body
+        let lib = LibSymbol {
+            lib_id: "test:GATE".into(),
+            graphics: vec![rect(-2.54, 2.54)],
+            pins: vec![p("1", "A", "input", -7.62, 1.27, 0.0), p("2", "B", "input", -7.62, -1.27, 0.0), p("3", "Y", "output", 7.62, 0.0, 180.0)],
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: String::new(),
+            reference_prefix: "U".into(),
+            unit_count: 1,
+            pin_names_hidden: false,
+            pin_numbers_hidden: false,
+            pin_name_offset_mm: 0.508,
+            alternate: Some(Box::new(AlternateBody::new(
+                vec![rect(-3.81, 3.81)],
+                vec![p("1", "A", "input", -7.62, 1.27, 0.0), p("2", "B", "input", -7.62, -1.27, 0.0), p("3", "Y", "output", 7.62, 0.0, 180.0)],
+            ))),
+        };
+        let u1 = part("U1", vec![pin("1", "A", PinKind::Signal), pin("2", "B", PinKind::Signal), pin("3", "Y", PinKind::Signal)]);
+        let model = ConstraintModel { parts: vec![u1], symbols: vec![lib], ..Default::default() };
+        let instance = SymbolInstance { id: "U1".into(), at: Point { x: 25_400, y: 25_400 }, rot: 0, mirrored: false, mirror_y: false, lib_id: "test:GATE".into(), unit: 1, value: "GATE".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let mut sch = SchematicSection { symbols: vec![instance], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false };
+        let design_with = |sch: SchematicSection| Design { schema: 1, provenance: Provenance { engine_version: "0".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] }, schematic: Some(sch), nets: None, placement: None, routing: None, drawings: None, footprint_library: None, sheet_contents: None, bus_aliases: Default::default(), symbol_library: None };
+        let meta = ExportMeta { date: "2026-01-01", title: "alt" };
+
+        // in the normal body style: both bodies are in the file, the instance says nothing
+        let normal = export_kicad_sch(&design_with(sch.clone()), &model, &meta).unwrap();
+        assert!(normal.contains("\"GATE_1_1\"") && normal.contains("\"GATE_1_2\"") && normal.contains("\"GATE_0_1\"") && normal.contains("\"GATE_0_2\""), "{normal}");
+        assert!(!normal.contains("(convert"), "the default body style is not written");
+        let (back, back_model, _) = import_kicad_sch(&normal).expect("round trips");
+        assert!(back.schematic.unwrap().extras.body_styles.is_empty());
+        assert!(back_model.symbols[0].alternate.is_some(), "the alternate body comes back");
+
+        // in the alternate one
+        sch.extras.body_styles.insert("U1".into(), 2);
+        let alt = export_kicad_sch(&design_with(sch), &model, &meta).unwrap();
+        assert!(alt.contains("(unit 1) (convert 2)"), "{alt}");
+        let (back, back_model, notes) = import_kicad_sch(&alt).expect("round trips");
+        assert_eq!(notes.unresolved_symbols, 0);
+        let back_sch = back.schematic.unwrap();
+        assert_eq!(back_sch.extras.body_styles.get("U1"), Some(&2), "the instance keeps its body style");
+        assert_eq!(back_sch.body_style_of(&back_sch.symbols[0]), 2);
+        let lib = &back_model.symbols[0];
+        let alternate = lib.alternate.as_ref().expect("both bodies are read");
+        assert_eq!((lib.pins.len(), alternate.pins.len()), (3, 3), "each body has its own pins");
+        assert_eq!((lib.graphics.len(), alternate.graphics.len()), (1, 1), "and its own graphics, not both drawn at once");
+        let width = |g: &SymbolGraphic| match g {
+            SymbolGraphic::Rectangle { start, end, .. } => (end.x - start.x).abs(),
+            _ => 0.0,
+        };
+        assert!((width(&lib.graphics[0]) - 5.08).abs() < 1e-6 && (width(&alternate.graphics[0]) - 7.62).abs() < 1e-6, "{:?} {:?}", lib.graphics, alternate.graphics);
     }
 
     /// GAPS.md #6: `import_kicad_sch_tree` actually follows a `(sheet ...)`

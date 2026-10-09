@@ -249,7 +249,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let x = mm(sym.at.x);
         let y = mm(sym.at.y);
         let uuid = duid_for(&format!("sym:{}", sym.id), &sym.id);
-        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {})", sexpr_str(&lib_id), sym.unit).unwrap();
+        // The body style the symbol is placed in: `(convert N)` (the token of a file before KiCad 10, which reads it as `body_style`, `SCH_SYMBOL::SetBodyStyle`),
+        // written only for a symbol in the alternate ("De Morgan") style of a library symbol that has one, as the default is the normal style.
+        let real_symbol = model.real_symbol_of(&lib_id, part);
+        let body_style = if real_symbol.as_ref().is_some_and(|s| s.has_alternate_body()) { sch.body_style_of(sym).min(2) } else { 1 };
+        let convert = if body_style > 1 { format!(" (convert {body_style})") } else { String::new() };
+        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {}){convert}", sexpr_str(&lib_id), sym.unit).unwrap();
         // The attributes `SCH_EDIT_TOOL::SetAttribute` toggles (Do not Populate, Exclude from BOM / Board / Simulation): kicad-cli's BOM, netlist and ERC read them from here.
         let yes_no = |b: bool| if b { "yes" } else { "no" };
         writeln!(
@@ -274,7 +279,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             resolved.as_ref().map(|s| s.datasheet.as_str()).filter(|s| !s.is_empty()).unwrap_or("")
         };
         // where each field is drawn: the placements the section keeps for this symbol, else Autoplace Fields' (`eda_engine::fields`)
-        let lib_for_geometry = model.real_symbol_of(&lib_id, part);
+        let lib_for_geometry = real_symbol.map(|r| if body_style > 1 { r.in_style(body_style).into_owned() } else { r });
         let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, lib_for_geometry.as_ref());
         let mut shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), lib_for_geometry.as_ref(), &geom);
         // the texts this symbol is written with (the instance's own, else the part's), which the placement is for
@@ -939,9 +944,26 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
     write_property(out, "Reference", "U", 0.0, 0.0, false);
     write_property(out, "Value", bare_name, 0.0, 0.0, false);
 
-    // ---- unit _0_1: the body common to every unit ----
-    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_0_1"))).unwrap();
-    match &resolved {
+    // ---- the body style(s): `_0_1` / `_<u>_1` for the normal one; a symbol with an alternate ("De Morgan") body style also gets `_0_2` / `_<u>_2` ----
+    // Each style is baked through the instances' own transform exactly like the other. The box they hang from is that of both bodies together
+    // (`real_symbol_bbox`), so a symbol placed in style 2 sits by the same corner as in style 1 and its pins stay where the library puts them, as
+    // `eda_engine::placed::corner_symbol` has it.
+    let styles: &[u32] = if resolved.as_ref().is_some_and(|r| r.has_alternate_body()) { &[1, 2] } else { &[1] };
+    for &style in styles {
+        let in_style = resolved.as_ref().map(|r| r.in_style(style).into_owned());
+        write_body_style_blocks(out, &bare_name, style, in_style.as_ref(), instances, part, default_baker, unit_count);
+    }
+
+    writeln!(out, "\t\t)").unwrap();
+}
+
+/// The `(symbol "<name>_0_<style>" ...)` block of the graphics every unit shares and the `(symbol "<name>_<u>_<style>" ...)` block of each unit's own graphics
+/// and pins, for body style `style` of a lib symbol: `resolved` is the symbol as that style draws it ([`eda_model::LibSymbol::in_style`]).
+#[allow(clippy::too_many_arguments)]
+fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolved: Option<&eda_model::LibSymbol>, instances: &[&SymbolInstance], part: &Part, default_baker: &SymbolInstance, unit_count: u32) {
+    // ---- unit _0_<style>: the body common to every unit ----
+    writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_0_{style}"))).unwrap();
+    match resolved {
         Some(sym_data) => {
             // Strictly unit 0 ("every unit") here -- a graphic scoped to a
             // *specific* unit belongs in that unit's own `_<u>_1` sub-block
@@ -949,7 +971,7 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
             // contents underneath *every* unit's own body, so leaking a
             // unit-1-specific graphic in here would draw it under units
             // 2..N as well).
-            let (width, _height) = eda_engine::geometry::node_size(part, resolved.as_ref(), 1);
+            let (width, _height) = eda_engine::geometry::node_size(part, resolved, 1);
             let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(sym_data, 1);
             for g in sym_data.graphics.iter().filter(|g| g.unit() == 0) {
                 write_symbol_graphic(out, &baked_graphic(g, default_baker, width as f64, x0, y1));
@@ -968,15 +990,15 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
     }
     writeln!(out, "\t\t\t)").unwrap();
 
-    // ---- unit _<u>_1, u = 1..=unit_count: each unit's own body + pins ----
+    // ---- unit _<u>_<style>, u = 1..=unit_count: each unit's own body + pins ----
     // A single-unit part (`unit_count == 1`, the overwhelming common case)
     // runs this loop exactly once, over exactly the same pins/graphics the
     // old unconditional "_1_1" block always wrote -- no behavior change.
     for u in 1..=unit_count {
         let baker = instances.iter().find(|s| s.unit == u).copied().unwrap_or(default_baker);
-        let (width, height) = eda_engine::geometry::node_size(part, resolved.as_ref(), u);
-        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved.as_ref(), u);
-        let (x0, _, _, y1) = resolved.as_ref().map(|s| eda_engine::geometry::real_symbol_bbox(s, u)).unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let (width, height) = eda_engine::geometry::node_size(part, resolved, u);
+        let (ports, pin_port) = eda_engine::geometry::build_ports(part, width, height, resolved, u);
+        let (x0, _, _, y1) = resolved.map(|s| eda_engine::geometry::real_symbol_bbox(s, u)).unwrap_or((0.0, 0.0, 0.0, 0.0));
         let mut pin_of_port: Vec<Option<usize>> = vec![None; ports.len()];
         for (pin_idx, port_idx) in pin_port.iter().enumerate() {
             if let Some(pi) = port_idx {
@@ -984,12 +1006,12 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
             }
         }
 
-        writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_{u}_1"))).unwrap();
+        writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_{u}_{style}"))).unwrap();
         // This unit's own graphics (a multi-unit symbol very often draws a
         // different body outline per unit -- e.g. each gate of a logic
         // array) -- unit 1 of a single-unit part has none of these beyond
         // what `_0_1` already drew, same as before this loop existed.
-        if let Some(sym_data) = &resolved {
+        if let Some(sym_data) = resolved {
             for g in sym_data.graphics.iter().filter(|g| g.unit() == u) {
                 write_symbol_graphic(out, &baked_graphic(g, baker, width as f64, x0, y1));
             }
@@ -997,7 +1019,7 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
         for (port_idx, port) in ports.iter().enumerate() {
             let Some(pin_idx) = pin_of_port[port_idx] else { continue };
             let pin = &part.pins[pin_idx];
-            let real_pin = resolved.as_ref().and_then(|s| s.pin_by_number(&pin.number));
+            let real_pin = resolved.and_then(|s| s.pin_by_number(&pin.number));
             let (bx, by, angle, length_mm) = match real_pin {
                 // The real pin's own outer point/angle/length -- exactly
                 // where its own drawn line (just written above, as part of
@@ -1021,7 +1043,7 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
                     (bx, by, 0.0, STUB_MM)
                 }
             };
-            let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
+            let etype = resolve_pin_electrical_type(pin, resolved);
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
             writeln!(
                 out,
@@ -1039,7 +1061,7 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
         // draw them here too, at the same points `derive_schematic` placed a
         // `no_connects` marker at, so this unit's own pin-uuid list always
         // has a matching drawn pin for every one of its `part.pins` entries.
-        for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height, resolved.as_ref(), u) {
+        for (i, local) in eda_engine::geometry::nc_pin_local_points(part, width, height, resolved, u) {
             let pin = &part.pins[i];
             // `baked_local` takes um (like every other call site in this
             // function — `local_stub_tip`'s output, `width`/`height`
@@ -1047,10 +1069,10 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
             // not pre-convert `local` here too, or every nc pin lands 1000x
             // closer to the origin than intended.
             let (bx, by) = baked_local(baker, width as f64, local.x as f64, local.y as f64);
-            let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
+            let etype = resolve_pin_electrical_type(pin, resolved);
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
             // a library symbol draws its no-connect pin like any other, along its own line; only a pin the symbol does not have is a point
-            let (angle, length) = match resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)) {
+            let (angle, length) = match resolved.and_then(|r| r.pin_by_number(&pin.number)) {
                 Some(rp) => (baked_real_angle(baker, rp.angle_deg), rp.length_mm),
                 None => (0.0, 0.0),
             };
@@ -1068,8 +1090,6 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
         }
         writeln!(out, "\t\t\t)").unwrap();
     }
-
-    writeln!(out, "\t\t)").unwrap();
 }
 
 /// A power symbol's `lib_symbol`: the resolved definition's real graphics
