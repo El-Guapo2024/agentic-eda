@@ -1438,15 +1438,42 @@ impl<'a> Shove<'a> {
             return None;
         }
         self.run_optimizer();
-        Some(self.outcome(head_root, raw))
+        Some(self.outcome(Some(head_root), raw))
+    }
+
+    /// `SHOVE::Run` for a via head (`AddHeads( VIA_HANDLE, aNewPos, SHP_SHOVE )`, what `DRAGGER::dragShove` adds for a dragged via):
+    /// `pushOrShoveVia( viaToDrag, newPos - pos, 0, true )` moves the via -- and drags the end of every track attached to it with
+    /// it -- and the main loop then resolves whatever those collide with. `None` when the via may not be shoved
+    /// (`ShoveVias()` off, locked: `SH_TRY_WALK`) or the shove fails. The outcome's `head` is the one point the via ended at,
+    /// which is not `to` if a pad or the board edge made the shove push it further (`GetModifiedHeadVia`).
+    fn run_via(mut self, via_id: ItemId, to: Point) -> Option<ShoveOutcome> {
+        let via = match self.node.get(via_id) {
+            Some(Item::Via(v)) => v.clone(),
+            _ => return None,
+        };
+        let delta = ((to.x - via.pos.x) as i64, (to.y - via.pos.y) as i64);
+        if self.push_or_shove_via(via_id, delta, 0, true) != Status::Ok {
+            return None;
+        }
+        if self.shove_main_loop() != Status::Ok {
+            return None;
+        }
+        self.run_optimizer();
+        // `reconstructHeads`: the via as the shove left it
+        let end = self.roots.iter().find_map(|r| match (&r.old_via, &r.new_via) {
+            (Some((id, _)), Some(new)) if *id == via_id => Some(new.pos),
+            _ => None,
+        });
+        Some(self.outcome(None, vec![end.unwrap_or(via.pos)]))
     }
 
     /// `reconstructHeads` + `removeHeads` + the diff against the world.
-    fn outcome(mut self, head_root: usize, raw: Vec<Point>) -> ShoveOutcome {
-        let head_entry = self.roots[head_root].clone();
-        let head = head_entry.new_line.as_ref().map(|l| l.line.pts.clone()).unwrap_or(raw);
+    fn outcome(mut self, head_root: Option<usize>, raw: Vec<Point>) -> ShoveOutcome {
+        // a via head (`AddHeads( VIA_HANDLE, .. )`) has no head line to take out of the world
+        let head_entry = head_root.map(|r| self.roots[r].clone());
+        let head = head_entry.as_ref().and_then(|e| e.new_line.as_ref()).map(|l| l.line.pts.clone()).unwrap_or(raw);
         let mut head_ids: Vec<ItemId> = self.head_marked.iter().copied().collect();
-        if let Some(l) = &head_entry.new_line {
+        if let Some(l) = head_entry.as_ref().and_then(|e| e.new_line.as_ref()) {
             head_ids.extend(l.line.segment_ids.iter().copied());
         }
         for id in head_ids {
@@ -1557,6 +1584,15 @@ pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, 
     }
     let head = Line::from_points(net.clone(), layer, width, raw.to_vec());
     Shove::new(node, rules, settings).run(head)
+}
+
+/// `DRAGGER::dragShove` for a dragged via: shove the via at `via_id` to `to`, with the tracks attached to it, pushing whatever they
+/// collide with out of the way. The outcome's `head` is `[where the via ended]` (see `Shove::run_via`), `displaced_lines` hold the
+/// attached tracks as they were left as well as everything else that moved, and `displaced_vias` the dragged via itself if it
+/// ended anywhere but where it was. `None` means the shove failed or the via may not be shoved (the dragger falls back to
+/// `dragViaWalkaround`).
+pub fn shove_via(node: &Node, via_id: ItemId, to: Point, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
+    Shove::new(node, rules, settings).run_via(via_id, to)
 }
 
 #[cfg(test)]
