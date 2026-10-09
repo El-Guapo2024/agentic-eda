@@ -3,12 +3,13 @@
 // via components/canvas/selectionCandidates.ts's `SelectionFilter` (the
 // subset of KiCad's real categories this app's model has a selectable
 // equivalent for -- see that file's own doc comment for what's
-// deliberately left out, e.g. standalone pads).
+// deliberately left out).
 import { useStudioDispatch, useStudioState } from "../../state/store";
 import type { SelectionFilter } from "../canvas/selectionCandidates";
 
 const ROWS: Array<{ key: keyof SelectionFilter; label: string }> = [
   { key: "footprints", label: "Footprints" },
+  { key: "pads", label: "Pads" },
   { key: "tracks", label: "Tracks" },
   { key: "vias", label: "Vias" },
   { key: "zones", label: "Zones" },

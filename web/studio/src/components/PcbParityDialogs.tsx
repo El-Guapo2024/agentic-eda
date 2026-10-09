@@ -20,6 +20,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import { movableItem, polarTranslation, positionRelativeSelectionAnchor, relativeMoveVector, toPolarDeg, type MovableKind } from "../kicad-port/pcbEditActions";
+import { editableSelection } from "../kicad-port/pcbTransform";
 import { itemPosition } from "../kicad-port/pcbReference";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
 
@@ -121,7 +122,8 @@ function PositionRelativeDialog() {
   const movables = useMemo(() => {
     if (!board) return [] as { ref: string; kind: MovableKind; at: [number, number] }[];
     const out: { ref: string; kind: MovableKind; at: [number, number] }[] = [];
-    for (const ref of state.selection) {
+    // `RequestSelection`: a pad stands for its footprint, a locked item stays where it is.
+    for (const ref of editableSelection(board, [...state.selection]).ids) {
       const it = movableItem(board, ref);
       if (it) out.push({ ref, ...it });
     }
@@ -231,7 +233,7 @@ function PositionRelativeDialog() {
             <span>Position Relative To...</span>
           </div>
           <div className="dialog-body" style={{ fontSize: 12 }}>
-            Select a footprint, via, graphic or text item first.
+            Select an item first.
           </div>
           <div className="dialog-footer">
             <button onClick={close}>Close</button>
@@ -247,11 +249,8 @@ function PositionRelativeDialog() {
     const v = relativeMoveVector(referenceAnchor(), translation, selectionAnchor);
     close();
     if (v.x === 0 && v.y === 0) return;
-    // moveSelectionBy: each item by the one aggregate vector (grouped per kind -- one Cmd per item).
-    for (const kind of ["part", "via", "shape", "text"] as const) {
-      const refs = movables.filter((m) => m.kind === kind).map((m) => m.ref);
-      if (refs.length) await api.commitMove(refs, v.x, v.y, kind);
-    }
+    // moveSelectionBy: the whole selection by the one aggregate vector -- one `move_items`, one undo step.
+    await api.commitMove(movables.map((m) => m.ref), v.x, v.y, "pcb");
   };
 
   const clearBtn = { padding: "0 6px" } as const;

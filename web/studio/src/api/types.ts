@@ -922,12 +922,22 @@ export type Cmd =
    * own client-side job.
    */
   | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
-  /** Cmd+D: copy existing tracks/vias/zones/shapes/texts named by id, in place, with fresh ids. Never footprints -- see crates/ops/src/lib.rs `Cmd::Duplicate`'s own doc comment. */
+  /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
+  /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
+  | { op: "paste_clipboard"; text: string; at: PointXY }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
   | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null }
+  /**
+   * `EDIT_TOOL::Move` / `Rotate` / `Flip` of any mix of footprints (references), tracks, vias, zones, shapes, texts, dimensions and groups,
+   * as one undo step each (crates/ops/src/pcb_transform.rs). `rotate_items`'s angle is positive CLOCKWISE on the screen, KiCad's runs the other
+   * way; `kicad-port/pcbTransform.ts` plans all three.
+   */
+  | { op: "move_items"; ids: string[]; dx: Um; dy: Um }
+  | { op: "rotate_items"; ids: string[]; pivot: PointXY; angle_millideg: number }
+  | { op: "flip_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
   /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
   | { op: "batch"; cmds: Cmd[] }
   /** `Cmd::OnSheet`: run a schematic command on the sheet at `sheet` (the `/`-joined `SheetInstance::id`s from the root, what `GET /api/schematic?sheet=` takes) instead of the root. */

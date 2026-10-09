@@ -204,6 +204,19 @@ export async function postCmd(cmd: Cmd, strict: boolean): Promise<CmdReply> {
 }
 
 /**
+ * A PCB Copy: the named items as KiCad's clipboard text (`CLIPBOARD_IO::SaveSelection`, crates/kicad/src/clipboard.rs), measured from `reference` --
+ * the point a Paste puts back on the cursor. A read: it changes nothing on the board.
+ */
+export async function postClipboardCopy(ids: readonly string[], reference: { x: number; y: number } | null): Promise<{ ok: true; text: string } | { ok: false; message: string }> {
+  const r = await fetch("/api/clipboard/copy", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, reference }),
+  });
+  return (await r.json()) as { ok: true; text: string } | { ok: false; message: string };
+}
+
+/**
  * What a held schematic selection would look like after the drop: the commands applied in memory on the server, the moved items' geometry back
  * (`POST /api/sch/move_preview`, crates/cli/src/sch_move_api.rs). Null when the server refuses the commands or is not reachable.
  */

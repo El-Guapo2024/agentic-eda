@@ -63,6 +63,15 @@ export function toggleDockPane(id: DockPaneId): void {
   commit(togglePane(current, id, windowWidth()));
 }
 
+/** Make sure a pane can be seen: shown, unfolded, its column open (a double click on a pad: its properties are the Properties pane's summary). */
+export function revealDockPane(id: DockPaneId): void {
+  if (!current.shown[id]) return toggleDockPane(id);
+  let next = current;
+  if (next.folded[id]) next = toggleFolded(next, id);
+  if (next.leftCollapsed) next = setColumnCollapsed(next, "left", false, windowWidth());
+  commit(next);
+}
+
 /** The caption chevron: roll a pane up to its caption or open it again. */
 export function toggleDockPaneFolded(id: DockPaneId): void {
   commit(toggleFolded(current, id));

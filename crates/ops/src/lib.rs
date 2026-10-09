@@ -51,9 +51,12 @@ pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
 pub mod library_editors;
+mod pcb_paste;
+mod pcb_transform;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
+pub use pcb_transform::{flip_layer, FlipDirection};
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
@@ -722,15 +725,18 @@ pub enum Cmd {
         text_thickness: Option<Um>,
     },
 
-    /// Copy existing tracks/vias/zones/shapes/texts named by id, in
-    /// place (same position, fresh ids) -- the studio's Cmd+D. Footprints
-    /// are deliberately not supported: duplicating one would add a part
-    /// instance the intent/BOM does not have, which needs a human
-    /// decision this verb cannot make on its own (see the report). An id
-    /// naming a footprint, or anything else this can't duplicate, is
-    /// simply not among the ones found -- only refused if NONE of the
-    /// given ids match anything duplicable.
+    /// `EDIT_TOOL::Duplicate` (the studio's Cmd+D): exact copies of the named items in place, under fresh ids -- placed footprints,
+    /// tracks, vias, zones, shapes, texts, dimensions and groups (a group with copies of its members). A copied footprint is a new
+    /// part (`DrawingsSection::board_parts`) under the next free reference, with its pads on the same nets; a copy of a member of a
+    /// group joins that group. An id that names nothing duplicable is skipped; the command is refused only if NONE of the given ids
+    /// match anything.
     Duplicate { ids: Vec<String> },
+    /// `PCB_CONTROL::Paste` of KiCad's own clipboard text (`pcbnew/kicad_clipboard.cpp`, [`eda_kicad::parse_pcb_clipboard`]): the
+    /// items it holds -- footprints, tracks, vias, zones, graphics, text, dimensions and groups -- put on the board with the
+    /// clipboard's origin (the copy's reference point) at `at`. The clipboard travels with the command, so a paste works from a
+    /// copy made on another board or in KiCad itself, and one undo step takes the whole paste back. See [`pcb_paste`] for how
+    /// nets, layers, groups and footprints land.
+    PasteClipboard { text: String, at: Point },
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
     /// the studio's Cmd+V. Unlike `Duplicate` (which looks up existing
@@ -783,6 +789,25 @@ pub enum Cmd {
     /// resolves to an actual board point since this crate has no
     /// selection/UI-origin concept of its own.
     MoveExact { parts: Vec<String>, dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point> },
+
+    // --------------------------------------------- move, rotate, flip: any item
+    //
+    // `EDIT_TOOL::Move` / `Rotate` / `Flip` (`pcbnew/tools/edit_tool.cpp`) for every kind of item at once, as one undo
+    // step each -- see [`pcb_transform`] for what each item class does with the transform. `ids` are placed parts'
+    // references and track, via, zone, shape, text, dimension and group ids, mixed freely; a group stands for its
+    // members. Which items a selection holds, which of them a lock keeps out, and about which point a turn or a flip
+    // happens are the tool's rules, which the studio applies before it sends one of these
+    // (`web/studio/src/kicad-port/pcbTransform.ts`).
+    /// Translate every item by `(dx, dy)`. Tracks keep their ids and shapes, a footprint lands on the placement grid.
+    MoveItems { ids: Vec<String>, dx: Um, dy: Um },
+    /// Turn every item about `pivot` by `angle_millideg`, positive clockwise on the screen (the sense of `MoveExact`'s
+    /// `rotate_millideg`). Each item turns about the one shared point, and its own orientation follows: a footprint's
+    /// `rot`, a text's and a dimension's text angle.
+    RotateItems { ids: Vec<String>, pivot: Point, angle_millideg: i64 },
+    /// `Change Side / Flip`: mirror every item across the axis through `pivot` and put it on the other side of the
+    /// board -- a footprint's side, a track's, zone's, shape's, text's and dimension's layer (`::FlipLayer`), a blind or
+    /// buried via's layer pair.
+    FlipItems { ids: Vec<String>, pivot: Point, direction: FlipDirection },
 
     /// Apply `cmds` in order as ONE command: one undo step, one activity
     /// entry, all-or-nothing (the first refused sub-command restores the
@@ -1608,12 +1633,13 @@ impl Cmd {
             Cmd::AddShape { shape } => vec![shape.layer()],
             Cmd::AddText { text } => vec![text.content.as_str()],
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
-            Cmd::PasteItems { .. } => vec!["paste"],
+            Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => vec!["paste"],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -1760,6 +1786,20 @@ impl Cmd {
                 // errs the same safe direction `MoveExact` already does.
                 | Cmd::CreateArray { .. }
         )
+    }
+
+    /// [`Cmd::clears_routing`], told what the board holds: the commands that move, turn or flip *any* kind of item
+    /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`]) and the one that takes a footprint off the board
+    /// ([`Cmd::Rip`]) leave the routing alone unless a footprint they name (directly, or as a member of a group) has routed
+    /// copper on a pad, because only such a footprint can be moved out from under a track -- a fresh copy, or one nothing
+    /// was routed to, takes nothing with it. `board` is the board as it was before the command.
+    pub fn clears_routing_in(&self, board: &Board<'_>) -> bool {
+        match self {
+            Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => board.names_routed_part(ids),
+            Cmd::Rip { part } => board.names_routed_part(std::slice::from_ref(part)),
+            other => other.clears_routing(),
+        }
     }
 }
 
@@ -2129,10 +2169,14 @@ impl<'a> Board<'a> {
                 self.edit_text_and_graphics(shape_ids, text_ids, layer.as_deref(), *line_width, *text_size, *text_thickness)
             }
 
-            Cmd::Duplicate { ids } => self.duplicate_items(ids),
+            Cmd::Duplicate { ids } => self.duplicate_all(ids),
+            Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
+            Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
+            Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
+            Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
                 for c in cmds {
@@ -2649,6 +2693,10 @@ impl<'a> Board<'a> {
     fn rip(&mut self, part: &str) -> Result<(), Vec<CheckResult>> {
         self.require_placed(part)?;
         self.design.placement.as_mut().unwrap().footprints.retain(|f| f.id != part);
+        // A footprint that exists only on the board (a copy) has no intent to go back to: deleting it deletes the part too.
+        if let Some(dr) = self.design.drawings.as_mut() {
+            dr.board_parts.retain(|b| b.reference != part);
+        }
         Ok(())
     }
 
@@ -3813,44 +3861,7 @@ impl<'a> Board<'a> {
 
     // ------------------------------------------------- duplicate / paste
 
-    /// `Cmd::Duplicate`: resolve each id against whichever collection
-    /// actually has it (a track, via, zone, shape or text -- never a
-    /// footprint, which has no match in any of these and so is simply
-    /// skipped, not specially detected) and hand the found copies to
-    /// `insert_copies`.
-    fn duplicate_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if ids.is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_duplicate", "duplicate", "no ids given")]);
-        }
-
-        let mut tracks = Vec::new();
-        let mut vias = Vec::new();
-        let mut zones = Vec::new();
-        if let Some(rt) = self.design.routing.as_ref() {
-            tracks.extend(rt.tracks.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
-            vias.extend(rt.vias.iter().filter(|v| ids.iter().any(|id| id == &v.id)).cloned());
-            zones.extend(rt.zones.iter().filter(|z| ids.iter().any(|id| id == &z.id)).cloned());
-        }
-        let mut shapes = Vec::new();
-        let mut texts = Vec::new();
-        if let Some(dr) = self.design.drawings.as_ref() {
-            shapes.extend(dr.shapes.iter().filter(|s| ids.iter().any(|id| id == s.id())).cloned());
-            texts.extend(dr.texts.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
-        }
-
-        if tracks.is_empty() && vias.is_empty() && zones.is_empty() && shapes.is_empty() && texts.is_empty() {
-            return Err(vec![CheckResult::fail(
-                "ops_unknown_duplicate",
-                "duplicate",
-                "none of the given ids name a track, via, zone, shape or text (footprints cannot be duplicated this way)",
-            )]);
-        }
-
-        self.insert_copies(tracks, vias, zones, shapes, texts)
-    }
-
-    /// Shared by `Duplicate` (copies resolved from existing ids) and
-    /// `PasteItems` (copies that travelled with the command): blank every
+    /// Shared by `PasteItems` (copies that travelled with the command) and `CreateArray`: blank every
     /// incoming id -- never trust a caller's or a stale copy's id, same
     /// rule `add_shape`/`add_track`/etc. already follow -- insert, and
     /// assign fresh deterministic ones the same way a brand new item
@@ -5371,6 +5382,10 @@ mod tests;
 mod sch_control_tests;
 #[cfg(test)]
 mod board_setup_tests;
+#[cfg(test)]
+mod pcb_transform_tests;
+#[cfg(test)]
+mod pcb_paste_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 

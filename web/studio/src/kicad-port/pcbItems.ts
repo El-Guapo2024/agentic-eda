@@ -7,11 +7,40 @@
 // (common/eda_shape.cpp), `PCB_TRACK::GetPosition` (start),
 // `ZONE::GetPosition` (first corner), `PCB_TEXT::GetPosition`.
 
-import type { BoardState, Shape } from "../api/types";
+import type { BoardState, BoardText, Pad, Part, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { circumcircle } from "./trackArc";
 
-export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group";
+export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad";
+
+/**
+ * The id a pad is selected, highlighted and listed under: `REF.NUMBER`, with `#k` after it for the k-th pad (from 2) of the footprint that
+ * shares the number (a shield tab, several pads on one pin). Pads have no id of their own in the board state; the footprint's reference makes
+ * this one unique, and a pad is always found through its footprint.
+ */
+export function padIds(part: { ref: string; pads?: readonly { num: string }[] }): string[] {
+  const seen = new Map<string, number>();
+  return (part.pads ?? []).map((pad) => {
+    const n = (seen.get(pad.num) ?? 0) + 1;
+    seen.set(pad.num, n);
+    return n === 1 ? `${part.ref}.${pad.num}` : `${part.ref}.${pad.num}#${n}`;
+  });
+}
+
+/** The pad `id` names and the footprint it belongs to, or null (a `REF.NUMBER[#k]` of a placed footprint). */
+export function padById(board: BoardState, id: string): { part: Part; pad: Pad; index: number } | null {
+  const dot = id.indexOf(".");
+  if (dot <= 0) return null;
+  const part = board.parts.find((p) => p.placed && p.ref === id.slice(0, dot));
+  if (!part) return null;
+  const index = padIds(part).indexOf(id);
+  return index < 0 ? null : { part, pad: part.pads![index]!, index };
+}
+
+/** The footprint a pad id belongs to (`FilterCollectorForFreePads`: in the board editor a pad is edited through its footprint), else null. */
+export function padParent(board: BoardState, id: string): string | null {
+  return padById(board, id)?.part.ref ?? null;
+}
 
 /** Which kind of item `id` names (a placed part's reference, or a track/via/zone/shape/text/dimension/group id). */
 export function itemKind(board: BoardState, id: string): ItemKind | null {
@@ -25,6 +54,7 @@ export function itemKind(board: BoardState, id: string): ItemKind | null {
   if (dr?.texts.some((t) => t.id === id)) return "text";
   if (dr?.dimensions.some((d) => d.id === id)) return "dimension";
   if (dr?.groups.some((g) => g.id === id)) return "group";
+  if (id.includes(".") && padById(board, id)) return "pad";
   return null;
 }
 
@@ -68,6 +98,20 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       const t = board.drawings?.texts.find((q) => q.id === id);
       return t ? [t.x, t.y] : null;
     }
+    // `PCB_DIMENSION_BASE::GetPosition()` is its first feature point.
+    case "dimension": {
+      const d = board.drawings?.dimensions.find((q) => q.id === id);
+      return d ? [d.start[0], d.start[1]] : null;
+    }
+    // `PCB_GROUP::GetPosition()` is the centre of its bounding box.
+    case "group": {
+      const b = itemBounds(board, id);
+      return b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null;
+    }
+    case "pad": {
+      const hit = padById(board, id);
+      return hit ? [hit.pad.x, hit.pad.y] : null;
+    }
     default:
       return null;
   }
@@ -101,13 +145,48 @@ export function itemBounds(board: BoardState, id: string): [number, number, numb
     }
     case "text": {
       const t = board.drawings?.texts.find((q) => q.id === id);
-      if (!t) return null;
-      const b = textBoundingBox(t);
-      return [b.x0, b.y0, b.x1, b.y1];
+      return t ? textBounds(t) : null;
+    }
+    // Every line of the dimension and its text (`PCB_DIMENSION_BASE::GetBoundingBox` joins its shapes and its text).
+    case "dimension": {
+      const d = board.drawings?.dimensions.find((q) => q.id === id);
+      if (!d) return null;
+      const pts: [number, number][] = d.lines.flatMap(([a, b]) => [a, b]);
+      const text = d.text ? textBounds({ id: d.id, content: d.text, x: d.text_at[0], y: d.text_at[1], angle: -d.computed_text_angle, layer: d.layer, size: d.text_size_um, stroke_width: d.stroke_width, justify: "center", mirror: false }) : null;
+      const lines = pts.length > 0 ? padded(boundsOf(pts), d.stroke_width / 2) : null;
+      return unionBounds([lines, text]);
+    }
+    // The union of its members' boxes (`PCB_GROUP::GetBoundingBox`).
+    case "group": {
+      const g = board.drawings?.groups.find((q) => q.id === id);
+      return g ? unionBounds(g.member_ids.map((m) => itemBounds(board, m))) : null;
+    }
+    case "pad": {
+      const hit = padById(board, id);
+      return hit ? [hit.pad.x - hit.pad.w / 2, hit.pad.y - hit.pad.h / 2, hit.pad.x + hit.pad.w / 2, hit.pad.y + hit.pad.h / 2] : null;
     }
     default:
       return null;
   }
+}
+
+/** A text's box with its angle applied (`EDA_TEXT::GetTextBox` turned by the text angle; the angle is KiCad's, counter-clockwise on the screen). */
+function textBounds(t: BoardText): [number, number, number, number] {
+  const b = textBoundingBox(t);
+  const rad = (t.angle / 1000) * (Math.PI / 180);
+  if (rad === 0) return [b.x0, b.y0, b.x1, b.y1];
+  const [cos, sin] = [Math.cos(rad), Math.sin(rad)];
+  const corners: [number, number][] = [
+    [b.x0, b.y0],
+    [b.x1, b.y0],
+    [b.x1, b.y1],
+    [b.x0, b.y1],
+  ].map(([x, y]) => {
+    const dx = x! - t.x;
+    const dy = y! - t.y;
+    return [t.x + dx * cos + dy * sin, t.y - dx * sin + dy * cos];
+  });
+  return boundsOf(corners);
 }
 
 /** The union of several boxes. */

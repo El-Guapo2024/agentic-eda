@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { offsetRatsnestForPreview, type RatsnestBoardLike, type RatsnestEdgeLike } from "./localRatsnest";
+import { carryRatsnest, offsetRatsnestForPreview, type RatsnestBoardLike, type RatsnestEdgeLike } from "./localRatsnest";
 
 const board: RatsnestBoardLike = {
   parts: [
@@ -49,4 +49,26 @@ test("offsetRatsnestForPreview: both endpoints of an edge move when both their p
   const result = offsetRatsnestForPreview(edges, board, { refs: ["U1", "R1"], kind: "part", dxUm: 10, dyUm: 10 });
   assert.deepEqual(result[0]!.from, [1110, 1010]);
   assert.deepEqual(result[0]!.to, [5110, 5010]);
+});
+
+test("carryRatsnest: an endpoint on a carried pad, via or track end goes where the carry takes it, the other end stays", () => {
+  const edges: RatsnestEdgeLike[] = [
+    { net: "N1", from: [1100, 1000], to: [5100, 5000] },
+    { net: "N2", from: [7000, 7000], to: [8000, 8000] },
+    { net: "N3", from: [9000, 9000], to: [9500, 9000] },
+  ];
+  const carried = { moving: { parts: [board.parts[0]!], routing: { vias: [{ x: 7000, y: 7000 }], tracks: [{ pts: [[9000, 9000], [9200, 9000]] as [number, number][] }] } } };
+  // a turn of 180 degrees about the origin, then nothing else
+  const result = carryRatsnest(edges, board, carried, (pt) => [-pt[0], -pt[1]]);
+  assert.deepEqual(result[0]!.from, [-1100, -1000]);
+  assert.deepEqual(result[0]!.to, [5100, 5000]);
+  assert.deepEqual(result[1]!.from, [-7000, -7000]);
+  assert.deepEqual(result[1]!.to, [8000, 8000]);
+  assert.deepEqual(result[2]!.from, [-9000, -9000]);
+  assert.deepEqual(result[2]!.to, [9500, 9000]);
+});
+
+test("carryRatsnest: nothing carried leaves the edges alone", () => {
+  const edges: RatsnestEdgeLike[] = [{ net: "N1", from: [1100, 1000], to: [5100, 5000] }];
+  assert.deepEqual(carryRatsnest(edges, board, { moving: { parts: [], routing: null } }, (pt) => [pt[0] + 1, pt[1]]), edges);
 });

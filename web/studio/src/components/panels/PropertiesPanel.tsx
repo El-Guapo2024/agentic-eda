@@ -6,7 +6,8 @@
 // actions the message panel and canvas expose) rather than a
 // transcription of KiCad's exact grid rows.
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
-import { formatXY } from "../../state/units";
+import { formatLength, formatXY } from "../../state/units";
+import { padById } from "../../kicad-port/pcbItems";
 import type { Rule } from "../../api/types";
 import { DockPanel } from "./Dock";
 
@@ -137,7 +138,7 @@ function PropertiesBody() {
       <div className="panel-section">
         <div className="kv-grid">
           <span>Selected</span>
-          <span>{refs.length} parts</span>
+          <span>{refs.length} items</span>
         </div>
         <div className="row" style={{ marginTop: 8, display: "flex", gap: 6 }}>
           <button onClick={() => api.rotateSelection(1)}>Rotate (R)</button>
@@ -148,6 +149,35 @@ function PropertiesBody() {
   }
 
   const ref = refs[0]!;
+  // A selected pad (`PAD` in pcbnew's property grid): what it is and where. Pad edits are not part of the board editor here -- a pad moves with its footprint.
+  const padHit = padById(board, ref);
+  if (padHit) {
+    const { part, pad } = padHit;
+    return (
+      <div className="panel-section">
+        <h3>Pad {pad.num}</h3>
+        <div className="kv-grid">
+          <span>Footprint</span>
+          <span>{part.ref}</span>
+          <span>Pad number</span>
+          <span>{pad.num || "–"}</span>
+          <span>Net</span>
+          <span>{pad.net ?? "–"}</span>
+          <span>Type</span>
+          <span>{pad.th ? "Through-hole" : "SMD"}</span>
+          <span>Shape</span>
+          <span>{pad.round ? (Math.abs(pad.w - pad.h) < 1 ? "Circle" : "Oval") : "Rectangle"}</span>
+          <span>Position</span>
+          <span>{formatXY(pad.x, pad.y, state.units)}</span>
+          <span>Size</span>
+          <span>{`${formatLength(pad.w, state.units)} x ${formatLength(pad.h, state.units)}`}</span>
+          <span>Side</span>
+          <span>{part.side === "bottom" ? "Bottom" : "Top"}</span>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>Moving, turning or flipping a pad acts on {part.ref}.</div>
+      </div>
+    );
+  }
   const p = board.parts.find((x) => x.ref === ref);
   if (!p) return null;
   const nets = [...new Set((p.pads ?? []).map((q) => q.net).filter((n): n is string => !!n))];

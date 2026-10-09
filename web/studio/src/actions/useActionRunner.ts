@@ -29,6 +29,8 @@ import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
+import { editableSelection, flipPivot, rotationPivot } from "../kicad-port/pcbTransform";
+import { itemKind, padParent } from "../kicad-port/pcbItems";
 import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
@@ -169,7 +171,9 @@ export function useActionRunner() {
       if (state.tab !== "pcb" || !state.board) return [];
       const toleranceUm = Math.max(150, 6 / state.view.scale);
       const cands = pickSelectionCandidates(state.board, state.cursorUm.x, state.cursorUm.y, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false);
-      return cands[0] ? [cands[0].id] : [];
+      const hit = cands[0];
+      // `FilterCollectorForFreePads`: a pad under the cursor stands for its footprint -- the edit tools work on that.
+      return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
     };
     /** RequestSelection for dialog/tool hand-offs that read `state.selection`: adopt the hovered item as the selection first. */
     const adoptHovered = (): string[] => {
@@ -218,11 +222,19 @@ export function useActionRunner() {
     const tryTransformDuringMove = (addQuarterTurns: number, toggleFlip: boolean): boolean => {
       const moving = state.activeTool === "move" || state.activeTool === "drag" || state.movePreview != null;
       if (!moving) return false;
-      const refs = state.movePreview?.refs ?? [...state.selection];
+      let refs = state.movePreview?.refs ?? [...state.selection];
       if (refs.length === 0) return false;
-      const first = refs[0]!;
-      const kind = state.movePreview?.kind ?? (api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part");
-      const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0 };
+      // A PCB move carries the selection the tool works on (locked items out) and turns and flips it about where it was picked up. (A held
+      // schematic selection is `tryHeldTurn`'s: it has its own preview kinds, `sch_move` and `sch_drag`.)
+      const kind = state.movePreview?.kind ?? "pcb";
+      let pivots: Pick<NonNullable<typeof state.movePreview>, "pivotUm" | "flipPivotUm"> = {};
+      if (kind === "pcb" && state.board && !state.movePreview) {
+        refs = editableSelection(state.board, refs).ids;
+        if (refs.length === 0) return false;
+        const snap = (p: readonly [number, number]): [number, number] => snapPoint(p[0], p[1], state.gridUm);
+        pivots = { pivotUm: rotationPivot(state.board, refs, snap) ?? undefined, flipPivotUm: flipPivot(state.board, refs) ?? undefined };
+      }
+      const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0, ...pivots };
       const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped } });
@@ -260,8 +272,8 @@ export function useActionRunner() {
 
     // align_distribute_tool.cpp -- no default hotkey in source either
     // (reached from its own right-click submenu there); this app surfaces
-    // them from Canvas.tsx's context menu the same way. Placed footprints
-    // only -- see kicad-port/alignDistribute.ts's scope note.
+    // them from Canvas.tsx's context menu the same way. Every kind of item;
+    // a locked one is a target that never moves -- see kicad-port/alignDistribute.ts.
     m.set("pcbnew.AlignAndDistribute.alignTop", pcbOnly(() => api.alignSelection("top")));
     m.set("pcbnew.AlignAndDistribute.alignBottom", pcbOnly(() => api.alignSelection("bottom")));
     m.set("pcbnew.AlignAndDistribute.alignLeft", pcbOnly(() => api.alignSelection("left")));
@@ -273,23 +285,16 @@ export function useActionRunner() {
     m.set("pcbnew.AlignAndDistribute.distributeVerticallyGaps", pcbOnly(() => api.distributeSelection("y", "gaps")));
     m.set("pcbnew.AlignAndDistribute.distributeVerticallyCenters", pcbOnly(() => api.distributeSelection("y", "centers")));
 
-    // common.Interactive.cut (Ctrl+X): trivially "copy then delete" -- the
-    // one honorable-mention gap PARITY-pcb.md's hotkey audit named as
-    // exactly that. copySelection is synchronous and reads straight off
-    // the current board/selection, so there is no race with the delete
-    // that follows it.
-    // common.Interactive.cut (Ctrl+X) -- edit_tool.cpp copyToClipboard(cut) + DeleteItems(isCut):
-    // copies exactly what it then deletes. The clipboard only holds tracks/vias/zones/shapes/text,
-    // so footprints and dimensions are neither copied nor deleted (they used to be destroyed
-    // un-restorably), and locked items are skipped. Copy happens first, delete is one undo step.
+    // common.Interactive.cut (Ctrl+X) -- edit_tool.cpp copyToClipboard(cut) + DeleteItems(isCut): copies exactly what it then deletes -- every kind of item,
+    // footprints and groups included, a locked item skipped (only a Cut drops them). The copy is KiCad's clipboard text, written before the delete,
+    // which is one undo step.
     m.set(
       "common.Interactive.cut",
       pcbOnly(() => {
-        const locked = new Set(state.board?.locked ?? []);
-        const refs = requestSelection().filter((id) => !locked.has(id) && Boolean(api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id)));
+        if (!state.board) return;
+        const refs = editableSelection(state.board, requestSelection()).ids;
         if (refs.length === 0) return;
-        api.copySelection(refs);
-        deleteRefs(refs);
+        void api.copySelection(refs).then(() => deleteRefs(refs));
       })
     );
 
@@ -298,7 +303,18 @@ export function useActionRunner() {
       if (state.tab !== "pcb" && state.tab !== "schematic") return;
       // `DrawRuleArea`'s loop: Delete while a rule area is in progress removes its last corner (`deleteLastPoint`) instead of deleting a selection.
       if (state.tab === "schematic" && state.drawState?.kind === "sch_shape" && state.drawState.poly) return deleteLastPoint(state.drawState, dispatch);
-      deleteRefs(requestSelection());
+      const refs = requestSelection();
+      // `EDIT_TOOL::Remove`: "When not in free-pad mode we normally auto-promote selected pads to their parent footprints. But this is probably a little too
+      // dangerous for a destructive operation, so we just do the promotion but not the deletion (allowing for a second delete to do it if that's what the
+      // user wanted)."
+      if (state.tab === "pcb" && state.board && refs.some((id) => itemKind(state.board!, id) === "pad")) {
+        const promoted = editableSelection(state.board, refs).ids;
+        if (promoted.filter((id) => itemKind(state.board!, id) === "part").length > refs.filter((id) => itemKind(state.board!, id) === "part").length) {
+          dispatch({ type: "SET_SELECTION", refs: promoted });
+          return;
+        }
+      }
+      deleteRefs(refs);
     });
     // F is Flip's real KiCad hotkey, but it's also pcbnew.InteractiveRouter.
     // AttemptFinish's while actively routing -- KiCad's own tool stack
@@ -566,7 +582,7 @@ export function useActionRunner() {
       if (state.tab === "pcb") void api.duplicateSelection();
       else if (state.tab === "footprint") void fpApi.duplicateSelection(false);
     });
-    m.set("common.Interactive.copy", pcbOnly(() => api.copySelection()));
+    m.set("common.Interactive.copy", pcbOnly(() => void api.copySelection(requestSelection())));
     m.set("common.Interactive.paste", pcbOnly(() => api.pasteClipboard()));
     // Task item 5: common/tool/group_tool.cpp (Ctrl+G/Ctrl+Shift+G -- see
     // useGlobalHotkeys.ts's own special-cased binding for why those two
@@ -784,12 +800,13 @@ export function useActionRunner() {
     m.set(
       "pcbnew.InteractiveMove.move",
       pcbOnly(() => {
-        const first = requestSelection()[0];
-        if (!first) return;
-        // Tracks and zones have no move_* Cmd (api/types.ts) -- nothing
-        // for M to do for them, same as they're excluded from dragging
-        // in Canvas.tsx's onPointerDown.
-        if (api.trackById(first) || api.zoneById(first)) return;
+        if (!state.board) return;
+        // `EDIT_TOOL::Move`: whatever `RequestSelection` hands it -- any kind of item, locked ones filtered out (`FilterCollectorForLockedItems`).
+        const { ids, lockedOut } = editableSelection(state.board, requestSelection());
+        if (ids.length === 0) {
+          if (lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+          return;
+        }
         adoptHovered();
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at: state.cursorUm });
@@ -816,6 +833,8 @@ export function useActionRunner() {
       if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch);
       // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.
       if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+      // `EDIT_TOOL::Duplicate` / `PCB_CONTROL::Paste`: cancelling the move that carries the new items takes them away again.
+      if (state.tab === "pcb" && state.activeTool === "move") void api.revertCarriedPlacement();
       dispatch({ type: "ESCAPE" });
     });
 
@@ -1705,7 +1724,8 @@ export function useActionRunner() {
       // items are picked up one at a time (selection order), each glued to the cursor by its anchor; a click drops it and picks up the next, Tab leaves it where it was.
       const startMoveIndividually = (refs: string[]) => {
         if (!board) return;
-        const movable = refs.filter((r) => movableItem(board, r));
+        // `RequestSelection` with the free-pad and locked-item filters: a pad stands for its footprint, a locked item stays.
+        const movable = editableSelection(board, refs).ids.filter((r) => movableItem(board, r));
         const [first, ...rest] = movable;
         if (!first) return;
         const at = movableItem(board, first)!.at;

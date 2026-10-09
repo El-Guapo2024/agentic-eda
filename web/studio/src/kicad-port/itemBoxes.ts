@@ -12,6 +12,7 @@
 import type { BoardState, CmdShape, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, PointXY, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
+import { padIds } from "./pcbItems";
 
 /** `[minX, minY, maxX, maxY]`. */
 export type Box = readonly [number, number, number, number];
@@ -67,6 +68,12 @@ export function pcbItemBoxes(board: BoardState): ItemBoxes {
       const b = boxOfPoints(pads.length > 0 ? pads : [[p.at[0], p.at[1]]]);
       if (b) out.set(p.ref, b);
     }
+  }
+  // A pad is an item of its own (`REF.NUMBER`, kicad-port/pcbItems.ts `padIds`): selectable, and Zoom to Selection finds it.
+  for (const p of board.parts) {
+    if (!p.placed || !p.pads?.length) continue;
+    const ids = padIds(p);
+    p.pads.forEach((pad, i) => out.set(ids[i]!, [pad.x - pad.w / 2, pad.y - pad.h / 2, pad.x + pad.w / 2, pad.y + pad.h / 2]));
   }
   for (const t of board.routing?.tracks ?? []) {
     const b = boxOfPoints(t.pts);
