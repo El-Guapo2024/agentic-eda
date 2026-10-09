@@ -45,6 +45,12 @@ pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_f
 mod symbol_import;
 pub use symbol_import::{parse_library_symbols, ParsedSymbols};
 
+// What the Symbol and Footprint Choosers index of the installed libraries without parsing their drawings (see each module's doc).
+mod symbol_scan;
+pub use symbol_scan::{inherit as inherit_symbol_summaries, parse_symbol, scan_symbols, symbol_text, SymbolSummary};
+mod footprint_scan;
+pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
+
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 

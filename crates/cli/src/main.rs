@@ -27,6 +27,7 @@ mod convert_api;
 mod fab_api;
 mod library_api;
 mod library_index;
+mod library_search;
 mod page_json;
 mod sch_api;
 mod sch_clipboard_api;

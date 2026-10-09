@@ -690,6 +690,26 @@ fn handle(
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        // The Symbol and Footprint Choosers (`crate::library_search`): one library's items with their descriptions, the search over every library's
+        // names, descriptions and keywords (best first, capped), and the drawing of the one item selected. The project's own symbols come apart.
+        ("GET", "/api/library/entries" | "/api/library/search" | "/api/library/details") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => {
+                    let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power"));
+                    match path {
+                        "/api/library/entries" => crate::library_search::entries(kind, &query_value(target, "lib"), &filter),
+                        "/api/library/search" => {
+                            let limit = query_value(target, "limit").parse::<usize>().ok().filter(|&n| n > 0).map_or(crate::library_search::SEARCH_LIMIT, |n| n.min(2000));
+                            crate::library_search::search(kind, &query_value(target, "q"), &filter, limit)
+                        }
+                        _ => crate::library_search::details(kind, &query_value(target, "id")),
+                    }
+                }
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
