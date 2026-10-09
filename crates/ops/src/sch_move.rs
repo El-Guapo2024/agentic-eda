@@ -14,6 +14,7 @@
 //! - a symbol's box for the centre of a selection is its body and pins, without its fields.
 
 use crate::sch_drag::{constrain_on_edge, Drag};
+use crate::sch_fields::FieldSel;
 use crate::sch_scene::{inferred_spin, mirror_coord, rotate_point, rotate_vec, Item, Matrix, Scene, F_END, F_SELECTED, F_START};
 use crate::{Board, Cmd};
 use eda_model::ir::{Point, SchematicSection, SheetInstance, Um};
@@ -228,6 +229,18 @@ pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<Stri
     }
     let mut locked_skipped = 0usize;
     for id in ids {
+        // a field picked on its own (`SCH_FIELD`): of a locked item it cannot be (`SCH_FIELD::IsLocked`)
+        if crate::sch_fields::is_field_id(id) {
+            let Some(f) = scene.find_field(id) else {
+                return Err(fail("ops_unknown_item", id, "no field with this id on the sheet"));
+            };
+            if scene.is_field_locked(&f) {
+                locked_skipped += 1;
+            } else if !scene.fields.contains(&f) {
+                scene.fields.push(f);
+            }
+            continue;
+        }
         let items = find_items(scene, id);
         if items.is_empty() {
             return Err(fail("ops_unknown_item", id, "no item with this id on the sheet"));
@@ -254,7 +267,7 @@ pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<Stri
             }
         }
     }
-    if scene.in_selection().is_empty() {
+    if scene.in_selection().is_empty() && scene.fields.is_empty() {
         if locked_skipped > 0 {
             return Err(fail("ops_locked", &ids[0], "the selected items are locked"));
         }
@@ -339,6 +352,10 @@ fn move_selection(scene: &mut Scene, delta: Point, turns: &[Turn], about: Option
     for it in scene.in_selection() {
         scene.move_item(it, delta);
     }
+    // a field moves by the offset taken back through its symbol's transform, unless its symbol moves it
+    for f in scene.loose_fields() {
+        scene.move_field(&f, delta);
+    }
     for &t in turns {
         turn_selection(scene, t, about, GRID_UM, true);
     }
@@ -351,6 +368,9 @@ fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um, turns:
     let internal = internal_points(scene);
     remove_orphaned_junctions(scene);
     scene.perform_item_move(&mut st, delta, true);
+    for f in scene.loose_fields() {
+        scene.move_field(&f, delta);
+    }
     for &t in turns {
         turn_selection(scene, t, about, GRID_UM, true);
     }
@@ -387,9 +407,10 @@ fn box_center(b: (Point, Point)) -> Point {
 
 /// `SELECTION::GetCenter`: the middle of the selection's box, text and labels left out; of a selection of only those, the mean of their
 /// places (so turning it does not shift it).
-fn selection_center(scene: &Scene, items: &[Item]) -> Point {
+fn selection_center(scene: &Scene, items: &[Item], fields: &[FieldSel]) -> Point {
     let text_like = |it: &Item| matches!(it, Item::Text(_)) || matches!(it, Item::Label(_)) || scene.is_label_like(*it);
-    if items.iter().all(text_like) {
+    // a field is no text for this (`SCH_FIELD_T` is not `SCH_TEXT_T`): its box counts
+    if fields.is_empty() && items.iter().all(text_like) {
         let n = items.len().max(1) as i64;
         let (sx, sy) = items.iter().fold((0, 0), |(x, y), it| {
             let p = scene.position(*it);
@@ -401,6 +422,18 @@ fn selection_center(scene: &Scene, items: &[Item]) -> Point {
     let mut hi: Option<Point> = None;
     for it in items.iter().filter(|it| !text_like(it)) {
         if let Some((a, b)) = scene.item_box(*it) {
+            lo = Some(match lo {
+                None => a,
+                Some(l) => Point { x: l.x.min(a.x), y: l.y.min(a.y) },
+            });
+            hi = Some(match hi {
+                None => b,
+                Some(h) => Point { x: h.x.max(b.x), y: h.y.max(b.y) },
+            });
+        }
+    }
+    for f in fields {
+        if let Some((a, b)) = scene.field_box(f) {
             lo = Some(match lo {
                 None => a,
                 Some(l) => Point { x: l.x.min(a.x), y: l.y.min(a.y) },
@@ -429,7 +462,9 @@ fn principal_count(scene: &Scene, items: &[Item]) -> usize {
 /// the items are held (`moving && selection.HasReferencePoint()`), when `about` is where they are held.
 fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um, moving: bool) {
     let all = scene.in_selection();
-    if all.is_empty() {
+    // the fields picked on their own, whose item does not turn them
+    let loose = scene.loose_fields();
+    if all.is_empty() && loose.is_empty() {
         return;
     }
     // what the user picked: not "SELECTED_BY_DRAG" (the lines and labels a drag added are turned with them, not counted)
@@ -457,7 +492,10 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um,
     match turn {
         Turn::RotCcw | Turn::RotCw => {
             let ccw = turn == Turn::RotCcw;
-            if principal_count(scene, &principal) == 1 {
+            if principal_count(scene, &principal) + loose.len() == 1 && principal.is_empty() {
+                // a lone field: its text turns a quarter where it stands (`case SCH_FIELD_T`)
+                scene.turn_field_text(&loose[0]);
+            } else if principal_count(scene, &principal) + loose.len() == 1 {
                 let head = principal[0];
                 let pivot = rotate_single(scene, head, reference, ccw, grid);
                 // "We've already rotated the user selected item if there was only one. We're just here to rotate the ends of wires that were attached to it."
@@ -466,7 +504,7 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um,
                     rotate_item(scene, it, pivot, ccw, grid);
                 }
             } else {
-                let center = reference.unwrap_or_else(|| half_grid(selection_center(scene, &all), grid));
+                let center = reference.unwrap_or_else(|| half_grid(selection_center(scene, &all, &scene.fields), grid));
                 for &it in &all {
                     if let Item::SheetPin(s, _) = it {
                         if sheets.contains(&s) {
@@ -475,14 +513,21 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um,
                     }
                     rotate_item(scene, it, center, ccw, grid);
                 }
+                // `SCH_FIELD::Rotate( rotPoint )`, unless "parent will rotate us"
+                for f in &loose {
+                    scene.rotate_field_about(f, center, ccw);
+                }
             }
         }
         Turn::MirrorH | Turn::MirrorV => {
             let vertical = turn == Turn::MirrorV;
-            if all.len() == 1 {
-                mirror_single(scene, all[0], vertical, about, grid);
+            if all.len() + scene.fields.len() == 1 {
+                match scene.fields.first().cloned() {
+                    Some(f) => scene.mirror_field(&f, vertical),
+                    None => mirror_single(scene, all[0], vertical, about, grid),
+                }
             } else {
-                let center = about.unwrap_or_else(|| half_grid(selection_center(scene, &all), grid));
+                let center = about.unwrap_or_else(|| half_grid(selection_center(scene, &all, &scene.fields), grid));
                 for &it in &all {
                     if let Item::SheetPin(s, _) = it {
                         if sheets.contains(&s) {
@@ -490,6 +535,10 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um,
                         }
                     }
                     mirror_item(scene, it, center, vertical, grid);
+                }
+                // a field flips its justification, whether or not its item is mirrored too (`SCH_EDIT_TOOL::Mirror`)
+                for f in scene.fields.clone() {
+                    scene.mirror_field(&f, vertical);
                 }
             }
         }
@@ -572,6 +621,16 @@ fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: b
         other => {
             let pivot = default_pivot(scene);
             rotate_item(scene, other, pivot, ccw, grid);
+            // `case SCH_SYMBOL_T`: `if( m_AutoplaceFields.enable ) ... symbol->AutoplaceFields( screen, fieldsAutoplaced )` -- a symbol turned alone has the
+            // fields that Autoplace Fields put where they were placed again for its new orientation
+            let owner = match other {
+                Item::Symbol(i) => Some(eda_model::ir::field_key(&scene.sch.symbols[i].id, scene.sch.symbols[i].unit)),
+                Item::Power(i) => Some(scene.sch.power_symbols[i].id.clone()),
+                _ => None,
+            };
+            if let Some(key) = owner {
+                scene.replace_fields_if_autoplaced(&key);
+            }
             pivot
         }
     }
@@ -632,6 +691,9 @@ fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Um) {
         Item::Sheet(i) => {
             let old = scene.sch.sheets[i].clone();
             rotate_sheet(&mut scene.sch.sheets[i], &old, c, ccw);
+            // `SCH_SHEET::Rotate`: "AutoplaceFields( nullptr, m_fieldsAutoplaced )" when they were
+            let id = scene.sch.sheets[i].id.clone();
+            scene.replace_fields_if_autoplaced(&id);
         }
         Item::SheetPin(s, p) => {
             let sheet = scene.sch.sheets[s].clone();
@@ -649,10 +711,12 @@ fn effective_spin(scene: &Scene, label: usize) -> LabelSpin {
 fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, about: Option<Point>, grid: Um) {
     match head {
         Item::Symbol(i) => {
-            // `SetOrientation( SYM_MIRROR_x )`, nothing else
+            // `SetOrientation( SYM_MIRROR_x )`, then `SetFieldsAutoplaced( AUTOPLACE_NONE )`
             let s = &mut scene.sch.symbols[i];
             let m = Matrix::of(s.rot, s.mirrored, s.mirror_y).then(if vertical { Matrix::MIRROR_X } else { Matrix::MIRROR_Y });
             (s.rot, s.mirrored, s.mirror_y) = m.orientation();
+            let key = eda_model::ir::field_key(&s.id, s.unit);
+            scene.sch.extras.fields_autoplaced.remove(&key);
         }
         Item::Text(_) => {}
         Item::Label(i) => {

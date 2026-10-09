@@ -58,6 +58,8 @@ export interface HookState {
   grid: number | null;
   dialogs: string[];
   open: string[];
+  /** The view of the canvas on screen (the schematic's or the board's): a point `(x, y)` of the sheet is at `(view.x + x * view.scale, view.y + y * view.scale)` pixels from the canvas's top-left corner; null on the other tabs. */
+  view: { x: number; y: number; scale: number } | null;
 }
 
 export interface EdaTestHook {
@@ -214,6 +216,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : null,
         dialogs: dialogTitles(),
         open: openNames(L),
+        view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : null,
       };
     },
 

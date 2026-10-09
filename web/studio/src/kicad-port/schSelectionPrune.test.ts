@@ -40,3 +40,10 @@ test("an older backend's sheet without junctions, lines or graphics still works"
   const sch = { symbols: [], wires: [{ id: "w1" }], labels: [], texts: [], power_symbols: [], no_connects: [], bus_entries: [], sheets: [] } as unknown as Schematic;
   assert.deepEqual([...keepOnSheet(new Set(["w1", "x"]), sch)], ["w1"]);
 });
+
+test("a shown field stays selected across a refresh, a hidden or emptied one does not", () => {
+  const field = (name: string, text: string, visible: boolean) => ({ id: `fld:R1:${name}`, name, text, at: [0, 0], vertical: false, h: "left", v: "center", visible });
+  const sch = sheet({ symbols: [{ id: "R1", unit: 1, fields: [field("Reference", "R1", true), field("Value", "330", true), field("Footprint", "", false), field("Datasheet", "", true)] }] });
+  const kept = keepOnSheet(new Set(["R1", "fld:R1:Reference", "fld:R1:Value", "fld:R1:Footprint", "fld:R1:Datasheet", "fld:R2:Value"]), sch);
+  assert.deepEqual([...kept].sort(), ["R1", "fld:R1:Reference", "fld:R1:Value"]);
+});

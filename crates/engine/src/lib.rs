@@ -13,6 +13,7 @@ use eda_model::ir::{Design, NoConnect, Point, Provenance, SchematicSection, Symb
 use eda_model::{CheckResult, ConstraintModel, Part, Pin, PinKind};
 
 pub mod fields;
+pub mod fields_edit;
 mod flat;
 pub mod geometry;
 pub mod hier;

@@ -15,6 +15,10 @@
 //! - `label_spins`: which way a label's text runs from its anchor (`SCH_LABEL_BASE::GetSpinStyle`), once Rotate or Mirror has set it.
 //! - `strokes`, `junction_looks`: the width, line style and colour of a wire, bus, bus entry or graphic line and the diameter and colour
 //!   of an explicit junction (`STROKE_PARAMS`, `SCH_JUNCTION::m_diameter`), once Wire/Bus Properties has set them.
+//! - `label_looks`: the size, bold and italic of a label's text (`EDA_TEXT`), once Label Properties has set them.
+//! - `fields_autoplaced`: which symbols, power symbols and sheets have their fields where Autoplace Fields put them
+//!   (`SCH_ITEM::GetFieldsAutoplaced`), so a turn, a text edit or a Properties OK places them again.
+//! - `body_styles`: the body style a placed symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`; 1 is the normal one, 2 KiCad's alternate "De Morgan" one).
 
 use crate::ir::{Millideg, Point, Um};
 use serde::{Deserialize, Serialize};
@@ -55,6 +59,59 @@ pub struct SchExtras {
     /// An explicit junction's dot (`SCH_JUNCTION::GetDiameter` / `GetColor`), by junction id, once Junction Properties set one.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub junction_looks: BTreeMap<String, JunctionLook>,
+    /// How a label's text is set (`EDA_TEXT::GetTextWidth`, `IsBold`, `IsItalic`), by label id, once Label Properties set it. A label with no entry has the
+    /// default text (50 mil, regular, upright), which is what the writer and the painter use for every label that was never edited.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub label_looks: BTreeMap<String, LabelLook>,
+    /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
+    /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
+    /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
+    /// text or showing a hidden field places them again while the item is in it. An item with no entry in `SchematicSection::field_layout` has its
+    /// fields placed live, as if it were in it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields_autoplaced: BTreeMap<String, AutoplaceAlgo>,
+    /// The body style a placed symbol is drawn in, by `field_key`: 1 is the normal one, 2 the alternate ("De Morgan") one of a library symbol that has
+    /// both (`SCH_SYMBOL::SetBodyStyle`, `(body_style 2)` in the file). A symbol with no entry is drawn in style 1.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub body_styles: BTreeMap<String, u32>,
+}
+
+/// `AUTOPLACE_ALGO`: which Autoplace Fields routine put an item's fields where they are. "Auto" is the minimalist one that runs when a symbol is
+/// placed or turned, "manual" the one the Autoplace Fields command runs, which also keeps the fields off whatever is drawn around the symbol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoplaceAlgo {
+    #[default]
+    Auto,
+    Manual,
+}
+
+/// The part of a label's `EDA_TEXT` that is not its spin or its text: size, bold, italic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LabelLook {
+    /// The text's size (height and width), micrometres; 0 is the default, 50 mil.
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub size_um: Um,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub italic: bool,
+}
+
+impl LabelLook {
+    pub fn is_default(&self) -> bool {
+        *self == LabelLook::default()
+    }
+
+    /// The size the text is set in, micrometres.
+    pub fn text_size_um(&self) -> Um {
+        if self.size_um > 0 {
+            self.size_um
+        } else {
+            crate::ir::DEFAULT_FIELD_SIZE_UM
+        }
+    }
 }
 
 /// How a wire, bus, bus entry or graphic line is stroked (`STROKE_PARAMS`): the part of `DIALOG_WIRE_BUS_PROPERTIES` and
@@ -145,7 +202,15 @@ impl SchExtras {
 
 impl SchExtras {
     pub fn is_empty(&self) -> bool {
-        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none() && self.label_spins.is_empty() && self.strokes.is_empty() && self.junction_looks.is_empty()
+        self.graphics.is_empty()
+            && self.locked.is_empty()
+            && self.page.is_none()
+            && self.label_spins.is_empty()
+            && self.strokes.is_empty()
+            && self.junction_looks.is_empty()
+            && self.label_looks.is_empty()
+            && self.fields_autoplaced.is_empty()
+            && self.body_styles.is_empty()
     }
 
     /// True when `id` is locked.

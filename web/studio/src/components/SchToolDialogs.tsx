@@ -6,6 +6,7 @@ import { graphicsEqual } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { ChangeSymbolsDialog } from "./SchChangeSymbolsDialog";
+import { FieldPropertiesDialog } from "./SchFieldDialog";
 import { GlobalEditDialog } from "./SchGlobalEditDialog";
 import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, StrokePropertiesDialog, TextPropertiesDialog } from "./SchPropertiesDialogs";
@@ -35,6 +36,8 @@ export function SchToolDialogs() {
     // Properties (`E`, a double-click): SchPropertiesDialogs.tsx; a text box and a directive label reopen the dialogs that drew them.
     case "props_label":
       return <LabelPropertiesDialog key={`pl:${dialog.id}`} id={dialog.id} />;
+    case "props_field":
+      return <FieldPropertiesDialog key={`pf:${dialog.id}`} id={dialog.id} />;
     case "props_text":
       return <TextPropertiesDialog key={`pt:${dialog.id}`} id={dialog.id} />;
     case "props_sheet":

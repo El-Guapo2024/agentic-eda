@@ -136,15 +136,15 @@ export interface BoardLike {
 
 /** The schematic's state JSON as far as the hook reads it. */
 export interface SchematicLike {
-  symbols?: IdItems;
+  symbols?: readonly { id?: string; fields?: IdItems }[];
   wires?: IdItems;
   labels?: IdItems;
   texts?: IdItems;
-  power_symbols?: IdItems;
+  power_symbols?: readonly { id?: string; fields?: IdItems }[];
   no_connects?: IdItems;
   junctions?: IdItems;
   lines?: IdItems;
-  sheets?: IdItems;
+  sheets?: readonly { id?: string; fields?: IdItems }[];
   graphics?: IdItems;
   bus_entries?: IdItems;
 }
@@ -166,7 +166,16 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
 }
 
 export function schematicLists(sch: SchematicLike | null | undefined): ItemLists {
+  // a field is selected by the id `fld:<owner>:<name>` (kicad-port/schFieldEdit.ts)
+  const fieldIds: string[] = [];
+  const addFields = (items: readonly { fields?: IdItems }[] | undefined) => {
+    for (const it of items ?? []) for (const f of it.fields ?? []) if (f.id) fieldIds.push(f.id);
+  };
+  addFields(sch?.symbols);
+  addFields(sch?.power_symbols);
+  addFields(sch?.sheets);
   return {
+    field: fieldIds,
     symbol: ids(sch?.symbols),
     wire: ids(sch?.wires),
     label: ids(sch?.labels),

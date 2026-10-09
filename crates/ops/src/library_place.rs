@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn a_definition_the_intent_gives_the_model_is_not_replaced_by_a_librarys() {
         let mut model = ConstraintModel::default();
-        model.symbols.push(eda_model::LibSymbol { lib_id: "Device:R".into(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), reference_prefix: "R".into(), unit_count: 1, pin_names_hidden: false, pin_numbers_hidden: false, pin_name_offset_mm: 0.0 });
+        model.symbols.push(eda_model::LibSymbol { lib_id: "Device:R".into(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), reference_prefix: "R".into(), unit_count: 1, pin_names_hidden: false, pin_numbers_hidden: false, pin_name_offset_mm: 0.0, alternate: None });
         let mut b = board(&model);
         b.apply(&Cmd::EmbedLibSymbol { symbol: LibrarySymbol::new_empty("Device:R") }).unwrap();
         assert!(b.design().symbol_library.is_none(), "the model already resolves Device:R");

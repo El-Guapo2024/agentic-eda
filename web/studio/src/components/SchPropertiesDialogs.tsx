@@ -74,10 +74,16 @@ function LabelForm({ label, spin }: { label: SchematicLabel; spin: LabelSpinName
   const [text, setText] = useState(label.net);
   const [shape, setShape] = useState<LabelShape>(label.shape ?? "input");
   const [turn, setTurn] = useState<LabelSpinName>(spin);
+  const [size, setSize] = useState(umToMm(label.size_um && label.size_um > 0 ? label.size_um : 1270));
+  const [bold, setBold] = useState(!!label.bold);
+  const [italic, setItalic] = useState(!!label.italic);
   const title = label.scope === "global" ? "Global Label Properties" : label.scope === "hierarchical" ? "Hierarchical Label Properties" : "Label Properties";
+  const sizeUm = mmToUm(size);
+  // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
+  const sizeOk = sizeUm !== null && sizeUm >= 10 && sizeUm <= 1_000_000;
   // "Label can not be empty." (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`)
-  const canOk = text.trim().length > 0;
-  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn }));
+  const canOk = text.trim().length > 0 && sizeOk;
+  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeUm, bold, italic }));
   return (
     <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -103,6 +109,17 @@ function LabelForm({ label, spin }: { label: SchematicLabel; spin: LabelSpinName
             </option>
           ))}
         </select>
+        <span>Text size (mm)</span>
+        <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
+        <span>Style</span>
+        <span style={{ display: "flex", gap: 14 }}>
+          <label>
+            <input type="checkbox" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
+          </label>
+          <label>
+            <input type="checkbox" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
+          </label>
+        </span>
       </Grid>
     </SchDialogShell>
   );

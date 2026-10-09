@@ -1552,6 +1552,8 @@ export interface LibSymbol {
   pin_numbers_hidden?: boolean;
   /** `(pin_names (offset x))`, mm: names are written inside the body, from the pin's inner end on, when it is above zero; over the pin line when it is zero. KiCad's default is 0.508 mm (20 mils). */
   pin_name_offset?: Mm;
+  /** `LIB_SYMBOL::GetBodyStyleCount`: 2 for a symbol with an alternate ("De Morgan") body style, whose items are then of `body_style` 1 or 2 (or 0, drawn in both); 1 (or absent) for one with a single body. */
+  body_style_count?: number;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
@@ -1570,7 +1572,22 @@ export interface SchField {
   h: "left" | "center" | "right";
   v: "top" | "center" | "bottom";
   visible: boolean;
+  /** The id the field is selected, moved and edited by (`fld:<owner>:<name>`, `eda_engine::fields_edit::field_id`); absent from a backend built before fields were items. */
+  id?: string;
+  /** The item that has the field: a symbol's reference (`#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. */
+  owner?: string;
+  /** The size of the text (its height and width), micrometres; absent is the default, 50 mil. */
+  size_um?: Um;
+  bold?: boolean;
+  italic?: boolean;
+  /** `SCH_FIELD::IsNameShown`: the field is drawn as `Name: value`. */
+  name_shown?: boolean;
+  /** `SCH_FIELD::CanAutoplace`: false leaves the field where it is when its item's fields are autoplaced. */
+  allow_autoplace?: boolean;
 }
+
+/** Whether Autoplace Fields put an item's fields where they are (`SCH_ITEM::GetFieldsAutoplaced`): null is not (or never did). */
+export type FieldsAutoplaced = "auto" | "manual" | null;
 
 export interface SchematicSymbol {
   /** Reference designator ("U1") -- the same id PCB parts use. */
@@ -1583,7 +1600,7 @@ export interface SchematicSymbol {
   mirror: "x" | "y" | null;
   /** 1-based unit (gate) of a multi-unit symbol -- e.g. a quad op-amp, or ecc83-pp's three-triode ECC83. */
   unit: number;
-  /** 0 = no DeMorgan alternate (every real-world symbol in this app so far); 1 = normal, 2 = alternate, when one exists. */
+  /** The body style the symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`): 1 the normal one, 2 the alternate ("De Morgan") one of a library symbol that has it. */
   body_style: number;
   value: string | null;
   mpn: string | null;
@@ -1599,6 +1616,7 @@ export interface SchematicSymbol {
   exclude_from_sim?: boolean;
   /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
   fields?: SchField[];
+  fields_autoplaced?: FieldsAutoplaced;
 }
 
 /**
@@ -1626,6 +1644,7 @@ export interface PowerSymbol {
   pin: SchematicPin;
   /** The Value (its net name) where KiCad draws it, and the hidden Reference. */
   fields?: SchField[];
+  fields_autoplaced?: FieldsAutoplaced;
 }
 
 export interface NoConnect {
@@ -1688,6 +1707,10 @@ export interface SchematicLabel {
   shape: LabelShape | null;
   /** Which way the text runs from the anchor once Rotate or Mirror has set it (`SCH_LABEL_BASE::GetSpinStyle`); absent or null reads off the wire that ends at the label. */
   spin?: "right" | "up" | "left" | "bottom" | null;
+  /** The text's size (height and width), micrometres, and whether it is bold or italic (`EDA_TEXT`); absent is the default, 50 mil, regular. */
+  size_um?: Um;
+  bold?: boolean;
+  italic?: boolean;
 }
 
 /** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */
@@ -1746,6 +1769,7 @@ export interface Sheet {
   pins: SheetPin[];
   /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
   fields?: SchField[];
+  fields_autoplaced?: FieldsAutoplaced;
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */

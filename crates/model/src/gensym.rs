@@ -187,6 +187,7 @@ pub fn generate(part: &Part, lib_id: &str) -> LibSymbol {
         pin_names_hidden: false,
         pin_numbers_hidden: false,
         pin_name_offset_mm: NAME_OFFSET_MM,
+        alternate: None,
     }
 }
 

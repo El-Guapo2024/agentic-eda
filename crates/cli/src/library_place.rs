@@ -153,7 +153,7 @@ mod tests {
     fn a_symbol_the_design_already_resolves_is_left_alone() {
         let root = root_with_lm358("known");
         let mut model = ConstraintModel::default();
-        model.symbols.push(eda_model::LibSymbol { lib_id: "Amplifier_Operational:LM358".into(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), reference_prefix: "U".into(), unit_count: 1, pin_names_hidden: false, pin_numbers_hidden: false, pin_name_offset_mm: 0.0 });
+        model.symbols.push(eda_model::LibSymbol { lib_id: "Amplifier_Operational:LM358".into(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), reference_prefix: "U".into(), unit_count: 1, pin_names_hidden: false, pin_numbers_hidden: false, pin_name_offset_mm: 0.0, alternate: None });
         assert!(rewrite(&add("Amplifier_Operational:LM358", "", ""), &design(), &model, &root, &root).is_none());
         // nor are a synthetic id, a bare name or a library that is not installed rewritten
         let empty = ConstraintModel::default();
@@ -195,7 +195,7 @@ mod tests {
         // a target the design resolves, or no library has, is left alone
         let known = Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "Device:C".into())], update_fields: false };
         let mut with_c = ConstraintModel::default();
-        with_c.symbols.push(eda_model::LibSymbol { lib_id: "Device:C".into(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), reference_prefix: "C".into(), unit_count: 1, pin_names_hidden: false, pin_numbers_hidden: false, pin_name_offset_mm: 0.0 });
+        with_c.symbols.push(eda_model::LibSymbol { lib_id: "Device:C".into(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), reference_prefix: "C".into(), unit_count: 1, pin_names_hidden: false, pin_numbers_hidden: false, pin_name_offset_mm: 0.0, alternate: None });
         assert!(rewrite(&known, &design(), &with_c, &root, &root).is_none());
         let nowhere = Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "Nope:Nothing".into())], update_fields: false };
         assert!(rewrite(&nowhere, &design(), &model, &root, &root).is_none());
