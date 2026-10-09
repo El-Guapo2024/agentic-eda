@@ -99,7 +99,7 @@ fn drawn(model: &ConstraintModel, sch: &SchematicSection) -> Vec<Drawn> {
             p.x = s.at.x;
             p.y = s.at.y;
         }
-        out.push(Drawn { owner: s.id.clone(), what: format!("symbol {}", s.id), rect: p.keepout() });
+        out.push(Drawn { owner: s.id.clone(), what: format!("symbol {}", s.id), rect: p.keepout_in(sch) });
     }
     for ps in &sch.power_symbols {
         if ps.lib_id == "power:PWR_FLAG" {
@@ -283,7 +283,9 @@ fn the_flat_derivation_sits_inside_the_frame_on_a_paper_that_holds_it() {
             }
         }
         // The grid is kept: every symbol and every wire point is still a multiple of 1.27 mm.
-        assert!(sch.symbols.iter().all(|s| s.at.x % G == 0 && s.at.y % G == 0), "{file}");
+        for s in &sch.symbols {
+            assert!(s.at.x % G == 0 && s.at.y % G == 0, "{file}: {} at {:?}", s.id, s.at);
+        }
     }
 }
 

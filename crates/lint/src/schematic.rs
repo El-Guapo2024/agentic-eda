@@ -464,6 +464,15 @@ fn collect_text_boxes_and_label_extents(sch: &SchematicSection, model: &Constrai
         let _w = width as f64 / 1000.0;
         let h = height as f64 / 1000.0;
 
+        // A symbol whose fields have places of their own (a derivation stores them where KiCad's Autoplace Fields puts them) has its
+        // reference and value there; `eda-render` draws them there too.
+        if let Some(fields) = eda_engine::fields::stored_visible_fields(sch, sym, part, model.real_symbol_of(&sym.lib_id, part).as_ref()) {
+            for f in &fields {
+                let key = if f.name == "Reference" { "ref" } else { "value" };
+                out.push((format!("{}:{key}", sym.id), eda_engine::fields::field_box_mm(f)));
+            }
+            continue;
+        }
         // Mirrors eda-render: a 2-pin passive anchors ref/value off the
         // glyph's vertical center (cy = h/2), not the (IC-sized) box edges.
         let _ = h;
@@ -666,7 +675,7 @@ fn check_wire_through_symbol(sch: &SchematicSection, geos: &BTreeMap<String, Sym
 
 fn check_endpoint_off_pin(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo>, out: &mut Vec<CheckResult>) {
     let mut ok = true;
-    for w in &sch.wires {
+    for (wi, w) in sch.wires.iter().enumerate() {
         // A wire naming no part pins at all isn't a part-to-part wire this
         // gate can judge -- e.g. the short leg `derive_schematic` draws
         // from a `PWR_FLAG` to an existing power symbol, neither end of
@@ -692,11 +701,18 @@ fn check_endpoint_off_pin(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo
         }
         let first = to_lpoint(first);
         let last = to_lpoint(last);
-        if !stub_tips.contains(&first) {
+        // A stub hung off a pin ends where it carries something: a power symbol's pin, a label, or the join across the stubs of pins side
+        // by side (another wire of the net has a point there).
+        let carries = |p: LPoint| -> bool {
+            sch.power_symbols.iter().any(|ps| ps.net == w.net && to_lpoint(ps.at) == p)
+                || sch.labels.iter().any(|l| l.net == w.net && to_lpoint(l.at) == p)
+                || sch.wires.iter().enumerate().any(|(j, o)| j != wi && o.net == w.net && o.pts.iter().any(|q| to_lpoint(*q) == p))
+        };
+        if !stub_tips.contains(&first) && !carries(first) {
             out.push(CheckResult::fail("schematic_wire_endpoint_off_pin", w.net.clone(), format!("first point {first:?} is not at any listed pin's stub tip")));
             ok = false;
         }
-        if !stub_tips.contains(&last) {
+        if !stub_tips.contains(&last) && !carries(last) {
             out.push(CheckResult::fail("schematic_wire_endpoint_off_pin", w.net.clone(), format!("last point {last:?} is not at any listed pin's stub tip")));
             ok = false;
         }

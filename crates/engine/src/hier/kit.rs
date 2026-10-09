@@ -300,6 +300,21 @@ impl Placed {
         r
     }
 
+    /// The body with its pins, and every text it draws, the fields where `sch` keeps them (else where Autoplace Fields puts them).
+    pub fn keepout_in(&self, sch: &eda_model::ir::SchematicSection) -> Rect {
+        let mut r = self.body_rect();
+        for t in self.pin_text_rects() {
+            r = r.union(t);
+        }
+        let (inst, geom) = (self.instance(), self.geom());
+        for f in crate::fields::symbol_fields(sch, &inst, Some(&self.part), self.resolved.as_ref(), &geom) {
+            if f.visible && !f.text.is_empty() {
+                r = r.union(text_rect(&f.text, f.at, f.h, f.v, f.vertical));
+            }
+        }
+        r
+    }
+
     /// The body with its pins, and every text it draws.
     pub fn keepout(&self) -> Rect {
         let mut r = self.body_rect();

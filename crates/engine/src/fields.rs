@@ -382,6 +382,26 @@ pub fn symbol_fields(sch: &SchematicSection, sym: &SymbolInstance, part: Option<
         .collect()
 }
 
+/// The Reference and Value of a symbol (the fields that are shown) where the section keeps their placements; `None` for a symbol it keeps none
+/// for (a drawing from before fields had places of their own).
+pub fn stored_visible_fields(sch: &SchematicSection, sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol>) -> Option<Vec<PageField>> {
+    if !sch.field_layout.contains_key(&field_key(&sym.id, sym.unit)) {
+        return None;
+    }
+    let mut sym = sym.clone();
+    if sym.lib_id.is_empty() {
+        sym.lib_id = format!("eda:{}", sym.id);
+    }
+    let geom = SymbolGeom::of(&sym, part, resolved);
+    Some(symbol_fields(sch, &sym, Some(part), resolved, &geom).into_iter().filter(|f| f.visible && !f.text.is_empty()).collect())
+}
+
+/// The box a shown field's text takes on the sheet, in millimetres.
+pub fn field_box_mm(f: &PageField) -> crate::geometry::TextBox {
+    let r = crate::hier::kit::text_rect(&f.text, f.at, f.h, f.v, f.vertical);
+    crate::geometry::TextBox { x0: r.x0 as f64 / 1000.0, y0: r.y0 as f64 / 1000.0, x1: r.x1 as f64 / 1000.0, y1: r.y1 as f64 / 1000.0 }
+}
+
 // -------------------------------------------------------------------------------------------------- power symbols
 
 /// How far a power symbol's glyph reaches from its pin along its axis, pen included (micrometres).

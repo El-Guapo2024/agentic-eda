@@ -130,7 +130,30 @@ pub fn translate_section(sch: &mut SchematicSection, dx: i64, dy: i64) {
 /// onto it, on the grid, centred across and with the top at the frame's margin. (`derive_schematic` packs from the origin, so its
 /// first row used to sit on the frame line, off the top of the page.)
 pub fn fit_flat(sch: &mut SchematicSection, model: &ConstraintModel) {
-    use kit::{label_rect, nc_rect, power_rect, smallest_paper, snap_down, snap_up, union_all, Placed, Rect};
+    use kit::{smallest_paper, snap_down, snap_up};
+    let Some(bb) = flat_extent(sch, model) else { return };
+    let (w, h) = (snap_up(bb.x1) - snap_down(bb.x0), snap_up(bb.y1) - snap_down(bb.y0));
+    let paper = smallest_paper(w, h);
+    let u = paper.usable();
+    let dx = u.x0 + snap_down((u.w() - w) / 2) - snap_down(bb.x0);
+    let dy = u.y0 - snap_down(bb.y0);
+    translate_section(sch, dx, dy);
+    let tb = sch.title_block.get_or_insert_with(TitleBlock::default);
+    tb.paper = paper.name.to_string();
+}
+
+/// Whether content of this extent fits the largest paper there is.
+pub fn fits_a_sheet(bb: kit::Rect) -> bool {
+    use kit::{snap_down, snap_up, PAPERS};
+    let (w, h) = (snap_up(bb.x1) - snap_down(bb.x0), snap_up(bb.y1) - snap_down(bb.y0));
+    let u = PAPERS[PAPERS.len() - 1].usable();
+    w <= u.w() && h <= u.h()
+}
+
+/// The box of everything a flat section draws: its symbols with their pins and texts, its labels, power symbols and no-connect flags,
+/// the points of its wires.
+pub fn flat_extent(sch: &SchematicSection, model: &ConstraintModel) -> Option<kit::Rect> {
+    use kit::{label_rect, nc_rect, power_rect, union_all, Placed, Rect};
     let mut rects: Vec<Rect> = Vec::new();
     for s in &sch.symbols {
         let Some(part) = model.part(&s.id) else { continue };
@@ -141,10 +164,11 @@ pub fn fit_flat(sch: &mut SchematicSection, model: &ConstraintModel) {
         p.flip = s.rot == 180_000;
         p.x = if p.flip { s.at.x - p.w() } else { s.at.x };
         p.y = if p.flip { s.at.y - p.h() } else { s.at.y };
-        rects.push(p.keepout());
+        rects.push(p.keepout_in(sch));
     }
     for l in &sch.labels {
-        rects.push(label_rect(l.at, (1, 0), &l.net, false).union(label_rect(l.at, (-1, 0), &l.net, false)));
+        let hierarchical = !matches!(l.kind, eda_model::ir::LabelKind::Local);
+        rects.push(label_rect(l.at, crate::obstacles::label_run_dir(sch, l), &l.net, hierarchical));
     }
     for p in &sch.power_symbols {
         rects.push(power_rect(p.at, p.rot, &p.net, &p.lib_id));
@@ -157,15 +181,7 @@ pub fn fit_flat(sch: &mut SchematicSection, model: &ConstraintModel) {
             rects.push(Rect { x0: p.x, y0: p.y, x1: p.x, y1: p.y });
         }
     }
-    let Some(bb) = union_all(rects) else { return };
-    let (w, h) = (snap_up(bb.x1) - snap_down(bb.x0), snap_up(bb.y1) - snap_down(bb.y0));
-    let paper = smallest_paper(w, h);
-    let u = paper.usable();
-    let dx = u.x0 + snap_down((u.w() - w) / 2) - snap_down(bb.x0);
-    let dy = u.y0 - snap_down(bb.y0);
-    translate_section(sch, dx, dy);
-    let tb = sch.title_block.get_or_insert_with(TitleBlock::default);
-    tb.paper = paper.name.to_string();
+    union_all(rects)
 }
 
 /// Number the power symbols across the whole design, in sheet order, and drop one `PWR_FLAG` per net that needs a source on the

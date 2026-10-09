@@ -76,43 +76,21 @@ fn measure(path: &Path) -> Option<(usize, usize)> {
     Some((flat.as_deref().map(summary).unwrap_or(0), modules.as_deref().map(summary).unwrap_or(0)))
 }
 
-/// What each example has today, (flat, module sheets). Every step of the cleanup lowers these; they end at zero.
-///
 /// Before the cleanup began (fields of every symbol stacked at the page's corner, labels reading over pin names, generated symbols with
-/// their pins one grid apart): all_power_ground_net 46 / 49, dense_small_outline 36 / 30, l1_usb_mcu 2147 / 957, l2_sensor_hub 5298 / 1414,
-/// l3_motor_hub 15262 / 2238, l4_control_hub 37401 / 3617, ldo 142 / 140, ldo_proximity_heavy 217 / 167, mcu_board_30plus 3100 / 1536,
-/// mixed_track_widths 142 / 140, nc_pins 67 / 68, opamp_filter 153 / 168, passive_divider_ladder 91 / 86, star_net 51 / 42,
-/// through_hole_headers 104 / 94, two_pin_nets 14 / 12, unroutable_tiny_outline 56 / 56.
-const KNOWN: &[(&str, usize, usize)] = &[
-    ("all_power_ground_net.yaml", 2, 0),
-    ("dense_small_outline.yaml", 0, 0),
-    ("l1_usb_mcu.yaml", 58, 0),
-    ("l2_sensor_hub.yaml", 163, 0),
-    ("l3_motor_hub.yaml", 256, 0),
-    ("l4_control_hub.yaml", 441, 0),
-    ("ldo.yaml", 16, 0),
-    ("ldo_proximity_heavy.yaml", 10, 0),
-    ("mcu_board_30plus.yaml", 90, 0),
-    ("mixed_track_widths.yaml", 16, 0),
-    ("nc_pins.yaml", 7, 0),
-    ("opamp_filter.yaml", 10, 0),
-    ("passive_divider_ladder.yaml", 1, 0),
-    ("star_net.yaml", 0, 0),
-    ("through_hole_headers.yaml", 18, 0),
-    ("two_pin_nets.yaml", 0, 0),
-    ("unroutable_tiny_outline.yaml", 4, 0),
-];
-
+/// their pins one grid apart) the findings, flat / module sheets, were: all_power_ground_net 46 / 49, dense_small_outline 36 / 30,
+/// l1_usb_mcu 2147 / 957, l2_sensor_hub 5298 / 1414, l3_motor_hub 15262 / 2238, l4_control_hub 37401 / 3617, ldo 142 / 140,
+/// ldo_proximity_heavy 217 / 167, mcu_board_30plus 3100 / 1536, mixed_track_widths 142 / 140, nc_pins 67 / 68, opamp_filter 153 / 168,
+/// passive_divider_ladder 91 / 86, star_net 51 / 42, through_hole_headers 104 / 94, two_pin_nets 14 / 12, unroutable_tiny_outline 56 / 56.
+/// Now there are none.
 #[test]
 fn no_overlap_on_any_example_flat_or_as_module_sheets() {
     let mut off = Vec::new();
     for f in example_files() {
         let name = f.file_name().unwrap().to_string_lossy().to_string();
         let Some((flat, modules)) = measure(&f) else { continue };
-        let (kflat, kmod) = KNOWN.iter().find(|(n, _, _)| *n == name).map(|(_, a, b)| (*a, *b)).unwrap_or((0, 0));
-        if flat != kflat || modules != kmod {
-            off.push(format!("{name}: flat {flat} (KNOWN says {kflat}), module sheets {modules} (KNOWN says {kmod})"));
+        if flat != 0 || modules != 0 {
+            off.push(format!("{name}: {flat} finding(s) flat, {modules} as module sheets"));
         }
     }
-    assert!(off.is_empty(), "the findings changed; a lower number is progress, so write it into KNOWN:\n{}", off.join("\n"));
+    assert!(off.is_empty(), "something on a derived sheet overlaps something else (run with --nocapture for the list, EDA_SCH_DUMP=<dir> to keep the sheets and render them with kicad-cli):\n{}", off.join("\n"));
 }

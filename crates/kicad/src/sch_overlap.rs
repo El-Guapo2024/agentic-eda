@@ -585,6 +585,21 @@ fn same_point(a: Pt, b: Pt) -> bool {
     (a.0 - b.0).abs() < 2.0 && (a.1 - b.1).abs() < 2.0
 }
 
+/// Is `p` on the segment from `s` to `e`, to within a hair?
+fn on_seg(p: Pt, s: Pt, e: Pt) -> bool {
+    let (dx, dy) = (e.0 - s.0, e.1 - s.1);
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-9 {
+        return same_point(p, s);
+    }
+    let t = ((p.0 - s.0) * dx + (p.1 - s.1) * dy) / len2;
+    if !(-1e-6..=1.0 + 1e-6).contains(&t) {
+        return false;
+    }
+    let (qx, qy) = (s.0 + t * dx, s.1 + t * dy);
+    (p.0 - qx).abs() < 2.0 && (p.1 - qy).abs() < 2.0
+}
+
 fn share_anchor(a: &Item, b: &Item) -> bool {
     a.anchors.iter().any(|p| b.anchors.iter().any(|q| same_point(*p, *q)))
 }
@@ -620,6 +635,11 @@ fn exempt(a: &Item, b: &Item) -> bool {
     }
     // a no-connect flag sits on its pin's end, over that pin's own texts
     let nc_on_texts = |nc: &Item, t: &Item| nc.kind == Kind::NoConnect && matches!(t.kind, Kind::PinName | Kind::PinNumber) && t.pin_tip.is_some_and(|tip| nc.anchors.iter().any(|p| same_point(*p, tip)));
+    // a power symbol or flag whose pin is on a wire is joined to it: a flag stands on the wire it flags
+    let power_on_wire = |p: &Item, w: &Item| p.power && p.kind == Kind::Body && w.kind == Kind::Wire && w.seg.is_some_and(|(s, e)| p.anchors.iter().any(|q| on_seg(*q, s, e)));
+    if power_on_wire(a, b) || power_on_wire(b, a) {
+        return true;
+    }
     // a power symbol or flag stands on a pin's end, over that pin's own texts, where KiCad's own schematics put them
     let power_on_texts = |p: &Item, t: &Item| p.power && p.kind == Kind::Body && matches!(t.kind, Kind::PinName | Kind::PinNumber) && t.pin_tip.is_some_and(|tip| p.anchors.iter().any(|q| same_point(*q, tip)));
     nc_on_texts(a, b) || nc_on_texts(b, a) || power_on_texts(a, b) || power_on_texts(b, a)
@@ -697,8 +717,9 @@ fn segs_conflict(a: (Pt, Pt), b: (Pt, Pt)) -> Option<f64> {
 fn conflict(a: &Item, b: &Item) -> Option<f64> {
     match (a.seg, b.seg) {
         (None, None) => a.rect.shared(&b.rect, TOL).map(|(w, h)| w.min(h)).filter(|d| *d > CONTACT_UM),
-        (Some(s), None) => seg_through(s, &b.rect),
-        (None, Some(s)) => seg_through(s, &a.rect),
+        // a wire a pen's width or less inside a box only touches it
+        (Some(s), None) => seg_through(s, &b.rect.inflate(-CONTACT_UM)),
+        (None, Some(s)) => seg_through(s, &a.rect.inflate(-CONTACT_UM)),
         (Some(s), Some(t)) => segs_conflict(s, t),
     }
 }

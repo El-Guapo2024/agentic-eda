@@ -187,8 +187,17 @@ pub struct Items {
     pub keepouts: Vec<(String, Rect)>,
     /// What hangs off the pins (stubs, power symbols, labels), so a later one steers clear of an earlier one on the next pin.
     pub hung: Vec<Rect>,
+    /// What stands on a pin's end (a flag), by the pin: everything hung on another pin steers clear of it.
+    pub reserved: Vec<(String, Rect)>,
+    /// How many things found no place clear of the rest (they hang where they would first have): the layout had too little room.
+    pub failures: usize,
     /// The box of the part a block is built around, kept through every move so the sheet can centre it.
     pub core: Option<Rect>,
+}
+
+/// The box of a wire from `a` to `b`: the line and a hair either side.
+fn wire_rect(a: Point, b: Point) -> Rect {
+    Rect::new(a.x.min(b.x) - 200, a.y.min(b.y) - 200, a.x.max(b.x) + 200, a.y.max(b.y) + 200)
 }
 
 fn shift(p: &mut Point, dx: i64, dy: i64) {
@@ -238,6 +247,9 @@ impl Items {
         for r in &mut self.hung {
             *r = r.translate(dx, dy);
         }
+        for (_, r) in &mut self.reserved {
+            *r = r.translate(dx, dy);
+        }
         self.core = self.core.map(|c| c.translate(dx, dy));
     }
 
@@ -259,6 +271,8 @@ impl Items {
         self.rects.extend(o.rects);
         self.keepouts.extend(o.keepouts);
         self.hung.extend(o.hung);
+        self.reserved.extend(o.reserved);
+        self.failures += o.failures;
         self.core = self.core.or(o.core);
     }
 
@@ -311,17 +325,39 @@ impl Items {
     /// Is the thing at `end` (its box `item`), joined to the pin at `tip` by a wire, clear of everything hung on the other pins and of the
     /// other parts? The pin's own part is not in its way: the wire leaves it.
     fn hangs_clear(&self, pin_ref: &str, tip: Point, end: Point, item: Rect) -> bool {
-        let own = pin_ref.split('.').next().unwrap_or("");
-        let wire = Rect::new(tip.x.min(end.x) - 200, tip.y.min(end.y) - 200, tip.x.max(end.x) + 200, tip.y.max(end.y) + 200);
-        let clear = |r: Rect| self.hung.iter().all(|h| !h.overlaps(&r)) && self.keepouts.iter().all(|(who, k)| who == own || !k.overlaps(&r));
-        clear(item.inflate(HANG_GAP)) && clear(wire)
+        self.rect_clear(pin_ref, item.inflate(HANG_GAP)) && self.rect_clear(pin_ref, wire_rect(tip, end))
     }
 
-    /// The nearest stub, from `min` cells, at whose end `item_at` (the box of the thing there) leaves it clear.
-    fn stub_cells(&self, pin_ref: &str, tip: Point, side: Side, min: i64, item_at: impl Fn(Point) -> Rect) -> i64 {
+    /// Does `r` keep clear of everything hung so far, of what stands on other pins' ends and of the parts other than the pin's own?
+    fn rect_clear(&self, pin_ref: &str, r: Rect) -> bool {
+        let own = pin_ref.split('.').next().unwrap_or("");
+        self.hung.iter().all(|h| !h.overlaps(&r)) && self.keepouts.iter().all(|(who, k)| who == own || !k.overlaps(&r)) && self.reserved.iter().all(|(pin, k)| pin == pin_ref || !k.overlaps(&r))
+    }
+
+    /// Where a wire from the pin at `tip` (on `side` of its part) may go to hang something whose box at `end`, facing `dir`, is `item_at(end, dir)`:
+    /// straight out from `min` cells, else out `min` cells and along, either way, as far as it takes. Returns the wire's points and the way the thing at
+    /// its end faces; the straight stub of `min` cells when nothing is clear.
+    fn hang_route(&self, pin_ref: &str, tip: Point, side: Side, min: i64, item_at: impl Fn(Point, (i64, i64)) -> Rect) -> (Vec<Point>, (i64, i64), bool) {
         let (dx, dy) = side_dir(side);
-        let end = |c: i64| Point { x: tip.x + dx * c * G, y: tip.y + dy * c * G };
-        (min..=min + MAX_PUSH).find(|&c| self.hangs_clear(pin_ref, tip, end(c), item_at(end(c)))).unwrap_or(min)
+        let out = |p: Point, d: (i64, i64), c: i64| Point { x: p.x + d.0 * c * G, y: p.y + d.1 * c * G };
+        for c in min..=min + MAX_PUSH {
+            let end = out(tip, (dx, dy), c);
+            if self.hangs_clear(pin_ref, tip, end, item_at(end, (dx, dy))) {
+                return (vec![tip, end], (dx, dy), true);
+            }
+        }
+        // out `min` cells, then along the row of pins either way
+        for k in 2..=MAX_PUSH {
+            for sign in [1, -1] {
+                let perp = (-dy * sign, dx * sign);
+                let turn = out(tip, (dx, dy), min);
+                let end = out(turn, perp, k);
+                if self.rect_clear(pin_ref, wire_rect(tip, turn)) && self.hangs_clear(pin_ref, turn, end, item_at(end, perp)) {
+                    return (vec![tip, turn, end], perp, true);
+                }
+            }
+        }
+        (vec![tip, out(tip, (dx, dy), min)], (dx, dy), false)
     }
 
     /// Remember the wire from `tip` to `end` and the box of what it ends in.
@@ -346,18 +382,19 @@ impl Items {
     }
 
     /// A power symbol off a pin: a wire two cells long out of the tip, the symbol on its end; three when a flag stands on the tip, so the flag's
-    /// glyph and the symbol's do not touch; longer when what hangs on the pin next to it is in the way.
+    /// glyph and the symbol's do not touch; longer, or bent along the row of pins, when what hangs on the pin next to it is in the way.
     pub fn power_at(&mut self, pin_ref: &str, tip: Point, side: Side, net: &str, flag: bool) {
-        let (dx, dy) = side_dir(side);
-        let rot = outward_rot(!is_ground_net_name(net), side);
         let lib_id = power_lib_id(net);
-        let cells = self.stub_cells(pin_ref, tip, side, if flag { 3 } else { 2 }, |end| power_rect(end, rot, net, &lib_id));
-        let end = Point { x: tip.x + dx * cells * G, y: tip.y + dy * cells * G };
-        self.wire(net, vec![pin_ref.to_string()], vec![tip, end]);
-        let wire = Rect::new(tip.x.min(end.x) - 200, tip.y.min(end.y) - 200, tip.x.max(end.x) + 200, tip.y.max(end.y) + 200);
-        self.rects.push(wire);
-        self.hung.push(wire);
-        self.power_symbol_at(pin_ref, end, side, net);
+        let rises = !is_ground_net_name(net);
+        let (pts, dir, found) = self.hang_route(pin_ref, tip, side, if flag { 3 } else { 2 }, |end, d| power_rect(end, outward_rot(rises, side_of_dir(d)), net, &lib_id));
+        self.failures += usize::from(!found);
+        self.wire(net, vec![pin_ref.to_string()], pts.clone());
+        for pair in pts.windows(2) {
+            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200, pair[0].y.min(pair[1].y) - 200, pair[0].x.max(pair[1].x) + 200, pair[0].y.max(pair[1].y) + 200);
+            self.rects.push(wire);
+            self.hung.push(wire);
+        }
+        self.power_symbol_at(pin_ref, *pts.last().expect("a route has points"), side_of_dir(dir), net);
     }
 
     /// The rail pins of one part, drawn the way a person draws them: pins of one rail that sit side by side on one side of the part (at most three
@@ -390,8 +427,20 @@ impl Items {
                     continue;
                 }
                 let (dx, dy) = side_dir(side);
-                let ends: Vec<Point> = run.iter().map(|p| Point { x: p.tip.x + dx * 3 * G, y: p.tip.y + dy * 3 * G }).collect();
                 let anchor = if horizontal || is_ground_net_name(&net) { run.len() - 1 } else { 0 };
+                // the stubs, three cells at least, as long as it takes for the join, the symbol and its name to clear what is already hung
+                let lib_id = power_lib_id(&net);
+                let rot = outward_rot(!is_ground_net_name(&net), side);
+                let ends_at = |c: i64| -> Vec<Point> { run.iter().map(|p| Point { x: p.tip.x + dx * c * G, y: p.tip.y + dy * c * G }).collect() };
+                let found = (3..=3 + MAX_PUSH).find(|&c| {
+                    let ends = ends_at(c);
+                    run.iter().zip(&ends).all(|(p, e)| self.rect_clear(&p.pin_ref, wire_rect(p.tip, *e)))
+                        && ends.windows(2).all(|w| self.rect_clear(&run[0].pin_ref, wire_rect(w[0], w[1])))
+                        && self.rect_clear(&run[0].pin_ref, power_rect(ends[anchor], rot, &net, &lib_id).inflate(HANG_GAP))
+                });
+                self.failures += usize::from(found.is_none());
+                let cells = found.unwrap_or(3);
+                let ends = ends_at(cells);
                 for (i, p) in run.iter().enumerate() {
                     self.wire(&net, vec![p.pin_ref.clone()], vec![p.tip, ends[i]]);
                     let w = Rect::new(p.tip.x.min(ends[i].x) - 200, p.tip.y.min(ends[i].y) - 200, p.tip.x.max(ends[i].x) + 200, p.tip.y.max(ends[i].y) + 200);
@@ -409,15 +458,69 @@ impl Items {
         }
     }
 
-    /// A wire from a pin tip straight out `len` (more when what hangs on the pin next to it is in the way), ending in a label.
+    /// A wire from a pin tip straight out `len` (more, or bent along the row of pins, when what hangs on the pin next to it is in the way), ending in a
+    /// label.
     pub fn labelled(&mut self, pin_ref: &str, tip: Point, side: Side, net: &str, hierarchical: bool, len: i64) {
-        let (dx, dy) = side_dir(side);
-        let cells = self.stub_cells(pin_ref, tip, side, len / G, |end| label_rect(end, (dx, dy), net, hierarchical));
-        let end = Point { x: tip.x + dx * cells * G, y: tip.y + dy * cells * G };
-        self.wire(net, vec![pin_ref.to_string()], vec![tip, end]);
+        let (pts, dir, found) = self.hang_route(pin_ref, tip, side, len / G, |end, d| label_rect(end, d, net, hierarchical));
+        self.failures += usize::from(!found);
+        let end = *pts.last().expect("a route has points");
+        self.wire(net, vec![pin_ref.to_string()], pts.clone());
         let kind = if hierarchical { LabelKind::Hierarchical { shape: LabelShape::Bidirectional } } else { LabelKind::Local };
         self.labels.push(NetLabel { id: String::new(), net: net.to_string(), at: end, kind });
-        self.hang(tip, end, label_rect(end, (dx, dy), net, hierarchical));
+        for pair in pts.windows(2) {
+            let wire = Rect::new(pair[0].x.min(pair[1].x) - 200, pair[0].y.min(pair[1].y) - 200, pair[0].x.max(pair[1].x) + 200, pair[0].y.max(pair[1].y) + 200);
+            self.rects.push(wire);
+            self.hung.push(wire);
+        }
+        let item = label_rect(end, dir, net, hierarchical);
+        self.rects.push(item);
+        self.hung.push(item);
+    }
+
+    /// Adjacent pins of one net on one side of a part, drawn as one: each has a stub three cells long, the stubs are joined across their ends, and
+    /// one label stands on a tail out of the middle of the join, its text running on outward -- so two labels of one net never crowd each other.
+    pub fn label_run(&mut self, pins: &[(String, Point)], side: Side, net: &str) {
+        let (dx, dy) = side_dir(side);
+        let at = |p: Point, c: i64| Point { x: p.x + dx * c * G, y: p.y + dy * c * G };
+        // the stubs, three cells at least, as long as it takes for the join and the label on its tail to clear what is already hung
+        let own = pins[0].0.clone();
+        let fits = |c: i64| -> bool {
+            let ends: Vec<Point> = pins.iter().map(|(_, t)| at(*t, c)).collect();
+            let n = ends.len();
+            let mid = if n % 2 == 1 { ends[n / 2] } else { Point { x: (ends[n / 2 - 1].x + ends[n / 2].x) / 2, y: (ends[n / 2 - 1].y + ends[n / 2].y) / 2 } };
+            let tail_end = at(mid, 2);
+            pins.iter().zip(&ends).all(|((r, t), e)| self.rect_clear(r, wire_rect(*t, *e)))
+                && ends.windows(2).all(|w| self.rect_clear(&own, wire_rect(w[0], w[1])))
+                && self.hangs_clear(&own, mid, tail_end, label_rect(tail_end, (dx, dy), net, false))
+        };
+        let found = (3..=3 + MAX_PUSH).find(|&c| fits(c));
+        self.failures += usize::from(found.is_none());
+        let stub = found.unwrap_or(3);
+        let ends: Vec<Point> = pins.iter().map(|(_, t)| at(*t, stub)).collect();
+        let n = ends.len();
+        // the join's middle: a pin's own stub end, or halfway between the two middle ones
+        let mid = if n % 2 == 1 { ends[n / 2] } else { Point { x: (ends[n / 2 - 1].x + ends[n / 2].x) / 2, y: (ends[n / 2 - 1].y + ends[n / 2].y) / 2 } };
+        let tail = (2..=2 + MAX_PUSH).find(|&c| self.hangs_clear(&own, mid, at(mid, c), label_rect(at(mid, c), (dx, dy), net, false))).unwrap_or(2);
+        let end = at(mid, tail);
+        let mut join: Vec<Point> = ends.clone();
+        if n % 2 == 0 {
+            join.insert(n / 2, mid);
+        }
+        for ((pin_ref, tip), e) in pins.iter().zip(&ends) {
+            self.wire(net, vec![pin_ref.clone()], vec![*tip, *e]);
+            let w = Rect::new(tip.x.min(e.x) - 200, tip.y.min(e.y) - 200, tip.x.max(e.x) + 200, tip.y.max(e.y) + 200);
+            self.rects.push(w);
+            self.hung.push(w);
+        }
+        for pair in join.windows(2) {
+            self.wire(net, Vec::new(), vec![pair[0], pair[1]]);
+            let w = Rect::new(pair[0].x.min(pair[1].x) - 200, pair[0].y.min(pair[1].y) - 200, pair[0].x.max(pair[1].x) + 200, pair[0].y.max(pair[1].y) + 200);
+            self.rects.push(w);
+            self.hung.push(w);
+        }
+        self.wire(net, Vec::new(), vec![mid, end]);
+        self.labels.push(NetLabel { id: String::new(), net: net.to_string(), at: end, kind: LabelKind::Local });
+        self.hang(mid, end, label_rect(end, (dx, dy), net, false));
     }
 
     /// Draw whatever `pin_ref`'s net needs at its tip: a power symbol, or a wire to a label.
@@ -435,6 +538,16 @@ impl Items {
             Some(NetClass::Internal) => self.labelled(pin_ref, tip, side, net, false, len),
             None => {}
         }
+    }
+}
+
+/// The side of a part a wire leaving along `dir` leaves from.
+pub fn side_of_dir(dir: (i64, i64)) -> Side {
+    match dir {
+        (1, 0) => Side::Right,
+        (-1, 0) => Side::Left,
+        (0, -1) => Side::Top,
+        _ => Side::Bottom,
     }
 }
 
