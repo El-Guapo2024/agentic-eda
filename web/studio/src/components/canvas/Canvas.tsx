@@ -15,7 +15,7 @@
 //     `move_to` on drop (see state/store.tsx `commitMove`); M starts the
 //     same preview without holding the button, click commits, Esc cancels.
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { carryStart } from "../../kicad-port/pcbTransform";
@@ -28,6 +28,8 @@ import { applyCommands } from "../../actions/pcbSweepKit";
 import { picker } from "../../actions/pcbPicker";
 import { boundsOfPoints, fitTransform, screenToWorld, panByWorldDelta } from "./view";
 import { paintBoard } from "./painter";
+import { buildPaintAppearance } from "./appearancePaint";
+import { netsContext } from "../../kicad-port/appearanceNets";
 import { isStale } from "../../kicad-port/checkRevision";
 import { layerColor } from "./layers";
 import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
@@ -226,6 +228,9 @@ export function Canvas() {
   const routeMoveGuardRef = useRef(createRequestGuard());
 
   const board = state.board;
+  // The Appearance panel's settings as the painter reads them: opacities, the colour each net gets, the sheet (rebuilt only when they or the board change).
+  const nets = useMemo(() => netsContext(board), [board]);
+  const paintAppearance = useMemo(() => buildPaintAppearance(state.appearance, nets, board), [state.appearance, nets, board]);
 
   // The canvas's backing size tracks its container's actual box, not a
   // value computed once at mount -- a side panel opening/closing or the
@@ -331,7 +336,8 @@ export function Canvas() {
             mode: state.bcx.ratsnestMode,
             hiddenNets: new Set(state.bcx.hiddenRatsnestNets),
             flippedPads: new Set(state.bcx.localRatsnestPads),
-            visibleLayers: new Set(board.layers.flatMap((l, i) => (state.layerVisible[l] !== false ? [i] : []))),
+            // The "visible layers" ratsnest mode counts the layers on; with the inactive layers hidden, the active one alone (`RATSNEST_VIEW_ITEM::ViewDraw`).
+            visibleLayers: new Set(board.layers.flatMap((l, i) => ((state.highContrast && state.appearance.contrastHidden && state.activeLayer ? l === state.activeLayer : state.layerVisible[l] !== false) ? [i] : []))),
           })
         : null,
       drcViolations: state.drc?.violations ?? null,
@@ -365,6 +371,7 @@ export function Canvas() {
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
       enteredGroup: state.enteredGroupId,
+      appearance: paintAppearance,
     });
     ctx.restore();
 
@@ -383,7 +390,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

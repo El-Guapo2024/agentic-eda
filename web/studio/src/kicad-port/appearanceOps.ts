@@ -53,6 +53,20 @@ export type AppearanceOp =
   | { op: "save_viewport"; name: string; rect: { x: number; y: number; w: number; h: number } }
   | { op: "delete_viewport"; name: string };
 
+/** Every op name, for the scripted entry point `studio.Appearance.op`. */
+export const APPEARANCE_OP_NAMES: readonly AppearanceOp["op"][] = [
+  "object", "opacity", "contrast", "net_color_mode", "ratsnest_display", "net_color", "net_visible", "show_all_nets", "hide_other_nets", "netclass_color", "netclass_visible",
+  "show_all_netclasses", "hide_other_netclasses", "layer", "layer_opacity", "layer_group", "menu_preset", "hide_all_but_active", "select_preset", "save_preset", "delete_preset",
+  "flip", "save_viewport", "delete_viewport",
+];
+
+/** An op as a script hands it over (`__eda.run( "studio.Appearance.op", { op: "object", id: "tracks", visible: false } )`): an object naming a known op, else null. */
+export function asAppearanceOp(v: unknown): AppearanceOp | null {
+  if (typeof v !== "object" || v === null) return null;
+  const name = (v as { op?: unknown }).op;
+  return typeof name === "string" && (APPEARANCE_OP_NAMES as readonly string[]).includes(name) ? (v as AppearanceOp) : null;
+}
+
 const clamp01 = (v: number): number => Math.max(0, Math.min(1, Number.isFinite(v) ? v : 0));
 
 /** The slice's objects, as the preset code sees them: the 22, with the ratsnest and the grid from their own switches. */

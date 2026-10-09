@@ -29,6 +29,8 @@ import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
 import { isHighlighted } from "../../kicad-port/boardControl";
 import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
+import { layerIsVisible, isCopper } from "../../kicad-port/layerPresets";
+import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
 
 /**
  * pcb_painter.cpp GetColor's net-highlight branch (see kicad-port/
@@ -43,6 +45,16 @@ import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 function withNetHighlight(color: string, net: string | null | undefined, highlight: string | readonly string[] | null): string {
   if (!highlight || !net) return color;
   return rgbToHex(netHighlightColor(hexToRgb(color), isHighlighted(net, highlight)));
+}
+
+/**
+ * The colour a copper item is drawn in: its net's (or its net class's) colour when the net colour mode is "All" and it has one, else the layer's `base`;
+ * then the net highlight on top (`PCB_RENDER_SETTINGS::GetColor`).
+ */
+function copperPaint(base: string, net: string | null | undefined, opts: PaintOptions): string {
+  const highlighted = opts.netHighlight && net ? isHighlighted(net, opts.netHighlight) : null;
+  const own = copperColor(base, net, opts.appearance, highlighted);
+  return own !== base ? own : withNetHighlight(base, net, opts.netHighlight);
 }
 
 export interface PaintOptions {
@@ -116,13 +128,19 @@ export interface PaintOptions {
   drcSelected: number | null;
   /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`): drawn in a frame with its name, and everything outside it dimmed. */
   enteredGroup?: string | null;
+  /**
+   * What the Appearance panel adds to plain layer visibility (appearancePaint.ts): the opacities, net colours, the hidden inactive-layer mode, the sheet.
+   * The visibility of the objects themselves (tracks, pads, DRC errors ...) is in `layerVisible` under `obj:<id>` keys (kicad-port/appearance.ts).
+   */
+  appearance?: PaintAppearance;
 }
 
 /** How much of its colour an item outside the entered group keeps. */
 export const OUTSIDE_ENTERED_GROUP_ALPHA = 0.3;
 
 function layerAlpha(opts: PaintOptions, key: string): number {
-  if (opts.activeLayer && opts.highContrast && opts.activeLayer !== key) return 0.25;
+  // HIGH_CONTRAST_MODE::DIMMED mixes the inactive layers 80 % into the background; HIDDEN draws them not at all.
+  if (opts.activeLayer && opts.highContrast && opts.activeLayer !== key) return opts.appearance?.contrastHidden ? 0 : 0.25;
   return opts.layerOpacity[key] ?? 1;
 }
 
@@ -208,6 +226,8 @@ function drawPadNumber(ctx: CanvasRenderingContext2D, pad: Pad, withNet: boolean
 
 function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part: Part, opts: PaintOptions) {
   if (!part.placed || !part.courtyard) return;
+  // Footprints Front / Footprints Back: everything of a footprint on a hidden side -- courtyard, pads, text -- is not drawn.
+  if (!footprintShown(opts.layerVisible, part)) return;
   const [x0, y0, x1, y1] = part.courtyard;
   const selected = opts.selection.has(part.ref);
   const isHot = opts.hot.has(part.ref);
@@ -255,8 +275,11 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   // background-colored, but this app's Pad has no drill-diameter field
   // to size it, so only the wall stroke is drawn.
   const padCopperKey = part.side === "bottom" ? "b_cu" : "f_cu";
-  for (const pad of part.pads ?? []) {
-    const fill = withNetHighlight(layerColor(padCopperKey), pad.net, opts.netHighlight);
+  const padAlpha = opacityOf(opts.appearance, "pads");
+  for (const pad of on(opts.layerVisible, "pads") ? (part.pads ?? []) : []) {
+    ctx.save();
+    ctx.globalAlpha *= padAlpha;
+    const fill = copperPaint(layerColor(padCopperKey), pad.net, opts);
     pathForPad(ctx, pad);
     if (opts.sketchPads) {
       ctx.strokeStyle = fill;
@@ -283,6 +306,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.fillText(pad.net, pad.x, numbered ? pad.y + padTextLayout(pad, true).netOffset : pad.y, pad.w * 0.9);
     }
     if (numbered) drawPadNumber(ctx, pad, !!pad.net && pad.w * view.scale > 22 && pad.h * view.scale > 10, layerColor("pad_netname"));
+    ctx.restore();
   }
 
   // A selected pad (pads are selectable on their own): the selection colour around it.
@@ -316,7 +340,8 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     align = "left";
   }
   const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
-  if (opts.layerVisible[silkKey] !== false) {
+  // The reference shows when its layer does and both Footprint Text and References are on (`PCB_TEXT::ViewGetLOD`).
+  if (opts.layerVisible[silkKey] !== false && on(opts.layerVisible, "footprint_text") && on(opts.layerVisible, "footprint_references")) {
     withAlpha(ctx, layerAlpha(opts, silkKey), () => {
       drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : fs / 6, color: layerColor(silkKey) });
     });
@@ -327,7 +352,9 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
 
 function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
   if (!board.routing) return;
-  for (const t of board.routing.tracks) {
+  const tracksOn = on(opts.layerVisible, "tracks");
+  const trackAlpha = opacityOf(opts.appearance, "tracks");
+  for (const t of tracksOn ? board.routing.tracks : []) {
     const key = copperColorKey(t.layer);
     const bucket = key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
     if (bucket !== wantLayer) continue;
@@ -343,21 +370,24 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
     // how layerVisible/layerOpacity are populated (BOARD_OK in
     // state/store.tsx) -- `key` above is this app's lowercase paint
     // bucket ("f_cu"), a different namespace, only used for layerColor().
-    withAlpha(ctx, layerAlpha(opts, t.layer) * 0.92, () => {
+    withAlpha(ctx, layerAlpha(opts, t.layer) * 0.92 * trackAlpha, () => {
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-      ctx.strokeStyle = withNetHighlight(layerColor(key), t.net, opts.netHighlight);
+      ctx.strokeStyle = copperPaint(layerColor(key), t.net, opts);
       ctx.lineWidth = opts.sketchTracks ? hairlineUm(view, 1.5) : Math.max(t.width, hairlineUm(view, 1));
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.stroke();
     });
   }
-  if (wantLayer === "f_cu") {
+  if (wantLayer === "f_cu" && on(opts.layerVisible, "vias")) {
+    const viaAlpha = opacityOf(opts.appearance, "vias");
     for (const v of board.routing.vias) {
+      ctx.save();
+      ctx.globalAlpha *= viaAlpha;
       ctx.beginPath();
       ctx.arc(v.x, v.y, v.d / 2, 0, Math.PI * 2);
-      const viaColor = withNetHighlight(layerColor("via"), v.net, opts.netHighlight);
+      const viaColor = copperPaint(layerColor("via"), v.net, opts);
       if (opts.sketchVias) {
         ctx.strokeStyle = viaColor;
         ctx.lineWidth = hairlineUm(view, 1.5);
@@ -366,6 +396,7 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
         ctx.fillStyle = viaColor;
         ctx.fill();
       }
+      ctx.restore();
     }
   }
 }
@@ -456,7 +487,9 @@ function fillTriangles(fill: { fragments: [number, number][][]; polys?: { outlin
 }
 
 function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
-  if (!board.routing) return;
+  if (!board.routing || !on(opts.layerVisible, "zones")) return;
+  const zoneAlpha = opacityOf(opts.appearance, "zones");
+  const teardropAlpha = opacityOf(opts.appearance, "tracks"); // `IsTeardropArea()` takes the track opacity
   for (const z of board.routing.zones) {
     const key = copperColorKey(z.layer);
     const bucket = key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
@@ -474,11 +507,11 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
       // knockout/thermal-relief pipeline applies) -- draw it solid
       // unconditionally, regardless of `zoneDisplayMode`, same as its
       // anchor pad/via is never shown as an "outline only" shape either.
-      withAlpha(ctx, layerAlpha(opts, z.layer), () => {
+      withAlpha(ctx, layerAlpha(opts, z.layer) * teardropAlpha, () => {
         ctx.beginPath();
         z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
         ctx.closePath();
-        ctx.fillStyle = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
+        ctx.fillStyle = copperPaint(layerColor(key), z.net, opts);
         ctx.fill();
         if (selected) {
           ctx.strokeStyle = layerColor("selection");
@@ -488,16 +521,16 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
       });
       continue;
     }
-    const copperColor = withNetHighlight(layerColor(key), z.net, opts.netHighlight);
+    const zoneColor = copperPaint(layerColor(key), z.net, opts);
     const fill = opts.zoneFill?.zones.find((f) => f.id === z.id);
-    withAlpha(ctx, layerAlpha(opts, z.layer), () => {
+    withAlpha(ctx, layerAlpha(opts, z.layer) * zoneAlpha, () => {
       if (opts.zoneDisplayMode !== "outline" && fill && fill.fragments.length > 0) {
         if (opts.zoneDisplayMode === "filled") {
           // `fragments` are already "Fracture"d (pcb_painter.cpp paints the
           // real ZONE_FILLER output the same way): each is one closed ring,
           // holes slit into the outer boundary -- a plain nonzero-winding
           // fill per fragment is exactly right, no separate even-odd pass.
-          ctx.fillStyle = copperColor;
+          ctx.fillStyle = zoneColor;
           for (const frag of fill.fragments) {
             if (frag.length < 3) continue;
             ctx.beginPath();
@@ -508,7 +541,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
         } else {
           // SHOW_FRACTURE_BORDERS / SHOW_TRIANGULATION: `SetIsFill( false ); SetIsStroke( true ); SetLineWidth( 0 )` -- no fill, the
           // fractured ring's own edges, or the triangles the fill is cut into.
-          ctx.strokeStyle = copperColor;
+          ctx.strokeStyle = zoneColor;
           ctx.lineWidth = hairlineUm(view, 1);
           ctx.beginPath();
           if (opts.zoneDisplayMode === "fractured") {
@@ -544,7 +577,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
       ctx.beginPath();
       z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
       ctx.closePath();
-      ctx.strokeStyle = selected ? layerColor("selection") : copperColor;
+      ctx.strokeStyle = selected ? layerColor("selection") : zoneColor;
       ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
       ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
       ctx.stroke();
@@ -564,9 +597,11 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
   const shapes = (board.drawings?.shapes ?? []).map((s) => (opts.shapePointPreview?.id === s.id ? opts.shapePointPreview.shape : s));
   for (const s of shapes) {
     const bucketish = realLayerKey(s.layer);
-    if (opts.layerVisible[s.layer] === false) continue;
+    if (!layerIsVisible(opts.layerVisible, s.layer)) continue;
     const selected = opts.selection.has(s.id);
     ctx.save();
+    // A filled shape takes the Filled Shapes opacity, any other graphic on copper the track opacity (`PCB_RENDER_SETTINGS::GetColor`).
+    ctx.globalAlpha *= s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled ? opacityOf(opts.appearance, "shapes") : isCopper(s.layer) ? opacityOf(opts.appearance, "tracks") : 1;
     ctx.strokeStyle = selected ? layerColor("selection") : layerColor(bucketish);
     ctx.fillStyle = ctx.strokeStyle;
     ctx.lineWidth = Math.max(s.stroke_width, hairlineUm(view, selected ? 2 : 1));
@@ -654,7 +689,7 @@ export function normalizeSweep(a0: number, aMid: number, a1: number): boolean {
 function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const texts = board.drawings?.texts ?? [];
   for (const t of texts) {
-    if (opts.layerVisible[t.layer] === false) continue;
+    if (!layerIsVisible(opts.layerVisible, t.layer)) continue;
     const selected = opts.selection.has(t.id);
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
     // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
@@ -684,7 +719,7 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
 function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const dimensions = board.drawings?.dimensions ?? [];
   for (const d of dimensions as Dimension[]) {
-    if (opts.layerVisible[d.layer] === false) continue;
+    if (!layerIsVisible(opts.layerVisible, d.layer)) continue;
     const selected = opts.selection.has(d.id);
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(d.layer));
     ctx.save();
@@ -723,12 +758,13 @@ function drawDimensions(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
  * guard -- each net's ratsnest disappears on its own the moment that net
  * is finished, exactly like real KiCad's.
  */
-function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: RatsnestEdge[], curved: boolean, netHighlight: string | readonly string[] | null) {
+function drawRatsnest(ctx: CanvasRenderingContext2D, view: ViewTransform, edges: RatsnestEdge[], curved: boolean, netHighlight: string | readonly string[] | null, colorOf?: (net: string) => string | null) {
   const hair = hairlineUm(view, 1);
   for (const e of edges) {
-    const on = isHighlighted(e.net, netHighlight);
-    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("ratsnest");
-    ctx.lineWidth = on ? hairlineUm(view, 2.5) : hair;
+    const lit = isHighlighted(e.net, netHighlight);
+    // A net's own colour (or its net class's) replaces the ratsnest colour unless the net colour mode is "None" (`RATSNEST_VIEW_ITEM::ViewDraw`).
+    ctx.strokeStyle = lit ? layerColor("LAYER_SELECTION_SHADOWS") : (colorOf?.(e.net) ?? layerColor("ratsnest"));
+    ctx.lineWidth = lit ? hairlineUm(view, 2.5) : hair;
     const [ax, ay] = e.from;
     const [bx, by] = e.to;
     ctx.beginPath();
@@ -994,15 +1030,17 @@ const DRC_MARKER_RADIUS_UM = 300;
  * so a plain circle is the honest simplification here, not a guess at
  * the real shape.
  */
-function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null, stale = false) {
+function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, violations: DrcViolation[], selected: number | null, stale = false, layerVisible: Record<string, boolean> = {}) {
   const hair = hairlineUm(view, 1.5);
   violations.forEach((v, i) => {
     const item = v.items[0];
     if (!item) return;
     const [x, y] = item.pos;
     const on = i === selected;
-    // A waived violation (`LAYER_DRC_EXCLUSION`): still drawn, in the exclusion colour and muted, as KiCad draws an excluded marker.
+    // A waived violation (`LAYER_DRC_EXCLUSION`): drawn in the exclusion colour and muted, as KiCad draws an excluded marker -- when DRC Exclusions is on.
     const waived = v.excluded === true;
+    // `PCB_MARKER::ViewGetLayers`: a marker is on the layer of its severity (an exclusion on its own), which the Objects tab switches. The one the DRC dialog has selected stays.
+    if (!on && !objectOnPaint(layerVisible, waived ? "drc_exclusions" : v.severity === "warning" ? "drc_warnings" : "drc_errors")) return;
     const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(waived ? "LAYER_DRC_EXCLUSION" : v.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
     const r = on ? DRC_MARKER_RADIUS_UM * 1.4 : DRC_MARKER_RADIUS_UM;
     ctx.save();
@@ -1085,7 +1123,12 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   const copperPasses = passes.map((pass) => ({ alpha: pass.alpha, layers: copper(pass.b) }));
   const byLayer: Record<string, () => void> = {
     grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]),
-    background: () => drawOutline(ctx, view, board.outline),
+    // The drawing sheet and the board area shadow lie under everything else, the outline on top of them.
+    background: () => {
+      drawSheet(ctx, view, opts);
+      drawBoardArea(ctx, board, opts);
+      drawOutline(ctx, view, board.outline);
+    },
     ...Object.fromEntries(Object.keys(copper(board)).map((key) => [key, () => copperPasses.forEach((pass) => withAlpha(ctx, pass.alpha, () => pass.layers[key]?.()))])),
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw
     // the airwires live from a moving footprint's (previewed) position
@@ -1094,7 +1137,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     ratsnest: () => {
       if (!opts.showRatsnest || !opts.ratsnestEdges) return;
       const edges = carry && preview ? carryRatsnest(opts.ratsnestEdges, fullBoard, carry, (pt) => carryPoint(preview, pt)) : offsetRatsnestForPreview(opts.ratsnestEdges, fullBoard, opts.movePreview);
-      drawRatsnest(ctx, view, edges, opts.ratsnestCurved, opts.netHighlight);
+      drawRatsnest(ctx, view, edges, opts.ratsnestCurved, opts.netHighlight, (net) => ratsnestColor(net, opts.appearance));
     },
   };
   for (const key of drawOrder()) byLayer[key]?.();
@@ -1108,6 +1151,10 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawDimensions(ctx, view, pass.b, opts);
     });
   }
+  // The overlays of footprints: locked items' shadow, the courtyards a move puts in conflict, and the anchors.
+  drawLockedShadows(ctx, board, opts);
+  drawConflicts(ctx, fullBoard, opts.movePreview, opts);
+  drawAnchors(ctx, view, board, opts);
   // The carried items, in the same order, through the transform the drop would apply.
   if (carry && preview) {
     const own = { ...opts, movePreview: null };
@@ -1120,6 +1167,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     drawShapes(ctx, view, carry.moving, own);
     drawTexts(ctx, view, carry.moving, own);
     drawDimensions(ctx, view, carry.moving, own);
+    drawAnchors(ctx, view, carry.moving, own);
     drawSelectedGroups(ctx, view, carry.moving, own);
     ctx.restore();
   }
@@ -1139,7 +1187,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   if (opts.activeTool === "select") drawSelectedGroups(ctx, view, board, opts);
   // DRC markers last of all -- an overlay above every board layer and
   // the in-progress tool preview, matching real KiCad.
-  if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected, opts.drcStale);
+  if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected, opts.drcStale, opts.layerVisible);
   if (opts.lintViolations) drawLintMarkers(ctx, view, opts.lintViolations, opts.lintSelected ?? null);
 }
 

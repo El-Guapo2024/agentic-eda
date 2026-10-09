@@ -26,6 +26,10 @@ import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
+import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
+import { reduceView, type AppearanceOp, type ViewSlice } from "../kicad-port/appearanceOps";
+import { applyAppearanceFile } from "../kicad-port/appearanceFile";
+import { netsContext } from "../kicad-port/appearanceNets";
 import { keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
@@ -788,6 +792,12 @@ export interface StudioState {
   /** The board-control actions' state (sketch modes, ratsnest/highlight sets, partial zone fill, board flip, their dialogs) -- see kicad-port/boardControlState.ts. Patched by the single `BCX` action. */
   bcx: BoardControlState;
   /**
+   * The Appearance panel's own settings (kicad-port/appearance.ts): object visibility and opacity, the inactive-layer and net colour modes, net and net
+   * class colours, the saved layer presets and viewports. Saved per project in appearance.json (kicad-port/appearanceFile.ts), never in the design.
+   * Object visibility also rides in `layerVisible` under `obj:<id>` keys, so every picker that gets that record honours it.
+   */
+  appearance: AppearanceState;
+  /**
    * `pcbnew.InteractiveDrawing.ruleArea` vs `.zone` (task item 3): both
    * arm the same outline-drawing tool (`activeTool === "zone"`); this is
    * the one bit that tells `ZoneDialog.tsx` which hotkey/menu entry armed
@@ -902,7 +912,7 @@ const initialState: StudioState = {
   // Copper layers (board.layers, e.g. "F.Cu") are added once the board
   // loads (see BOARD_OK below); the standard non-copper buckets have no
   // model data to wait for, so they're defaulted here.
-  layerVisible: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, true])),
+  layerVisible: withObjectKeys(Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, true])), DEFAULT_APPEARANCE),
   layerOpacity: Object.fromEntries(STANDARD_LAYERS.map((l) => [l.key, 1])),
   selectionFilter: DEFAULT_SELECTION_FILTER,
   schSelectionFilter: DEFAULT_SCH_SELECTION_FILTER,
@@ -945,6 +955,7 @@ const initialState: StudioState = {
   lengthTuningMode: "single",
   pcbx: DEFAULT_PCB_PARITY,
   bcx: DEFAULT_BOARD_CONTROL,
+  appearance: DEFAULT_APPEARANCE,
   nextZoneIsRuleArea: false,
   cleanupTracksDialogOpen: false,
   editTracksAndViasDialogOpen: false,
@@ -1086,6 +1097,10 @@ export type Action =
   | { type: "SET_LENGTH_TUNING_DIALOG_OPEN"; open: boolean; mode?: TuneMode }
   | { type: "PCBX"; patch: Partial<PcbParityState> }
   | { type: "BCX"; patch: Partial<BoardControlState> }
+  /** An edit made in the Appearance panel (kicad-port/appearanceOps.ts), or by a script through `studio.Appearance.op`. */
+  | { type: "APPEARANCE"; op: AppearanceOp }
+  /** The project's saved appearance (appearance.json) laid over the state once it has been read. */
+  | { type: "APPEARANCE_LOAD"; file: unknown }
   /** `highlightNetSelection`: several nets highlighted at once (the first is `netHighlight`, the rest `bcx.netHighlightMore`); empty clears. */
   | { type: "SET_NET_HIGHLIGHT_SET"; nets: string[] }
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
@@ -1105,6 +1120,38 @@ export type Action =
 export function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
   if (!groups || groups.length === 0) return refs;
   return substituteSelection(groups, refs, enteredGroupId).ids;
+}
+
+/** The fields of the state the Appearance panel edits (kicad-port/appearanceOps.ts `ViewSlice`), `bcx`'s three lifted out. */
+function viewSliceOf(state: StudioState): ViewSlice {
+  return {
+    appearance: state.appearance,
+    layerVisible: state.layerVisible,
+    layerOpacity: state.layerOpacity,
+    activeLayer: state.activeLayer,
+    highContrast: state.highContrast,
+    showRatsnest: state.showRatsnest,
+    gridVisible: state.gridVisible,
+    boardFlipped: state.bcx.boardFlipped,
+    ratsnestMode: state.bcx.ratsnestMode,
+    hiddenNets: state.bcx.hiddenRatsnestNets,
+  };
+}
+
+/** The state with an edited slice put back. Turning the global ratsnest on or off forgets the Local Ratsnest tool's pads (`SetElementVisibility( LAYER_RATSNEST )`). */
+function withViewSlice(state: StudioState, slice: ViewSlice): StudioState {
+  const ratsnestChanged = slice.showRatsnest !== state.showRatsnest;
+  return {
+    ...state,
+    appearance: slice.appearance,
+    layerVisible: slice.layerVisible,
+    layerOpacity: slice.layerOpacity,
+    activeLayer: slice.activeLayer,
+    highContrast: slice.highContrast,
+    showRatsnest: slice.showRatsnest,
+    gridVisible: slice.gridVisible,
+    bcx: { ...state.bcx, boardFlipped: slice.boardFlipped, ratsnestMode: slice.ratsnestMode, hiddenRatsnestNets: slice.hiddenNets, localRatsnestPads: ratsnestChanged ? [] : state.bcx.localRatsnestPads },
+  };
 }
 
 function reducer(state: StudioState, action: Action): StudioState {
@@ -1295,7 +1342,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_ACTIVE_LAYER":
       return { ...state, activeLayer: action.layer };
     case "TOGGLE_HIGH_CONTRAST":
-      return { ...state, highContrast: !state.highContrast };
+      // `PCB_CONTROL::HighContrastMode`: NORMAL <-> DIMMED (from HIDDEN it goes back to NORMAL).
+      return { ...state, highContrast: !state.highContrast, appearance: state.appearance.contrastHidden ? { ...state.appearance, contrastHidden: false } : state.appearance };
     case "SET_LAYER_VISIBLE":
       return { ...state, layerVisible: { ...state.layerVisible, [action.layer]: action.visible } };
     case "SET_LAYER_OPACITY":
@@ -1478,6 +1526,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, pcbx: { ...state.pcbx, ...action.patch } };
     case "BCX":
       return { ...state, bcx: { ...state.bcx, ...action.patch } };
+    case "APPEARANCE":
+      return withViewSlice(state, reduceView(viewSliceOf(state), action.op, netsContext(state.board)));
+    case "APPEARANCE_LOAD":
+      return withViewSlice(state, applyAppearanceFile(viewSliceOf(state), action.file, { copper: state.board?.layers ?? [] }));
     case "SET_NEXT_ZONE_IS_RULE_AREA":
       // Arming a plain zone/rule-area draw also drops any pending cutout/similar mode (pcbx.zoneDrawMode).
       return { ...state, nextZoneIsRuleArea: action.value, pcbx: { ...state.pcbx, zoneDrawMode: null } };
