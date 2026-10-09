@@ -141,89 +141,87 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
   const listBox = { border: "1px solid var(--chrome-border)", height: "44vh", overflow: "auto", fontSize: 12 };
 
   return (
-    <>
-      <SchDialogFrame
-        title="Assign Footprints"
-        width={1000}
-        onClose={onClose}
-        footer={
-          <button className="primary" onClick={() => void submit()}>
-            {changes.length > 0 ? `Apply ${changes.length} assignment${changes.length === 1 ? "" : "s"}` : "OK"}
-          </button>
-        }
-      >
-        <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
-          <div style={{ flex: "1.3 1 0", minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Symbols ({rows.length})</div>
-            <div style={listBox}>
-              <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-                <colgroup>
-                  <col style={{ width: "18%" }} />
-                  <col style={{ width: "22%" }} />
-                  <col />
-                </colgroup>
-                <tbody>
-                  {rows.map((r) => {
-                    const fp = current(r);
-                    const isStaged = staged[r.ref] !== undefined && staged[r.ref] !== r.footprint;
-                    return (
-                      <tr key={r.ref} className={selected.includes(r.ref) ? "armed" : undefined} style={{ cursor: "default", background: selected.includes(r.ref) ? "var(--chrome-selected-bg)" : undefined, color: selected.includes(r.ref) ? "var(--chrome-selected-text)" : undefined }} onClick={(e) => clickRow(r.ref, e)}>
-                        <td style={cell}>{r.ref}</td>
-                        <td style={cell}>{r.value}</td>
-                        <td style={{ ...cell, fontStyle: isStaged ? "italic" : undefined, fontWeight: isStaged ? 700 : undefined }} title={fp}>
-                          {fp || <span style={{ opacity: 0.5 }}>(none)</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div style={{ flex: "0.7 1 0", minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Libraries</div>
-            <div style={listBox}>
-              {["", ...libraries].map((l) => (
-                <div key={l || "(all)"} style={{ ...cell, cursor: "default", background: library === l ? "var(--chrome-selected-bg)" : undefined, color: library === l ? "var(--chrome-selected-text)" : undefined }} onClick={() => setLibrary(l)}>
-                  {l || "All libraries"}
-                </div>
-              ))}
-            </div>
-          </div>
-          <div style={{ flex: "1.4 1 0", minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Footprints ({shown.length})</div>
-            <div style={listBox}>
-              {shown.map((c) => (
-                <div key={c.id} title={c.id} style={{ ...cell, cursor: "default", background: picked === c.id ? "var(--chrome-selected-bg)" : undefined, color: picked === c.id ? "var(--chrome-selected-text)" : undefined }} onClick={() => setPicked(c.id)} onDoubleClick={() => assign(c.id)}>
-                  {c.id}
-                  {c.padCount !== null && <small style={{ opacity: 0.6 }}> · {c.padCount} pads</small>}
-                </div>
-              ))}
-              {shown.length === 0 && (
-                <div className="panel-empty">{names.length === 0 ? "This project has no footprints yet. Open or draw one in the Footprint Editor, then assign it here." : "No footprint matches the filters."}</div>
-              )}
-            </div>
+    <SchDialogFrame
+      title="Assign Footprints"
+      width={1000}
+      onClose={onClose}
+      footer={
+        <button className="primary" onClick={() => void submit()}>
+          {changes.length > 0 ? `Apply ${changes.length} assignment${changes.length === 1 ? "" : "s"}` : "OK"}
+        </button>
+      }
+    >
+      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+        <div style={{ flex: "1.3 1 0", minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Symbols ({rows.length})</div>
+          <div style={listBox}>
+            <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: "18%" }} />
+                <col style={{ width: "22%" }} />
+                <col />
+              </colgroup>
+              <tbody>
+                {rows.map((r) => {
+                  const fp = current(r);
+                  const isStaged = staged[r.ref] !== undefined && staged[r.ref] !== r.footprint;
+                  return (
+                    <tr key={r.ref} className={selected.includes(r.ref) ? "armed" : undefined} style={{ cursor: "default", background: selected.includes(r.ref) ? "var(--chrome-selected-bg)" : undefined, color: selected.includes(r.ref) ? "var(--chrome-selected-text)" : undefined }} onClick={(e) => clickRow(r.ref, e)}>
+                      <td style={cell}>{r.ref}</td>
+                      <td style={cell}>{r.value}</td>
+                      <td style={{ ...cell, fontStyle: isStaged ? "italic" : undefined, fontWeight: isStaged ? 700 : undefined }} title={fp}>
+                        {fp || <span style={{ opacity: 0.5 }}>(none)</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, marginTop: 8, fontSize: 12 }}>
-          <label title="Show only the footprints the selected symbol's footprint filters allow">
-            <input type="checkbox" checked={bySymbol} onChange={(e) => setBySymbol(e.target.checked)} /> Filter by the symbol's footprint filters
-          </label>
-          <label title={symInfo ? `The selected symbol has ${symInfo.pins} pins` : "Select a symbol first"}>
-            <input type="checkbox" checked={byPins} onChange={(e) => setByPins(e.target.checked)} /> Filter by pin count{symInfo ? ` (${symInfo.pins})` : ""}
-          </label>
-          <input placeholder="Search footprints" value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
-          <button disabled={selected.length === 0} onClick={() => setChoosing(true)} title="Choose a footprint from KiCad's installed libraries (the Footprint Chooser)" data-assign-from-libraries>
-            From KiCad's libraries…
-          </button>
-          <button disabled={!picked || selected.length === 0} onClick={() => picked && assign(picked)}>
-            Assign
-          </button>
-          <button disabled={selected.length === 0} onClick={() => assign("")} title="Remove the footprint from the selected symbols (Delete)">
-            Remove assignment
-          </button>
+        <div style={{ flex: "0.7 1 0", minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Libraries</div>
+          <div style={listBox}>
+            {["", ...libraries].map((l) => (
+              <div key={l || "(all)"} style={{ ...cell, cursor: "default", background: library === l ? "var(--chrome-selected-bg)" : undefined, color: library === l ? "var(--chrome-selected-text)" : undefined }} onClick={() => setLibrary(l)}>
+                {l || "All libraries"}
+              </div>
+            ))}
+          </div>
         </div>
-      </SchDialogFrame>
+        <div style={{ flex: "1.4 1 0", minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 11, marginBottom: 4 }}>Footprints ({shown.length})</div>
+          <div style={listBox}>
+            {shown.map((c) => (
+              <div key={c.id} title={c.id} style={{ ...cell, cursor: "default", background: picked === c.id ? "var(--chrome-selected-bg)" : undefined, color: picked === c.id ? "var(--chrome-selected-text)" : undefined }} onClick={() => setPicked(c.id)} onDoubleClick={() => assign(c.id)}>
+                {c.id}
+                {c.padCount !== null && <small style={{ opacity: 0.6 }}> · {c.padCount} pads</small>}
+              </div>
+            ))}
+            {shown.length === 0 && (
+              <div className="panel-empty">{names.length === 0 ? "This project has no footprints yet. Open or draw one in the Footprint Editor, then assign it here." : "No footprint matches the filters."}</div>
+            )}
+          </div>
+        </div>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, marginTop: 8, fontSize: 12 }}>
+        <label title="Show only the footprints the selected symbol's footprint filters allow">
+          <input type="checkbox" checked={bySymbol} onChange={(e) => setBySymbol(e.target.checked)} /> Filter by the symbol's footprint filters
+        </label>
+        <label title={symInfo ? `The selected symbol has ${symInfo.pins} pins` : "Select a symbol first"}>
+          <input type="checkbox" checked={byPins} onChange={(e) => setByPins(e.target.checked)} /> Filter by pin count{symInfo ? ` (${symInfo.pins})` : ""}
+        </label>
+        <input placeholder="Search footprints" value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
+        <button disabled={selected.length === 0} onClick={() => setChoosing(true)} title="Choose a footprint from KiCad's installed libraries (the Footprint Chooser)" data-assign-from-libraries>
+          From KiCad's libraries…
+        </button>
+        <button disabled={!picked || selected.length === 0} onClick={() => picked && assign(picked)}>
+          Assign
+        </button>
+        <button disabled={selected.length === 0} onClick={() => assign("")} title="Remove the footprint from the selected symbols (Delete)">
+          Remove assignment
+        </button>
+      </div>
       {choosing && (
         <FootprintChooserDialog
           preselect={firstRow && current(firstRow).includes(":") ? current(firstRow) : null}
@@ -236,6 +234,6 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
           }}
         />
       )}
-    </>
+    </SchDialogFrame>
   );
 }

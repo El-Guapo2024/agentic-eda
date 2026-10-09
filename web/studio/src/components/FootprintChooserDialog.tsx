@@ -137,7 +137,8 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
   const doc = info && urlIn(info.description);
 
   return (
-    <div className="dialog-backdrop" data-footprint-chooser>
+    // Rendered inside the dialog that opened it (Symbol Properties, Assign Footprints): a click or a key in here is not that dialog's.
+    <div className="dialog-backdrop" data-footprint-chooser onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
       <div className="dialog chooser-dialog" ref={root} onKeyDown={onKeyDown} role="dialog" aria-label={title}>
         <div className="dialog-header">
           <span>
