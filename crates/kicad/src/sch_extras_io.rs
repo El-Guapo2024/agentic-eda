@@ -212,6 +212,27 @@ pub(crate) fn parse_bool(node: &[Sexpr], tag: &str) -> Option<bool> {
     sexpr::find(node, tag).map(|n| matches!(sexpr::txt(n, 1), Some("yes") | Some("true") | None))
 }
 
+/// What an item's `(effects (font (size H W) [bold] [italic]) (justify ...))` says (`EDA_TEXT::Format`, `SCH_IO_KICAD_SEXPR_PARSER::parseEDA_TEXT`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct EffectsLook {
+    /// The text's height in micrometres (`GetTextHeight`); 1.27 mm when the item says nothing.
+    pub size_um: Um,
+    pub bold: bool,
+    pub italic: bool,
+    /// The words of `(justify ...)`: `left`, `right`, `top`, `bottom`, `mirror`.
+    pub justify: Vec<String>,
+}
+
+/// The `(effects ...)` of `item`. `bold` and `italic` are read as `(bold yes)` (what KiCad writes since 9) and as the bare words older files have.
+pub(crate) fn read_effects(item: &[Sexpr]) -> EffectsLook {
+    let effects = sexpr::find(item, "effects");
+    let font = effects.and_then(|e| sexpr::find(e, "font"));
+    let size_um = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(crate::import::mm_to_um).unwrap_or(1270);
+    let flag = |tag: &str| font.is_some_and(|f| parse_bool(f, tag).unwrap_or(false) || f.iter().skip(1).any(|c| c.text() == Some(tag)));
+    let justify: Vec<String> = effects.and_then(|e| sexpr::find(e, "justify")).map(|j| j.iter().skip(1).filter_map(Sexpr::text).map(String::from).collect()).unwrap_or_default();
+    EffectsLook { size_um, bold: flag("bold"), italic: flag("italic"), justify }
+}
+
 fn pt(node: &[Sexpr]) -> Option<Point> {
     Some(Point { x: crate::import::mm_to_um(sexpr::num(node, 1)?), y: crate::import::mm_to_um(sexpr::num(node, 2)?) })
 }

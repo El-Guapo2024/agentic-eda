@@ -10,7 +10,7 @@
 //! ([`crate::import_kicad_sch`]) on the fragment wrapped in a file header, so a symbol, a wire or a label means here on paste exactly what it
 //! means in a file; the library symbols come through the Symbol Editor's reader, which keeps hidden pins and fills.
 //!
-//! What the schematic IR does not hold is not written and not read: a field's position and size, a label's rotation, a wire's stroke. The
+//! What the schematic IR does not hold is not written and not read: a field's position and size, a wire's stroke. The
 //! fields of a copied symbol are put beside it and marked `(fields_autoplaced yes)`, so KiCad lays them out when the pasted symbol is moved.
 
 use crate::sexpr;
@@ -506,11 +506,13 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         if let Some(shape) = shape {
             let _ = write!(out, "\n\t\t(shape {})", label_shape_token(shape));
         }
-        let _ = writeln!(out, "\n\t\t(at {x} {y} 0)");
+        // the label's spin, size, bold and italic go on the clipboard (`SCH_IO_KICAD_SEXPR::saveText`)
+        let (angle, effects) = crate::label_effects(sch, l, tag == "label");
+        let _ = writeln!(out, "\n\t\t(at {x} {y} {angle})");
         if shape.is_some() && tag == "global_label" {
             let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
         }
-        let _ = writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left bottom))");
+        let _ = writeln!(out, "\t\t{effects}");
         let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
         if tag == "global_label" {
             let _ = writeln!(out, "\t\t(property \"Intersheetrefs\" \"${{INTERSHEET_REFS}}\" (at {x} {y} 0) (effects (font (size 1.27 1.27)) (justify left) (hide yes)))");

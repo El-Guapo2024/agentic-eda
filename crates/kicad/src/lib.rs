@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_layout::{Port, Side};
-use eda_model::ir::{Design, NetLabel, NoConnect, PowerSymbol, SchematicText, SymbolInstance, Wire};
+use eda_model::ir::{Design, FieldPlacement, NetLabel, NoConnect, PowerSymbol, SchematicText, SymbolInstance, Wire};
 use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
@@ -264,6 +264,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         if sch.extras.is_locked(&sym.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
+        write!(out, "{}", fields_autoplaced_token(sch, &eda_model::ir::field_key(&sym.id, sym.unit))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         let value = if !sym.value.is_empty() { sym.value.as_str() } else { part.value.as_deref().unwrap_or(&sym.id) };
         let footprint = if !sym.footprint.is_empty() { sym.footprint.as_str() } else { part.footprint.as_deref().unwrap_or("") };
@@ -323,11 +324,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         if sch.extras.is_locked(&ps.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
+        write!(out, "{}", fields_autoplaced_token(sch, &ps.id)).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         // the file keeps a turned symbol's field where it is on the sheet, with the angle and justification it has before the turn
         for (p, text) in eda_engine::fields::power_placements(sch, ps) {
             let (ox, oy) = eda_engine::symgeom::bake(ps.rot, false, 0.0, p.dx as f64, p.dy as f64);
-            write_field_text(&mut out, &p.name, &text, (ps.at.x as f64 + ox, ps.at.y as f64 + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible);
+            write_field_text(&mut out, &p.name, &text, (ps.at.x as f64 + ox, ps.at.y as f64 + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible, &FieldLook::of(&p));
         }
         write_property(&mut out, "Footprint", "", 0.0, 0.0, true);
         write_property(&mut out, "Datasheet", "", 0.0, 0.0, true);
@@ -484,11 +486,11 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         if let Some(shape) = shape {
             write!(out, " (shape {})", label_shape_token(shape)).unwrap();
         }
-        // `SCH_LABEL_BASE::SetSpinStyle`: the angle and justification that make the text run on away from the wire the label ends
-        let (angle, justify) = label_spin(sch, l);
-        let vertical_justify = if tag == "label" { " bottom" } else { "" };
+        // `SCH_LABEL_BASE::SetSpinStyle`: the angle and justification that make the text run on the way the label's spin says -- the one Rotate, Mirror or
+        // Label Properties gave it, else away from the wire the label ends
+        let (angle, effects) = label_effects(sch, l, tag == "label");
         writeln!(out, " (at {x} {y} {angle})").unwrap();
-        writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify {justify}{vertical_justify}))").unwrap();
+        writeln!(out, "\t\t{effects}").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&l.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
@@ -526,6 +528,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let page = ctx.sheet_pages.get(&uuid).copied().unwrap_or(1);
         writeln!(out, "\t(sheet").unwrap();
         writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
+        write!(out, "{}", fields_autoplaced_token(sch, &s.id)).unwrap();
         writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
         writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
@@ -671,18 +674,35 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
     }
 }
 
-/// A label's file angle and horizontal justification, `SetSpinStyle`'s: the text runs on from the anchor, away from the wire that ends
-/// there (to the right of a wire that comes from the left, upward from one that comes from below, and so on). A label no wire ends at
+/// A label's spin: the one Rotate, Mirror or Label Properties set (`SchExtras::label_spins`), else the way its text runs on from the anchor, away from
+/// the wire that ends there (to the right of a wire that comes from the left, upward from one that comes from below, and so on); a label no wire ends at
 /// reads to the right.
-fn label_spin(sch: &eda_model::ir::SchematicSection, l: &NetLabel) -> (u32, &'static str) {
+pub(crate) fn label_spin_of(sch: &eda_model::ir::SchematicSection, l: &NetLabel) -> eda_model::sch_extras::LabelSpin {
+    use eda_model::sch_extras::LabelSpin;
+    if let Some(spin) = sch.extras.label_spins.get(&l.id) {
+        return *spin;
+    }
     match eda_engine::obstacles::label_run_dir(sch, l) {
         // the wire is above the label: the text hangs below it, reading up and ending at the anchor
-        (0, 1) => (90, "right"),
+        (0, 1) => LabelSpin::Bottom,
         // the wire is below: the text rises from the anchor
-        (0, -1) => (90, "left"),
+        (0, -1) => LabelSpin::Up,
         // the wire is on the right: the text runs left
-        (-1, 0) => (0, "right"),
-        _ => (0, "left"),
+        (-1, 0) => LabelSpin::Left,
+        _ => LabelSpin::Right,
+    }
+}
+
+/// A label's file angle and horizontal justification, as `SCH_IO_KICAD_SEXPR::saveText` writes a spin: the text's own angle (0 or 90) with half a turn
+/// added for a text that ends at its anchor (`SPIN_STYLE::LEFT` and `BOTTOM`), and `SetSpinStyle`'s justification (left for the spins that run on from
+/// the anchor, right for the ones that end at it).
+pub(crate) fn label_spin(sch: &eda_model::ir::SchematicSection, l: &NetLabel) -> (u32, &'static str) {
+    use eda_model::sch_extras::LabelSpin;
+    match label_spin_of(sch, l) {
+        LabelSpin::Right => (0, "left"),
+        LabelSpin::Up => (90, "left"),
+        LabelSpin::Left => (180, "right"),
+        LabelSpin::Bottom => (270, "right"),
     }
 }
 
@@ -707,19 +727,51 @@ fn justify_tokens(h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::
     }
 }
 
+/// How a field's text is set in the file beyond what it says and where it is: the size, bold, italic (`(font (size) (bold yes) (italic yes))`), whether the
+/// name is shown and whether Autoplace Fields may move it (`(show_name yes)`, `(do_not_autoplace yes)`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FieldLook {
+    size_um: f64,
+    bold: bool,
+    italic: bool,
+    show_name: bool,
+    do_not_autoplace: bool,
+}
+
+impl FieldLook {
+    const DEFAULT: FieldLook = FieldLook { size_um: 1270.0, bold: false, italic: false, show_name: false, do_not_autoplace: false };
+
+    fn of(p: &FieldPlacement) -> FieldLook {
+        FieldLook { size_um: p.text_size_um() as f64, bold: p.bold, italic: p.italic, show_name: p.name_shown, do_not_autoplace: p.no_autoplace }
+    }
+
+    fn of_page(f: &eda_engine::fields::PageField) -> FieldLook {
+        FieldLook { size_um: f.size_um, bold: f.bold, italic: f.italic, show_name: f.name_shown, do_not_autoplace: f.no_autoplace }
+    }
+
+    /// `(font (size S S) (bold yes) (italic yes))`.
+    fn font(&self) -> String {
+        let size = fmt_mm_f(self.size_um / 1000.0);
+        format!("(font (size {size} {size}){}{})", if self.bold { " (bold yes)" } else { "" }, if self.italic { " (italic yes)" } else { "" })
+    }
+}
+
 /// One `(property ...)` of a symbol, a power symbol or a sheet: the text, its anchor (micrometres) and angle, how it is justified, and
 /// whether it is hidden.
 #[allow(clippy::too_many_arguments)]
-fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), vertical: bool, h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::VJustify, hide: bool) {
+fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), vertical: bool, h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::VJustify, hide: bool, look: &FieldLook) {
     let hide = if hide { " (hide yes)" } else { "" };
+    let flags = format!("{}{}", if look.show_name { " (show_name yes)" } else { "" }, if look.do_not_autoplace { " (do_not_autoplace yes)" } else { "" });
     writeln!(
         out,
-        "\t\t(property {} {} (at {} {} {})\n\t\t\t(effects (font (size 1.27 1.27)){}{})\n\t\t)",
+        "\t\t(property {} {} (at {} {} {}){}\n\t\t\t(effects {}{}{})\n\t\t)",
         sexpr_str(key),
         sexpr_str(value),
         fmt_mm_f(at.0 / 1000.0),
         fmt_mm_f(at.1 / 1000.0),
         if vertical { 90 } else { 0 },
+        flags,
+        look.font(),
         justify_tokens(h, v),
         hide
     )
@@ -727,7 +779,25 @@ fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), ve
 }
 
 fn write_page_field(out: &mut String, f: &eda_engine::fields::PageField) {
-    write_field_text(out, &f.name, &f.text, f.at, f.vertical, f.h, f.v, !f.visible);
+    write_field_text(out, &f.name, &f.text, f.at, f.vertical, f.h, f.v, !f.visible, &FieldLook::of_page(f));
+}
+
+/// `(effects (font ...) (justify ...))` of a label: its size, bold and italic and the justification its spin gives (`SCH_LABEL_BASE::SetSpinStyle`: the
+/// text ends at the anchor when it is justified right; a local label is bottom-justified, the others centred).
+pub(crate) fn label_effects(sch: &eda_model::ir::SchematicSection, l: &NetLabel, local: bool) -> (u32, String) {
+    let (angle, justify) = label_spin(sch, l);
+    let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
+    let vertical_justify = if local { " bottom" } else { "" };
+    (angle, format!("(effects {} (justify {justify}{vertical_justify}))", FieldLook { size_um: look.text_size_um() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font()))
+}
+
+/// `(fields_autoplaced yes)`: the fields of the item are where Autoplace Fields put them (`SCH_ITEM::GetFieldsAutoplaced`).
+fn fields_autoplaced_token(sch: &eda_model::ir::SchematicSection, key: &str) -> &'static str {
+    if sch.extras.fields_autoplaced.contains_key(key) {
+        "\t\t(fields_autoplaced yes)\n"
+    } else {
+        ""
+    }
 }
 
 fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide: bool) {

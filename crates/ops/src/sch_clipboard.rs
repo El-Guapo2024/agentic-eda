@@ -177,6 +177,7 @@ impl<'a> Board<'a> {
         sch.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
         sch.power_symbols.extend(new_powers);
         sch.wires.extend(new_wires);
+        let first_label = sch.labels.len();
         sch.labels.extend(new_labels);
         sch.texts.extend(new_texts);
         sch.no_connects.extend(new_ncs);
@@ -193,6 +194,16 @@ impl<'a> Board<'a> {
             sch.user_fields.entry(reference).or_insert(fields);
         }
         sch.assign_missing_ids();
+        // a pasted label keeps its spin, size, bold and italic
+        for (k, l) in src.labels.iter().enumerate() {
+            let Some(new_id) = sch.labels.get(first_label + k).map(|n| n.id.clone()) else { continue };
+            if let Some(spin) = src.extras.label_spins.get(&l.id) {
+                sch.extras.label_spins.insert(new_id.clone(), *spin);
+            }
+            if let Some(look) = src.extras.label_looks.get(&l.id) {
+                sch.extras.label_looks.insert(new_id, *look);
+            }
+        }
         Ok(())
     }
 }

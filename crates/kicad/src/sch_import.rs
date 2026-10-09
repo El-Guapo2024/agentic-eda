@@ -352,6 +352,8 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
     let mut labels: Vec<eda_model::ir::NetLabel> = Vec::new();
     let mut label_locked: Vec<bool> = Vec::new();
+    // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
+    let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
         for l in sexpr::find_all(root, tag) {
             let Some(net) = sexpr::txt(l, 1).map(String::from) else { continue };
@@ -362,8 +364,21 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
                 Some(true) => LabelKind::Global { shape },
                 Some(false) => LabelKind::Hierarchical { shape },
             };
+            // `SCH_IO_KICAD_SEXPR_PARSER::parseSchText`: the angle is kept upright (0 or 90) and sets the spin, the justification then says whether
+            // the text ends at the anchor
+            let look = crate::sch_extras_io::read_effects(l);
+            let angle = sexpr::find(l, "at").and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0);
+            let vertical = eda_model::kicad_geom::upright_quarter_turns(angle) == 1;
+            let ends_at_anchor = look.justify.iter().any(|j| j == "right");
+            let spin = match (vertical, ends_at_anchor) {
+                (false, false) => eda_model::sch_extras::LabelSpin::Right,
+                (false, true) => eda_model::sch_extras::LabelSpin::Left,
+                (true, false) => eda_model::sch_extras::LabelSpin::Up,
+                (true, true) => eda_model::sch_extras::LabelSpin::Bottom,
+            };
             labels.push(eda_model::ir::NetLabel { id: String::new(), net, at: mm_point_to_um(at), kind });
             label_locked.push(is_locked(l));
+            label_geometry.push((spin, look));
         }
     }
 
@@ -455,6 +470,18 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
         locked.extend(locked_refs);
         for id in locked.into_iter().filter(|id| !id.is_empty()) {
             sch.extras.set_locked(&id, true);
+        }
+        // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
+        for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
+            if id.is_empty() {
+                continue;
+            }
+            sch.extras.label_spins.insert(id.clone(), spin);
+            let size_um = if look.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { look.size_um };
+            let label_look = eda_model::sch_extras::LabelLook { size_um, bold: look.bold, italic: look.italic };
+            if !label_look.is_default() {
+                sch.extras.label_looks.insert(id, label_look);
+            }
         }
         // Strokes and junction looks that are not KiCad's defaults (`SchExtras::strokes`, `junction_looks`).
         let strokes: Vec<(String, SchStroke)> = sch.wires.iter().map(|w| w.id.clone()).zip(wire_stroke).chain(sch.bus_entries.iter().map(|b| b.id.clone()).zip(be_stroke)).chain(sch.lines.iter().map(|l| l.id.clone()).zip(line_stroke)).collect();
