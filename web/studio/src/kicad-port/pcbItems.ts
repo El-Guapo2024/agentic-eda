@@ -10,6 +10,7 @@
 import type { BoardState, BoardText, Pad, Part, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { circumcircle } from "./trackArc";
+import { groupLeaves } from "./groupTree";
 
 export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad";
 
@@ -156,10 +157,10 @@ export function itemBounds(board: BoardState, id: string): [number, number, numb
       const lines = pts.length > 0 ? padded(boundsOf(pts), d.stroke_width / 2) : null;
       return unionBounds([lines, text]);
     }
-    // The union of its members' boxes (`PCB_GROUP::GetBoundingBox`).
+    // The union of its members' boxes, the groups it holds opened (`PCB_GROUP::GetBoundingBox`).
     case "group": {
-      const g = board.drawings?.groups.find((q) => q.id === id);
-      return g ? unionBounds(g.member_ids.map((m) => itemBounds(board, m))) : null;
+      const groups = board.drawings?.groups ?? [];
+      return groups.some((q) => q.id === id) ? unionBounds(groupLeaves(groups, id).map((m) => itemBounds(board, m))) : null;
     }
     case "pad": {
       const hit = padById(board, id);

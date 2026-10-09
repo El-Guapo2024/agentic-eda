@@ -44,6 +44,7 @@ import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
 import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
+import { boardDeleteCmds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -186,21 +187,11 @@ export function useActionRunner() {
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
-      const locked = new Set(state.board?.locked ?? []);
       // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
       if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
-      for (const id of refs) {
-        if (state.tab === "pcb") {
-          if (locked.has(id)) continue;
-          if (api.trackById(id)) cmds.push({ op: "delete_track", id });
-          else if (api.viaById(id)) cmds.push({ op: "delete_via", id });
-          else if (api.zoneById(id)) cmds.push({ op: "delete_zone", id });
-          else if (api.shapeById(id)) cmds.push({ op: "delete_shape", id });
-          else if (api.textById(id)) cmds.push({ op: "delete_text", id });
-          else if (api.dimensionById(id)) cmds.push({ op: "delete_dimension", id });
-          else if (api.partByRef(id)?.placed) cmds.push({ op: "rip", part: id });
-        }
-      }
+      // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
+      // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
+      if (state.tab === "pcb" && state.board) cmds.push(...boardDeleteCmds(state.board, refs).cmds);
       dispatch({ type: "CLEAR_SELECTION" });
       if (cmds.length) void api.cmdBatch(cmds);
     };
@@ -595,7 +586,8 @@ export function useActionRunner() {
       "common.Interactive.groupEnter",
       pcbOnly(() => {
         const refs = [...state.selection];
-        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "SET_ENTERED_GROUP", id: refs[0]! });
+        // The members are selected on the way in (`EnterGroup`: `select( member )` for each).
+        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "ENTER_GROUP", id: refs[0]! });
       })
     );
     m.set(
@@ -603,7 +595,7 @@ export function useActionRunner() {
       pcbOnly(() => {
         const leftId = state.enteredGroupId;
         dispatch({ type: "SET_ENTERED_GROUP", id: null });
-        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId] });
+        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId], raw: true });
       })
     );
     m.set(

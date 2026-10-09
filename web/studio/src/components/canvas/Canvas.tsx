@@ -19,7 +19,8 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { carryStart } from "../../kicad-port/pcbTransform";
-import { padById } from "../../kicad-port/pcbItems";
+import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
+import { isGroup, topLevelGroup, withinScope } from "../../kicad-port/groupTree";
 import type { ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
@@ -365,6 +366,7 @@ export function Canvas() {
       cursorUm: state.cursorUm,
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
+      enteredGroup: state.enteredGroupId,
     });
     ctx.restore();
 
@@ -383,7 +385,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -793,8 +795,21 @@ export function Canvas() {
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
     const toleranceUm = Math.max(150, 6 / state.view.scale);
     const onePixelUm = 1 / state.view.scale;
+    // pcb_selection_tool.cpp selectPoint: "if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) ) ExitGroup();" -- a click
+    // outside the box of the entered group leaves it, then picks as with no group entered. Inside it, only the group's own members and the groups
+    // directly in it can be picked (`FilterCollectorForHierarchy`: "If a group is entered, disallow selections of objects outside the group").
+    let scope = state.enteredGroupId;
+    if (board && scope) {
+      const box = itemBounds(board, scope);
+      if (!box || wx < box[0] || wx > box[2] || wy < box[1] || wy > box[3]) {
+        dispatch({ type: "SET_ENTERED_GROUP", id: null });
+        scope = null;
+      }
+    }
+    const groupsNow = board?.drawings?.groups ?? [];
+    const pickable = (id: string): boolean => scope === null || (board != null && withinScope(groupsNow, padParent(board, id) ?? id, scope));
     const runPick = (skipHeuristics: boolean): SelectionCandidate[] =>
-      board ? pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics) : [];
+      board ? pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics).filter((c) => pickable(c.id)) : [];
 
     // pcb_selection_tool.cpp SELECTION_TOOL::hasModifier's `m_skip_heuristics`
     // (Alt): go straight to the full candidate list/clarification menu,
@@ -1055,7 +1070,9 @@ export function Canvas() {
         const [x0, y0] = drag.startWorld;
         const [x1, y1] = screenToWorld(state.view, flipLocalX(state.bcx.boardFlipped, containerSize.width, marquee.x1), marquee.y1);
         const selBox: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-        const hits = collectBoxSelection(board, selBox, crossing, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        const entered = state.enteredGroupId;
+        const groupsNow = board.drawings?.groups ?? [];
+        const hits = collectBoxSelection(board, selBox, crossing, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast).filter((h) => entered === null || withinScope(groupsNow, padParent(board, h.id) ?? h.id, entered));
         if (hits.length > 0 || hasModifier(modifiers)) {
           dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits.map((h) => h.id), modifiers) });
         }
@@ -1343,10 +1360,11 @@ export function Canvas() {
       // either case. Re-entering the group already entered falls through
       // to properties instead, same as double-clicking a member while
       // already inside its own group.
+      // `m_selection.GetSize() == 1 && m_selection[0]->Type() == PCB_GROUP_T` -> `EnterGroup()` (leaving the group entered, if any, first), else Properties.
       const groups = board.drawings?.groups ?? [];
-      const hitGroup = groups.find((g) => g.id === refs[0] || g.member_ids.includes(refs[0]!));
-      if (hitGroup && hitGroup.id !== state.enteredGroupId) {
-        dispatch({ type: "SET_ENTERED_GROUP", id: hitGroup.id });
+      const hitGroup = isGroup(groups, refs[0]!) ? refs[0]! : topLevelGroup(groups, refs[0]!, state.enteredGroupId);
+      if (hitGroup && hitGroup !== state.enteredGroupId) {
+        dispatch({ type: "ENTER_GROUP", id: hitGroup });
         return;
       }
       openPropertiesFor(refs[0]!, api, dispatch);

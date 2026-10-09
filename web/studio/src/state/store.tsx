@@ -24,6 +24,7 @@ import { editableSelection, planCarry, planFlip, planRotate, type TransformPlan 
 import { snapPoint } from "../components/canvas/gridHelper";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { substituteSelection } from "../kicad-port/groupTree";
 import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
@@ -964,8 +965,11 @@ export type Action =
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
-  | { type: "SET_SELECTION"; refs: string[] }
+  /** `raw`: the items as they are, with no group standing in for its members (`select( item )` of a group that was just made or left). */
+  | { type: "SET_SELECTION"; refs: string[]; raw?: boolean }
   | { type: "SET_ENTERED_GROUP"; id: string | null }
+  /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
+  | { type: "ENTER_GROUP"; id: string }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -1089,22 +1093,14 @@ export type Action =
   | { type: "SET_CREATE_ARRAY_DIALOG_OPEN"; open: boolean };
 
 /**
- * `pcb_selection_tool.cpp`'s "clicking a group member selects the group"
- * rule (task item 5): any ref that is a member of a group becomes that
- * group's own id instead, *unless* `enteredGroupId` names that same group
- * (`common.Interactive.groupEnter` -- see `StudioState.enteredGroupId`'s
- * own doc), in which case the ref passes through unchanged so individual
- * members can be picked while "inside" the group. A ref naming a group
- * directly, or not in any group, also passes through unchanged.
+ * `pcb_selection_tool.cpp`'s "clicking a group member selects the group" rule (`FilterCollectorForHierarchy`): any ref that is a member of a group
+ * becomes the outermost group that holds it inside `enteredGroupId` -- the group being worked in, whose own members (and the groups directly in it)
+ * can be picked one by one (`common.Interactive.groupEnter`, `StudioState.enteredGroupId`). A ref naming a group directly, or not in any group, passes
+ * through. The tree is kicad-port/groupTree.ts.
  */
 export function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
   if (!groups || groups.length === 0) return refs;
-  const byMember = new Map<string, string>();
-  for (const g of groups) for (const m of g.member_ids) byMember.set(m, g.id);
-  return refs.map((id) => {
-    const groupId = byMember.get(id);
-    return groupId && groupId !== enteredGroupId ? groupId : id;
-  });
+  return substituteSelection(groups, refs, enteredGroupId).ids;
 }
 
 function reducer(state: StudioState, action: Action): StudioState {
@@ -1126,7 +1122,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
       const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
-      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };
+      // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
+      const enteredGroupId = state.enteredGroupId != null && (action.board.drawings?.groups ?? []).some((g) => g.id === state.enteredGroupId) ? state.enteredGroupId : null;
+      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot, enteredGroupId };
     }
     case "BOARD_ERR":
       return { ...state, boardError: action.message };
@@ -1148,10 +1146,21 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, viewer3d: { ...state.viewer3d, ...action.options } };
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
-    case "SET_SELECTION":
-      return { ...state, selection: new Set(withGroupSubstitution(action.refs, state.board?.drawings?.groups, state.enteredGroupId)), armed: null };
+    case "SET_SELECTION": {
+      const groups = state.board?.drawings?.groups;
+      if (action.raw || !groups || groups.length === 0) return { ...state, selection: new Set(action.refs), armed: null };
+      // Selecting something outside the entered group leaves it (`PCB_SELECTION_TOOL::select`: `ExitGroup()`).
+      const { ids, exits } = substituteSelection(groups, action.refs, state.enteredGroupId);
+      return { ...state, selection: new Set(ids), armed: null, enteredGroupId: exits ? null : state.enteredGroupId };
+    }
     case "SET_ENTERED_GROUP":
       return { ...state, enteredGroupId: action.id };
+    case "ENTER_GROUP": {
+      // `PCB_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its members -- each as it is, a group inside it too.
+      const group = state.board?.drawings?.groups.find((g) => g.id === action.id);
+      if (!group) return state;
+      return { ...state, enteredGroupId: group.id, selection: new Set(group.member_ids), armed: null };
+    }
     case "TOGGLE_SELECTION": {
       const next = new Set(state.selection);
       if (next.has(action.ref)) next.delete(action.ref);
@@ -1224,14 +1233,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
       }
-      // Task item 5: nothing selected but still inside a group -- source's
-      // own next `else if` tier, `ExitGroup()` (re-selecting the group
-      // itself, `ExitGroup(true)`'s default -- matches
-      // `common.Interactive.groupLeave`'s own `SET_SELECTION` in
-      // useActionRunner.ts).
+      // Nothing selected but still inside a group: the selection tool's next `else if` tier, `ExitGroup()` -- which leaves the group and does not select
+      // it (`ExitGroup( bool aSelectGroup = false )`; only the Leave Group action, `ExitGroup( true )`, does).
       if (state.enteredGroupId != null) {
-        const leftId = state.enteredGroupId;
-        return { ...state, enteredGroupId: null, selection: new Set([leftId]) };
+        return { ...state, enteredGroupId: null };
       }
       // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
       return { ...state, netHighlight: null, bcx: withHighlight(state.bcx, state.netHighlight, []) };
@@ -2125,9 +2130,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
       const ok = await runCmd({ op: "group", ids });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // The board as the backend has it now (`stateRef` only catches up on the next render): the new group is what is selected afterwards
+      // (`RunAction( ACTIONS::selectItem, group )`), as it is -- not as the group above it, when it was made inside an entered group.
+      const after = await fetchState().catch(() => null);
       const newGroupId = (after?.drawings?.groups ?? []).map((g) => g.id).find((id) => !before.has(id));
-      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId] });
+      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId], raw: true });
     },
     ungroupSelection: async () => {
       const groupIds = [...stateRef.current.selection].filter((id) => api.groupById(id));
@@ -2138,7 +2145,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const members = groupIds.flatMap((id) => api.groupById(id)?.member_ids ?? []);
       const ok = await runCmd({ op: "ungroup", ids: groupIds });
       if (!ok) return;
-      dispatch({ type: "SET_SELECTION", refs: members });
+      dispatch({ type: "SET_SELECTION", refs: members, raw: true });
     },
     addZone: async (net, layer, outline, settings) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").

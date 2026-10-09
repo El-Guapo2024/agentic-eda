@@ -10,6 +10,7 @@
 import type { BoardState } from "../api/types";
 import { fetchSchematic } from "../api/client";
 import { collectSheetRefs, crossProbeView, sheetOfRef } from "../kicad-port/crossProbe";
+import { expandGroups } from "../kicad-port/groupTree";
 import { itemBounds, unionBounds } from "../kicad-port/pcbItems";
 import { selectConnections } from "../kicad-port/pcbSelectionOps";
 import { fitTransform, type Bounds } from "../kicad-port/view";
@@ -24,19 +25,13 @@ function canvasSize(): { width: number; height: number } | null {
 /** The footprint references among `ids`, a group standing for its members (`crossProbeTypes`: pads, footprints, groups). */
 export function partRefsOf(board: BoardState, ids: Iterable<string>): string[] {
   const parts = new Set(board.parts.map((p) => p.ref));
-  const groups = new Map((board.drawings?.groups ?? []).map((g) => [g.id, g.member_ids]));
   const out: string[] = [];
   const seen = new Set<string>();
-  const add = (id: string) => {
+  for (const id of expandGroups(board.drawings?.groups ?? [], [...ids])) {
     if (parts.has(id) && !seen.has(id)) {
       seen.add(id);
       out.push(id);
     }
-  };
-  for (const id of ids) {
-    const members = groups.get(id);
-    if (members) members.forEach(add);
-    else add(id);
   }
   return out;
 }

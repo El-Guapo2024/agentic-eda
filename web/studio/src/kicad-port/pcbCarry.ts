@@ -10,6 +10,7 @@
 
 import type { BoardState } from "../api/types";
 import { padParent } from "./pcbItems";
+import { groupAndDescendants, groupLeaves } from "./groupTree";
 
 export type Matrix = readonly [number, number, number, number, number, number];
 
@@ -73,8 +74,9 @@ export function carriedIds(board: BoardState, refs: readonly string[]): Set<stri
   for (const raw of refs) {
     const id = padParent(board, raw) ?? raw;
     out.add(id);
-    const group = groups.find((g) => g.id === id);
-    if (group) for (const m of group.member_ids) out.add(padParent(board, m) ?? m);
+    // A group's items, and the groups it holds (their boxes move with it too).
+    for (const g of groupAndDescendants(groups, id)) out.add(g);
+    for (const m of groupLeaves(groups, id)) out.add(padParent(board, m) ?? m);
   }
   return out;
 }
