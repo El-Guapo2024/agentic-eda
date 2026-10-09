@@ -106,8 +106,14 @@ export interface Viewer3dToolbarsFile extends ToolbarsFile {
 
 export type MenuNode =
   | { type: "separator" }
-  /** `label`: only for an entry this studio adds itself (kicad/menuExtras.ts), whose action is not one of KiCad's in actions.json. */
-  | { type: "item"; action: string; label?: string }
+  /**
+   * `label`: for an entry this studio adds itself (kicad/menuExtras.ts), or one KiCad builds from data (a zoom or a grid), whose action is not one of KiCad's in
+   * actions.json or whose text is not the action's.
+   * `arg`: the event parameter the action runs with (`ACTIONS::zoomPreset`'s entry, `gridPreset`'s).
+   * `disabled`: the menu's own enable condition said no (`ACTION_MENU::Enable`, `ACTION_CONDITIONS::Enable`); the entry is listed but drawn disabled.
+   * `checked`: a check item and its state (`ACTION_MENU::Check`).
+   */
+  | { type: "item"; action: string; label?: string; arg?: number | string; disabled?: boolean; checked?: boolean }
   | { type: "submenu"; label: string; items: MenuNode[] };
 
 export interface MenuConfig {

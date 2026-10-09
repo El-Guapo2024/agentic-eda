@@ -40,11 +40,25 @@ pub enum OptEffort {
 }
 
 /// `PNS::ROUTING_SETTINGS`. Defaults mirror `ROUTING_SETTINGS`'s own
-/// constructor (`pns_routing_settings.cpp`) for every field KiCad persists;
-/// `free_angle_mode` is pinned permanently `false` (this port only
-/// implements KiCad's default 45-degree `DIRECTION_45` posture model --
-/// free-angle routing is out of scope, see `docs/parity/GAPS.md` #7's
-/// task scope).
+/// constructor (`pns_routing_settings.cpp`) for every field this port has.
+///
+/// Every field is read by the router: `mode`, `optimizer_effort`,
+/// `shove_vias`, `jump_over_obstacles`, `shove_iteration_limit` and
+/// `via_force_prop_iteration_limit` by the shove and the via placement,
+/// `walkaround_iteration_limit` and `walkaround_hug_length_threshold` by the
+/// walkaround, `smart_pads` and `optimizer_effort` by the optimizer,
+/// `remove_loops`, `fix_all_segments`, `free_angle_mode` and `can_violate_drc`
+/// by the line placer and the dragger. The studio's HTTP API reads all of them
+/// from the `settings` object of a start request
+/// (`crates/cli/src/route_api.rs`), and Interactive Router Settings sets them.
+///
+/// KiCad's other settings are not here because nothing here could read them:
+/// `m_autoPosture` (no mouse trail: the posture is the last segment's, or the
+/// `/` key's), `m_smoothDraggedSegments` and `m_optimizeEntireDraggedTrack`
+/// (the corner drag does not snap or optimize what it drags), `m_suggestFinish`
+/// (KiCad hides it: "not implemented"), `m_followMouse`, `m_snapTo*`,
+/// `m_cornerMode` (only the mitered 45-degree corner is built) and the time
+/// limits (every call branches fresh from the world, there is no springback).
 #[derive(Debug, Clone)]
 pub struct RoutingSettings {
     pub mode: Mode,
@@ -56,34 +70,44 @@ pub struct RoutingSettings {
     /// over itself.
     pub remove_loops: bool,
     /// `SmartPads()`: shorten/angle the line's own first/last segment for a
-    /// cleaner entry/exit from a pad. Not yet implemented by this port's
-    /// optimizer (see `crates/pns/PARITY.md`); the setting exists so
-    /// callers/tests can see it is deliberately inert for now.
+    /// cleaner entry/exit from a pad (`OPTIMIZER::SMART_PADS`).
     pub smart_pads: bool,
-    /// `JumpOverObstacles()`.
+    /// `JumpOverObstacles()`: a track a shove pushed into a solid goes behind
+    /// it (rank - 1) instead of being "reflected" back at the pusher.
     pub jump_over_obstacles: bool,
     pub shove_iteration_limit: i32,
     pub walkaround_iteration_limit: i32,
+    /// `ViaForcePropIterationLimit()`: how many steps `VIA::PushoutForce`
+    /// takes to get a via off what it sits on.
     pub via_force_prop_iteration_limit: i32,
     /// `GetFixAllSegments()`: a plain click (as opposed to the final,
     /// route-ending click) fixes the *entire* current head, not all but
-    /// its last segment. KiCad's own default is `true`; this port only
-    /// implements that default (see `crates/pns/PARITY.md`).
+    /// its last segment, which stays free and follows the cursor. KiCad's
+    /// default is `true`.
     pub fix_all_segments: bool,
-    /// `WalkaroundHugLengthThreshold()`: a walkaround candidate within this
-    /// multiple of the direct path's length is accepted outright, instead
-    /// of falling back to the cursor-proximity heuristic.
+    /// `WalkaroundHugLengthThreshold()`: a walkaround within this multiple
+    /// (twice, for the whole walk) of the direct path's length is taken as it
+    /// is; a longer one hugs the obstacle to the point nearest the cursor.
     pub walkaround_hug_length_threshold: f64,
-    /// `CanViolateDRC()` (pns_routing_settings.h:117): only with this set
-    /// does `AllowDRCViolations()` let `MarkObstacles` mode commit a
-    /// colliding head. KiCad's default is `false` (`.cpp:48`).
+    /// `GetAllowDRCViolationsSetting()` (`CanViolateDRC`, `can_violate_drc` in
+    /// the settings file): only with this set does `AllowDRCViolations()` let
+    /// `MarkObstacles` mode commit a colliding head. Default `false`.
     pub can_violate_drc: bool,
+    /// `GetFreeAngleMode()`: in `MarkObstacles` mode the head is a straight
+    /// line from the last fixed point to the cursor, at any angle
+    /// (`buildInitialLine`). In the other modes it does nothing, like KiCad's.
+    pub free_angle_mode: bool,
 }
 
 impl RoutingSettings {
     /// `ROUTING_SETTINGS::AllowDRCViolations()`.
     pub fn allow_drc_violations(&self) -> bool {
         self.mode == Mode::MarkObstacles && self.can_violate_drc
+    }
+
+    /// `GetFreeAngleMode() && Mode() == RM_MarkObstacles`: the only place KiCad's router builds a head at any angle.
+    pub fn free_angle(&self) -> bool {
+        self.free_angle_mode && self.mode == Mode::MarkObstacles
     }
 }
 
@@ -102,6 +126,7 @@ impl Default for RoutingSettings {
             fix_all_segments: true,
             walkaround_hug_length_threshold: 1.5,
             can_violate_drc: false,
+            free_angle_mode: false,
         }
     }
 }

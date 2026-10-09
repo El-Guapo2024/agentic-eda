@@ -27,6 +27,8 @@ mod convert_api;
 mod fab_api;
 mod library_api;
 mod library_index;
+mod library_place;
+mod library_search;
 mod page_json;
 mod sch_api;
 mod sch_clipboard_api;
@@ -34,6 +36,8 @@ mod sch_control_api;
 mod sch_export_api;
 mod sch_move_api;
 mod fab_cmd;
+#[cfg(test)]
+mod gate_vs_kicad;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;

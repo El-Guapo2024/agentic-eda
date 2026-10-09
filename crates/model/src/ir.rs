@@ -2006,16 +2006,18 @@ pub struct Group {
     /// `PCB_GROUP::GetName()`. Empty = unnamed (KiCad's own default).
     #[serde(default)]
     pub name: String,
-    /// Ids of every direct member -- a part reference, or a track/via/
-    /// zone/shape/text id. Never another group's id: this model has no
-    /// nested-group concept (`eda_group.h`'s `EDA_GROUP` allows a group of
-    /// groups upstream; out of scope here, see `eda_ops::group_items`'s
-    /// own doc).
+    /// Ids of every direct member -- a part reference, a track/via/zone/
+    /// shape/text/dimension id, or another group's id (`EDA_GROUP::m_items`
+    /// holds any item, so groups nest). An id is a member of one group at
+    /// most and the nesting never loops; `DrawingsSection::group_leaves`
+    /// and friends (`groups.rs`) read the tree.
     pub member_ids: Vec<String>,
 }
 
 impl Group {
-    fn id_seed(&self) -> String {
+    /// What the id of a group is derived from: its members, sorted (`next_item_id( "grp", .. )`). Public for the importer, which
+    /// names inner groups before the groups that hold them.
+    pub fn id_seed(&self) -> String {
         let mut members = self.member_ids.clone();
         members.sort();
         members.join(",")

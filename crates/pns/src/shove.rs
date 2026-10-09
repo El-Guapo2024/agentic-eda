@@ -285,6 +285,14 @@ fn circle_circle_mtv(a: Point, ra: Um, b: Point, rb: Um, clearance: Um) -> Optio
 /// to whatever shape a pad has: away from the pad's nearest boundary point
 /// (towards the inside's far side when the via is inside it).
 fn solid_via_mtv(shape: &Shape, c: Point, r: Um, clearance: Um) -> Option<(i64, i64)> {
+    // A round pad is a `SHAPE_CIRCLE` and an oval one a `SHAPE_SEGMENT` in KiCad, which have their own pushouts: the circle
+    // away from the pad's centre, the segment away from its axis. (The rectangle code below pushes toward a circle's
+    // centre when the via is inside the pad, because a circle's "boundary" here is one point.)
+    match shape {
+        Shape::Circle { c: pad_c, r: pad_r } => return circle_circle_mtv(*pad_c, *pad_r, c, r, clearance),
+        Shape::Stadium { a, b, r: pad_r } => return circle_chain_mtv(c, r, &[*a, *b], clearance + *pad_r),
+        _ => {}
+    }
     shape.collides(&Shape::Circle { c, r }, clearance)?;
     let (mut best, mut nearest) = (i128::MAX, c);
     for s in shape.boundary_segs() {
@@ -300,6 +308,58 @@ fn solid_via_mtv(shape: &Shape, c: Point, r: Um, clearance: Um) -> Option<(i64, 
     let (delta, len) = if inside { ((nearest.x - c.x, nearest.y - c.y), ((min_dist + 1.0 + dist).abs() + 1.0) as Um) } else { ((c.x - nearest.x, c.y - nearest.y), ((min_dist + 1.0 - dist).abs() + 1.0) as Um) };
     let m = crate::hull::resize(delta.0, delta.1, len);
     Some((m.0 as i64, m.1 as i64))
+}
+
+/// `VIA::PushoutForce( aNode, aOther, aForce )`: the displacement that takes a via at `pos` out of one obstacle, at the full
+/// clearance (no epsilon). `(0, 0)` when the via is not in it, or the obstacle's MTV is zero.
+fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> (i64, i64) {
+    let r = via.diameter / 2;
+    let clearance = Node::clearance_to(rules, &via.net, other);
+    match other {
+        Item::Solid(s) => solid_via_mtv(&s.shape, pos, r, clearance),
+        Item::Segment(sg) => circle_chain_mtv(pos, r, &[sg.a, sg.b], clearance + sg.width / 2),
+        Item::Via(o) => circle_circle_mtv(o.pos, o.diameter / 2, pos, r, clearance),
+    }
+    .unwrap_or((0, 0))
+}
+
+/// `VIA::PushoutForce( aNode, aDirection, aForce, aCollisionMask, aMaxIterations )`: push the via out of whatever of
+/// `mask`'s kinds it sits on, one obstacle at a time by that obstacle's minimum translation vector (at most a quarter of the
+/// via's diameter per step, "to make the algorithm more predictable and less jumpy"), and after half the iterations along
+/// `direction` -- the lead, usually back toward the cursor -- instead, in case the barycentric force goes the wrong way.
+/// `max_iterations` is `ROUTING_SETTINGS::ViaForcePropIterationLimit`. `None` when it does not come free within that many
+/// steps, or an obstacle's MTV is zero ("force propagation has failed").
+pub(crate) fn via_pushout_force(node: &Node, rules: &BoardRules, via: &Via, direction: (i64, i64), mask: u8, max_iterations: i32, exclude: &[ItemId]) -> Option<(i64, i64)> {
+    let threshold = via.diameter / 4;
+    let (mut pos, mut total) = (via.pos, (0i64, 0i64));
+    let mut iter = 0;
+    while iter < max_iterations {
+        let circle = Shape::Circle { c: pos, r: via.diameter / 2 };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: false };
+        let obstacles = node.colliding_with(&circle, &via.net, via.layers, rules, exclude, opts);
+        let Some(first) = obstacles.first() else { break };
+        let force = via_pushout_from(rules, via, pos, node.get(first.id)?);
+        if force == (0, 0) {
+            return None;
+        }
+        let magnitude = ((force.0 as f64).powi(2) + (force.1 as f64).powi(2)).sqrt();
+        let step = if iter > max_iterations / 2 && magnitude > threshold as f64 {
+            let l = crate::hull::resize(direction.0 as Um, direction.1 as Um, threshold);
+            (l.0 as i64, l.1 as i64)
+        } else if magnitude > threshold as f64 {
+            let f = crate::hull::resize(force.0 as Um, force.1 as Um, threshold);
+            (f.0 as i64, f.1 as i64)
+        } else {
+            force
+        };
+        total = (total.0 + step.0, total.1 + step.1);
+        pos = Point { x: pos.x + step.0 as Um, y: pos.y + step.1 as Um };
+        iter += 1;
+    }
+    if iter == max_iterations {
+        return None;
+    }
+    Some(total)
 }
 
 // ----------------------------------------------------------------------------
@@ -698,7 +758,8 @@ impl<'a> Shove<'a> {
         if same_net(ia.net(), ib.net()) || !ia.layers().overlaps(&ib.layers()) {
             return false;
         }
-        let clearance = self.clearance(ia.net(), ib.net());
+        // An Edge.Cuts graphic on either side asks for the board's edge clearance, not a net class's.
+        let clearance = if matches!(ib, Item::Solid(s) if s.edge) { Node::clearance_to(self.rules, ia.net(), ib) } else { Node::clearance_to(self.rules, ib.net(), ia) };
         ia.shape(ia.layers().start()).collides(&ib.shape(ib.layers().start()), clearance).is_some()
     }
 
@@ -898,6 +959,11 @@ impl<'a> Shove<'a> {
         let current_rank = self.line_rank(cur);
         let mut skip: HashSet<ItemId> = self.head_marked.clone();
         skip.extend(cur.line.segment_ids.iter().copied());
+        // The board outline is a closed ring of solids: when there is no room between a pushed line and the edge,
+        // the shortest walk that clears everything is the long way round the whole ring. That is a path, but never
+        // what a shove is for, so a walk around an edge may not grow past `WalkaroundHugLengthThreshold` x 2 (the
+        // bound `LINE_PLACER::rhWalkBase` puts on a head's detour) times the line's own length -- KiCad has none here.
+        let edge_walk_bound = matches!(self.node.get(obstacle), Some(Item::Solid(s)) if s.edge).then(|| 2.0 * self.settings.walkaround_hug_length_threshold * cur.line.length());
         let walked: Option<(SLine, i32)> = {
             let cluster = self.node.assemble_cluster(obstacle, cur.line.layer, 10.0, None, &|id| skip.contains(&id));
             let mut walker = Walker::new(&self.node, self.rules);
@@ -918,6 +984,9 @@ impl<'a> Shove<'a> {
                 walk_line.line.pts = outcome.line_of(WalkPolicy::Shortest).to_vec();
                 walk_line.line.simplify();
                 if walk_line.line.has_loops() {
+                    continue;
+                }
+                if edge_walk_bound.is_some_and(|bound| walk_line.line.length() > bound) {
                     continue;
                 }
                 if let Some(last_line) = self.line_stack.first() {
@@ -964,8 +1033,8 @@ impl<'a> Shove<'a> {
                 mtv = via_mtv.or(line_mtv).unwrap_or((0, 0));
             }
             Pusher::Item(id) => {
-                if let Some(Item::Solid(s)) = self.node.get(*id) {
-                    let clearance = self.clearance(&s.net, &obstacle_via.net);
+                if let Some(solid @ Item::Solid(s)) = self.node.get(*id) {
+                    let clearance = Node::clearance_to(self.rules, &obstacle_via.net, solid);
                     if let Some(m) = solid_via_mtv(&s.shape, obstacle_via.pos, obstacle_via.diameter / 2, clearance) {
                         mtv = m;
                         collided = true;
@@ -1369,15 +1438,42 @@ impl<'a> Shove<'a> {
             return None;
         }
         self.run_optimizer();
-        Some(self.outcome(head_root, raw))
+        Some(self.outcome(Some(head_root), raw))
+    }
+
+    /// `SHOVE::Run` for a via head (`AddHeads( VIA_HANDLE, aNewPos, SHP_SHOVE )`, what `DRAGGER::dragShove` adds for a dragged via):
+    /// `pushOrShoveVia( viaToDrag, newPos - pos, 0, true )` moves the via -- and drags the end of every track attached to it with
+    /// it -- and the main loop then resolves whatever those collide with. `None` when the via may not be shoved
+    /// (`ShoveVias()` off, locked: `SH_TRY_WALK`) or the shove fails. The outcome's `head` is the one point the via ended at,
+    /// which is not `to` if a pad or the board edge made the shove push it further (`GetModifiedHeadVia`).
+    fn run_via(mut self, via_id: ItemId, to: Point) -> Option<ShoveOutcome> {
+        let via = match self.node.get(via_id) {
+            Some(Item::Via(v)) => v.clone(),
+            _ => return None,
+        };
+        let delta = (to.x - via.pos.x, to.y - via.pos.y);
+        if self.push_or_shove_via(via_id, delta, 0, true) != Status::Ok {
+            return None;
+        }
+        if self.shove_main_loop() != Status::Ok {
+            return None;
+        }
+        self.run_optimizer();
+        // `reconstructHeads`: the via as the shove left it
+        let end = self.roots.iter().find_map(|r| match (&r.old_via, &r.new_via) {
+            (Some((id, _)), Some(new)) if *id == via_id => Some(new.pos),
+            _ => None,
+        });
+        Some(self.outcome(None, vec![end.unwrap_or(via.pos)]))
     }
 
     /// `reconstructHeads` + `removeHeads` + the diff against the world.
-    fn outcome(mut self, head_root: usize, raw: Vec<Point>) -> ShoveOutcome {
-        let head_entry = self.roots[head_root].clone();
-        let head = head_entry.new_line.as_ref().map(|l| l.line.pts.clone()).unwrap_or(raw);
+    fn outcome(mut self, head_root: Option<usize>, raw: Vec<Point>) -> ShoveOutcome {
+        // a via head (`AddHeads( VIA_HANDLE, .. )`) has no head line to take out of the world
+        let head_entry = head_root.map(|r| self.roots[r].clone());
+        let head = head_entry.as_ref().and_then(|e| e.new_line.as_ref()).map(|l| l.line.pts.clone()).unwrap_or(raw);
         let mut head_ids: Vec<ItemId> = self.head_marked.iter().copied().collect();
-        if let Some(l) = &head_entry.new_line {
+        if let Some(l) = head_entry.as_ref().and_then(|e| e.new_line.as_ref()) {
             head_ids.extend(l.line.segment_ids.iter().copied());
         }
         for id in head_ids {
@@ -1488,6 +1584,15 @@ pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, 
     }
     let head = Line::from_points(net.clone(), layer, width, raw.to_vec());
     Shove::new(node, rules, settings).run(head)
+}
+
+/// `DRAGGER::dragShove` for a dragged via: shove the via at `via_id` to `to`, with the tracks attached to it, pushing whatever they
+/// collide with out of the way. The outcome's `head` is `[where the via ended]` (see `Shove::run_via`), `displaced_lines` hold the
+/// attached tracks as they were left as well as everything else that moved, and `displaced_vias` the dragged via itself if it
+/// ended anywhere but where it was. `None` means the shove failed or the via may not be shoved (the dragger falls back to
+/// `dragViaWalkaround`).
+pub fn shove_via(node: &Node, via_id: ItemId, to: Point, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
+    Shove::new(node, rules, settings).run_via(via_id, to)
 }
 
 #[cfg(test)]

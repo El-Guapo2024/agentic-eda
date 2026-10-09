@@ -269,8 +269,8 @@ mod tests {
         for old in &orig.symbols {
             let new = sch.symbols.iter().find(|s| !orig.symbols.iter().any(|o| o.id == s.id) && s.value == old.value && s.footprint == old.footprint && s.rot == old.rot && s.mirrored == old.mirrored).unwrap_or_else(|| panic!("no copy of {}", old.id));
             assert_eq!((new.at.x - old.at.x, new.at.y - old.at.y), (dx, dy), "{} moved by the paste's offset", old.id);
-            if old.lib_id.starts_with("eda:") {
-                assert_eq!(new.lib_id, "clipboard:U1", "a generated box is a library symbol of its own in the copy");
+            if eda_model::symbol::is_synthetic_lib_id(&old.lib_id) {
+                assert_eq!(new.lib_id, "clipboard:U1", "a generated symbol (`eda:` or `gen:`) is a library symbol of its own in the copy");
             } else {
                 assert_eq!(new.lib_id, old.lib_id);
             }

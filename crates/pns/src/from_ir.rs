@@ -15,7 +15,8 @@
 use crate::item::{net_of, Item, Segment, Solid, Via};
 use crate::layer::LayerMap;
 use crate::node::Node;
-use eda_model::ir::Design;
+use eda_drc::kimath::Shape;
+use eda_model::ir::{Design, Point};
 use eda_model::ConstraintModel;
 
 /// The id/segment-index pair a `"trk_xxx#3"` flattened id decodes to, the
@@ -45,7 +46,7 @@ pub fn build_node(design: &Design, model: &ConstraintModel) -> (Node, LayerMap) 
             })
         });
         let layer_range = layer_range.unwrap_or_else(|| layers.all());
-        node.add(Item::Solid(Solid { net: pad.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone() }));
+        node.add(Item::Solid(Solid { net: pad.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false }));
     }
 
     for t in &drc_board.tracks {
@@ -59,7 +60,33 @@ pub fn build_node(design: &Design, model: &ConstraintModel) -> (Node, LayerMap) 
         node.add(Item::Via(Via { net: v.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: false }));
     }
 
+    add_board_outline(&mut node, design, &layers);
+
     (node, layers)
+}
+
+/// The board outline as router obstacles: `PNS_KICAD_IFACE_BASE::syncGraphicalItem` for each graphic on Edge.Cuts. Every
+/// segment of the outline becomes a `SOLID` on every copper layer, with no net (it collides with everything, whatever the
+/// net), not routable, and a zero-width shape (`SetWidth( 0 )` for an Edge.Cuts `SH_SEGMENT`), so a track or via keeps the
+/// board's copper-to-edge clearance from it (`Node::clearance_to`) and a shove cannot push copper past it. The outline is the
+/// design's one closed polygon, last point joined to the first; an inner cutout is not in the IR and so not an obstacle.
+fn add_board_outline(node: &mut Node, design: &Design, layers: &LayerMap) {
+    let Some(placement) = &design.placement else { return };
+    let outline = &placement.outline;
+    let n = outline.len();
+    if n < 2 {
+        return;
+    }
+    // Two points are one segment, not the same one twice.
+    let segments = if n == 2 { 1 } else { n };
+    for i in 0..segments {
+        let (a, b) = (outline[i], outline[(i + 1) % n]);
+        if a == b {
+            continue;
+        }
+        let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        node.add(Item::Solid(Solid { net: None, layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: 0 }, source: format!("edge:{i}"), edge: true }));
+    }
 }
 
 #[cfg(test)]

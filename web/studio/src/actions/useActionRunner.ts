@@ -44,6 +44,7 @@ import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
 import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
+import { boardDeleteCmds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -89,6 +90,8 @@ import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../
 import { registerBoardControlActions } from "./boardControlActions";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
+import { registerPcbMenuActions } from "./pcbMenuActions";
+import { registerPcbFindActions } from "./pcbFindActions";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
@@ -191,21 +194,11 @@ export function useActionRunner() {
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
-      const locked = new Set(state.board?.locked ?? []);
       // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
       if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
-      for (const id of refs) {
-        if (state.tab === "pcb") {
-          if (locked.has(id)) continue;
-          if (api.trackById(id)) cmds.push({ op: "delete_track", id });
-          else if (api.viaById(id)) cmds.push({ op: "delete_via", id });
-          else if (api.zoneById(id)) cmds.push({ op: "delete_zone", id });
-          else if (api.shapeById(id)) cmds.push({ op: "delete_shape", id });
-          else if (api.textById(id)) cmds.push({ op: "delete_text", id });
-          else if (api.dimensionById(id)) cmds.push({ op: "delete_dimension", id });
-          else if (api.partByRef(id)?.placed) cmds.push({ op: "rip", part: id });
-        }
-      }
+      // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
+      // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
+      if (state.tab === "pcb" && state.board) cmds.push(...boardDeleteCmds(state.board, refs).cmds);
       dispatch({ type: "CLEAR_SELECTION" });
       if (cmds.length) void api.cmdBatch(cmds);
     };
@@ -433,7 +426,7 @@ export function useActionRunner() {
         dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
         return;
       }
-      void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings.mode, dispatch, freeAngle);
+      void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings, dispatch, freeAngle);
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
     // `routerInlineDrag` (EDIT_TOOL::invokeInlineRouter -> `RunAction( PCB_ACTIONS::routerInlineDrag, DM_ANY )`): the router's own drag entry point, the one `D` above ends in.
@@ -444,10 +437,8 @@ export function useActionRunner() {
     // a free-angle drag ("Footprints cannot be dragged freely"), and `findDraggableAt` only ever finds a
     // track or via. A selection hover is the same RequestSelection fallback `D` uses.
     m.set("pcbnew.InteractiveRouter.DragFreeAngle", pcbOnly(startDragAtCursor(true)));
-    // `Ctrl+<` (dialog_pns_settings.cpp): mode/remove-redundant-tracks,
-    // read fresh by the next `X`/`D` session start -- see
-    // `state.routerSettings`'s own doc comment on why this isn't live
-    // mid-route the way upstream's dialog is.
+    // `Ctrl+<` (dialog_pns_settings.cpp): the router's settings, sent with the next `X`/`D` session start and, on OK, to the one
+    // running -- see `state.routerSettings`'s own doc comment.
     m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
     // `7` (gap #7 task item 4): length tuning -- see
     // components/LengthTuningDialog.tsx's own header comment on why this
@@ -602,7 +593,8 @@ export function useActionRunner() {
       "common.Interactive.groupEnter",
       pcbOnly(() => {
         const refs = [...state.selection];
-        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "SET_ENTERED_GROUP", id: refs[0]! });
+        // The members are selected on the way in (`EnterGroup`: `select( member )` for each).
+        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "ENTER_GROUP", id: refs[0]! });
       })
     );
     m.set(
@@ -610,7 +602,7 @@ export function useActionRunner() {
       pcbOnly(() => {
         const leftId = state.enteredGroupId;
         dispatch({ type: "SET_ENTERED_GROUP", id: null });
-        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId] });
+        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId], raw: true });
       })
     );
     m.set(
@@ -1656,7 +1648,7 @@ export function useActionRunner() {
 
     // common/lib_tree / LIB_TREE's ACTIONS::libraryTreeSearch (Ctrl+L): focus
     // the search field of the symbol chooser. Registered only while that
-    // dialog is open. (This app has no footprint chooser.)
+    // dialog is open. (The Footprint Chooser takes the focus when it opens.)
     if (state.symbolChooserOpen) {
       m.set("common.Control.libraryTreeSearch", () => {
         const el = document.getElementById("library-tree-search") as HTMLInputElement | null;
@@ -2001,7 +1993,7 @@ export function useActionRunner() {
           const runAnchor = (a: (typeof anchors)[number]) => async (): Promise<QueueOutcome> => {
             const layer = routeStartLayer(a, copperLayers, state.activeLayer);
             if (variant !== "auto") return handOver(variant === "fromEnd" ? a.target : a.at, layer);
-            const started = await routeStart(a.at[0], a.at[1], layer, width, settings.mode, settings.removeLoops);
+            const started = await routeStart(a.at[0], a.at[1], layer, width, settings);
             if (!started.ok) return "done";
             const head = await routeMove(a.target[0], a.target[1]);
             // AttemptFinish: only a head that reaches the far end without colliding completes by itself.
@@ -2223,6 +2215,9 @@ export function useActionRunner() {
     registerSchClipboardActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
     // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
     registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
+    registerPcbMenuActions(m, { state, dispatch, api, requestSelection });
+    // Find, Find Next and Find Previous on the board (dialog_find.cpp): actions/pcbFindActions.ts.
+    registerPcbFindActions(m, { state, dispatch, api, requestSelection });
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });

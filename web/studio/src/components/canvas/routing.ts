@@ -10,7 +10,8 @@
 // below is unrelated to the route tool now; it remains the plain-45-
 // degree-snap helper the shape tools (segment/rect) still use for their
 // own, much simpler, single-segment preview.
-import type { BoardState, RouteMode } from "../../api/types";
+import type { BoardState } from "../../api/types";
+import type { RouterSettings } from "../../kicad-port/routerSettings";
 import { routeCancel, routeFinish, routeFix, routeStart } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
@@ -27,8 +28,8 @@ import { advanceRouteQueue } from "./routeQueue";
  * RouterSettingsDialog.tsx) -- read fresh at the start of every session,
  * same as every other "current pick" this app's route/via tools read
  * (track width, via preset). */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: { mode: RouteMode; removeLoops: boolean }, dispatch: Dispatch<Action>): Promise<boolean> {
-  const preview = await routeStart(x, y, layer, width, settings.mode, settings.removeLoops);
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: RouterSettings, dispatch: Dispatch<Action>): Promise<boolean> {
+  const preview = await routeStart(x, y, layer, width, settings);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return false;

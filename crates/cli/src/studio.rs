@@ -692,6 +692,26 @@ fn handle(
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        // The Symbol and Footprint Choosers (`crate::library_search`): one library's items with their descriptions, the search over every library's
+        // names, descriptions and keywords (best first, capped), and the drawing of the one item selected. The project's own symbols come apart.
+        ("GET", "/api/library/entries" | "/api/library/search" | "/api/library/details") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => {
+                    let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power"));
+                    match path {
+                        "/api/library/entries" => crate::library_search::entries(kind, &query_value(target, "lib"), &filter),
+                        "/api/library/search" => {
+                            let limit = query_value(target, "limit").parse::<usize>().ok().filter(|&n| n > 0).map_or(crate::library_search::SEARCH_LIMIT, |n| n.min(2000));
+                            crate::library_search::search(kind, &query_value(target, "q"), &filter, limit)
+                        }
+                        _ => crate::library_search::details(kind, &query_value(target, "id")),
+                    }
+                }
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
@@ -767,6 +787,7 @@ fn handle(
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(route_session).to_string().as_bytes()),
         ("POST", "/api/route/mode") => respond(stream, "200 OK", "application/json", route_api::set_mode(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/settings") => respond(stream, "200 OK", "application/json", route_api::set_settings(route_session, &body).to_string().as_bytes()),
         // D (stage 5): drag an existing track segment/corner or via,
         // keeping its connections -- shares `route_session` with the
         // route endpoints above (see route_api::drag_start's doc comment).
@@ -990,6 +1011,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 // Task item 4: true for a generated teardrop, never a
                 // hand-drawn zone -- see `eda_model::ir::Zone::teardrop`.
                 "teardrop": z.teardrop,
+                // `ZONE::GetZoneName()`: the Properties panel's "Name" row (`Cmd::SetZoneName`).
+                "name": z.name,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable
@@ -1200,6 +1223,8 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "keep_text_aligned": d.keep_text_aligned,
         "text_angle": d.text_angle,
         "text_size_um": d.text_size_um,
+        // `EDA_TEXT::GetTextThickness()` of the label; null = 15 % of the size (the Properties panel's "Thickness").
+        "text_thickness_um": d.text_thickness_um,
         "stroke_width": d.stroke_width,
         "arrow_length": d.arrow_length,
         "extension_offset": d.extension_offset,

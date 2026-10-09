@@ -184,7 +184,8 @@ impl LinePlacer {
         if start == p {
             return HeadResult { pts: vec![start], colliding: false, displaced_lines: Vec::new(), displaced_vias: Vec::new() };
         }
-        let raw = self.direction.build_initial_trace(start, p, false, CornerMode::Mitered45);
+        // `buildInitialLine`: `if( GetFreeAngleMode() && Mode() == RM_MarkObstacles ) l = SHAPE_LINE_CHAIN( { m_p_start, aP } )`
+        let raw = if settings.free_angle() { vec![start, p] } else { self.direction.build_initial_trace(start, p, false, CornerMode::Mitered45) };
         let exclude = self.exclude();
 
         if settings.mode == Mode::Shove {
@@ -194,7 +195,7 @@ impl LinePlacer {
             // walked around, a locked item, or the iteration limit falls back
             // to a full walkaround for this call, exactly like upstream.
             let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
-            if let Some(walked) = walkaround::walk_masked(node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::SOLID, iteration_limit) {
+            if let Some(walked) = walkaround::walk_base(node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::SOLID, iteration_limit, settings.walkaround_hug_length_threshold, &exclude) {
                 if let Some(outcome) = crate::shove::shove_line(node, &walked, &self.net, self.current_layer, self.width, rules, settings) {
                     let line = Line::from_points(self.net.clone(), self.current_layer, self.width, outcome.head.clone());
                     // Like `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`
@@ -215,10 +216,14 @@ impl LinePlacer {
                 HeadResult { pts: raw, colliding, displaced_lines: Vec::new(), displaced_vias: Vec::new() }
             }
             Mode::Walkaround | Mode::Shove => {
-                let wr = walkaround::route(&raw, node, &self.net, self.current_layer, self.width, rules, &exclude, settings.walkaround_iteration_limit as u32);
-                match wr.best() {
+                // `rhWalkOnly`: `rhWalkBase( aP, walkFull, ITEM::ANY_T, RM_Walkaround )`, refused if the walk still
+                // collides with anything, then the head optimized per the effort setting.
+                let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
+                let walked = walkaround::walk_base(node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::ANY, iteration_limit, settings.walkaround_hug_length_threshold, &exclude)
+                    .filter(|path| !walkaround::path_collides(node, rules, &self.net, self.current_layer, self.width, path, &exclude));
+                match walked {
                     Some(path) => {
-                        let line = Line::from_points(self.net.clone(), self.current_layer, self.width, path.clone());
+                        let line = Line::from_points(self.net.clone(), self.current_layer, self.width, path);
                         let optimized = optimizer::optimize_with(&line, node, rules, &exclude, head_effort(settings));
                         HeadResult { pts: optimized.pts, colliding: false, displaced_lines: Vec::new(), displaced_vias: Vec::new() }
                     }
@@ -228,31 +233,24 @@ impl LinePlacer {
         }
     }
 
-    /// Via placement for the pending via at the head's end: tries the
-    /// exact cursor position first, then a small ring of nearby offsets
-    /// (a simplified stand-in for `VIA::PushoutForce`'s iterative search --
-    /// see `PARITY.md`), on the *new* layer's span.
-    fn place_via(&self, node: &Node, rules: &BoardRules, at: Point, to_layer: i32) -> Point {
-        let layers = LayerRange::new(self.current_layer, to_layer);
-        let fits = |p: Point| {
-            let shape = Shape::Circle { c: p, r: self.via_diameter / 2 };
-            node.first_colliding(&shape, &self.net, layers, rules, &[]).is_none()
+    /// Via placement for the pending via at the head's end (`LINE_PLACER::buildInitialLine`'s via part): put it at `at` and,
+    /// where it sits on something, push it out by `VIA::PushoutForce` along the lead from where this leg started -- on pads
+    /// and everything else in `Mode::Walkaround`, on pads alone in `Mode::Shove` (the tracks and vias it meets are the shove's
+    /// to move), not at all in `Mode::MarkObstacles` -- at most `ROUTING_SETTINGS::ViaForcePropIterationLimit` steps. A via
+    /// that does not come free stays where the cursor put it, and the caller's own collision check marks it.
+    fn place_via(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, at: Point, to_layer: i32) -> Point {
+        let mask = match settings.mode {
+            Mode::MarkObstacles => return at,
+            Mode::Walkaround => crate::node::kind_mask::ANY,
+            Mode::Shove => crate::node::kind_mask::SOLID,
         };
-        if fits(at) {
-            return at;
+        let via = crate::item::Via { net: self.net.clone(), layers: LayerRange::new(self.current_layer, to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false };
+        let start = self.fixed_start();
+        let lead = (at.x - start.x, at.y - start.y);
+        match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
+            Some(force) => Point { x: at.x + force.0 as Um, y: at.y + force.1 as Um },
+            None => at,
         }
-        let step = (self.via_diameter / 2).max(100);
-        for ring in 1..=8 {
-            let r = step * ring as Um;
-            for k in 0..8 {
-                let theta = std::f64::consts::PI * 2.0 * k as f64 / 8.0;
-                let candidate = Point { x: at.x + (r as f64 * theta.cos()).round() as Um, y: at.y + (r as f64 * theta.sin()).round() as Um };
-                if fits(candidate) {
-                    return candidate;
-                }
-            }
-        }
-        at // give up: leave it at the cursor, marked colliding by the caller's own check
     }
 
     /// `LINE_PLACER::Move`: the live preview, including end-of-route
@@ -269,7 +267,7 @@ impl LinePlacer {
         head.simplify();
         let via = if self.placing_via {
             let via_pos = head.last().unwrap_or(target);
-            let placed = self.place_via(node, rules, via_pos, self.current_layer);
+            let placed = self.place_via(node, rules, settings, via_pos, self.current_layer);
             let shape = Shape::Circle { c: placed, r: self.via_diameter / 2 };
             if node.first_colliding(&shape, &self.net, LayerRange::single(self.current_layer), rules, &[]).is_some() {
                 colliding = true;
@@ -334,9 +332,17 @@ impl LinePlacer {
             return if preview.snapped_end.is_some() { FixOutcome::Fixed { real_end: true } } else { FixOutcome::Blocked };
         }
         let real_end = preview.snapped_end.is_some();
-        self.direction = preview.head.pts.windows(2).rev().find(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).unwrap_or(self.direction);
+        // `FixRoute`: with "Fix all segments on click" off, a click that does not end the route fixes every segment but
+        // the last, which stays free and follows the cursor; the next leg starts where the last one began
+        // (`m_currentStart = p_pre_last`) and continues in the direction of the one before it (`lastDirSeg = CSegment( -2 )`).
+        let keep_last_free = !settings.fix_all_segments && !real_end && !self.placing_via && preview.head.segment_count() > 1;
+        let mut head = preview.head.clone();
+        if keep_last_free {
+            head.pts.pop();
+        }
+        self.direction = head.pts.windows(2).rev().find(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).unwrap_or(self.direction);
         self.absorb_displacement(&preview);
-        self.runs.push(preview.head);
+        self.runs.push(head);
         self.placement_correct = true;
         FixOutcome::Fixed { real_end }
     }
@@ -351,7 +357,7 @@ impl LinePlacer {
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
         head.simplify();
         self.absorb(&head_result.displaced_lines, &head_result.displaced_vias);
-        let via_pos = self.place_via(node, rules, head.last().unwrap_or(p), new_layer);
+        let via_pos = self.place_via(node, rules, settings, head.last().unwrap_or(p), new_layer);
         if head.point_count() >= 2 {
             self.runs.push(head);
         }
@@ -518,7 +524,7 @@ mod tests {
     #[test]
     fn walks_around_an_obstacle_between_fixed_points() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
         let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
@@ -531,7 +537,7 @@ mod tests {
     #[test]
     fn mark_obstacles_commits_collision_only_when_can_violate_drc() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1000, y: 0 }, shape: Shape::Circle { c: Point { x: 1000, y: 0 }, r: 500 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1000, y: 0 }, shape: Shape::Circle { c: Point { x: 1000, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let mut settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         assert!(!settings.can_violate_drc);
@@ -540,6 +546,78 @@ mod tests {
         assert!(placer.finish(&node, &rules, &settings, Point { x: 2000, y: 0 }).is_none());
         settings.can_violate_drc = true;
         assert!(matches!(placer.fix(&node, &rules, &settings, Point { x: 2000, y: 0 }), FixOutcome::Fixed { .. }));
+    }
+
+    /// `GetFixAllSegments()` off: a click fixes every segment but the last, which stays free (`FixRoute`'s `lastV`).
+    #[test]
+    fn without_fix_all_segments_a_click_leaves_the_last_segment_free() {
+        let node = Node::new();
+        let rules = rules();
+        let target = Point { x: 3000, y: 1000 };
+        let mut all = RoutingSettings::default();
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        let head = placer.preview(&node, &rules, &all, target).head.pts;
+        assert_eq!(head.len(), 3, "an elbow of two legs: {head:?}");
+        assert_eq!(placer.fix(&node, &rules, &all, target), FixOutcome::Fixed { real_end: false });
+        assert_eq!(placer.runs[0].pts, head, "by default the whole head is fixed");
+        assert_eq!(placer.fixed_start(), target);
+
+        all.fix_all_segments = false;
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        assert_eq!(placer.fix(&node, &rules, &all, target), FixOutcome::Fixed { real_end: false });
+        assert_eq!(placer.runs[0].pts, head[..2].to_vec(), "only the first leg is fixed");
+        assert_eq!(placer.fixed_start(), head[1], "and the next one starts where the free one did");
+        assert_eq!(placer.direction, Direction45::from_seg(head[0], head[1]), "continuing in the direction of the leg before it");
+        // A click that ends the route fixes the lot, whatever the setting says.
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        let finished = placer.finish(&node, &rules, &all, target).unwrap();
+        assert_eq!(finished[0].pts, head);
+    }
+
+    /// `WalkaroundHugLengthThreshold()`: a head whose walkaround is more than twice the threshold times the direct length
+    /// hugs the obstacle instead of chasing the cursor round it.
+    #[test]
+    fn a_long_detour_hugs_the_obstacle_unless_the_hug_threshold_allows_it() {
+        let mut node = Node::new();
+        // a 20 mm wall of GND between the start and the cursor, 4 mm apart: the way round is 5 times as long
+        node.add(Item::Segment(crate::item::Segment { net: net_of("GND"), layer: 0, a: Point { x: 2000, y: -10_000 }, b: Point { x: 2000, y: 10_000 }, width: 200, source_track: None, locked: false }));
+        let rules = rules();
+        let cursor = Point { x: 4000, y: 0 };
+        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+
+        let hugging = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
+        let pv = placer.preview(&node, &rules, &hugging, cursor);
+        assert!(!pv.colliding);
+        let end = pv.head.last().unwrap();
+        assert_ne!(end, cursor, "the head does not go the 20 mm round to the cursor: {:?}", pv.head.pts);
+        assert!(end.x < 2000 && pv.head.length() < 6000.0, "it stops at the wall's clearance, on the near side: {:?}", pv.head.pts);
+
+        let patient = RoutingSettings { walkaround_hug_length_threshold: 3.0, ..hugging.clone() };
+        let pv = placer.preview(&node, &rules, &patient, cursor);
+        assert!(!pv.colliding);
+        assert_eq!(pv.head.last(), Some(cursor), "with a threshold of 3 the 21 mm detour is taken: {:?}", pv.head.pts);
+        assert!(pv.head.length() > 20_000.0);
+    }
+
+    /// `ViaForcePropIterationLimit()`: how many steps `VIA::PushoutForce` has to get the via off a pad.
+    #[test]
+    fn a_via_placed_on_a_pad_is_pushed_off_within_the_via_force_iteration_limit() {
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
+        let rules = rules();
+        let mut placer = LinePlacer::start(&node, Point { x: 3000, y: 0 }, None, net_of("SIG"), 0, 200);
+        placer.toggle_via(true, 600, 300);
+        let on_the_pad = Point { x: 200, y: 300 };
+        let settings = RoutingSettings::default();
+        let placed = placer.place_via(&node, &rules, &settings, on_the_pad, 1);
+        let centre_distance = ((placed.x as f64).powi(2) + (placed.y as f64).powi(2)).sqrt();
+        assert!(centre_distance >= 1000.0 - 2.0, "the 600 um via is {centre_distance} um from the 500 um pad's centre: {placed:?}");
+        // four steps of a quarter of the via are not enough to leave this pad
+        let tight = RoutingSettings { via_force_prop_iteration_limit: 4, ..settings.clone() };
+        assert_eq!(placer.place_via(&node, &rules, &tight, on_the_pad, 1), on_the_pad, "out of steps: the via stays where the cursor put it");
+        // Highlight collisions never moves a via.
+        let marking = RoutingSettings { mode: Mode::MarkObstacles, ..settings };
+        assert_eq!(placer.place_via(&node, &rules, &marking, on_the_pad, 1), on_the_pad);
     }
 
     #[test]
@@ -562,7 +640,7 @@ mod tests {
     #[test]
     fn snaps_onto_a_same_net_pad_and_reports_real_end() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U2.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U2.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
@@ -617,7 +695,7 @@ mod tests {
         use crate::item::{Segment, Solid};
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2000, y: 0 }, shape: Shape::Circle { c: Point { x: 2000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2000, y: 0 }, shape: Shape::Circle { c: Point { x: 2000, y: 0 }, r: 400 }, source: "U1.1".into(), edge: false }));
         node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: 4300, y: -2500 }, b: Point { x: 4300, y: -300 }, width: 200, source_track: Some(("trkP".into(), 0)), locked: false }));
         let rules = rules();
         let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);

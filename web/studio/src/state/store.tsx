@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
@@ -24,6 +24,7 @@ import { editableSelection, planCarry, planFlip, planRotate, type TransformPlan 
 import { snapPoint } from "../components/canvas/gridHelper";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { substituteSelection } from "../kicad-port/groupTree";
 import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
@@ -33,6 +34,7 @@ import { repeatSource } from "../kicad-port/schRepeat";
 import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
+import { DEFAULT_ROUTER_SETTINGS, type RouterSettings } from "../kicad-port/routerSettings";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
 import type { SchToolDialog, SchTurn } from "../api/schEditTypes";
@@ -526,6 +528,8 @@ export interface StudioState {
   schNav: NavHistory;
   /** An unplaced part ref chosen from the panel, waiting for a canvas click to place it. */
   armed: string | null;
+  /** A footprint of a library (`Lib:Name`) chosen in the Footprint Chooser (Place Footprint), waiting for a canvas click: it becomes a part of its own on the board (`place_footprint`). */
+  armedFootprint: string | null;
   movePreview: MovePreview | null;
   activeTool: ToolId;
   drawState: DrawState | null;
@@ -807,20 +811,13 @@ export interface StudioState {
   /** `pcbnew.Array.createArray` (Ctrl+T, task item 6) -- components/CreateArrayDialog.tsx. */
   createArrayDialogOpen: boolean;
   /**
-   * `eda_pns::RoutingSettings`, the subset this app's router actually
-   * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
-   * most of upstream's own `DIALOG_PNS_SETTINGS` fields -- shove vias,
-   * jump-over-obstacles/back-pressure, smart pads, smooth dragged
-   * segments, auto posture, suggest ending -- exist on the Rust struct
-   * (or don't exist at all) but are never actually read by any routing
-   * code, so there is nothing real for a toggle to do yet; only `mode`
-   * and `removeLoops` have a genuine effect). Read fresh by `X`/`D`'s own
-   * session start (`routeStart`/`routeDragStart`) -- this app's "start a
-   * fresh session every time" architecture (PARITY.md's own doc on why)
-   * means a setting changed here takes effect on the *next* route/drag,
-   * not one already in progress, unlike upstream's live mid-route dialog.
+   * `eda_pns::RoutingSettings`, the subset of `PNS::ROUTING_SETTINGS` this app's router implements
+   * (kicad-port/routerSettings.ts; `Ctrl+<` edits them, components/RouterSettingsDialog.tsx). Every field is read by the
+   * router. Sent with `X`/`D`'s own session start (`routeStart`/`routeDragStart`) -- this app starts a fresh backend session
+   * for every route or drag -- and, when the dialog is closed with OK while one is running, to that session
+   * (`routeSetSettings`), so a change applies from the next move as upstream's does.
    */
-  routerSettings: { mode: RouteMode; removeLoops: boolean };
+  routerSettings: RouterSettings;
 }
 
 /** The browser's local storage, or null where it is absent or reading it throws (private windows, blocked site data, node tests). */
@@ -850,6 +847,7 @@ const initialState: StudioState = {
   schPosture: false,
   schNav: initialNavHistory(),
   armed: null,
+  armedFootprint: null,
   movePreview: null,
   activeTool: "select",
   drawState: null,
@@ -955,7 +953,7 @@ const initialState: StudioState = {
   editTextAndGraphicsDialogOpen: false,
   createArrayDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
-  routerSettings: { mode: "walkaround", removeLoops: true },
+  routerSettings: DEFAULT_ROUTER_SETTINGS,
 };
 
 export type Action =
@@ -970,14 +968,18 @@ export type Action =
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
-  | { type: "SET_SELECTION"; refs: string[] }
+  /** `raw`: the items as they are, with no group standing in for its members (`select( item )` of a group that was just made or left). */
+  | { type: "SET_SELECTION"; refs: string[]; raw?: boolean }
   | { type: "SET_ENTERED_GROUP"; id: string | null }
+  /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
+  | { type: "ENTER_GROUP"; id: string }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
   | { type: "SET_HOT"; refs: string[] }
   | { type: "SET_NET_HIGHLIGHT"; net: string | null }
   | { type: "SET_ARMED"; ref: string | null }
+  | { type: "SET_ARMED_FOOTPRINT"; name: string | null }
   | { type: "SET_MOVE_PREVIEW"; preview: MovePreview | null }
   | { type: "SET_ACTIVE_TOOL"; tool: ToolId }
   | { type: "SET_VIEW"; view: ViewTransform }
@@ -1095,22 +1097,14 @@ export type Action =
   | { type: "SET_CREATE_ARRAY_DIALOG_OPEN"; open: boolean };
 
 /**
- * `pcb_selection_tool.cpp`'s "clicking a group member selects the group"
- * rule (task item 5): any ref that is a member of a group becomes that
- * group's own id instead, *unless* `enteredGroupId` names that same group
- * (`common.Interactive.groupEnter` -- see `StudioState.enteredGroupId`'s
- * own doc), in which case the ref passes through unchanged so individual
- * members can be picked while "inside" the group. A ref naming a group
- * directly, or not in any group, also passes through unchanged.
+ * `pcb_selection_tool.cpp`'s "clicking a group member selects the group" rule (`FilterCollectorForHierarchy`): any ref that is a member of a group
+ * becomes the outermost group that holds it inside `enteredGroupId` -- the group being worked in, whose own members (and the groups directly in it)
+ * can be picked one by one (`common.Interactive.groupEnter`, `StudioState.enteredGroupId`). A ref naming a group directly, or not in any group, passes
+ * through. The tree is kicad-port/groupTree.ts.
  */
 export function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
   if (!groups || groups.length === 0) return refs;
-  const byMember = new Map<string, string>();
-  for (const g of groups) for (const m of g.member_ids) byMember.set(m, g.id);
-  return refs.map((id) => {
-    const groupId = byMember.get(id);
-    return groupId && groupId !== enteredGroupId ? groupId : id;
-  });
+  return substituteSelection(groups, refs, enteredGroupId).ids;
 }
 
 function reducer(state: StudioState, action: Action): StudioState {
@@ -1132,7 +1126,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
       const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
-      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };
+      // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
+      const enteredGroupId = state.enteredGroupId != null && (action.board.drawings?.groups ?? []).some((g) => g.id === state.enteredGroupId) ? state.enteredGroupId : null;
+      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot, enteredGroupId };
     }
     case "BOARD_ERR":
       return { ...state, boardError: action.message };
@@ -1154,10 +1150,21 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, viewer3d: { ...state.viewer3d, ...action.options } };
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
-    case "SET_SELECTION":
-      return { ...state, selection: new Set(withGroupSubstitution(action.refs, state.board?.drawings?.groups, state.enteredGroupId)), armed: null };
+    case "SET_SELECTION": {
+      const groups = state.board?.drawings?.groups;
+      if (action.raw || !groups || groups.length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
+      // Selecting something outside the entered group leaves it (`PCB_SELECTION_TOOL::select`: `ExitGroup()`).
+      const { ids, exits } = substituteSelection(groups, action.refs, state.enteredGroupId);
+      return { ...state, selection: new Set(ids), armed: null, armedFootprint: null, enteredGroupId: exits ? null : state.enteredGroupId };
+    }
     case "SET_ENTERED_GROUP":
       return { ...state, enteredGroupId: action.id };
+    case "ENTER_GROUP": {
+      // `PCB_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its members -- each as it is, a group inside it too.
+      const group = state.board?.drawings?.groups.find((g) => g.id === action.id);
+      if (!group) return state;
+      return { ...state, enteredGroupId: group.id, selection: new Set(group.member_ids), armed: null };
+    }
     case "TOGGLE_SELECTION": {
       const next = new Set(state.selection);
       if (next.has(action.ref)) next.delete(action.ref);
@@ -1174,6 +1181,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         ...state,
         selection: new Set(),
         armed: null,
+        armedFootprint: null,
         movePreview: null,
         activeTool: "select",
         drawState: null,
@@ -1202,11 +1210,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       // replaced also wiped the selection on every Escape, even mid-move
       // -- wrong: EDIT_TOOL::doMoveSelection's own cancel just reverts
       // the move and leaves the pre-move selection exactly as it was.
-      const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
+      const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.armedFootprint != null || state.movePreview != null;
       if (inProgress) {
         return {
           ...state,
           armed: null,
+          armedFootprint: null,
           movePreview: null,
           activeTool: "select",
           drawState: null,
@@ -1230,14 +1239,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
       }
-      // Task item 5: nothing selected but still inside a group -- source's
-      // own next `else if` tier, `ExitGroup()` (re-selecting the group
-      // itself, `ExitGroup(true)`'s default -- matches
-      // `common.Interactive.groupLeave`'s own `SET_SELECTION` in
-      // useActionRunner.ts).
+      // Nothing selected but still inside a group: the selection tool's next `else if` tier, `ExitGroup()` -- which leaves the group and does not select
+      // it (`ExitGroup( bool aSelectGroup = false )`; only the Leave Group action, `ExitGroup( true )`, does).
       if (state.enteredGroupId != null) {
-        const leftId = state.enteredGroupId;
-        return { ...state, enteredGroupId: null, selection: new Set([leftId]) };
+        return { ...state, enteredGroupId: null };
       }
       // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
       return { ...state, netHighlight: null, bcx: withHighlight(state.bcx, state.netHighlight, []) };
@@ -1249,7 +1254,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_NET_HIGHLIGHT_SET":
       return { ...state, netHighlight: action.nets[0] ?? null, bcx: withHighlight(state.bcx, state.netHighlight, action.nets) };
     case "SET_ARMED":
-      return { ...state, armed: action.ref, selection: new Set() };
+      return { ...state, armed: action.ref, armedFootprint: null, selection: new Set() };
+    case "SET_ARMED_FOOTPRINT":
+      return { ...state, armedFootprint: action.name, armed: null, selection: new Set() };
     case "SET_MOVE_PREVIEW":
       return { ...state, movePreview: action.preview };
     case "SET_ACTIVE_TOOL":
@@ -1514,6 +1521,8 @@ export interface StudioApi {
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
   commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetUm?: MovePreview["perRefOffsetUm"]) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
+  /** Place Footprint's click: the footprint of a library armed in the Footprint Chooser becomes a part of its own at this point (`place_footprint`, one undo step). */
+  placeLibraryFootprintAt: (xUm: number, yUm: number) => Promise<void>;
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
   navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
   route: () => Promise<void>;
@@ -1835,9 +1844,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (source) dispatch({ type: "SET_SCH_REPEAT", cmds: source });
       }
       await refresh();
+      // The schematic tab draws `state.schematic`, which the version poll refetches up to a poll later: an edit made there (the Properties grid shows what the board
+      // answered) wants the new sheet at once.
+      if (stateRef.current.tab === "schematic") await refreshSchematic();
       return reply.ok;
     },
-    [refresh]
+    [refresh, refreshSchematic]
   );
 
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
@@ -2042,6 +2054,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       await runBatch(cmds);
       advanceMoveQueue();
     },
+    placeLibraryFootprintAt: async (xUm, yUm) => {
+      const name = stateRef.current.armedFootprint;
+      if (!name) return;
+      // `BOARD_EDITOR_CONTROL::PlaceFootprint` commits on the click and goes back to asking for the next footprint; here the tool is done after one.
+      dispatch({ type: "SET_ARMED_FOOTPRINT", name: null });
+      await runCmd({ op: "place_footprint", footprint: name, at: { x: xUm, y: yUm } });
+    },
     placeArmedAt: async (xUm, yUm) => {
       const ref = stateRef.current.armed;
       if (!ref) return;
@@ -2131,9 +2150,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
       const ok = await runCmd({ op: "group", ids });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // The board as the backend has it now (`stateRef` only catches up on the next render): the new group is what is selected afterwards
+      // (`RunAction( ACTIONS::selectItem, group )`), as it is -- not as the group above it, when it was made inside an entered group.
+      const after = await fetchState().catch(() => null);
       const newGroupId = (after?.drawings?.groups ?? []).map((g) => g.id).find((id) => !before.has(id));
-      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId] });
+      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId], raw: true });
     },
     ungroupSelection: async () => {
       const groupIds = [...stateRef.current.selection].filter((id) => api.groupById(id));
@@ -2144,7 +2165,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const members = groupIds.flatMap((id) => api.groupById(id)?.member_ids ?? []);
       const ok = await runCmd({ op: "ungroup", ids: groupIds });
       if (!ok) return;
-      dispatch({ type: "SET_SELECTION", refs: members });
+      dispatch({ type: "SET_SELECTION", refs: members, raw: true });
     },
     addZone: async (net, layer, outline, settings) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").

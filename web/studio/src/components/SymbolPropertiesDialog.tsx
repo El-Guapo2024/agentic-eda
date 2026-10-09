@@ -1,7 +1,7 @@
 // `E` (sch_edit_tool.cpp::Properties -- dispatches to one of 6 dialogs by
 // item type; this app only has symbols selectable so far, so this is
 // always DIALOG_SYMBOL_PROPERTIES's own shape, trimmed to the fields this
-// IR has: Reference/Value/Footprint/Datasheet, no unit/DeMorgan/pin-table
+// IR has: Reference/Value/Footprint/Datasheet, no unit/pin-table
 // editing) and `U`/`V`/`F` (sch_edit_tool.cpp::EditField's own quick
 // single-field edits: editReference/editValue/editFootprint) -- real
 // eeschema uses a different, smaller dialog for U/V/F
@@ -11,12 +11,17 @@
 // way) rather than building two dialogs with identical plumbing.
 //
 // The "Show" column of the fields table (`DIALOG_SYMBOL_PROPERTIES`) shows or hides each of the four fields, and the Body style choice (Standard / Alternate, only for a symbol
-// whose library symbol has two) puts the symbol in the other body style (`SCH_EDIT_FRAME::SelectBodyStyle`): both go in the same undo step as the texts.
-import { useEffect, useRef, useState } from "react";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+// whose library symbol has two) puts the symbol in the other body style (`SCH_EDIT_FRAME::SelectBodyStyle`): both go in the same undo step as the texts. The Footprint
+// field's Browse... button opens the Footprint Chooser.
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchAnySymbol } from "../api/libraryClient";
+import type { Cmd } from "../api/types";
+import { uniquePinCount } from "../kicad-port/footprintFilter";
 import { bodyStyleCount, setBodyStyleCmd } from "../kicad-port/schBodyStyle";
 import { fieldVisibilityCmds, ownerKey } from "../kicad-port/schFieldEdit";
-import type { Cmd } from "../api/types";
+import { expandStackedPinNotation } from "../kicad-port/stackedPins";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { FootprintChooserDialog } from "./FootprintChooserDialog";
 
 const MAIN_FIELDS = ["Reference", "Value", "Footprint", "Datasheet"] as const;
 
@@ -35,6 +40,23 @@ export function SymbolPropertiesDialog() {
   /** The "Show" check of each main field, by name; `undefined` for a field the server did not send (an older one). */
   const [shown, setShown] = useState<Record<string, boolean>>({});
   const [bodyStyle, setBodyStyle] = useState(1);
+  // The Footprint field's browse button: the Footprint Chooser, narrowed by this symbol's pin count and its library symbol's footprint filters.
+  const [choosingFootprint, setChoosingFootprint] = useState(false);
+  const [libInfo, setLibInfo] = useState<{ filters: string[]; pins: number } | null>(null);
+  const libId = symbol?.lib_id ?? null;
+  useEffect(() => {
+    setLibInfo(null);
+    if (!libId) return;
+    let cancelled = false;
+    // The pins of the whole library symbol, every unit (`GetGraphicalPins( 0, 1 )`): the placed instance lists the pins of its own unit only.
+    fetchAnySymbol(libId)
+      .then((r) => !cancelled && setLibInfo({ filters: r.symbol.footprint_filters ?? [], pins: uniquePinCount(r.symbol.pins, (n) => expandStackedPinNotation(n).numbers) }))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [libId]);
+  const instancePins = useMemo(() => new Set((symbol?.pins ?? []).map((p) => p.number)).size, [symbol]);
 
   const refInput = useRef<HTMLInputElement>(null);
   const valueInput = useRef<HTMLInputElement>(null);
@@ -66,20 +88,24 @@ export function SymbolPropertiesDialog() {
       setError("Reference cannot be blank.");
       return;
     }
-    if (trimmedRef !== symbol.id) {
-      const ok = await api.cmd({ op: "rename_symbol", id: symbol.id, new_id: trimmedRef });
-      if (!ok) {
-        setError(`"${trimmedRef}" is already used by another symbol.`);
-        return;
-      }
+    const renamed = trimmedRef !== symbol.id;
+    if (renamed && api.symbolById(trimmedRef)) {
+      setError(`"${trimmedRef}" is already used by another symbol.`);
+      return;
     }
-    // the texts, the shown fields and the body style are one undo step (fields are keyed by the reference the symbol has now)
-    const cmds: Cmd[] = [{ op: "edit_symbol_fields", id: trimmedRef, value, footprint, datasheet }, ...fieldVisibilityCmds(ownerKey({ id: trimmedRef, unit: symbol.unit }), symbol.fields, shown)];
+    // One submit, one undo step: the texts (the footprint is the Browse... pick too), the shown fields and the body style, all by the reference the symbol has now, and the
+    // new reference last (a rename moves what is kept under the old one; the server's parts are not renamed until the step is done, so a field edit after it would miss its symbol)
+    const cmds: Cmd[] = [{ op: "edit_symbol_fields", id: symbol.id, value, footprint, datasheet }, ...fieldVisibilityCmds(ownerKey({ id: symbol.id, unit: symbol.unit }), symbol.fields, shown)];
     if (state.schematic && bodyStyle !== (symbol.body_style || 1)) {
-      const change = setBodyStyleCmd(state.schematic, [trimmedRef], bodyStyle);
+      const change = setBodyStyleCmd(state.schematic, [symbol.id], bodyStyle);
       if (change) cmds.push(change);
     }
-    await api.cmdBatch(cmds);
+    if (renamed) cmds.push({ op: "rename_symbol", id: symbol.id, new_id: trimmedRef });
+    if (!(await api.cmdBatch(cmds))) {
+      // the server says why (a reference another sheet has, a field of a sheet read from a KiCad file) in a toast
+      setError(renamed ? `The changes were not applied ("${trimmedRef}" may be used by another symbol).` : "The changes were not applied.");
+      return;
+    }
     close();
   };
   const bodyStyles = state.schematic ? bodyStyleCount(state.schematic, symbol) : 1;
@@ -95,7 +121,7 @@ export function SymbolPropertiesDialog() {
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 480 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Symbol Properties</span>
         </div>
@@ -122,14 +148,20 @@ export function SymbolPropertiesDialog() {
             />
             {showBox("Value")}
             <span>Footprint</span>
-            <input
-              ref={footprintInput}
-              value={footprint}
-              onChange={(e) => setFootprint(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-            />
+            <div style={{ display: "flex", gap: 4 }}>
+              <input
+                ref={footprintInput}
+                style={{ flex: 1, minWidth: 0 }}
+                value={footprint}
+                onChange={(e) => setFootprint(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+              />
+              <button onClick={() => setChoosingFootprint(true)} title="Choose a footprint from KiCad's libraries (Footprint Chooser)" data-browse-footprint>
+                Browse…
+              </button>
+            </div>
             {showBox("Footprint")}
             <span>Datasheet</span>
             <input
@@ -173,6 +205,18 @@ export function SymbolPropertiesDialog() {
           </button>
         </div>
       </div>
+      {choosingFootprint && (
+        <FootprintChooserDialog
+          preselect={footprint.includes(":") ? footprint : null}
+          pinCount={libInfo?.pins ?? instancePins}
+          fpFilters={libInfo?.filters}
+          onCancel={() => setChoosingFootprint(false)}
+          onChoose={(pick) => {
+            setChoosingFootprint(false);
+            if (pick.kind === "footprint") setFootprint(pick.name);
+          }}
+        />
+      )}
     </div>
   );
 }
