@@ -31,7 +31,9 @@ import { useStudioDispatch, useStudioState } from "../../state/store";
 import { TrackballCamera, FOV_DEG, KEY_ZOOM_FACTOR, ROTATION_STEP_DEG, type ViewPreset as FacePreset } from "../../kicad-port/camera3d";
 import { resolve3DAction, ROTATE_SIGN, type Action3D } from "../../kicad-port/actions3d";
 import { isMac } from "../../platform";
-import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, boardOutlineBounds } from "./scene";
+import { buildBoardGroup, buildBackgroundTexture, countByName, disposeObject3D, boardOutlineBounds } from "./scene";
+import { MODEL_ROWS, ROWS, isVisible, toggled } from "../../kicad-port/appearance3d";
+import { useViewerColors } from "./useViewerColors";
 import { ModelCache } from "./modelCache";
 import { PartModels, type PartStats } from "./partModels";
 import { viewer3dProbe } from "./viewer3dProbe";
@@ -299,7 +301,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
 
     // The parts: each is its KiCad 3D models as they load, a box until its first one is in.
     viewer3dProbe.opened();
-    let partStats: PartStats = { total: 0, asModels: 0, asBoxes: 0 };
+    let partStats: PartStats = { total: 0, asModels: 0, asBoxes: 0, shown: 0 };
     const cache = new ModelCache();
     const publish = () => {
       viewer3dProbe.update({
@@ -412,8 +414,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     };
     const onPointerLeave = () => requestHover(null);
     const onPointerMove = (e: PointerEvent) => {
-      if (dragButton === null) requestHover({ x: e.offsetX, y: e.offsetY });
-      else if (hoverPx !== null) requestHover(null);
+      if (dragButton === null) {
+        // From the client position and the canvas's box, which is the pointer's place on the canvas for a real event and for one a script dispatches alike (a script's `offsetX` is not reliable).
+        const box = el.getBoundingClientRect();
+        requestHover({ x: e.clientX - box.left, y: e.clientY - box.top });
+      } else if (hoverPx !== null) requestHover(null);
       // `if( m_camera_is_moving ) return;` -- the mouse does nothing to a camera that is on its way to a view.
       if (camera3d.isMoving()) {
         camera3d.setCurMousePosition(e.offsetX, e.offsetY);
@@ -466,18 +471,17 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
      * listener and maybe firing an unrelated same-key 2D action.
      */
     const onKeyDown = (e: KeyboardEvent) => {
-      // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') -- visibility
+      // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') / showVirtual ('V') -- visibility
       // view-OPTIONS, not camera actions, so these go straight to the
       // store (Viewer3DOptions) rather than through Action3D/camera3d.
-      // (showVirtual/showNotInPosFile/showDNP -- 'V'/'P'/'D' in source --
-      // have no equivalent in this app's data model at all: no "virtual
-      // footprint", pick-and-place, or DNP concept exists here, so those
-      // 3 hotkeys are not bound; see PARITY-3d.md.)
-      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T" || e.key === "s" || e.key === "S")) {
+      // (showNotInPosFile/showDNP -- 'P'/'D' in source -- have no
+      // equivalent in this app's data model: no pick-and-place or DNP
+      // concept exists here, so those 2 hotkeys are not bound; see PARITY-3d.md.)
+      const modelRow = e.key === "t" || e.key === "T" ? "th_models" : e.key === "s" || e.key === "S" ? "smd_models" : e.key === "v" || e.key === "V" ? "virtual_models" : null;
+      if (modelRow && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         e.stopPropagation();
-        if (e.key === "t" || e.key === "T") dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showTHT: !viewer3dRef.current.showTHT } });
-        else dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showSMD: !viewer3dRef.current.showSMD } });
+        dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { layers: toggled(viewer3dRef.current.layers, modelRow) } });
         return;
       }
 
@@ -626,7 +630,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   // alone never changes `board.outline` (boardOutlineBounds only looks at
   // that), so it rebuilds geometry without moving the camera -- the same
   // way KiCad's own show/hide toggles don't reset your view.
-  const { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes } = state.viewer3d;
+  const { layers } = state.viewer3d;
+  // Which of the Appearance manager's rows that gate the board's own geometry are shown, as one string: toggling a model row (T / S / V, bounding boxes) must not rebuild the board.
+  const sceneRows = ROWS.filter((r) => !MODEL_ROWS.has(r.id)).map((r) => (isVisible(layers, r.id) ? "1" : "0")).join("");
+  // The colour of every row: the theme's, the board's stackup when "Use board stackup colors" is on, the swatches (kicad-port/appearance3d.ts, BOARD_ADAPTER::GetLayerColors).
+  const resolved = useViewerColors();
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
@@ -634,12 +642,11 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
     // The parts are not in this group: partModels draws them (the real models, a box until they are in).
-    const nextGroup = board
-      ? buildBoardGroup(board, { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes, partBodies: false })
-      : new THREE.Group();
+    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row), colors: resolved }) : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
-    three.partModels.sync(board, { showTHT: showComponents && showTHT, showSMD: showComponents && showSMD, showVirtual: showComponents, showBoundingBoxes });
+    syncActiveGroupRef.current();
+    viewer3dProbe.update({ scene: countByName(nextGroup) });
 
     const bounds = board ? boardOutlineBounds(board) : null;
     const spanMm = bounds ? Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 1e-3) : EMPTY_BOARD_SPAN_MM;
@@ -655,7 +662,25 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         (Math.abs(prev.minX - bounds.minX) > EPS_MM || Math.abs(prev.minZ - bounds.minZ) > EPS_MM || Math.abs(prev.maxX - bounds.maxX) > EPS_MM || Math.abs(prev.maxZ - bounds.maxZ) > EPS_MM));
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) three.camera3d.reset();
-  }, [board, showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board, sceneRows, resolved]);
+
+  // The parts: the through-hole, SMD and virtual rows and the bounding boxes only touch their models.
+  const thtShown = isVisible(layers, "th_models");
+  const smdShown = isVisible(layers, "smd_models");
+  const virtualShown = isVisible(layers, "virtual_models");
+  const bboxShown = isVisible(layers, "bounding_boxes");
+  useEffect(() => {
+    threeRef.current?.partModels.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showBoundingBoxes: bboxShown });
+  }, [board, thtShown, smdShown, virtualShown, bboxShown]);
+
+  // The background gradient (the Appearance manager's Background Start / End swatches).
+  useEffect(() => {
+    const three = threeRef.current;
+    if (!three) return;
+    (three.scene.background as THREE.Texture | null)?.dispose();
+    three.scene.background = buildBackgroundTexture(resolved.background_top, resolved.background_bottom);
+  }, [resolved]);
 
   // Flip/orthographic are camera-only now (KiCad's own flipView/
   // toggleOrtho actions move the camera, not the board -- eda_3d_actions.

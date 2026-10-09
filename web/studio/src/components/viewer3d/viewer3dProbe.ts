@@ -20,11 +20,13 @@ export interface Viewer3dSnapshot {
   allModelsMs: number | null;
   models: ModelCounts;
   /** Placed parts: how many there are, how many are drawn with at least one real model, how many as a placeholder box. */
-  parts: { total: number; asModels: number; asBoxes: number };
+  parts: { total: number; asModels: number; asBoxes: number; shown: number };
   /** The reference of the part under the pointer (it is drawn highlighted), or null. */
   hovered: string | null;
   /** The camera is animating towards a view (KiCad's `m_camera_is_moving`). */
   cameraMoving: boolean;
+  /** The pieces of the board's own geometry drawn right now, by name (`board-slab`, `solder-mask-top`, `track`, `via`, `pad`, `zone-fill`, `silk-text`, ...): what the Appearance manager's rows gate. */
+  scene: Record<string, number>;
   /** Which source draws the board: the live scene with the models loaded here, or KiCad's own GLB export. */
   source: "live" | "export";
   /** Per model name: where it stands and what it cost, for the measurements. */
@@ -36,9 +38,10 @@ const empty = (): Viewer3dSnapshot => ({
   firstModelMs: null,
   allModelsMs: null,
   models: { requested: 0, loading: 0, ready: 0, missing: 0, failed: 0, triangles: 0 },
-  parts: { total: 0, asModels: 0, asBoxes: 0 },
+  parts: { total: 0, asModels: 0, asBoxes: 0, shown: 0 },
   hovered: null,
   cameraMoving: false,
+  scene: {},
   source: "live",
   detail: [],
 });
@@ -46,24 +49,39 @@ const empty = (): Viewer3dSnapshot => ({
 let state: Viewer3dSnapshot = empty();
 let openedAt: number | null = null;
 let screenOfPart: ((ref: string) => { x: number; y: number } | null) | null = null;
+let cached: Viewer3dSnapshot | null = null;
+const listeners = new Set<() => void>();
+function changed(): void {
+  cached = null;
+  for (const l of [...listeners]) l();
+}
 
 export const viewer3dProbe = {
   /** The 3D tab mounted: the clock for `firstModelMs` starts. */
   opened(now: number = performance.now()): void {
     state = { ...empty(), open: true };
     openedAt = now;
+    changed();
   },
   closed(): void {
     state = empty();
     openedAt = null;
+    changed();
   },
   /** What the viewer shows right now; stamps the two times the first time each is true. */
   update(patch: Partial<Omit<Viewer3dSnapshot, "firstModelMs" | "allModelsMs">>, now: number = performance.now()): void {
     state = { ...state, ...patch };
-    if (openedAt === null) return;
-    if (state.firstModelMs === null && state.parts.asModels > 0) state = { ...state, firstModelMs: Math.round(now - openedAt) };
-    const m = state.models;
-    if (state.allModelsMs === null && m.requested > 0 && m.loading === 0) state = { ...state, allModelsMs: Math.round(now - openedAt) };
+    if (openedAt !== null) {
+      if (state.firstModelMs === null && state.parts.asModels > 0) state = { ...state, firstModelMs: Math.round(now - openedAt) };
+      const m = state.models;
+      if (state.allModelsMs === null && m.requested > 0 && m.loading === 0) state = { ...state, allModelsMs: Math.round(now - openedAt) };
+    }
+    changed();
+  },
+  /** For `useSyncExternalStore`: told whenever the readout changes. Returns the unsubscribe. */
+  subscribe(listener: () => void): () => void {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
   },
   /** The viewer registers where a part is on its canvas (CSS pixels from the canvas's top-left), so a script can hover it without guessing pixels. */
   setScreenOf(fn: ((ref: string) => { x: number; y: number } | null) | null): void {
@@ -72,7 +90,9 @@ export const viewer3dProbe = {
   screenOf(ref: string): { x: number; y: number } | null {
     return screenOfPart ? screenOfPart(ref) : null;
   },
+  /** The readout; the same object until it changes (what `useSyncExternalStore` needs). */
   snapshot(): Viewer3dSnapshot {
-    return { ...state, models: { ...state.models }, parts: { ...state.parts }, detail: state.detail.map((d) => ({ ...d })) };
+    cached ??= { ...state, models: { ...state.models }, parts: { ...state.parts }, scene: { ...state.scene }, detail: state.detail.map((d) => ({ ...d })) };
+    return cached;
   },
 };

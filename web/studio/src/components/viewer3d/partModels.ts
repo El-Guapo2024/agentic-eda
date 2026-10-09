@@ -33,6 +33,8 @@ export interface PartStats {
   asModels: number;
   /** Parts drawn as their placeholder box. */
   asBoxes: number;
+  /** Parts shown right now (the through-hole, SMD and virtual rows let their kind through). */
+  shown: number;
 }
 
 interface PartEntry {
@@ -73,7 +75,7 @@ export class PartModels {
   sync(board: BoardState | null, opts: PartModelOptions, stack: Stack = DEFAULT_STACK): void {
     this.last = { board, opts, stack };
     const seen = new Set<string>();
-    const stats: PartStats = { total: 0, asModels: 0, asBoxes: 0 };
+    const stats: PartStats = { total: 0, asModels: 0, asBoxes: 0, shown: 0 };
     for (const part of board?.parts ?? []) {
       if (!part.placed || !part.side || !part.at) continue;
       seen.add(part.ref);
@@ -95,6 +97,7 @@ export class PartModels {
       }
       entry.group.visible = kindShown(kind, { tht: opts.showTHT, smd: opts.showSMD, virtual: opts.showVirtual });
       stats.total++;
+      if (entry.group.visible) stats.shown++;
       if (entry.withModels) stats.asModels++;
       else stats.asBoxes++;
     }

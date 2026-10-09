@@ -701,6 +701,8 @@ export interface StackupLayer {
   kind?: string;
   epsilon_r?: number;
   loss_tangent?: number;
+  /** `(color ..)` of a solder mask, silkscreen or dielectric: KiCad's name for a standard colour (`Green`, `FR4 natural`, ..) or `#RRGGBB[AA]`; absent = not specified. The 3D viewer paints the board with it ("Use board stackup colors"). */
+  color?: string;
 }
 
 // ---------------------------------------------------------------- Cmd
