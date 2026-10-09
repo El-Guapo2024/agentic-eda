@@ -147,6 +147,16 @@ Bugs found and fixed on the way: **a library symbol with a graphic made `design.
 style when they are 1 (and empty text fields), so no pin ever matched the unit being edited -- nothing was drawn or pickable
 (`kicad-port/libraryDefaults.ts`); a symbol a few millimetres across was blown up to the whole canvas; the editors' toolbars overlapped.
 
+## Grid overrides and click versus drag (GAPS.md item 14, 2026-10-09)
+
+| Behaviour | Status | KiCad file:function |
+|---|---|---|
+| A press becomes a drag after more than 8 px along an axis (on macOS also a motion after 300 ms held); a click is at the press | identical | `tool_dispatcher.cpp:handleMouseButton` -- `kicad-port/dragThreshold.ts`, `SymbolEditorCanvas.tsx` (`gestureRef`, `justPannedRef`); a move drag that ends where it started commits nothing |
+| `Toggle Grid Overrides` (`Ctrl+Shift+G`, the toolbar button): a pin snaps to the connected-items grid, a shape and the anchor to the graphics grid, text to the text grid; what is picked up snaps on the coarsest of its items' grids. The symbol editor starts with connected items on 50 mil, text on 10 mil, graphics off, as the schematic does | identical for the grid; the pointer is not warped | `ee_grid_helper.cpp:GetItemGrid` / `GetSelectionGrid`, `symbol_editor_drawing_tools.cpp` (`GRID_GRAPHICS` for the anchor) -- `SymbolEditorCanvas.tsx` (`toolGrid`, `heldGrid`), `kicad-port/gridOverrides.ts` |
+| Snapping to a pin's end or another item's anchor (`EE_GRID_HELPER::BestSnapAnchor`) | **missing** | the symbol editor snaps to the grid only; `SchGridHelper` (`kicad-port/schGridHelper.ts`) is wired into the schematic (`PARITY-sch.md` section 18), not here |
+
+Not click-tested for the snapped coordinates: `window.__eda.state().view` is null on this tab, so the check script cannot place a pointer on the canvas. The grid it picks is the unit-tested `gridSizeFor` / `selectionGrid` (`gridOverrides.test.ts`); the tab mounts and arms its tools with no console error.
+
 ## Known gaps (not fixed, scope-bounded)
 
 - DeMorgan alternate body style: authorable, exported to `.kicad_sym`, and (since the schematic item 12 work) shown by a placed symbol.

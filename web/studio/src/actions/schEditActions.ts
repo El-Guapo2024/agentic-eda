@@ -4,11 +4,13 @@
 // the logic with no React in it lives in `kicad-port/sch*.ts` with unit tests, the verbs in crates/ops/src/sch_edit.rs.
 import type { Dispatch } from "react";
 import type { Cmd, Schematic } from "../api/types";
-import { GRID } from "../components/schematic/layout";
 import { inferSpin } from "../components/schematic/labelShape";
 import { allItems } from "../components/schematic/schItems";
 import { measureStrokeText } from "../components/text/strokeFont";
 import { alignToGrid } from "../kicad-port/gridSnap";
+import { gridSizeFor } from "../kicad-port/gridOverrides";
+import { getGridOverrides } from "../state/gridOverrides";
+import { getGridSettings } from "../state/gridSettings";
 import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-port/schConvertText";
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
@@ -72,8 +74,10 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
       const sources = convertSources(sch, requestSelection());
       const { cmds, predictedIds } = convertCmds(sources, target, {
         measure: measureStrokeText,
+        // The label that replaces a text goes on the connection grid (`GRID_CONNECTABLE`: 50 mil unless the overrides say otherwise).
         snap: (p) => {
-          const a = alignToGrid({ x: p[0], y: p[1] }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
+          const grid = gridSizeFor("connectable", state.schGridUm, getGridSettings("schematic").grids, getGridOverrides("schematic"));
+          const a = alignToGrid({ x: p[0], y: p[1] }, grid, { x: 0, y: 0 }, { ctrlOrCmd: false });
           return [a.x, a.y];
         },
         takenIds: new Set(allItems(sch).map((r) => r.id)),

@@ -12,6 +12,8 @@ export interface CheckedContext {
   units: "mm" | "mil" | "in";
   /** The active editor canvas shows its grid. */
   gridVisible: boolean;
+  /** The active editor's Grid Overrides switch (`EDA_DRAW_FRAME::IsGridOverridden`). */
+  gridOverrides?: boolean;
   /** The Footprint Editor's and the Symbol Editor's active tool ids. */
   fpTool: string;
   symTool: string;
@@ -62,6 +64,8 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
   switch (name) {
     case "common.Control.toggleGrid":
       return c.gridVisible;
+    case "common.Control.toggleGridOverrides":
+      return c.gridOverrides === true;
     // `ACTIONS::highContrastMode` is a check item of the board and Footprint Editor menus (the schematic and symbol editors have no layers to contrast).
     case "common.Control.highContrastMode":
       return c.tab === "pcb" || c.tab === "footprint" ? c.highContrast === true : undefined;

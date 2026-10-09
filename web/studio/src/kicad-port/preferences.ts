@@ -7,11 +7,14 @@
 //     up/down, one action per column, and whether zoom and left/right pan run reversed;
 //   * "Automatically pan while moving object" and its speed (`input.auto_pan`, `input.auto_pan_acceleration`);
 //   * "Use zoom acceleration" and the zoom speed with its "Automatic" switch (`input.zoom_acceleration`,
-//     `input.zoom_speed`, `input.zoom_speed_auto` -> `WX_VIEW_CONTROLS::LoadSettings`).
+//     `input.zoom_speed`, `input.zoom_speed_auto` -> `WX_VIEW_CONTROLS::LoadSettings`);
+//   * the board editor's magnetic points (`PCBNEW_SETTINGS::m_MagneticItems`, "Snap to Pads", "Snap to Tracks and Vias", "Snap to graphics": the board editor's
+//     Preferences > Editing Options), which decide what the drawing and move tools snap to (kicad-port/snapAnchors.ts).
 // Not offered: "Center and warp cursor on zoom" (it moves the real pointer, which a page may not and this studio
 // never does), the drag gestures and "Pan on mouse movement with key" (the canvases' own drag handling is not
 // configurable), and "Pan left/right with horizontal movement" (stored by KiCad but never read by the wheel code).
 import { DEFAULT_VIEW_CONTROL_SETTINGS, type ScrollModifier, type ViewControlSettings } from "./viewControls";
+import type { MagneticOption, PcbMagnetic } from "./snapAnchors";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
 
 export type { ScrollModifier };
@@ -34,6 +37,12 @@ export interface Preferences {
   /** `input.zoom_speed_auto`, default on; `input.zoom_speed` 1..10, default 5, used when it is off. */
   zoomSpeedAuto: boolean;
   zoomSpeed: number;
+  /** `MAGNETIC_SETTINGS::pads`: snap to pads never / only while routing / always -- default "in track tool". */
+  magneticPads: MagneticOption;
+  /** `MAGNETIC_SETTINGS::tracks`: tracks and vias -- default "in track tool". */
+  magneticTracks: MagneticOption;
+  /** `MAGNETIC_SETTINGS::graphics`: snap to graphics -- default off. */
+  magneticGraphics: boolean;
 }
 
 /** `COMMON_SETTINGS` factory defaults (common_settings.cpp `input.*`): wheel zooms, Ctrl pans left/right, Shift pans up/down. */
@@ -48,6 +57,9 @@ export const DEFAULT_PREFERENCES: Preferences = {
   zoomAcceleration: false,
   zoomSpeedAuto: true,
   zoomSpeed: 5,
+  magneticPads: "track-tool",
+  magneticTracks: "track-tool",
+  magneticGraphics: false,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH">;
@@ -115,6 +127,12 @@ const MODIFIERS: readonly ScrollModifier[] = ["none", "ctrl", "shift", "alt"];
 const isModifier = (v: unknown): v is ScrollModifier => typeof v === "string" && (MODIFIERS as readonly string[]).includes(v);
 const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : fallback);
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
+const magnetic = (v: unknown, fallback: MagneticOption): MagneticOption => (v === "never" || v === "track-tool" || v === "always" ? v : fallback);
+
+/** The magnetic settings the board editor's snapping reads, with `allLayers` (the toggle of `common.Control.magneticSnapToggle`, Shift+S, kept in the studio state). */
+export function toPcbMagnetic(p: Pick<Preferences, "magneticPads" | "magneticTracks" | "magneticGraphics">, allLayers: boolean): PcbMagnetic {
+  return { pads: p.magneticPads, tracks: p.magneticTracks, graphics: p.magneticGraphics, allLayers };
+}
 
 /** Whatever was stored, made into valid preferences: unknown or malformed fields fall back to their defaults, a clashing wheel assignment to the defaults. */
 export function sanitizePreferences(raw: unknown): Preferences {
@@ -131,6 +149,9 @@ export function sanitizePreferences(raw: unknown): Preferences {
     zoomAcceleration: bool(o.zoomAcceleration, d.zoomAcceleration),
     zoomSpeedAuto: bool(o.zoomSpeedAuto, d.zoomSpeedAuto),
     zoomSpeed: clampInt(o.zoomSpeed, 1, 10, d.zoomSpeed),
+    magneticPads: magnetic(o.magneticPads, d.magneticPads),
+    magneticTracks: magnetic(o.magneticTracks, d.magneticTracks),
+    magneticGraphics: bool(o.magneticGraphics, d.magneticGraphics),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

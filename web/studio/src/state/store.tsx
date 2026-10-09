@@ -320,6 +320,8 @@ export interface MovePreview {
   vertices?: Record<string, number[]>;
   /** `sch_move` / `sch_drag`: R, Shift+R, X and Y pressed while the items are held, in order -- committed with the move as one step. */
   turns?: SchTurn[];
+  /** `sch_move` / `sch_drag`: where the held items are held now -- the reference point they were picked up by (`BestDragOrigin`) plus how far they have gone, i.e. the snapped cursor; what R, Shift+R, X and Y turn them about. Absent: where the cursor went down plus the move. */
+  holdUm?: [number, number];
   dxUm: number;
   dyUm: number;
   /**
@@ -639,6 +641,8 @@ export interface StudioState {
   units: LengthUnit;
   polar: boolean;
   gridUm: number;
+  /** The Schematic Editor's current grid (`GRID_SETTINGS::last_size_idx` of eeschema), um: one of its grid list (state/gridSettings.ts), 50 mil to start. */
+  schGridUm: number;
   gridVisible: boolean;
   /** `MAGNETIC_SETTINGS::allLayers` (pcbnew_settings.cpp, default false): snap to items on every layer instead of the active layer only. Toggled by `common.Control.magneticSnapToggle` (Shift+S). UI state, not design data. */
   magneticAllLayers: boolean;
@@ -889,6 +893,7 @@ const initialState: StudioState = {
   units: "mm",
   polar: false,
   gridUm: 1000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
+  schGridUm: 1270, // eeschema's default grid: 50 mil
   gridVisible: true,
   magneticAllLayers: false,
   fullscreenCrosshair: false,
@@ -989,6 +994,7 @@ export type Action =
   | { type: "SET_UNITS"; units: LengthUnit }
   | { type: "TOGGLE_POLAR" }
   | { type: "SET_GRID_UM"; um: number }
+  | { type: "SET_SCH_GRID_UM"; um: number }
   | { type: "TOGGLE_GRID_VISIBLE" }
   | { type: "SET_MAGNETIC_ALL_LAYERS"; value: boolean }
   | { type: "TOGGLE_CROSSHAIR" }
@@ -1310,6 +1316,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, polar: !state.polar };
     case "SET_GRID_UM":
       return { ...state, gridUm: action.um };
+    case "SET_SCH_GRID_UM":
+      return { ...state, schGridUm: action.um };
     case "TOGGLE_GRID_VISIBLE":
       return { ...state, gridVisible: !state.gridVisible };
     case "SET_MAGNETIC_ALL_LAYERS":
@@ -2011,7 +2019,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         dxUm: preview.dxUm,
         dyUm: preview.dyUm,
         turns: preview.turns,
-        holdUm: holdPoint(origin, preview.dxUm, preview.dyUm),
+        holdUm: preview.holdUm ?? holdPoint(origin, preview.dxUm, preview.dyUm),
       });
       if (cmd) await runCmd(cmd);
     },

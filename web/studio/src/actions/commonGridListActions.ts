@@ -1,6 +1,6 @@
-// The actions that work on the editor's list of grids: Edit Grids..., the grid presets and Next / Previous Grid, the fast grids. The board editor, the Footprint
-// Editor and the Symbol Editor each have a list (state/gridSettings.ts, edited in components/GridsDialog.tsx); the schematic's grid is the fixed 50 mil, so it has no
-// list to index and none of these is offered there. `registerCommonActions` (commonActions.ts) calls `registerGridListActions` once while the registry is built.
+// The actions that work on the editor's list of grids: Edit Grids..., the grid presets and Next / Previous Grid, the fast grids, and Grid Overrides. The board editor, the
+// Schematic Editor, the Footprint Editor and the Symbol Editor each have a list (state/gridSettings.ts, edited in components/GridsDialog.tsx) and their grid overrides
+// (state/gridOverrides.ts). `registerCommonActions` (commonActions.ts) calls `registerGridListActions` once while the registry is built.
 //
 //   common/tool/common_tools.cpp   COMMON_TOOLS::GridProperties / GridPreset / GridNext / GridPrev / GridFast1 / GridFast2 / GridFastCycle / OnGridChanged
 //   common/eda_draw_frame.cpp      EDA_DRAW_FRAME::OnSelectGrid ("Edit Grids..." at the end of the grid box -> `ACTIONS::gridProperties`)
@@ -9,6 +9,7 @@
 // (`EVENTS::GridChangedByKeyEvent`); the grid box and `gridPreset` do not.
 import type { ActionHandler, CommonActionContext } from "./commonActions";
 import { getGridSettings } from "../state/gridSettings";
+import { toggleGridOverrides } from "../state/gridOverrides";
 import { setGridsDialogOpen } from "../state/commonDialogs";
 import { gridEditorOfTab, stepGrid } from "../kicad-port/gridSettings";
 import { fastGridCycleTarget, gridPresetIndex } from "../kicad-port/cursorControl";
@@ -41,6 +42,10 @@ export function registerGridListActions(m: Map<string, ActionHandler>, ctx: Comm
   // ACTIONS::gridProperties ("Edit Grids...", common.Control.editGrids) -- COMMON_TOOLS::GridProperties: `ShowPreferences( "Grids", <the editor> )`, the Grids page
   // of the Preferences (components/GridsDialog.tsx) -- the end of the grid box, and the right-click menu of the Show Grid button, run it.
   m.set("common.Control.editGrids", () => setGridsDialogOpen(editor));
+
+  // ACTIONS::toggleGridOverrides (Ctrl+Shift+G) -- COMMON_TOOLS::ToggleGridOverrides: `m_frame->SetGridOverrides( !m_frame->IsGridOverridden() )`. With overrides on, connected
+  // items, wires, vias, text and graphics snap to the grid the Grids page names for them; off, everything snaps to the current grid.
+  m.set("common.Control.toggleGridOverrides", () => void toggleGridOverrides(editor));
 
   // ACTIONS::gridPreset -- COMMON_TOOLS::GridPreset( aEvent.Parameter<int>(), false ): entry `idx` of the editor's grid list.
   m.set("common.Control.gridPreset", (arg) => preset(typeof arg === "number" ? Math.round(arg) : 0, false));

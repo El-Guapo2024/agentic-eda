@@ -73,7 +73,7 @@ export function StatusBar() {
             : `dx ${formatLength(dx, state.units)}  dy ${formatLength(dy, state.units)}  dist ${formatLength(Math.hypot(dx, dy), state.units)}`
           : "dx –  dy –  dist –"}
       </span>
-      {(onPcb || lib) && <span className="field">grid {formatLength(lib ? lib.gridUm : state.gridUm, state.units)}</span>}
+      {(onPcb || lib || state.tab === "schematic") && <span className="field">grid {formatLength(lib ? lib.gridUm : state.tab === "schematic" ? state.schGridUm : state.gridUm, state.units)}</span>}
       <label className="toggle" title="Polar coordinates">
         <input type="checkbox" checked={state.polar} onChange={() => dispatch({ type: "TOGGLE_POLAR" })} />
         polar

@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, dialogs, open, view, appearance, viewer3d }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view, appearance, viewer3d }
 //   __eda.viewer3dScreen(ref)  -> { x, y } | null   where a part is on the 3D canvas (CSS px from its top-left), for hovering it without guessing pixels
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
@@ -20,6 +20,9 @@ import { useCommonDialogs } from "../state/commonDialogs";
 import { useActionRunner } from "./useActionRunner";
 import { picker } from "./pcbPicker";
 import { viewer3dProbe, type Viewer3dSnapshot } from "../components/viewer3d/viewer3dProbe";
+import { getGridOverrides } from "../state/gridOverrides";
+import { gridEditorOfTab } from "../kicad-port/gridSettings";
+import { lastSnapReport, type SnapReport } from "../kicad-port/snapReport";
 import {
   ErrorLog,
   appearanceSummary,
@@ -58,10 +61,16 @@ export interface HookState {
   /** The group being worked in on the board (`PCB_SELECTION_TOOL::m_enteredGroup`), or null. */
   entered: string | null;
   counts: Counts;
-  /** The grid of the editor on screen, in um; null on the tabs whose grid is not a choice (the schematic's is the fixed 50 mil, the 3D viewer has none). */
+  /** The grid of the editor on screen, in um; null on the 3D tab, which has none. */
   grid: number | null;
+  /** Grid Overrides (Ctrl+Shift+G) of the editor on screen: on or off; null on the 3D tab. */
+  gridOverrides: boolean | null;
+  /** What the last snap of a placing or moving tool did -- the tool, the cursor handed in, the point returned, the marker's point types -- or null when no tool is snapping. */
+  snap: SnapReport | null;
   dialogs: string[];
   open: string[];
+  /** The sheets the schematic is in, root first (`state.currentSheetPath`: the ids `GET /api/schematic?sheet=a/b` takes); empty at the root and on the other tabs. */
+  sheetPath: string[];
   /** The view of the canvas on screen (the schematic's or the board's): a point `(x, y)` of the sheet is at `(view.x + x * view.scale, view.y + y * view.scale)` pixels from the canvas's top-left corner; null on the other tabs. */
   view: { x: number; y: number; scale: number } | null;
   /** The Appearance panel's settings that differ from a new project (kicad-port/edaTestHook.ts `AppearanceSummary`). */
@@ -215,6 +224,7 @@ function build(latest: { current: Latest }): EdaTestHook {
       const L = latest.current;
       const studio = L.getStudio();
       const { tool, selection, lists } = listsFor(L);
+      const editor = gridEditorOfTab(studio.tab);
       return {
         tab: studio.tab,
         revision: studio.version,
@@ -223,9 +233,12 @@ function build(latest: { current: Latest }): EdaTestHook {
         selection: selectionWithKinds(selection, kindIndex(lists)),
         entered: studio.tab === "pcb" ? studio.enteredGroupId : null,
         counts: countsOf(studio.board, studio.schematic),
-        grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : null,
+        grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : studio.tab === "schematic" ? studio.schGridUm : null,
+        gridOverrides: editor ? getGridOverrides(editor).enabled : null,
+        snap: lastSnapReport(),
         dialogs: dialogTitles(),
         open: openNames(L),
+        sheetPath: studio.tab === "schematic" ? [...studio.currentSheetPath] : [],
         view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : null,
         appearance: appearanceSummary(studio),
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
