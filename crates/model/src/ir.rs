@@ -1887,7 +1887,41 @@ pub struct FieldPlacement {
     /// Drawn on the sheet (a hidden field keeps its place for when it is shown).
     #[serde(default = "d_true_field", skip_serializing_if = "is_true_field")]
     pub visible: bool,
+    /// The text's size (its height and its width), micrometres: `EDA_TEXT::GetTextWidth`. 0 is KiCad's default for a field, 50 mil
+    /// (`DEFAULT_SIZE_TEXT`, 1.27 mm), which is what every field has until Field Properties sets another.
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub size_um: Um,
+    /// `EDA_TEXT::IsBold` / `IsItalic`: the pen is a fifth of the size instead of an eighth, the strokes lean.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    /// `SCH_FIELD::IsNameShown` (`(show_name yes)`): the text is drawn as `Name: value`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub name_shown: bool,
+    /// `!SCH_FIELD::CanAutoplace` (`(do_not_autoplace yes)`): Autoplace Fields leaves this field where it is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_autoplace: bool,
 }
+
+impl FieldPlacement {
+    /// A visible field named `name` at its owner's origin, horizontal, centred, in the default size.
+    pub fn at_origin(name: &str) -> FieldPlacement {
+        FieldPlacement { name: name.to_string(), dx: 0, dy: 0, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: true, size_um: 0, bold: false, italic: false, name_shown: false, no_autoplace: false }
+    }
+
+    /// The size the text is set in, micrometres (the default when none was set).
+    pub fn text_size_um(&self) -> Um {
+        if self.size_um > 0 {
+            self.size_um
+        } else {
+            DEFAULT_FIELD_SIZE_UM
+        }
+    }
+}
+
+/// `DEFAULT_SIZE_TEXT` (50 mils): the size of a field, a label and a text until another is set.
+pub const DEFAULT_FIELD_SIZE_UM: Um = 1_270;
 
 fn d_true_field() -> bool {
     true

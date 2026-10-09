@@ -89,6 +89,11 @@ pub fn text_rect(text: &str, anchor: (f64, f64), h: HJustify, v: VJustify, verti
     outward(TextStyle::new(h, v).text_box(text, anchor, vertical as i32))
 }
 
+/// [`text_rect`] for a text set in `style` (its size and pen; the justification is the style's own).
+pub fn text_rect_styled(text: &str, anchor: (f64, f64), style: &TextStyle, vertical: bool) -> Rect {
+    outward(style.text_box(text, anchor, vertical as i32))
+}
+
 /// The width of a text's box, pen included: `GetTextBox`'s width.
 pub fn text_w(_font: i64, s: &str) -> i64 {
     text_rect(s, (0.0, 0.0), HJustify::Left, VJustify::Center, false).w()
