@@ -20,7 +20,7 @@ use crate::board;
 use eda_model::ir::Point;
 use eda_pns::line_placer::{FixOutcome, Preview};
 use eda_pns::router::Router;
-use eda_pns::settings::Mode;
+use eda_pns::settings::{Mode, OptEffort, RoutingSettings};
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Mutex;
@@ -61,6 +61,53 @@ fn mode_of(req: &Value) -> Mode {
     }
 }
 
+/// The router's `ROUTING_SETTINGS` a request carries: `req.settings`, an object with any of
+///
+/// - `mode` (`"mark_obstacles" | "walkaround" | "shove"`), `optimizer_effort` (`"low" | "medium" | "full"`),
+/// - the Interactive Router Settings dialog's switches `shove_vias`, `jump_over_obstacles`, `remove_loops`, `smart_pads`,
+///   `allow_drc_violations` (`CanViolateDRC`), `free_angle_mode`, `fix_all_segments`,
+/// - the limits `shove_iteration_limit`, `walkaround_iteration_limit`, `via_force_prop_iteration_limit` and
+///   `walkaround_hug_length_threshold`, which KiCad keeps in the settings file only.
+///
+/// Anything absent is KiCad's default (`RoutingSettings::default()`); `mode` and `remove_loops` also come from the request's
+/// own top level, where they used to be the only two. Read field by field: serde_json's `arbitrary_precision` (starlark turns
+/// it on) breaks a derived reader on numbers.
+fn settings_of(req: &Value) -> RoutingSettings {
+    let mut s = RoutingSettings::default();
+    let obj = req.get("settings").filter(|v| v.is_object()).unwrap_or(&Value::Null);
+    let get = |key: &str| obj.get(key).or_else(|| req.get(key));
+    let flag = |key: &str, into: &mut bool| {
+        if let Some(b) = get(key).and_then(Value::as_bool) {
+            *into = b;
+        }
+    };
+    let limit = |key: &str, into: &mut i32| {
+        if let Some(n) = get(key).and_then(Value::as_i64) {
+            *into = n.clamp(1, 100_000) as i32;
+        }
+    };
+    s.mode = mode_of(if obj.get("mode").is_some() { obj } else { req });
+    s.optimizer_effort = match get("optimizer_effort").and_then(Value::as_str) {
+        Some("low") => OptEffort::Low,
+        Some("full") => OptEffort::Full,
+        _ => OptEffort::Medium,
+    };
+    flag("shove_vias", &mut s.shove_vias);
+    flag("jump_over_obstacles", &mut s.jump_over_obstacles);
+    flag("remove_loops", &mut s.remove_loops);
+    flag("smart_pads", &mut s.smart_pads);
+    flag("allow_drc_violations", &mut s.can_violate_drc);
+    flag("free_angle_mode", &mut s.free_angle_mode);
+    flag("fix_all_segments", &mut s.fix_all_segments);
+    limit("shove_iteration_limit", &mut s.shove_iteration_limit);
+    limit("walkaround_iteration_limit", &mut s.walkaround_iteration_limit);
+    limit("via_force_prop_iteration_limit", &mut s.via_force_prop_iteration_limit);
+    if let Some(t) = get("walkaround_hug_length_threshold").and_then(Value::as_f64).filter(|t| t.is_finite()) {
+        s.walkaround_hug_length_threshold = t.clamp(0.0, 1000.0);
+    }
+    s
+}
+
 fn preview_json(router: &Router, preview: &Preview) -> Value {
     json!({
         "ok": true,
@@ -83,11 +130,9 @@ fn preview_json(router: &Router, preview: &Preview) -> Value {
     })
 }
 
-/// `POST /api/route/start`: `{x, y, layer, width?, mode?, remove_loops?}`.
-/// `mode` is one of `"mark_obstacles" | "walkaround" | "shove"` (default
-/// `"walkaround"`, matching KiCad's own default -- see
-/// `eda_pns::settings::Mode`); `remove_loops` defaults to `true`
-/// (`RoutingSettings::default()`'s own default).
+/// `POST /api/route/start`: `{x, y, layer, width?, settings?}`. `settings` is the router's
+/// `ROUTING_SETTINGS` ([`settings_of`]); `mode` and `remove_loops` at the top level still work, for a client that predates it.
+/// Without any, KiCad's defaults: `walkaround`, `remove_loops` on.
 pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -95,8 +140,7 @@ pub fn start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let mut router = Router::new(&design, &model);
-    router.settings.mode = mode_of(&req);
-    router.settings.remove_loops = req.get("remove_loops").and_then(Value::as_bool).unwrap_or(true);
+    router.settings = settings_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     let width = num(&req, "width", model.board.track_width);
@@ -208,6 +252,18 @@ pub fn set_mode(cell: &RouteCell, body: &[u8]) -> Value {
     json!({ "ok": true })
 }
 
+/// `POST /api/route/settings`: `{settings}` ([`settings_of`]) -- Interactive Router Settings, OK, applied to the session
+/// that is running right now (route, drag or diff pair), so the next `move` already uses them, as upstream's dialog does
+/// (`ROUTER_TOOL::...` hands the changed `ROUTING_SETTINGS` to the live router). With no session there is nothing to
+/// change (the studio keeps the settings for the next one).
+pub fn set_settings(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing") };
+    router.settings = settings_of(&req);
+    json!({ "ok": true })
+}
+
 // --------------------------------------------------------------- dragging (stage 5)
 //
 // D on a track segment/corner or via: keeps its connections while moving
@@ -233,10 +289,10 @@ fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -
     })
 }
 
-/// `POST /api/route/drag_start`: `{x, y, layer, mode?}`. Builds a fresh
+/// `POST /api/route/drag_start`: `{x, y, layer, settings?}` (`mode` at the top level still works). Builds a fresh
 /// `Router` from the board as it stands right now, same as `start` -- a
-/// drag reads the live board just as much as a route does. `mode` is the
-/// same `Mode` a route session takes (`mode_of`'s own doc comment) --
+/// drag reads the live board just as much as a route does. `settings` are the same
+/// `ROUTING_SETTINGS` a route session takes ([`settings_of`]) --
 /// `eda_pns::dragger::Dragger` reuses it exactly as upstream's `DRAGGER`
 /// reuses `SHOVE`/`WALKAROUND`; no `remove_loops` here, a route-only
 /// concept upstream's own `DRAGGER` never touches either. `free_angle`
@@ -250,7 +306,7 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let mut router = Router::new(&design, &model);
-    router.settings.mode = mode_of(&req);
+    router.settings = settings_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     let free_angle = req.get("free_angle").and_then(Value::as_bool).unwrap_or(false);
@@ -328,6 +384,7 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         Err(e) => return err(board::reasons(&e)),
     };
     let mut router = Router::new(&design, &model);
+    router.settings = settings_of(&req);
     let at = point_of(&req);
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.start_diff_pair(at, layer) {
@@ -404,5 +461,151 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => json!({ "ok": true, "message": summary }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eda_model::ir::{Design, PlacementSection, Provenance, RoutingSection, Track, Via};
+    use eda_model::ConstraintModel;
+
+    /// A scratch project directory, removed again when the test ends.
+    struct Scratch(std::path::PathBuf);
+    impl std::ops::Deref for Scratch {
+        type Target = std::path::PathBuf;
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let d = std::env::temp_dir().join(format!("eda_cli_route_test_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        Scratch(d)
+    }
+
+    fn p(x: i64, y: i64) -> Point {
+        Point { x, y }
+    }
+
+    /// A 20 mm board with a SIG stub ending at (10000, 8000) and a GND via at (10000, 5000), right in the way of SIG going down.
+    fn setup(dir: &Path) {
+        let model = ConstraintModel::default();
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
+        let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![p(10_000, 9_000), p(10_000, 8_000)], arc_mid_offset: None };
+        let via = Via { id: "v_gnd".into(), net: "GND".into(), at: p(10_000, 5_000), drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        let design = Design {
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+            schema: 1,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(PlacementSection { outline: vec![p(0, 0), p(20_000, 0), p(20_000, 20_000), p(0, 20_000)], footprints: vec![], modules: vec![] }),
+            routing: Some(RoutingSection { tracks: vec![stub], vias: vec![via], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: None,
+        };
+        board::save(dir, &design).unwrap();
+        let meta = board::Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    fn body(v: Value) -> Vec<u8> {
+        v.to_string().into_bytes()
+    }
+
+    fn start_with(dir: &Path, cell: &RouteCell, settings: Value) {
+        let reply = start(dir, cell, &body(json!({ "x": 10_000, "y": 8_000, "layer": "F.Cu", "width": 200, "settings": settings })));
+        assert_eq!(reply["ok"], json!(true), "{reply}");
+    }
+
+    #[test]
+    fn a_request_without_settings_is_kicads_defaults() {
+        let s = settings_of(&json!({}));
+        let d = RoutingSettings::default();
+        assert_eq!((s.mode, s.optimizer_effort, s.shove_vias, s.jump_over_obstacles, s.remove_loops, s.smart_pads, s.can_violate_drc, s.free_angle_mode, s.fix_all_segments), (d.mode, d.optimizer_effort, true, false, true, true, false, false, true));
+        assert_eq!((s.shove_iteration_limit, s.walkaround_iteration_limit, s.via_force_prop_iteration_limit, s.walkaround_hug_length_threshold), (250, 40, 40, 1.5));
+        // the two a client sent before there was a `settings` object
+        let legacy = settings_of(&json!({ "mode": "shove", "remove_loops": false }));
+        assert_eq!((legacy.mode, legacy.remove_loops), (Mode::Shove, false));
+    }
+
+    #[test]
+    fn every_setting_the_dialog_has_reaches_the_router() {
+        let s = settings_of(&json!({ "settings": {
+            "mode": "mark_obstacles", "optimizer_effort": "full", "shove_vias": false, "jump_over_obstacles": true, "remove_loops": false,
+            "smart_pads": false, "allow_drc_violations": true, "free_angle_mode": true, "fix_all_segments": false,
+            "shove_iteration_limit": 12, "walkaround_iteration_limit": 7, "via_force_prop_iteration_limit": 9, "walkaround_hug_length_threshold": 3.25,
+        } }));
+        assert_eq!((s.mode, s.optimizer_effort), (Mode::MarkObstacles, OptEffort::Full));
+        assert_eq!((s.shove_vias, s.jump_over_obstacles, s.remove_loops, s.smart_pads, s.can_violate_drc, s.free_angle_mode, s.fix_all_segments), (false, true, false, false, true, true, false));
+        assert_eq!((s.shove_iteration_limit, s.walkaround_iteration_limit, s.via_force_prop_iteration_limit, s.walkaround_hug_length_threshold), (12, 7, 9, 3.25));
+        assert!(s.allow_drc_violations() && s.free_angle(), "both only count in Highlight collisions mode");
+        // nonsense is clamped, not trusted
+        let wild = settings_of(&json!({ "settings": { "shove_iteration_limit": -5, "via_force_prop_iteration_limit": 0, "walkaround_hug_length_threshold": -1 } }));
+        assert_eq!((wild.shove_iteration_limit, wild.via_force_prop_iteration_limit, wild.walkaround_hug_length_threshold), (1, 1, 0.0));
+    }
+
+    #[test]
+    fn shove_vias_decides_whether_a_via_in_the_way_is_pushed_or_walked_around() {
+        let dir = scratch("shove_vias");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        // Shove: the GND via at (10000, 5000) sits right on SIG's way down and is pushed aside.
+        start_with(&dir, &cell, json!({ "mode": "shove" }));
+        let pushed = mv(&cell, &body(json!({ "x": 10_000, "y": 2_000 })));
+        assert_eq!(pushed["colliding"], json!(false), "{pushed}");
+        assert_eq!(pushed["displaced_vias"].as_array().unwrap().len(), 1, "the via is shoved: {pushed}");
+        assert_eq!(pushed["head"].as_array().unwrap().len(), 2, "and SIG goes straight through where it was: {pushed}");
+        // The same with "Shove vias" off: the via is an obstacle like a pad, the head walks around it.
+        start_with(&dir, &cell, json!({ "mode": "shove", "shove_vias": false }));
+        let hugged = mv(&cell, &body(json!({ "x": 10_000, "y": 2_000 })));
+        assert_eq!(hugged["colliding"], json!(false), "{hugged}");
+        assert!(hugged["displaced_vias"].as_array().unwrap().is_empty(), "the via stays: {hugged}");
+        assert!(hugged["head"].as_array().unwrap().len() > 2, "the head goes around it: {hugged}");
+        // Changing the setting under a running session takes effect on the next move, as upstream's dialog does.
+        let live = set_settings(&cell, &body(json!({ "settings": { "mode": "shove", "shove_vias": true } })));
+        assert_eq!(live["ok"], json!(true));
+        let again = mv(&cell, &body(json!({ "x": 10_000, "y": 2_000 })));
+        assert_eq!(again["displaced_vias"].as_array().unwrap().len(), 1, "{again}");
+    }
+
+    #[test]
+    fn free_angle_mode_draws_the_head_at_any_angle_only_in_highlight_collisions_mode() {
+        let dir = scratch("free_angle");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        // (3000, -1000) from the stub's end: not a multiple of 45 degrees.
+        let target = body(json!({ "x": 13_000, "y": 7_000 }));
+        start_with(&dir, &cell, json!({ "mode": "mark_obstacles", "free_angle_mode": true }));
+        assert_eq!(mv(&cell, &target)["head"], json!([[10_000, 8_000], [13_000, 7_000]]), "one straight leg");
+        start_with(&dir, &cell, json!({ "mode": "mark_obstacles" }));
+        assert_eq!(mv(&cell, &target)["head"].as_array().unwrap().len(), 3, "an elbow of 45-degree legs");
+        start_with(&dir, &cell, json!({ "mode": "walkaround", "free_angle_mode": true }));
+        assert_eq!(mv(&cell, &target)["head"].as_array().unwrap().len(), 3, "the switch only counts when highlighting collisions");
+    }
+
+    #[test]
+    fn allow_drc_violations_lets_a_colliding_head_be_fixed_in_highlight_collisions_mode() {
+        let dir = scratch("drc_violations");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        let onto_the_via = body(json!({ "x": 10_000, "y": 5_000 }));
+        start_with(&dir, &cell, json!({ "mode": "mark_obstacles" }));
+        let preview = mv(&cell, &onto_the_via);
+        assert_eq!(preview["colliding"], json!(true), "{preview}");
+        assert_eq!(fix(&cell, &onto_the_via)["blocked"], json!(true), "a colliding head is refused by default");
+        start_with(&dir, &cell, json!({ "mode": "mark_obstacles", "allow_drc_violations": true }));
+        assert_eq!(fix(&cell, &onto_the_via)["blocked"], json!(false), "and fixed once violations are allowed");
     }
 }
