@@ -1,15 +1,15 @@
-// The Properties panel (docked left -- per the task's reading of
-// pcb_edit_frame.cpp's AUI layout). KiCad builds this as a live property
-// grid (common/widgets/properties_panel.cpp, pcbnew/widgets/
-// pcb_properties_panel.cpp) that this session could not read; this is a
-// reasonable approximation (a key/value grid plus the same rotate/rip
-// actions the message panel and canvas expose) rather than a
-// transcription of KiCad's exact grid rows.
+// The Properties panel (docked left -- pcb_edit_frame.cpp's AUI layout): KiCad's property grid (common/widgets/properties_panel.cpp, pcbnew/widgets/
+// pcb_properties_panel.cpp, eeschema/widgets/sch_properties_panel.cpp). The grid shows the properties every selected item has, under the groups KiCad
+// puts them in, with the value they share or `<...>` where they differ; a row is edited in place and applies to every selected item as ONE undo step
+// (kicad-port/{pcbProperties,schItemProperties}.ts register the properties; components/panels/PropertyGrid.tsx draws them).
+import { useMemo } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
-import { formatLength, formatXY } from "../../state/units";
-import { padById } from "../../kicad-port/pcbItems";
+import { pcbEdit, pcbGrid } from "../../kicad-port/pcbProperties";
+import { schEdit, schGrid } from "../../kicad-port/schItemProperties";
+import type { PropValue } from "../../kicad-port/propertyManager";
 import type { Rule } from "../../api/types";
 import { DockPanel } from "./Dock";
+import { PropertyGrid } from "./PropertyGrid";
 
 /**
  * KiCad picks up an unplaced footprint through the Add Footprint tool's
@@ -58,53 +58,30 @@ function ruleLine(rule: Rule, ref: string): string | null {
 }
 
 /**
- * The schematic tab's own properties view: PCB and schematic share the
- * same reference-designator identity and the same state.selection (so
- * clicking U1 in either view cross-probes to the other -- see
- * SchematicView.tsx), but a schematic symbol has pins/nets, not a PCB
- * position/side/courtyard, so it gets its own small render rather than
- * pretending a symbol is a placed PCB part.
+ * The schematic tab's Properties pane (`SCH_PROPERTIES_PANEL`): the grid of the selected items. PCB and schematic share the reference-designator identity and
+ * `state.selection` (so clicking U1 in either view cross-probes to the other -- see SchematicView.tsx), but the schematic has its own item classes and registrations.
  */
 export function SchematicProperties() {
   const state = useStudioState();
+  const api = useStudioApi();
   const sch = state.schematic;
-  const refs = [...state.selection];
-  if (!sch || refs.length === 0) {
+  const ids = useMemo(() => [...state.selection], [state.selection]);
+  // The grid is rebuilt when the sheet, the selection or the units change, not on every move of the cursor (a big selection has a lot of rows to merge).
+  const model = useMemo(() => (sch ? schGrid(sch, ids, state.units) : null), [sch, ids, state.units]);
+  if (!sch || !model || model.count === 0) {
     return (
       <div className="panel-section">
-        <div className="panel-empty">Nothing selected.</div>
+        <div className="panel-empty">No objects selected</div>
       </div>
     );
   }
-  const sym = sch.symbols.find((s) => s.id === refs[0]);
-  if (!sym) return null;
-  const nets = [...new Set(sch.wires.filter((w) => w.pins.some((p) => p.startsWith(`${sym.id}.`))).map((w) => w.net))];
-  return (
-    <div className="panel-section">
-      <div className="kv-grid">
-        <span>Reference</span>
-        <span>{sym.id}</span>
-        <span>Value</span>
-        <span>{sym.value ?? "–"}</span>
-        {sym.package && (
-          <>
-            <span>Footprint</span>
-            <span>{sym.package}</span>
-          </>
-        )}
-        {sym.mpn && (
-          <>
-            <span>MPN</span>
-            <span>{sym.mpn}</span>
-          </>
-        )}
-        <span>Pins</span>
-        <span>{sym.pins.length}</span>
-        <span>Nets</span>
-        <span>{nets.join(", ") || "–"}</span>
-      </div>
-    </div>
-  );
+  const commit = async (name: string, value: PropValue): Promise<string | null> => {
+    const plan = schEdit(sch, ids, name, value, state.units);
+    if (!plan.ok) return plan.error;
+    if (plan.cmds.length > 0) await api.cmdBatch(plan.cmds);
+    return null;
+  };
+  return <PropertyGrid model={model} units={state.units} onCommit={commit} selectionKey={ids.join("\n")} />;
 }
 
 /** The board editor's Properties pane, docked left (`PCB_PROPERTIES_PANEL`); the schematic's is `SchematicDock`'s. */
@@ -120,105 +97,37 @@ function PropertiesBody() {
   const state = useStudioState();
   const api = useStudioApi();
   const board = state.board;
-  const refs = [...state.selection];
+  const ids = useMemo(() => [...state.selection], [state.selection]);
+  const model = useMemo(() => (board ? pcbGrid(board, ids, state.units) : null), [board, ids, state.units]);
 
-  if (!board || refs.length === 0) {
+  if (!board || !model || model.count === 0) {
     return (
       <>
         <div className="panel-section">
-          <div className="panel-empty">Nothing selected.</div>
+          <div className="panel-empty">No objects selected</div>
         </div>
         <UnplacedList />
       </>
     );
   }
 
-  if (refs.length > 1) {
-    return (
-      <div className="panel-section">
-        <div className="kv-grid">
-          <span>Selected</span>
-          <span>{refs.length} items</span>
-        </div>
-        <div className="row" style={{ marginTop: 8, display: "flex", gap: 6 }}>
-          <button onClick={() => api.rotateSelection(1)}>Rotate (R)</button>
-          <button onClick={() => api.ripSelection()}>Delete (Del)</button>
-        </div>
-      </div>
-    );
-  }
+  const commit = async (name: string, value: PropValue): Promise<string | null> => {
+    const plan = pcbEdit(board, ids, name, value, state.units);
+    if (!plan.ok) return plan.error;
+    // One edit, one undo step: every command of the edit goes in one batch (`BOARD_COMMIT::Push( "Edit Properties" )`).
+    if (plan.cmds.length > 0) await api.cmdBatch(plan.cmds);
+    return null;
+  };
 
-  const ref = refs[0]!;
-  // A selected pad (`PAD` in pcbnew's property grid): what it is and where. Pad edits are not part of the board editor here -- a pad moves with its footprint.
-  const padHit = padById(board, ref);
-  if (padHit) {
-    const { part, pad } = padHit;
-    return (
-      <div className="panel-section">
-        <h3>Pad {pad.num}</h3>
-        <div className="kv-grid">
-          <span>Footprint</span>
-          <span>{part.ref}</span>
-          <span>Pad number</span>
-          <span>{pad.num || "–"}</span>
-          <span>Net</span>
-          <span>{pad.net ?? "–"}</span>
-          <span>Type</span>
-          <span>{pad.th ? "Through-hole" : "SMD"}</span>
-          <span>Shape</span>
-          <span>{pad.round ? (Math.abs(pad.w - pad.h) < 1 ? "Circle" : "Oval") : "Rectangle"}</span>
-          <span>Position</span>
-          <span>{formatXY(pad.x, pad.y, state.units)}</span>
-          <span>Size</span>
-          <span>{`${formatLength(pad.w, state.units)} x ${formatLength(pad.h, state.units)}`}</span>
-          <span>Side</span>
-          <span>{part.side === "bottom" ? "Bottom" : "Top"}</span>
-        </div>
-        <div style={{ marginTop: 8, fontSize: 11, opacity: 0.7 }}>Moving, turning or flipping a pad acts on {part.ref}.</div>
-      </div>
-    );
-  }
-  const p = board.parts.find((x) => x.ref === ref);
-  if (!p) return null;
-  const nets = [...new Set((p.pads ?? []).map((q) => q.net).filter((n): n is string => !!n))];
-  const rules = board.rules.map((r) => ruleLine(r, ref)).filter((l): l is string => !!l);
+  // The one app-specific section KiCad's grid does not have: the placement rules the intent states for a single footprint.
+  const part = ids.length === 1 ? board.parts.find((x) => x.ref === ids[0]) : undefined;
+  const rules = part ? board.rules.map((r) => ruleLine(r, part.ref)).filter((l): l is string => !!l) : [];
 
   return (
-    <div className="panel-section">
-      <div className="kv-grid">
-        <span>Reference</span>
-        <span>{p.ref}</span>
-        <span>Value</span>
-        <span>{p.value ?? "–"}</span>
-        <span>Footprint</span>
-        <span>{p.package ?? "–"}</span>
-        {p.mpn && (
-          <>
-            <span>MPN</span>
-            <span>{p.mpn}</span>
-          </>
-        )}
-        {p.block && (
-          <>
-            <span>Block</span>
-            <span>{p.block}</span>
-          </>
-        )}
-        {p.placed && p.at && (
-          <>
-            <span>Position</span>
-            <span>{formatXY(p.at[0], p.at[1], state.units)}</span>
-            <span>Orientation</span>
-            <span>{`${p.rot ?? 0}°`}</span>
-            <span>Side</span>
-            <span>{p.side === "bottom" ? "Bottom" : "Top"}</span>
-          </>
-        )}
-        <span>Nets</span>
-        <span>{nets.join(", ") || "–"}</span>
-      </div>
+    <>
+      <PropertyGrid model={model} units={state.units} onCommit={commit} selectionKey={ids.join("\n")} />
       {rules.length > 0 && (
-        <div style={{ marginTop: 8 }}>
+        <div className="panel-section">
           <h3>Placement rules</h3>
           {rules.map((line, i) => (
             <div key={i} style={{ fontSize: 11 }}>
@@ -227,12 +136,6 @@ function PropertiesBody() {
           ))}
         </div>
       )}
-      {p.placed && (
-        <div style={{ marginTop: 10, display: "flex", gap: 6 }}>
-          <button onClick={() => api.rotateSelection(1)}>Rotate (R)</button>
-          <button onClick={() => api.ripSelection()}>Delete (Del)</button>
-        </div>
-      )}
-    </div>
+    </>
   );
 }

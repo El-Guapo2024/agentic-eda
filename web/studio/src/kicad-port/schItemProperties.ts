@@ -65,34 +65,73 @@ export interface SchCtx {
   sch: Schematic;
   units: LengthUnit;
   locked: ReadonlySet<string>;
+  /** How many items are selected: a reference names one symbol, so it is edited only on its own. */
+  count: number;
 }
 
-export function schContext(sch: Schematic, units: LengthUnit): SchCtx {
-  return { sch, units, locked: new Set(sch.locked ?? []) };
+export function schContext(sch: Schematic, units: LengthUnit, count = 1): SchCtx {
+  return { sch, units, locked: new Set(sch.locked ?? []), count };
+}
+
+/** The sheet's items by id, for a selection too big to search one id at a time. The first of two items of an id wins, as in `propertiesTarget`. */
+interface SchIndex {
+  symbol: Map<string, SchematicSymbol>;
+  power: Map<string, PowerSymbol>;
+  wire: Map<string, SchematicWire>;
+  label: Map<string, SchematicLabel>;
+  text: Map<string, SchematicText>;
+  noConnect: Set<string>;
+  busEntry: Map<string, BusEntry>;
+  junction: Map<string, SchJunction>;
+  line: Map<string, SchLine>;
+  sheet: Map<string, Sheet>;
+  graphic: Map<string, SchGraphic>;
+}
+
+function firstById<T extends { id: string }>(list: readonly T[]): Map<string, T> {
+  const out = new Map<string, T>();
+  for (const item of list) if (!out.has(item.id)) out.set(item.id, item);
+  return out;
+}
+
+function indexOf(sch: Schematic): SchIndex {
+  return {
+    symbol: firstById(sch.symbols),
+    power: firstById(sch.power_symbols),
+    wire: firstById(sch.wires),
+    label: firstById(sch.labels),
+    text: firstById(sch.texts),
+    noConnect: new Set(sch.no_connects.map((n) => n.id)),
+    busEntry: firstById(sch.bus_entries),
+    junction: firstById(sch.junctions ?? []),
+    line: firstById(sch.lines ?? []),
+    sheet: firstById(sch.sheets),
+    graphic: firstById(sch.graphics ?? []),
+  };
 }
 
 /** The item a selection id names, or null. Same order as `propertiesTarget`. */
-export function schItemOf(sch: Schematic, id: string): SchItem | null {
-  const symbol = sch.symbols.find((s) => s.id === id);
+function resolve(idx: SchIndex, id: string): SchItem | null {
+  const symbol = idx.symbol.get(id);
   if (symbol) return { type: "SCH_SYMBOL", id, symbol };
-  const power = sch.power_symbols.find((p) => p.id === id);
+  const power = idx.power.get(id);
   if (power) return { type: "SCH_SYMBOL", id, power };
-  const wire = sch.wires.find((w) => w.id === id);
+  const wire = idx.wire.get(id);
   if (wire) return { type: "SCH_LINE", id, wire, lineKind: wire.bus ? "bus" : "wire" };
-  const label = sch.labels.find((l) => l.id === id);
+  const label = idx.label.get(id);
   if (label) return { type: label.scope === "global" ? "SCH_GLOBALLABEL" : label.scope === "hierarchical" ? "SCH_HIERLABEL" : "SCH_LABEL", id, label };
-  const text = sch.texts.find((t) => t.id === id);
+  const text = idx.text.get(id);
   if (text) return { type: "SCH_TEXT", id, text };
-  if (sch.no_connects.some((n) => n.id === id)) return { type: "SCH_NO_CONNECT", id };
-  const busEntry = sch.bus_entries.find((b) => b.id === id);
+  if (idx.noConnect.has(id)) return { type: "SCH_NO_CONNECT", id };
+  const busEntry = idx.busEntry.get(id);
   if (busEntry) return { type: "SCH_BUS_WIRE_ENTRY", id, busEntry };
-  const junction = (sch.junctions ?? []).find((j) => j.id === id);
+  const junction = idx.junction.get(id);
   if (junction) return { type: "SCH_JUNCTION", id, junction };
-  const line = (sch.lines ?? []).find((l) => l.id === id);
+  const line = idx.line.get(id);
   if (line) return { type: "SCH_LINE", id, line, lineKind: "line" };
-  const sheet = sch.sheets.find((s) => s.id === id);
+  const sheet = idx.sheet.get(id);
   if (sheet) return { type: "SCH_SHEET", id, sheet };
-  const graphic = (sch.graphics ?? []).find((g) => g.id === id);
+  const graphic = idx.graphic.get(id);
   if (graphic) {
     const t = graphic.shape.type;
     return { type: t === "text_box" ? "SCH_TEXTBOX" : t === "rule_area" ? "SCH_RULE_AREA" : t === "directive" ? "SCH_DIRECTIVE_LABEL" : "SCH_SHAPE", id, graphic };
@@ -100,11 +139,17 @@ export function schItemOf(sch: Schematic, id: string): SchItem | null {
   return null;
 }
 
+/** The item a selection id names, or null. */
+export function schItemOf(sch: Schematic, id: string): SchItem | null {
+  return resolve(indexOf(sch), id);
+}
+
 /** The items of a selection, in selection order; an id the sheet does not have is skipped. */
 export function schItemsOf(sch: Schematic, ids: Iterable<string>): SchItem[] {
+  const idx = indexOf(sch);
   const out: SchItem[] = [];
   for (const id of ids) {
-    const item = schItemOf(sch, id);
+    const item = resolve(idx, id);
     if (item) out.push(item);
   }
   return out;
@@ -344,7 +389,7 @@ function build(): PropertyManager<SchItem, SchCtx, Cmd> {
       name: "Reference",
       kind: "string",
       get: (i) => i.symbol?.id ?? i.power?.id ?? "",
-      writeable: isReal,
+      writeable: (i, c) => isReal(i) && c.count === 1,
       validate: (v) => (String(v).trim() === "" ? "A reference cannot be empty." : null),
       set: (i, v) => (!i.symbol || i.symbol.id === String(v).trim() ? [] : [{ op: "rename_symbol", id: i.symbol.id, new_id: String(v).trim() }]),
     },
@@ -803,15 +848,18 @@ export const SCH_PROPERTIES: PropertyManager<SchItem, SchCtx, Cmd> = build();
 
 /** The grid the Properties panel shows for a selection of schematic items. */
 export function schGrid(sch: Schematic, ids: Iterable<string>, units: LengthUnit): GridModel {
-  return buildGrid(SCH_PROPERTIES, schItemsOf(sch, ids), schContext(sch, units), schFriendlyName);
+  const items = schItemsOf(sch, ids);
+  return buildGrid(SCH_PROPERTIES, items, schContext(sch, units, items.length), schFriendlyName);
 }
 
 /** The commands an edit of one row sets on the selection, or why it is refused. */
 export function schEdit(sch: Schematic, ids: Iterable<string>, name: string, value: PropValue, units: LengthUnit): EditPlan<Cmd> {
-  return planEdit(SCH_PROPERTIES, schItemsOf(sch, ids), name, value, schContext(sch, units));
+  const items = schItemsOf(sch, ids);
+  return planEdit(SCH_PROPERTIES, items, name, value, schContext(sch, units, items.length));
 }
 
 /** `extractValueAndWritability` for one named property of a selection. */
 export function schRow(sch: Schematic, ids: Iterable<string>, name: string, units: LengthUnit): ReturnType<typeof extractValueAndWritability> {
-  return extractValueAndWritability(SCH_PROPERTIES, schItemsOf(sch, ids), name, schContext(sch, units));
+  const items = schItemsOf(sch, ids);
+  return extractValueAndWritability(SCH_PROPERTIES, items, name, schContext(sch, units, items.length));
 }

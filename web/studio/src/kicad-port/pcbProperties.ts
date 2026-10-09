@@ -16,7 +16,7 @@
 import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, Group, Pad, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { toCmdDimension } from "./dimensionConvert";
-import { padById, itemPosition } from "./pcbItems";
+import { arcShapeCenter, padById } from "./pcbItems";
 import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
 import { buildGrid, extractValueAndWritability, planEdit, positiveInt, rangeInt, tooSmall, type EditPlan, type GridModel } from "./propertyGrid";
@@ -126,11 +126,34 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   return null;
 }
 
+/** Every item of the board by id (the order of `pcbItemOf`'s lookups: the first kind to have an id names it), for a selection too big to search one id at a time. */
+function indexOf(board: BoardState): Map<string, PcbItem> {
+  const out = new Map<string, PcbItem>();
+  const put = (item: PcbItem): void => void (out.has(item.id) || out.set(item.id, item));
+  for (const part of board.parts) {
+    if (!part.placed) continue;
+    put({ type: "FOOTPRINT", id: part.ref, part });
+  }
+  const rt = board.routing;
+  for (const track of rt?.tracks ?? []) put({ type: track.arc_mid ? "PCB_ARC" : "PCB_TRACK", id: track.id, track });
+  for (const via of rt?.vias ?? []) put({ type: "PCB_VIA", id: via.id, via });
+  for (const zone of rt?.zones ?? []) put({ type: "ZONE", id: zone.id, zone });
+  const dr = board.drawings;
+  for (const shape of dr?.shapes ?? []) put({ type: "PCB_SHAPE", id: shape.id, shape });
+  for (const text of dr?.texts ?? []) put({ type: "PCB_TEXT", id: text.id, text });
+  for (const dim of dr?.dimensions ?? []) put({ type: DIM_TYPE[dim.kind], id: dim.id, dim });
+  for (const group of dr?.groups ?? []) put({ type: "PCB_GROUP", id: group.id, group });
+  return out;
+}
+
 /** The items of a selection, in selection order; an id the board does not have is skipped. */
 export function pcbItemsOf(board: BoardState, ids: Iterable<string>): PcbItem[] {
+  const list = [...ids];
   const out: PcbItem[] = [];
-  for (const id of ids) {
-    const item = pcbItemOf(board, id);
+  // A big selection (Select All) is resolved through one index, not one search per id.
+  const index = list.length > 12 ? indexOf(board) : null;
+  for (const id of list) {
+    const item = index ? (index.get(id) ?? (id.includes(".") ? pcbItemOf(board, id) : null)) : pcbItemOf(board, id);
     if (item) out.push(item);
   }
   return out;
@@ -227,6 +250,29 @@ function dimCmd(d: Dimension, patch: Partial<CmdDimension>): Cmd {
 }
 
 const moveCmd = (ids: string[], dx: number, dy: number): Cmd[] => (dx === 0 && dy === 0 ? [] : [{ op: "move_items", ids, dx, dy }]);
+
+/**
+ * `BOARD_ITEM::GetPosition()` of an item (the same answer as `itemPosition` of `pcbItems.ts`, without searching the board for the id): a footprint's anchor, a pad's
+ * centre, a track's start, a via's centre, a zone's first corner, a text's anchor, a dimension's first feature point, a polygon's first vertex, a circle's or an arc's
+ * centre and any other shape's start.
+ */
+export function positionOf(i: PcbItem): [number, number] {
+  if (i.pad) return [i.pad.x, i.pad.y];
+  if (i.part) return i.part.at ? [i.part.at[0], i.part.at[1]] : [0, 0];
+  if (i.track) return i.track.pts[0] ?? [0, 0];
+  if (i.via) return [i.via.x, i.via.y];
+  if (i.zone) return i.zone.outline[0] ?? [0, 0];
+  if (i.text) return [i.text.x, i.text.y];
+  if (i.dim) return [i.dim.start[0], i.dim.start[1]];
+  const s = i.shape;
+  if (s) {
+    if (s.kind === "arc") return arcShapeCenter(s) ?? [s.start[0], s.start[1]];
+    if (s.kind === "circle") return [s.center[0], s.center[1]];
+    if (s.kind === "polygon") return s.pts[0] ?? [0, 0];
+    return [s.start[0], s.start[1]];
+  }
+  return [0, 0];
+}
 
 // -------------------------------------------------------------------------------------------------------------------------- shapes
 
@@ -326,10 +372,10 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   // ---------------------------------------------------------------------------------------------------------------- BOARD_ITEM
   pm.registerType("BOARD_ITEM");
 
-  /** `BOARD_ITEM::GetPosition()`: a pad's is its own (a pad moves its footprint), a dimension's its first feature point. */
-  const position = (i: PcbItem, c: PcbCtx): [number, number] => itemPosition(c.board, i.id) ?? [0, 0];
-  const setPosition = (axis: 0 | 1) => (i: PcbItem, v: PropValue, c: PcbCtx): Cmd[] => {
-    const at = position(i, c);
+  /** `BOARD_ITEM::GetPosition()` (`pcbItems.ts`'s `itemPosition`, read off the item): a pad's is its own (a pad moves its footprint), a dimension's its first feature point. */
+  const position = (i: PcbItem): [number, number] => positionOf(i);
+  const setPosition = (axis: 0 | 1) => (i: PcbItem, v: PropValue): Cmd[] => {
+    const at = position(i);
     const delta = Math.round(num(v)) - at[axis];
     if (delta === 0) return [];
     const [dx, dy] = axis === 0 ? [delta, 0] : [0, delta];
@@ -342,8 +388,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     }
     return moveCmd([i.id], dx, dy);
   };
-  add({ owner: "BOARD_ITEM", name: POSITION_X, kind: "int", display: "coord", get: (i, c) => position(i, c)[0], set: setPosition(0) });
-  add({ owner: "BOARD_ITEM", name: POSITION_Y, kind: "int", display: "coord", get: (i, c) => position(i, c)[1], set: setPosition(1) });
+  add({ owner: "BOARD_ITEM", name: POSITION_X, kind: "int", display: "coord", get: (i) => position(i)[0], set: setPosition(0) });
+  add({ owner: "BOARD_ITEM", name: POSITION_Y, kind: "int", display: "coord", get: (i) => position(i)[1], set: setPosition(1) });
   // The layer of a text or a dimension: any layer (`BOARD_ITEM`'s Layer takes every enabled layer; the classes with a layer of their own replace it).
   add({
     owner: "BOARD_ITEM",

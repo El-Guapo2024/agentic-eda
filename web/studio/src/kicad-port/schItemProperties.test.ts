@@ -258,6 +258,14 @@ test("a symbol is moved, turned, mirrored and renamed through the verbs the edit
   assert.deepEqual(edit(s, ["U1"], "Reference", "U7"), [{ op: "rename_symbol", id: "U1", new_id: "U7" }]);
 });
 
+test("a reference is edited on one symbol only: two of them would be one name", () => {
+  const s = sheet();
+  assert.equal(rowOf(s, ["U1"], "Reference")!.writable, true);
+  assert.equal(rowOf(s, ["U1", "R1"], "Reference")!.writable, false);
+  assert.deepEqual(edit(s, ["U1", "R1"], "Reference", "X9"), []);
+  assert.equal(rowOf(s, ["U1", "R1"], "Value")!.writable, true, "a value can be the same on many");
+});
+
 test("a locked symbol cannot be moved from the grid, as it cannot be moved by hand", () => {
   const s = sheet();
   assert.equal(rowOf(s, ["R1"], "Position X")!.writable, false);
