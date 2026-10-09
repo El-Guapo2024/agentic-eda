@@ -13,7 +13,6 @@ import type { SymAction, SymbolEditorApi, SymbolEditorState } from "../state/sym
 import { boxOfIds, boxOfPoints, footprintItemBoxes, pcbContentBox, pcbItemBoxes, symbolItemBoxes, unionBoxes, type Box, type ItemBoxes } from "../kicad-port/itemBoxes";
 import type { Schematic } from "../api/types";
 import { pageOf } from "../components/schematic/drawingSheet";
-import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { hitSymbol, hitWire } from "../components/schematic/schHit";
 import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
@@ -200,8 +199,8 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
         flipped: false,
         cursor: studio.cursorUm,
         setCursor: (at) => snap.dispatch({ type: "SET_CURSOR", at }),
-        gridUm: SCH_GRID_UM,
-        setGridUm: () => {},
+        gridUm: studio.schGridUm,
+        setGridUm: (um) => snap.dispatch({ type: "SET_SCH_GRID_UM", um }),
         selection: studio.selection,
         setSelection: (ids) => snap.dispatch({ type: "SET_SELECTION", refs: ids }),
         toolIdle: studio.activeTool === "select" && !studio.drawState && !studio.movePreview,

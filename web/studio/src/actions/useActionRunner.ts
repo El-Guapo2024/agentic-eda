@@ -47,7 +47,6 @@ import { findNextMatch } from "../components/schematic/findNavigation";
 import { boardDeleteCmds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { symbolBounds } from "../components/schematic/painter";
-import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
 import { alignToGrid } from "../kicad-port/gridSnap";
 import { netAtPoint } from "../kicad-port/schNetAtPoint";
 import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
@@ -1275,7 +1274,7 @@ export function useActionRunner() {
     });
     const cursorSnapped = (): [number, number] | null => {
       if (!state.cursorUm) return null;
-      const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, SCH_GRID_UM, { x: 0, y: 0 }, { ctrlOrCmd: false });
+      const p = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, state.schGridUm, { x: 0, y: 0 }, { ctrlOrCmd: false });
       return [p.x, p.y];
     };
 
@@ -1445,8 +1444,8 @@ export function useActionRunner() {
     /** `view->IsMirroredX()`: the PCB canvas is showing the board flipped (pcbnew.Control.flipBoard). */
     const flippedView = state.tab === "pcb" && state.bcx.boardFlipped;
     const setActiveView = (view: typeof state.view) => dispatch(state.tab === "schematic" ? { type: "SET_SCHEMATIC_VIEW", view } : { type: "SET_VIEW", view });
-    /** The grid CursorControl/PanControl step by: this app's PCB grid, or the schematic's fixed 50 mil (SCH_GRID_UM). */
-    const activeGridUm = () => (state.tab === "schematic" ? SCH_GRID_UM : state.gridUm);
+    /** The grid CursorControl/PanControl step by: the board's grid, or the schematic's. */
+    const activeGridUm = () => (state.tab === "schematic" ? state.schGridUm : state.gridUm);
 
     /**
      * Stand-in for `m_toolMgr->ProcessEvent(TC_MOUSE...)` / the warped pointer
@@ -1540,7 +1539,7 @@ export function useActionRunner() {
       // pcb_control.cpp PCB_CONTROL::SnapMode (magneticSnapToggle, Shift+S):
       // `settings.allLayers = !settings.allLayers`; SnapModeFeedback pops up
       // "Object Snapping: Active Layer / All Layers". The setting feeds
-      // collectAnchors' layer filter (kicad-port/gridSnap.ts).
+      // the board's snapping (`toPcbMagnetic( prefs, allLayers )`, components/canvas/Canvas.tsx -> pcbSnap.ts).
       m.set("common.Control.magneticSnapToggle", () => {
         const next = !state.magneticAllLayers;
         dispatch({ type: "SET_MAGNETIC_ALL_LAYERS", value: next });

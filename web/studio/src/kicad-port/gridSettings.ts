@@ -4,24 +4,26 @@
 // `fast_grid_1` / `fast_grid_2`: the default grid and the one after it), commit 8303b2ad. Pure: state/gridSettings.ts keeps them, the dialog edits them and the
 // toolbars' grid boxes, the grid actions and the fast grid hotkeys read them.
 //
-// Not here: a grid's name, a grid with different X and Y sizes (the studio snaps to one square grid, so the dialog asks for one size) and the grid overrides
-// (connected items, wires, vias, text and graphics each get a grid of their own -- which is also why `common.Control.toggleGridOverrides` has a reason in
-// tools/ui-parity-missing.json).
+// Not here: a grid's name and a grid with different X and Y sizes (the studio snaps to one square grid, so the dialog asks for one size). The grid overrides
+// (connected items, wires, vias, text and graphics each get a grid of their own) are kicad-port/gridOverrides.ts, with their own state/gridOverrides.ts.
 import { DEFAULT_PCB_GRIDS_UM } from "./grid";
 import { DEFAULT_FAST_GRID_1, DEFAULT_FAST_GRID_2 } from "./cursorControl";
 
-/** The editors whose grid is a choice from a list: the board editor, the Footprint Editor and the Symbol Editor (the schematic's is fixed at 50 mil). */
-export type GridEditor = "pcb" | "footprint" | "symbol";
+/** The editors whose grid is a choice from a list: the board editor, the Schematic Editor, the Footprint Editor and the Symbol Editor. */
+export type GridEditor = "pcb" | "footprint" | "symbol" | "schematic";
 
-export const GRID_EDITORS: readonly GridEditor[] = ["pcb", "footprint", "symbol"];
+export const GRID_EDITORS: readonly GridEditor[] = ["pcb", "footprint", "schematic", "symbol"];
 
 /** The page of KiCad's Preferences tree each editor's grids are on. */
-export const GRID_EDITOR_LABEL: Record<GridEditor, string> = { pcb: "PCB Editor", footprint: "Footprint Editor", symbol: "Symbol Editor" };
+export const GRID_EDITOR_LABEL: Record<GridEditor, string> = { pcb: "PCB Editor", footprint: "Footprint Editor", symbol: "Symbol Editor", schematic: "Schematic Editor" };
 
-/** The editor whose grid list a tab uses, or null for the tabs without one (the schematic's grid is the fixed 50 mil; the 3D viewer has none). */
+/** The editor whose grid list a tab uses, or null for the tabs without one (the 3D viewer has none). */
 export function gridEditorOfTab(tab: string): GridEditor | null {
-  return tab === "pcb" || tab === "footprint" || tab === "symbol" ? tab : null;
+  return tab === "pcb" || tab === "footprint" || tab === "symbol" || tab === "schematic" ? tab : null;
 }
+
+/** The editors whose grid overrides start the way eeschema's do (`APP_SETTINGS_BASE::addParamsForWindow`: eeschema and the symbol editor); the others start as pcbnew's. */
+export const SCHEMATIC_FAMILY: readonly GridEditor[] = ["schematic", "symbol"];
 
 export interface GridSettings {
   /** The grid sizes, um, in the order the list shows them (not sorted: KiCad's own default list jumps from 1 mil to 5 mm). */
@@ -38,9 +40,12 @@ export const EESCHEMA_GRIDS_UM: readonly number[] = [2540, 1270, 635, 254];
 export const GRID_MIN_UM = 1;
 export const GRID_MAX_UM = 1_000_000;
 
-/** The settings an editor has until its grids are edited: the PCB list for the board and footprint editors (`defaultGridIdx` 15 -> fast grids 15 and 16), the eeschema list for the symbol editor (index 1, 50 mil -> 1 and 2). */
+/**
+ * The settings an editor has until its grids are edited: the PCB list for the board and footprint editors (`defaultGridIdx` 15 -> fast grids 15 and 16), the eeschema list for
+ * the schematic and the symbol editor (index 1, 50 mil -> 1 and 2).
+ */
 export function defaultGridSettings(editor: GridEditor): GridSettings {
-  return editor === "symbol" ? { grids: EESCHEMA_GRIDS_UM, fast1: 1, fast2: 2 } : { grids: DEFAULT_PCB_GRIDS_UM, fast1: DEFAULT_FAST_GRID_1, fast2: DEFAULT_FAST_GRID_2 };
+  return SCHEMATIC_FAMILY.includes(editor) ? { grids: EESCHEMA_GRIDS_UM, fast1: 1, fast2: 2 } : { grids: DEFAULT_PCB_GRIDS_UM, fast1: DEFAULT_FAST_GRID_1, fast2: DEFAULT_FAST_GRID_2 };
 }
 
 const sameSize = (a: number | undefined, b: number | undefined) => a !== undefined && b !== undefined && Math.abs(a - b) < 1e-9;
@@ -154,6 +159,7 @@ export function parseStoredGridSettings(text: string | null): Record<GridEditor,
     pcb: parseGridSettings(saved?.pcb, "pcb"),
     footprint: parseGridSettings(saved?.footprint, "footprint"),
     symbol: parseGridSettings(saved?.symbol, "symbol"),
+    schematic: parseGridSettings(saved?.schematic, "schematic"),
   };
 }
 

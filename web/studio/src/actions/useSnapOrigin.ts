@@ -1,6 +1,6 @@
 // Keeps the point the snapping of the editor on screen is anchored at current (`components/canvas/gridHelper.ts` `setSnapOrigin`): the board's grid origin on
 // the PCB tab, the session's in the Footprint Editor, (0, 0) in the schematic and the symbol editor, which have no grid origin. Every tool that snaps a click
-// through `snapPoint` / `snapWithAnchors` reads it there, so none of them has to be told. Call once, near the app's root.
+// through `snapPoint` (and the grid helpers' `GridEnv.origin`) reads it there, so none of them has to be told. Call once, near the app's root.
 import { useLayoutEffect } from "react";
 import { useStudioState } from "../state/store";
 import { useFootprintGridOrigin } from "../state/gridOrigin";
