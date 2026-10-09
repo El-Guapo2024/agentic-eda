@@ -23,6 +23,14 @@ never edited as masters.
   the active tab, selection, camera and a one-shot zoom-to. The studio
   pushes its own as `ui` and applies anyone else's, so an agent can see
   what is selected and drive the view.
+- **Local appearance settings**: `appearance.json` (`/api/appearance`) holds
+  what the Appearance panel chose for this project -- layers and objects
+  shown, opacities, net and net class colours, saved layer presets and
+  viewports -- split as KiCad splits it: `local` is the `.kicad_prl`, `project`
+  what KiCad keeps in the `.kicad_pro`. It is never part of the design, so it
+  does not reload the scene or enter undo; the derived `.kicad/` project
+  carries it (`<stem>.kicad_prl`, the project's net colours, presets and
+  viewports, and a coloured net class's definition).
 - **One shared history**: `.history/undo|redo` snapshots, each tagged with
   its author (`ui`, `cli`, `agent`, ...). A direct edit of `design.json`
   (detected against `.history/head.json`) becomes its own `file` step, so
