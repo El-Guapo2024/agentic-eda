@@ -252,6 +252,7 @@ fn extract_filled_polygons(text: &str, layer: &str) -> Paths64 {
     out
 }
 
+#[derive(Clone)]
 struct ParityRow {
     board: String,
     net: String,
@@ -510,15 +511,29 @@ fn kicad_cli_zone_fill_parity() {
 // reaches our filler exactly as the studio would see it.
 // ---------------------------------------------------------------------------
 
-/// `qa/data/pcbnew`-relative boards of the feature table in `PARITY.md`.
+/// `qa/data/pcbnew`-relative boards of the result table in `PARITY.md`: the ones a debug build fills in about half a minute.
+/// (`stonehenge` and the three large boards `issue5093`, `issue11814` and `issue14559` are in the table too, but are measured
+/// with `PARITY_BOARDS`: the first has ring-shaped custom pads, a known gap, and the others take many minutes in debug.)
 const FEATURE_BOARDS: &[&str] = &[
+    "issue7086.kicad_pcb",
+    "solder_mask_bridge_test.kicad_pcb",
+    "notched_zones.kicad_pcb",
     "zone_filler.kicad_pcb",
-    "test_starved_thermal.kicad_pcb",
     "issue21746/issue21746.kicad_pcb",
-    "stonehenge.kicad_pcb",
     "issue2568.kicad_pcb",
     "fill_bad.kicad_pcb",
+    "issue16182.kicad_pcb",
+    "issue1358.kicad_pcb",
+    "issue12831.kicad_pcb",
+    "hatch_thermal_connectivity/hatch_thermal_connectivity.kicad_pcb",
+    "issue2904.kicad_pcb",
+    "issue17429.kicad_pcb",
 ];
+
+/// What every fill of `FEATURE_BOARDS` must stay within: a regression is a fill that drifts from kicad's by more than this. The worst row
+/// measured on 2026-10-08 was 0.53% of the area and 0.92% XOR (`PARITY.md`).
+const MAX_AREA_DIFF_PCT: f64 = 1.0;
+const MAX_XOR_PCT: f64 = 1.5;
 
 /// Our fill of every copper pour of `rel` against `kicad-cli pcb drc --refill-zones --save-board`.
 fn check_board_imported(cli: &Path, rel: &str) -> Vec<ParityRow> {
@@ -631,4 +646,15 @@ fn kicad_cli_zone_fill_feature_parity() {
         rows.extend(check_board_imported(&cli, board));
     }
     println!("\n{}", parity_table(&rows));
+    // The default board list is a regression test; boards named with `PARITY_BOARDS` are only measured.
+    if std::env::var_os("PARITY_BOARDS").is_none() {
+        let xor_pct = |r: &ParityRow| if r.kicad_area_mm2 > 0.0 { 100.0 * r.xor_area_mm2 / r.kicad_area_mm2 } else { 0.0 };
+        let worse: Vec<ParityRow> = rows.iter().filter(|r| r.area_pct_diff > MAX_AREA_DIFF_PCT || xor_pct(r) > MAX_XOR_PCT).cloned().collect();
+        assert!(!rows.is_empty(), "no zone was compared");
+        assert!(
+            worse.is_empty(),
+            "fills that differ from kicad's by more than {MAX_AREA_DIFF_PCT}% of the area or {MAX_XOR_PCT}% XOR (see crates/zone-filler/PARITY.md):\n{}",
+            parity_table(&worse)
+        );
+    }
 }

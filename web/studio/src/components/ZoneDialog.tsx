@@ -49,7 +49,7 @@ const PAD_CONNECTION_OPTIONS: { value: PadConnection; label: string }[] = [
   { value: "None", label: "None" },
 ];
 
-/** panel_zone_properties.cpp's "Outline smoothing" (`m_cornerSmoothingChoice`). */
+/** panel_zone_properties.cpp's "Corner smoothing" (`m_cornerSmoothingChoice`). */
 const SMOOTHING_OPTIONS: { value: ZoneSmoothing; label: string }[] = [
   { value: "none", label: "None" },
   { value: "chamfer", label: "Chamfer" },
@@ -285,20 +285,28 @@ export function ZoneDialog() {
                 )}
               </div>
 
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Outline smoothing</p>
-              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
-                <span>Corners</span>
-                <select value={settings.smoothing ?? "none"} onChange={(e) => set("smoothing", e.target.value as ZoneSmoothing)} title="ZONE::BuildSmoothedPoly: the outline's corners are chamfered or filleted before the zone is filled">
+              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr", marginTop: 12 }}>
+                <span>Corner smoothing</span>
+                <select
+                  value={settings.smoothing ?? "none"}
+                  // `OnCornerSmoothingSelection` hides the radius for None and `AcceptOptions` stores 0 for it.
+                  onChange={(e) => setSettings((s) => ({ ...s, smoothing: e.target.value as ZoneSmoothing, corner_radius: e.target.value === "none" ? 0 : s.corner_radius ?? 0 }))}
+                  title="ZONE::BuildSmoothedPoly: the outline's corners are chamfered or filleted before the zone is filled"
+                >
                   {SMOOTHING_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
                     </option>
                   ))}
                 </select>
-                <span>{settings.smoothing === "chamfer" ? "Chamfer distance" : "Fillet radius"}</span>
-                <span>
-                  <LengthInput valueUm={settings.corner_radius ?? 0} unit={units} onChange={(v) => set("corner_radius", Math.max(0, v))} disabled={(settings.smoothing ?? "none") === "none"} /> {units}
-                </span>
+                {(settings.smoothing ?? "none") !== "none" && (
+                  <>
+                    <span>Radius</span>
+                    <span>
+                      <LengthInput valueUm={settings.corner_radius ?? 0} unit={units} onChange={(v) => set("corner_radius", Math.max(0, v))} /> {units}
+                    </span>
+                  </>
+                )}
               </div>
 
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Fill</p>
