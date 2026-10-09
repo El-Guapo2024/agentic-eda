@@ -51,6 +51,8 @@ function zoneToCmd(z: Zone): CmdZone {
     hatch_smoothing_value: z.hatch_smoothing_value,
     hatch_hole_min_area: z.hatch_hole_min_area,
     hatch_border_algorithm: z.hatch_border_algorithm,
+    smoothing: z.smoothing,
+    corner_radius: z.corner_radius,
     is_rule_area: z.is_rule_area,
     keepout_tracks: z.keepout_tracks,
     keepout_vias: z.keepout_vias,

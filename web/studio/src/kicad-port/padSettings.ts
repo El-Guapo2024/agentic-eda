@@ -3,7 +3,7 @@
 // Pad Properties (`PAD_TOOL::copyPadSettings` / `pastePadProperties`), Push Pad Properties and the Default Pad
 // Properties dialog. `crates/ops/src/library_editors.rs::import_pad_settings` is the same algorithm on the backend
 // (Push Pad Properties runs there); keep the two identical.
-import type { LibraryPad } from "../api/types";
+import type { LibraryPad, LibraryPadShape, PadConnection } from "../api/types";
 import { padCanHaveNumber } from "./fpEditActions";
 
 /** A pad's settings: everything but the id, the number and the position (what `ImportSettingsFrom` never touches). */
@@ -32,6 +32,8 @@ export const DEFAULT_PAD_MASTER: PadSettings = {
   clearance_override: null,
   thermal_gap_override: null,
   thermal_spoke_width_override: null,
+  zone_connection: null,
+  thermal_spoke_angle_mdeg: null,
 };
 
 /** A pad's settings, as the master pad holds them (`m_Pad_Master->ImportSettingsFrom( pad )`). */
@@ -52,6 +54,8 @@ export function settingsOf(pad: LibraryPad): PadSettings {
     clearance_override: pad.clearance_override,
     thermal_gap_override: pad.thermal_gap_override,
     thermal_spoke_width_override: pad.thermal_spoke_width_override,
+    zone_connection: pad.zone_connection ?? null,
+    thermal_spoke_angle_mdeg: pad.thermal_spoke_angle_mdeg ?? null,
   };
 }
 
@@ -78,4 +82,17 @@ export function importPadSettings(dst: LibraryPad, master: PadSettings): Library
  */
 export function newPadFromMaster(master: PadSettings, number: string, at: { x: number; y: number }): LibraryPad {
   return importPadSettings({ ...master, layers: [...master.layers], number, at }, master);
+}
+
+/** The dialog's "Pad connection" (`m_ZoneConnectionChoice`): the pad's own override of how a zone connects to it; "From parent footprint" is no override. The zone's "thermal reliefs for PTH only" is a zone setting, not a pad one. */
+export const PAD_CONNECTION_OPTIONS: { value: PadConnection | ""; label: string }[] = [
+  { value: "", label: "From parent footprint" },
+  { value: "Full", label: "Solid" },
+  { value: "Thermal", label: "Thermal relief" },
+  { value: "None", label: "None" },
+];
+
+/** `PADSTACK::DefaultThermalSpokeAngleForShape`, degrees: a + for an oval or (rounded) rectangle, an X for everything else. */
+export function defaultSpokeAngleDeg(shape: LibraryPadShape): number {
+  return shape === "oval" || shape === "rect" || shape === "round_rect" || shape === "chamfered_rect" ? 90 : 45;
 }

@@ -931,6 +931,24 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
             p["body"] = json!(crate::body_api::placed_body(&design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             p["pads"] = json!(pads);
+            // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
+            // there are any: `Design::pad_zone_facts` resolves an edit made on the board over an import's and a published library's.
+            if let Some(footprint) = model.footprint_of(part) {
+                let n = footprint.pads.len();
+                let facts: Vec<_> = footprint.pads.iter().enumerate().map(|(i, pad)| (&pad.number, design.pad_zone_facts(&part.reference, &footprint.name, i, n, &pad.number))).collect();
+                let own = |f: &eda_model::ir::PadZoneFacts| f.connection.is_some() || f.thermal_gap.is_some() || f.thermal_spoke_width.is_some() || f.thermal_spoke_angle_mdeg.is_some() || f.pad_clearance.is_some();
+                let fp_level = facts.first().map(|(_, f)| (f.footprint_connection, f.footprint_clearance)).unwrap_or_default();
+                if fp_level.0.is_some() || fp_level.1.is_some() || facts.iter().any(|(_, f)| own(f)) {
+                    p["zone"] = json!({
+                        "connection": fp_level.0,
+                        "clearance": fp_level.1,
+                        "pads": facts.iter().filter(|(_, f)| own(f)).map(|(num, f)| json!({
+                            "num": num, "connection": f.connection, "gap": f.thermal_gap, "spoke_width": f.thermal_spoke_width,
+                            "spoke_angle_mdeg": f.thermal_spoke_angle_mdeg, "clearance": f.pad_clearance,
+                        })).collect::<Vec<_>>(),
+                    });
+                }
+            }
         }
         parts.push(p);
     }
@@ -986,6 +1004,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 // Task item 4: true for a generated teardrop, never a
                 // hand-drawn zone -- see `eda_model::ir::Zone::teardrop`.
                 "teardrop": z.teardrop,
+                // `ZONE_SETTINGS::m_cornerSmoothingType` / `m_cornerRadius`: ZoneDialog's "Outline smoothing".
+                "smoothing": z.smoothing, "corner_radius": z.corner_radius,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable

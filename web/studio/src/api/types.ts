@@ -64,6 +64,18 @@ export interface Part {
    */
   body?: CourtyardBox | null;
   pads?: Pad[];
+  /** The zone-connection facts this placed footprint and its pads carry (`crates/cli/src/studio.rs`); absent when there are none. */
+  zone?: PartZoneFacts;
+}
+
+/** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
+export interface PartZoneFacts {
+  /** `FOOTPRINT::GetLocalZoneConnection`. */
+  connection: PadConnection | null;
+  /** `FOOTPRINT::GetLocalClearance`. */
+  clearance: Um | null;
+  /** The pads that set something of their own. */
+  pads: { num: string; connection: PadConnection | null; gap: Um | null; spoke_width: Um | null; spoke_angle_mdeg: number | null; clearance: Um | null }[];
 }
 
 export interface Track {
@@ -94,6 +106,8 @@ export type PadConnection = "None" | "Thermal" | "Full" | "ThtThermal";
 export type IslandRemovalMode = "Always" | "Never" | "Area";
 /** `ZONE_FILL_MODE`. */
 export type FillMode = "Polygons" | "HatchPattern";
+/** `ZONE_SETTINGS::SMOOTHING_*` (`crates/model/src/ir.rs` `ZoneSmoothing`, snake_case on the wire): how the zone outline's corners are cut before the fill. */
+export type ZoneSmoothing = "none" | "chamfer" | "fillet";
 
 /** `crates/ops/src/lib.rs` `SizeSpec`/`ViaSizeSpec`, `#[serde(tag = "kind")]` -- `edit_tracks_and_vias`'s track-width/via-size fields: either resolve from the item's own net class (`BoardRules::width_of`/`via_diameter_of`/`via_drill_of`), or an explicit value. */
 export type SizeSpec = { kind: "net_class" } | { kind: "value"; um: Um };
@@ -138,6 +152,10 @@ export interface ZoneSettingsFields {
   hatch_smoothing_value: number;
   hatch_hole_min_area: number;
   hatch_border_algorithm: number;
+  /** "Outline smoothing": chamfer or fillet the outline's corners by `corner_radius` before filling (`ZONE::BuildSmoothedPoly`). */
+  smoothing: ZoneSmoothing;
+  /** The chamfer distance or fillet radius, µm; only meaningful with `smoothing`. */
+  corner_radius: Um;
 }
 
 /**
@@ -425,6 +443,10 @@ export interface LibraryPad {
   clearance_override: Um | null;
   thermal_gap_override: Um | null;
   thermal_spoke_width_override: Um | null;
+  /** The dialog's "Pad connection" (`PAD::GetLocalZoneConnection`); absent/`null` is "From parent footprint". */
+  zone_connection?: PadConnection | null;
+  /** The dialog's "Spoke angle" (`PAD::GetThermalSpokeAngle`), millidegrees as in the `.kicad_pcb`; absent/`null` is the shape's default (90 degrees, 45 for a circle). */
+  thermal_spoke_angle_mdeg?: number | null;
 }
 
 /** `crates/model/src/ir.rs` `FootprintAttributes` (`FOOTPRINT_ATTR_T` plus the dialog's two related non-attribute-bit checkboxes). */
@@ -454,6 +476,8 @@ export interface FootprintPropertiesFields {
   reference_visible: boolean;
   value_visible: boolean;
   model: string | null;
+  /** The Clearances tab's "Zone connection" (`FOOTPRINT::GetLocalZoneConnection`); absent/`null` is "inherited". */
+  zone_connection?: PadConnection | null;
 }
 
 /**
@@ -795,6 +819,10 @@ export type Cmd =
   | { op: "flip"; part: string }
   /** Footprint Properties' "Text Placement" field (the refdes label's side) -- does not move anything, so (unlike Flip/Rotate/MoveTo) it does not clear routing. */
   | ({ op: "set_label_side"; part: string } & { side: LabelSide })
+  /** Footprint Properties' "Zone connection" and "Clearance" on a placed footprint (`FOOTPRINT::SetLocalZoneConnection` / `SetLocalClearance`): a whole-panel commit, `null` inherits. */
+  | { op: "set_footprint_zone_connection"; part: string; zone_connection: PadConnection | null; clearance: Um | null }
+  /** Pad Properties' zone fields on the pads numbered `pad` of a placed footprint: "Pad connection", "Relief gap", "Spoke width", "Spoke angle" (millidegrees) and "Clearance". A whole-panel commit, `null` inherits. */
+  | { op: "set_pad_zone_overrides"; part: string; pad: string; zone_connection: PadConnection | null; thermal_gap: Um | null; thermal_spoke_width: Um | null; thermal_spoke_angle_mdeg: number | null; clearance: Um | null }
   | { op: "add_track"; net: string; layer: string; width: Um; pts: PointXY[] }
   | { op: "delete_track"; id: string }
   | { op: "set_track_width"; id: string; width: Um }

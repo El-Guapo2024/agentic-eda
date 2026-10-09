@@ -482,6 +482,8 @@ export const DEFAULT_ZONE_SETTINGS: ZoneSettingsFields = {
   hatch_smoothing_value: 0.1,
   hatch_hole_min_area: 0.15,
   hatch_border_algorithm: 1,
+  smoothing: "none",
+  corner_radius: 0,
 };
 
 export interface StudioState {

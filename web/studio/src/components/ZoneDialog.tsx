@@ -25,7 +25,7 @@
 // existing zone's current settings and commits everything through
 // `edit_zone` alone (outline unchanged -- no point editor yet).
 import { useEffect, useMemo, useState } from "react";
-import type { FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields } from "../api/types";
+import type { FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import { duplicatedZoneOutline } from "../kicad-port/boardControl";
@@ -47,6 +47,13 @@ const PAD_CONNECTION_OPTIONS: { value: PadConnection; label: string }[] = [
   { value: "Thermal", label: "Thermal reliefs" },
   { value: "ThtThermal", label: "Thermal reliefs for PTH only" },
   { value: "None", label: "None" },
+];
+
+/** panel_zone_properties.cpp's "Outline smoothing" (`m_cornerSmoothingChoice`). */
+const SMOOTHING_OPTIONS: { value: ZoneSmoothing; label: string }[] = [
+  { value: "none", label: "None" },
+  { value: "chamfer", label: "Chamfer" },
+  { value: "fillet", label: "Fillet" },
 ];
 
 const ISLAND_REMOVAL_OPTIONS: { value: IslandRemovalMode; label: string }[] = [
@@ -276,6 +283,22 @@ export function ZoneDialog() {
                     </span>
                   </>
                 )}
+              </div>
+
+              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Outline smoothing</p>
+              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
+                <span>Corners</span>
+                <select value={settings.smoothing ?? "none"} onChange={(e) => set("smoothing", e.target.value as ZoneSmoothing)} title="ZONE::BuildSmoothedPoly: the outline's corners are chamfered or filleted before the zone is filled">
+                  {SMOOTHING_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <span>{settings.smoothing === "chamfer" ? "Chamfer distance" : "Fillet radius"}</span>
+                <span>
+                  <LengthInput valueUm={settings.corner_radius ?? 0} unit={units} onChange={(v) => set("corner_radius", Math.max(0, v))} disabled={(settings.smoothing ?? "none") === "none"} /> {units}
+                </span>
               </div>
 
               <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Fill</p>

@@ -506,6 +506,12 @@ pub enum Cmd {
         keepout_copper_pour: bool,
         #[serde(default)]
         keepout_footprints: bool,
+        /// `ZONE_SETTINGS::m_cornerSmoothingType` and `m_cornerRadius` ("Outline smoothing" and its size): the outline's corners
+        /// are chamfered or filleted before the fill (`ZONE::BuildSmoothedPoly`). `None` leaves what the zone has.
+        #[serde(default)]
+        smoothing: Option<eda_model::ir::ZoneSmoothing>,
+        #[serde(default)]
+        corner_radius: Option<Um>,
     },
 
     /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
@@ -1236,6 +1242,10 @@ pub enum Cmd {
         value_visible: bool,
         /// `(model "...")` 3D model path; `None` clears it.
         model: Option<String>,
+        /// The Clearances tab's "Zone connection" (`FOOTPRINT::SetLocalZoneConnection`); `None` is "inherited". Part of the
+        /// whole panel, so a command that leaves it out clears it.
+        #[serde(default)]
+        zone_connection: Option<PadConnection>,
     },
     /// `PCB_ACTIONS::setAnchor` ("Place Footprint Anchor"): `at` (in the
     /// footprint's current local frame) becomes the new origin -- every
@@ -2122,6 +2132,8 @@ impl<'a> Board<'a> {
                 keepout_pads,
                 keepout_copper_pour,
                 keepout_footprints,
+                smoothing,
+                corner_radius,
             } => self.edit_zone(
                 id,
                 net,
@@ -2148,6 +2160,8 @@ impl<'a> Board<'a> {
                 *keepout_pads,
                 *keepout_copper_pour,
                 *keepout_footprints,
+                *smoothing,
+                *corner_radius,
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -2232,8 +2246,8 @@ impl<'a> Board<'a> {
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
-            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model } => {
-                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone())
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, zone_connection } => {
+                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), *zone_connection)
             }
             Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
             Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
@@ -3071,6 +3085,8 @@ impl<'a> Board<'a> {
         keepout_pads: bool,
         keepout_copper_pour: bool,
         keepout_footprints: bool,
+        smoothing: Option<eda_model::ir::ZoneSmoothing>,
+        corner_radius: Option<Um>,
     ) -> Result<(), Vec<CheckResult>> {
         // "" (no net) is normal for a rule area, and allowed for an
         // ordinary zone too -- see `add_zone`'s matching comment.
@@ -3091,6 +3107,9 @@ impl<'a> Board<'a> {
         }
         if fill_mode == FillMode::HatchPattern && (hatch_thickness < min_thickness || hatch_gap < min_thickness) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "hatch thickness and gap must be at least the minimum width")]);
+        }
+        if corner_radius.is_some_and(|r| r < 0) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "the outline smoothing size cannot be negative")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
@@ -3118,6 +3137,12 @@ impl<'a> Board<'a> {
         z.keepout_pads = keepout_pads;
         z.keepout_copper_pour = keepout_copper_pour;
         z.keepout_footprints = keepout_footprints;
+        if let Some(s) = smoothing {
+            z.smoothing = s;
+        }
+        if let Some(r) = corner_radius {
+            z.corner_radius = r;
+        }
         Ok(())
     }
 
@@ -4847,6 +4872,7 @@ impl<'a> Board<'a> {
         reference_visible: bool,
         value_visible: bool,
         model: Option<String>,
+        zone_connection: Option<PadConnection>,
     ) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(name)?;
         fp.description = description;
@@ -4855,6 +4881,7 @@ impl<'a> Board<'a> {
         fp.reference_visible = reference_visible;
         fp.value_visible = value_visible;
         fp.model = model;
+        fp.zone_connection = zone_connection;
         Ok(())
     }
 
