@@ -12,12 +12,14 @@
 // track right under the cursor, but its much larger area loses the
 // size-ratio pass -- see pcb_selection_tool.cpp's own comment: "If the
 // user clicked on a small item within a much larger one...").
-import type { BoardState, Dimension, Pad, Part } from "../../api/types";
+import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
 import { padIds } from "../../kicad-port/pcbItems";
+import { fieldAsText } from "../../kicad-port/fpFields";
+import { layerKeyOf } from "../../kicad-port/layerKey";
 import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 
-export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad";
+export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field";
 
 export interface SelectionCandidate extends GuessCandidate {
   kind: SelectableKind;
@@ -67,7 +69,33 @@ function filterAllows(filter: SelectionFilter, kind: SelectableKind): boolean {
       return filter.dimensions;
     case "pad":
       return filter.pads;
+    // `PCB_SELECTION_TOOL::itemPassesFilter`: a footprint's field is text (`PCB_FIELD_T` shares `m_filter.text`).
+    case "field":
+      return filter.text;
   }
+}
+
+/** The box around a field's text, turned by its angle (`EDA_TEXT::GetTextBox` and the rotation): the same rough per-character width `textBoundingBox` uses. */
+export function textBoundingBoxRotated(f: FieldInfo): { x0: number; y0: number; x1: number; y1: number } {
+  const t = fieldAsText(f);
+  const b = textBoundingBox(t);
+  const rad = (t.angle / 1000) * (Math.PI / 180);
+  if (rad === 0) return b;
+  const [cos, sin] = [Math.cos(rad), Math.sin(rad)];
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const [x, y] of [
+    [b.x0, b.y0],
+    [b.x1, b.y0],
+    [b.x1, b.y1],
+    [b.x0, b.y1],
+  ] as const) {
+    const dx = x - t.x;
+    const dy = y - t.y;
+    xs.push(t.x + dx * cos + dy * sin);
+    ys.push(t.y - dx * sin + dy * cos);
+  }
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys) };
 }
 
 /** How far (um) `(x, y)` is outside a pad -- 0 or less on it: a round pad is a circle or a stadium, any other a box. */
@@ -155,6 +183,17 @@ export function collectSelectionCandidates(
     });
   }
 
+  // Fields: a footprint's Reference, Value and user fields are items of their own. A hidden one cannot be picked, and one of a locked footprint is locked with it.
+  for (const p of board.parts as Part[]) {
+    if (!p.placed || !p.fields?.length) continue;
+    for (const f of p.fields) {
+      if (!f.visible || !f.text) continue;
+      const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
+      const inside = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1;
+      const d = inside ? 0 : Math.hypot(xUm - (x0 + x1) / 2, yUm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
+      consider("field", f.id, d, Math.max((x1 - x0) * (y1 - y0), 1), layerKeyOf(f.layer), p.ref);
+    }
+  }
   for (const t of board.routing?.tracks ?? []) {
     const d = distToPolyline(xUm, yUm, t.pts) - t.width / 2;
     const len = t.pts.reduce((acc, p, i) => (i === 0 ? 0 : acc + Math.hypot(p[0] - t.pts[i - 1]![0], p[1] - t.pts[i - 1]![1])), 0);
@@ -305,6 +344,20 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     const ids = padIds(p);
     p.pads.forEach((pad, i) => consider("pad", ids[i]!, [pad.x - pad.w / 2, pad.y - pad.h / 2, pad.x + pad.w / 2, pad.y + pad.h / 2], pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref));
   }
+  // A field is taken by a box that holds it; its footprint taking it too (the footprint carries its fields) leaves it out (`FilterCollectorForHierarchy`).
+  const fieldHits: BoxSelectHit[] = [];
+  for (const p of board.parts as Part[]) {
+    if (!p.placed || !p.fields?.length) continue;
+    for (const f of p.fields) {
+      if (!f.visible || !f.text) continue;
+      if (!filterAllows(filter, "field") || (!filter.lockedItems && locked.has(p.ref))) continue;
+      if (!layerSelectable(layerKeyOf(f.layer), layerVisible, activeLayer, highContrast)) continue;
+      const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
+      if (boxMatches([x0, y0, x1, y1], selBox, crossing)) fieldHits.push({ kind: "field", id: f.id });
+    }
+  }
+  const takenParts = new Set(out.filter((h) => h.kind === "part").map((h) => h.id));
+  out.push(...fieldHits.filter((h) => !takenParts.has(h.id.slice(0, h.id.indexOf(":")))));
 
   // `PCB_SELECTION_TOOL::SelectMultiple`: "If we selected nothing but pads, allow them to be selected" -- a box that takes a footprint (or anything else)
   // never takes the pads inside it as well.

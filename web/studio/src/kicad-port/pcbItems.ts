@@ -10,8 +10,9 @@
 import type { BoardState, BoardText, Pad, Part, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { circumcircle } from "./trackArc";
+import { fieldAsText, fieldById } from "./fpFields";
 
-export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad";
+export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field";
 
 /**
  * The id a pad is selected, highlighted and listed under: `REF.NUMBER`, with `#k` after it for the k-th pad (from 2) of the footprint that
@@ -55,6 +56,8 @@ export function itemKind(board: BoardState, id: string): ItemKind | null {
   if (dr?.dimensions.some((d) => d.id === id)) return "dimension";
   if (dr?.groups.some((g) => g.id === id)) return "group";
   if (id.includes(".") && padById(board, id)) return "pad";
+  // A footprint's Reference, Value or user field (`PCB_FIELD`): an item of its own, `REF:Name`.
+  if (id.includes(":") && fieldById(board, id)) return "field";
   return null;
 }
 
@@ -112,6 +115,10 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       const hit = padById(board, id);
       return hit ? [hit.pad.x, hit.pad.y] : null;
     }
+    case "field": {
+      const hit = fieldById(board, id);
+      return hit ? [hit.field.x, hit.field.y] : null;
+    }
     default:
       return null;
   }
@@ -164,6 +171,10 @@ export function itemBounds(board: BoardState, id: string): [number, number, numb
     case "pad": {
       const hit = padById(board, id);
       return hit ? [hit.pad.x - hit.pad.w / 2, hit.pad.y - hit.pad.h / 2, hit.pad.x + hit.pad.w / 2, hit.pad.y + hit.pad.h / 2] : null;
+    }
+    case "field": {
+      const hit = fieldById(board, id);
+      return hit && hit.field.text !== "" ? textBounds(fieldAsText(hit.field)) : hit ? [hit.field.x, hit.field.y, hit.field.x, hit.field.y] : null;
     }
     default:
       return null;

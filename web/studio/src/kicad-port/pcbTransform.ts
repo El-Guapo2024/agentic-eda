@@ -16,6 +16,7 @@
 // Pure: no store, no DOM. Unit-tested in pcbTransform.test.ts.
 
 import type { BoardState, Cmd, PointXY } from "../api/types";
+import { parseFieldId } from "./fpFields";
 import { itemBounds, itemKind, itemPosition, padParent, unionBounds } from "./pcbItems";
 
 export type FlipDirection = "left_right" | "top_bottom";
@@ -40,6 +41,9 @@ export function groupOf(board: BoardState, id: string): string | null {
 export function isLocked(board: BoardState, id: string): boolean {
   const locked = new Set(board.locked ?? []);
   if (locked.has(id)) return true;
+  // A footprint's field is as locked as the footprint (`PCB_TEXT::IsLocked`: "|| GetParentFootprint()->IsLocked()").
+  const field = parseFieldId(id);
+  if (field && locked.has(field.ref)) return true;
   const group = board.drawings?.groups.find((g) => g.id === id);
   if (group) return group.member_ids.some((m) => locked.has(m));
   const parent = groupOf(board, id);
@@ -68,7 +72,12 @@ export function editableSelection(board: BoardState, ids: readonly string[], opt
     }
     out.push(id);
   }
-  return { ids: out, lockedOut };
+  // `FilterCollectorForHierarchy`: a field travels with its footprint, so it is not moved on its own when the footprint is in the selection too.
+  const kept = out.filter((id) => {
+    const field = parseFieldId(id);
+    return !(field && itemKind(board, id) === "field" && out.includes(field.ref));
+  });
+  return { ids: kept, lockedOut };
 }
 
 // ------------------------------------------------------------ reference points

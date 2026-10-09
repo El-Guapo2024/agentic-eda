@@ -74,7 +74,7 @@ pub(crate) fn attrs_json(design: &Design, fp: &FootprintInstance, footprint: &Fo
 fn shape_name(s: PadShape) -> &'static str {
     match s {
         PadShape::Rect => "rect",
-        PadShape::RoundRect => "roundrect",
+        PadShape::RoundRect => "round_rect",
         PadShape::Circle => "circle",
         PadShape::Oval => "oval",
     }
@@ -84,7 +84,7 @@ fn kind_name(k: PadKind) -> &'static str {
     match k {
         PadKind::Smd => "smd",
         PadKind::ThroughHole => "through_hole",
-        PadKind::NonPlatedHole => "npth",
+        PadKind::NonPlatedHole => "non_plated_hole",
     }
 }
 
@@ -131,6 +131,8 @@ pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintI
         "paste_margin": edit.and_then(|e| e.solder_paste_margin),
         "paste_ratio": edit.and_then(|e| e.solder_paste_margin_ratio),
         "edited": edit.is_some(),
+        // The edit as stored, so the dialog sends back the overrides that are already there along with the one it changes.
+        "edit": edit.and_then(|e| serde_json::to_value(e).ok()),
     })
 }
 

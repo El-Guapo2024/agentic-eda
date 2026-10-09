@@ -5,10 +5,10 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, Dimension, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
+import type { BoardState, Dimension, DrcViolation, FieldInfo, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { boundsOfPoints, hairlineUm } from "./view";
-import { layerColor, copperColorKey, drawOrder } from "./layers";
+import { layerColor, layerKeyOf, copperColorKey, drawOrder } from "./layers";
 import { constrainByAngleMode } from "./routing";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
 import { snapPoint } from "./gridHelper";
@@ -18,6 +18,7 @@ import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
+import { fieldAsText } from "../../kicad-port/fpFields";
 import { padIds } from "../../kicad-port/pcbItems";
 import type { LengthUnit } from "../../state/units";
 import { measureLabel } from "../../kicad-port/measureRuler";
@@ -135,9 +136,32 @@ function pathForPad(ctx: CanvasRenderingContext2D, pad: Pad) {
   if (isCircle) {
     ctx.arc(pad.x, pad.y, pad.w / 2, 0, Math.PI * 2);
   } else {
-    const r = pad.round ? Math.min(pad.w, pad.h) / 2 : Math.min(pad.w, pad.h) * 0.15;
+    // A pad that says what shape it is (`pad.shape`) is drawn as that: a rectangle has square corners, a rounded rectangle the radius of its ratio
+    // (KiCad's 25% when it has none), an oval a stadium. One that does not (an older backend) keeps the rounded box it was always drawn as.
+    const shorter = Math.min(pad.w, pad.h);
+    const r = pad.shape === "rect" ? 0 : pad.shape === "round_rect" ? shorter * (pad.ratio ?? 0.25) : pad.round ? shorter / 2 : shorter * 0.15;
     ctx.roundRect(pad.x - pad.w / 2, pad.y - pad.h / 2, pad.w, pad.h, r);
   }
+}
+
+/** A through-hole pad's hole: a circle of the drill, or the slot of an oblong one, at the pad's position (not the copper's centre, which an offset moves). Null when there is none to draw. */
+function pathForHole(ctx: CanvasRenderingContext2D, pad: Pad): boolean {
+  const cx = pad.px ?? pad.x;
+  const cy = pad.py ?? pad.y;
+  ctx.beginPath();
+  if (pad.slot) {
+    // the slot lies along the pad's longer side (KiCad draws an oblong hole along the axis it is longer in, turned with the pad)
+    const [sw, sh] = pad.slot;
+    const turned = pad.w < pad.h;
+    const [w, h] = turned ? [sh, sw] : [sw, sh];
+    ctx.roundRect(cx - w / 2, cy - h / 2, w, h, Math.min(w, h) / 2);
+    return true;
+  }
+  if (pad.drill) {
+    ctx.arc(cx, cy, pad.drill / 2, 0, Math.PI * 2);
+    return true;
+  }
+  return false;
 }
 
 // The full-viewport background fill happens once in Canvas.tsx, in
@@ -261,9 +285,19 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.fill();
     }
     if (pad.th) {
-      ctx.strokeStyle = layerColor("pad_th");
-      ctx.lineWidth = hairlineUm(view, 1);
-      ctx.stroke();
+      // The hole punched through the copper (the board's background shows in it), with the wall around it, when the backend says how big it is.
+      if (pathForHole(ctx, pad)) {
+        ctx.fillStyle = layerColor("background");
+        ctx.fill();
+        ctx.strokeStyle = layerColor("pad_th");
+        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.stroke();
+      } else {
+        pathForPad(ctx, pad);
+        ctx.strokeStyle = layerColor("pad_th");
+        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.stroke();
+      }
     }
     // Net name, only once the pad is legible on screen.
     const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
@@ -291,32 +325,62 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     });
   }
 
-  // Reference designator.
-  const fs = Math.max(500, Math.min(900, Math.min(x1 - x0, y1 - y0) * 0.45));
-  const cx = (x0 + x1) / 2,
-    cy = (y0 + y1) / 2;
-  let tx = cx,
-    ty = y0 - fs * 0.3,
-    align: CanvasTextAlign = "center";
-  if (part.label === "below") ty = y1 + fs * 0.95;
-  if (part.label === "left") {
-    tx = x0 - fs * 0.3;
-    ty = cy + fs * 0.35;
-    align = "right";
-  }
-  if (part.label === "right") {
-    tx = x1 + fs * 0.3;
-    ty = cy + fs * 0.35;
-    align = "left";
-  }
-  const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
-  if (opts.layerVisible[silkKey] !== false) {
-    withAlpha(ctx, layerAlpha(opts, silkKey), () => {
-      drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : fs / 6, color: layerColor(silkKey) });
-    });
+  // The Reference, the Value and the user fields are drawn by `drawFields` once the backend says where they are (`part.fields`); an older backend's footprint has
+  // only its reference, drawn beside the courtyard the way it always was.
+  if (!part.fields) {
+    const fs = Math.max(500, Math.min(900, Math.min(x1 - x0, y1 - y0) * 0.45));
+    const cx = (x0 + x1) / 2,
+      cy = (y0 + y1) / 2;
+    let tx = cx,
+      ty = y0 - fs * 0.3,
+      align: CanvasTextAlign = "center";
+    if (part.label === "below") ty = y1 + fs * 0.95;
+    if (part.label === "left") {
+      tx = x0 - fs * 0.3;
+      ty = cy + fs * 0.35;
+      align = "right";
+    }
+    if (part.label === "right") {
+      tx = x1 + fs * 0.3;
+      ty = cy + fs * 0.35;
+      align = "left";
+    }
+    const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
+    if (opts.layerVisible[silkKey] !== false) {
+      withAlpha(ctx, layerAlpha(opts, silkKey), () => {
+        drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : fs / 6, color: layerColor(silkKey) });
+      });
+    }
+
   }
 
   ctx.restore();
+}
+
+/**
+ * A footprint's fields (`PCB_FIELD`: Reference, Value, user fields) as the board has them -- position, size, thickness, layer, angle, justification, mirroring --
+ * in KiCad's stroke font. A hidden field is not drawn (it is when the footprint is selected in KiCad, with "Force show fields when footprint selected" on; the
+ * Properties panel and the dialog show it). `GetDrawRotation`'s keep-upright rule has already been applied in `fieldAsText`.
+ */
+export function drawFields(ctx: CanvasRenderingContext2D, view: ViewTransform, fields: readonly FieldInfo[], opts: PaintOptions) {
+  for (const f of fields) {
+    const selected = opts.selection.has(f.id);
+    if (!f.visible && !selected) continue;
+    const key = layerKeyOf(f.layer);
+    if (!f.text || opts.layerVisible[key] === false) continue;
+    const t = fieldAsText(f);
+    const color = selected ? layerColor("selection") : layerColor(realLayerKey(f.layer));
+    // millideg, KiCad's counter-clockwise; the canvas turns clockwise.
+    const angleRad = (-t.angle / 1000) * (Math.PI / 180);
+    // The anchor is where the text box is centred (or its top or bottom edge sits); the font draws from the baseline.
+    const sizeUm = Math.max(f.h, hairlineUm(view, 8));
+    const down = f.valign > 0 ? 0 : f.valign < 0 ? 0.72 * sizeUm : 0.36 * sizeUm;
+    const x = f.x - down * Math.sin(angleRad);
+    const y = f.y + down * Math.cos(angleRad);
+    withAlpha(ctx, layerAlpha(opts, key) * (f.visible ? 1 : 0.5), () => {
+      drawStrokeText(ctx, t.content, x, y, { sizeUm, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : Math.max(f.thickness, sizeUm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color });
+    });
+  }
 }
 
 function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
@@ -1089,6 +1153,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   for (const key of drawOrder()) byLayer[key]?.();
   // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
   for (const part of board.parts) drawFootprint(ctx, view, part, opts);
+  drawFields(ctx, view, board.parts.flatMap((p) => (p.placed ? (p.fields ?? []) : [])), opts);
   // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
   drawShapes(ctx, view, board, opts);
   drawTexts(ctx, view, board, opts);
@@ -1102,6 +1167,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     const moving = copper(carry.moving);
     for (const key of drawOrder()) moving[key]?.();
     for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);
+    drawFields(ctx, view, [...carry.moving.parts.flatMap((p) => p.fields ?? []), ...carry.fields], own);
     drawShapes(ctx, view, carry.moving, own);
     drawTexts(ctx, view, carry.moving, own);
     drawDimensions(ctx, view, carry.moving, own);

@@ -15,7 +15,7 @@
 
 use super::pcb_transform::{flip_layer, side_specific, FlipDirection, Xform};
 use super::Board;
-use eda_model::fp_edit::{default_reference_layout, default_value_layout, pad_index, parse_field_id, patched_footprint, FieldLayout, FootprintAttrs, FootprintEdit, PadEdit, UserField, REFERENCE, VALUE};
+use eda_model::fp_edit::{default_reference_layout, default_value_layout, field_id, pad_index, parse_field_id, patched_footprint, FieldLayout, FootprintAttrs, FootprintEdit, PadEdit, UserField, REFERENCE, VALUE};
 use eda_model::ir::{FootprintInstance, Um};
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
@@ -138,6 +138,41 @@ impl Board<'_> {
             // The footprint's DNP and BOM flags are the symbol's too: see `Design::sync_symbol_bom_flags`.
             let edit = [slot.clone()];
             self.design.sync_symbol_bom_flags(&edit);
+        }
+        self.tidy_edit(part);
+        Ok(())
+    }
+
+    /// `Cmd::EditBoardField`: one field's layout and/or text.
+    pub(crate) fn edit_board_field(&mut self, part: &str, name: &str, layout: Option<&FieldLayout>, text: Option<&str>) -> Result<(), Vec<CheckResult>> {
+        self.require_placed(part)?;
+        if layout.is_none() && text.is_none() {
+            return Err(fail("ops_bad_field", &field_id(part, name), "nothing to change: give a layout, a text, or both"));
+        }
+        let user = name != REFERENCE && name != VALUE;
+        if user && !self.design.footprint_edit(part).is_some_and(|e| e.fields.iter().any(|f| f.name == name)) {
+            return Err(fail("ops_unknown_item", &field_id(part, name), format!("{part} has no field called {name:?}")));
+        }
+        if text.is_some() && !user {
+            return Err(fail("ops_bad_field", &field_id(part, name), format!("The text of {name} comes from the schematic: edit the symbol")));
+        }
+        if let Some(l) = layout {
+            self.check_layout(&format!("{part} {name}"), l)?;
+        }
+        let slot = self.edit_slot(part);
+        match name {
+            REFERENCE => slot.reference = layout.cloned(),
+            VALUE => slot.value = layout.cloned(),
+            other => {
+                if let Some(f) = slot.fields.iter_mut().find(|f| f.name == other) {
+                    if let Some(l) = layout {
+                        f.layout = l.clone();
+                    }
+                    if let Some(t) = text {
+                        f.text = t.to_string();
+                    }
+                }
+            }
         }
         self.tidy_edit(part);
         Ok(())

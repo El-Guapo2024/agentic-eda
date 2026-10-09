@@ -1127,6 +1127,7 @@ fn cmd_line(c: &Cmd) -> String {
             }
             format!("footprint edit {part} ({})", what.join(", "))
         }
+        Cmd::EditBoardField { part, name, .. } => format!("field edit {part}:{name}"),
         Cmd::EditBoardPad { part, edit } => format!("pad edit {}", edit.pad_id(part)),
 
         // No real `eda board` CLI subcommand parses these yet (the studio
@@ -1360,6 +1361,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetZoneName { .. } => "zone",
         Cmd::ReplaceShape { .. } => "shape",
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
+        Cmd::EditBoardField { .. } => "field-edit",
         Cmd::EditBoardPad { .. } => "pad-edit",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",

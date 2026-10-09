@@ -249,3 +249,35 @@ fn a_field_of_a_footprint_that_is_not_on_the_board_is_unknown_and_a_deleted_foot
     assert!(edit_of(&b, "U2").is_none(), "the edit goes with the footprint");
     let _ = (design, drawings);
 }
+
+#[test]
+fn one_field_is_edited_on_its_own_and_edits_of_two_fields_of_one_footprint_compose() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let user = |name: &str, y: Um| UserField { name: name.into(), text: format!("{name} text"), layout: layout(0, y, "F.Fab") };
+    b.apply(&set_fields("U1", None, None, Some(vec![user("Vendor", 2_000), user("Rev", 3_000)]), None)).unwrap();
+
+    let mut vendor = layout(500, 2_500, "F.Fab");
+    vendor.visible = true;
+    let mut rev = layout(-500, 3_500, "F.SilkS");
+    rev.size = (800, 800);
+    b.apply(&Cmd::Batch {
+        cmds: vec![
+            Cmd::EditBoardField { part: "U1".into(), name: "Vendor".into(), layout: Some(vendor.clone()), text: Some("ACME".into()) },
+            Cmd::EditBoardField { part: "U1".into(), name: "Rev".into(), layout: Some(rev.clone()), text: None },
+        ],
+    })
+    .unwrap();
+    let e = edit_of(&b, "U1").unwrap();
+    assert_eq!((e.fields[0].layout.clone(), e.fields[0].text.as_str()), (vendor, "ACME"));
+    assert_eq!((e.fields[1].layout.clone(), e.fields[1].text.as_str()), (rev, "Rev text"), "the second edit did not undo the first");
+
+    // The Reference's layout is set; its text is not the board's to change.
+    let mut r = layout(0, -3_000, "F.SilkS");
+    r.bold = true;
+    b.apply(&Cmd::EditBoardField { part: "U1".into(), name: "Reference".into(), layout: Some(r.clone()), text: None }).unwrap();
+    assert_eq!(edit_of(&b, "U1").unwrap().reference, Some(r.clone()));
+    assert!(refusal(&mut b, Cmd::EditBoardField { part: "U1".into(), name: "Reference".into(), layout: None, text: Some("R9".into()) }).contains("comes from the schematic"));
+    assert!(refusal(&mut b, Cmd::EditBoardField { part: "U1".into(), name: "Nope".into(), layout: Some(r), text: None }).contains("no field called"));
+    assert!(refusal(&mut b, Cmd::EditBoardField { part: "U1".into(), name: "Value".into(), layout: None, text: None }).contains("nothing to change"));
+}

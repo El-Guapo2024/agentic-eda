@@ -747,6 +747,17 @@ pub enum Cmd {
         #[serde(default)]
         attrs: Option<eda_model::fp_edit::FootprintAttrs>,
     },
+    /// One field of a footprint on its own (the Properties panel's rows of a `PCB_FIELD`): the Reference, the Value or the user field `name` gets
+    /// `layout` (its position, size, layer, ...) and/or, for a user field, `text`. The Reference and Value texts come from the schematic and
+    /// are not edited here. Unlike `EditBoardFootprint` it leaves every other field alone, so edits of two fields of one footprint compose.
+    EditBoardField {
+        part: String,
+        name: String,
+        #[serde(default)]
+        layout: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        text: Option<String>,
+    },
     /// `DIALOG_PAD_PROPERTIES::TransferDataFromWindow` for a pad on the board (the footprint editor's own is `EditPad`): the pad of `part` that `edit` names (its number, and which of the pads that
     /// share it) gets `edit` as its changes -- shape, size, hole, offset, corner radius, clearance and solder mask and paste margins. An
     /// edit that changes nothing puts the pad back as the library has it.
@@ -1588,7 +1599,7 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
-            Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
+            Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2135,6 +2146,7 @@ impl<'a> Board<'a> {
             Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
             Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
             Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
+            Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
             Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),

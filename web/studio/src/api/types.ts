@@ -20,13 +20,85 @@ export type LabelSide = "above" | "below" | "left" | "right";
 export interface Pad {
   num: string;
   net: string | null;
+  /** The copper's centre on the board (the pad's position moved by its shape offset, if it has one). */
   x: Um;
   y: Um;
+  /** The copper's extent on the board (a turned pad's bounding box). */
   w: Um;
   h: Um;
   round: boolean;
   /** Through-hole (drilled) vs. surface-mount. */
   th: boolean;
+  /**
+   * What the Pad Properties dialog edits (crates/cli/src/fp_json.rs `pad_json`; absent from an older backend): the pad's id (`REF.NUM[#k]`),
+   * its shape and type, its size un-turned, its own rotation (clockwise degrees), the corner ratio, the hole, the pad's position (where the
+   * hole is: differs from `x`, `y` only with an offset), and the overrides that were set on it.
+   */
+  id?: string;
+  shape?: PadShapeName;
+  kind?: PadKindName;
+  size?: [Um, Um];
+  rot?: Degrees;
+  ratio?: number | null;
+  drill?: Um | null;
+  slot?: [Um, Um] | null;
+  px?: Um;
+  py?: Um;
+  offset?: [Um, Um] | null;
+  clearance?: Um | null;
+  mask_margin?: Um | null;
+  paste_margin?: Um | null;
+  paste_ratio?: number | null;
+  /** True once the pad has an edit of its own in the design. */
+  edited?: boolean;
+  /** The edit as stored (`PadEditCmd`), for the dialog to send back with the one change it makes. */
+  edit?: PadEditCmd | null;
+}
+
+/** The engine's four pad shapes (`eda_model::PadShape`) and three pad types (`PadKind`), as the studio state names them. */
+export type PadShapeName = "rect" | "round_rect" | "circle" | "oval";
+export type PadKindName = "smd" | "through_hole" | "non_plated_hole";
+
+/**
+ * A footprint's field as laid out on the board (crates/cli/src/fp_json.rs `field_json`): the Reference, the Value or a user field. `x`, `y` and
+ * `angle` are on the board (`angle` is KiCad's: counter-clockwise on the screen, millidegrees); `lx`, `ly` and `langle` are the same in the footprint's own
+ * frame, which is what `edit_board_footprint` takes.
+ */
+export interface FieldInfo {
+  id: string;
+  name: string;
+  text: string;
+  x: Um;
+  y: Um;
+  angle: number;
+  w: Um;
+  h: Um;
+  thickness: Um;
+  layer: string;
+  visible: boolean;
+  halign: -1 | 0 | 1;
+  valign: -1 | 0 | 1;
+  mirror: boolean;
+  bold: boolean;
+  italic: boolean;
+  upright: boolean;
+  knockout: boolean;
+  lx: Um;
+  ly: Um;
+  langle: number;
+  /** True once the layout is stored in the design; false for the default placement. */
+  custom: boolean;
+}
+
+/** `FootprintAttrs` as the studio state names them. */
+export interface FootprintAttrsInfo {
+  kind: "unspecified" | "smd" | "through_hole";
+  board_only: boolean;
+  exclude_from_pos_files: boolean;
+  exclude_from_bom: boolean;
+  dnp: boolean;
+  allow_missing_courtyard: boolean;
+  custom: boolean;
 }
 
 /** `[minX, minY, maxX, maxY]`, footprint-local, µm. */
@@ -64,6 +136,10 @@ export interface Part {
    */
   body?: CourtyardBox | null;
   pads?: Pad[];
+  /** Reference, Value and the user fields, as they are on the board (absent from an older backend). */
+  fields?: FieldInfo[];
+  /** The attributes in effect: the edit's, else derived from the pads and the schematic symbol. */
+  attrs?: FootprintAttrsInfo;
 }
 
 export interface Track {
@@ -110,7 +186,7 @@ export type ViaSizeSpec = { kind: "net_class" } | { kind: "value"; diameter: Um;
  * entered.
  */
 export type ArrayGeometry =
-  | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean }
+  | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean; reverse_alternate?: boolean }
   | { kind: "circular"; center: PointXY; count: number; angle_millideg: number; angle_offset_millideg?: number; clockwise?: boolean; rotate_items?: boolean };
 
 /**
@@ -788,6 +864,56 @@ export interface CmdZone extends Partial<ZoneSettingsFields>, Partial<RuleAreaFi
 
 export type ZonePriorityMove = "top" | "raise" | "lower" | "bottom";
 
+/** `eda_model::fp_edit::FieldLayout`: a field's text in the footprint's own frame (`at` and `angle` as `FieldInfo.lx`, `ly`, `langle`). */
+export interface FieldLayoutCmd {
+  at: PointXY;
+  angle?: number;
+  size: [Um, Um];
+  thickness?: Um;
+  layer: string;
+  visible?: boolean;
+  halign?: -1 | 0 | 1;
+  valign?: -1 | 0 | 1;
+  mirror?: boolean;
+  bold?: boolean;
+  italic?: boolean;
+  keep_upright?: boolean;
+  knockout?: boolean;
+  /** The text shown when it is not the footprint's reference or the part's value. */
+  text?: string | null;
+}
+export interface UserFieldCmd {
+  name: string;
+  text: string;
+  layout: FieldLayoutCmd;
+}
+/** `eda_model::fp_edit::FootprintAttrs`. */
+export interface FootprintAttrsCmd {
+  kind: "unspecified" | "smd" | "through_hole";
+  board_only: boolean;
+  exclude_from_pos_files: boolean;
+  exclude_from_bom: boolean;
+  dnp: boolean;
+  allow_missing_courtyard: boolean;
+}
+/** `eda_model::fp_edit::PadEdit`: the changes to one pad; a key left out is the pad as the library has it. */
+export interface PadEditCmd {
+  number: string;
+  nth?: number;
+  kind?: "smd" | "through_hole" | "non_plated_hole";
+  shape?: "rect" | "round_rect" | "circle" | "oval";
+  size?: [Um, Um];
+  drill?: Um;
+  drill_slot?: [Um, Um];
+  offset?: PointXY;
+  rot?: number;
+  roundrect_ratio?: number;
+  clearance?: Um;
+  solder_mask_margin?: Um;
+  solder_paste_margin?: Um;
+  solder_paste_margin_ratio?: number;
+}
+
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
@@ -840,16 +966,13 @@ export type Cmd =
   /** Group Properties' OK (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): rename the group and make its members exactly `member_ids` (each pulled out of any other group; under 2 members dissolves it). */
   | { op: "edit_group"; id: string; name: string; member_ids: string[] }
   /**
-   * Ctrl+T (task item 6): `pcbnew.Array.createArray`. `arrange: false`
-   * (the dialog's "Duplicate" default) creates `geometry`'s size minus
-   * one new copies of each resolved track/via/zone/shape/text (never a
-   * part or a group -- same scope `duplicate` already has); `arrange:
-   * true` ("Arrange selection") repositions the given `ids` into the
-   * array's own slots instead, creating nothing -- a placed part is
-   * allowed there, since that only ever moves something that already
-   * exists. See `ArrayGeometry`'s own doc for the angle-sign convention.
+   * Ctrl+T: `pcbnew.Array.createArray` (crates/ops/src/array.rs). `arrange: false` (the dialog's "Duplicate selection") makes a copy of the whole
+   * selection for every point of the array but one -- footprints as new parts, tracks, vias, zones, graphics, text, dimensions, groups -- and
+   * leaves the selection on the first; `arrange: true` ("Arrange selection") makes nothing and puts the given `ids`, in order, on the points.
+   * `reannotate` (default true) is "Assign unique reference designators"; false is "Keep original reference designators". See `ArrayGeometry`'s
+   * own doc for the angle-sign convention.
    */
-  | { op: "create_array"; ids: string[]; geometry: ArrayGeometry; arrange?: boolean }
+  | { op: "create_array"; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; reannotate?: boolean }
   /** Task item 7: `pcbnew/pcb_dimension.{h,cpp}`. `id` on `dimension`, if sent, is ignored. */
   | { op: "add_dimension"; dimension: CmdDimension }
   | { op: "delete_dimension"; id: string }
@@ -962,6 +1085,15 @@ export type Cmd =
   | { op: "set_item_net"; ids: string[]; net: string }
   | { op: "set_zone_name"; id: string; name: string }
   | { op: "replace_shape"; id: string; shape: CmdShape }
+  /**
+   * The Footprint Properties and Pad Properties dialogs' OK, and the Properties panel's footprint, field and pad rows (crates/ops/src/fp_edit.rs): what is given
+   * replaces what the footprint has -- the Reference layout, the Value layout, the whole list of user fields, the attributes (type, board only, exclude from
+   * position files and BOM, DNP, exempt from the courtyard requirement); what is left out stays. `edit_board_pad` replaces the edit of one pad (an edit that
+   * changes nothing puts the pad back as the library has it). `move_items`, `rotate_items` and `flip_items` take a field's id (`REF:Reference`).
+   */
+  | { op: "edit_board_footprint"; part: string; reference?: FieldLayoutCmd; value?: FieldLayoutCmd; fields?: UserFieldCmd[]; attrs?: FootprintAttrsCmd }
+  | { op: "edit_board_field"; part: string; name: string; layout?: FieldLayoutCmd; text?: string }
+  | { op: "edit_board_pad"; part: string; edit: PadEditCmd }
   /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
   | { op: "batch"; cmds: Cmd[] }
   /** `Cmd::OnSheet`: run a schematic command on the sheet at `sheet` (the `/`-joined `SheetInstance::id`s from the root, what `GET /api/schematic?sheet=` takes) instead of the root. */

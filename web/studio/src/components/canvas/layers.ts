@@ -101,6 +101,8 @@ export const STANDARD_LAYERS: Array<{ key: string; label: string }> = [
   { key: "board_edge", label: "Edge.Cuts" },
 ];
 
+export { layerKeyOf } from "../../kicad-port/layerKey";
+
 export function layerColor(bucketOrRealKey: string): string {
   const realKey = BUCKET_TO_KICAD_KEY[bucketOrRealKey] ?? bucketOrRealKey;
   if (colors.meta.generated) {
