@@ -18,6 +18,9 @@ pub fn placed(ctx: &Ctx, reference: &str) -> Placed {
     let part = ctx.model.part(reference).unwrap_or_else(|| panic!("module part {reference} is in the model"));
     let kept = ctx.keep.symbols.get(reference);
     let lib_id = match kept.map(|k| k.lib_id.clone()).filter(|l| !l.is_empty()) {
+        // a symbol drawn before generated symbols (`eda:<ref>`, the box the layout engine sized) is drawn as a generated one: the sheet
+        // is laid out afresh round it anyway
+        Some(kept_id) if kept_id.starts_with("eda:") => ctx.model.lib_id_of(part),
         Some(kept_id) => ctx.model.fitting_lib_id(part, kept_id),
         None => ctx.model.lib_id_of(part),
     };

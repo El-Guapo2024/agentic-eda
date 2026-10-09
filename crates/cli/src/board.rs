@@ -2899,6 +2899,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The user's own board was drawn before generated symbols (its symbols name no library symbol, its fields sit at the page's corner): Tools >
+    /// Reorganize into Module Sheets draws the new sheets with generated symbols and fields where KiCad puts them, and nothing on any of them
+    /// overlaps anything else as KiCad draws it.
+    #[test]
+    fn reorganizing_the_users_board_gives_sheets_with_nothing_overlapping() {
+        let dir = scratch("legacy_overlap");
+        setup_mcu30_users_board(&dir);
+        step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(design.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.symbols.iter()).all(|s| !s.lib_id.starts_with("eda:")), "no legacy box survives on the new sheets");
+        let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-08", title: "t" }, "root.kicad_sch").expect("the sheets export");
+        let reports = eda_kicad::sch_overlap::check_tree(&files).expect("the exported sheets read back");
+        let found: Vec<String> = reports.iter().filter(|r| r.count() > 0).map(|r| r.render()).collect();
+        assert!(found.is_empty(), "overlaps on the reorganized sheets:\n{}", found.join("\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Tools > Reorganize into Module Sheets on the user's own board: the old flat drawing reads as loose pins, so the new sheets are drawn from the
     /// intent's nets -- and every one of them, with its name, is still a net the tracks are on. The board stays routable.
     #[test]
