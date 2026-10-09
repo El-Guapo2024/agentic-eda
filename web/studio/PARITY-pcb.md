@@ -863,7 +863,7 @@ Before this section the pane was a read-only key/value summary of one footprint 
 `board_item.cpp`, `board_connected_item.cpp`, `footprint.cpp`, `pad.cpp`, `pcb_track.cpp`, `zone.cpp`, `pcb_text.cpp`, `eda_text.cpp`, `pcb_shape.cpp`, `eda_shape.cpp`,
 `pcb_dimension.cpp` and `pcb_group.cpp` (snapshot `8303b2ad`). The registry and the grid logic are pure (`kicad-port/propertyManager.ts`, `propertyGrid.ts`, `pcbProperties.ts`);
 `components/panels/PropertyGrid.tsx` draws the grid and `PropertiesPanel.tsx` feeds it the board's selection. The schematic's pane is the same grid over its own registrations
-(`PARITY-sch.md` section 16).
+(`PARITY-sch.md` section 17).
 
 | Behavior | Status | KiCad file:function |
 |---|---|---|

@@ -551,7 +551,7 @@ what real KiCad writes and reads was checked with kicad-cli instead of the KiCad
 Limits, recorded rather than hidden: hierarchical sheets are not copied or pasted; a field's position and size and a label's rotation, size and justification are not in the IR (`GAPS.md` item 12), so a copy carries none and
 a paste from KiCad drops them; a wire's stroke and a junction's size are the defaults; a symbol drawn with an alternate body style shows its normal one (the engine's library symbol has one); a pasted symbol is a new part, unplaced on the PCB.
 
-## 16. The Properties panel (`sch_properties_panel.cpp`, `properties_panel.cpp`, and the `PROPERTY_MANAGER` registrations of eeschema)
+## 17. The Properties panel (`sch_properties_panel.cpp`, `properties_panel.cpp`, and the `PROPERTY_MANAGER` registrations of eeschema)
 
 The pane was a read-only summary of one symbol (reference, value, footprint, MPN, pins, nets). It is now the same property grid as the board's (`PARITY-pcb.md` section 23: the registry, the merge of a selection,
 `<...>`, one edit as one batch and so one undo step, Enter / Escape, validators), registered for the schematic's classes from `SCH_ITEM_DESC`, `SCH_SYMBOL_DESC`, `SCH_LABEL_DESC`, `SCH_DIRECTIVE_LABEL_DESC`,

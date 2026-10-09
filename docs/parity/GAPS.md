@@ -204,7 +204,7 @@ New (the residual of old #11; blocks #26). **Open.** Hit: every board (silkscree
 ### 10. The Properties panel is a read-only summary
 New (old #11). **Mostly done (2026-10-08).** Hit: constantly. Blocks: no longer; the dialogs and the pane edit the same things. WP3, size M (done).
 - Done (`kicad-port/{propertyManager,propertyGrid,pcbProperties,schItemProperties}.ts`, `components/panels/{PropertyGrid,PropertiesPanel}.tsx`; `PARITY-pcb.md` section 23, `PARITY-sch.md`
-  section 16): the pane is KiCad's property grid. `PROPERTY_MANAGER` is ported (the class registry, `InheritsAfter` / `Mask` / `ReplaceProperty` / `OverrideAvailability`, the walk that orders
+  section 17): the pane is KiCad's property grid. `PROPERTY_MANAGER` is ported (the class registry, `InheritsAfter` / `Mask` / `ReplaceProperty` / `OverrideAvailability`, the walk that orders
   a class's rows and groups), so each class lists what KiCad's registration lists, in KiCad's order: footprints, pads, tracks, arcs, vias, zones and rule areas, text, shapes of every
   kind, the five dimensions and groups on the board; symbols, power symbols, wires, buses, graphic lines, junctions, bus entries, labels of the four kinds, text, text boxes, shapes, rule
   areas, directive labels and sheets on the sheet. A selection shows the rows every item has (same name, available, same choices), the value they share or `<...>`, and a row is writeable
