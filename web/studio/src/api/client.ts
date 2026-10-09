@@ -4,7 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
@@ -140,8 +140,9 @@ export async function fetchRatsnest(): Promise<Ratsnest> {
  * KiCad's "Refill all zones before performing DRC" -- off by default, because
  * kicad-cli 10.99 skips its courtyard checks when it refills.
  */
-export async function fetchDrc(refillZones = false): Promise<DrcReport> {
-  const r = await getJson<DrcReport & { error?: string }>(refillZones ? "/api/drc?refill_zones=1" : "/api/drc");
+export async function fetchDrc(refillZones = false, schematicParity = false): Promise<DrcReport> {
+  const asked = [refillZones ? "refill_zones=1" : "", schematicParity ? "schematic_parity=1" : ""].filter(Boolean).join("&");
+  const r = await getJson<DrcReport & { error?: string }>(asked ? `/api/drc?${asked}` : "/api/drc");
   if (r.error) throw new ApiError(r.error);
   return r;
 }
@@ -646,4 +647,9 @@ export function fetchSchFind(search: SchSearchData, scope?: string[], sheet: rea
 
 export async function fetchErcPinMap(): Promise<ErcPinMapReply> {
   return getJson<ErcPinMapReply>("/api/sch/erc_pin_map");
+}
+
+/** The ERC severities Schematic Setup > Violation Severity edits (the table kicad-cli's ERC runs with). */
+export async function fetchErcSeverities(): Promise<ErcSeveritiesReply> {
+  return getJson<ErcSeveritiesReply>("/api/sch/erc_severities");
 }

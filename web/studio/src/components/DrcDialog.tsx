@@ -1,9 +1,10 @@
 // pcbnew.DRCTool.runDRC ("Design Rules Checker", Inspect menu). Read
-// pcbnew/dialogs/dialog_drc_base.cpp for the real dialog's shape: a
+// pcbnew/dialogs/dialog_drc.cpp and dialog_drc_base.cpp for the real dialog's shape: a
 // top options row (refill zones / test schematic parity), a notebook with
 // "Violations (%s)" / "Unconnected Items (%s)" / "Schematic Parity (%s)" /
-// "Ignored Tests (%s)" tabs, a "Show: All / Errors [n] / Warnings [n] /
-// Exclusions [n]" filter row, then OK-Cancel.
+// "Ignored Tests (%s)" pages, a "Show: All / Errors [n] / Warnings [n] /
+// Exclusions [n]" row, a list of markers (RC_TREE_MODEL: kicad-port/rcItems.ts,
+// components/RcList.tsx) with a right-click menu, then Close.
 //
 // The violations ARE kicad-cli's: GET /api/drc exports the current design
 // to a derived .kicad_pcb, runs `kicad-cli pcb drc` on it, and points each
@@ -17,51 +18,52 @@
 // shown as out of date (kicad-port/checkRevision.ts). KiCad's own `type`
 // names are shown directly as each violation's category.
 //
-// "Lint" is a tab of its own: crates/lint, our own checks that KiCad does
-// not have (placement quality, net-class track width). In-process and
-// cheap, so it follows the board live while the dialog is open; it never
-// mixes into kicad-cli's lists.
+// Exclusions: "Exclude this violation", "Exclude with comment...", "Exclude all ..."
+// and Remove are undoable verbs (`add_drc_exclusions`), persisted in design.json and
+// written into the derived project for kicad-cli (crates/kicad/src/drc_exclusions.rs);
+// the list is patched in place, with no new run. Next / Previous / Exclude Marker
+// (the Inspect menu's actions) step and act on the page that is up and the rows the
+// Show boxes let through (state/checkerView.ts).
 //
-// "Schematic Parity" and "Ignored Tests" are real KiCad tabs with nothing
-// behind them yet -- kept as clickable, honestly-empty tabs rather than
-// omitted. Exclusions/Save/Delete Marker have no backing concept and are left
-// out rather than wired to a no-op.
+// "Schematic Parity" is `kicad-cli pcb drc --schematic-parity`: the derived schematic
+// goes beside the derived board and the report's `schematic_parity` is the list.
+// "Ignored Tests" is the report's `ignored_checks`: the checks whose severity is
+// Ignore, which kicad-cli does not run; a right click changes a check's severity.
+//
+// "Lint" is a tab of its own: crates/lint, our own checks that KiCad does not have
+// (placement quality, net-class track width). In-process and cheap, so it follows
+// the board live while the dialog is open; it never mixes into kicad-cli's lists.
 import { useEffect, useMemo, useState } from "react";
 import type { DrcViolation } from "../api/types";
 import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
+import { allShown, canExclude, countKinds, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
+import { askExclusionComment, setDrcView, useCheckerView, type DrcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { boundsOfPoints, fitTransform } from "./canvas/view";
-
-type DrcTab = "violations" | "unconnected" | "lint" | "parity" | "ignored";
-
-const STUB_TABS: Array<{ id: DrcTab; label: string }> = [
-  { id: "parity", label: "Schematic Parity" },
-  { id: "ignored", label: "Ignored Tests" },
-];
-
-/** Our id for a violation's item -> the id the canvas selects by: a pad (`REF.PAD`) selects its part, a track segment (`id#n`) its track; the Edge.Cuts outline (`outline`) is nothing to select. */
-function baseRef(id: string): string {
-  return id.split("#")[0]!.split(".")[0]!;
-}
+import { drcListOf, drcSelectedOf, drcSettingSeverity, drcTitle, excludeDrc, excludeMarkerDrc, frameDrc, openSeveritySetup, restoreDrc, runMarkerMenu, selectDrc, setDrcSeverity, stepDrc, toMenuEntries } from "../actions/checkerOps";
+import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
+import { RcList, type RcRow } from "./RcList";
 
 export function DrcDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
+  const view = useCheckerView().drc;
   const open = state.drcDialogOpen;
-  const [tab, setTab] = useState<DrcTab>("violations");
-  const [showErrors, setShowErrors] = useState(true);
-  const [showWarnings, setShowWarnings] = useState(true);
+  const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  const cctx = useMemo(() => ({ api, dispatch }), [api, dispatch]);
 
-  const violations = state.drc?.violations ?? [];
-  const errors = useMemo(() => violations.filter((v) => v.severity === "error"), [violations]);
-  const warnings = useMemo(() => violations.filter((v) => v.severity === "warning"), [violations]);
-  const visible = violations.filter((v) => (v.severity === "error" ? showErrors : showWarnings));
-  const unconnected = state.drc?.unconnected_items ?? [];
+  const report = state.drc;
+  const violations = report?.violations ?? [];
+  const unconnected = report?.unconnected_items ?? [];
+  const parityRun = report?.schematic_parity_run === true;
+  const parity = report?.schematic_parity ?? [];
+  const ignored = report?.ignored_checks ?? [];
   const lint = state.lint?.pcb.violations ?? [];
   const running = state.drcRunning;
+  // `updateDisplayedCounts`: the badges count every marker of the report, whatever the Show boxes say (the parity page only once it has run).
+  const counts = useMemo(() => countKinds(violations, unconnected, parityRun ? parity : []), [violations, unconnected, parity, parityRun]);
   // Out of date: the board's revision is no longer the one the report was computed on. A run in flight says "running" instead.
-  const stale = state.drc !== null && !running && isStale(state.drcVersion, state.version);
+  const stale = report !== null && !running && isStale(state.drcVersion, state.version);
 
   // Opening the dialog on a board kicad-cli has not judged yet runs it (the
   // running state below shows meanwhile); a board it already judged keeps its
@@ -72,71 +74,117 @@ export function DrcDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, state.version === null]);
 
+  // A new run is a new list: the rows selected on the Unconnected Items and Schematic Parity pages belonged to the last one. (A patch -- an exclusion, a
+  // severity change -- keeps the report's `revision`, so it keeps the selection.)
+  const runStamp = report?.revision ?? (report ? "unstamped" : null);
+  useEffect(() => {
+    setDrcView({ unconnectedSelected: null, paritySelected: null });
+  }, [runStamp]);
+
   if (!open) return null;
   const close = () => dispatch({ type: "SET_DRC_OPEN", open: false });
+  const setTab = (tab: DrcTab) => setDrcView({ tab });
+  const setFilter = (filter: RcFilter) => setDrcView({ filter });
 
-  /**
-   * KiCad's own "click a violation to select and zoom to it" (the real
-   * dialog cross-probes to the board the same way). Selects/hots every
-   * item the violation names, then re-frames the PCB canvas on their
-   * combined position -- read directly off the live container's own
-   * size (this dialog has no canvas ref of its own: Canvas.tsx owns the
-   * element, this just measures the one already on screen, the same
-   * class name SchematicView.tsx's own view-fit measures by).
-   */
-  const jumpTo = (v: DrcViolation, index: number, lintRow: boolean) => {
-    dispatch(lintRow ? { type: "SET_DRC_LINT_SELECTED", index } : { type: "SET_DRC_SELECTED", index });
-    const refs = v.items.flatMap((it) => (it.id && it.id !== "outline" ? [baseRef(it.id)] : []));
-    dispatch({ type: "SET_SELECTION", refs });
-    dispatch({ type: "SET_HOT", refs });
-
-    const container = document.querySelector(".pcb-canvas-container");
-    const rect = container?.getBoundingClientRect();
-    if (!rect || rect.width < 50 || rect.height < 50) return;
-    const bounds = boundsOfPoints(v.items.map((it) => it.pos));
-    if (!bounds) return;
-    // A single-point (or tightly-clustered) violation's own bounds are
-    // ~0x0 -- pad them out to a sane minimum (2mm) so fitTransform
-    // frames a sensible close-up instead of zooming to a single point.
-    const padUm = 2_000;
-    const padded = { minX: bounds.minX - padUm, minY: bounds.minY - padUm, maxX: bounds.maxX + padUm, maxY: bounds.maxY + padUm };
-    dispatch({ type: "SET_VIEW", view: fitTransform(padded, rect.width, rect.height, 60) });
-    dispatch({ type: "SET_TAB", tab: "pcb" });
+  const listedCount = (tab: DrcTab) => listedIndexes(drcListOf(report, tab), view.filter).length;
+  const tabTitle = (tab: DrcTab, label: string) => {
+    if (!report) return label;
+    if (tab === "parity" && !parityRun) return `${label} (not run)`;
+    if (tab === "ignored") return `${label} (${ignored.length})`;
+    if (tab === "lint") return `${label} (${lint.length})`;
+    return `${label} (${listedCount(tab)})`;
   };
 
-  const row = (v: DrcViolation, index: number, lintRow: boolean, selected: boolean) => (
-    <div key={index} className={`problem-row${v.severity === "warning" ? " warn" : ""}${lintRow ? " lint" : ""}${selected ? " selected" : ""}`} onClick={() => jumpTo(v, index, lintRow)}>
-      <b>{v.type.replace(/_/g, " ")}</b> <span>{v.description}</span>
-      {v.items.length > 0 && <small>{v.items.map((it) => it.description).join(", ")}</small>}
-      {v.fix && (
-        <small style={{ display: "block", color: "var(--chrome-accent, #4ea1ff)" }}>
-          Fix: move {v.fix.mover} toward {v.fix.toward} ({v.fix.suggested_command})
-        </small>
-      )}
-    </div>
-  );
+  /** `OnDRCItemRClick`: the marker's menu, drawn at the pointer. */
+  const openMenu = (tab: DrcTab, index: number, x: number, y: number) => {
+    const v = drcListOf(report, tab)[index];
+    if (!v) return;
+    const spec = rcMenu({ domain: "drc", title: drcTitle(v.type), excluded: v.excluded === true, severity: drcSettingSeverity(state, v.type) });
+    const entries = toMenuEntries(spec, (id) => void runMarkerMenu(cctx, { domain: "drc", tab, index }, id, askExclusionComment), canExclude(v));
+    setMenu({ x, y, entries });
+  };
+
+  const toggle = (tab: DrcTab, index: number) => {
+    const v = drcListOf(report, tab)[index];
+    if (!v) return;
+    void (v.excluded ? restoreDrc(cctx, [v]) : excludeDrc(cctx, [v]));
+  };
+
+  const rowsOf = (tab: DrcTab): RcRow[] => {
+    const list = drcListOf(report, tab);
+    const selected = drcSelectedOf(state, tab);
+    return listedIndexes(list, view.filter).map((i) => {
+      const v = list[i]!;
+      const kind = rcKind(v);
+      const aside = v.excluded && v.kicad_matched === false ? " Waived in this report; kicad-cli's own report still lists it (KiCad keys an exclusion by the marker's exact position, which its report does not give)." : "";
+      return { index: i, kind, prefix: markerPrefix(kind, v.severity), message: v.description, items: v.items.map((it) => it.description), comment: v.comment ?? "", selected: selected === i, canToggle: canExclude(v), title: `${v.type}${aside}` };
+    });
+  };
+
+  const lintRows: RcRow[] = lint.map((v: DrcViolation, i) => ({
+    index: i,
+    kind: rcKind(v),
+    prefix: `${v.type.replace(/_/g, " ")}: `,
+    message: v.description,
+    items: v.items.map((it) => it.description),
+    comment: "",
+    selected: state.drcLintSelected === i,
+    lint: true,
+    canToggle: false,
+    extra: v.fix ? `Fix: move ${v.fix.mover} toward ${v.fix.toward} (${v.fix.suggested_command})` : undefined,
+  }));
+
+  /** Lint findings select the way a violation does (items on the board, frame them) but keep their own highlight. */
+  const jumpToLint = (index: number) => {
+    dispatch({ type: "SET_DRC_LINT_SELECTED", index });
+    frameDrc(cctx, lint[index], true);
+  };
+
+  const tab = view.tab;
+  const markerPage = tab === "violations" || tab === "unconnected" || tab === "parity";
+
+  const ignoredMenu = (key: string, x: number, y: number) => {
+    const current = drcSettingSeverity(state, key);
+    const entries: MenuEntry[] = (["error", "warning", "ignore"] as const).map((sev) => ({
+      label: sev === "error" ? "Error" : sev === "warning" ? "Warning" : "Ignore",
+      checked: current === sev,
+      onSelect: () => void setDrcSeverity(cctx, key, sev),
+    }));
+    setMenu({ x, y, entries });
+  };
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 620 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 640 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Design Rules Checker</span>
-          <span style={{ display: "flex", gap: 12, fontWeight: 400, fontSize: 11 }}>
-            <span style={{ color: "var(--chrome-danger)" }}>{errors.length} error(s)</span>
-            <span style={{ color: "var(--chrome-warn)" }}>{warnings.length} warning(s)</span>
+          <span className="rc-badges" aria-label="Markers by kind">
+            <span style={{ color: "var(--chrome-danger)" }}>{counts.errors} error(s)</span>
+            <span style={{ color: "var(--chrome-warn)" }}>{counts.warnings} warning(s)</span>
+            <span style={{ color: "var(--chrome-text-dim)" }}>{counts.exclusions} excluded</span>
           </span>
         </div>
         <div className="dialog-body" style={{ paddingTop: 10 }}>
-          <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 10, fontSize: 11 }}>
+          <div className="rc-toolbar">
             <button onClick={() => void api.runDrc()} disabled={running}>
               {running ? "Running…" : "Run DRC"}
             </button>
-            {state.drc?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{state.drc.engine}</span>}
+            {report?.engine && <span style={{ color: "var(--chrome-text-dim)" }}>{report.engine}</span>}
             {stale && (
               <span className="stale-notice" role="status" style={{ color: "var(--chrome-warn)" }}>
                 {STALE_NOTICE}
               </span>
             )}
+            <span style={{ flex: 1 }} />
+            <button title="Previous Marker" aria-label="Previous Marker" disabled={!markerPage} onClick={() => stepDrc(cctx, "prev")}>
+              ◀ Previous
+            </button>
+            <button title="Next Marker" aria-label="Next Marker" disabled={!markerPage} onClick={() => stepDrc(cctx, "next")}>
+              Next ▶
+            </button>
+            <button title="Mark the selected violation as an exclusion" aria-label="Exclude Marker" disabled={tab !== "violations"} onClick={() => void excludeMarkerDrc(cctx)}>
+              Exclude Marker
+            </button>
           </div>
           {state.drcError && (
             <div className="run-error" role="alert">
@@ -154,43 +202,113 @@ export function DrcDialog() {
               <input type="checkbox" checked={state.drcRefillZones} onChange={(e) => dispatch({ type: "SET_DRC_REFILL", refill: e.target.checked })} />
               Refill all zones before performing DRC
             </label>
-            <label className="toggle" style={{ opacity: 0.45 }}>
-              <input type="checkbox" readOnly disabled />
+            <label className="toggle" title="kicad-cli --schematic-parity: compare the board with the schematic (missing, extra and duplicate footprints, pads on other nets, footprints other than the symbol's). Applies to the next run.">
+              <input type="checkbox" checked={state.drcParity} onChange={(e) => dispatch({ type: "SET_DRC_PARITY", parity: e.target.checked })} />
               Test for parity between PCB and schematic
             </label>
           </div>
 
           <div className="dock-tabs" style={{ marginBottom: 10 }}>
-            <div className={`dock-tab${tab === "violations" ? " active" : ""}`} onClick={() => setTab("violations")}>
-              Violations ({violations.length})
-            </div>
-            <div className={`dock-tab${tab === "unconnected" ? " active" : ""}`} onClick={() => setTab("unconnected")}>
-              Unconnected Items ({unconnected.length})
-            </div>
-            <div className={`dock-tab${tab === "lint" ? " active" : ""}`} onClick={() => setTab("lint")} title="Our own checks, the ones KiCad does not have">
-              Lint ({lint.length})
-            </div>
-            {STUB_TABS.map((t) => (
-              <div key={t.id} className={`dock-tab${tab === t.id ? " active" : ""}`} onClick={() => setTab(t.id)}>
-                {t.label}
+            {(
+              [
+                ["violations", "Violations"],
+                ["unconnected", "Unconnected Items"],
+                ["parity", "Schematic Parity"],
+                ["ignored", "Ignored Tests"],
+                ["lint", "Lint"],
+              ] as const
+            ).map(([id, label]) => (
+              <div key={id} className={`dock-tab${tab === id ? " active" : ""}`} onClick={() => setTab(id)} title={id === "lint" ? "Our own checks, the ones KiCad does not have" : undefined}>
+                {tabTitle(id, label)}
               </div>
             ))}
           </div>
 
           <div style={{ opacity: running ? 0.5 : stale ? 0.6 : 1 }}>
-            {tab === "unconnected" &&
-              (!state.drc ? (
-                <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to list unconnected items."}</div>
-              ) : unconnected.length === 0 ? (
-                <div className="panel-empty">No unconnected items.</div>
-              ) : (
-                unconnected.map((v, i) => (
-                  <div key={i} className="problem-row" onClick={() => jumpTo(v, -1, false)}>
-                    <b>{v.type.replace(/_/g, " ")}</b> <span>{v.description}</span>
-                    {v.items.length > 0 && <small>{v.items.map((it) => it.description).join(", ")}</small>}
+            {markerPage && (
+              <div className="rc-show">
+                <span style={{ color: "var(--chrome-text-dim)" }}>Show:</span>
+                <label className="toggle">
+                  <input type="checkbox" checked={allShown(view.filter)} onChange={(e) => setFilter(setShowAll(e.target.checked))} />
+                  All
+                </label>
+                <label className="toggle">
+                  <input type="checkbox" checked={view.filter.errors} onChange={(e) => setFilter({ ...view.filter, errors: e.target.checked })} />
+                  Errors ({counts.errors})
+                </label>
+                <label className="toggle">
+                  <input type="checkbox" checked={view.filter.warnings} onChange={(e) => setFilter({ ...view.filter, warnings: e.target.checked })} />
+                  Warnings ({counts.warnings})
+                </label>
+                <label className="toggle">
+                  <input type="checkbox" checked={view.filter.exclusions} onChange={(e) => setFilter({ ...view.filter, exclusions: e.target.checked })} />
+                  Exclusions ({counts.exclusions})
+                </label>
+              </div>
+            )}
+
+            {tab === "violations" && (
+              <>
+                {!report && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to check the board."}</div>}
+                {report && violations.length === 0 && <div className="panel-empty">No violations.</div>}
+                {report && violations.length > 0 && listedCount("violations") === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
+                <RcList rows={rowsOf("violations")} onSelect={(i) => selectDrc(cctx, "violations", i, true)} onMenu={(i, x, y) => openMenu("violations", i, x, y)} onToggle={(i) => toggle("violations", i)} />
+              </>
+            )}
+
+            {tab === "unconnected" && (
+              <>
+                {!report && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to list unconnected items."}</div>}
+                {report && unconnected.length === 0 && <div className="panel-empty">No unconnected items.</div>}
+                {report && unconnected.length > 0 && listedCount("unconnected") === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
+                <RcList rows={rowsOf("unconnected")} onSelect={(i) => selectDrc(cctx, "unconnected", i, true)} onMenu={(i, x, y) => openMenu("unconnected", i, x, y)} onToggle={(i) => toggle("unconnected", i)} />
+              </>
+            )}
+
+            {tab === "parity" && (
+              <>
+                {!report && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to compare the board with the schematic."}</div>}
+                {report && !parityRun && (
+                  <div className="panel-empty" role="status">
+                    {report.schematic_parity_error ? `The parity test could not run: ${report.schematic_parity_error}` : "Not run. Check “Test for parity between PCB and schematic” and run DRC again."}
                   </div>
-                ))
-              ))}
+                )}
+                {report && parityRun && parity.length === 0 && <div className="panel-empty">The board matches the schematic.</div>}
+                {report && parityRun && parity.length > 0 && listedCount("parity") === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
+                <RcList rows={parityRun ? rowsOf("parity") : []} onSelect={(i) => selectDrc(cctx, "parity", i, true)} onMenu={(i, x, y) => openMenu("parity", i, x, y)} onToggle={(i) => toggle("parity", i)} />
+              </>
+            )}
+
+            {tab === "ignored" && (
+              <>
+                <div className="panel-empty" style={{ textAlign: "left", marginBottom: 6 }}>
+                  Checks whose severity is Ignore: kicad-cli does not run them.{" "}
+                  <a href="#" onClick={(e) => (e.preventDefault(), openSeveritySetup(cctx, "drc"))}>
+                    Edit violation severities...
+                  </a>{" "}
+                  Right-click one to change its severity.
+                </div>
+                {!report && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to list the ignored tests."}</div>}
+                {report && ignored.length === 0 && <div className="panel-empty">No test is ignored.</div>}
+                <div role="list">
+                  {ignored.map((c) => (
+                    <div
+                      key={c.key}
+                      role="listitem"
+                      className="rc-ignored-row"
+                      title={c.key}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        ignoredMenu(c.key, e.clientX, e.clientY);
+                      }}
+                    >
+                      {" • "}
+                      {c.description}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
 
             {tab === "lint" && (
               <>
@@ -199,33 +317,7 @@ export function DrcDialog() {
                 </div>
                 {!state.lint && <div className="panel-empty">Loading…</div>}
                 {state.lint && lint.length === 0 && <div className="panel-empty">No findings.</div>}
-                {lint.map((v, i) => row(v, i, true, state.drcLintSelected === i))}
-              </>
-            )}
-
-            {(tab === "parity" || tab === "ignored") && <div className="panel-empty">Not available: no backend data for this tab yet.</div>}
-
-            {tab === "violations" && (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
-                  <span style={{ color: "var(--chrome-text-dim)" }}>Show:</span>
-                  <label className="toggle">
-                    <input type="checkbox" checked={showErrors} onChange={(e) => setShowErrors(e.target.checked)} />
-                    Errors ({errors.length})
-                  </label>
-                  <label className="toggle">
-                    <input type="checkbox" checked={showWarnings} onChange={(e) => setShowWarnings(e.target.checked)} />
-                    Warnings ({warnings.length})
-                  </label>
-                </div>
-
-                {!state.drc && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to check the board."}</div>}
-                {state.drc && violations.length === 0 && <div className="panel-empty">No violations.</div>}
-                {state.drc && violations.length > 0 && visible.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
-                {visible.map((v) => {
-                  const index = violations.indexOf(v);
-                  return row(v, index, false, state.drcSelected === index);
-                })}
+                <RcList rows={lintRows} onSelect={jumpToLint} />
               </>
             )}
           </div>
@@ -236,6 +328,12 @@ export function DrcDialog() {
           </button>
         </div>
       </div>
+      {/* The menu sits inside the backdrop, whose click closes the dialog: a click on an entry must stop here. */}
+      {menu && (
+        <div onClick={(e) => e.stopPropagation()}>
+          <ContextMenu x={menu.x} y={menu.y} entries={menu.entries} onClose={() => setMenu(null)} />
+        </div>
+      )}
     </div>
   );
 }

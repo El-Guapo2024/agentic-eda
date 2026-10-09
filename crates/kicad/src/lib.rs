@@ -58,6 +58,10 @@ pub mod sch_overlap;
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
 
+// The review workflow's share of the derived project: the waived DRC violations as KiCad's marker texts, and the per-check ERC severities.
+pub mod drc_exclusions;
+pub use pcb::effective_erc_severities;
+
 const STUB_MM: f64 = 1.27;
 
 /// Fixed provenance for the title block. Passed explicitly (never system

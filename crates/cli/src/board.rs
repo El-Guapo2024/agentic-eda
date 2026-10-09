@@ -1046,6 +1046,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
+        Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
+        Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
+        Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
         Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
         Cmd::SwapChain { parts } => format!("swap-chain {}", parts.join(" ")),
@@ -1286,6 +1289,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetStackup { .. } => "stackup",
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
+        Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
+        Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::SetLocked { .. } => "lock",
         Cmd::SwapChain { .. } => "swap",
@@ -1705,7 +1710,8 @@ pub fn run(
             Ok(())
         }
         "drc" => {
-            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc(&dir, has(rest, "--refill-zones"))?).unwrap_or_default());
+            // `--schematic-parity`: also compare the board with the schematic (the studio's "Test for parity between PCB and schematic").
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc_with(&dir, has(rest, "--refill-zones"), has(rest, "--schematic-parity"))?).unwrap_or_default());
             Ok(())
         }
         // Our own checks, the ones KiCad does not have (`eda-lint`):
@@ -1867,7 +1873,7 @@ mod tests {
 
     /// kicad-cli's violation counts by type on the board in `dir`, as the studio's DRC reports them.
     fn drc_counts(dir: &Path) -> std::collections::BTreeMap<String, u64> {
-        let report = crate::kicad_engine::drc(dir, false).expect("kicad-cli ran");
+        let report = crate::kicad_engine::drc_with(dir, false, false).expect("kicad-cli ran");
         report["counts"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap())).collect()
     }
 
@@ -2592,6 +2598,134 @@ mod tests {
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
         assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }]);
+    }
+
+    /// A DRC exclusion from the report's own violation: what the studio sends when the user excludes it.
+    fn exclusion_of(v: &serde_json::Value, comment: &str) -> eda_model::ir::DrcExclusion {
+        let strings = |key: &str| -> Vec<String> { v["items"].as_array().unwrap().iter().map(|i| i[key].as_str().unwrap_or("").to_string()).collect() };
+        eda_model::ir::DrcExclusion {
+            check: v["type"].as_str().unwrap().to_string(),
+            items: strings("uuid"),
+            ids: strings("id"),
+            positions_nm: v["marker_nm"].as_array().unwrap().iter().map(|p| [p[0].as_i64().unwrap(), p[1].as_i64().unwrap()]).collect(),
+            comment: comment.to_string(),
+        }
+    }
+
+    /// `kicad-cli pcb drc` on the board the studio derived in `dir`, asked for `severities` and nothing else: the violations of `kind` it lists as
+    /// `(excluded, severity)`. The derived project is the one the studio's last run wrote.
+    fn kicad_cli_lists(dir: &Path, severities: &[&str], kind: &str) -> Vec<(bool, String)> {
+        let cli = eda_kicad_engine::find_cli().expect("checked by the caller");
+        let board = dir.join(".kicad").join("board.kicad_pcb");
+        let out = dir.join(".kicad").join("direct.json");
+        let ran = std::process::Command::new(cli).args(["pcb", "drc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&board).output().expect("kicad-cli runs");
+        assert!(out.exists(), "kicad-cli wrote no report: {}{}", String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
+        let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        report["violations"].as_array().unwrap().iter().filter(|v| v["type"] == kind).map(|v| (v["excluded"].as_bool().unwrap_or(false), v["severity"].as_str().unwrap().to_string())).collect()
+    }
+
+    /// A violation waived in the studio reaches kicad-cli through the derived `.kicad_pro` (slow tier: a dozen kicad-cli runs): it is
+    /// listed as excluded when asked for exclusions and left out of a report that is not, and Remove (or Undo) puts it back. That holds where the report
+    /// says enough to guess the marker's position (a via, the middle of a track); for a clearance, whose marker sits at the contact point of the two
+    /// items -- a position kicad-cli's report does not give -- the studio's own report holds the waiver and kicad-cli's does not.
+    #[test]
+    fn a_waived_violation_reaches_kicad_cli_through_the_derived_project_and_kicad_cli_stops_reporting_it() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("drc_exclusions");
+        setup(&dir);
+        // A via with a 25 um ring (minimum 100), a 100 um track (minimum 200), and a via 100 um from the side of a track (clearance 200):
+        // the marker of that one sits on the track beside the via, at a point no position in the report is.
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 10_000, y: 15_000, drill: 300, diameter: 350, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 100, pts: vec![Point { x: 2_000, y: 8_000 }, Point { x: 6_001, y: 8_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "VCC".into(), x: 6_100, y: 12_500, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+
+        let find = |report: &serde_json::Value, kind: &str| -> serde_json::Value { report["violations"].as_array().unwrap().iter().find(|v| v["type"] == kind).cloned().unwrap_or_else(|| panic!("no {kind} in {report:#}")) };
+        let first = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        let (via, track, clearance) = (find(&first, "annular_width"), find(&first, "track_width"), find(&first, "clearance"));
+        assert!([&via, &track, &clearance].iter().all(|v| v["excluded"] == false), "nothing is waived yet");
+        let counts = |r: &serde_json::Value, kind: &str| r["counts"][kind].as_u64().unwrap_or(0);
+        assert_eq!((counts(&first, "annular_width"), counts(&first, "track_width"), counts(&first, "clearance")), (1, 1, 1));
+
+        // Exclude the three together, as "Exclude all of this type" would: one step.
+        step(&dir, Cmd::AddDrcExclusions { exclusions: vec![exclusion_of(&via, ""), exclusion_of(&track, "thin on purpose"), exclusion_of(&clearance, "")] }, false, "ui").unwrap();
+        let after = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        for (kind, matched) in [("annular_width", true), ("track_width", true), ("clearance", false)] {
+            let v = find(&after, kind);
+            assert_eq!(v["excluded"], true, "{kind} is waived in the studio's report");
+            assert_eq!(v["kicad_matched"], matched, "{kind}: kicad-cli matches the exclusion only when the marker sits where the report can tell");
+            assert_eq!(counts(&after, kind), 0, "a waived violation is not counted");
+        }
+        assert_eq!(find(&after, "track_width")["comment"], "thin on purpose", "the comment goes to kicad-cli and comes back");
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        assert!(project["board"]["design_settings"]["drc_exclusions"].as_array().is_some_and(|l| l.len() >= 2), "the derived project lists the waived violations: {project}");
+
+        // kicad-cli itself, on the derived files: a report that does not ask for exclusions no longer has them; one that does has them flagged.
+        let plain = ["--severity-error", "--severity-warning"];
+        assert!(kicad_cli_lists(&dir, &plain, "annular_width").is_empty(), "kicad-cli stops reporting the via");
+        assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "and the track");
+        assert_eq!(kicad_cli_lists(&dir, &plain, "clearance").len(), 1, "but the clearance, whose marker position the report cannot give, is still found by a plain run");
+        assert_eq!(kicad_cli_lists(&dir, &["--severity-exclusions"], "annular_width"), vec![(true, "error".to_string())], "asked for exclusions it lists the via, flagged");
+        assert_eq!(kicad_cli_lists(&dir, &["--severity-all"], "track_width"), vec![(true, "error".to_string())]);
+
+        // Remove one: back in the report, and kicad-cli finds it again.
+        step(&dir, Cmd::DeleteDrcExclusions { exclusions: vec![eda_model::ir::DrcExclusionKey { check: "annular_width".into(), items: exclusion_of(&via, "").items }] }, false, "ui").unwrap();
+        let removed = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        assert_eq!(find(&removed, "annular_width")["excluded"], false);
+        assert_eq!(counts(&removed, "annular_width"), 1);
+        assert_eq!(kicad_cli_lists(&dir, &plain, "annular_width").len(), 1, "kicad-cli reports it again");
+        assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "the others stay waived");
+
+        // Undo takes the removal back (the via is waived again), and another Undo the exclusions.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.drawings.unwrap().drc_exclusions.len(), 3);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!(load(&dir).unwrap().1.drawings.map_or(true, |d| d.drc_exclusions.is_empty()));
+    }
+
+    /// Schematic Setup > Violation Severity reaches kicad-cli's ERC through the derived project (slow tier): a check set to Error is
+    /// reported as one, one set to Ignore is not run and shows up in the report's ignored checks. Undo takes the table back.
+    #[test]
+    fn a_changed_erc_severity_changes_what_kicad_cli_reports_and_undo_takes_it_back() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("erc_severities");
+        setup(&dir);
+        // The derived schematic of this board has symbols with no footprint library: `footprint_link_issues`, a warning by default.
+        let check = "footprint_link_issues";
+        let of = |report: &serde_json::Value, severity: &str| report["violations"].as_array().unwrap().iter().filter(|v| v["check"] == check && v["severity"] == severity).count();
+        let ignored = |report: &serde_json::Value| report["ignored_checks"].as_array().unwrap().iter().any(|c| c["key"] == check);
+        let before = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        let n = of(&before, "warning");
+        assert!(n > 0 && of(&before, "error") == 0 && !ignored(&before), "{before:#}");
+
+        let table = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "error")]) }, false, "ui").unwrap();
+        let errors = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!((of(&errors, "error"), of(&errors, "warning")), (n, 0), "the check is reported as an error now");
+
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "ignore")]) }, false, "ui").unwrap();
+        let off = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!(of(&off, "error") + of(&off, "warning"), 0, "an ignored check is not run");
+        assert!(ignored(&off), "and the report lists it as ignored: {:#}", off["ignored_checks"]);
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let back = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!((of(&back, "warning"), ignored(&back)), (n, false), "Undo takes both back");
     }
 
     /// `E`/`V`/`F`: each field is independently settable -- editing just

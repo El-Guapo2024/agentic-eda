@@ -31,13 +31,25 @@ pub fn load_with_schematic(dir: &Path) -> Result<(Design, ConstraintModel), Vec<
     Ok((design, model))
 }
 
-/// `kicad-cli pcb drc` on the current design: `{ engine, violations,
-/// unconnected_items, counts }`. `refill_zones`: see
-/// [`eda_kicad_engine::drc`] (off by default; kicad-cli drops its courtyard
-/// checks when it refills).
+/// `kicad-cli pcb drc` on the current design, without the parity test: [`drc_with`] with both options off. (The tests call this one.)
+#[allow(dead_code)]
 pub fn drc(dir: &Path, refill_zones: bool) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    Ok(eda_kicad_engine::drc(&design, &model, &work(dir), refill_zones)?.to_json())
+    drc_with(dir, refill_zones, false)
+}
+
+/// `kicad-cli pcb drc` on the current design: `{ engine, violations, unconnected_items, schematic_parity, ignored_checks, counts }`.
+/// `refill_zones`: see [`eda_kicad_engine::drc`] (off by default; kicad-cli drops its courtyard checks when it refills).
+///
+/// With the dialog's "Test for parity between PCB and schematic" (`schematic_parity`, `--schematic-parity`): the design's schematic -- the one
+/// the engine would derive from the intent when none is stored yet, as for ERC -- goes beside the board for kicad-cli to compare with,
+/// and the report's `schematic_parity` holds what differs.
+///
+/// The violations the design waived (`design.drawings.drc_exclusions`) are in the derived project, so kicad-cli matches the ones it can;
+/// the report marks them `excluded` here either way (`DrcReport::to_json_with`).
+pub fn drc_with(dir: &Path, refill_zones: bool, schematic_parity: bool) -> Result<Value, Vec<CheckResult>> {
+    let (design, model) = if schematic_parity { load_with_schematic(dir)? } else { board::load(dir).map(|(_, d, m)| (d, m))? };
+    let waived = design.drawings.as_ref().map(|d| d.drc_exclusions.clone()).unwrap_or_default();
+    Ok(eda_kicad_engine::drc_with(&design, &model, &work(dir), eda_kicad_engine::DrcOptions { refill_zones, schematic_parity })?.to_json_with(&waived))
 }
 
 /// `kicad-cli sch erc` on the current schematic, in the studio's ERC shape

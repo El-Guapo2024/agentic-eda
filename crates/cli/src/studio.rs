@@ -610,9 +610,10 @@ fn handle(
         // own checks, the ones KiCad does not have, are `/api/lint`: cheap and
         // in-process, refreshed on every change.
         ("GET", "/api/drc") => {
-            // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC".
-            let refill = target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv == "refill_zones=1");
-            offload(stream, lane, dir, job, &format!("{path} refill={refill}"), &[], move |dir, _| crate::kicad_engine::drc(dir, refill).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
+            // `?refill_zones=1`: the DRC dialog's "Refill all zones before performing DRC". `&schematic_parity=1`: "Test for parity between PCB and schematic".
+            let asked = |name: &str| target.split('?').nth(1).unwrap_or("").split('&').any(|kv| kv.split_once('=').is_some_and(|(k, v)| k == name && v == "1"));
+            let (refill, parity) = (asked("refill_zones"), asked("schematic_parity"));
+            offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
         ("GET", "/api/lint") => {
@@ -626,6 +627,7 @@ fn handle(
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
+        ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),

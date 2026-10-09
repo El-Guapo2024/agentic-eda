@@ -206,7 +206,7 @@ mod tests {
     fn every_studio_route_that_starts_kicad_cli_goes_through_offload() {
         let studio = include_str!("studio.rs");
         let production = studio.split("#[cfg(test)]").next().unwrap();
-        let starts_kicad_cli = ["kicad_engine::drc(", "kicad_engine::erc(", "kicad_engine::board_stats", "kicad_engine::check_rules", "kicad_engine::export", "fab_api::", "sch_output_api::", "board_output_api::", "sch_export_api::"];
+        let starts_kicad_cli = ["kicad_engine::drc(", "kicad_engine::drc_with(", "kicad_engine::erc(", "kicad_engine::board_stats", "kicad_engine::check_rules", "kicad_engine::export", "fab_api::", "sch_output_api::", "board_output_api::", "sch_export_api::"];
         for (n, line) in production.lines().enumerate() {
             let code = line.trim_start();
             if code.starts_with("//") || code.starts_with("use ") {

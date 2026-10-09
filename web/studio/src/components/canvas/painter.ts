@@ -995,7 +995,9 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
     if (!item) return;
     const [x, y] = item.pos;
     const on = i === selected;
-    const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(v.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
+    // A waived violation (`LAYER_DRC_EXCLUSION`): still drawn, in the exclusion colour and muted, as KiCad draws an excluded marker.
+    const waived = v.excluded === true;
+    const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(waived ? "LAYER_DRC_EXCLUSION" : v.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
     const r = on ? DRC_MARKER_RADIUS_UM * 1.4 : DRC_MARKER_RADIUS_UM;
     ctx.save();
     ctx.fillStyle = color;
@@ -1005,7 +1007,7 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
     if (stale) ctx.setLineDash([r * 0.35, r * 0.25]);
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.globalAlpha = stale ? 0.1 : 0.35;
+    ctx.globalAlpha = stale ? 0.1 : waived && !on ? 0.18 : 0.35;
     ctx.fill();
     ctx.globalAlpha = stale ? 0.55 : 1;
     ctx.stroke();

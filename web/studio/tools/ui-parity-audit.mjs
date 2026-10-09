@@ -2,7 +2,7 @@
 // UI parity audit: every TOOL_ACTION KiCad defines (src/kicad/actions.json,
 // extracted from the pinned KiCad source) vs. whether this studio wires it.
 // An action counts as wired when its name appears as a handler key
-// (`m.set("<name>", ...)`) or any string literal in non-test UI source.
+// (`m.set("<name>", ...)`, or `registry.set(...)` in the schematic clipboard module) or any string literal in non-test UI source.
 // An action that is deliberately not wired is listed with its reason in
 // tools/ui-parity-missing.json ({ "<name>": "<why>" }) and shows up as
 // `missing: <why>` instead of a bare `missing` -- no fake handler stands in
@@ -26,7 +26,7 @@ function walk(d, out = []) {
   return out;
 }
 const src = walk(join(root, "src")).map((p) => readFileSync(p, "utf8")).join("\n");
-const handled = new Set([...src.matchAll(/m\.set\(\s*"([^"]+)"/g)].map((m) => m[1]));
+const handled = new Set([...src.matchAll(/\b(?:m|registry)\.set\(\s*"([^"]+)"/g)].map((m) => m[1]));
 const mentioned = new Set([...src.matchAll(/"((?:pcbnew|eeschema|common)\.[A-Za-z0-9_.]+)"/g)].map((m) => m[1]));
 
 // A reason for an action that is wired, or for one KiCad does not define, is stale: say so.

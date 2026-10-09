@@ -55,6 +55,10 @@ import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
 import { connectedTrackWidth, displayedRatsnest, flipLocalX, flipPan, highlightedNets, netsOfSelection, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
+import { DRC_MARKER_HIT_UM, nearestMarker } from "../../kicad-port/markerHit";
+import { canExclude, rcMenu } from "../../kicad-port/rcItems";
+import { drcSettingSeverity, drcTitle, runMarkerMenu, toMenuEntries } from "../../actions/checkerOps";
+import { askExclusionComment } from "../../state/checkerView";
 import "../../styles/canvas.css";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
@@ -1108,6 +1112,17 @@ export function Canvas() {
     }
     if (!board) return;
     const [wx, wy] = worldAt(e);
+    // A right click on a DRC marker (a circle the last run left on the board) opens the marker's menu -- Exclude, Exclude all of this type, Change severity,
+    // Show in the dialog -- instead of the item menu: a `PCB_MARKER` is an item of its own with its own entries (kicad-port/rcItems.ts `rcMenu`).
+    const markerIndex = nearestMarker((state.drc?.violations ?? []).map((v) => v.items[0]?.pos ?? null), wx, wy, DRC_MARKER_HIT_UM);
+    if (markerIndex >= 0) {
+      const v = state.drc!.violations[markerIndex]!;
+      dispatch({ type: "SET_DRC_SELECTED", index: markerIndex });
+      const spec = rcMenu({ domain: "drc", title: drcTitle(v.type), excluded: v.excluded === true, severity: drcSettingSeverity(state, v.type), onCanvas: true });
+      const entries = toMenuEntries(spec, (id) => void runMarkerMenu({ api, dispatch }, { domain: "drc", tab: "violations", index: markerIndex }, id, askExclusionComment), canExclude(v));
+      setContextMenu({ x: e.clientX, y: e.clientY, entries });
+      return;
+    }
     const hit = partHit(board.parts, wx, wy);
     if (hit && !state.selection.has(hit.ref)) dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
     dispatch({ type: "PCBX", patch: { menuCursorUm: { x: wx, y: wy } } }); // `GetMenuCursorPos()`

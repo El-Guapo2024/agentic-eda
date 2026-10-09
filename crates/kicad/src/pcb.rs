@@ -611,19 +611,41 @@ pub fn custom_erc_pin_map(design: &Design) -> Option<Vec<Vec<u8>>> {
     (m.len() == 12 && m.iter().all(|r| r.len() == 12 && r.iter().all(|&c| c <= 2))).then(|| m.clone())
 }
 
-/// [`export_kicad_pro`] plus the schematic side of the project (`erc`): the
-/// design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix
-/// the user set up and not only by KiCad's default; and the two library-link
-/// checks ignored (every symbol is embedded in the derived schematic, so
-/// there is no library for KiCad to compare it against and each one would
-/// report a meaningless `lib_symbol_mismatch`).
+/// The per-check ERC severities the derived project holds: Schematic Setup's choices (`SchExtras::erc_severities`), with "ignore" for the
+/// two library-link checks -- every symbol is embedded in the derived schematic, so there is no library for KiCad to compare it against and
+/// each one would report a meaningless `lib_symbol_mismatch` -- unless the table says otherwise. Keyed by the ERC settings key, valued
+/// `error` | `warning` | `ignore`; only the checks that differ from KiCad's default are named (the project's own `rule_severities` loader
+/// leaves a check it does not find at its default).
+pub fn effective_erc_severities(design: &Design) -> BTreeMap<String, String> {
+    let mut severities: BTreeMap<String, String> = BTreeMap::from([("lib_symbol_issues".to_string(), "ignore".to_string()), ("lib_symbol_mismatch".to_string(), "ignore".to_string())]);
+    if let Some(sch) = design.schematic.as_ref() {
+        for (key, value) in &sch.extras.erc_severities {
+            severities.insert(key.clone(), value.clone());
+        }
+    }
+    severities
+}
+
+/// [`export_kicad_pro`] plus the parts of the project the design's own data decides:
+///
+/// - `erc`: the design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix the user set up and not only by KiCad's
+///   default, and the per-check severities ([`effective_erc_severities`]);
+/// - `board.design_settings.drc_exclusions`: the violations the user waived ([`crate::drc_exclusions`]), so kicad-cli reports each as
+///   excluded and leaves it out of a report that does not ask for exclusions.
 pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String {
-    let base = export_kicad_pro(model);
-    let mut erc = serde_json::json!({ "rule_severities": { "lib_symbol_issues": "ignore", "lib_symbol_mismatch": "ignore" } });
+    let mut project: serde_json::Value = serde_json::from_str(&export_kicad_pro(model)).unwrap_or_else(|_| serde_json::json!({}));
+    let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
     if let Some(m) = custom_erc_pin_map(design) {
         erc["pin_map"] = serde_json::json!(m);
     }
-    base.replacen("{\n", &format!("{{\n  \"erc\": {},\n", serde_json::to_string(&erc).unwrap_or_else(|_| "{}".into())), 1)
+    project["erc"] = erc;
+    let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
+    if !waived.is_empty() {
+        project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
+    }
+    let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
+    text.push('\n');
+    text
 }
 
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
@@ -1093,6 +1115,38 @@ mod tests {
         design.schematic.as_mut().unwrap().erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix: vec![vec![0; 3]; 3] });
         let bad: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         assert!(bad["erc"]["pin_map"].is_null());
+    }
+
+    #[test]
+    fn the_project_lists_the_waived_violations_and_the_chosen_erc_severities() {
+        use eda_model::ir::{DrawingsSection, DrcExclusion};
+        let (mut design, model) = fixture();
+        let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        assert!(plain["board"]["design_settings"]["drc_exclusions"].is_null(), "nothing waived: the key is not written");
+        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2), "only the two library checks, which are always ignored");
+
+        design.drawings = Some(DrawingsSection {
+            drc_exclusions: vec![
+                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[12_459_000, 18_390_000]], comment: "tight on purpose".into() },
+                DrcExclusion { check: "clearance".into(), items: vec!["a".into(), "b".into()], ids: vec![], positions_nm: vec![], comment: String::new() },
+            ],
+            ..Default::default()
+        });
+        design.schematic = Some(eda_model::ir::SchematicSection {
+            symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None,
+            user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![],
+            extras: eda_model::sch_extras::SchExtras { erc_severities: [("pin_not_connected".to_string(), "warning".to_string()), ("lib_symbol_mismatch".to_string(), "warning".to_string())].into(), ..Default::default() },
+            imported_from_kicad: false,
+        });
+        let json: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        let entries = json["board"]["design_settings"]["drc_exclusions"].as_array().expect("a list");
+        assert_eq!(entries.len(), 1, "an exclusion with no position to try is the studio's alone: {entries:?}");
+        assert_eq!(entries[0][0], "annular_width|12459000|18390000|via-uuid|00000000-0000-0000-0000-000000000000");
+        assert_eq!(entries[0][1], "tight on purpose");
+        assert_eq!(json["erc"]["rule_severities"]["pin_not_connected"], "warning", "the schematic's own choice");
+        assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "warning", "and it can undo the embedded-library default");
+        assert_eq!(json["erc"]["rule_severities"]["lib_symbol_issues"], "ignore");
+        assert!(json["board"]["design_settings"]["rules"]["min_clearance"].is_number(), "the board half is untouched");
     }
 
     #[test]

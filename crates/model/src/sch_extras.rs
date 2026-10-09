@@ -24,6 +24,12 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchExtras {
+    /// Schematic Setup > Violation Severity (`ERC_SETTINGS::m_ERCSeverities`, `panel_setup_severities.cpp`): the ERC checks reported at a
+    /// severity other than KiCad's default for them, by settings key (`pin_not_connected`, ...) -> `error` | `warning` | `ignore`.
+    /// Written to the derived project as `erc.rule_severities`, so kicad-cli's ERC reports each check at the severity chosen. Absent:
+    /// KiCad's defaults. `crate::erc_checks` lists the keys. Additive. (Counts in `is_empty`: a table is a reason to write `extras`.)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub erc_severities: BTreeMap<String, String>,
     /// Drawn graphics and annotations, in drawing order (later ones paint over earlier ones).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<SchGraphic>,
@@ -126,6 +132,14 @@ impl LabelSpin {
             (Bottom, false) => Up,
             (s, _) => s,
         }
+    }
+}
+
+impl SchExtras {
+    /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty) and no table of ERC severities. The
+    /// severities are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
+    pub fn writes_nothing(&self) -> bool {
+        self.is_empty() && self.erc_severities.is_empty()
     }
 }
 

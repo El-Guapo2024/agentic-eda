@@ -128,7 +128,8 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
 /// does.
 fn print_drc(d: &eda_model::ir::Design, model: &ConstraintModel, work: &Path) -> Result<bool, Vec<CheckResult>> {
     let report = eda_kicad_engine::drc(d, model, work, false)?;
-    let all: Vec<_> = report.violations.iter().chain(report.unconnected_items.iter()).collect();
+    // A violation the design waived (`design.drawings.drc_exclusions`) is reported flagged, and is not a finding.
+    let all: Vec<_> = report.violations.iter().chain(report.unconnected_items.iter()).filter(|v| !v.excluded).collect();
     let errors = all.iter().filter(|v| v.severity == "error").count();
     let warnings = all.iter().filter(|v| v.severity == "warning").count();
     println!("drc ({}): {} violations, {errors} error, {warnings} warning", report.engine, all.len());

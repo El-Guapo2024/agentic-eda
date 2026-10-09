@@ -208,13 +208,21 @@ New (old #11). **Partial.** Hit: constantly. Blocks: no, dialogs edit most thing
 - Port from: `common/widgets/properties_panel.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
 
 ### 11. The DRC and ERC dialogs lack the review workflow
-New (the UI half of old #19). **Partial.** Hit: every review pass. Blocks: partly. WP5, size M.
-- Exists: Run DRC and Run ERC through kicad-cli with a running state and out-of-date marking, lint tabs, ERC exclusions
-  (`Cmd::AddErcExclusion`) and the ERC pin map (`components/DrcDialog.tsx`, `ErcDialog.tsx`, `SchematicSetupDialog.tsx`).
-- Missing: DRC exclusions; the Ignored Tests and Schematic Parity tabs are empty (`DrcDialog.tsx` `STUB_TABS`) and
-  `--schematic-parity` is never passed (`crates/kicad-engine/src/lib.rs`); per-check severities for the board and the schematic
-  (Schematic Setup has the pin map page only); Next, Previous and Exclude Marker; a marker context menu.
-- Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `common/dialogs/panel_setup_severities.cpp`, `eeschema/dialogs/dialog_schematic_setup.cpp`.
+New (the UI half of old #19). **Mostly closed on 2026-10-08.** Hit: every review pass. Blocks: no. WP5, size M.
+- Done: Run DRC and Run ERC through kicad-cli with a running state, out-of-date marking and lint tabs; the list is `RC_TREE_MODEL`'s (`Error: ` / `Excluded warning: `
+  lines, the items and the exclusion comment under each, Show All / Errors / Warnings / Exclusions with the counts); DRC exclusions as an undoable verb
+  (`Cmd::AddDrcExclusions` / `DeleteDrcExclusions`, `design.drawings.drc_exclusions`) written into the derived `.kicad_pro`; Next, Previous and Exclude Marker on both
+  editors over the rows the Show boxes list (KiCad gives them no default hotkey); a marker menu in both dialogs and on both canvases (Exclude, Exclude with comment,
+  Exclude all of the check, Change severity, Ignore, Edit severities, Show in the dialog); the Ignored Tests and Schematic Parity pages (`--schematic-parity`); a Violation
+  Severity page in Schematic Setup (`Cmd::SetErcSeverities` -> `erc.rule_severities`). Details: `web/studio/PARITY-pcb.md` section 9a, `PARITY-sch.md` sections 4 and 9,
+  `PARITY-common.md` section 5.
+- Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its exact text, position
+  included, and kicad-cli's report gives the items' positions and never the marker's, so the studio writes the positions worth trying (the items', a track's ends and middle,
+  the middle of the first two) and the rest are waived in the studio's report alone (`kicad_matched: false` on the row). A KiCad patch adding the marker position to
+  `RC_JSON::VIOLATION` would close it. ERC exclusions are the studio's alone (the derived project does not carry them) and have no comment. Not ported: selecting a marker
+  with a left click, Delete Marker / Delete All Markers and Save report, "Exclude all violations of rule '...'" (per custom rule: the report does not name the rule), the
+  Inspect / Fix menu entries, Edit connection grid spacing (Schematic Setup has no Formatting page).
+- Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `common/dialogs/panel_setup_severities.cpp`, `eeschema/dialogs/dialog_schematic_setup.cpp`, `common/rc_item.cpp`.
 
 ### 12. Schematic symbols, fields and labels carry no per-instance geometry
 New. **Partial** (fields done, labels not). Hit: every schematic cleanup. Blocks: no. WP1, size M.
@@ -384,8 +392,8 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
   `common/dialogs/panel_setup_{netclasses,severities}.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`, `pcbnew/dialogs/dialog_drc.cpp`,
   `eeschema/dialogs/dialog_{schematic_setup,erc}.cpp`, `pcbnew/zone_filler.cpp`, `pcbnew/zone.cpp`, `pcbnew/teardrop/`.
 - Order: (1) writer: keepouts, per-zone settings, dimensions, groups, locks, arcs, teardrops, with a round-trip test and a fresh `scores.json` (**done 2026-10-08**);
-  (2) the `design.json` overlay for `BoardRules` and the Board Setup pages (**done 2026-10-08**); (3) severities and the DRC and ERC review workflow (Violation Severity is a
-  Board Setup page now; the DRC exclusions, per-check severities in the DRC and ERC dialogs, `--schematic-parity` and the empty DRC tabs are open); (4) zone filler fidelity.
+  (2) the `design.json` overlay for `BoardRules` and the Board Setup pages (**done 2026-10-08**); (3) severities and the DRC and ERC review workflow (**done 2026-10-08**: Violation Severity in Board Setup and Schematic Setup, DRC exclusions, `--schematic-parity`, the
+  Ignored Tests and Schematic Parity pages, marker menus, Next / Previous / Exclude Marker; item 11 says what is left); (4) zone filler fidelity.
 
 **WP6. Libraries, parts and footprints on the board** (items 5, 9, 19, 22). Size XL.
 - Files: `crates/kicad/src/{symbol_lib,footprint_lib}.rs`, `crates/cli/src/{studio,library_api}.rs`, `crates/model/src/{ir,footprint,symbol}.rs` (`FootprintInstance`,
@@ -418,7 +426,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 16 | Hotkey extraction | **Closed** | `web/studio/tools/lib/actionsParser.js::extractPlatformRaw` (with test), `src/kicad/actions.json` (`common.Interactive.redo` is Ctrl+Y), `actions/hotkeys.ts::effectiveHotkey`. |
 | 17 | Click-versus-drag threshold | **Open** | `Canvas.tsx` sets `drag.moved` on a non-zero snapped delta; item 14. |
 | 18 | Snapping | Partial | `kicad-port/gridSnap.ts`, `components/canvas/gridHelper.ts` (Move and picker); item 14. |
-| 19 | DRC schematic parity | Out of scope | kicad-cli has `--schematic-parity`; wiring the dialog is item 11. |
+| 19 | DRC schematic parity | Out of scope | kicad-cli has `--schematic-parity`; the dialog passes it (2026-10-08, item 11): the Schematic Parity page lists what it reports. |
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | Partial | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`); schematic Align: item 1. |
 | 26 | Array tool | Partial | `Cmd::CreateArray`, `CreateArrayDialog.tsx`; item 22. |

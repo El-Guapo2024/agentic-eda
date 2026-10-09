@@ -21,6 +21,7 @@ import { Canvas } from "./components/canvas/Canvas";
 import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
 import { ErcDialog } from "./components/ErcDialog";
+import { ExclusionCommentDialog } from "./components/ExclusionCommentDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
@@ -224,6 +225,7 @@ function StudioFrame() {
       </div>
       <DrcDialog />
       <ErcDialog />
+      <ExclusionCommentDialog />
       <HotkeysDialog />
       <PreferencesDialog />
       <ZoomAreaOverlay />
