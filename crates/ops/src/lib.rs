@@ -51,10 +51,10 @@ pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
 pub mod library_editors;
-mod review;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
+mod review;
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
@@ -1579,9 +1579,9 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
-            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             // A severity table is about the report, not the drawing.
             Cmd::SetErcSeverities { .. } => false,
+            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             _ => true,
         }
     }
@@ -5382,13 +5382,13 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 }
 
 #[cfg(test)]
+mod review_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod sch_control_tests;
 #[cfg(test)]
 mod board_setup_tests;
-#[cfg(test)]
-mod review_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 

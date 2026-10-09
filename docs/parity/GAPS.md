@@ -190,7 +190,7 @@ New (the UI half of old #19). **Mostly closed on 2026-10-08.** Hit: every review
   (`Cmd::AddDrcExclusions` / `DeleteDrcExclusions`, `design.drawings.drc_exclusions`) written into the derived `.kicad_pro`; Next, Previous and Exclude Marker on both
   editors over the rows the Show boxes list (KiCad gives them no default hotkey); a marker menu in both dialogs and on both canvases (Exclude, Exclude with comment,
   Exclude all of the check, Change severity, Ignore, Edit severities, Show in the dialog); the Ignored Tests and Schematic Parity pages (`--schematic-parity`); a Violation
-  Severity page in Schematic Setup (`Cmd::SetErcSeverities` -> `erc.rule_severities`). Details: `web/studio/PARITY-pcb.md` section 22, `PARITY-sch.md` sections 4 and 9,
+  Severity page in Schematic Setup (`Cmd::SetErcSeverities` -> `erc.rule_severities`). Details: `web/studio/PARITY-pcb.md` section 9a, `PARITY-sch.md` sections 4 and 9,
   `PARITY-common.md` section 5.
 - Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its exact text, position
   included, and kicad-cli's report gives the items' positions and never the marker's, so the studio writes the positions worth trying (the items', a track's ends and middle,

@@ -151,3 +151,18 @@ fn the_design_json_stays_the_same_without_exclusions_and_round_trips_with_them()
     let back: Design = serde_json::from_str(&text).unwrap();
     assert_eq!(back.drawings.unwrap().drc_exclusions, waived(&b));
 }
+
+/// `SchExtras::is_empty` decides whether `extras` is written to design.json at all, so a table of severities has to count there: a merge that drops it from
+/// that line would lose every severity the user chose, silently, at the next save.
+#[test]
+fn a_table_of_erc_severities_is_written_to_design_json_and_read_back() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(), &m, 100, 300);
+    let table: BTreeMap<String, String> = [("pin_not_connected".to_string(), "ignore".to_string())].into();
+    b.apply(&Cmd::SetErcSeverities { severities: table.clone() }).unwrap();
+    assert!(!b.design().schematic.as_ref().unwrap().extras.is_empty(), "a table alone makes the extras worth writing");
+    let text = serde_json::to_string(b.design()).unwrap();
+    assert!(text.contains("erc_severities") && text.contains("pin_not_connected"), "{text}");
+    let back: Design = serde_json::from_str(&text).unwrap();
+    assert_eq!(back.schematic.unwrap().extras.erc_severities, table);
+}

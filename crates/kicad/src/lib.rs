@@ -23,8 +23,7 @@ use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
 mod pcb_items;
-pub mod drc_exclusions;
-pub use pcb::{custom_erc_pin_map, effective_erc_severities, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
+pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
 mod page;
@@ -55,6 +54,10 @@ pub use sch_clipboard::{parse_clipboard, write_clipboard, CopyInput, CopyOutput}
 mod sch_extras_io;
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
+
+// The review workflow's share of the derived project: the waived DRC violations as KiCad's marker texts, and the per-check ERC severities.
+pub mod drc_exclusions;
+pub use pcb::effective_erc_severities;
 
 const STUB_MM: f64 = 1.27;
 

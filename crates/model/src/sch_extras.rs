@@ -21,6 +21,12 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchExtras {
+    /// Schematic Setup > Violation Severity (`ERC_SETTINGS::m_ERCSeverities`, `panel_setup_severities.cpp`): the ERC checks reported at a
+    /// severity other than KiCad's default for them, by settings key (`pin_not_connected`, ...) -> `error` | `warning` | `ignore`.
+    /// Written to the derived project as `erc.rule_severities`, so kicad-cli's ERC reports each check at the severity chosen. Absent:
+    /// KiCad's defaults. `crate::erc_checks` lists the keys. Additive. (Counts in `is_empty`: a table is a reason to write `extras`.)
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub erc_severities: BTreeMap<String, String>,
     /// Drawn graphics and annotations, in drawing order (later ones paint over earlier ones).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<SchGraphic>,
@@ -32,12 +38,6 @@ pub struct SchExtras {
     /// `None` is KiCad's default, A4 landscape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<crate::page::PageSettings>,
-    /// Schematic Setup > Violation Severity (`ERC_SETTINGS::m_ERCSeverities`, `panel_setup_severities.cpp`): the ERC checks reported at a
-    /// severity other than KiCad's default for them, by settings key (`pin_not_connected`, ...) -> `error` | `warning` | `ignore`.
-    /// Written to the derived project as `erc.rule_severities`, so kicad-cli's ERC reports each check at the severity chosen. Absent:
-    /// KiCad's defaults. `crate::erc_checks` lists the keys. Additive.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub erc_severities: BTreeMap<String, String>,
 }
 
 impl SchExtras {
