@@ -198,8 +198,8 @@ export function modelUrl(name: string): string {
 }
 
 /**
- * The models the placed parts show, the one most parts use first (ties in the order the parts first use them). The server converts what it is asked for in runs of
- * kicad-cli and the first run is small (crates/cli/src/model3d_api.rs `FIRST_BATCH`), so the packages most of the board is made of are the first on screen.
+ * The models the placed parts show, the one most parts use first (ties in the order the parts first use them). The page loads them three at a time, parsing each
+ * on the main thread, so the packages most of the board is made of are the first drawn while the rest are still coming in.
  */
 export function modelsByUse(parts: ReadonlyArray<{ placed?: boolean; models?: ReadonlyArray<Pick<Model3dEntry, "name" | "show">> }>): string[] {
   const uses = new Map<string, number>();

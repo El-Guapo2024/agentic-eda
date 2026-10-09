@@ -12,9 +12,9 @@
 //!     converts it with `kicad-cli pcb export vrml --models-dir` (`eda_kicad_engine::convert_models_to_vrml`: KiCad's own 3D cache reads the STEP and
 //!     writes the VRML KiCad's libraries are written in) and keeps the result in a cache directory, keyed by the file's path, size and modification time,
 //!     so a model is converted once, not once per board or per session. The route answers `202 {"status":"pending"}` while it runs and the browser asks
-//!     again; the request loop never waits for kicad-cli. Requests that arrive together (one per distinct model of the board) are converted in as few
-//!     kicad-cli runs as there can be -- a run costs a second or two before it loads anything -- but the first run takes only the first two, so the first models
-//!     are on screen in about half the time and the rest follow in one run (up to 16).
+//!     again; the request loop never waits for kicad-cli. Requests that arrive together (one per distinct model of the board) are converted in one
+//!     kicad-cli run, up to 16: a run costs 2.5 to 3.7 s of CPU whether it converts 2, 5 or 15 models (measured), so splitting a board's models into runs
+//!     (tried: two models first, the rest after) puts the first model no sooner and the last one later.
 //!   - **The models of each part** go out in `/api/state` (`parts[].models`, `parts[].kind3d`), from [`part_json`].
 
 use crate::kicad_lane::Lane;
@@ -239,13 +239,8 @@ pub struct Store {
     settled: Condvar,
 }
 
-/// The most models one kicad-cli run converts: it loads them all at once.
+/// The most models one kicad-cli run converts: it loads them all at once (and a run is dear: see the module doc).
 const MAX_BATCH: usize = 16;
-
-/// The most models the first run of a burst converts. A run costs about a second of kicad-cli start-up and then a fraction of a second per model, and the first
-/// model on screen waits for its whole run: a small first run puts the first models up in about half the time and the rest follow in one run of up to
-/// [`MAX_BATCH`] (the page asks for the most used packages first, `kicad-port/model3d.ts` `modelsByUse`).
-const FIRST_BATCH: usize = 2;
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -314,7 +309,6 @@ impl Store {
     /// Converts what is queued, a batch at a time, until nothing is.
     fn work(self: Arc<Self>) {
         std::thread::sleep(self.gather);
-        let mut limit = FIRST_BATCH;
         loop {
             let batch: Vec<PathBuf> = {
                 let mut inner = lock(&self.inner);
@@ -323,7 +317,7 @@ impl Store {
                 while let Some(p) = inner.queue.pop_front() {
                     // Two models of one file name would be one `.wrl` in one run: the second waits for the next.
                     let clash = batch.iter().any(|b| b.file_stem() == p.file_stem());
-                    if batch.len() < limit && !clash {
+                    if batch.len() < MAX_BATCH && !clash {
                         batch.push(p);
                     } else {
                         later.push_back(p);
@@ -337,7 +331,6 @@ impl Store {
                 for p in &batch {
                     inner.state.insert(p.clone(), Entry::Running);
                 }
-                limit = MAX_BATCH;
                 batch
             };
             let results = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (self.convert)(&batch))).unwrap_or_else(|_| batch.iter().map(|_| Err("the model conversion crashed".to_string())).collect());
@@ -773,32 +766,26 @@ mod tests {
         assert_eq!(*runs.lock().unwrap(), vec![1, 1]);
     }
 
-    /// A kicad-cli run costs a second of start-up and the first model on screen waits for its whole run, so the first run of a burst takes only two models and the
-    /// rest follow in one run -- not five in one, not five in five -- and the first two are the first two asked for (the page asks for the packages most parts use first).
+    /// A kicad-cli run costs 2.5 to 3.7 s of CPU whether it converts 2, 5 or 15 models (measured), so a burst is one run -- not a small first run and then the rest, which
+    /// was tried and put the first model no sooner and the last one later -- up to [`MAX_BATCH`], and what does not fit follows in the next.
     #[test]
-    fn the_first_run_of_a_burst_is_small_and_the_rest_follow_in_one_run() {
-        let t = Tree::new("ramp");
+    fn a_burst_of_models_is_one_run_up_to_the_batch_limit() {
+        let t = Tree::new("burst");
         let runs = Arc::new(Mutex::new(Vec::new()));
-        let batches = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
-        let (log, inner) = (batches.clone(), counting_converter(t.root.join("work"), runs.clone()));
-        let convert: Converter = Arc::new(move |batch: &[PathBuf]| {
-            log.lock().unwrap().push(batch.iter().map(|p| p.file_stem().unwrap().to_string_lossy().into_owned()).collect());
-            inner(batch)
-        });
-        let store = Store::new(t.root.join("cache"), convert, Duration::from_millis(80));
-        let names = ["m1", "m2", "m3", "m4", "m5"];
-        for n in names {
-            std::fs::write(t.root.join(format!("models/Lib.3dshapes/{n}.step")), format!("ISO-10303-21; {n}")).unwrap();
-        }
-        let steps: Vec<PathBuf> = names.iter().map(|n| t.path(&format!("models/Lib.3dshapes/{n}.step"))).collect();
+        let store = Store::new(t.root.join("cache"), counting_converter(t.root.join("work"), runs.clone()), Duration::from_millis(120));
+        let steps: Vec<PathBuf> = (0..MAX_BATCH + 3)
+            .map(|i| {
+                std::fs::write(t.root.join(format!("models/Lib.3dshapes/m{i}.step")), format!("ISO-10303-21; {i}")).unwrap();
+                t.path(&format!("models/Lib.3dshapes/m{i}.step"))
+            })
+            .collect();
         for s in &steps {
             assert_eq!(store.ask(s, false), Ask::Pending);
         }
         for s in &steps {
             assert!(matches!(wait_for(&store, s), Ask::Ready(_)), "{s:?}");
         }
-        assert_eq!(*batches.lock().unwrap(), vec![vec!["m1", "m2"], vec!["m3", "m4", "m5"]], "two models first, the other three together");
-        assert_eq!(*runs.lock().unwrap(), vec![FIRST_BATCH, names.len() - FIRST_BATCH]);
+        assert_eq!(*runs.lock().unwrap(), vec![MAX_BATCH, 3], "a full run, then what did not fit");
     }
 
     fn delayed(inner: Converter, delay: Duration) -> Converter {

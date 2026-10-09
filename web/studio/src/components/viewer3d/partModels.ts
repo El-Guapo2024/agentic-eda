@@ -76,7 +76,7 @@ export class PartModels {
     this.last = { board, opts, stack };
     const seen = new Set<string>();
     const stats: PartStats = { total: 0, asModels: 0, asBoxes: 0, shown: 0 };
-    // The models the board uses are asked for most-used first: the server's first conversion run is small, so the packages most of the board is made of come in first.
+    // The models the board uses are asked for most-used first: the packages most of the board is made of are the first loaded and drawn.
     for (const name of modelsByUse(board?.parts ?? [])) this.cache.request(name);
     for (const part of board?.parts ?? []) {
       if (!part.placed || !part.side || !part.at) continue;
