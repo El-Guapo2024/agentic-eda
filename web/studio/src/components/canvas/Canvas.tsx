@@ -36,6 +36,7 @@ import { paintSnapOverlay } from "./snapOverlayPainter";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { useGridSettings } from "../../state/gridSettings";
 import { toPcbMagnetic } from "../../kicad-port/preferences";
+import { heldCursor } from "../../kicad-port/heldCursor";
 import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
@@ -477,9 +478,13 @@ export function Canvas() {
     return [p[0], p[1]];
   };
 
-  /** The cursor of a move: `BestSnapAnchor( mouse, { active layer }, selection grid, selection )`. */
-  const moveCursor = (wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, refs: readonly string[]): [number, number] => {
-    const p = snap.moveCursor([wx, wy], snapMods(e), refs);
+  /**
+   * The cursor of a move: `BestSnapAnchor( cursor, { active layer }, selection grid, selection )`. KiCad warps the pointer to the held point (`BestDragOrigin`) when the move
+   * starts, so from then on the cursor is that point plus how far the pointer has travelled; a page may not move the pointer, so the same cursor is computed: `held` + (pointer now
+   * - pointer at the start), which keeps the item under the pointer where it was grabbed.
+   */
+  const moveCursor = (wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, refs: readonly string[], held: readonly [number, number], grabbed: readonly [number, number]): [number, number] => {
+    const p = snap.moveCursor(heldCursor(held, grabbed, [wx, wy]), snapMods(e), refs);
     return [p[0], p[1]];
   };
 
@@ -1080,7 +1085,7 @@ export function Canvas() {
       // multi-select drag doesn't exclude any member (a reasonable,
       // documented simplification -- see PARITY-pcb.md).
       const [ox, oy] = moveOrigin(origin.x, origin.y, refs);
-      const [sx, sy] = moveCursor(wx, wy, e, refs);
+      const [sx, sy] = moveCursor(wx, wy, e, refs, [ox, oy], [origin.x, origin.y]);
       // Preserve whatever R/Shift+R/F have already accumulated on this
       // same preview (useActionRunner.ts) -- a fresh preview object every
       // pointer-move must not reset the live rotate/flip state.
@@ -1100,7 +1105,7 @@ export function Canvas() {
       // Until the press has become a drag it is a click that may still be released: nothing is picked up.
       if (!motion?.dragging) return;
       drag.moved = true;
-      const [sx, sy] = moveCursor(wx, wy, e, drag.refs);
+      const [sx, sy] = moveCursor(wx, wy, e, drag.refs, drag.snapOrigin, drag.startWorld);
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
       const { rotateQuarterTurns, flipped } = state.movePreview ?? {};

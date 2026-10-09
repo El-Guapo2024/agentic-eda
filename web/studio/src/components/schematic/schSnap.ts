@@ -34,6 +34,9 @@ export interface SchSnapMods {
 
 const itemCache = new WeakMap<Schematic, SchSnapItem[]>();
 
+/** Whole micrometres, as KiCad's integer coordinates are: with the grid off (Ctrl) a point is wherever the pointer is, and the verbs take integers. */
+const whole = (p: Pt): Pt => [Math.round(p[0]), Math.round(p[1])];
+
 const boxOf = (b: { minX: number; minY: number; maxX: number; maxY: number }) => box(b.minX, b.minY, b.maxX, b.maxY);
 
 /** The sheet as the grid helper sees it. */
@@ -183,7 +186,7 @@ export class SchSnap {
     const h = this.helperFor(tool);
     h.setUseGrid(!mods.ctrl);
     h.setSnap(!mods.shift);
-    const p = h.bestSnapAnchor(world, category, skip);
+    const p = whole(h.bestSnapAnchor(world, category, skip));
     this.cachedOverlay = h.overlay();
     this.last = p;
     reportSnap({ tool, input: world, output: p, types: 0, anchored: this.cachedOverlay.snapPoint !== null });
@@ -201,7 +204,7 @@ export class SchSnap {
     if (!this.view) return world;
     const h = this.helperFor("align");
     h.setUseGrid(!mods.ctrl);
-    return h.align(world, category);
+    return whole(h.align(world, category));
   }
 
   /** The point the last `point` call put the cursor at; null before one and after `reset`. */

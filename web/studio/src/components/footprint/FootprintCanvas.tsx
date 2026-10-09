@@ -33,6 +33,9 @@ import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "../canvas/curve
 const DRAW_STROKE_WIDTH_UM = 150;
 import { ContextMenu, type MenuEntry } from "../canvas/ContextMenu";
 import { useFootprintGridOrigin } from "../../state/gridOrigin";
+import { useGridSettings } from "../../state/gridSettings";
+import { useGridOverrides } from "../../state/gridOverrides";
+import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
@@ -167,11 +170,27 @@ function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "poly
 // (An arc and a Bezier are not point-counted either: kicad-port/arcGeom.ts / bezierGeom.ts decide when they are complete.)
 const AUTO_FINISH: Partial<Record<"segment" | "rect" | "circle" | "arc" | "polygon" | "bezier", number>> = { segment: 2, rect: 2, circle: 2 };
 
+/** The grid category a footprint editor tool places on (`PCB_GRID_HELPER`'s: a shape on the graphics grid, text on the text grid; a pad and the anchor on the current one). */
+function toolCategory(tool: string): GridCategory {
+  if (tool.startsWith("draw_")) return "graphics";
+  return tool === "text" ? "text" : "current";
+}
+
 export function FootprintCanvas() {
   const state = useFpState();
   const dispatch = useFpDispatch();
   const api = useFpApi();
   const gridOrigin = useFootprintGridOrigin();
+  // Grid overrides (`common.Control.toggleGridOverrides`): a pad on the connected-items grid, a shape on the graphics grid, text on the text grid -- `GetItemGrid`.
+  const gridList = useGridSettings("footprint").grids;
+  const gridOverrides = useGridOverrides("footprint");
+  const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridUm, gridList, gridOverrides);
+  const toolGrid = (): number => gridOf(toolCategory(state.activeTool));
+  /** `GetSelectionGrid`: the coarsest of the grids of what is held. */
+  const heldGrid = (ids: readonly string[]): number => {
+    const cats = ids.map((id): GridCategory => (api.padById(id) ? "connectable" : api.graphicById(id) ? "graphics" : "text"));
+    return gridOf(selectionGrid(cats, gridOf));
+  };
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -340,7 +359,7 @@ export function FootprintCanvas() {
     if (draw.shapeKind === "arc") return;
     if (draw.shapeKind === "bezier") {
       // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
-      const at = state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, state.gridUm) : draw.bezier?.lastPoint;
+      const at = state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, gridOf("graphics")) : draw.bezier?.lastPoint;
       const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
       if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_UM));
       dispatch({ type: "SET_DRAW_STATE", draw: null });
@@ -372,7 +391,7 @@ export function FootprintCanvas() {
     }
     if (e.button !== 0) return;
 
-    const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+    const [sx, sy] = snapPoint(wx, wy, toolGrid());
 
     // `EDIT_TOOL::doMoveSelection` armed (Duplicate hands its copies straight to it): a click drops them where they are now.
     if (state.activeTool === "move" && state.duplicatePending) {
@@ -460,8 +479,11 @@ export function FootprintCanvas() {
       const refs = applySingleClickModifier(state.selection, hit.id, modifiers);
       dispatch({ type: "SET_SELECTION", refs });
       if (refs.includes(hit.id)) {
-        dragRef.current = { kind: "move", refs: refs.length > 1 ? refs : [hit.id], moveKind: hit.kind, startWorld: [wx, wy] };
-        dispatch({ type: "SET_MOVE_ORIGIN", at: { x: sx, y: sy } });
+        const held = refs.length > 1 ? refs : [hit.id];
+        dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy] };
+        // `GetSelectionGrid`: what is picked up snaps on its own grid (a pad on the connectable one, a graphic on the graphics one).
+        const [ox, oy] = snapPoint(wx, wy, heldGrid(held));
+        dispatch({ type: "SET_MOVE_ORIGIN", at: { x: ox, y: oy } });
       }
     } else if (!hasModifier(modifiers)) {
       dispatch({ type: "CLEAR_SELECTION" });
@@ -481,13 +503,13 @@ export function FootprintCanvas() {
     // `drawArc` / `drawOneBezier`'s motion branch: update the construction manager's geometry (never its step) with the snapped cursor.
     const draw = state.drawState;
     if (draw && (draw.arc || draw.bezier)) {
-      const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+      const [sx, sy] = snapPoint(wx, wy, toolGrid());
       if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap("45", e)) } });
       else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
     }
     // The armed Move (a Duplicate's pick-up): the selection follows the snapped cursor from where it was picked up.
     if (state.activeTool === "move" && state.duplicatePending && state.selection.size > 0) {
-      const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+      const [sx, sy] = snapPoint(wx, wy, heldGrid([...state.selection]));
       // No pointer position was known when the copies were picked up (`doMoveSelection`'s `originalCursorPos`): the first move is it.
       if (!state.moveOriginUm) dispatch({ type: "SET_MOVE_ORIGIN", at: { x: sx, y: sy } });
       const origin = state.moveOriginUm ?? { x: sx, y: sy };
@@ -503,7 +525,7 @@ export function FootprintCanvas() {
     } else if (drag.kind === "move") {
       // Nothing is picked up until the press has become a drag (tool_dispatcher.cpp: 8 px, or on macOS a motion after 300 ms held).
       if (!motion?.dragging) return;
-      const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+      const [sx, sy] = snapPoint(wx, wy, heldGrid(drag.refs));
       const origin = state.moveOriginUm ?? { x: sx, y: sy };
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxUm: sx - origin.x, dyUm: sy - origin.y } });
     }

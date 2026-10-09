@@ -54,6 +54,9 @@ export interface PointOpts {
 
 const NO_SKIP: ReadonlySet<string> = new Set();
 
+/** Whole micrometres, as KiCad's integer coordinates are: with the grid off, or on a grid that is not a whole number of um (1 mil is 25.4 um), a point is wherever it falls, and the verbs take integers. */
+const whole = (p: Pt): Pt => [Math.round(p[0]), Math.round(p[1])];
+
 export class PcbSnap {
   private view: PcbSnapView | null = null;
   private helper: PcbGridHelper | null = null;
@@ -135,7 +138,7 @@ export class PcbSnap {
     if (opts.skipPoint === null) h.clearSkipPoint();
     else if (opts.skipPoint) h.setSkipPoint(opts.skipPoint);
     const layers: LayerSel = opts.layers ?? (this.view.activeLayer ? new Set([this.view.activeLayer]) : "all");
-    const p = h.bestSnapAnchor(world, layers, opts.category ?? "current", opts.skip ?? NO_SKIP);
+    const p = whole(h.bestSnapAnchor(world, layers, opts.category ?? "current", opts.skip ?? NO_SKIP));
     this.cachedOverlay = h.overlay();
     this.armTimer(h);
     this.last = p;
@@ -173,7 +176,7 @@ export class PcbSnap {
     if (!this.view) return world;
     const h = this.helperFor(tool);
     h.setUseGrid(!mods.ctrl);
-    const p = h.align(world, category);
+    const p = whole(h.align(world, category));
     this.last = p;
     return p;
   }
@@ -237,6 +240,7 @@ export class PcbSnap {
       else if (item.arc) out = h.alignToArc(world, item.arc);
       else out = h.alignToSegment(world, item.start, item.end);
     }
+    out = whole(out);
     this.last = out;
     reportSnap({ tool: "route", input: world, output: out, types: 0, anchored: item !== null && allowed });
     return out;

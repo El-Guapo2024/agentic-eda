@@ -31,6 +31,7 @@ import { SchSnap, SCH_PLACING_TOOLS, toolCategory, type SchSnapMods } from "./sc
 import { useGridOverrides } from "../state/gridOverrides";
 import { useGridSettings } from "../state/gridSettings";
 import { computeVisibleGridSize } from "../kicad-port/grid";
+import { heldCursor } from "../kicad-port/heldCursor";
 import { paintSnapOverlay } from "./canvas/snapOverlayPainter";
 import { layerColor } from "./canvas/layers";
 import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, pageOf } from "./schematic/drawingSheet";
@@ -716,12 +717,14 @@ export function SchematicView() {
         if (armedKind && state.selection.size > 0) {
           // `SCH_MOVE_TOOL::doMoveSelection`: the selection is held by its reference point (`BestDragOrigin`: the nearest pin or origin of what is held to where it was picked up)
           // and goes to the cursor snapped with `BestSnapAnchor` on the coarsest grid of the selection, skipping the selection itself.
+          // (KiCad warps the pointer to the held point when the move starts; a page may not, so the cursor is that point plus the pointer's travel since: the item stays where it was grabbed.)
           const origin = state.moveOriginUm ?? { x: wx, y: wy };
           const ids = [...state.selection];
           const [ox, oy] = snap.dragOrigin([origin.x, origin.y], ids);
-          const [sx, sy] = snap.moveCursor([wx, wy], modsRef.current, ids);
+          const [sx, sy] = snap.moveCursor(heldCursor([ox, oy], [origin.x, origin.y], [wx, wy]), modsRef.current, ids);
           // R, Shift+R, X and Y pressed since the items were picked up stay on the preview as it follows the cursor
-          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: ids, kind: armedKind, dxUm: sx - ox, dyUm: sy - oy, holdUm: [sx, sy], vertices: pickedVertices(state), turns: state.movePreview?.turns } });
+          // (Whole micrometres, as KiCad's integer coordinates are: with the grid off (Ctrl) the cursor is wherever the pointer is, and the verbs take integer deltas.)
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: ids, kind: armedKind, dxUm: Math.round(sx - ox), dyUm: Math.round(sy - oy), holdUm: [sx, sy], vertices: pickedVertices(state), turns: state.movePreview?.turns } });
           return;
         }
 
@@ -745,8 +748,8 @@ export function SchematicView() {
           // of travel along an axis, or on macOS a motion after 300 ms held -- nothing is picked up, so the release is still a plain click.
           if (!motion?.dragging) return;
           drag.moved = true;
-          const [sx, sy] = snap.moveCursor([wx, wy], modsRef.current, drag.refs);
-          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "sch_drag", dxUm: sx - drag.origin[0], dyUm: sy - drag.origin[1], holdUm: [sx, sy], vertices: drag.vertices, turns: state.movePreview?.turns } });
+          const [sx, sy] = snap.moveCursor(heldCursor(drag.origin, drag.startWorld, [wx, wy]), modsRef.current, drag.refs);
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "sch_drag", dxUm: Math.round(sx - drag.origin[0]), dyUm: Math.round(sy - drag.origin[1]), holdUm: [sx, sy], vertices: drag.vertices, turns: state.movePreview?.turns } });
         }
       }}
       onContextMenu={(e) => {
