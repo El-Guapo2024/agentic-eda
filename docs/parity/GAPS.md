@@ -14,7 +14,7 @@ doc and the code disagree, the code wins and the doc is named.
   (eeschema 77, common 105) are being wired now by the schematic-control and common-actions agents. Single
   actions are tracked in `UI-ACTIONS.md` and not repeated here.
 - **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"):
-  **8 closed, 13 partial, 1 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports; the counts are those of Appendix A).
+  **10 closed, 12 partial, 0 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports; the counts are those of Appendix A).
 - **12 items are new**, found in `PARITY-*.md`, `CODE-COMPARE-*.md` and by reading the code. The ranked list marks them.
 - **Three findings change the picture.**
   1. *A wired action is not a working feature.* `UI-ACTIONS.md` counted schematic Move, Drag, Rotate, Mirror,
@@ -203,7 +203,7 @@ Old #12, and the PCB parts of #14 and #25. **Mostly done (2026-10-08).** Hit: ev
   (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `POST /api/clipboard/copy`): kicad-cli loads our text as a board and what KiCad 10 writes reads
   back; Escape takes a carried duplicate or paste away again. Pads are selectable (click, box, Selection Filter, highlight, a Properties pane summary).
   A footprint edit clears the routing only when copper is routed to its pads, so a copy can be placed and deleted on a routed board.
-- Missing: `BestSnapAnchor` beyond the grid and a footprint's own bounding box (the courtyard stands in); a footprint with copper on its pads still clears
+- Missing: the anchor half of `BestSnapAnchor` for a Rotate or Flip reference point (item 14 has it for Move) and a footprint's own bounding box (the courtyard stands in); a footprint with copper on its pads still clears
   the whole routing when edited; Duplicate and Paste are a step of their own and the drop a second one; a copy keeps the original's nets, so `--strict` refuses
   moving it away; no rotation-step or flip-direction setting; Paste Special on the PCB; the pad edits (item 9).
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcbnew/kicad_clipboard.cpp`.
@@ -307,16 +307,29 @@ Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L. **Fill fidelity 
 - Port from: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `pcbnew/teardrop/`.
 
 ### 14. Snap, grid and the click-versus-drag rule
-Old #17 (open) and #18 (partial). Hit: every drag. Blocks: no. WP3 for the PCB, WP1 for the schematic, size M.
-- Missing: anchor snap works for Move and the picker only; draw, route, zone and shape clicks use the plain grid (`Canvas.tsx`
-  `snapPoint`); no snap hysteresis or construction-line snap (header of `kicad-port/gridSnap.ts`); no per-category grids
-  (`toggleGridOverrides` is recorded unwired); the schematic grid is a constant (`components/schematic/layout.ts` `GRID`) with no
-  pin or anchor snap in Move. A press followed by a one-grid jitter counts as a drag, because `drag.moved` is set when the snapped
-  delta is non-zero (`Canvas.tsx`); KiCad starts a drag after 8 px of travel (on macOS also after 300 ms held).
-- Done since: the board, footprint and symbol editors have an editable grid list, fast grids and Edit Grids... (`PARITY-common.md`
-  section 10) and a grid origin the server's placement snap follows. The schematic's constant grid means it offers none of the grid
-  list, Next / Previous Grid, fast grids or Edit Grids; a grid choice there waits for the schematic's own snapping work.
-- Port from: `pcbnew/tools/pcb_grid_helper.cpp`, `common/tool/grid_helper.cpp`, `eeschema/tools/ee_grid_helper.cpp`, `common/tool/tool_dispatcher.cpp`.
+Old #17 and #18. **Closed on 2026-10-09 for the board, the schematic and the click rule; the footprint and symbol editors snap to the grid only.** Hit: every drag. Blocks: no. WP3 for the PCB, WP1 for the schematic, size M.
+- Done, the click rule (`kicad-port/dragThreshold.ts`, 11 tests; `PARITY-pcb.md` section 2): a press becomes a drag after more than 8 px along an axis, or on macOS a motion after 300 ms
+  held, exactly as `tool_dispatcher.cpp` decides it, in the board, schematic, footprint and symbol editors. A one-grid jitter is a click now, and a move that ends where it
+  started commits nothing.
+- Done, the board (`kicad-port/{snapGeom,snapScene,snapAnchors,constructionManager,gridHelperBase,pcbGridHelper}.ts`, 67 tests; `components/canvas/pcbSnap.ts`): `PCB_GRID_HELPER::BestSnapAnchor`
+  serves the shape, zone, text, via, dimension, ruler and picker tools and the point editor, with the snap hysteresis (5 px), the snap lines, the construction geometry (a
+  segment's extensions, an arc's circle, the 500 ms dwell) and the intersections; the router's tools snap as `TOOL_BASE::snapToItem` does; a Move starts from `BestDragOrigin`.
+  Anchor types: pad centres, corners and quadrants, track ends and midpoints, via centres, footprint origins, shape and zone points, centres, quadrants, midpoints and
+  intersections. Magnetic Points are in Preferences (Snap to Pads / Tracks and Vias / graphics, Active or All Layers). The superseded `bestSnapPoint` / `snapWithAnchors` are deleted.
+- Done, grid overrides (`kicad-port/gridOverrides.ts`, `state/gridOverrides.ts`): connected items, wires, vias, text and graphics each get a grid of their own in Edit Grids, and
+  `Toggle Grid Overrides` (`Ctrl+Shift+G`, no longer Ungroup's key) switches them; the board, schematic, footprint and symbol editors read them. `common.Control.toggleGridOverrides`
+  is wired (common 145 of 183).
+- Done, the schematic (`kicad-port/schGridHelper.ts`, `components/schematic/schSnap.ts`; `PARITY-sch.md` section 18): the grid list (100 / 50 / 25 / 10 mil), Next / Previous Grid,
+  fast grids and Edit Grids with a Schematic page, the painter's dots on the chosen grid, `EE_GRID_HELPER::BestSnapAnchor` (55 mil, the grid wins while on, pins and origins and
+  wire projections as anchors, snap lines) for every placing tool on its category's grid, and Move and Drag from `BestDragOrigin` keeping connections on the 50 mil grid.
+  The 400 px flat pin radius the wire, label, power and no-connect tools had is gone.
+- Measured: 1521 unit tests pass; `e2e/snap-grid.check.js` runs 43 checks in the browser through `window.__eda` (the drag rule under both platform rules, board grid and overrides, a pad
+  anchor, Shift, the snap line, the schematic's grid list and dots, the text grid, a wire's first click, a grid-off move landing on whole um; every edit undone).
+- Left: the footprint and symbol editors snap to the grid of the category, not to other items' anchors (`PcbGridHelper` / `SchGridHelper` are not wired there) and were not click-tested;
+  with the default Magnetic Points ("In Track Tool") a move or a shape does not snap to pads or tracks until they are set to Always (KiCad's default too); the junction tool keeps its
+  own 12 px snap; the schematic context menu has no Zoom and Grid submenus; the server still snaps a part's placement to 100 um (`meta.snap_um`) whatever grid is shown;
+  the studio never moves the real pointer, so a Move computes the cursor KiCad's warp would give (`kicad-port/heldCursor.ts`).
+- Port from: `pcbnew/tools/pcb_grid_helper.cpp`, `common/tool/grid_helper.cpp`, `eeschema/tools/ee_grid_helper.cpp`, `common/tool/tool_dispatcher.cpp`, `common/tool/construction_manager.cpp`.
 
 ### 15. Interaction details that differ
 New (from `CODE-COMPARE-ui.md`). **Partial.** Hit: constantly, one detail at a time. WP3, WP1 and WP4, size M and ongoing.
@@ -492,8 +505,8 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 14 | Clipboard | Partial | PCB: every item kind, footprints included, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `Cmd::Duplicate`, `components/canvas/clipboard.ts`); schematic: done in KiCad's format (`Cmd::PasteSch`, item 6). Left: Paste Special on the PCB (item 8). |
 | 15 | Cross-tab undo | **Closed** | `crates/ops` `Domain`, `crates/cli/src/board.rs::restore_domain` (test `undo_redo_are_scoped_to_the_tab_that_asked`); the Footprint and Symbol tabs undo in their own scopes. |
 | 16 | Hotkey extraction | **Closed** | `web/studio/tools/lib/actionsParser.js::extractPlatformRaw` (with test), `src/kicad/actions.json` (`common.Interactive.redo` is Ctrl+Y), `actions/hotkeys.ts::effectiveHotkey`. |
-| 17 | Click-versus-drag threshold | **Open** | `Canvas.tsx` sets `drag.moved` on a non-zero snapped delta; item 14. |
-| 18 | Snapping | Partial | `kicad-port/gridSnap.ts`, `components/canvas/gridHelper.ts` (Move and picker); item 14. |
+| 17 | Click-versus-drag threshold | **Closed** | `kicad-port/dragThreshold.ts` in all four editors (2026-10-09); item 14. |
+| 18 | Snapping | **Closed** (board and schematic) | `kicad-port/{pcbGridHelper,schGridHelper,constructionManager}.ts`, `components/canvas/pcbSnap.ts`, `components/schematic/schSnap.ts` (2026-10-09); the library editors snap to the grid only; item 14. |
 | 19 | DRC schematic parity | Out of scope | kicad-cli has `--schematic-parity`; the dialog passes it (2026-10-08, item 11): the Schematic Parity page lists what it reports. |
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | Partial | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`); schematic Align: item 1. |

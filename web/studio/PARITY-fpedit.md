@@ -141,6 +141,16 @@ Bugs found and fixed on the way: Push Pad Properties copied some pad fields and 
 does); the default pad a click placed was an SMD pad (KiCad's master is through-hole); the footprint editor's toasts were never
 cleared; a library symbol with a graphic made `design.json` unreadable (see `PARITY-symedit.md`).
 
+## 9. Grid overrides and click versus drag (GAPS.md item 14, 2026-10-09)
+
+| Behaviour | Status | KiCad file:function |
+|---|---|---|
+| A press becomes a drag after more than 8 px along an axis (on macOS also a motion after 300 ms held); a click is at the press | identical | `tool_dispatcher.cpp:handleMouseButton` -- `kicad-port/dragThreshold.ts`, `FootprintCanvas.tsx` (`gestureRef`, `justPannedRef`); a move drag that ends where it started commits nothing |
+| `Toggle Grid Overrides` (`Ctrl+Shift+G`, the toolbar button): what a tool places or moves snaps to the grid of its category -- a pad on connected items, a shape on graphics, text on text, the pad and anchor tools on the current grid; what is picked up snaps on the coarsest of its items' grids | identical for the grid; the pointer is not warped | `pcb_grid_helper.cpp:GetItemGrid` / `GetSelectionGrid`, `pad_tool.cpp` (`GRID_CURRENT`), `drawing_tool.cpp` (`GRID_GRAPHICS`, `GRID_TEXT`) -- `FootprintCanvas.tsx` (`toolGrid`, `heldGrid`), `kicad-port/gridOverrides.ts`; the footprint editor's own overrides (Edit Grids... > Footprint Editor), all off by default as KiCad's board editors' are |
+| Snapping to other items' anchors (pads, graphics' corners, intersections), the hysteresis, snap lines and construction geometry | **missing** | the footprint editor snaps to the grid only; `PcbGridHelper` (`kicad-port/pcbGridHelper.ts`) is wired into the board editor (`PARITY-pcb.md` section 2), not here |
+
+Not click-tested for the snapped coordinates: `window.__eda.state().view` is null on this tab, so the check script cannot place a pointer on the canvas. The grid it picks is the unit-tested `gridSizeFor` / `selectionGrid` (`gridOverrides.test.ts`); the tab mounts and arms its tools with no console error.
+
 ## Known gaps summary (ranked, highest first)
 
 1. **No manual click-through testing was possible this session** -- the in-app browser pane would not navigate (confirmed, not assumed: a `navigate` call timed out at 300s). Every UI interaction (pad placement, drag-to-move, dialogs opening/submitting, the context menu) is implemented following this codebase's own established Canvas.tsx/ZoneDialog.tsx patterns and is typecheck-clean, but has only been exercised indirectly: via the backend API directly (curl, see the commit log) and via this app's own `node:test` unit tests for the pure-logic pieces (padNumbering.ts). **A real click-through is the single highest-priority remaining item.**
