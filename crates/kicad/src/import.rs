@@ -1245,6 +1245,9 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     if let Some(g) = sexpr::find(fp, "net_tie_pad_groups") {
         e.net_tie_pad_groups = g.iter().skip(1).filter_map(Sexpr::text).map(String::from).collect();
     }
+    // `(zone_connect N)` (`FOOTPRINT::SetLocalZoneConnection`); the legacy `(thermal_width ..)` / `(thermal_gap ..)` are
+    // read and dropped by KiCad itself ("never exposed in the GUI").
+    e.zone_connection = sexpr::find(fp, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
     e
 }
 
@@ -1288,6 +1291,11 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64) -> PadMask
     if let Some(t) = sexpr::find(pad, "pintype").and_then(|f| sexpr::txt(f, 1)) {
         info.pin_type = t.to_string();
     }
+    // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.
+    info.zone_connection = sexpr::find(pad, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
+    info.thermal_spoke_width = sexpr::find(pad, "thermal_bridge_width").or_else(|| sexpr::find(pad, "thermal_width")).and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
+    info.thermal_spoke_angle_mdeg = sexpr::find(pad, "thermal_bridge_angle").and_then(|f| sexpr::num(f, 1)).map(|d| ((d * 1000.0).round() as i64).rem_euclid(360_000) as eda_model::ir::Millideg);
+    info.thermal_gap = sexpr::find(pad, "thermal_gap").and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
     info
 }
 

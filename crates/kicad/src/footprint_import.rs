@@ -73,6 +73,7 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     fp.description = sexpr::find(root, "descr").and_then(|d| sexpr::txt(d, 1)).unwrap_or("").to_string();
     fp.keywords = sexpr::find(root, "tags").and_then(|d| sexpr::txt(d, 1)).unwrap_or("").to_string();
     fp.attributes = attributes(root);
+    fp.zone_connection = sexpr::find(root, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
     fp.model = crate::footprint_lib::model_from(root);
     fp.courtyard = crate::footprint_lib::courtyard_from(root);
 
@@ -261,6 +262,8 @@ fn parse_pad(pad: &[Sexpr], warnings: &mut Vec<String>) -> Option<LibraryPad> {
         clearance_override: um("clearance"),
         thermal_gap_override: um("thermal_gap"),
         thermal_spoke_width_override: um("thermal_bridge_width"),
+        zone_connection: sexpr::find(pad, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64)),
+        thermal_spoke_angle_mdeg: sexpr::find(pad, "thermal_bridge_angle").and_then(|a| sexpr::num(a, 1)).map(|d| ((d * 1000.0).round() as i64).rem_euclid(360_000) as eda_model::ir::Millideg),
     })
 }
 
@@ -289,6 +292,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 

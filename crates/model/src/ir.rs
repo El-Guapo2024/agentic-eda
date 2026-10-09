@@ -2161,6 +2161,64 @@ pub struct PadMaskInfo {
     /// `(pintype "..")`, e.g. `"free"` (see `PAD::IsFreePad`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_type: String,
+    /// `(zone_connect N)` (`PAD::GetLocalZoneConnection`): how a zone connects to this pad, overriding the footprint's
+    /// and then the zone's own `pad_connection`. `None` is `INHERITED`. Read by the zone filler
+    /// (`ZONE_FILLER::knockoutThermalReliefs` -> `DRC_ENGINE::EvalZoneConnection`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    /// `(thermal_gap g)` (`PAD::GetLocalThermalGapOverride`): the pad's own thermal relief gap; `None` inherits the zone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_gap: Option<Um>,
+    /// `(thermal_bridge_width w)` (`PAD::GetLocalThermalSpokeWidthOverride`): the pad's own spoke width; `None` inherits the zone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_width: Option<Um>,
+    /// `(thermal_bridge_angle a)` (`PAD::GetThermalSpokeAngle`), millidegrees in KiCad's own sign convention (as in the
+    /// file). `None` is the shape's default: 90 degrees for an oval or (rounded) rectangle, 45 for a circle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// One placed pad's zone-connection facts, resolved: its own override over its footprint's, then the zone's own
+/// `pad_connection` (applied by the filler, `DRC_ENGINE::EvalZoneConnection`). See [`Design::pad_zone_facts`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PadZoneFacts {
+    /// The pad's own `(zone_connect ..)`; `None` inherits.
+    pub connection: Option<PadConnection>,
+    /// The footprint's `(zone_connect ..)`; `None` inherits (consulted when the pad inherits).
+    pub footprint_connection: Option<PadConnection>,
+    pub thermal_gap: Option<Um>,
+    pub thermal_spoke_width: Option<Um>,
+    /// Millidegrees, KiCad's sign convention; `None` is the shape's default.
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+impl Design {
+    /// The zone-connection facts of pad number `pad_idx` (of `pad_count`) of placed footprint `fp_id` whose definition is
+    /// `footprint_name`. A footprint instance that came from a `.kicad_pcb` (or was edited on the board) carries its own
+    /// [`FootprintExtra`], and those facts are the whole truth -- exactly KiCad, where each board pad holds its own copy.
+    /// Without one, a *published* library footprint of that name supplies them (`Cmd::UpdateFootprintOnBoard`), since the
+    /// board's pads then come from it.
+    pub fn pad_zone_facts(&self, fp_id: &str, footprint_name: &str, pad_idx: usize, pad_count: usize) -> PadZoneFacts {
+        if let Some(extra) = self.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp_id)) {
+            let pad = if extra.pads.len() == pad_count { extra.pads.get(pad_idx) } else { None };
+            return PadZoneFacts {
+                connection: pad.and_then(|p| p.zone_connection),
+                footprint_connection: extra.zone_connection,
+                thermal_gap: pad.and_then(|p| p.thermal_gap),
+                thermal_spoke_width: pad.and_then(|p| p.thermal_spoke_width),
+                thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
+            };
+        }
+        let Some(lib) = self.footprint_library.as_ref().and_then(|l| l.by_name(footprint_name)).filter(|f| f.published) else { return PadZoneFacts::default() };
+        let pad = if lib.pads.len() == pad_count { lib.pads.get(pad_idx) } else { None };
+        PadZoneFacts {
+            connection: pad.and_then(|p| p.zone_connection),
+            footprint_connection: lib.zone_connection,
+            thermal_gap: pad.and_then(|p| p.thermal_gap_override),
+            thermal_spoke_width: pad.and_then(|p| p.thermal_spoke_width_override),
+            thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
+        }
+    }
 }
 
 /// A footprint-owned graphic (or mask-only pad) in board space.
@@ -2198,6 +2256,10 @@ pub struct FootprintExtra {
     /// `(net_tie_pad_groups "1,2" "3")`, verbatim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub net_tie_pad_groups: Vec<String>,
+    /// `(zone_connect N)` on the footprint (`FOOTPRINT::GetLocalZoneConnection`): how zones connect to every pad that
+    /// does not set its own. `None` is `INHERITED` (the zone's `pad_connection` applies).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
     /// Footprint graphics on silk/mask layers, board space.
@@ -2457,6 +2519,14 @@ pub struct LibraryPad {
     /// `PAD::GetLocalThermalSpokeWidthOverride()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thermal_spoke_width_override: Option<Um>,
+    /// `PAD::GetLocalZoneConnection()` -- the Pad Properties dialog's "Pad connection" choice; `None` is `INHERITED`
+    /// ("From parent footprint").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    /// `PAD::GetThermalSpokeAngle()` -- the dialog's "Spoke angle", millidegrees as in the file; `None` is the shape's
+    /// default (90 degrees for an oval or (rounded) rectangle, 45 for a circle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
 }
 
 /// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
@@ -2565,6 +2635,8 @@ impl LibraryPad {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 }
@@ -2645,6 +2717,10 @@ pub struct LibraryFootprint {
     /// change what's already placed without that separate, explicit step.
     #[serde(default)]
     pub published: bool,
+    /// `FOOTPRINT::GetLocalZoneConnection()` -- the Footprint Properties dialog's "Zone connection": how a zone connects to
+    /// every pad of this footprint that does not set its own. `None` is `INHERITED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
 }
 
 impl Default for LibraryFootprint {
@@ -2664,6 +2740,7 @@ impl Default for LibraryFootprint {
             model: None,
             anchor: Point { x: 0, y: 0 },
             published: false,
+            zone_connection: None,
         }
     }
 }
@@ -3707,6 +3784,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 

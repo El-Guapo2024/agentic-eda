@@ -2723,6 +2723,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         };
         step(&dir, Cmd::AddPad { footprint: "2PAD".into(), pad }, false, "test").unwrap();
 
