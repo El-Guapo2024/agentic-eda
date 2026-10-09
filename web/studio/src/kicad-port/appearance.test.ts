@@ -8,6 +8,9 @@ import {
   defaultAppearance,
   isUnspecified,
   netPalette,
+  copperColor,
+  drcMarkerObject,
+  ratsnestColor,
   nextContrastMode,
   nextNetColorMode,
   objectKey,
@@ -59,10 +62,10 @@ test("COLOR4D::UNSPECIFIED is (0, 0, 0, 0): clearing a swatch writes rgba(0,0,0,
   assert.equal(specifiedColor("junk"), null);
 });
 
-test("the 22 objects, and what a new project has on (GAL_SET::DefaultVisible): all but DRC exclusions and the board area shadow", () => {
+test("the 22 objects, and what a new project has on (GAL_SET::DefaultVisible): all but DRC exclusions and the board area shadow -- and the drawing sheet, which this studio keeps off", () => {
   assert.equal(OBJECT_IDS.length, 22);
   const off = OBJECT_IDS.filter((id) => !DEFAULT_OBJECT_VISIBILITY[id]);
-  assert.deepEqual(off, ["drc_exclusions", "board_outline_area"]);
+  assert.deepEqual(off, ["drc_exclusions", "board_outline_area", "drawing_sheet"]);
 });
 
 test("the Objects rows are s_objectSettings' without Images and Points, and Filled Shapes has a slider and no checkbox", () => {
@@ -117,7 +120,7 @@ test("the inactive-layer and net colour modes cycle as PCB_CONTROL does and use 
 
 test("visibleObjects merges the ratsnest and the grid switches in, in the order of OBJECT_IDS", () => {
   const a = defaultAppearance();
-  assert.equal(visibleObjects(a, true, true).length, 20);
+  assert.equal(visibleObjects(a, true, true).length, 19, "the 22 less the three that are off by default");
   const none = visibleObjects(a, false, false);
   assert.equal(none.includes("ratsnest"), false);
   assert.equal(none.includes("grid"), false);
@@ -157,4 +160,39 @@ test("net colours: the net's own beats its class's, the Default class has none, 
   assert.equal(p.has("VCC"), false, "an unspecified net colour and the Default class: none");
   assert.equal(p.has("SCL"), false, "the Default class never gives a colour");
   assert.equal(p.size, 3);
+});
+
+test("a DRC marker is on the object of its severity; a waived one is a DRC exclusion (PCB_MARKER::ViewGetLayers)", () => {
+  assert.equal(drcMarkerObject({ severity: "error" }), "drc_errors");
+  assert.equal(drcMarkerObject({ severity: "warning" }), "drc_warnings");
+  assert.equal(drcMarkerObject({ severity: "error", excluded: true }), "drc_exclusions");
+  assert.equal(drcMarkerObject({ severity: "warning", excluded: true }), "drc_exclusions");
+  assert.equal(drcMarkerObject({ severity: "exclusion" }), "drc_errors", "anything else is an error, as the switch's default");
+});
+
+const palette = new Map([["GND", { r: 0, g: 224, b: 64, a: 1 }], ["SIG", { r: 255, g: 160, b: 0, a: 0.5 }]]);
+
+test("copper takes its net's colour in the All mode only, and keeps its own where the net has none (PCB_RENDER_SETTINGS::GetColor)", () => {
+  const all = { netColorMode: "all" as const, palette };
+  assert.equal(copperColor("#c83434ff", "GND", all, null), "rgba(0, 224, 64, 1)");
+  assert.equal(copperColor("#c83434ff", "VCC", all, null), "#c83434ff", "no colour for the net");
+  assert.equal(copperColor("#c83434ff", null, all, null), "#c83434ff", "an item with no net");
+  assert.equal(copperColor("#c83434ff", "GND", { netColorMode: "ratsnest", palette }, null), "#c83434ff", "ratsnest mode: copper is not touched");
+  assert.equal(copperColor("#c83434ff", "GND", { netColorMode: "off", palette }, null), "#c83434ff");
+  assert.equal(copperColor("#c83434ff", "GND", undefined, null), "#c83434ff", "no appearance at all");
+});
+
+test("a highlight brightens the highlighted net's colour and darkens every other net's by 0.5, keeping the alpha", () => {
+  const all = { netColorMode: "all" as const, palette };
+  assert.equal(copperColor("#000", "SIG", all, true), "rgba(255, 208, 128, 0.5)");
+  assert.equal(copperColor("#000", "SIG", all, false), "rgba(128, 80, 0, 0.5)");
+  assert.equal(copperColor("#000", "GND", all, true), "rgba(128, 240, 160, 1)");
+});
+
+test("the ratsnest takes the net's colour in every mode but None", () => {
+  assert.equal(ratsnestColor("GND", { netColorMode: "all", palette }), "rgba(0, 224, 64, 1)");
+  assert.equal(ratsnestColor("GND", { netColorMode: "ratsnest", palette }), "rgba(0, 224, 64, 1)");
+  assert.equal(ratsnestColor("GND", { netColorMode: "off", palette }), null);
+  assert.equal(ratsnestColor("VCC", { netColorMode: "all", palette }), null, "no colour: the ratsnest colour");
+  assert.equal(ratsnestColor("GND", undefined), null);
 });

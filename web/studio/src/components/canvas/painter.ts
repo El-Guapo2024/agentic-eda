@@ -30,6 +30,7 @@ import { isHighlighted } from "../../kicad-port/boardControl";
 import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 import { layerIsVisible, isCopper } from "../../kicad-port/layerPresets";
+import { drcMarkerObject } from "../../kicad-port/appearance";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
 
 /**
@@ -276,7 +277,10 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
   // to size it, so only the wall stroke is drawn.
   const padCopperKey = part.side === "bottom" ? "b_cu" : "f_cu";
   const padAlpha = opacityOf(opts.appearance, "pads");
-  for (const pad of on(opts.layerVisible, "pads") ? (part.pads ?? []) : []) {
+  // A surface-mount pad is copper on its footprint's side; a through-hole one is on every copper layer, so it shows while any of them does (`PAD::ViewGetLOD`).
+  const sideCopper = part.side === "bottom" ? "B.Cu" : "F.Cu";
+  const anyCopper = Object.keys(opts.layerVisible).every((k) => !/\.Cu$/.test(k)) || Object.entries(opts.layerVisible).some(([k, v]) => /\.Cu$/.test(k) && v !== false);
+  for (const pad of on(opts.layerVisible, "pads") ? (part.pads ?? []).filter((q) => (q.th ? anyCopper : opts.layerVisible[sideCopper] !== false)) : []) {
     ctx.save();
     ctx.globalAlpha *= padAlpha;
     const fill = copperPaint(layerColor(padCopperKey), pad.net, opts);
@@ -1040,7 +1044,7 @@ function drawDrcMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, viol
     // A waived violation (`LAYER_DRC_EXCLUSION`): drawn in the exclusion colour and muted, as KiCad draws an excluded marker -- when DRC Exclusions is on.
     const waived = v.excluded === true;
     // `PCB_MARKER::ViewGetLayers`: a marker is on the layer of its severity (an exclusion on its own), which the Objects tab switches. The one the DRC dialog has selected stays.
-    if (!on && !objectOnPaint(layerVisible, waived ? "drc_exclusions" : v.severity === "warning" ? "drc_warnings" : "drc_errors")) return;
+    if (!on && !objectOnPaint(layerVisible, drcMarkerObject(v))) return;
     const color = on ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(waived ? "LAYER_DRC_EXCLUSION" : v.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
     const r = on ? DRC_MARKER_RADIUS_UM * 1.4 : DRC_MARKER_RADIUS_UM;
     ctx.save();

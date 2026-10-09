@@ -4,15 +4,16 @@
 // (`LAYER_CONFLICTS_SHADOW`, drc_interactive_courtyard_clearance.cpp), the board area shadow (`LAYER_BOARD_OUTLINE_AREA`) and the drawing sheet
 // (`LAYER_DRAWINGSHEET`). painter.ts calls these; it keeps every other drawing decision.
 
-import type { BoardState, Part, Zone } from "../../api/types";
+import type { BoardState, Part } from "../../api/types";
 import type { ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor } from "./layers";
 import { drawStrokeText } from "../text/strokeFont";
-import { DEFAULT_OPACITY, netPalette, objectOn, type AppearanceState, type NetColorMode, type ObjectId, type Opacity, type OpacityKey, type Rgba } from "../../kicad-port/appearance";
+import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
+import { DEFAULT_OPACITY, copperColor, netPalette, objectOn, ratsnestColor, type AppearanceState, type NetColorMode, type ObjectId, type Opacity, type OpacityKey, type Rgba } from "../../kicad-port/appearance";
 import type { NetsContext } from "../../kicad-port/appearanceNets";
-import { brighten, darken, HIGHLIGHT_FACTOR } from "../../kicad-port/netHighlight";
-import { carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
+import { splitCarried } from "../../kicad-port/pcbCarry";
+import { courtyardConflicts, movedBox, type Box, type MovePreview } from "../../kicad-port/courtyardConflicts";
 import { scaleToZoomFactor } from "../../kicad-port/zoomFit";
 
 /** Everything the painter needs from the panel's settings, assembled once per change (components/canvas/Canvas.tsx). */
@@ -52,32 +53,14 @@ export function opacityOf(a: PaintAppearance | undefined, key: OpacityKey): numb
   return (a ?? PLAIN_APPEARANCE).opacity[key];
 }
 
-const rgbaText = (c: Rgba): string => `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`;
-
-/**
- * `PCB_RENDER_SETTINGS::GetColor`'s net branch for copper: the item's colour is its net's (or its net class's) when the net colour mode is "All" and the net
- * has one, else the layer's `base`; a highlighted net brightens it and every other net darkens it by the same 0.5 (`m_highlightFactor`).
- */
-export function copperColor(base: string, net: string | null | undefined, a: PaintAppearance | undefined, highlighted: boolean | null): string {
-  const own = net && a && a.netColorMode === "all" ? a.palette.get(net) : undefined;
-  if (!own) return base;
-  if (highlighted === null) return rgbaText(own);
-  const rgb = highlighted ? brighten(own, HIGHLIGHT_FACTOR) : darken(own, HIGHLIGHT_FACTOR);
-  return rgbaText({ ...rgb, a: own.a });
-}
-
-/** The ratsnest line's colour: the net's (or its class's) in every mode but "None" (`RATSNEST_VIEW_ITEM::ViewDraw`'s `colorByNet`), else the ratsnest colour. */
-export function ratsnestColor(net: string, a: PaintAppearance | undefined): string | null {
-  const own = a && a.netColorMode !== "off" ? a.palette.get(net) : undefined;
-  return own ? rgbaText(own) : null;
-}
+export { copperColor, ratsnestColor };
 
 /** True when the object is switched on (and not at opacity 0), by the `obj:<id>` keys of the layer visibility record. */
 export const on = (layerVisible: Readonly<Record<string, boolean>>, id: ObjectId): boolean => objectOn(layerVisible, id);
 
 // ------------------------------------------------------------------------------------------------------------------------------------ overlays
 
-type Opts = { layerVisible: Record<string, boolean>; appearance?: PaintAppearance };
+type Opts = { layerVisible: Record<string, boolean>; appearance?: PaintAppearance; activeLayer?: string | null; highContrast?: boolean };
 
 /** `PCB_PAINTER::draw( const FOOTPRINT* )` on `LAYER_ANCHOR`: a cross five pixels either way, one pixel wide, at the footprint's origin -- only where its side shows (`FOOTPRINT::ViewGetLOD`) and zoomed in enough (the item's level of detail 1.5). */
 export function drawAnchors(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: Opts): void {
@@ -123,9 +106,11 @@ export function drawLockedShadows(ctx: CanvasRenderingContext2D, board: BoardSta
     const [x0, y0, x1, y1] = p.courtyard;
     ctx.fillRect(x0 - m / 2, y0 - m / 2, x1 - x0 + m, y1 - y0 + m);
   }
+  // "Hide shadow if the main layer is not shown", and on dimmed copper (`PCB_TRACK::ViewGetLOD`): a shadow lies on a layer that is on and, in high contrast, active.
+  const shadowed = (layer: string): boolean => layerIsVisible(opts.layerVisible, layer) && !(opts.highContrast && opts.activeLayer && layerStateKey(layer) !== opts.activeLayer);
   if (on(opts.layerVisible, "tracks")) {
     for (const t of board.routing?.tracks ?? []) {
-      if (!locked.has(t.id) || t.pts.length < 2) continue;
+      if (!locked.has(t.id) || t.pts.length < 2 || !shadowed(t.layer)) continue;
       ctx.lineWidth = t.width + m;
       ctx.beginPath();
       t.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -143,7 +128,7 @@ export function drawLockedShadows(ctx: CanvasRenderingContext2D, board: BoardSta
   }
   if (on(opts.layerVisible, "zones")) {
     for (const z of board.routing?.zones ?? []) {
-      if (!locked.has(z.id) || z.outline.length < 3) continue;
+      if (!locked.has(z.id) || z.outline.length < 3 || !shadowed(z.layer)) continue;
       ctx.lineWidth = m;
       ctx.beginPath();
       z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
@@ -152,7 +137,7 @@ export function drawLockedShadows(ctx: CanvasRenderingContext2D, board: BoardSta
     }
   }
   for (const s of board.drawings?.shapes ?? []) {
-    if (!locked.has(s.id)) continue;
+    if (!locked.has(s.id) || !shadowed(s.layer)) continue;
     ctx.lineWidth = s.stroke_width + m;
     ctx.beginPath();
     if (s.kind === "segment") {
@@ -188,108 +173,8 @@ export function drawBoardArea(ctx: CanvasRenderingContext2D, board: BoardState, 
 
 // ------------------------------------------------------------------------------------------------------------------------------ colliding courtyards
 
-type Box = readonly [number, number, number, number];
-
-function boxesOverlap(a: Box, b: Box): boolean {
-  return a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
-}
-
-/** The courtyard box of `p` after the move in progress: the corners go through the same transform the painter draws the footprint with, the box is theirs. */
-function movedBox(p: Part, preview: CarryPreview & { kind?: string; perRefOffsetUm?: Record<string, [number, number]> }): Box | null {
-  if (!p.courtyard) return null;
-  const [x0, y0, x1, y1] = p.courtyard;
-  const corners: [number, number][] = [
-    [x0, y0],
-    [x1, y0],
-    [x1, y1],
-    [x0, y1],
-  ];
-  let pts: [number, number][];
-  if (preview.kind === "pcb") {
-    pts = corners.map((c) => carryPoint(preview, c));
-  } else {
-    // `drawFootprint`'s own transform: turn / flip about the anchor, then move (Pack and Move adds its per-footprint shift).
-    const own = preview.perRefOffsetUm?.[p.ref];
-    const [dx, dy] = [preview.dxUm + (own?.[0] ?? 0), preview.dyUm + (own?.[1] ?? 0)];
-    const [ax, ay] = p.at ?? [(x0 + x1) / 2, (y0 + y1) / 2];
-    const theta = (-(preview.rotateQuarterTurns ?? 0) * Math.PI) / 2;
-    const [cos, sin] = [Math.round(Math.cos(theta)), Math.round(Math.sin(theta))];
-    pts = corners.map(([x, y]) => {
-      let u = x - ax;
-      const v = y - ay;
-      if (preview.flipped) u = -u;
-      return [ax + u * cos - v * sin + dx, ay + u * sin + v * cos + dy];
-    });
-  }
-  const xs = pts.map((q) => q[0]);
-  const ys = pts.map((q) => q[1]);
-  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-}
-
-function polygonHitsBox(poly: readonly (readonly [number, number])[], b: Box): boolean {
-  const inside = (x: number, y: number) => {
-    let c = false;
-    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [xi, yi] = poly[i]!;
-      const [xj, yj] = poly[j]!;
-      if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) c = !c;
-    }
-    return c;
-  };
-  if (poly.some(([x, y]) => x >= b[0] && x <= b[2] && y >= b[1] && y <= b[3])) return true;
-  if (inside(b[0], b[1]) || inside(b[2], b[1]) || inside(b[2], b[3]) || inside(b[0], b[3])) return true;
-  const edges: [number, number, number, number][] = [
-    [b[0], b[1], b[2], b[1]],
-    [b[2], b[1], b[2], b[3]],
-    [b[2], b[3], b[0], b[3]],
-    [b[0], b[3], b[0], b[1]],
-  ];
-  const ccw = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) => (cy - ay) * (bx - ax) > (by - ay) * (cx - ax);
-  const cross = (a: readonly [number, number], b2: readonly [number, number], c: readonly [number, number], d: readonly [number, number]) =>
-    ccw(a[0], a[1], c[0], c[1], d[0], d[1]) !== ccw(b2[0], b2[1], c[0], c[1], d[0], d[1]) && ccw(a[0], a[1], b2[0], b2[1], c[0], c[1]) !== ccw(a[0], a[1], b2[0], b2[1], d[0], d[1]);
-  for (let i = 0; i < poly.length; i++) {
-    const [p, q] = [poly[i]!, poly[(i + 1) % poly.length]!];
-    if (edges.some(([x0, y0, x1, y1]) => cross(p, q, [x0, y0], [x1, y1]))) return true;
-  }
-  return false;
-}
-
-/**
- * `DRC_INTERACTIVE_COURTYARD_CLEARANCE::testCourtyardClearances` for a move in progress, over the studio's rectangular courtyards: a footprint being
- * moved and one that is not conflict when their courtyards on the same side overlap (clearance 0); a footprint being moved and a rule area that
- * keeps footprints out conflict when the area meets the courtyard. Both parties of a conflict are highlighted (`UpdateConflicts( view, true )`).
- * Returns the refs of the footprints in conflict and the ids of the rule areas.
- */
-export function courtyardConflicts(board: BoardState, preview: (CarryPreview & { kind?: string; perRefOffsetUm?: Record<string, [number, number]> }) | null): { parts: Set<string>; zones: Set<string> } {
-  const parts = new Set<string>();
-  const zones = new Set<string>();
-  if (!preview) return { parts, zones };
-  const split = splitCarried(board, preview.refs);
-  const moving = split.moving.parts.filter((p) => p.placed && p.courtyard);
-  const still = split.still.parts.filter((p) => p.placed && p.courtyard);
-  const keepouts = (board.routing?.zones ?? []).filter((z: Zone) => z.is_rule_area && z.keepout_footprints && z.outline.length >= 3);
-  for (const m of moving) {
-    const mb = movedBox(m, preview);
-    if (!mb) continue;
-    for (const o of still) {
-      if ((o.side === "bottom") !== (m.side === "bottom")) continue;
-      if (boxesOverlap(mb, o.courtyard as Box)) {
-        parts.add(m.ref);
-        parts.add(o.ref);
-      }
-    }
-    for (const z of keepouts) {
-      if (polygonHitsBox(z.outline, mb)) {
-        parts.add(m.ref);
-        zones.add(z.id);
-      }
-    }
-  }
-  return { parts, zones };
-}
-
 /** `PCB_PAINTER::draw( const FOOTPRINT* )` / `draw( const ZONE* )` on `LAYER_CONFLICTS_SHADOW`: the courtyards (and rule areas) in conflict during a move, filled. Drawn where the part is on screen: the moved ones through the move. */
-export function drawConflicts(ctx: CanvasRenderingContext2D, board: BoardState, preview: (CarryPreview & { kind?: string; perRefOffsetUm?: Record<string, [number, number]> }) | null, opts: Opts): void {
+export function drawConflicts(ctx: CanvasRenderingContext2D, board: BoardState, preview: MovePreview | null, opts: Opts): void {
   if (!preview || !on(opts.layerVisible, "conflict_shadows")) return;
   const { parts, zones } = courtyardConflicts(board, preview);
   if (parts.size === 0 && zones.size === 0) return;

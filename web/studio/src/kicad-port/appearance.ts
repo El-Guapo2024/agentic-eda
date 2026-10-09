@@ -16,6 +16,8 @@
 // What the panel does not list, with the reason: Images (`LAYER_DRAW_BITMAPS`) and Points (`LAYER_POINTS`) -- the board model has no reference images
 // and no snap points, so a toggle would switch nothing. Both stay in the model (`OBJECT_IDS`) so a preset or a project file that names them keeps them.
 
+import { brighten, darken, HIGHLIGHT_FACTOR } from "./netHighlight";
+
 // ------------------------------------------------------------------------------------------------------------------------------------ colours
 
 /** A colour as `COLOR4D` holds it: red, green, blue as 0..255 integers and alpha 0..1. */
@@ -120,7 +122,8 @@ export function isObjectId(s: unknown): s is ObjectId {
 
 /**
  * `GAL_SET::DefaultVisible` restricted to the 22: everything is on except the DRC exclusions ("DRC exclusions hidden by default") and the board area
- * shadow ("currently hidden by default").
+ * shadow ("currently hidden by default") -- and, unlike KiCad, the drawing sheet: the placer starts a board at the page's corner, where the sheet's frame (ten
+ * and twelve millimetres in from the paper's edge) would cut straight through it, and the studio has never drawn one. One click on Drawing Sheet shows it.
  */
 export const DEFAULT_OBJECT_VISIBILITY: Readonly<Record<ObjectId, boolean>> = {
   tracks: true,
@@ -143,7 +146,7 @@ export const DEFAULT_OBJECT_VISIBILITY: Readonly<Record<ObjectId, boolean>> = {
   locked_item_shadows: true,
   conflict_shadows: true,
   board_outline_area: false,
-  drawing_sheet: true,
+  drawing_sheet: false,
   grid: true,
 };
 
@@ -211,6 +214,14 @@ export function withObjectVisible(visible: Readonly<Record<ObjectId, boolean>>, 
     next.footprint_text = true;
   }
   return next;
+}
+
+/**
+ * The object a DRC marker belongs to (`PCB_MARKER::ViewGetLayers`): a violation the person waived is a DRC exclusion, otherwise its severity decides --
+ * a warning is a DRC warning, everything else (an error, and any severity KiCad does not name) a DRC error.
+ */
+export function drcMarkerObject(v: { excluded?: boolean; severity: string }): ObjectId {
+  return v.excluded === true ? "drc_exclusions" : v.severity === "warning" ? "drc_warnings" : "drc_errors";
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------ modes
@@ -375,3 +386,32 @@ export function netPalette(a: Pick<AppearanceState, "netColors" | "netclassColor
 /** Whether the mode puts net colours on copper (`NET_COLOR_MODE::ALL`) or on the ratsnest (anything but `OFF`). */
 export const netColorsOnCopper = (m: NetColorMode): boolean => m === "all";
 export const netColorsOnRatsnest = (m: NetColorMode): boolean => m !== "off";
+
+// -------------------------------------------------------------------------------------------------------------------------- colours of copper and ratsnest
+
+/** What the painter reads to colour a net: the net colour mode and each net's own colour (`netPalette`). */
+export interface NetColorView {
+  netColorMode: NetColorMode;
+  palette: ReadonlyMap<string, Rgba>;
+}
+
+const rgbaText = (c: Rgba): string => `rgba(${c.r}, ${c.g}, ${c.b}, ${c.a})`;
+
+/**
+ * `PCB_RENDER_SETTINGS::GetColor`'s net branch for copper: the item's colour is its net's (or its net class's) when the net colour mode is "All" and the net
+ * has one, else `base` (null: nothing to change). With a net highlight (`highlighted` true on the highlighted net, false on every other, null for none) the colour
+ * is brightened or darkened by the same 0.5 (`m_highlightFactor`), its alpha kept.
+ */
+export function copperColor(base: string, net: string | null | undefined, view: NetColorView | undefined, highlighted: boolean | null): string {
+  const own = net && view && netColorsOnCopper(view.netColorMode) ? view.palette.get(net) : undefined;
+  if (!own) return base;
+  if (highlighted === null) return rgbaText(own);
+  const rgb = highlighted ? brighten(own, HIGHLIGHT_FACTOR) : darken(own, HIGHLIGHT_FACTOR);
+  return rgbaText({ ...rgb, a: own.a });
+}
+
+/** The ratsnest line's colour: the net's (or its class's) in every mode but "None" (`RATSNEST_VIEW_ITEM::ViewDraw`'s `colorByNet`), else null (the ratsnest colour). */
+export function ratsnestColor(net: string, view: NetColorView | undefined): string | null {
+  const own = view && netColorsOnRatsnest(view.netColorMode) ? view.palette.get(net) : undefined;
+  return own ? rgbaText(own) : null;
+}

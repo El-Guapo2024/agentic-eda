@@ -10,7 +10,7 @@ export function NetDisplayOptions() {
   return (
     <Pane title="Net Display Options">
       <div className="ap-sub" title="Choose when to show net and netclass colors">
-        Net colors (N):
+        Net colors:
       </div>
       <Radios<NetColorMode>
         name="Net colors"

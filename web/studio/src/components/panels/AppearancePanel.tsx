@@ -18,7 +18,7 @@ const TABS: ReadonlyArray<{ id: SubTab; label: string }> = [
   { id: "layers", label: "Layers" },
   { id: "objects", label: "Objects" },
   { id: "nets", label: "Nets" },
-  { id: "classes", label: "Net Classes" },
+  { id: "classes", label: "Classes" },
 ];
 
 export function AppearancePanel() {
@@ -27,7 +27,7 @@ export function AppearancePanel() {
     <div className="ap-root" style={{ flex: 1, minHeight: 0 }}>
       <div className="dock-tabs">
         {TABS.map((t) => (
-          <div key={t.id} className={`dock-tab${tab === t.id ? " active" : ""}`} data-tab={t.id} onClick={() => setTab(t.id)}>
+          <div key={t.id} className={`dock-tab${tab === t.id ? " active" : ""}`} data-tab={t.id} title={t.id === "classes" ? "Net Classes" : undefined} onClick={() => setTab(t.id)}>
             {t.label}
           </div>
         ))}

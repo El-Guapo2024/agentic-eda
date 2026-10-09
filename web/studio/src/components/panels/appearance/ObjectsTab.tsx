@@ -37,8 +37,7 @@ export function ObjectsTab() {
             <span className={row.opacity ? "ap-label-fixed" : "ap-name"}>{row.label}</span>
             {row.opacity && (
               <input
-                className="ap-slider"
-                style={{ flex: 1, width: "auto" }}
+                className="ap-slider grow"
                 type="range"
                 min={0}
                 max={100}

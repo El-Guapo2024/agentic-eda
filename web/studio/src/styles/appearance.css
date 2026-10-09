@@ -92,8 +92,14 @@
   width: 64px;
   flex-shrink: 0;
 }
+/* The Objects tab's sliders take what is left of the row (a range input will not shrink below its own size unless told it may). */
+.ap-row .ap-slider.grow {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 36px;
+}
 .ap-label-fixed {
-  width: 98px;
+  width: 96px;
   flex: none;
   overflow: hidden;
   text-overflow: ellipsis;
