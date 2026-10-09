@@ -3496,6 +3496,40 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The fields of a symbol as items (move, turn, mirror, Field Properties, Autoplace Fields) and a label's look: each is a single undo step that changes the
+    /// sheet, and one Undo brings back exactly what was there (the stored places of the fields and the autoplaced flags included), on the user's board.
+    #[test]
+    fn every_schematic_field_verb_is_one_undo_step() {
+        use eda_engine::fields_edit::field_id;
+        use eda_ops::sch_edit::SchCmd as E;
+        use eda_ops::sch_move::SchMoveCmd as V;
+        let dir = scratch("sch_field_undo");
+        setup_mcu30_users_board(&dir);
+        let (_, design, _) = load(&dir).unwrap();
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents)).unwrap();
+        let start = sheet_of(&design);
+        let label = design.schematic.as_ref().unwrap().labels.first().map(|l| l.id.clone()).expect("the board has a net label");
+        let commands = vec![
+            Cmd::SchMove(V::Move { ids: vec![field_id("R1", "Reference")], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Rotate { ids: vec![field_id("R1", "Value")], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(V::Mirror { ids: vec![field_id("R1", "Value")], vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+            Cmd::SchMove(V::Rotate { ids: vec!["R1".into()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true) }),
+        ];
+        for cmd in commands {
+            let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
+            step(&dir, wrapped, false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let after = sheet_of(&load(&dir).unwrap().1);
+            assert_ne!(after, start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Dragging a symbol with the verb that moves any item takes the wires on its pins along: after the drag every wire end that was on one of its
     /// pins is on that pin where it now is, on the user's board (flat) and on mcu30 as module sheets, for each of the 30 symbols.
     #[test]
