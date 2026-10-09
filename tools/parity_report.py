@@ -265,9 +265,15 @@ def render_report(conn, rt, scores):
             lines.append(f"- imported ok: {pcb_notes['imported_ok']}/{pcb_notes['total']}")
             lines.append(f"- zones skipped (no polygon, or no copper layer): {pcb_notes['zones_skipped']}")
             lines.append(f"- track arcs kept as arcs: {pcb_notes.get('track_arcs_kept', 'n/a')}")
-            lines.append(f"- board-outline arcs approximated as straight segments: {pcb_notes['track_arcs_approximated']}")
+            if pcb_notes.get("outline_shapes") is not None:
+                # Since the board outline is built as KiCad builds it (2026-10-09) an Edge.Cuts arc is kept, never approximated.
+                lines.append(f"- Edge.Cuts items kept as shapes (arcs, circles, rectangles, curves, cutouts; none turned into chords): {pcb_notes['outline_shapes']}")
+            else:
+                lines.append(f"- board-outline arcs approximated as straight segments: {pcb_notes['track_arcs_approximated']}")
             lines.append(f"- non-rect pad shapes approximated as rect: {pcb_notes['non_rect_pad_shapes_approximated']}")
             lines.append(f"- boards whose outline didn't close into a loop: {pcb_notes['outline_open']}")
+            if pcb_notes.get("outline_malformed") is not None:
+                lines.append(f"- boards whose Edge.Cuts are malformed by KiCad's own test (`invalid_outline`): {pcb_notes['outline_malformed']} {pcb_notes.get('outline_malformed_boards', [])}")
             lines.append(f"- outline source breakdown: {pcb_notes['outline_source_counts']}")
             if pcb_notes.get("failures"):
                 lines.append(f"\nImport failures ({len(pcb_notes['failures'])}):\n")

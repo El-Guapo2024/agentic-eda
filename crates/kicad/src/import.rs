@@ -2032,6 +2032,17 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
 mod tests {
     use super::*;
 
+    /// KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))`: the end is the start turned by A about the centre (`SetArcAngleAndEnd`), the
+    /// middle by A/2, in the file's own axes, whichever way A goes.
+    #[test]
+    fn a_legacy_arc_is_three_points_turned_about_its_centre() {
+        let p = |x, y| Point { x, y };
+        assert_eq!(legacy_arc(p(15_000, 5_000), p(20_000, 5_000), 90.0), (p(20_000, 5_000), p(18_536, 8_536), p(15_000, 10_000)));
+        assert_eq!(legacy_arc(p(15_000, 5_000), p(20_000, 5_000), -90.0), (p(20_000, 5_000), p(18_536, 1_464), p(15_000, 0)));
+        // A half turn goes through the far side of the circle: the middle is a quarter turn on.
+        assert_eq!(legacy_arc(p(0, 0), p(1_000, 0), 180.0), (p(1_000, 0), p(0, 1_000), p(-1_000, 0)));
+    }
+
     #[test]
     fn rotation_negation_round_trips() {
         assert_eq!(import_rot_millideg(0.0), 0);

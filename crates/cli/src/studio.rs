@@ -2200,6 +2200,44 @@ mod tests {
         assert_eq!(breadcrumb, vec![("s1".to_string(), "child".to_string())]);
     }
 
+    /// The outline as the canvas and the 3D view read it from `/api/state`: every outline with its cutouts, and what is wrong with it.
+    #[test]
+    fn the_state_carries_the_outline_with_its_cutouts_and_its_errors() {
+        use eda_model::ir::{DrawingsSection, PlacementSection, Shape};
+        let p = |x, y| Point { x, y };
+        let line = |a: Point, b: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: a, end: b };
+        let mut d = design(sch(vec![]), Default::default());
+        d.placement = Some(PlacementSection { outline: vec![p(0, 0), p(40_000, 0), p(40_000, 30_000), p(0, 30_000)], footprints: vec![], modules: vec![] });
+
+        // A plain polygon: one outline, no hole, nothing to report.
+        assert_eq!(outline_polys_json(&d), json!([{ "outer": [[0, 0], [40_000, 0], [40_000, 30_000], [0, 30_000]], "holes": [] }]));
+        assert_eq!(outline_errors_json(&d), json!([]));
+
+        // A round hole drawn on Edge.Cuts is a hole of it.
+        let mut shapes = vec![Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: p(20_000, 15_000), end: p(23_000, 15_000) }];
+        d.drawings = Some(DrawingsSection { shapes: shapes.clone(), ..Default::default() });
+        let polys = outline_polys_json(&d);
+        assert_eq!(polys.as_array().map(Vec::len), Some(1));
+        assert_eq!(polys[0]["holes"].as_array().map(Vec::len), Some(1), "{polys}");
+        assert_eq!(outline_errors_json(&d), json!([]));
+
+        // The same board with the outline made of shapes, one side of it missing: malformed, and the outline is the rectangle round the edges.
+        shapes = vec![line(p(0, 0), p(18_000, 0)), line(p(22_000, 0), p(40_000, 0)), line(p(40_000, 0), p(40_000, 30_000)), line(p(40_000, 30_000), p(0, 30_000)), line(p(0, 30_000), p(0, 0))];
+        for (i, sh) in shapes.iter_mut().enumerate() {
+            sh.set_id(format!("edge{i}"));
+        }
+        d.drawings = Some(DrawingsSection { shapes, outline_is_shapes: true, ..Default::default() });
+        let errors = outline_errors_json(&d);
+        assert_eq!(errors.as_array().map(Vec::len), Some(1), "{errors}");
+        assert_eq!(errors[0]["message"], "Board has malformed outline (not a closed shape)");
+        assert_eq!(errors[0]["at"], json!([20_000, 0]));
+        let mut items: Vec<String> = errors[0]["items"].as_array().expect("items").iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+        items.sort();
+        assert_eq!(items, vec!["edge0".to_string(), "edge1".to_string()], "the two pieces either side of the gap");
+        let polys = outline_polys_json(&d);
+        assert_eq!((polys.as_array().map(Vec::len), polys[0]["holes"].as_array().map(Vec::len)), (Some(1), Some(0)), "{polys}");
+    }
+
     #[test]
     fn an_unknown_sheet_id_falls_back_to_the_last_good_level_instead_of_erroring() {
         let d = design(sch(vec![]), std::collections::BTreeMap::new());

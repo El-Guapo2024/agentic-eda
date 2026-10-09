@@ -258,21 +258,27 @@ fn point_on_ring(chain: &LineChain, p: Point) -> bool {
 }
 
 /// `SHAPE_LINE_CHAIN::Intersect( aChain, aIp, true )` on two closed rings: the first place their sides touch or cross. (KiCad's
-/// "ExcludeColinearAndTouching" only skips the collinear branch; `SEG::Intersect` still reports a shared end point.)
+/// "ExcludeColinearAndTouching" only skips the collinear branch; `SEG::Intersect` still reports a shared end point.) The ring with the
+/// fewer sides is the one whose sides are looked up, and a side of the other that does not reach its box is passed over at once, so a
+/// board of thousands of sides and hundreds of cutouts costs one pass over the long ring per cutout.
 fn rings_intersect(a: &[Point], b: &[Point]) -> Option<Point> {
     if a.len() < 2 || b.len() < 2 {
         return None;
     }
-    let bb = ring_bbox(b);
-    let sides = |r: &[Point]| -> Vec<Seg> { (0..r.len()).map(|i| Seg { a: r[i], b: r[(i + 1) % r.len()] }).collect() };
-    let theirs = sides(b);
-    for s in sides(a) {
+    let (long, short) = if a.len() >= b.len() { (a, b) } else { (b, a) };
+    let (bl, bs) = (ring_bbox(long), ring_bbox(short));
+    if bl.2 < bs.0 || bs.2 < bl.0 || bl.3 < bs.1 || bs.3 < bl.1 {
+        return None;
+    }
+    for i in 0..long.len() {
+        let s = Seg { a: long[i], b: long[(i + 1) % long.len()] };
         let sb = s.bbox();
-        if sb.2 < bb.0 || sb.0 > bb.2 || sb.3 < bb.1 || sb.1 > bb.3 {
+        if sb.2 < bs.0 || sb.0 > bs.2 || sb.3 < bs.1 || sb.1 > bs.3 {
             continue;
         }
-        for t in &theirs {
-            if let Some(p) = seg_intersect(s, *t, false) {
+        for j in 0..short.len() {
+            let t = Seg { a: short[j], b: short[(j + 1) % short.len()] };
+            if let Some(p) = seg_intersect(s, t, false) {
                 return Some(p);
             }
         }
@@ -976,11 +982,11 @@ pub fn test_board_outlines_graphic_items(shapes: &[Shape], min_dist: f64, max_er
 
     // Closed contours: every closed shape, and the loops the open ones chain into.
     let mut closed: Vec<(usize, Vec<Point>)> = Vec::new();
+    let mut builder = Chainer { shapes, max_error, epsilon: chaining_epsilon, index: Endpoints::new(&[], chaining_epsilon), owners: BTreeMap::new(), errors: Vec::new() };
     for (i, s) in shapes.iter().enumerate() {
         if is_closed_shape(s) {
-            let mut c = Chainer { shapes, max_error, epsilon: chaining_epsilon, index: Endpoints::new(shapes, chaining_epsilon), owners: BTreeMap::new(), errors: Vec::new() };
             let mut contour = Contour::default();
-            c.process_closed(i, &mut contour);
+            builder.process_closed(i, &mut contour);
             closed.push((i, contour.pts));
         }
     }
