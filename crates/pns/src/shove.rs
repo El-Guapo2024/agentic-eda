@@ -1451,7 +1451,7 @@ impl<'a> Shove<'a> {
             Some(Item::Via(v)) => v.clone(),
             _ => return None,
         };
-        let delta = ((to.x - via.pos.x) as i64, (to.y - via.pos.y) as i64);
+        let delta = (to.x - via.pos.x, to.y - via.pos.y);
         if self.push_or_shove_via(via_id, delta, 0, true) != Status::Ok {
             return None;
         }

@@ -4,26 +4,18 @@
 //! stopping at it, trying both winding directions and chaining onto
 //! whatever new obstacle the hugged path runs into next.
 //!
-//! Scoped down from the full algorithm (see the task research spec this
-//! was ported from, and `crates/pns/PARITY.md`):
-//! - KiCad hugs a whole *cluster* of mutually-touching foreign-net items
-//!   (`TOPOLOGY::AssembleCluster`) per step; this port hugs one obstacle
-//!   item at a time (still re-detects and chains onto the next obstacle
-//!   every iteration, so a multi-item blob is still walked around, just
-//!   one hull-hug per loop iteration instead of one per whole blob).
-//! - The `WP_SHORTEST` internal CW/CCW arbitration, the live-cursor
-//!   proximity fallback, and the length-expansion/time-limit telemetry are
-//!   replaced by the simpler contract every caller in this crate actually
-//!   needs: try both windings, return both results, let the caller (which
-//!   already knows the target point) pick.
-//! - No `RestrictToCluster` scoping (no diff-pair/shove-internal caller
-//!   needs it yet).
+//! [`walk_around_hull`] is `LINE::Walkaround` for one hull. [`Walker`] is
+//! the faithful `WALKAROUND` -- policies, cluster hugging, item masks,
+//! `RestrictToCluster`, the `WP_SHORTEST` check-back, the length-expansion
+//! cut-off -- which the shove needs (`onCollidingSolid` walks a line around
+//! the cluster of a pad) and the dragger (`tryWalkaround`) uses. [`walk_base`]
+//! is `LINE_PLACER::rhWalkBase` on top of it: both windings, the shorter
+//! taken, and the hug of the obstacle (`cursorDistMinimum`) when the detour
+//! is too long -- Walk around mode's walk and the solids-only pre-pass of
+//! `rhShoveOnly`.
 //!
-//! The per-obstacle [`route`] below is what plain Walkaround mode still uses.
-//! [`Walker`] is the faithful `WALKAROUND` -- policies, cluster hugging,
-//! item masks, `RestrictToCluster`, the `WP_SHORTEST` check-back -- which
-//! the shove needs (`onCollidingSolid` walks a line around the cluster of a
-//! pad) and which the solids-only pre-pass of `rhShoveOnly` runs.
+//! Still scoped down: no `m_PNSProcessClusterTimeout` wall-clock bound (the
+//! iteration limit, `WalkaroundIterationLimit`, is the only one).
 
 use crate::item::{ItemId, Net};
 use crate::layer::LayerRange;
@@ -167,71 +159,6 @@ fn walk_around_hull_simple(path: &[Point], hull: &[Point], forward: bool) -> Opt
     out.extend(path[(exit_seg + 1)..].to_vec());
     out.dedup();
     Some(out)
-}
-
-/// The nearest obstacle touching any leg of `path`, entry point included
-/// (for ordering ties) -- `NODE::NearestObstacle`, narrowed to "first leg
-/// that collides, nearest hit on it" rather than KiCad's whole-path
-/// parallel search (see this module's doc comment).
-fn first_obstacle(path: &[Point], node: &Node, net: &Net, layer: i32, width: Um, rules: &BoardRules, exclude: &[ItemId]) -> Option<ItemId> {
-    for w in path.windows(2) {
-        let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
-        let obstacles = node.all_colliding(&shape, net, LayerRange::single(layer), rules, exclude);
-        if let Some(nearest) = obstacles.into_iter().min_by(|a, b| dist_f(w[0], a.pos).partial_cmp(&dist_f(w[0], b.pos)).unwrap()) {
-            return Some(nearest.id);
-        }
-    }
-    None
-}
-
-#[allow(clippy::too_many_arguments)] // mirrors the collision query's own (node, net, layer, width, rules, exclude) parameter set, plus the direction/iteration-limit this is specific to.
-fn route_one(mut path: Vec<Point>, forward: bool, node: &Node, net: &Net, layer: i32, width: Um, rules: &BoardRules, exclude: &[ItemId], iteration_limit: u32) -> Option<Vec<Point>> {
-    for _ in 0..iteration_limit {
-        let Some(obstacle_id) = first_obstacle(&path, node, net, layer, width, rules, exclude) else {
-            return Some(path); // ST_DONE: nothing left in the way
-        };
-        let obstacle = node.get(obstacle_id)?;
-        let clearance = Node::clearance_to(rules, net, obstacle);
-        let hull = obstacle.hull(clearance, width, layer);
-        path = walk_around_hull(&path, &hull, forward)?;
-        if path.len() < 2 {
-            return None;
-        }
-    }
-    None // iteration limit: ST_ALMOST_DONE/ST_STUCK, treated as failure here
-}
-
-pub struct WalkResult {
-    pub forward: Option<Vec<Point>>,
-    pub backward: Option<Vec<Point>>,
-}
-
-impl WalkResult {
-    /// The shorter of the two successful candidates, if any -- the common
-    /// case callers want (KiCad's `WP_SHORTEST`).
-    pub fn best(&self) -> Option<&Vec<Point>> {
-        fn len(p: &[Point]) -> f64 {
-            p.windows(2).map(|w| dist_f(w[0], w[1])).sum()
-        }
-        match (&self.forward, &self.backward) {
-            (Some(f), Some(b)) => Some(if len(f) <= len(b) { f } else { b }),
-            (Some(f), None) => Some(f),
-            (None, Some(b)) => Some(b),
-            (None, None) => None,
-        }
-    }
-}
-
-/// `WALKAROUND::Route`: try both windings, re-detecting and hugging
-/// whatever obstacle the in-progress path runs into, up to
-/// `iteration_limit` rounds per winding (`ROUTING_SETTINGS::
-/// WalkaroundIterationLimit`, default 40).
-#[allow(clippy::too_many_arguments)] // see `route_one`'s own note just above.
-pub fn route(path: &[Point], node: &Node, net: &Net, layer: i32, width: Um, rules: &BoardRules, exclude: &[ItemId], iteration_limit: u32) -> WalkResult {
-    WalkResult {
-        forward: route_one(path.to_vec(), true, node, net, layer, width, rules, exclude, iteration_limit),
-        backward: route_one(path.to_vec(), false, node, net, layer, width, rules, exclude, iteration_limit),
-    }
 }
 
 /// `WALKAROUND::STATUS`.
@@ -650,8 +577,7 @@ mod tests {
     fn straight_path_with_no_obstacle_is_unchanged() {
         let node = Node::new();
         let path = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
-        let wr = route(&path, &node, &net_of("SIG"), 0, 200, &rules(), &[], 10);
-        assert_eq!(wr.best().unwrap(), &path);
+        assert_eq!(walk_base(&node, &rules(), &net_of("SIG"), 0, 200, &path, kind_mask::ANY, 10, 1.5, &[]).unwrap(), path);
     }
 
     /// A long leg whose straight-45-degree elbow passes exactly through a
@@ -676,8 +602,8 @@ mod tests {
         let rules: BoardRules = serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap();
         let path = vec![Point { x: -2475, y: -1905 }, Point { x: 8665, y: -1905 }, Point { x: 12475, y: 1905 }];
         let net = net_of("SIG");
-        let wr = route(&path, &node, &net, 0, 200, &rules, &[], 40);
-        let best = wr.best().expect("at least one winding must clear a single narrow pad");
+        let best = walk_base(&node, &rules, &net, 0, 200, &path, kind_mask::ANY, 40, 1.5, &[]).expect("at least one winding must clear a single narrow pad");
+        let best = &best;
         assert_eq!(best.first(), Some(&path[0]));
         assert_eq!(best.last(), Some(&path[2]));
         for w in best.windows(2) {
@@ -692,9 +618,8 @@ mod tests {
         node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let path = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
-        let wr = route(&path, &node, &net_of("SIG"), 0, 200, &rules, &[], 10);
-        assert!(wr.forward.is_some() || wr.backward.is_some(), "at least one winding must succeed");
-        let best = wr.best().unwrap();
+        let best = walk_base(&node, &rules, &net_of("SIG"), 0, 200, &path, kind_mask::ANY, 10, 1.5, &[]).expect("at least one winding must succeed");
+        let best = &best;
         assert_eq!(best.first(), Some(&Point { x: 0, y: 0 }));
         assert_eq!(best.last(), Some(&Point { x: 5000, y: 0 }));
         assert!(best.len() > 2, "a real detour must add at least one vertex");

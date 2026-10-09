@@ -246,7 +246,7 @@ impl LinePlacer {
         };
         let via = crate::item::Via { net: self.net.clone(), layers: LayerRange::new(self.current_layer, to_layer), pos: at, diameter: self.via_diameter, drill: self.via_drill, source_via: None, locked: false };
         let start = self.fixed_start();
-        let lead = ((at.x - start.x) as i64, (at.y - start.y) as i64);
+        let lead = (at.x - start.x, at.y - start.y);
         match crate::shove::via_pushout_force(node, rules, &via, lead, mask, settings.via_force_prop_iteration_limit, &[]) {
             Some(force) => Point { x: at.x + force.0 as Um, y: at.y + force.1 as Um },
             None => at,

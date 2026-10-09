@@ -301,8 +301,6 @@ impl Dragger {
         if let Some(head) = push(&main_pts, &self.net, self.layer, self.width.max(1)) {
             main_pts = head;
         }
-        let fanout = fanout;
-
         DragPreview {
             pts: main_pts,
             colliding,
@@ -357,7 +355,7 @@ impl Dragger {
     fn drag_via_walkaround(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, to: Point) -> DragPreview {
         let exclude = self.exclude();
         let via = crate::item::Via { net: self.net.clone(), layers: self.via_layers, pos: to, diameter: self.via_diameter, drill: self.via_drill, source_via: self.source_via.clone(), locked: false };
-        let lead = ((self.via_pos.x - to.x) as i64, (self.via_pos.y - to.y) as i64);
+        let lead = (self.via_pos.x - to.x, self.via_pos.y - to.y);
         let Some(force) = shove::via_pushout_force(node, rules, &via, lead, crate::node::kind_mask::ANY, settings.via_force_prop_iteration_limit, &exclude) else {
             // can't force-propagate the via? bummer...
             let (pts, fanout) = self.candidate(node, to);
