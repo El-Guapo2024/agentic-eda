@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn walks_around_an_obstacle_between_fixed_points() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
         let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn mark_obstacles_commits_collision_only_when_can_violate_drc() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1000, y: 0 }, shape: Shape::Circle { c: Point { x: 1000, y: 0 }, r: 500 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1000, y: 0 }, shape: Shape::Circle { c: Point { x: 1000, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let mut settings = RoutingSettings { mode: Mode::MarkObstacles, ..RoutingSettings::default() };
         assert!(!settings.can_violate_drc);
@@ -562,7 +562,7 @@ mod tests {
     #[test]
     fn snaps_onto_a_same_net_pad_and_reports_real_end() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U2.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U2.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings::default();
         let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
@@ -617,7 +617,7 @@ mod tests {
         use crate::item::{Segment, Solid};
         use crate::layer::LayerRange;
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2000, y: 0 }, shape: Shape::Circle { c: Point { x: 2000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2000, y: 0 }, shape: Shape::Circle { c: Point { x: 2000, y: 0 }, r: 400 }, source: "U1.1".into(), edge: false }));
         node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: 4300, y: -2500 }, b: Point { x: 4300, y: -300 }, width: 200, source_track: Some(("trkP".into(), 0)), locked: false }));
         let rules = rules();
         let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);

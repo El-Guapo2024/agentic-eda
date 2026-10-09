@@ -191,7 +191,7 @@ fn route_one(mut path: Vec<Point>, forward: bool, node: &Node, net: &Net, layer:
             return Some(path); // ST_DONE: nothing left in the way
         };
         let obstacle = node.get(obstacle_id)?;
-        let clearance = Node::clearance(rules, net, obstacle.net());
+        let clearance = Node::clearance_to(rules, net, obstacle);
         let hull = obstacle.hull(clearance, width, layer);
         path = walk_around_hull(&path, &hull, forward)?;
         if path.len() < 2 {
@@ -355,7 +355,7 @@ impl<'a> Walker<'a> {
         if !item.layers().overlaps_layer(layer) || crate::item::same_net(item.net(), net) {
             return false;
         }
-        let clearance = Node::clearance(self.rules, net, item.net());
+        let clearance = Node::clearance_to(self.rules, net, item);
         let clearance = if clearance > 0 { (clearance - crate::node::CLEARANCE_EPSILON).max(0) } else { clearance };
         let item_shape = item.shape(item.layers().start());
         pts.windows(2).any(|w| Shape::Stadium { a: w[0], b: w[1], r: width / 2 }.collides(&item_shape, clearance).is_some())
@@ -365,7 +365,7 @@ impl<'a> Walker<'a> {
     fn process_cluster(&self, cluster: &[ItemId], pts: &mut Vec<Point>, net: &Net, layer: i32, width: Um, cw: bool) -> bool {
         for &id in cluster {
             let Some(item) = self.node.get(id) else { continue };
-            let clearance = Node::clearance(self.rules, net, item.net());
+            let clearance = Node::clearance_to(self.rules, net, item);
             let hull = item.hull(clearance, width, layer);
             let mut simplified = Line::from_points(net.clone(), layer, width, std::mem::take(pts));
             simplified.simplify();
@@ -555,6 +555,7 @@ mod tests {
             pos: Point { x: 2475, y: -1905 },
             shape: Shape::RoundRect { x0: 2475 - 975, y0: -1905 - 300, x1: 2475 + 975, y1: -1905 + 300, r: 150 },
             source: "U1.8".into(),
+            edge: false,
         }));
         let rules: BoardRules = serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap();
         let path = vec![Point { x: -2475, y: -1905 }, Point { x: 8665, y: -1905 }, Point { x: 12475, y: 1905 }];
@@ -572,7 +573,7 @@ mod tests {
     #[test]
     fn walks_around_a_pad_blocking_the_direct_path() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2500, y: 0 }, shape: Shape::Circle { c: Point { x: 2500, y: 0 }, r: 500 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let path = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
         let wr = route(&path, &node, &net_of("SIG"), 0, 200, &rules, &[], 10);
@@ -591,7 +592,7 @@ mod tests {
     }
 
     fn walker_pad(node: &mut Node, net: &str, c: Point, r: Um) -> ItemId {
-        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into() }))
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false }))
     }
 
     fn walker_track(node: &mut Node, net: &str, a: Point, b: Point, width: Um) -> ItemId {

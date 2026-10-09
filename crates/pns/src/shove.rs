@@ -698,7 +698,8 @@ impl<'a> Shove<'a> {
         if same_net(ia.net(), ib.net()) || !ia.layers().overlaps(&ib.layers()) {
             return false;
         }
-        let clearance = self.clearance(ia.net(), ib.net());
+        // An Edge.Cuts graphic on either side asks for the board's edge clearance, not a net class's.
+        let clearance = if matches!(ib, Item::Solid(s) if s.edge) { Node::clearance_to(self.rules, ia.net(), ib) } else { Node::clearance_to(self.rules, ib.net(), ia) };
         ia.shape(ia.layers().start()).collides(&ib.shape(ib.layers().start()), clearance).is_some()
     }
 
@@ -898,6 +899,11 @@ impl<'a> Shove<'a> {
         let current_rank = self.line_rank(cur);
         let mut skip: HashSet<ItemId> = self.head_marked.clone();
         skip.extend(cur.line.segment_ids.iter().copied());
+        // The board outline is a closed ring of solids: when there is no room between a pushed line and the edge,
+        // the shortest walk that clears everything is the long way round the whole ring. That is a path, but never
+        // what a shove is for, so a walk around an edge may not grow past `WalkaroundHugLengthThreshold` x 2 (the
+        // bound `LINE_PLACER::rhWalkBase` puts on a head's detour) times the line's own length -- KiCad has none here.
+        let edge_walk_bound = matches!(self.node.get(obstacle), Some(Item::Solid(s)) if s.edge).then(|| 2.0 * self.settings.walkaround_hug_length_threshold * cur.line.length());
         let walked: Option<(SLine, i32)> = {
             let cluster = self.node.assemble_cluster(obstacle, cur.line.layer, 10.0, None, &|id| skip.contains(&id));
             let mut walker = Walker::new(&self.node, self.rules);
@@ -918,6 +924,9 @@ impl<'a> Shove<'a> {
                 walk_line.line.pts = outcome.line_of(WalkPolicy::Shortest).to_vec();
                 walk_line.line.simplify();
                 if walk_line.line.has_loops() {
+                    continue;
+                }
+                if edge_walk_bound.is_some_and(|bound| walk_line.line.length() > bound) {
                     continue;
                 }
                 if let Some(last_line) = self.line_stack.first() {
@@ -964,8 +973,8 @@ impl<'a> Shove<'a> {
                 mtv = via_mtv.or(line_mtv).unwrap_or((0, 0));
             }
             Pusher::Item(id) => {
-                if let Some(Item::Solid(s)) = self.node.get(*id) {
-                    let clearance = self.clearance(&s.net, &obstacle_via.net);
+                if let Some(solid @ Item::Solid(s)) = self.node.get(*id) {
+                    let clearance = Node::clearance_to(self.rules, &obstacle_via.net, solid);
                     if let Some(m) = solid_via_mtv(&s.shape, obstacle_via.pos, obstacle_via.diameter / 2, clearance) {
                         mtv = m;
                         collided = true;

@@ -431,8 +431,8 @@ mod tests {
     #[test]
     fn starts_from_a_pad_and_finds_the_coupled_pad_by_suffix() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 200 }, source: "J1.1".into() }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 500 }, shape: Shape::Circle { c: Point { x: 0, y: 500 }, r: 200 }, source: "J1.2".into() }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 200 }, source: "J1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 500 }, shape: Shape::Circle { c: Point { x: 0, y: 500 }, r: 200 }, source: "J1.2".into(), edge: false }));
         let rules = rules();
         let placer = DiffPairPlacer::start(&node, Point { x: 0, y: 0 }, &net_of("USB_DP"), 0, &rules).expect("must find the coupled pad");
         assert_eq!(placer.pad_a, Point { x: 0, y: 0 });
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn refuses_when_nothing_exists_on_the_coupled_net() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 200 }, source: "J1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 200 }, source: "J1.1".into(), edge: false }));
         let rules = rules();
         assert!(DiffPairPlacer::start(&node, Point { x: 0, y: 0 }, &net_of("USB_DP"), 0, &rules).is_none(), "no USB_DN anywhere on the board to pair with");
     }
@@ -463,10 +463,10 @@ mod tests {
         // from one click near their shared midpoint, while still clearing
         // the *other* net's own pads by more than track half-width (62)
         // + board clearance (200) + the 50-radius pad itself.
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 50 }, source: "J1.1".into() }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 900 }, shape: Shape::Circle { c: Point { x: 0, y: 900 }, r: 50 }, source: "J1.2".into() }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 10_000, y: 0 }, shape: Shape::Circle { c: Point { x: 10_000, y: 0 }, r: 50 }, source: "U1.1".into() }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 10_000, y: 900 }, shape: Shape::Circle { c: Point { x: 10_000, y: 900 }, r: 50 }, source: "U1.2".into() }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 50 }, source: "J1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 900 }, shape: Shape::Circle { c: Point { x: 0, y: 900 }, r: 50 }, source: "J1.2".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 10_000, y: 0 }, shape: Shape::Circle { c: Point { x: 10_000, y: 0 }, r: 50 }, source: "U1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 10_000, y: 900 }, shape: Shape::Circle { c: Point { x: 10_000, y: 900 }, r: 50 }, source: "U1.2".into(), edge: false }));
         let rules = rules();
         let mut placer = DiffPairPlacer::start(&node, Point { x: 0, y: 0 }, &net_of("USB_DP"), 0, &rules).unwrap();
         // The pair's own shared midpoint -- within SNAP_UM of both U1 pads at once.
@@ -486,8 +486,8 @@ mod tests {
     #[test]
     fn a_pad_directly_on_one_lines_path_is_reported_as_colliding() {
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 200 }, source: "J1.1".into() }));
-        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 300 }, shape: Shape::Circle { c: Point { x: 0, y: 300 }, r: 200 }, source: "J1.2".into() }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 200 }, source: "J1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 300 }, shape: Shape::Circle { c: Point { x: 0, y: 300 }, r: 200 }, source: "J1.2".into(), edge: false }));
         // Sits right on the A line's own straight path (y=0), a totally
         // different net -- this port's diff pair has no shove/walkaround
         // (module doc comment), so this must simply be flagged, not routed

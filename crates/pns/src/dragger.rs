@@ -268,6 +268,13 @@ impl Dragger {
                 l.pts = head;
             }
         }
+        if self.kind == DragKind::Via {
+            // The dragged via is not a pusher here (D7: `dragShove` for a via is not ported), so it is the one thing
+            // nothing resolves: dropped onto a pad, the board outline or another net's copper it would leave a violation,
+            // and the drag says so instead of committing it.
+            let shape = Shape::Circle { c: to, r: self.via_diameter / 2 };
+            colliding |= node.first_colliding(&shape, &self.net, LayerRange::new(self.layer, self.layer), rules, &exclude).is_some();
+        }
 
         DragPreview {
             pts: main_pts,
@@ -407,7 +414,7 @@ mod tests {
         use crate::layer::LayerRange;
         let mut node = Node::new();
         let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 1000, y: 0 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
         let dragger = Dragger::start(&node, Point { x: 1000, y: 0 }, seg_id).unwrap();
@@ -453,7 +460,7 @@ mod tests {
     fn starting_on_a_pad_refuses() {
         use crate::item::Solid;
         let mut node = Node::new();
-        let pad_id = node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        let pad_id = node.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 400 }, source: "U1.1".into(), edge: false }));
         assert!(Dragger::start(&node, Point { x: 0, y: 0 }, pad_id).is_none());
     }
 }
