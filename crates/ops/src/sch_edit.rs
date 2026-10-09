@@ -58,6 +58,16 @@ pub enum SchCmd {
     /// Refused when no library symbol has that id, or when the new symbol has fewer units than one of the placed ones
     /// ("new symbol has too few units"), or when the reference already uses it.
     ChangeSymbol { id: String, lib_id: String },
+    /// Cycle Body Style (`SCH_EDIT_TOOL::CycleBodyStyle`) and the body style choice of Symbol Properties (`DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow`,
+    /// both through `SCH_EDIT_FRAME::SelectBodyStyle`): every placed unit of the references `ids` is drawn in body style `style` (1 the normal one, 2 the alternate
+    /// "De Morgan" one of a library symbol that has it, clamped to the symbol's count), or in the next one when `style` is left out (`GetBodyStyle() + 1`, back to 1
+    /// after the last). A symbol whose library symbol has one body style is left as it is, as is one already in `style`; refused when no symbol changes. The pins
+    /// of the other body style may be elsewhere: wires stay where they are and are read again (`SCH_SYMBOL::SetBodyStyle` updates the pins, nothing moves the wires).
+    SetBodyStyle {
+        ids: Vec<String>,
+        #[serde(default)]
+        style: Option<u32>,
+    },
     /// Update Symbol(s) from Library (`DIALOG_CHANGE_SYMBOLS`, `MODE::UPDATE`): the symbols placed with these library ids start
     /// resolving from the project's edited library symbol of that id (`LibrarySymbol::published`, what the Symbol Editor's
     /// "Update Symbol in Schematic" sets). Library ids with no edited symbol, or one already published, are skipped; refused when
@@ -164,6 +174,7 @@ impl SchCmd {
             SchCmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddGraphic { .. } => vec!["graphic"],
             SchCmd::UpdateLibrarySymbols { lib_ids } => lib_ids.iter().map(String::as_str).collect(),
+            SchCmd::SetBodyStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
             SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } | SchCmd::EditField { id, .. } => vec![id.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
@@ -185,6 +196,10 @@ impl SchCmd {
             SchCmd::EditSheetPin { id, .. } => format!("schematic sheet-pin edit {id}"),
             SchCmd::ChangeSymbol { id, lib_id } => format!("schematic change-symbol {id} {lib_id}"),
             SchCmd::UpdateLibrarySymbols { lib_ids } => format!("schematic update-symbols {}", lib_ids.join(" ")),
+            SchCmd::SetBodyStyle { ids, style } => match style {
+                Some(n) => format!("schematic body-style {} {n}", ids.join(" ")),
+                None => format!("schematic body-style {} next", ids.join(" ")),
+            },
             SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
             SchCmd::EditField { id, .. } => format!("schematic edit-field {id}"),
             SchCmd::AutoplaceFields { ids } => format!("schematic autoplace-fields {}", ids.join(" ")),
@@ -200,7 +215,7 @@ impl SchCmd {
             SchCmd::SetLocked { .. } => "schematic-lock",
             SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } => "schematic-graphic",
             SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
-            SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } => "schematic-symbol",
+            SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } => "schematic-text",
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } => "schematic-fields",
             SchCmd::EditSheet { .. } => "schematic-sheet",
@@ -234,6 +249,7 @@ impl<'a> Board<'a> {
             SchCmd::EditSheetPin { id, name, shape, at } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
+            SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style),
             SchCmd::EditLabel { id, text, shape, spin, size_um, bold, italic } => self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_um: *size_um, bold: *bold, italic: *italic }),
             SchCmd::EditField { id, text, at, vertical, h, v, size_um, bold, italic, visible, name_shown, allow_autoplace } => self.edit_sch_field(
                 id,
@@ -256,6 +272,43 @@ impl<'a> Board<'a> {
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_um, style, color, diameter_um } => self.set_sch_stroke(ids, *width_um, *style, *color, *diameter_um),
         }
+    }
+
+    /// [`SchCmd::SetBodyStyle`]: `SCH_EDIT_FRAME::SelectBodyStyle` on each placed unit of `ids`.
+    fn set_body_style(&mut self, ids: &[String], style: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic()?;
+        if let Some(missing) = ids.iter().find(|id| !sch.symbols.iter().any(|s| &s.id == *id)) {
+            return Err(vec![CheckResult::fail("ops_unknown_symbol", missing, "no symbol with this reference on the sheet")]);
+        }
+        let mut changes: Vec<(String, u32)> = Vec::new();
+        for sym in sch.symbols.iter().filter(|s| ids.contains(&s.id)) {
+            // `bodyStyleCount <= 1`: nothing to select between (`LIB_SYMBOL::GetBodyStyleCount`)
+            let count = self.design_symbol(&sym.lib_id).map_or(1, |l| l.body_style_count());
+            let current = sch.body_style_of(sym);
+            if count <= 1 {
+                continue;
+            }
+            // `CycleBodyStyle`: "nextBodyStyle = GetBodyStyle() + 1; if( nextBodyStyle > GetBodyStyleCount() ) nextBodyStyle = 1"; `SelectBodyStyle`: clamped
+            let next = match style {
+                None => if current + 1 > count { 1 } else { current + 1 },
+                Some(n) => n.clamp(1, count),
+            };
+            if next != current {
+                changes.push((eda_model::ir::field_key(&sym.id, sym.unit), next));
+            }
+        }
+        if changes.is_empty() {
+            return Err(vec![CheckResult::fail("ops_no_body_style", ids.first().map(String::as_str).unwrap_or("symbol"), "the symbol has no other body style to change to")]);
+        }
+        let sch = self.schematic_mut()?;
+        for (key, next) in changes {
+            if next <= 1 {
+                sch.extras.body_styles.remove(&key);
+            } else {
+                sch.extras.body_styles.insert(key, next);
+            }
+        }
+        Ok(())
     }
 
     fn update_library_symbols(&mut self, lib_ids: &[String]) -> Result<(), Vec<CheckResult>> {

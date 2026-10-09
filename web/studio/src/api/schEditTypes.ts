@@ -122,6 +122,8 @@ export type SchEditCmd =
   | { verb: "change_symbol"; id: string; lib_id: string }
   /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */
   | { verb: "update_library_symbols"; lib_ids: string[] }
+  /** Cycle Body Style / the body style choice of Symbol Properties (`SelectBodyStyle`): the placed units of these references are drawn in body style `style` (1 normal, 2 alternate "De Morgan"), or in the next one when it is left out. */
+  | { verb: "set_body_style"; ids: string[]; style?: number }
   /** Label Properties: a field left out is unchanged (`shape` is for global and hierarchical labels, `spin` is which way the text runs from the anchor). */
   | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean }
   /**

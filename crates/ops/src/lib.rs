@@ -5441,4 +5441,6 @@ mod sch_move_tests;
 #[cfg(test)]
 mod sch_fields_tests;
 #[cfg(test)]
+mod sch_body_style_tests;
+#[cfg(test)]
 mod sch_props_tests;

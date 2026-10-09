@@ -35,7 +35,7 @@ impl<'a> Board<'a> {
     }
 
     /// The library symbol the design draws `lib_id` from, if it has one at all: a real library's, a built-in, or one published into the project.
-    fn design_symbol(&self, lib_id: &str) -> Option<LibSymbol> {
+    pub(crate) fn design_symbol(&self, lib_id: &str) -> Option<LibSymbol> {
         if lib_id.is_empty() || is_synthetic_lib_id(lib_id) {
             return None;
         }
@@ -131,7 +131,9 @@ impl<'a> Board<'a> {
             let origin = Point { x: s.at.x + dx, y: s.at.y + dy };
             let at = match engine_of.get(&s.lib_id) {
                 Some(engine) if !imported => {
-                    let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(engine, s.unit);
+                    // the box of the body style the symbol was copied in
+                    let drawn = if src.body_style_of(s) > 1 && engine.has_alternate_body() { engine.in_style(src.body_style_of(s)).into_owned() } else { engine.clone() };
+                    let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
                     let (ox, oy) = place_offset_um(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
                     Point { x: origin.x - ox, y: origin.y - oy }
                 }
@@ -194,6 +196,13 @@ impl<'a> Board<'a> {
             sch.user_fields.entry(reference).or_insert(fields);
         }
         sch.assign_missing_ids();
+        // a pasted symbol keeps the body style it was copied in (`SCH_SYMBOL::GetBodyStyle`)
+        for (s, new) in src.symbols.iter().zip(symbol_refs) {
+            let style = src.body_style_of(s);
+            if style > 1 && engine_of.get(&s.lib_id).is_some_and(|e| e.has_alternate_body()) {
+                sch.extras.body_styles.insert(eda_model::ir::field_key(new, s.unit), style);
+            }
+        }
         // a pasted label keeps its spin, size, bold and italic
         for (k, l) in src.labels.iter().enumerate() {
             let Some(new_id) = sch.labels.get(first_label + k).map(|n| n.id.clone()) else { continue };

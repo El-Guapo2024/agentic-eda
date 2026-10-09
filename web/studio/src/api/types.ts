@@ -1505,6 +1505,8 @@ export interface LibSymbol {
   pin_numbers_hidden?: boolean;
   /** `(pin_names (offset x))`, mm: names are written inside the body, from the pin's inner end on, when it is above zero; over the pin line when it is zero. KiCad's default is 0.508 mm (20 mils). */
   pin_name_offset?: Mm;
+  /** `LIB_SYMBOL::GetBodyStyleCount`: 2 for a symbol with an alternate ("De Morgan") body style, whose items are then of `body_style` 1 or 2 (or 0, drawn in both); 1 (or absent) for one with a single body. */
+  body_style_count?: number;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
@@ -1551,7 +1553,7 @@ export interface SchematicSymbol {
   mirror: "x" | "y" | null;
   /** 1-based unit (gate) of a multi-unit symbol -- e.g. a quad op-amp, or ecc83-pp's three-triode ECC83. */
   unit: number;
-  /** 0 = no DeMorgan alternate (every real-world symbol in this app so far); 1 = normal, 2 = alternate, when one exists. */
+  /** The body style the symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`): 1 the normal one, 2 the alternate ("De Morgan") one of a library symbol that has it. */
   body_style: number;
   value: string | null;
   mpn: string | null;

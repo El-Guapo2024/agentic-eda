@@ -1339,7 +1339,7 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
             // part.pins entry) when no real library symbol resolves one of
             // them by number, same "can't tell, so don't filter" fallback
             // `eda_engine::geometry`'s own unit-aware functions use.
-            let resolved = part.and_then(|p| model.real_symbol_of(&s.lib_id, p));
+            let resolved = part.and_then(|p| model.real_symbol_of_instance(&sch, s, p));
             let pins: Vec<Value> = part
                 .map(|p| {
                     p.pins
@@ -1383,6 +1383,9 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                 // this field (`visibleFor`), so sending it is what actually
                 // turns that pre-existing renderer plumbing on.
                 "unit": s.unit,
+                // Which body style the symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`: 1 the normal one, 2 the alternate "De Morgan" one) -- the
+                // same filter `resolveLibSymbol` applies to the `body_style` of each item of `lib_symbols[lib_id]`.
+                "body_style": sch.body_style_of(s),
                 "value": if s.value.is_empty() { part.and_then(|p| p.value.clone()) } else { Some(s.value.clone()) },
                 "footprint": if s.footprint.is_empty() { None } else { Some(s.footprint.clone()) },
                 "datasheet": if s.datasheet.is_empty() { None } else { Some(s.datasheet.clone()) },
@@ -1648,6 +1651,7 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         pin_names_hidden: false,
         pin_numbers_hidden: false,
         pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
+        alternate: None,
     };
     let Some(part) = model.part(reference) else { return empty() };
     let wireable: Vec<&eda_model::Pin> = part.pins.iter().filter(|p| p.kind != eda_model::PinKind::Nc).collect();
@@ -1705,6 +1709,7 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         pin_names_hidden: false,
         pin_numbers_hidden: false,
         pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
+        alternate: None,
     }
 }
 
@@ -1755,33 +1760,33 @@ pub(crate) fn fields_autoplaced_json(sch: &eda_model::ir::SchematicSection, key:
 ///
 /// Each graphic and pin carries two spellings: the engine symbol's own (`stroke_mm`, `filled`, `radius_mm`, `text`) and the names the studio's painter and its
 /// `LibSymbol` type read (`stroke_width`, `fill`, `radius`, `content`, `body_style`, and a pin's `hidden`). Without the second a symbol from a library was
-/// drawn with no body and no pins: the painter keeps an item only when its `body_style` is 0 or the placed one's. The engine symbol has no body styles and
-/// no hidden pins, so every item is shared (`body_style` 0) and none is hidden, and it keeps only whether a shape is filled, not how: a filled rectangle is
-/// the body colour (what library ICs use), any other filled shape the outline colour.
+/// drawn with no body and no pins: the painter keeps an item only when its `body_style` is 0 or the placed one's. A symbol with one body style has every item
+/// shared (`body_style` 0); one with an alternate ("De Morgan") body style has the items both bodies draw alike shared and the others of body style 1 (the
+/// normal body) or 2 (the alternate one), which is what `resolveLibSymbol` picks from by the style a placed symbol is in. No pin is hidden, and the engine symbol
+/// keeps only whether a shape is filled, not how: a filled rectangle is the body colour (what library ICs use), any other filled shape the outline colour.
 fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     let pt = |p: eda_model::symbol::SPoint| json!([p.x, p.y]);
     let fill = |filled: bool, how: &str| if filled { how.to_string() } else { "none".to_string() };
-    let graphics: Vec<Value> = s
-        .graphics
-        .iter()
-        .map(|g| {
-            use eda_model::SymbolGraphic::*;
-            match g {
-                Rectangle { unit, start, end, stroke_mm, filled } => json!({ "kind": "rectangle", "unit": unit, "body_style": 0, "start": pt(*start), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "background") }),
-                Polyline { unit, pts, stroke_mm, filled } => json!({ "kind": "polyline", "unit": unit, "body_style": 0, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
-                Circle { unit, center, radius_mm, stroke_mm, filled } => json!({ "kind": "circle", "unit": unit, "body_style": 0, "center": pt(*center), "radius_mm": radius_mm, "radius": radius_mm, "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
-                Arc { unit, start, mid, end, stroke_mm, filled } => json!({ "kind": "arc", "unit": unit, "body_style": 0, "start": pt(*start), "mid": pt(*mid), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
-                Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": 0, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
-            }
-        })
-        .collect();
-    let pins: Vec<Value> = s
-        .pins
-        .iter()
-        .map(|p| json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": 0, "hidden": false }))
-        .collect();
+    let graphic = |g: &eda_model::SymbolGraphic, style: u32| -> Value {
+        use eda_model::SymbolGraphic::*;
+        match g {
+            Rectangle { unit, start, end, stroke_mm, filled } => json!({ "kind": "rectangle", "unit": unit, "body_style": style, "start": pt(*start), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "background") }),
+            Polyline { unit, pts, stroke_mm, filled } => json!({ "kind": "polyline", "unit": unit, "body_style": style, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+            Circle { unit, center, radius_mm, stroke_mm, filled } => json!({ "kind": "circle", "unit": unit, "body_style": style, "center": pt(*center), "radius_mm": radius_mm, "radius": radius_mm, "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+            Arc { unit, start, mid, end, stroke_mm, filled } => json!({ "kind": "arc", "unit": unit, "body_style": style, "start": pt(*start), "mid": pt(*mid), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+            Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": style, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
+        }
+    };
+    let pin = |p: &eda_model::LibPin, style: u32| json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": style, "hidden": false });
+    let (normal, alt) = s.bodies();
+    let mut graphics: Vec<Value> = normal.0.iter().map(|g| graphic(g, if alt.is_none_or(|a| a.0.contains(g)) { 0 } else { 1 })).collect();
+    let mut pins: Vec<Value> = normal.1.iter().map(|p| pin(p, if alt.is_none_or(|a| a.1.contains(p)) { 0 } else { 1 })).collect();
+    if let Some(a) = alt {
+        graphics.extend(a.0.iter().filter(|g| !normal.0.contains(g)).map(|g| graphic(g, 2)));
+        pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
+    }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count() })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document
@@ -2098,6 +2103,7 @@ mod tests {
             pin_names_hidden: false,
             pin_numbers_hidden: false,
             pin_name_offset_mm: 0.508,
+            alternate: None,
         });
         let g = gnd["graphics"].as_array().unwrap();
         assert_eq!((g[0]["fill"].as_str(), g[1]["fill"].as_str(), g[1]["radius"].as_f64()), (Some("background"), Some("outline"), Some(0.5)));

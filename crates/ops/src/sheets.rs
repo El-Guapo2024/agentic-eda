@@ -63,7 +63,7 @@ impl<'a> Board<'a> {
             let mut pins = BTreeMap::new();
             for sym in &drawn.symbols {
                 let Some(part) = self.model.part(&sym.id) else { continue };
-                let resolved = self.model.real_symbol_of(&sym.lib_id, part);
+                let resolved = self.model.real_symbol_of_instance(&drawn, sym, part);
                 for (number, at) in pin_points(sym, part, resolved.as_ref()) {
                     pins.insert(format!("{}.{number}", sym.id), at);
                 }
@@ -198,7 +198,7 @@ mod tests {
                 let mut m = BTreeMap::new();
                 for sym in &s.symbols {
                     let part = model.part(&sym.id).unwrap();
-                    for (n, at) in pin_points(sym, part, model.real_symbol_of(&sym.lib_id, part).as_ref()) {
+                    for (n, at) in pin_points(sym, part, model.real_symbol_of_instance(s, sym, part).as_ref()) {
                         m.insert(format!("{}.{n}", sym.id), at);
                     }
                 }

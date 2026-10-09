@@ -13,6 +13,7 @@ import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-po
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import { registerSchFieldActions } from "./schFieldActions";
+import { registerSchBodyStyleActions } from "./schBodyStyleActions";
 import { registerSchModuleSheetActions } from "./schModuleSheetActions";
 import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
@@ -218,6 +219,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
 
   registerSchSheetPinActions(registry, ctx);
   registerSchFieldActions(registry, ctx);
+  registerSchBodyStyleActions(registry, ctx);
   registerSchModuleSheetActions(registry, ctx);
   registerSchSymbolActions(registry, ctx);
   registerStackedPinActions(registry, ctx);

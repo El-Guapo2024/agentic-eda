@@ -3,6 +3,7 @@ import type { Schematic } from "../../api/types";
 import { emptySummary, type SchSelectionSummary } from "../../kicad-port/schContextMenu";
 import { canAddCorner, canRemoveCorner, type P, type PolyKind } from "../../kicad-port/schPolyCorners";
 import { isFieldId } from "../../kicad-port/schFieldEdit";
+import { singleMultiBodyStyleSymbol } from "../../kicad-port/schBodyStyle";
 
 /** The outline of a drawn polygon or rule area, or null for anything else. */
 export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pts: P[] } | null {
@@ -61,6 +62,7 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
   }
   // `GetSameSymbolMultiUnitSelection`: one reference selected, with several placed units.
   if (symbolIds.length === 1) s.sameReferenceUnits = symbolUnits.get(symbolIds[0]!) ?? 0;
+  s.multiBodyStyle = ids.length === 1 && singleMultiBodyStyleSymbol(sch, ids);
   // The point editor's corner entries: one selected polygon or rule area, the pointer on its outline (create) or on one of its corners (remove).
   const poly = ids.length === 1 && cursor ? polygonOutline(sch, ids[0]!) : null;
   if (poly && cursor) {

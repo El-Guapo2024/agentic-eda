@@ -990,14 +990,15 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
     let effective_id = if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() };
     let lib: Option<LibSymbol> = match (sch.imported_from_kicad, part) {
         (false, Some(p)) => {
-            let resolved = model.real_symbol_of(&s.lib_id, p);
+            let resolved = model.real_symbol_of_instance(sch, s, p);
             Some(eda_engine::placed::corner_symbol(&effective_id, p, resolved.as_ref(), s.unit))
         }
         _ => {
             if eda_model::is_synthetic_lib_id(&effective_id) {
                 None
             } else {
-                model.symbol_of(&effective_id)
+                // the body style the symbol is placed in, from the library symbol's own origin
+                model.symbol_of(&effective_id).map(|l| if l.has_alternate_body() { l.in_style(sch.body_style_of(s)).into_owned() } else { l })
             }
         }
     };

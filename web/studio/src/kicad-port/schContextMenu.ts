@@ -36,6 +36,8 @@ export interface SchSelectionSummary {
   sheetHasUndefinedPins: boolean;
   /** The selection is symbol units of one multi-unit reference (`GetSameSymbolMultiUnitSelection`). */
   sameReferenceUnits: number;
+  /** The one selected symbol has more than one body style (`SCH_CONDITIONS::SingleMultiBodyStyleSymbol`). */
+  multiBodyStyle: boolean;
   /** Selected pins (pin selection is not part of this studio's schematic yet: always 0 there). */
   pins: number;
   /** The one selected polygon or rule area has its outline under the cursor (`SCH_POINT_EDITOR::addCornerCondition`). */
@@ -69,6 +71,7 @@ export function emptySummary(): SchSelectionSummary {
     unlocked: 0,
     sheetHasUndefinedPins: false,
     sameReferenceUnits: 0,
+    multiBodyStyle: false,
     pins: 0,
     canAddCorner: false,
     canRemoveCorner: false,
@@ -111,6 +114,8 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.fields > 0;
 
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
+  // `makeBodyStyleMenu` at `SingleMultiBodyStyleSymbol` (KiCad lists each body style; the studio has the one command that cycles through them)
+  add(single && s.symbols === 1 && s.multiBodyStyle && item("eeschema.InteractiveEdit.toggleDeMorgan"));
   if (orientable) {
     add({
       type: "submenu",

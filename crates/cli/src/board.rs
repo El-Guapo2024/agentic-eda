@@ -280,7 +280,7 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
         for sym in &sch.symbols {
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
-                    let resolved = model.real_symbol_of(&sym.lib_id, part);
+                    let resolved = model.real_symbol_of_instance(sch, sym, part);
                     for (number, at) in eda_engine::placed::pin_points(sym, part, resolved.as_ref()) {
                         pin_world.insert(format!("{}.{number}", sym.id), at);
                     }
@@ -292,6 +292,7 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
             // Multi-unit: this placed instance only seeds `pin_world` for the pins that are actually drawn on its own unit
             // (plus any `unit == 0` pin, common to every unit) -- a pin of a *different* unit of the same reference is
             // positioned when *that* unit's own `SymbolInstance` is visited, not here.
+            let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
                 pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
@@ -2255,6 +2256,7 @@ mod tests {
             pin_names_hidden: false,
             pin_numbers_hidden: false,
             pin_name_offset_mm: 0.508,
+            alternate: None,
         };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
@@ -3527,6 +3529,64 @@ mod tests {
             undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
             assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symbol placed in the alternate ("De Morgan") body style of its library symbol: Change Symbol onto a library symbol that has one, then Cycle Body Style, are each a
+    /// single undo step on the user's board; the studio's `GET /api/schematic` sends the style of the symbol and both bodies of the library symbol (each item of
+    /// `body_style` 1 or 2, so the painter draws the one the symbol is in), and the file KiCad reads has the style on the instance and both bodies in the symbol.
+    #[test]
+    fn cycle_body_style_is_one_undo_step_and_the_studio_draws_the_style() {
+        use eda_model::ir::{LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, SymbolLibrarySection};
+        use eda_model::symbol::SPoint;
+        use eda_ops::sch_edit::SchCmd as E;
+        let dir = scratch("sch_body_style_undo");
+        setup_mcu30_users_board(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        // a published library symbol with the pins of the resistor R1 is, a rectangle in its normal body and a wider one in the alternate body
+        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None };
+        let rect = |half: f64, style: u32| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: SPoint::new(-half, 2.54), end: SPoint::new(half, -2.54), stroke_mm: 0.254, fill: LibraryFill::None };
+        let mut lib = LibrarySymbol::new_empty("Test:Gate2");
+        lib.reference_prefix = "R".into();
+        lib.has_alternate_body_style = true;
+        lib.published = true;
+        lib.pins = vec![pin("1", 3.81, 270.0, 0), pin("2", -3.81, 90.0, 0)];
+        lib.graphics = vec![rect(1.016, 1), rect(2.032, 2)];
+        lib.assign_missing_ids();
+        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![lib] });
+        save(&dir, &design).unwrap();
+
+        let on_root = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents)).unwrap();
+        step(&dir, on_root(Cmd::SchEdit(E::ChangeSymbol { id: "R1".into(), lib_id: "Test:Gate2".into() })), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, placed, model) = load(&dir).unwrap();
+        let before = sheet_of(&placed);
+        assert!(placed.schematic.as_ref().unwrap().extras.body_styles.is_empty(), "a symbol is placed in its normal body style");
+
+        step(&dir, on_root(Cmd::SchEdit(E::SetBodyStyle { ids: vec!["R1".into()], style: None })), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, alt, model_alt) = load(&dir).unwrap();
+        assert_eq!(alt.schematic.as_ref().unwrap().extras.body_styles.get("R1"), Some(&2));
+        assert_ne!(sheet_of(&alt), before);
+
+        // what the studio is sent
+        let json = crate::studio::schematic_json_of(&alt, &model_alt, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap();
+        assert_eq!(r1["body_style"], 2, "the symbol says which body style it is drawn in");
+        let lib_json = &json["lib_symbols"]["Test:Gate2"];
+        assert_eq!(lib_json["body_style_count"], 2);
+        let styles_of = |items: &serde_json::Value| -> Vec<u64> { items.as_array().unwrap().iter().filter(|g| g["kind"] == "rectangle").map(|g| g["body_style"].as_u64().unwrap()).collect() };
+        assert_eq!(styles_of(&lib_json["graphics"]), vec![1, 2], "the normal body is of style 1 and the alternate one of style 2: the painter keeps the items of the style the symbol is in");
+        assert!(lib_json["pins"].as_array().unwrap().iter().all(|p| p["body_style"] == 0), "pins both bodies share are drawn in either");
+        let normal_json = crate::studio::schematic_json_of(&placed, &model, "");
+        assert_eq!(normal_json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap()["body_style"], 1);
+
+        // the file KiCad reads
+        let text = eda_kicad::export_kicad_sch(&alt, &model_alt, &eda_kicad::ExportMeta { date: "2026-01-01", title: "body_style" }).unwrap();
+        assert!(text.contains("(unit 1) (convert 2)"), "the instance is in body style 2");
+        assert!(text.contains("\"Gate2_1_1\"") && text.contains("\"Gate2_1_2\""), "both bodies are in the symbol");
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), before, "one Undo puts the body style back");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
