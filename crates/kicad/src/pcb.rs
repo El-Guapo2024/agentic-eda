@@ -294,7 +294,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             continue;
         };
         let own_zones: String = zone_blocks.iter().filter(|(parent, _)| parent.as_deref() == Some(fp.id.as_str())).map(|(_, text)| text.as_str()).collect();
-        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, is_locked(&fp.id), &own_zones);
+        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, design, is_locked(&fp.id), &own_zones);
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     if !errors.is_empty() {
@@ -632,6 +632,7 @@ fn write_footprint(
     footprint: &eda_model::Footprint,
     net_num: &BTreeMap<&str, usize>,
     model: &ConstraintModel,
+    design: &Design,
     locked: bool,
     zones: &str,
 ) -> String {
@@ -693,8 +694,21 @@ fn write_footprint(
     )
     .unwrap();
 
-    let mut pads: Vec<&Pad> = footprint.pads.iter().collect();
-    pads.sort_by(|a, b| a.number.cmp(&b.number));
+    // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
+    let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
+    pads.sort_by(|a, b| a.1.number.cmp(&b.1.number));
+
+    // The footprint's own clearance and zone connection (`FOOTPRINT::SetLocalClearance`, `SetLocalZoneConnection`): the
+    // facts a pad inherits. Resolved like the filler resolves them, so kicad-cli's fill and DRC see what the studio's do.
+    if let Some(&(first, first_pad)) = pads.first() {
+        let facts = design.pad_zone_facts(&fp.id, &footprint.name, first, footprint.pads.len(), &first_pad.number);
+        if let Some(c) = facts.footprint_clearance {
+            writeln!(out, "\t\t(clearance {})", mm(c)).unwrap();
+        }
+        if let Some(c) = facts.footprint_connection {
+            writeln!(out, "\t\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+        }
+    }
 
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
     let pin_net = |number: &str| -> Option<&str> {
@@ -702,7 +716,7 @@ fn write_footprint(
         model.nets.iter().find(|n| n.pins.iter().any(|p| p == &key)).map(|n| n.name.as_str())
     };
 
-    for pad in &pads {
+    for &(pad_idx, pad) in &pads {
         // Our local frame is the part seen from the top; a bottom-side
         // part's x is mirrored before it is rotated (footprint::to_board,
         // which the placer, router and gates all go through). KiCad
@@ -770,6 +784,27 @@ fn write_footprint(
                     write!(out, " (net {n} {})", sexpr_str(net_name)).unwrap();
                 }
             }
+        }
+        // The pad's own clearance, zone connection and thermal relief (`PCB_IO_KICAD_SEXPR::format( const PAD* )`): the angle
+        // only when it is not the shape's default, 45 degrees for a circle and 90 otherwise.
+        let zf = design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number);
+        if let Some(c) = zf.pad_clearance {
+            write!(out, " (clearance {})", mm(c)).unwrap();
+        }
+        if let Some(c) = zf.connection {
+            write!(out, " (zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+        }
+        if let Some(w) = zf.thermal_spoke_width {
+            write!(out, " (thermal_bridge_width {})", mm(w)).unwrap();
+        }
+        if let Some(a) = zf.thermal_spoke_angle_mdeg {
+            let default_mdeg: eda_model::ir::Millideg = if pad.shape == PadShape::Circle { 45_000 } else { 90_000 };
+            if a != default_mdeg {
+                write!(out, " (thermal_bridge_angle {})", fmt_mm_f(a as f64 / 1000.0)).unwrap();
+            }
+        }
+        if let Some(g) = zf.thermal_gap {
+            write!(out, " (thermal_gap {})", mm(g)).unwrap();
         }
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
@@ -1101,6 +1136,33 @@ mod tests {
         // GND < VIN alphabetically -> GND=1, VIN=2
         assert!(out.contains("(net 1 \"GND\")"));
         assert!(out.contains("(net 2 \"VIN\")"));
+    }
+
+    /// A pad's zone connection, relief gap, spoke width and angle and clearance, and its footprint's connection and clearance,
+    /// are written as KiCad writes them -- so kicad-cli's fill and DRC see the board's own edits -- and the importer reads
+    /// every one of them back.
+    #[test]
+    fn pad_and_footprint_zone_overrides_are_written_and_read_back() {
+        use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
+        let (mut design, model) = fixture();
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            zone_overrides: vec![FootprintZoneOverrides {
+                id: "U1".into(),
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(45_000) }],
+            }],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in ["(clearance 0.8)", "(zone_connect 0)", "(clearance 0.6)", "(zone_connect 2)", "(thermal_gap 0.4)", "(thermal_bridge_width 0.3)", "(thermal_bridge_angle 45)"] {
+            assert!(out.contains(want), "missing {want}");
+        }
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let extra = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").unwrap();
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800)));
+        let p1 = &extra.pads[0];
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(45_000), Some(600)));
+        assert_eq!(extra.pads[1].zone_connection, None, "the other pads inherit");
     }
 
     #[test]

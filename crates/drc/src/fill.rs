@@ -59,7 +59,7 @@ fn fill_pad(p: &crate::board::DrcPad) -> FillPad {
         copper: convert_shape(&p.copper),
         hole: p.hole.as_ref().map(convert_shape),
         geometry: Some(PadGeometry { center: pt(p.center), size: p.size, circular, default_spoke_angle_mdeg: default_angle, orientation_mdeg: p.orientation_mdeg }),
-        clearance_override: p.zone.clearance,
+        clearance_override: p.zone.clearance(),
         zone_connection: p.zone.connection,
         footprint_zone_connection: p.zone.footprint_connection,
         thermal_gap: p.zone.thermal_gap,
@@ -133,7 +133,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
         board.vias.iter().map(|v| FillVia { net: v.net.clone(), at: pt(v.at), diameter: v.diameter, drill: v.drill, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone(), layer_order: board.layers.clone() }).collect();
 
     // `BOARD::GetMaxClearanceValue`: the rules' largest clearance, and every local override of a pad, footprint or zone.
-    let worst_clearance = board.pads.iter().filter_map(|p| p.zone.clearance).chain(board.zones.iter().map(|z| z.clearance)).fold(crate::constraints::worst_case_clearance(rules), i64::max);
+    let worst_clearance = board.pads.iter().filter_map(|p| p.zone.clearance()).chain(board.zones.iter().map(|z| z.clearance)).fold(crate::constraints::worst_case_clearance(rules), i64::max);
 
     // Copper-pour keepouts (task item 3): the filler's own unconditional knockout, see `FillKeepout`'s doc.
     let keepouts: Vec<FillKeepout> = board.keepouts.iter().filter(|k| k.no_copper_pour).map(|k| FillKeepout { layer: k.layer.clone(), outline: k.outline.iter().map(|&p| pt(p)).collect() }).collect();

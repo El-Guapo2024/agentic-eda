@@ -51,6 +51,7 @@ pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
 pub mod library_editors;
+mod zone_overrides;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
@@ -364,6 +365,33 @@ pub enum Cmd {
     /// resize anything else about the part, so unlike `Flip`/`Rotate`/
     /// `MoveTo` this does not clear the board's routing.
     SetLabelSide { part: String, side: LabelSide },
+    /// Footprint Properties' "Zone connection" and "Clearance" (`FOOTPRINT::SetLocalZoneConnection`, `SetLocalClearance`) on a
+    /// placed footprint: how zones connect to every pad of it that does not set its own, and the clearance they keep from
+    /// them. `None` inherits (the zone's connection, the rules' clearance). A whole-panel commit; see [`zone_overrides`].
+    SetFootprintZoneConnection {
+        part: String,
+        #[serde(default)]
+        zone_connection: Option<PadConnection>,
+        #[serde(default)]
+        clearance: Option<Um>,
+    },
+    /// Pad Properties' zone fields on the pads numbered `pad` of a placed footprint: "Pad connection" (`PAD::SetLocalZoneConnection`:
+    /// solid, thermal relief, none, or `None` for "From parent footprint"), "Relief gap", "Spoke width" and "Spoke angle" (millidegrees,
+    /// KiCad's sign convention), and the pad's own "Clearance". A whole-panel commit: every field is the pad's own, `None` inherits.
+    SetPadZoneOverrides {
+        part: String,
+        pad: String,
+        #[serde(default)]
+        zone_connection: Option<PadConnection>,
+        #[serde(default)]
+        thermal_gap: Option<Um>,
+        #[serde(default)]
+        thermal_spoke_width: Option<Um>,
+        #[serde(default)]
+        thermal_spoke_angle_mdeg: Option<Millideg>,
+        #[serde(default)]
+        clearance: Option<Um>,
+    },
 
     /// Add a hand-drawn copper track. `net` and `layer` are refused if
     /// they do not name a real net / a real copper layer; whether the
@@ -1588,7 +1616,9 @@ impl Cmd {
             | Cmd::Rotate { part, .. }
             | Cmd::Rip { part }
             | Cmd::Flip { part }
-            | Cmd::SetLabelSide { part, .. } => vec![part],
+            | Cmd::SetLabelSide { part, .. }
+            | Cmd::SetFootprintZoneConnection { part, .. }
+            | Cmd::SetPadZoneOverrides { part, .. } => vec![part],
             Cmd::Swap { a, b } => vec![a, b],
             Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
             Cmd::DeleteTrack { id }
@@ -2005,6 +2035,12 @@ impl<'a> Board<'a> {
             Cmd::Rip { part } => self.rip(part),
             Cmd::Flip { part } => self.flip(part),
             Cmd::SetLabelSide { part, side } => self.set_label_side(part, *side),
+            Cmd::SetFootprintZoneConnection { part, zone_connection, clearance } => self.set_footprint_zone_connection(part, *zone_connection, *clearance),
+            Cmd::SetPadZoneOverrides { part, pad, zone_connection, thermal_gap, thermal_spoke_width, thermal_spoke_angle_mdeg, clearance } => self.set_pad_zone_overrides(
+                part,
+                pad,
+                eda_model::ir::PadZoneOverride { number: pad.clone(), clearance: *clearance, zone_connection: *zone_connection, thermal_gap: *thermal_gap, thermal_spoke_width: *thermal_spoke_width, thermal_spoke_angle_mdeg: *thermal_spoke_angle_mdeg },
+            ),
 
             Cmd::AddTrack { net, layer, width, pts } => self.add_track(net, layer, *width, pts),
             Cmd::DeleteTrack { id } => self.delete_track(id),
