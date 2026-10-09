@@ -78,11 +78,12 @@ impl PlacedPad {
     }
 
     /// Distance from `p` to the pad's axis-aligned bounding rectangle
-    /// (negative inside). This is the clearance measure the routing gates
-    /// use (`routing_clearance` tests segments against pad rects, corner
-    /// rounding ignored), so it is what the router must keep clear of;
-    /// [`PlacedPad::signed_distance`] is the true copper edge and is up to
-    /// one corner radius more lenient at a rounded corner.
+    /// (negative inside). A conservative stand-in for the pad: the grid
+    /// router keeps clear of the rectangle, which can only be farther than
+    /// the copper. [`PlacedPad::signed_distance`] is the true copper edge
+    /// (up to one corner radius more lenient at a rounded corner), and the
+    /// `routing_clearance` gate measures the exact outline
+    /// (`eda_drc::board::placed_pad_copper`), not this rectangle.
     pub fn rect_distance(&self, p: Point) -> f64 {
         let (hw, hh) = (self.size.0 as f64 / 2.0, self.size.1 as f64 / 2.0);
         let (dx, dy) = (((p.x - self.center.x) as f64).abs(), ((p.y - self.center.y) as f64).abs());

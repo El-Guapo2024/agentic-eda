@@ -380,25 +380,21 @@ impl Shape {
     /// probe point per side plus the boundary-segment scan is a complete
     /// test, the same one `SHAPE_POLY_SET::Collide` reduces to internally.
     pub fn clearance_to(&self, other: &Shape) -> (Um, Point) {
-        let (c1, c2) = (self.core(), other.core());
-        if c1.contains_point(c2.probe_point()) || c2.contains_point(c1.probe_point()) {
-            return (0, c1.probe_point());
-        }
-        let (segs1, segs2) = (c1.boundary_segs(), c2.boundary_segs());
-        let mut best_sq = i128::MAX;
-        let mut best_pt = segs1[0].a;
-        for s1 in &segs1 {
-            for s2 in &segs2 {
-                let d = s1.sq_distance_to_seg(s2);
-                if d < best_sq {
-                    best_sq = d;
-                    best_pt = s1.nearest_point(s2.nearest_point(s1.a));
-                }
-            }
-        }
+        let Some((best_sq, best_pt)) = self.core_sq_distance(other) else { return (0, self.core().probe_point()) };
         let core_dist = isqrt(best_sq);
         let actual = (core_dist - self.radius() - other.radius()).max(0);
         (actual, best_pt)
+    }
+
+    /// The exact gap to `other`, in µm and not rounded: 0 when the shapes touch or overlap, otherwise the distance between
+    /// their cores less both radii. [`Shape::clearance_to`] floors the core distance to a whole micron, which is right for
+    /// the router's integer geometry but 1 um off for a check that has to agree with KiCad's DRC (which takes
+    /// `DRCEpsilon`, 0.5 um, off every clearance) to a fraction of a micron.
+    pub fn gap_to(&self, other: &Shape) -> f64 {
+        match self.core_sq_distance(other) {
+            None => 0.0,
+            Some((best_sq, _)) => ((best_sq as f64).sqrt() - (self.radius() + other.radius()) as f64).max(0.0),
+        }
     }
 
     /// `true` when `self` and `other` are closer than `clearance` (KiCad's
@@ -414,9 +410,24 @@ impl Shape {
         // (`dist_sq < SEG::Square( clearance + radii )`): taking an
         // integer root first would round a 199.6 µm gap down to 199 and
         // flag it against a 200 µm clearance.
+        let Some((best_sq, best_pt)) = self.core_sq_distance(other) else { return Some((0, self.core().probe_point())) };
+        let reach = (self.radius() + other.radius()) as i128;
+        let need = reach + clearance.max(0) as i128;
+        if best_sq <= reach * reach || best_sq < need * need {
+            let actual = (isqrt(best_sq) - self.radius() - other.radius()).max(0);
+            Some((actual, best_pt))
+        } else {
+            None
+        }
+    }
+
+    /// The squared distance between the two shapes' cores and where it is nearest, or `None` when one core contains a
+    /// probe point of the other (the shapes overlap, whatever their radii). If neither contains the other, two
+    /// overlapping simple regions must have crossing edges, which the segment-pair scan finds as a zero distance.
+    fn core_sq_distance(&self, other: &Shape) -> Option<(i128, Point)> {
         let (c1, c2) = (self.core(), other.core());
         if c1.contains_point(c2.probe_point()) || c2.contains_point(c1.probe_point()) {
-            return Some((0, c1.probe_point()));
+            return None;
         }
         let (segs1, segs2) = (c1.boundary_segs(), c2.boundary_segs());
         let mut best_sq = i128::MAX;
@@ -430,14 +441,7 @@ impl Shape {
                 }
             }
         }
-        let reach = (self.radius() + other.radius()) as i128;
-        let need = reach + clearance.max(0) as i128;
-        if best_sq <= reach * reach || best_sq < need * need {
-            let actual = (isqrt(best_sq) - self.radius() - other.radius()).max(0);
-            Some((actual, best_pt))
-        } else {
-            None
-        }
+        Some((best_sq, best_pt))
     }
 }
 
@@ -554,6 +558,35 @@ mod tests {
         let t2 = Shape::Stadium { a: p(0, 500), b: p(5000, 500), r: 100 };
         let (actual, _) = t1.clearance_to(&t2);
         assert_eq!(actual, 300);
+    }
+
+    #[test]
+    fn gap_to_keeps_the_fraction_clearance_to_floors() {
+        // Two circles of radius 500 whose centres are 1414.21 um apart (1000 um over, 1000 um across): 414.21 um of air.
+        let a = Shape::Circle { c: p(0, 0), r: 500 };
+        let b = Shape::Circle { c: p(1000, 1000), r: 500 };
+        let (floored, _) = a.clearance_to(&b);
+        assert_eq!(floored, 414);
+        assert!((a.gap_to(&b) - 414.21).abs() < 0.01, "{}", a.gap_to(&b));
+        // A track past a round pad: the pad's centre is 800 um off the track's centreline, 200 um of air.
+        let pad = Shape::Circle { c: p(0, 0), r: 500 };
+        let track = Shape::Stadium { a: p(-5000, 800), b: p(5000, 800), r: 100 };
+        assert_eq!(pad.gap_to(&track), 200.0);
+        assert!(pad.gap_to(&track) < 200.5 && pad.collides(&track, 201).is_some() && pad.collides(&track, 200).is_none());
+    }
+
+    #[test]
+    fn gap_to_is_zero_when_shapes_touch_overlap_or_contain_each_other() {
+        let zone = Shape::Polygon { pts: vec![p(0, 0), p(10_000, 0), p(10_000, 10_000), p(0, 10_000)] };
+        let inside = Shape::Rect { x0: 4000, y0: 4000, x1: 5000, y1: 5000 };
+        assert_eq!(zone.gap_to(&inside), 0.0, "contained");
+        assert_eq!(inside.gap_to(&zone), 0.0);
+        let a = Shape::Circle { c: p(0, 0), r: 500 };
+        assert_eq!(a.gap_to(&Shape::Circle { c: p(100, 0), r: 500 }), 0.0, "overlapping");
+        assert_eq!(a.gap_to(&Shape::Circle { c: p(1000, 0), r: 500 }), 0.0, "touching");
+        let rr = Shape::RoundRect { x0: -1000, y0: -1000, x1: 1000, y1: 1000, r: 500 };
+        let probe = Shape::Circle { c: p(2000, 2000), r: 0 };
+        assert!((rr.gap_to(&probe) - 1621.3).abs() < 0.1, "a round corner is farther than a square one: {}", rr.gap_to(&probe));
     }
 
     #[test]
