@@ -64,7 +64,9 @@ export function FootprintPropertiesDialog() {
     setOrientation(norm360(-(part.rot ?? 0)));
     setBottom(part.side === "bottom");
     setLocked((board?.locked ?? []).includes(part.ref));
-    setSelected(0);
+    // Asked for a field (a double click on it, or E), the dialog starts on that field's row.
+    const asked = first ? parseFieldId(first) : null;
+    setSelected(Math.max(0, asked ? fieldsOf(part).findIndex((f) => f.name === asked.name) : 0));
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, part?.ref]);
@@ -336,7 +338,7 @@ export function FootprintPropertiesDialog() {
             </div>
           </div>
           {error && (
-            <p style={{ color: "var(--error, #e5534b)", margin: "10px 0 0", fontSize: 12, whiteSpace: "pre-line" }} data-testid="footprint-properties-error">
+            <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "10px 0 0", fontSize: 12, whiteSpace: "pre-line" }} data-testid="footprint-properties-error">
               {error}
             </p>
           )}

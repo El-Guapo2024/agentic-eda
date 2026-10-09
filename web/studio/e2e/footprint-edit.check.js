@@ -316,6 +316,14 @@
       t((await snapshot()) === base, "three undos (add, rename, delete) put the board back");
     });
 
+    // ----- E or a double click on a field opens its footprint's dialog on that field's row
+    await scenario("Footprint Properties: asked for a field (E on it) the dialog starts on that field's row", async (t) => {
+      await select([`${refA}:Value`]);
+      await open("pcbnew.InteractiveEdit.properties");
+      const rows = [...document.querySelectorAll('[data-testid^="field-row-"]')];
+      t(rows.length >= 2 && rows[1].style.background !== "" && rows[0].style.background === "", `the Value row is the selected one (${rows.map((r) => (r.style.background ? "selected" : "-")).join(" ")})`);
+    });
+
     // ----- Flip turns the fields over with the footprint
     await scenario("footprint: Flip takes its Reference and Value to the other side's layers, mirrored, in one undo step", async (t) => {
       await select([refA]);

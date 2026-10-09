@@ -209,7 +209,7 @@ New (the residual of old #11; blocked #26). **Mostly done (2026-10-09).** Hit: e
   `attr` / pad extras that kicad-cli loads and whose position and BOM exports honour (slow test `kicad_cli_loads_the_edited_board_and_its_position_and_bom_exports_honour_the_attributes`), and read back by the importer. A field is an
   item of the board (`REF:Name`): selected, drawn, moved with M, dragged, moved with Move Exactly, turned, flipped. Editing is the Footprint Properties dialog (the field grid), the Pad Properties dialog and the Properties panel
   (item 10). Duplicate, Paste and Create Array take the edits with a copy. Board-only footprints (mounting holes, fiducials) are the "not in schematic" attribute.
-- Measured: 65 new Rust tests and 38 new `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 15 scenarios through `window.__eda` on a served board (each undone, the board compared), and real kicad-cli
+- Measured: 65 new Rust tests and 38 new `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 16 scenarios through `window.__eda` on a served board (each undone, the board compared), and real kicad-cli
   honoured do-not-populate and exclude-from-position-files in `/api/fab/pos` and do-not-populate in `/api/fab/bom` on an edited scratch board.
 - Missing: Change Footprint(s), Update Footprints from Library and geographical reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); per-footprint clearance and paste margin
   overrides; a pad's zone connection and thermal relief overrides (the zone filler's, item 13); trapezoid, chamfered and custom pads, padstacks, fabrication property, pad number and pin function edits; Datasheet and

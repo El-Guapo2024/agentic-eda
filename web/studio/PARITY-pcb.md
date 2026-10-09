@@ -967,9 +967,9 @@ step; **slow tier**: `kicad_cli_loads_the_edited_board_and_its_position_and_bom_
 (ids, layouts, commands, the checks), `pcbProperties.ts` (the new rows), `arrayOptions.ts`; the painter, hit testing and carry draw, pick and move a field.
 
 Verified in the browser (port 8809, a scratch board made with `eda board new examples/mcu_board_30plus.yaml` and eight footprints placed with `eda board place`; the page's pointer events were dispatched in the page, the real
-pointer never touched): `e2e/footprint-edit.check.js` runs 15 scenarios through `window.__eda`, each undone and the board compared with how it was -- a field selected as an item, moved with Move Exactly, carried with M and
+pointer never touched): `e2e/footprint-edit.check.js` runs 16 scenarios through `window.__eda`, each undone and the board compared with how it was -- a field selected as an item, moved with Move Exactly, carried with M and
 dragged by the pointer (one undo step, its footprint not moved); the panel edits of a field (visible, thickness, justification, layer) and of a footprint (do not populate, exclude from BOM and from position files, component type); the Footprint Properties
-dialog (a reference size, a new user field, an orientation and an attribute in one OK, one undo; a user field added, renamed and deleted; a reserved name refused with nothing sent); Flip (fields on the
+dialog (a reference size, a new user field, an orientation and an attribute in one OK, one undo; a user field added, renamed and deleted; a reserved name refused with nothing sent; E on a field opens it on that field's row); Flip (fields on the
 back layers, mirrored); the Pad Properties dialog (shape, size, offset and clearance in one OK, one undo; a pad with no size refused in the check's words); Create Array as a 3 x 2 grid with unique references, four
 footprints on a circle with "Full circle", and Arrange selection, each one undo step, the dialog's remembered values, the messages of bad entries and Escape. With the real kicad-cli on the scratch board after edits sent to
 `/api/cmd`: `/api/fab/pos` with `exclude_dnp` left out the footprint marked do not populate and the one excluded from position files, and `/api/fab/bom` left the do-not-populate one out of the BOM.

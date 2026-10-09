@@ -270,7 +270,7 @@ export function BoardPadPropertiesDialog() {
             {override("Solder paste ratio", form.pasteRatio, (v) => set("pasteRatio", v), "pad-paste-ratio", true)}
           </div>
           {error && (
-            <p style={{ color: "var(--error, #e5534b)", margin: "10px 0 0", fontSize: 12 }} data-testid="board-pad-properties-error">
+            <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "10px 0 0", fontSize: 12 }} data-testid="board-pad-properties-error">
               {error}
             </p>
           )}
