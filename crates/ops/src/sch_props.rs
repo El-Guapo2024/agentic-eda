@@ -13,7 +13,7 @@
 
 use crate::{empty_schematic_section, Board};
 use eda_model::ir::{LabelKind, LabelShape, Millideg, SchematicSection, Um};
-use eda_model::sch_extras::{JunctionLook, LabelSpin, SchColor, SchLineStyle, SchStroke};
+use eda_model::sch_extras::{JunctionLook, LabelLook, LabelSpin, SchColor, SchLineStyle, SchStroke};
 use eda_model::CheckResult;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -53,13 +53,27 @@ fn holds(contents: &BTreeMap<String, SchematicSection>, from: &str, target: &str
     screen.sheets.iter().any(|s| s.file == target || holds(contents, &s.file, target, seen))
 }
 
+/// What Label Properties sets of a label's text beyond what it says and which way it runs: the size, bold and italic (`SetTextSize`, `SetBold`, `SetItalic`).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct LabelLookEdit {
+    pub size_um: Option<Um>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+}
+
 impl<'a> Board<'a> {
     /// Label Properties: see [`SchCmd::EditLabel`](crate::sch_edit::SchCmd::EditLabel).
-    pub(crate) fn edit_sch_label(&mut self, id: &str, text: Option<&str>, shape: Option<LabelShape>, spin: Option<LabelSpin>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn edit_sch_label(&mut self, id: &str, text: Option<&str>, shape: Option<LabelShape>, spin: Option<LabelSpin>, look: LabelLookEdit) -> Result<(), Vec<CheckResult>> {
         let text = text.map(str::trim);
         if text == Some("") {
             // DIALOG_LABEL_PROPERTIES::TransferDataFromWindow: `if( text.IsEmpty() && !m_currentLabel->IsNew() )`
             return Err(fail("ops_bad_label", id, "Label can not be empty."));
+        }
+        if let Some(size) = look.size_um {
+            // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
+            if !(TEXT_SIZE_MIN_UM..=TEXT_SIZE_MAX_UM).contains(&size) {
+                return Err(fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm."));
+            }
         }
         let sch = self.schematic_mut()?;
         let Some(label) = sch.labels.iter_mut().find(|l| l.id == id) else {
@@ -86,6 +100,28 @@ impl<'a> Board<'a> {
             // `if( m_currentLabel->GetSpinStyle() != selectedSpinStyle ) SetSpinStyle( selectedSpinStyle )`
             if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
                 changed = true;
+            }
+        }
+        if look.size_um.is_some() || look.bold.is_some() || look.italic.is_some() {
+            // `SetTextSize`, then `SetBold` and `SetItalic` ("Must come after SetTextSize()"); a look equal to the default keeps no entry
+            let before: LabelLook = sch.extras.label_looks.get(id).copied().unwrap_or_default();
+            let mut now = before;
+            if let Some(size) = look.size_um {
+                now.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
+            }
+            if let Some(b) = look.bold {
+                now.bold = b;
+            }
+            if let Some(i) = look.italic {
+                now.italic = i;
+            }
+            if now != before {
+                changed = true;
+                if now.is_default() {
+                    sch.extras.label_looks.remove(id);
+                } else {
+                    sch.extras.label_looks.insert(id.to_string(), now);
+                }
             }
         }
         if !changed {

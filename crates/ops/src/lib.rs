@@ -4188,7 +4188,8 @@ impl<'a> Board<'a> {
     fn delete_symbol(&mut self, id: &str, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
         let i = self.find_symbol_unit_index(id, unit)?;
         let sch = self.schematic_mut()?;
-        sch.symbols.remove(i);
+        let removed = sch.symbols.remove(i);
+        sch_fields::drop_symbol_keys(sch, &removed.id, removed.unit);
         // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it.
         if !sch.symbols.iter().any(|s| s.id == id) {
             sch.user_fields.remove(id);
@@ -4689,6 +4690,8 @@ impl<'a> Board<'a> {
         if let Some(fields) = sch.user_fields.remove(id) {
             sch.user_fields.insert(new_id.to_string(), fields);
         }
+        // where its fields are, and whether Autoplace Fields put them there, follow the new reference
+        sch_fields::rename_symbol_keys(sch, id, new_id);
         Ok(())
     }
 
@@ -5432,7 +5435,10 @@ pub mod sch_move;
 mod sch_drag;
 mod sch_props;
 mod sch_scene;
+mod sch_fields;
 #[cfg(test)]
 mod sch_move_tests;
+#[cfg(test)]
+mod sch_fields_tests;
 #[cfg(test)]
 mod sch_props_tests;

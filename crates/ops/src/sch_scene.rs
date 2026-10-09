@@ -274,7 +274,10 @@ pub(crate) struct Scene<'m> {
     pub selected: BTreeSet<Item>,
     /// `SELECTED_BY_DRAG` on an item that is not a segment.
     pub by_drag: BTreeSet<Item>,
-    _model: std::marker::PhantomData<&'m ConstraintModel>,
+    /// The model the scene was made against: the parts and library symbols the fields of its symbols are measured by.
+    pub model: &'m ConstraintModel,
+    /// The fields the user picked on their own (`SCH_FIELD`), see `sch_fields.rs`.
+    pub fields: Vec<crate::sch_fields::FieldSel>,
 }
 
 impl<'m> Scene<'m> {
@@ -293,7 +296,7 @@ impl<'m> Scene<'m> {
         }
         let shapes = sch.symbols.iter().map(|s| symbol_shape(model, &sch, s)).collect();
         let power_shapes = sch.power_symbols.iter().map(|p| power_shape(model, p)).collect();
-        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), _model: std::marker::PhantomData }
+        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new() }
     }
 
     // -------------------------------------------------------------------------------------------------------------- items

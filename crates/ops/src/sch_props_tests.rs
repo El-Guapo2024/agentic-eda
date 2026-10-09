@@ -61,7 +61,7 @@ fn labels() -> SchematicSection {
 }
 
 fn label(id: &str, text: Option<&str>, shape: Option<LabelShape>, spin: Option<LabelSpin>) -> SchCmd {
-    SchCmd::EditLabel { id: id.into(), text: text.map(str::to_string), shape, spin }
+    SchCmd::EditLabel { id: id.into(), text: text.map(str::to_string), shape, spin, size_um: None, bold: None, italic: None }
 }
 
 #[test]
