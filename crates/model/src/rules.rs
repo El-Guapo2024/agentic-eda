@@ -344,6 +344,7 @@ pub fn default_stackup(copper_layers: usize, board_thickness_um: Um) -> Stackup 
         kind: Some(kind.into()),
         epsilon_r: epsilon,
         loss_tangent: tangent,
+        color: None,
     };
     let mut layers = vec![
         layer("F.SilkS", "Top Silk Screen", None, None, None, None),

@@ -950,6 +950,12 @@ pub struct StackupLayer {
     /// `(loss_tangent ..)`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loss_tangent: Option<f64>,
+    /// `(color "Green")`: the colour of a solder mask, a silkscreen or a dielectric (`BOARD_STACKUP_ITEM::IsColorEditable`), as KiCad names it
+    /// (`Green`, `Red`, `Blue`, `Purple`, `Black`, `White`, `Yellow` for a mask or a silkscreen; `FR4 natural`, `PTFE natural`, `Polyimide`, `Phenolic natural`,
+    /// `Aluminum` for a dielectric) or `#RRGGBB[AA]` for a user-defined one. `None` = not specified. The 3D viewer paints the board with it
+    /// (`BOARD_ADAPTER::GetLayerColors`, "Use board stackup colors").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 /// A group of nets that route alike. Matched by glob over the net name.

@@ -464,6 +464,13 @@ fn write_stackup(out: &mut String, model: &ConstraintModel) {
     writeln!(out, "\t\t(stackup").unwrap();
     for l in &stackup.layers {
         write!(out, "\t\t\t(layer {} (type {})", sexpr_str(&l.name), sexpr_str(l.kind.as_deref().unwrap_or(""))).unwrap();
+        // `(color ..)` is written for a mask, a silkscreen and a dielectric whose colour is specified (`IsColorEditable`, `IsPrmSpecified`), before the thickness.
+        if let Some(c) = l.color.as_deref().filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")) {
+            let kind = l.kind.as_deref().unwrap_or("").to_ascii_lowercase();
+            if kind.contains("silk screen") || kind.contains("solder mask") || kind == "core" || kind == "prepreg" || kind == "dielectric" {
+                write!(out, " (color {})", sexpr_str(c)).unwrap();
+            }
+        }
         if let Some(t) = l.thickness_mm {
             write!(out, " (thickness {})", fmt_mm_f(t)).unwrap();
         }
@@ -1662,11 +1669,34 @@ mod tests {
         assert!(got.layers.iter().zip(&stackup.layers).all(|(g, w)| near(g.thickness_mm, w.thickness_mm) && g.material == w.material));
     }
 
+    /// `(color "Green")` of a mask, a silkscreen and a dielectric is written before the thickness (`BOARD_STACKUP::FormatBoardStackup`) and read back; a
+    /// colour that is not specified is not written, and nothing is written for a layer whose colour is not editable (copper, paste).
+    #[test]
+    fn the_colours_of_the_stackup_are_written_and_read_back() {
+        let (design, mut model) = fixture();
+        let mut stackup = eda_model::rules::default_stackup(2, 1_600);
+        for (name, color) in [("F.Mask", "Red"), ("F.SilkS", "#FFEE00"), ("dielectric 1", "FR4 natural"), ("F.Cu", "Green"), ("F.Paste", "Silver"), ("B.Mask", "Not specified")] {
+            stackup.layers.iter_mut().find(|l| l.name == name).unwrap().color = Some(color.into());
+        }
+        model.board.board_thickness_um = eda_model::rules::stackup_thickness_um(&stackup);
+        model.stackup = Some(stackup);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in ["(layer \"F.Mask\" (type \"Top Solder Mask\") (color \"Red\") (thickness", "(layer \"F.SilkS\" (type \"Top Silk Screen\") (color \"#FFEE00\")", "(layer \"dielectric 1\" (type \"core\") (color \"FR4 natural\") (thickness"] {
+            assert!(out.contains(want), "missing {want}:\n{}", &out[..out.len().min(3000)]);
+        }
+        assert!(!out.contains("(layer \"F.Cu\" (type \"copper\") (color") && !out.contains("(layer \"F.Paste\" (type \"Top Solder Paste\") (color"), "copper and paste have no colour");
+        assert!(!out.contains("Not specified"), "a colour that is not specified is not written");
+        let (_, back, _) = crate::import_kicad_pcb(&out).unwrap();
+        let colour = |name: &str| back.stackup.as_ref().unwrap().layers.iter().find(|l| l.name == name).unwrap().color.clone();
+        assert_eq!((colour("F.Mask"), colour("F.SilkS"), colour("dielectric 1")), (Some("Red".into()), Some("#FFEE00".into()), Some("FR4 natural".into())));
+        assert_eq!((colour("F.Cu"), colour("B.Mask")), (None, None));
+    }
+
     #[test]
     fn a_stackup_the_intent_listed_by_name_alone_is_not_written() {
         // `StackupLayer`s without a type (the older shape: name, material, thickness) do not describe the board to KiCad.
         let (design, mut model) = fixture();
-        model.stackup = Some(eda_model::Stackup { layers: vec![eda_model::StackupLayer { name: "F.Cu".into(), material: Some("copper".into()), thickness_mm: Some(0.035), kind: None, epsilon_r: None, loss_tangent: None }], copper_finish: None, dielectric_constraints: false, edge_connector: 0, edge_plating: false });
+        model.stackup = Some(eda_model::Stackup { layers: vec![eda_model::StackupLayer { name: "F.Cu".into(), material: Some("copper".into()), thickness_mm: Some(0.035), kind: None, epsilon_r: None, loss_tangent: None, color: None }], copper_finish: None, dielectric_constraints: false, edge_connector: 0, edge_plating: false });
         assert!(!export_kicad_pcb(&design, &model, &meta()).unwrap().contains("(stackup"));
     }
 

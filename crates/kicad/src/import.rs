@@ -473,6 +473,7 @@ fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
                 kind,
                 epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
                 loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
+                color: sexpr::find(l, "color").and_then(|c| sexpr::txt(c, 1)).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")).map(String::from),
             })
         })
         .collect();
