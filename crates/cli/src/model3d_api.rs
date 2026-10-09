@@ -13,7 +13,7 @@
 //!     writes the VRML KiCad's libraries are written in) and keeps the result in a cache directory, keyed by the file's path, size and modification time,
 //!     so a model is converted once, not once per board or per session. The route answers `202 {"status":"pending"}` while it runs and the browser asks
 //!     again; the request loop never waits for kicad-cli. Requests that arrive together (one per distinct model of the board) are converted in one
-//!     kicad-cli run, up to 16: a run costs 2.5 to 3.7 s of CPU whether it converts 2, 5 or 15 models (measured), so splitting a board's models into runs
+//!     kicad-cli run, up to 16: a run costs 2 to 3.7 s of CPU whether it converts 2, 5 or 15 models (measured), so splitting a board's models into runs
 //!     (tried: two models first, the rest after) puts the first model no sooner and the last one later.
 //!   - **The models of each part** go out in `/api/state` (`parts[].models`, `parts[].kind3d`), from [`part_json`].
 
@@ -766,7 +766,7 @@ mod tests {
         assert_eq!(*runs.lock().unwrap(), vec![1, 1]);
     }
 
-    /// A kicad-cli run costs 2.5 to 3.7 s of CPU whether it converts 2, 5 or 15 models (measured), so a burst is one run -- not a small first run and then the rest, which
+    /// A kicad-cli run costs 2 to 3.7 s of CPU whether it converts 2, 5 or 15 models (measured), so a burst is one run -- not a small first run and then the rest, which
     /// was tried and put the first model no sooner and the last one later -- up to [`MAX_BATCH`], and what does not fit follows in the next.
     #[test]
     fn a_burst_of_models_is_one_run_up_to_the_batch_limit() {
