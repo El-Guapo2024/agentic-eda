@@ -31,6 +31,12 @@ pub fn load_with_schematic(dir: &Path) -> Result<(Design, ConstraintModel), Vec<
     Ok((design, model))
 }
 
+/// `kicad-cli pcb drc` on the current design, without the parity test: [`drc_with`] with both options off. (The tests call this one.)
+#[allow(dead_code)]
+pub fn drc(dir: &Path, refill_zones: bool) -> Result<Value, Vec<CheckResult>> {
+    drc_with(dir, refill_zones, false)
+}
+
 /// `kicad-cli pcb drc` on the current design: `{ engine, violations, unconnected_items, schematic_parity, ignored_checks, counts }`.
 /// `refill_zones`: see [`eda_kicad_engine::drc`] (off by default; kicad-cli drops its courtyard checks when it refills).
 ///
