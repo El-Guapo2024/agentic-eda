@@ -58,14 +58,14 @@ exists rather than letting you rediscover it.
 | `pns_index.h` | `src/index.rs` -- a uniform grid (not a literal R-tree, same tradeoff `eda_drc::rtree::DrcRTree` already documents), supporting `remove`, which `DrcRTree` doesn't (DRC builds its index once per run; this router mutates constantly). A new small index rather than extending `DrcRTree`, to keep `crates/drc` untouched. | Done. |
 | `pns_node.{h,cpp}` | `src/node.rs` | Done, modulo the branching simplification (#1 above) and: no `m_override`/root-fallback machinery (unneeded once branching is a full clone); dangling joints *are* pruned on empty (KiCad leaves them, per its own `// fixme: remove dangling joints`) since pruning is free with a plain `HashMap`; no edge exclusions, no `RULE_RESOLVER` net-tie/keepout hooks (nothing in this project's model to resolve yet); `NearestObstacle`'s true path-length-global nearest search is narrowed to "first leg that collides, nearest hit on that leg" (see `walkaround.rs`/`shove.rs`'s own notes) -- cheaper and almost always the same answer at these board sizes. |
 | `pns_utils.cpp` (`OctagonalHull`/`SegmentHull`/`ConvexHull`) | `src/hull.rs` | Done, via a different construction (circumscribing-octagon samples + a shared convex-hull routine) that is always *at least* as generous as KiCad's own chamfer -- see that file's doc comment for the exact argument. |
-| `pns_routing_settings.h`, `pns_sizes_settings.h` | `src/settings.rs` | Done. Defaults cross-checked against `pns_routing_settings.cpp`'s real constructor (including the non-obvious default `RM_Walkaround`, not `RM_Shove`). `SizesSettings::for_net` pulls from this project's own `BoardRules` net-class resolution instead of a live KiCad dialog. `free_angle_mode` is permanently off (45-degree-only router, see decision #4-adjacent scope note in the task). |
+| `pns_routing_settings.h`, `pns_sizes_settings.h` | `src/settings.rs` | Done. Defaults cross-checked against `pns_routing_settings.cpp`'s real constructor (including the non-obvious default `RM_Walkaround`, not `RM_Shove`). `SizesSettings::for_net` pulls from this project's own `BoardRules` net-class resolution instead of a live KiCad dialog. `free_angle_mode` is live since 2026-10-08 (Highlight collisions only: `build_head` draws the head as one free-angle segment, as `buildInitialLine` does). |
 | `geometry/direction45.h` | `src/direction45.rs` | `CORNER_MODE` narrowed to `Mitered45`/`Mitered90` (no arcs to fillet a rounded corner with -- see decision #3). `BuildInitialTrace`'s "only honor `start_diagonal` when direction is `Undefined`" subtlety preserved. |
 
 ## Stage 2 -- LINE_PLACER + WALKAROUND
 
 | KiCad file | Port | Status |
 |---|---|---|
-| `pns_walkaround.{h,cpp}` | `src/walkaround.rs` | Core `Route()` loop (hug nearest obstacle, re-detect, chain) ported. Simplified: hugs one obstacle item per iteration rather than a whole `TOPOLOGY::AssembleCluster` blob (still converges to the same place over a few more iterations); no `RestrictToCluster` scoping; CW/CCW reported as two plain candidates (`WalkResult::best()` picks the shorter), no live-cursor-proximity fallback (no continuous mouse-tick stream to fall back from in this architecture) or length-expansion telemetry. |
+| `pns_walkaround.{h,cpp}` | `src/walkaround.rs` | `Walker` is the faithful `WALKAROUND`: a whole `AssembleCluster` hugged per step, `WP_CW`/`WP_CCW`/`WP_SHORTEST` (with the check-back against the clusters already hugged), `SetItemMask`, `RestrictToCluster`, the length-expansion cut-off and the per-cluster iteration limit. `walk_base` is `LINE_PLACER::rhWalkBase` on it (Walk around mode and the solids-only pre-pass of the shove). Not ported: `m_PNSProcessClusterTimeout` (the wall-clock bound; the iteration limit is the only one). |
 | `pns_line_placer.{h,cpp}`, `pns_mouse_trail_tracer.{h,cpp}` | `src/line_placer.rs` | See that file's own doc comment for the detailed list; headline simplification is posture: this port keeps the explicit direction state and the `/` toggle (`Direction45::right()`) and continues from the last fixed segment's direction, but does not implement `MOUSE_TRAIL_TRACER`'s continuous mouse-trail-area heuristic (automatic posture guessing from how the cursor swept toward the target) -- not meaningful without a continuous mouse-move stream to measure. |
 
 **Status (2026-10-08):** `walkaround::Walker` is the faithful `WALKAROUND`
@@ -73,9 +73,9 @@ exists rather than letting you rediscover it.
 check-back against clusters already hugged), a whole `AssembleCluster` per
 step, `SetItemMask` (solids-only), `RestrictToCluster`, the 10x length
 cut-off and the iteration limit per cluster. The shove (`onCollidingSolid`)
-and the solids-only pre-pass of `rhShoveOnly` use it. Plain Walkaround mode
-still uses the per-obstacle `walkaround::route` described above (D15 is
-therefore still open for that mode).
+and the solids-only pre-pass of `rhShoveOnly` use it, and so does plain Walkaround
+mode (`walkaround::walk_base`, `rhWalkBase`): the per-obstacle `walkaround::route`
+that walked one item per iteration is gone, and D15 is closed.
 
 Two real bugs surfaced while getting the stage 2 tests to pass on a
 realistic multi-footprint board, both fixed rather than worked around:
