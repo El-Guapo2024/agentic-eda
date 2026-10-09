@@ -40,6 +40,8 @@ export function schControlChecked(name: string, ctx: Pick<SchControlContext, "co
   switch (name) {
     case "eeschema.EditorControl.showHiddenPins":
       return d.showHiddenPins;
+    case "eeschema.EditorControl.showHiddenFields":
+      return d.showHiddenFields;
     case "eeschema.EditorControl.showDirectiveLabels":
       return d.showDirectiveLabels;
     case "eeschema.EditorControl.showERCErrors":
@@ -121,6 +123,8 @@ export function registerSchControlActions(m: Registry, ctx: SchControlContext): 
   // `ToggleDirectiveLabels`, `ToggleERCErrors`, `ToggleERCWarnings`, `ToggleERCExclusions`, `MarkSimExclusions`: `cfg->m_Appearance.<flag> = !cfg->m_Appearance.<flag>`, then a repaint.
   const toggleDisplay = (key: keyof SchControlState["display"]) => onSchematic(() => controlDispatch({ type: "TOGGLE_DISPLAY", key }));
   m.set("eeschema.EditorControl.showHiddenPins", toggleDisplay("showHiddenPins"));
+  // Show Hidden Fields -- `ToggleHiddenFields`, the same flag for the fields (the ones Delete or Field Properties hid).
+  m.set("eeschema.EditorControl.showHiddenFields", toggleDisplay("showHiddenFields"));
   m.set("eeschema.EditorControl.showDirectiveLabels", toggleDisplay("showDirectiveLabels"));
   m.set("eeschema.EditorControl.showERCErrors", toggleDisplay("showErcErrors"));
   m.set("eeschema.EditorControl.showERCWarnings", toggleDisplay("showErcWarnings"));

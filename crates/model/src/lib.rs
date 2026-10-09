@@ -9,10 +9,12 @@ pub mod erc_checks;
 pub mod floorplan;
 pub mod footprint;
 pub mod gensym;
+mod groups;
 pub mod ir;
 pub mod kicad_font;
 pub mod kicad_geom;
 pub mod modules;
+pub mod outline;
 pub mod page;
 pub mod rules;
 pub mod sch_clipboard;
@@ -1193,6 +1195,18 @@ impl ConstraintModel {
         let sym = self.symbol_of(lib_id)?;
         if part.pins.iter().all(|p| sym.pin_by_number(&p.number).is_some()) { Some(sym) } else { None }
     }
+    /// [`Self::real_symbol_of`], as a placed symbol in body `style` draws it (`SCH_SYMBOL::GetBodyStyle`): style 2 of a library symbol that has an alternate
+    /// body is that body's graphics and pins ([`LibSymbol::in_style`]); any other style is the symbol itself.
+    pub fn real_symbol_in_style(&self, lib_id: &str, part: &Part, style: u32) -> Option<LibSymbol> {
+        let sym = self.real_symbol_of(lib_id, part)?;
+        Some(if style > 1 && sym.has_alternate_body() { sym.in_style(style).into_owned() } else { sym })
+    }
+
+    /// [`Self::real_symbol_of`] for the placed symbol `sym` of `sch`: in the body style it is drawn in.
+    pub fn real_symbol_of_instance(&self, sch: &ir::SchematicSection, sym: &ir::SymbolInstance, part: &Part) -> Option<LibSymbol> {
+        self.real_symbol_in_style(&sym.lib_id, part, sch.body_style_of(sym))
+    }
+
     /// Simple glob match ('*' wildcard) over net names.
     pub fn nets_matching(&self, pattern: &str) -> Vec<&Net> {
         self.nets.iter().filter(|n| glob_match(pattern, &n.name)).collect()

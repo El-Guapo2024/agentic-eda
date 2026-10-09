@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], counts, grid, dialogs, open, viewer3d }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, dialogs, open, view, appearance, viewer3d }
 //   __eda.viewer3dScreen(ref)  -> { x, y } | null   where a part is on the 3D canvas (CSS px from its top-left), for hovering it without guessing pixels
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
@@ -22,6 +22,7 @@ import { picker } from "./pcbPicker";
 import { viewer3dProbe, type Viewer3dSnapshot } from "../components/viewer3d/viewer3dProbe";
 import {
   ErrorLog,
+  appearanceSummary,
   boardLists,
   countsOf,
   describeActions,
@@ -38,6 +39,7 @@ import {
   settle,
   symbolLists,
   type ActionInfo,
+  type AppearanceSummary,
   type CmdOutcome,
   type Counts,
   type ErrorEntry,
@@ -53,11 +55,17 @@ export interface HookState {
   /** The prompt of the picker session running (the delete tool's "Delete: click an item to delete it"), or null. */
   picker: string | null;
   selection: SelectedItem[];
+  /** The group being worked in on the board (`PCB_SELECTION_TOOL::m_enteredGroup`), or null. */
+  entered: string | null;
   counts: Counts;
   /** The grid of the editor on screen, in um; null on the tabs whose grid is not a choice (the schematic's is the fixed 50 mil, the 3D viewer has none). */
   grid: number | null;
   dialogs: string[];
   open: string[];
+  /** The view of the canvas on screen (the schematic's or the board's): a point `(x, y)` of the sheet is at `(view.x + x * view.scale, view.y + y * view.scale)` pixels from the canvas's top-left corner; null on the other tabs. */
+  view: { x: number; y: number; scale: number } | null;
+  /** The Appearance panel's settings that differ from a new project (kicad-port/edaTestHook.ts `AppearanceSummary`). */
+  appearance: AppearanceSummary;
   /** The 3D viewer's own readout (components/viewer3d/viewer3dProbe.ts): the time to the first real model, the models in, the part under the pointer, whether the camera is moving; null off the 3D tab. */
   viewer3d: Viewer3dSnapshot | null;
 }
@@ -213,10 +221,13 @@ function build(latest: { current: Latest }): EdaTestHook {
         tool,
         picker: picker.session()?.prompt ?? null,
         selection: selectionWithKinds(selection, kindIndex(lists)),
+        entered: studio.tab === "pcb" ? studio.enteredGroupId : null,
         counts: countsOf(studio.board, studio.schematic),
         grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : null,
         dialogs: dialogTitles(),
         open: openNames(L),
+        view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : null,
+        appearance: appearanceSummary(studio),
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
       };
     },

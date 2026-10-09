@@ -4,7 +4,7 @@
 
 use crate::kimath::Shape;
 use eda_model::footprint::placed_courtyard;
-use eda_model::ir::{Design, LabelSide, Point, Shape as IrShape, Side, Text, Um};
+use eda_model::ir::{Design, LabelSide, PadZoneFacts, Point, Shape as IrShape, Side, Text, Um};
 use eda_model::{ConstraintModel, Pad, PadKind, PadShape};
 use std::collections::HashMap;
 
@@ -143,6 +143,13 @@ pub struct DrcPad {
     /// Board-space axis-aligned slot drill extent (see `rotated_extent_by`),
     /// `None` for a round-drilled or SMD pad.
     pub drill_slot: Option<(Um, Um)>,
+    /// The pad's own (un-rotated) size and shape and its `PAD::GetOrientation()` (millidegrees, KiCad's sign convention, as
+    /// the `.kicad_pcb` stores it): what `ZONE_FILLER::buildThermalSpokes` builds a thermal relief's spokes from.
+    pub size: (Um, Um),
+    pub shape: PadShape,
+    pub orientation_mdeg: i64,
+    /// The pad's and footprint's zone-connection overrides, thermal gap / spoke width / spoke angle.
+    pub zone: PadZoneFacts,
 }
 
 pub struct DrcTrackSeg {
@@ -190,6 +197,17 @@ pub struct DrcZone {
     /// of zone-vs-zone and tested against other zones instead
     /// (`testTeardropClearances`).
     pub teardrop: bool,
+    /// The hatch fill and the outline's corner smoothing (`ZONE_SETTINGS`), for the filler.
+    pub fill_mode: eda_model::ir::FillMode,
+    pub hatch_thickness: Um,
+    pub hatch_gap: Um,
+    pub hatch_orientation_mdeg: eda_model::ir::Millideg,
+    pub hatch_smoothing_level: i32,
+    pub hatch_smoothing_value: f64,
+    pub hatch_hole_min_area: f64,
+    pub hatch_border_algorithm: i32,
+    pub smoothing: eda_model::ir::ZoneSmoothing,
+    pub corner_radius: Um,
 }
 
 /// A rule area / keepout (`ZONE::GetIsRuleArea`, task item 3) -- kept
@@ -320,7 +338,15 @@ pub struct DrcGraphicPad {
 
 pub struct DrcBoard {
     pub layers: Vec<String>,
+    /// `placement.outline`: the polygon a plain board's outline is, or the summary of the Edge.Cuts shapes that are it. Readers that
+    /// want the real outline -- arcs, cutouts, several outlines -- take [`Self::board_outline`] and [`Self::edge_cuts`].
     pub outline: Vec<Point>,
+    /// `BOARD::GetBoardPolygonOutlines( .., true )` of the Edge.Cuts: every outline with its holes, whether they are well-formed, and what
+    /// KiCad's outline handler would have been told (`crate::outline`).
+    pub board_outline: crate::outline::BoardOutline,
+    /// The board's Edge.Cuts items (`eda_model::outline::edge_cuts_shapes`): the items themselves, for what is measured to an edge -- the zone
+    /// fill's knockout, the router's obstacle -- as opposed to the polygon they chain into.
+    pub edge_cuts: Vec<IrShape>,
     pub pads: Vec<DrcPad>,
     pub tracks: Vec<DrcTrackSeg>,
     pub vias: Vec<DrcVia>,
@@ -542,6 +568,8 @@ fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
 
 pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let outline = design.placement.as_ref().map(|p| p.outline.clone()).unwrap_or_default();
+    let board_outline = crate::outline::board_outline(design, true);
+    let edge_cuts = eda_model::outline::edge_cuts_shapes(design);
     let layers = model.board.layers.clone();
 
     // "REF.PIN" -> net name, exactly `eda_kicad::pcb`'s own `pin_net` lookup.
@@ -637,6 +665,11 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     hole,
                     drill_round: pad.drill,
                     drill_slot,
+                    size: pad.size,
+                    shape: pad.shape,
+                    // `pad_file_angle`: the footprint's rotation plus the pad's own (whose sense flips on the bottom), negated.
+                    orientation_mdeg: (-(board_rot + if fp.side == Side::Bottom { -(pad.rot as i64) } else { pad.rot as i64 })).rem_euclid(360_000),
+                    zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number),
                 });
             }
         }
@@ -701,6 +734,16 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 island_removal_mode: z.island_removal_mode,
                 min_island_area: z.min_island_area,
                 teardrop: z.teardrop,
+                fill_mode: z.fill_mode,
+                hatch_thickness: z.hatch_thickness,
+                hatch_gap: z.hatch_gap,
+                hatch_orientation_mdeg: z.hatch_orientation_mdeg,
+                hatch_smoothing_level: z.hatch_smoothing_level,
+                hatch_smoothing_value: z.hatch_smoothing_value,
+                hatch_hole_min_area: z.hatch_hole_min_area,
+                hatch_border_algorithm: z.hatch_border_algorithm,
+                smoothing: z.smoothing,
+                corner_radius: z.corner_radius,
             });
         }
     }
@@ -804,7 +847,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         .enumerate()
         .filter_map(|(i, t)| footprint_text_shape(t).map(|shape| DrcCopperGraphic { id: format!("ctxt{i}"), desc: format!("Text '{}' on {}", t.text.replace('\n', " "), t.layer), layer: t.layer.clone(), pos: t.at, shape }))
         .collect();
-    DrcBoard { layers, outline, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
+    DrcBoard { layers, outline, board_outline, edge_cuts, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
 }
 
 impl DrcVia {

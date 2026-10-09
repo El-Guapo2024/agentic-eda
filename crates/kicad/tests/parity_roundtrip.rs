@@ -161,6 +161,11 @@ struct PcbCorpusStats {
     non_rect_pad_shapes_approximated: usize,
     outline_open: usize,
     outline_source_counts: BTreeMap<String, usize>,
+    /// Edge.Cuts items kept as shapes (arcs, circles, rectangles, polygons, curves, and the lines of a board that is not one plain loop).
+    outline_shapes: usize,
+    /// Boards whose Edge.Cuts are malformed by the live port of `testOutline` (`kicad-cli`'s `invalid_outline`), and which.
+    outline_malformed: usize,
+    outline_malformed_boards: Vec<String>,
     failures: Vec<String>,
 }
 
@@ -184,6 +189,11 @@ fn pcb_corpus_notes(root: &Path) -> PcbCorpusStats {
                     s.outline_open += 1;
                 }
                 *s.outline_source_counts.entry(notes.outline_source.to_string()).or_default() += 1;
+                s.outline_shapes += notes.outline_shapes;
+                if !notes.outline_errors.is_empty() {
+                    s.outline_malformed += 1;
+                    s.outline_malformed_boards.push(name.clone());
+                }
             }
             Ok(Err(e)) => {
                 s.import_failed += 1;

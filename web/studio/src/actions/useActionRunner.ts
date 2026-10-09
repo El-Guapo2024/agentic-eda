@@ -44,6 +44,7 @@ import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
 import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
+import { boardDeleteCmds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { symbolBounds } from "../components/schematic/painter";
 import { GRID as SCH_GRID_UM } from "../components/schematic/layout";
@@ -74,6 +75,8 @@ import { registerSchControlActions, schControlChecked } from "./schControlAction
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
+import { hitField } from "../kicad-port/schFieldEdit";
+import { measureStrokeText } from "../components/text/strokeFont";
 import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
 import { deleteCmds } from "../kicad-port/schDelete";
 import { withoutLocked } from "../kicad-port/schLock";
@@ -87,6 +90,10 @@ import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../
 import { registerBoardControlActions } from "./boardControlActions";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
+import { registerPcbMenuActions } from "./pcbMenuActions";
+import { registerAppearanceActions } from "./appearanceActions";
+import { nextContrastMode } from "../kicad-port/appearance";
+import { registerPcbFindActions } from "./pcbFindActions";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
@@ -160,6 +167,9 @@ export function useActionRunner() {
         // `itemPassesFilter`: an item the selection filter keeps out (a category that is off, a locked item without "Locked items") cannot be picked up by the cursor.
         const selectable = schSelectable(sch, state.schSelectionFilter);
         const pick = (id: string | null | undefined): string | null => (id && selectable(id) ? id : null);
+        // a shown field under the cursor (the Reference, the Value, ...) is what a key acts on before the symbol whose box it may sit over
+        const field = pick(hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText));
+        if (field) return [field];
         const sym = pick(hitSymbol(sch, state.cursorUm.x, state.cursorUm.y));
         if (sym) return [sym];
         // Any other placed item (label, text, power symbol, sheet, shape, junction, ...) under the cursor, then a wire.
@@ -183,24 +193,15 @@ export function useActionRunner() {
     };
     // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
     registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
+    registerAppearanceActions(m, { state, dispatch });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
-      const locked = new Set(state.board?.locked ?? []);
       // `SCH_EDIT_TOOL::DoDelete`: every selectable schematic item, locked ones skipped (kicad-port/schDelete.ts).
       if (state.tab === "schematic" && state.schematic) cmds.push(...deleteCmds(state.schematic, refs, new Set(state.schematic.locked ?? [])));
-      for (const id of refs) {
-        if (state.tab === "pcb") {
-          if (locked.has(id)) continue;
-          if (api.trackById(id)) cmds.push({ op: "delete_track", id });
-          else if (api.viaById(id)) cmds.push({ op: "delete_via", id });
-          else if (api.zoneById(id)) cmds.push({ op: "delete_zone", id });
-          else if (api.shapeById(id)) cmds.push({ op: "delete_shape", id });
-          else if (api.textById(id)) cmds.push({ op: "delete_text", id });
-          else if (api.dimensionById(id)) cmds.push({ op: "delete_dimension", id });
-          else if (api.partByRef(id)?.placed) cmds.push({ op: "rip", part: id });
-        }
-      }
+      // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
+      // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
+      if (state.tab === "pcb" && state.board) cmds.push(...boardDeleteCmds(state.board, refs).cmds);
       dispatch({ type: "CLEAR_SELECTION" });
       if (cmds.length) void api.cmdBatch(cmds);
     };
@@ -595,7 +596,8 @@ export function useActionRunner() {
       "common.Interactive.groupEnter",
       pcbOnly(() => {
         const refs = [...state.selection];
-        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "SET_ENTERED_GROUP", id: refs[0]! });
+        // The members are selected on the way in (`EnterGroup`: `select( member )` for each).
+        if (refs.length === 1 && api.groupById(refs[0]!)) dispatch({ type: "ENTER_GROUP", id: refs[0]! });
       })
     );
     m.set(
@@ -603,7 +605,7 @@ export function useActionRunner() {
       pcbOnly(() => {
         const leftId = state.enteredGroupId;
         dispatch({ type: "SET_ENTERED_GROUP", id: null });
-        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId] });
+        if (leftId) dispatch({ type: "SET_SELECTION", refs: [leftId], raw: true });
       })
     );
     m.set(
@@ -865,10 +867,10 @@ export function useActionRunner() {
     m.set("common.Control.toggleGrid", () => dispatch({ type: "TOGGLE_GRID_VISIBLE" }));
     m.set("pcbnew.Control.showRatsnest", () => dispatch({ type: "TOGGLE_RATSNEST" }));
     m.set("pcbnew.Control.ratsnestLineMode", () => dispatch({ type: "TOGGLE_RATSNEST_CURVED" }));
-    // The real action is a 3-state cycle (Normal/Dimmed/Off); this app's
-    // high-contrast is a plain on/off, so this simplifies to a toggle
-    // rather than inventing a third state painter.ts doesn't implement.
-    m.set("common.Control.highContrastModeCycle", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
+    // PCB_CONTROL::HighContrastModeCycle: normal -> dimmed -> hidden -> normal (the Appearance panel's "Inactive layers": Normal, Dim, Hide).
+    m.set("common.Control.highContrastModeCycle", () =>
+      dispatch({ type: "APPEARANCE", op: { op: "contrast", mode: nextContrastMode(!state.highContrast ? "normal" : state.appearance.contrastHidden ? "hidden" : "dimmed") } })
+    );
     m.set("common.Control.togglePolarCoords", () => dispatch({ type: "TOGGLE_POLAR" }));
     // cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs: actions/commonActions.ts (one setting, all four canvases).
 
@@ -2216,6 +2218,9 @@ export function useActionRunner() {
     registerSchClipboardActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
     // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
     registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
+    registerPcbMenuActions(m, { state, dispatch, api, requestSelection });
+    // Find, Find Next and Find Previous on the board (dialog_find.cpp): actions/pcbFindActions.ts.
+    registerPcbFindActions(m, { state, dispatch, api, requestSelection });
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
@@ -2293,7 +2298,7 @@ export function useActionRunner() {
       return schControlChecked(name, {
         control: schControl,
         state,
-        requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
+        requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText) ?? hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
       });
     },
     [registry, schControl, state, commonOptions]

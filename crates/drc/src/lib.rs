@@ -1,7 +1,8 @@
 //! The geometry core other crates build on: KiCad's shapes and collision
 //! (`kimath`), the flattened board (`board`), clearance and rule resolution
 //! (`constraints`, `pcbexpr`), a spatial index (`rtree`), the zone-fill driver
-//! (`fill`, over `eda_zone_filler`) and the stroke font (`stroke_font`).
+//! (`fill`, over `eda_zone_filler`), the board outline as KiCad builds it from Edge.Cuts
+//! (`outline`: `ConvertOutlineToPolygon`) and the stroke font (`stroke_font`).
 //!
 //! The interactive router (`eda_pns`), the zone filler, live connectivity
 //! (`eda_connectivity`), the `.kicad_pcb` exporter and the renderer all use it.
@@ -16,6 +17,7 @@ pub mod board;
 pub mod constraints;
 pub mod fill;
 pub mod kimath;
+pub mod outline;
 pub mod pcbexpr;
 pub mod rtree;
 pub mod stroke_font;

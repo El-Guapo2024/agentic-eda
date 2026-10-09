@@ -45,6 +45,18 @@ fn thin(a: Point, b: Point) -> Rect {
 
 /// Every drawn item of `sch` but the fields of its symbols.
 pub fn of_section(sch: &SchematicSection, model: &ConstraintModel) -> Vec<Obstacle> {
+    let mut out = of_section_but_wires(sch, model);
+    for w in &sch.wires {
+        for pair in w.pts.windows(2) {
+            out.push(Obstacle { owner: String::new(), rect: thin(pair[0], pair[1]) });
+        }
+    }
+    out
+}
+
+/// [`of_section`] without the wires and buses: what the fields of a symbol being placed by hand keep clear of, apart from the wires, which they
+/// are measured against segment by segment.
+pub fn of_section_but_wires(sch: &SchematicSection, model: &ConstraintModel) -> Vec<Obstacle> {
     let mut out = Vec::new();
     for sym in &sch.symbols {
         let Some(part) = model.part(&sym.id) else { continue };
@@ -52,7 +64,7 @@ pub fn of_section(sch: &SchematicSection, model: &ConstraintModel) -> Vec<Obstac
         if sym.lib_id.is_empty() {
             sym.lib_id = format!("eda:{}", sym.id);
         }
-        let resolved = model.real_symbol_of(&sym.lib_id, part);
+        let resolved = model.real_symbol_of_instance(sch, &sym, part);
         let geom = SymbolGeom::of(&sym, part, resolved.as_ref());
         if let Some(b) = geom.body {
             out.push(Obstacle { owner: sym.id.clone(), rect: outward(b) });
@@ -75,11 +87,6 @@ pub fn of_section(sch: &SchematicSection, model: &ConstraintModel) -> Vec<Obstac
     }
     for j in &sch.junctions {
         out.push(Obstacle { owner: String::new(), rect: Rect::new(j.at.x - 400, j.at.y - 400, j.at.x + 400, j.at.y + 400) });
-    }
-    for w in &sch.wires {
-        for pair in w.pts.windows(2) {
-            out.push(Obstacle { owner: String::new(), rect: thin(pair[0], pair[1]) });
-        }
     }
     out
 }

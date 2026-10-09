@@ -10,7 +10,7 @@
 //! ([`crate::import_kicad_sch`]) on the fragment wrapped in a file header, so a symbol, a wire or a label means here on paste exactly what it
 //! means in a file; the library symbols come through the Symbol Editor's reader, which keeps hidden pins and fills.
 //!
-//! What the schematic IR does not hold is not written and not read: a field's position and size, a label's rotation, a wire's stroke. The
+//! What the schematic IR does not hold is not written and not read: a field's position and size, a wire's stroke. The
 //! fields of a copied symbol are put beside it and marked `(fields_autoplaced yes)`, so KiCad lays them out when the pasted symbol is moved.
 
 use crate::sexpr;
@@ -220,7 +220,21 @@ struct CopiedSymbol<'a> {
     lib_id: String,
     /// KiCad's own origin of the symbol, sheet coordinates.
     origin: Point,
+    /// The library symbol with both its body styles (the clipboard's `(lib_symbols ...)` names both).
     engine: LibSymbol,
+    /// The body style the symbol is placed in (`SCH_SYMBOL::GetBodyStyle`): 1, or 2 for the alternate "De Morgan" one of a symbol that has it.
+    style: u32,
+}
+
+impl CopiedSymbol<'_> {
+    /// The library symbol as the placed symbol draws it (its box, its pins).
+    fn drawn(&self) -> LibSymbol {
+        if self.style > 1 && self.engine.has_alternate_body() {
+            self.engine.in_style(self.style).into_owned()
+        } else {
+            self.engine.clone()
+        }
+    }
 }
 
 /// The library symbol a placed symbol draws from, its name in the clipboard and where KiCad's origin of it is.
@@ -241,19 +255,21 @@ fn copied_symbol<'a>(input: &CopyInput<'_>, sym: &'a SymbolInstance) -> Option<C
     };
     match real {
         Some(engine) => {
+            let style = if engine.has_alternate_body() { input.section.body_style_of(sym).min(2) } else { 1 };
             let origin = if input.section.imported_from_kicad {
                 sym.at
             } else {
-                let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&engine, sym.unit);
+                let drawn = if style > 1 { engine.in_style(style).into_owned() } else { engine.clone() };
+                let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, sym.unit);
                 let (dx, dy) = place_offset_um(sym.rot as f64 / 1000.0, sym.mirrored, sym.mirror_y, (-x0, -y1));
                 Point { x: sym.at.x + dx, y: sym.at.y + dy }
             };
-            Some(CopiedSymbol { sym, lib_id, origin, engine })
+            Some(CopiedSymbol { sym, lib_id, origin, engine, style })
         }
         None => {
             // No library symbol: the generic box the sheet draws, whose origin is its corner.
             let engine = eda_engine::placed::corner_symbol(&lib_id, part?, None, sym.unit);
-            Some(CopiedSymbol { sym, lib_id, origin: sym.at, engine })
+            Some(CopiedSymbol { sym, lib_id, origin: sym.at, engine, style: 1 })
         }
     }
 }
@@ -270,7 +286,7 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
 
 /// The box a symbol covers on the sheet (mm): its library box turned and mirrored the way it is placed, around its origin.
 fn sheet_box_mm(c: &CopiedSymbol<'_>) -> (f64, f64, f64, f64) {
-    let (x0, y0, x1, y1) = eda_engine::geometry::real_symbol_bbox(&c.engine, c.sym.unit);
+    let (x0, y0, x1, y1) = eda_engine::geometry::real_symbol_bbox(&c.drawn(), c.sym.unit);
     let angle = c.sym.rot as f64 / 1000.0;
     let (ox, oy) = (c.origin.x as f64 / 1000.0, c.origin.y as f64 / 1000.0);
     let pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|p| {
@@ -296,7 +312,7 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>) {
         let _ = writeln!(out, "\t\t(mirror {})", if sym.mirrored { "y" } else { "x" });
     }
     let _ = writeln!(out, "\t\t(unit {})", sym.unit);
-    let _ = writeln!(out, "\t\t(body_style 1)");
+    let _ = writeln!(out, "\t\t(body_style {})", c.style);
     let _ = writeln!(out, "\t\t(exclude_from_sim {})", yes(sym.exclude_from_sim));
     let _ = writeln!(out, "\t\t(in_bom {})", yes(!sym.exclude_from_bom));
     let _ = writeln!(out, "\t\t(on_board {})", yes(!sym.exclude_from_board));
@@ -506,11 +522,13 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         if let Some(shape) = shape {
             let _ = write!(out, "\n\t\t(shape {})", label_shape_token(shape));
         }
-        let _ = writeln!(out, "\n\t\t(at {x} {y} 0)");
+        // the label's spin, size, bold and italic go on the clipboard (`SCH_IO_KICAD_SEXPR::saveText`)
+        let (angle, effects) = crate::label_effects(sch, l, tag == "label");
+        let _ = writeln!(out, "\n\t\t(at {x} {y} {angle})");
         if shape.is_some() && tag == "global_label" {
             let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
         }
-        let _ = writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left bottom))");
+        let _ = writeln!(out, "\t\t{effects}");
         let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
         if tag == "global_label" {
             let _ = writeln!(out, "\t\t(property \"Intersheetrefs\" \"${{INTERSHEET_REFS}}\" (at {x} {y} 0) (effects (font (size 1.27 1.27)) (justify left) (hide yes)))");

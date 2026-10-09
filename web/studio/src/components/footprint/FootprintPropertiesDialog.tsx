@@ -7,15 +7,18 @@
 //
 // Not ported: the Layers tab (private/custom user layers -- this app's
 // board has a fixed layer set, nothing to assign a private layer from),
-// the Clearances tab (an exact duplicate of the pad dialog's own override
-// fields but at the footprint level -- deferred, see PARITY-fpedit.md),
+// the Clearances tab beyond its "Zone connection" (the solder mask and paste
+// margins and the clearance are the pad dialog's own override fields at the
+// footprint level -- deferred, see PARITY-fpedit.md),
 // net-tie/jumper pad groups (no net-tie concept in this model), and the
 // Fields grid beyond what's already a named field here (reference/value
 // visibility) -- `FootprintField`s are modeled in the IR but have no
 // editor UI yet (PARITY-fpedit.md).
 import { useEffect, useState } from "react";
 import type { FootprintPropertiesFields } from "../../api/types";
+import type { PadConnection } from "../../api/types";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
+import { PAD_CONNECTION_OPTIONS } from "../../kicad-port/padSettings";
 
 const DEFAULT_FIELDS: FootprintPropertiesFields = {
   description: "",
@@ -24,6 +27,7 @@ const DEFAULT_FIELDS: FootprintPropertiesFields = {
   reference_visible: true,
   value_visible: true,
   model: null,
+  zone_connection: null,
 };
 
 export function FootprintLibraryPropertiesDialog() {
@@ -38,7 +42,9 @@ export function FootprintLibraryPropertiesDialog() {
   useEffect(() => {
     if (open && state.footprint) {
       const { description, keywords, attributes, reference_visible, value_visible, model } = state.footprint;
-      setForm({ description, keywords, attributes, reference_visible, value_visible, model });
+      // The backend leaves an empty description or keywords (and an unset model or zone connection) out of the JSON: read them as empty, or the
+      // command that sends them back is refused for a missing field.
+      setForm({ description: description ?? "", keywords: keywords ?? "", attributes, reference_visible, value_visible, model: model ?? null, zone_connection: state.footprint.zone_connection ?? null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -104,6 +110,22 @@ export function FootprintLibraryPropertiesDialog() {
                 <input type="checkbox" checked={form.attributes[key]} onChange={(e) => setAttr(key, e.target.checked)} /> {label}
               </label>
             ))}
+          </div>
+
+          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and settings</p>
+          <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
+            <span>Zone connection</span>
+            <select
+              value={form.zone_connection ?? ""}
+              onChange={(e) => setForm((f) => ({ ...f, zone_connection: e.target.value === "" ? null : (e.target.value as PadConnection) }))}
+              title="FOOTPRINT::GetLocalZoneConnection: how a copper zone connects to every pad of this footprint that does not set its own"
+            >
+              {PAD_CONNECTION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.value === "" ? "Inherited" : o.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 12 }}>

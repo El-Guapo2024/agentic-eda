@@ -646,7 +646,38 @@ fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cm
         keepout_pads: z.keepout_pads,
         keepout_copper_pour: z.keepout_copper_pour,
         keepout_footprints: z.keepout_footprints,
+        smoothing: Some(z.smoothing),
+        corner_radius: Some(z.corner_radius),
     }
+}
+
+#[test]
+fn edit_zone_sets_the_outline_smoothing_and_a_missing_one_leaves_it() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| {
+        z.smoothing = eda_model::ir::ZoneSmoothing::Fillet;
+        z.corner_radius = 1_500;
+    }))
+    .unwrap();
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!((z.smoothing, z.corner_radius), (eda_model::ir::ZoneSmoothing::Fillet, 1_500));
+
+    // a client that does not know about smoothing (the field absent) leaves it as it is
+    let mut cmd = edit_zone_cmd(id.clone(), "GND", |z| z.clearance = 300);
+    if let Cmd::EditZone { smoothing, corner_radius, .. } = &mut cmd {
+        *smoothing = None;
+        *corner_radius = None;
+    }
+    b.apply(&cmd).unwrap();
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!((z.clearance, z.smoothing, z.corner_radius), (300, eda_model::ir::ZoneSmoothing::Fillet, 1_500));
+
+    let e = b.apply(&edit_zone_cmd(id, "GND", |z| z.corner_radius = -1)).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_zone");
 }
 
 #[test]
@@ -819,6 +850,52 @@ fn add_shape_move_and_delete() {
 }
 
 #[test]
+fn the_outline_summary_follows_the_edge_cuts_shapes_when_they_are_the_outline() {
+    let m = net_model();
+    let mut b = board(&m);
+    let edge = |a: Point, c: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: a, end: c };
+    let p = |x, y| Point { x, y };
+    // An imported board whose outline is its shapes: a 10 x 10 mm square, `placement.outline` the ring that stands for it.
+    let mut d = b.design().clone();
+    d.drawings = Some(eda_model::ir::DrawingsSection {
+        shapes: vec![edge(p(0, 0), p(10_000, 0)), edge(p(10_000, 0), p(10_000, 10_000)), edge(p(10_000, 10_000), p(0, 10_000)), edge(p(0, 10_000), p(0, 0))],
+        outline_is_shapes: true,
+        ..Default::default()
+    });
+    d.drawings.as_mut().unwrap().assign_missing_ids();
+    eda_drc::outline::refresh_outline_summary(&mut d);
+    let mut b = Board::new(d, &m, 100, 300);
+    let area = |b: &Board| {
+        let o = &b.design().placement.as_ref().unwrap().outline;
+        (0..o.len()).map(|i| o[i].x * o[(i + 1) % o.len()].y - o[(i + 1) % o.len()].x * o[i].y).sum::<i64>().abs() / 2
+    };
+    assert_eq!(area(&b), 100_000_000);
+
+    // A circular cutout drawn on Edge.Cuts is a hole: the summary ring is the outer ring still, but the shape is in the outline.
+    let hole = Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: p(5_000, 5_000), end: p(7_000, 5_000) };
+    b.apply(&Cmd::AddShape { shape: hole }).unwrap();
+    assert_eq!(area(&b), 100_000_000, "a cutout does not change the outer ring");
+    let outline = eda_drc::outline::board_outline(b.design(), false);
+    assert_eq!((outline.polys.outline_count(), outline.polys.hole_count(0)), (1, 1));
+
+    // Taking the right side 2 mm in changes the outline, and the summary follows (the cutout stays well inside).
+    let right = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.x == 10_000 && end.x == 10_000)).unwrap().id().to_string();
+    let top = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.y == 10_000 && end.y == 10_000)).unwrap().id().to_string();
+    let bottom = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.y == 0 && end.y == 0)).unwrap().id().to_string();
+    for id in [&right, &top, &bottom] {
+        b.apply(&Cmd::DeleteShape { id: id.clone() }).unwrap();
+    }
+    b.apply(&Cmd::AddShape { shape: edge(p(0, 0), p(8_000, 0)) }).unwrap();
+    b.apply(&Cmd::AddShape { shape: edge(p(8_000, 0), p(8_000, 10_000)) }).unwrap();
+    b.apply(&Cmd::AddShape { shape: edge(p(8_000, 10_000), p(0, 10_000)) }).unwrap();
+    assert_eq!(area(&b), 80_000_000, "the summary is the new 8 x 10 mm outline");
+    // A cutout that crosses the outline is malformed, as in KiCad; the summary is then the rectangle round the edges.
+    assert_eq!(eda_drc::outline::check_board_outline(b.design()).len(), 0);
+    b.apply(&Cmd::AddShape { shape: Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: p(8_000, 5_000), end: p(9_500, 5_000) } }).unwrap();
+    assert!(!eda_drc::outline::check_board_outline(b.design()).is_empty());
+}
+
+#[test]
 fn add_shape_accepts_a_bezier_and_moving_it_shifts_all_four_control_points() {
     // `pcbnew.InteractiveDrawing.bezier` commits one `PCB_SHAPE` of type BEZIER: start, C1, C2, end.
     let m = net_model();
@@ -986,7 +1063,7 @@ fn group_then_ungroup_round_trips() {
 }
 
 #[test]
-fn grouping_an_existing_group_flattens_instead_of_nesting() {
+fn grouping_an_existing_group_nests_it() {
     let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402")], &[], vec![]);
     let mut b = board(&m);
     b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
@@ -994,11 +1071,17 @@ fn grouping_an_existing_group_flattens_instead_of_nesting() {
 
     b.apply(&Cmd::Group { ids: vec![inner_id.clone(), "C2".into()] }).unwrap();
     let groups = b.design().drawings.as_ref().unwrap().groups.clone();
-    assert_eq!(groups.len(), 1, "the inner group must be flattened away, not nested: {groups:?}");
-    assert_ne!(groups[0].id, inner_id, "a flattened-and-rebuilt group gets a fresh id");
-    let mut members = groups[0].member_ids.clone();
-    members.sort();
-    assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()]);
+    assert_eq!(groups.len(), 2, "the inner group stays, inside the new one: {groups:?}");
+    let inner = groups.iter().find(|g| g.id == inner_id).expect("the inner group keeps its id");
+    let mut inner_members = inner.member_ids.clone();
+    inner_members.sort();
+    assert_eq!(inner_members, vec!["C1".to_string(), "U1".to_string()]);
+    let outer = groups.iter().find(|g| g.id != inner_id).unwrap();
+    let mut outer_members = outer.member_ids.clone();
+    outer_members.sort();
+    let mut want = vec![inner_id, "C2".to_string()];
+    want.sort();
+    assert_eq!(outer_members, want);
 }
 
 #[test]
@@ -1063,7 +1146,7 @@ fn edit_group_renames_it_and_replaces_its_members() {
 }
 
 #[test]
-fn edit_group_refuses_an_unknown_group_and_a_group_inside_a_group() {
+fn edit_group_refuses_an_unknown_group_and_a_group_that_would_hold_itself() {
     let m = model(vec![part("U1", "SOIC-8"), part("C1", "0402"), part("C2", "0402"), part("C3", "0402")], &[], vec![]);
     let mut b = board(&m);
     b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
@@ -1071,9 +1154,14 @@ fn edit_group_refuses_an_unknown_group_and_a_group_inside_a_group() {
     let groups = b.design().drawings.as_ref().unwrap().groups.clone();
     let e = b.apply(&Cmd::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: vec!["U1".into(), "C1".into()] }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_group");
-    let e = b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[1].id.clone(), "U1".into()] }).unwrap_err();
-    assert_eq!(e[0].check, "ops_bad_group", "no nested groups");
+    let e = b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "U1".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_group", "a group cannot hold itself");
     assert_eq!(b.design().drawings.as_ref().unwrap().groups.len(), 2, "a refused edit changes nothing");
+
+    // another group is a fine member; its holder can then not be put into it
+    b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[1].id.clone(), "U1".into(), "C1".into()] }).unwrap();
+    let e = b.apply(&Cmd::EditGroup { id: groups[1].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "C2".into()] }).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_group", "a group cannot hold a group that holds it");
 }
 
 #[test]
@@ -1379,6 +1467,8 @@ fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
         clearance_override: None,
         thermal_gap_override: None,
         thermal_spoke_width_override: None,
+        zone_connection: None,
+        thermal_spoke_angle_mdeg: None,
     }
 }
 
@@ -1637,9 +1727,11 @@ fn edit_footprint_properties_replaces_the_whole_panel() {
         reference_visible: false,
         value_visible: true,
         model: Some("${KICAD10_3DMODEL_DIR}/x.step".into()),
+        zone_connection: Some(PadConnection::Full),
     })
     .unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.zone_connection, Some(PadConnection::Full), "the Clearances tab's zone connection is part of the panel");
     assert_eq!(fp.description, "A test footprint");
     assert!(fp.attributes.smd);
     assert!(!fp.reference_visible);

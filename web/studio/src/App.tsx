@@ -60,6 +60,7 @@ import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
 import { SymbolFieldsTableDialog } from "./components/SymbolFieldsTableDialog";
 import { FindReplaceDialog } from "./components/FindReplaceDialog";
+import { PcbFindDialog } from "./components/PcbFindDialog";
 import { SchematicSetupDialog } from "./components/SchematicSetupDialog";
 import { PlotDialog } from "./components/PlotDialog";
 import { PlotSchematicDialog } from "./components/PlotSchematicDialog";
@@ -72,6 +73,7 @@ import { Viewer3DToolbar } from "./components/viewer3d/Viewer3DToolbar";
 import { Viewer3DAppearancePanel } from "./components/viewer3d/Viewer3DAppearancePanel";
 import { useGlobalHotkeys } from "./actions/useGlobalHotkeys";
 import { useEdaTestHook } from "./actions/useEdaTestHook";
+import { useAppearanceSync } from "./components/panels/appearance/useAppearanceSync";
 import { useSnapOrigin } from "./actions/useSnapOrigin";
 import "./styles/global.css";
 import "./styles/layout.css";
@@ -112,6 +114,7 @@ function StudioFrame() {
   const state = useStudioState();
   useGlobalHotkeys();
   useEdaTestHook(); // window.__eda: the scripted test hook (actions/useEdaTestHook.ts)
+  useAppearanceSync(); // the Appearance panel's per-project settings (appearance.json)
   useSnapOrigin(); // the point the grid snapping is anchored at (the grid origin of the PCB / Footprint editor on screen)
   useFootprintEditHotkey();
   useOpenDockWithNetNavigator();
@@ -261,6 +264,7 @@ function StudioFrame() {
       <AnnotateDialog />
       <SymbolFieldsTableDialog />
       <FindReplaceDialog />
+      <PcbFindDialog />
       <SchematicSetupDialog />
       <PlotDialog />
       <PlotSchematicDialog />

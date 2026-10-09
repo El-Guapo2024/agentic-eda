@@ -19,11 +19,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use eda_model::ir::{Design, Dimension, FootprintInstance, Group, LabelSide, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
+use eda_model::ir::{Design, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Footprint};
 
 use crate::pcb::{write_footprint, write_layers, write_shape, write_text};
-use crate::pcb_items::{write_dimension, write_group, write_zone, DimensionArgs, ZoneArgs};
+use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{duid, mm, sexpr_str};
 
 /// What a clipboard holds, in the clipboard's own coordinates (the copy's reference point is the origin) and with ids of
@@ -65,6 +65,10 @@ pub struct ClipFootprint {
     pub definition: Option<Footprint>,
     /// Pad number -> net name, for the pads the text put on a net.
     pub pad_nets: Vec<(String, String)>,
+    /// What the text set for how zones connect to the footprint and to its pads (`zone_connect`, the thermal relief and the
+    /// clearance of the pads and of the footprint), as the board edit that gives the pasted footprint the same ones
+    /// (`DrawingsSection::zone_overrides`; the `id` is the reference the text carried). `None` when it set none.
+    pub zone_overrides: Option<FootprintZoneOverrides>,
 }
 
 /// A group on the clipboard: its name and its members.
@@ -84,6 +88,9 @@ pub enum ClipRef {
     Text(usize),
     Dimension(usize),
     Footprint(usize),
+    /// A group inside the group (`PCB_GROUP` is an item like any other): the position in [`Clipboard::groups`]. Inner groups are
+    /// listed before the groups that hold them.
+    Group(usize),
 }
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
@@ -136,17 +143,28 @@ impl<'a> Picked<'a> {
         true
     }
 
+    /// A group and everything below it: its items, and the groups it holds with theirs.
+    fn add_group(&mut self, design: &'a Design, g: &'a Group, seen: &mut BTreeSet<String>) {
+        if !seen.insert(g.id.clone()) {
+            return;
+        }
+        self.groups.push(g);
+        for m in &g.member_ids {
+            match design.drawings.as_ref().and_then(|d| d.group(m)) {
+                Some(inner) => self.add_group(design, inner, seen),
+                None => {
+                    self.add_item(design, m, seen);
+                }
+            }
+        }
+    }
+
     fn resolve(design: &'a Design, ids: &[String]) -> Result<Picked<'a>, Vec<CheckResult>> {
         let mut out = Picked::default();
         let mut seen = BTreeSet::new();
         for id in ids {
-            if let Some(g) = design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| &g.id == id)) {
-                if seen.insert(g.id.clone()) {
-                    out.groups.push(g);
-                    for m in &g.member_ids {
-                        out.add_item(design, m, &mut seen);
-                    }
-                }
+            if let Some(g) = design.drawings.as_ref().and_then(|d| d.group(id)) {
+                out.add_group(design, g, &mut seen);
             } else if !out.add_item(design, id, &mut seen) {
                 return Err(fail("clipboard.unknown_item", id, "no placed part, track, via, zone, shape, text, dimension or group with this id"));
             }
@@ -180,7 +198,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
     if picked.total() == 1 && picked.footprints.len() == 1 {
         let (part, footprint, moved) = fp_pieces(picked.footprints[0])?;
         let mut out = String::new();
-        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, false, "");
+        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, "");
         return Ok(out);
     }
 
@@ -217,7 +235,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
 
     for fp in &picked.footprints {
         let (part, footprint, moved) = fp_pieces(fp)?;
-        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, false, "");
+        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, "");
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     for t in &picked.tracks {
@@ -273,10 +291,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         written.entry(d.id.clone()).or_default().push(uuid);
     }
     // Groups last, as KiCad writes them: a group names its members by uuid, and the parser resolves them once every item is read.
-    for g in &picked.groups {
-        let members: Vec<String> = g.member_ids.iter().filter_map(|m| written.get(m)).flatten().cloned().collect();
-        write_group(&mut out, g, &duid(&format!("clip:group:{}", g.id)), false, members);
-    }
+    write_groups(&mut out, &picked.groups, &written, &|g| duid(&format!("clip:group:{}", g.id)), &|_| false);
     writeln!(out, ")").unwrap();
     Ok(out)
 }
@@ -320,6 +335,11 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
         }
         pad_nets.sort();
         fp_index.insert(fp.id.clone(), clip.footprints.len());
+        let definition = part.and_then(|p| model.footprint_of(p));
+        let zone_overrides = definition.as_ref().and_then(|d| {
+            let numbers: Vec<&str> = d.pads.iter().map(|p| p.number.as_str()).collect();
+            design.zone_overrides_of(&fp.id, &d.name, &numbers)
+        });
         clip.footprints.push(ClipFootprint {
             // The importer keeps a repeated reference apart with a `#n` suffix; the text had the plain one.
             reference: fp.id.split('#').next().unwrap_or(&fp.id).to_string(),
@@ -329,17 +349,20 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
             rot: fp.rot,
             side: fp.side,
             label: fp.label,
-            definition: part.and_then(|p| model.footprint_of(p)),
+            definition,
             pad_nets,
+            zone_overrides,
         });
     }
     if let Some(dr) = &design.drawings {
+        // The importer lists an inner group before the group that holds it, so a group's position is known by then.
+        let mut group_index: BTreeMap<&str, usize> = BTreeMap::new();
         for g in &dr.groups {
             let members: Vec<ClipRef> = g
                 .member_ids
                 .iter()
                 .filter_map(|m| {
-                    clip.tracks
+                    group_index.get(m.as_str()).copied().map(ClipRef::Group).or_else(|| clip.tracks
                         .iter()
                         .position(|t| &t.id == m)
                         .map(ClipRef::Track)
@@ -348,9 +371,10 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
                         .or_else(|| clip.shapes.iter().position(|s| s.id() == m).map(ClipRef::Shape))
                         .or_else(|| clip.texts.iter().position(|t| &t.id == m).map(ClipRef::Text))
                         .or_else(|| clip.dimensions.iter().position(|d| &d.id == m).map(ClipRef::Dimension))
-                        .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint))
+                        .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint)))
                 })
                 .collect();
+            group_index.insert(g.id.as_str(), clip.groups.len());
             clip.groups.push(ClipGroup { name: g.name.clone(), members });
         }
     }
@@ -457,6 +481,44 @@ mod tests {
     }
 
     #[test]
+    fn the_corner_smoothing_of_a_zone_travels_with_a_copy() {
+        use eda_model::ir::ZoneSmoothing;
+        let (mut design, model) = fixture();
+        let z = &mut design.routing.as_mut().unwrap().zones[0];
+        z.smoothing = ZoneSmoothing::Fillet;
+        z.corner_radius = 2_000;
+        let text = export_pcb_clipboard(&design, &model, &ids(&["zone_a"]), p(0, 0)).unwrap();
+        assert!(text.contains("(smoothing fillet)") && text.contains("(radius 2)"), "{text}");
+        let clip = parse_pcb_clipboard(&text).unwrap();
+        assert_eq!((clip.zones[0].smoothing, clip.zones[0].corner_radius), (ZoneSmoothing::Fillet, 2_000));
+    }
+
+    #[test]
+    fn how_zones_connect_to_a_footprint_and_its_pads_travels_with_a_copy() {
+        use eda_model::ir::{FootprintZoneFacts, PadConnection, PadZoneOverride};
+        let (mut design, model) = fixture();
+        design.drawings.as_mut().unwrap().zone_overrides.push(eda_model::ir::FootprintZoneOverrides {
+            id: "C1".into(),
+            footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(900) }),
+            pads: vec![PadZoneOverride { number: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(30_000), clearance: Some(600) }],
+        });
+        // A footprint on its own, and the same one inside a board fragment: the text says the same, and the paste reads it back.
+        for names in [ids(&["C1"]), ids(&["C1", "zone_a"])] {
+            let text = export_pcb_clipboard(&design, &model, &names, p(110_000, 120_000)).unwrap();
+            assert!(text.contains("(zone_connect 0)") && text.contains("(clearance 0.9)"), "the footprint's own: {text}");
+            assert!(text.contains("(zone_connect 2)") && text.contains("(thermal_gap 0.4)") && text.contains("(thermal_bridge_width 0.3)") && text.contains("(thermal_bridge_angle 30)"), "the pad's: {text}");
+            let clip = parse_pcb_clipboard(&text).unwrap();
+            let edit = clip.footprints[0].zone_overrides.as_ref().expect("the paste reads them back");
+            assert_eq!(edit.footprint, Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(900) }));
+            assert_eq!(edit.pads.len(), 1, "{:?}", edit.pads);
+            assert_eq!((edit.pads[0].number.as_str(), edit.pads[0].zone_connection, edit.pads[0].thermal_gap, edit.pads[0].thermal_spoke_width, edit.pads[0].thermal_spoke_angle_mdeg, edit.pads[0].clearance), ("2", Some(PadConnection::Full), Some(400), Some(300), Some(30_000), Some(600)));
+        }
+        // C2 sets nothing, and its copy says so.
+        let clip = parse_pcb_clipboard(&export_pcb_clipboard(&design, &model, &ids(&["C2"]), p(0, 0)).unwrap()).unwrap();
+        assert!(clip.footprints[0].zone_overrides.is_none());
+    }
+
+    #[test]
     fn a_copy_is_a_board_fragment_measured_from_the_reference_point() {
         let (design, model) = fixture();
         let arc = arc_track_id(&design);
@@ -501,6 +563,28 @@ mod tests {
         let kinds: Vec<&str> = clip.groups[0].members.iter().map(|m| match m { ClipRef::Shape(_) => "shape", ClipRef::Text(_) => "text", ClipRef::Zone(_) => "zone", _ => "other" }).collect();
         assert_eq!(kinds.len(), 3);
         assert!(kinds.contains(&"shape") && kinds.contains(&"text") && kinds.contains(&"zone"), "{kinds:?}");
+    }
+
+    #[test]
+    fn a_group_that_holds_a_group_copies_and_pastes_back_nested() {
+        let (mut design, model) = fixture();
+        let dr = design.drawings.as_mut().unwrap();
+        dr.groups = vec![
+            Group { id: "grp_outer".into(), name: "outer".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()] },
+            Group { id: "grp_inner".into(), name: "inner".into(), member_ids: vec!["shp_a".into(), "zone_a".into()] },
+        ];
+        // Copying the outer group takes the inner group and what is in it along (`PCB_GROUP::DeepClone`).
+        let text = export_pcb_clipboard(&design, &model, &ids(&["grp_outer"]), p(100_000, 100_000)).unwrap();
+        assert_eq!(text.matches("\t(group ").count(), 2, "{text}");
+        let clip = parse_pcb_clipboard(&text).unwrap();
+        assert_eq!((clip.shapes.len(), clip.texts.len(), clip.zones.len()), (1, 1, 1), "the inner group's items travel too");
+        assert_eq!(clip.groups.len(), 2);
+        let inner = clip.groups.iter().position(|g| g.name == "inner").unwrap();
+        let outer = clip.groups.iter().position(|g| g.name == "outer").unwrap();
+        assert!(inner < outer, "an inner group is listed before the group that holds it");
+        assert!(clip.groups[outer].members.contains(&ClipRef::Group(inner)), "{:?}", clip.groups[outer].members);
+        assert_eq!(clip.groups[outer].members.len(), 2);
+        assert_eq!(clip.groups[inner].members.len(), 2);
     }
 
     #[test]

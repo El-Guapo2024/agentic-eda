@@ -94,13 +94,14 @@ export function applyPatch(sch: Schematic, p: SchMovePatch): Schematic {
   const junctionsOld = new Map((sch.junctions ?? []).map((j) => [j.id, j]));
   return {
     ...sch,
+    // the fields go where the server put them: a held symbol shows its Reference and Value with it, a held field where it would land
     symbols: sch.symbols.map((s) => {
       const q = symbolAt.get(`${s.id}#${s.unit}`);
-      return q ? { ...s, at: q.at, rot: q.rot, mirror: q.mirror } : s;
+      return q ? { ...s, at: q.at, rot: q.rot, mirror: q.mirror, ...(q.fields?.length ? { fields: q.fields } : {}) } : s;
     }),
     power_symbols: sch.power_symbols.map((s) => {
       const q = power.get(s.id);
-      return q ? { ...s, at: q.at, rot: q.rot } : s;
+      return q ? { ...s, at: q.at, rot: q.rot, ...(q.fields?.length ? { fields: q.fields } : {}) } : s;
     }),
     wires: p.wires.map((w) => {
       const old = wiresOld.get(w.id);
@@ -127,7 +128,7 @@ export function applyPatch(sch: Schematic, p: SchMovePatch): Schematic {
       const q = sheets.get(s.id);
       if (!q) return s;
       const pins = new Map(q.pins.map((x) => [x.id, x.at]));
-      return { ...s, at: q.at, size: q.size, pins: s.pins.map((pin) => ({ ...pin, at: pins.get(pin.id) ?? pin.at })) };
+      return { ...s, at: q.at, size: q.size, pins: s.pins.map((pin) => ({ ...pin, at: pins.get(pin.id) ?? pin.at })), ...(q.fields?.length ? { fields: q.fields } : {}) };
     }),
   };
 }

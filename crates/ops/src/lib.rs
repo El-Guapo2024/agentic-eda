@@ -41,8 +41,10 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
+#[cfg(test)]
+use eda_model::ir::Group;
 use eda_model::rules::{Constraints, MaskPaste, NetClassSettings, StackupSettings, TextGraphicsDefaults};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -53,9 +55,12 @@ pub mod board_setup;
 mod review;
 pub mod library_editors;
 mod library_place;
+mod outline;
+mod pcb_groups;
 mod pcb_paste;
 mod pcb_props;
 mod pcb_transform;
+mod zone_overrides;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
@@ -370,6 +375,33 @@ pub enum Cmd {
     /// resize anything else about the part, so unlike `Flip`/`Rotate`/
     /// `MoveTo` this does not clear the board's routing.
     SetLabelSide { part: String, side: LabelSide },
+    /// Footprint Properties' "Zone connection" and "Clearance" (`FOOTPRINT::SetLocalZoneConnection`, `SetLocalClearance`) on a
+    /// placed footprint: how zones connect to every pad of it that does not set its own, and the clearance they keep from
+    /// them. `None` inherits (the zone's connection, the rules' clearance). A whole-panel commit; see [`zone_overrides`].
+    SetFootprintZoneConnection {
+        part: String,
+        #[serde(default)]
+        zone_connection: Option<PadConnection>,
+        #[serde(default)]
+        clearance: Option<Um>,
+    },
+    /// Pad Properties' zone fields on the pads numbered `pad` of a placed footprint: "Pad connection" (`PAD::SetLocalZoneConnection`:
+    /// solid, thermal relief, none, or `None` for "From parent footprint"), "Relief gap", "Spoke width" and "Spoke angle" (millidegrees,
+    /// KiCad's sign convention), and the pad's own "Clearance". A whole-panel commit: every field is the pad's own, `None` inherits.
+    SetPadZoneOverrides {
+        part: String,
+        pad: String,
+        #[serde(default)]
+        zone_connection: Option<PadConnection>,
+        #[serde(default)]
+        thermal_gap: Option<Um>,
+        #[serde(default)]
+        thermal_spoke_width: Option<Um>,
+        #[serde(default)]
+        thermal_spoke_angle_mdeg: Option<Millideg>,
+        #[serde(default)]
+        clearance: Option<Um>,
+    },
 
     /// Add a hand-drawn copper track. `net` and `layer` are refused if
     /// they do not name a real net / a real copper layer; whether the
@@ -484,6 +516,12 @@ pub enum Cmd {
         keepout_copper_pour: bool,
         #[serde(default)]
         keepout_footprints: bool,
+        /// `ZONE_SETTINGS::m_cornerSmoothingType` and `m_cornerRadius` ("Outline smoothing" and its size): the outline's corners
+        /// are chamfered or filleted before the fill (`ZONE::BuildSmoothedPoly`). `None` leaves what the zone has.
+        #[serde(default)]
+        smoothing: Option<eda_model::ir::ZoneSmoothing>,
+        #[serde(default)]
+        corner_radius: Option<Um>,
     },
 
     /// Task item 4: Board Setup > Teardrops' settings page -- whole-struct
@@ -505,40 +543,30 @@ pub enum Cmd {
 
     // ------------------------------------------------------------ groups
     //
-    // Task item 5: `common/tool/group_tool.cpp` -- see `eda_model::ir::
-    // Group`'s own doc for the storage choice and the no-nested-groups
-    // scope.
-    /// Ctrl+G: create a new group from `ids` (parts, tracks, vias, zones,
-    /// shapes, texts). Refused with fewer than 2 ids -- a one-item "group"
-    /// is meaningless, matching source's own `ACTIONS::group.Enable(
-    /// selectionCount >= 2)`. Any named id that is itself an existing
-    /// group is flattened into the new one (its own members are pulled in
-    /// and it is deleted) rather than nested, since this model has no
-    /// group-of-groups concept.
+    // `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`: implemented in pcb_groups.rs. Groups nest -- a
+    // member id may be another group's.
+    /// Ctrl+G: create a new group from `ids` (parts, tracks, vias, zones, shapes, texts, dimensions, groups). Refused with fewer
+    /// than 2 ids -- a one-item "group" is meaningless, matching source's own `ACTIONS::group.Enable( selectionCount >= 2 )`.
+    /// A named id that is itself a group becomes a member of the new one (it nests). Each id leaves the group it was in; when
+    /// they all shared one, the new group takes their place in it.
     Group { ids: Vec<String> },
-    /// Ctrl+Shift+G: dissolve every named group, releasing its members
-    /// (which stay on the board, exactly where they are, just no longer
-    /// grouped). An id that does not name a group is silently skipped,
-    /// not refused -- the dialog's own context menu only ever sends real
-    /// group ids, but a stale id from a since-changed board should not
-    /// abort the rest of the batch.
+    /// Ctrl+Shift+G: dissolve every named group, releasing its members (which stay on the board, exactly where they are, just no
+    /// longer grouped, nor in the group above the dissolved one either -- `GROUP_TOOL::Ungroup`'s `RemoveAll()`). An id that
+    /// does not name a group is silently skipped, not refused -- the dialog's own context menu only ever sends real group ids,
+    /// but a stale id from a since-changed board should not abort the rest of the batch.
     Ungroup { ids: Vec<String> },
-    /// `ACTIONS::addToGroup`: add `ids` to an existing group, pulling each
-    /// one out of whatever other group it already belonged to first (an
-    /// item is only ever in one group at a time, matching the no-nested-
-    /// groups scope).
+    /// `ACTIONS::addToGroup`: add `ids` to an existing group, pulling each one out of whatever other group it already belonged to
+    /// first (an item is only ever in one group at a time). A group is refused as a member of itself or of a group below it.
     AddToGroup { group_id: String, ids: Vec<String> },
-    /// `ACTIONS::removeFromGroup`: remove `ids` from whatever group each
-    /// currently belongs to (a no-op for one that isn't in any group). A
-    /// group left with fewer than 2 members is dissolved entirely --
-    /// `GROUP_TOOL::RemoveFromGroup`'s own `if (group->GetItems().size() <
-    /// 2) group->RemoveAll()` rule, ported exactly.
+    /// `ACTIONS::removeFromGroup`: remove `ids` from whatever group each currently belongs to (a no-op for one that isn't in any
+    /// group). A group left with fewer than 2 members is dissolved entirely -- `GROUP_TOOL::RemoveFromGroup`'s own
+    /// `if (group->GetItems().size() < 2) group->RemoveAll()` rule, ported exactly.
     RemoveFromGroup { ids: Vec<String> },
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow` (`ACTIONS::groupProperties`, Group Properties...): rename the group `id` and
     /// make its members exactly `member_ids` -- each one pulled out of whatever other group it was in (an item is in one group at a
     /// time), the group's own previous members that are not listed released. A group left with fewer than 2 members dissolves, as
     /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's other two fields (locked, design-block link) have no
-    /// counterpart in this model. A group cannot hold itself or another group (no nested groups).
+    /// counterpart in this model. A member may be a group, but not this group or one that holds it.
     EditGroup { id: String, name: String, member_ids: Vec<String> },
 
     // ------------------------------------------------------------ arrays
@@ -1294,6 +1322,10 @@ pub enum Cmd {
         value_visible: bool,
         /// `(model "...")` 3D model path; `None` clears it.
         model: Option<String>,
+        /// The Clearances tab's "Zone connection" (`FOOTPRINT::SetLocalZoneConnection`); `None` is "inherited". Part of the
+        /// whole panel, so a command that leaves it out clears it.
+        #[serde(default)]
+        zone_connection: Option<PadConnection>,
     },
     /// `PCB_ACTIONS::setAnchor` ("Place Footprint Anchor"): `at` (in the
     /// footprint's current local frame) becomes the new origin -- every
@@ -1681,7 +1713,9 @@ impl Cmd {
             | Cmd::Rotate { part, .. }
             | Cmd::Rip { part }
             | Cmd::Flip { part }
-            | Cmd::SetLabelSide { part, .. } => vec![part],
+            | Cmd::SetLabelSide { part, .. }
+            | Cmd::SetFootprintZoneConnection { part, .. }
+            | Cmd::SetPadZoneOverrides { part, .. } => vec![part],
             Cmd::Swap { a, b } => vec![a, b],
             Cmd::AddTrack { net, .. } | Cmd::AddVia { net, .. } | Cmd::AddZone { net, .. } => vec![net.as_str()],
             Cmd::DeleteTrack { id }
@@ -1928,15 +1962,6 @@ impl Outcome {
     }
 }
 
-/// A group with fewer than 2 members is meaningless and dissolves --
-/// `GROUP_TOOL::RemoveFromGroup`'s own rule (`task item 5`), applied
-/// uniformly everywhere a group's membership can shrink: explicit
-/// `RemoveFromGroup`, and a member getting pulled into a different group
-/// via `Group`/`AddToGroup`.
-fn prune_empty_groups(dr: &mut DrawingsSection) {
-    dr.groups.retain(|g| g.member_ids.len() >= 2);
-}
-
 impl<'a> Board<'a> {
     /// An empty board with the given outline.
     pub fn new(design: Design, model: &'a ConstraintModel, snap: Um, spacing: Um) -> Self {
@@ -2102,8 +2127,17 @@ impl<'a> Board<'a> {
         (fails, warns)
     }
 
-    /// Apply a command, or refuse it.
+    /// Apply a command, or refuse it. A group keeps only the members that are still on the board afterwards (`pcb_groups.rs`).
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
+        let groups_before = self.group_universe();
+        let edge_before = outline::snapshot(&self.design);
+        self.apply_cmd(cmd)?;
+        self.tidy_groups(groups_before);
+        outline::refresh_if_changed(&mut self.design, edge_before);
+        Ok(())
+    }
+
+    fn apply_cmd(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         match cmd {
             Cmd::Place { part, anchor, side } => self.place_beside(part, anchor, *side),
             Cmd::PlaceEdge { part, edge, fraction } => self.place_on_edge(part, *edge, *fraction),
@@ -2119,6 +2153,12 @@ impl<'a> Board<'a> {
             Cmd::Rip { part } => self.rip(part),
             Cmd::Flip { part } => self.flip(part),
             Cmd::SetLabelSide { part, side } => self.set_label_side(part, *side),
+            Cmd::SetFootprintZoneConnection { part, zone_connection, clearance } => self.set_footprint_zone_connection(part, *zone_connection, *clearance),
+            Cmd::SetPadZoneOverrides { part, pad, zone_connection, thermal_gap, thermal_spoke_width, thermal_spoke_angle_mdeg, clearance } => self.set_pad_zone_overrides(
+                part,
+                pad,
+                eda_model::ir::PadZoneOverride { number: pad.clone(), clearance: *clearance, zone_connection: *zone_connection, thermal_gap: *thermal_gap, thermal_spoke_width: *thermal_spoke_width, thermal_spoke_angle_mdeg: *thermal_spoke_angle_mdeg },
+            ),
 
             Cmd::AddTrack { net, layer, width, pts } => self.add_track(net, layer, *width, pts),
             Cmd::DeleteTrack { id } => self.delete_track(id),
@@ -2203,6 +2243,8 @@ impl<'a> Board<'a> {
                 keepout_pads,
                 keepout_copper_pour,
                 keepout_footprints,
+                smoothing,
+                corner_radius,
             } => self.edit_zone(
                 id,
                 net,
@@ -2229,6 +2271,8 @@ impl<'a> Board<'a> {
                 *keepout_pads,
                 *keepout_copper_pour,
                 *keepout_footprints,
+                *smoothing,
+                *corner_radius,
             ),
 
             Cmd::AddShape { shape } => self.add_shape(shape.clone()),
@@ -2323,8 +2367,8 @@ impl<'a> Board<'a> {
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
-            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model } => {
-                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone())
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, zone_connection } => {
+                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), *zone_connection)
             }
             Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
             Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
@@ -3166,6 +3210,8 @@ impl<'a> Board<'a> {
         keepout_pads: bool,
         keepout_copper_pour: bool,
         keepout_footprints: bool,
+        smoothing: Option<eda_model::ir::ZoneSmoothing>,
+        corner_radius: Option<Um>,
     ) -> Result<(), Vec<CheckResult>> {
         // "" (no net) is normal for a rule area, and allowed for an
         // ordinary zone too -- see `add_zone`'s matching comment.
@@ -3186,6 +3232,9 @@ impl<'a> Board<'a> {
         }
         if fill_mode == FillMode::HatchPattern && (hatch_thickness < min_thickness || hatch_gap < min_thickness) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "hatch thickness and gap must be at least the minimum width")]);
+        }
+        if corner_radius.is_some_and(|r| r < 0) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "the outline smoothing size cannot be negative")]);
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
@@ -3213,6 +3262,12 @@ impl<'a> Board<'a> {
         z.keepout_pads = keepout_pads;
         z.keepout_copper_pour = keepout_copper_pour;
         z.keepout_footprints = keepout_footprints;
+        if let Some(s) = smoothing {
+            z.smoothing = s;
+        }
+        if let Some(r) = corner_radius {
+            z.corner_radius = r;
+        }
         Ok(())
     }
 
@@ -3256,104 +3311,7 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    // ----------------------------------------------------------- groups
-
-    /// `Cmd::Group`: create a new group, flattening in any selected
-    /// existing group's own members (see `Cmd::Group`'s own doc on why --
-    /// no nested groups). An item pulled in that belonged to some other,
-    /// untouched group leaves that group (one group per item at a time).
-    fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if ids.len() < 2 {
-            return Err(vec![CheckResult::fail("ops_bad_group", "group", "a group needs at least two items")]);
-        }
-        let dr = self.drawings_mut();
-        let mut members: Vec<String> = Vec::new();
-        let mut flattened: Vec<String> = Vec::new();
-        for id in ids {
-            if let Some(g) = dr.groups.iter().find(|g| &g.id == id) {
-                members.extend(g.member_ids.iter().cloned());
-                flattened.push(id.clone());
-            } else {
-                members.push(id.clone());
-            }
-        }
-        dr.groups.retain(|g| !flattened.contains(&g.id));
-
-        let mut seen = BTreeSet::new();
-        members.retain(|m| seen.insert(m.clone()));
-
-        for g in dr.groups.iter_mut() {
-            g.member_ids.retain(|m| !members.contains(m));
-        }
-        prune_empty_groups(dr);
-
-        dr.groups.push(Group { id: String::new(), name: String::new(), member_ids: members });
-        dr.assign_missing_ids();
-        Ok(())
-    }
-
-    /// `Cmd::Ungroup`: dissolve every named group. An id not naming a
-    /// group is silently skipped -- see `Cmd::Ungroup`'s own doc.
-    fn ungroup_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if let Some(dr) = self.design.drawings.as_mut() {
-            dr.groups.retain(|g| !ids.iter().any(|id| id == &g.id));
-        }
-        Ok(())
-    }
-
-    /// `Cmd::AddToGroup`.
-    fn add_to_group(&mut self, group_id: &str, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let dr = self.drawings_mut();
-        if !dr.groups.iter().any(|g| g.id == group_id) {
-            return Err(vec![CheckResult::fail("ops_unknown_group", group_id, "no group with this id")]);
-        }
-        for g in dr.groups.iter_mut().filter(|g| g.id != group_id) {
-            g.member_ids.retain(|m| !ids.contains(m));
-        }
-        prune_empty_groups(dr);
-        // `group_id`'s own group is never itself a candidate for pruning
-        // above (its membership only grows here), so it is always still
-        // present to find and extend.
-        let g = dr.groups.iter_mut().find(|g| g.id == group_id).expect("group_id was checked present and is never pruned by this function");
-        for id in ids {
-            if !g.member_ids.contains(id) {
-                g.member_ids.push(id.clone());
-            }
-        }
-        Ok(())
-    }
-
-    /// `Cmd::RemoveFromGroup`.
-    fn remove_from_group(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if let Some(dr) = self.design.drawings.as_mut() {
-            for g in dr.groups.iter_mut() {
-                g.member_ids.retain(|m| !ids.contains(m));
-            }
-            prune_empty_groups(dr);
-        }
-        Ok(())
-    }
-
-    /// `Cmd::EditGroup`.
-    fn edit_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let dr = self.drawings_mut();
-        if !dr.groups.iter().any(|g| g.id == id) {
-            return Err(vec![CheckResult::fail("ops_unknown_group", id, "no group with this id")]);
-        }
-        if member_ids.iter().any(|m| m == id || dr.groups.iter().any(|g| &g.id == m)) {
-            return Err(vec![CheckResult::fail("ops_bad_group", id, "a group cannot hold a group")]);
-        }
-        let mut seen = BTreeSet::new();
-        let members: Vec<String> = member_ids.iter().filter(|m| seen.insert((*m).clone())).cloned().collect();
-        for g in dr.groups.iter_mut().filter(|g| g.id != id) {
-            g.member_ids.retain(|m| !members.contains(m));
-        }
-        let g = dr.groups.iter_mut().find(|g| g.id == id).expect("the group was checked present");
-        g.name = name.to_string();
-        g.member_ids = members;
-        prune_empty_groups(dr);
-        Ok(())
-    }
+    // The group verbs (Group, Ungroup, AddToGroup, RemoveFromGroup, EditGroup) are in pcb_groups.rs.
 
     // --------------------------------------------------------- arrays
 
@@ -4246,7 +4204,8 @@ impl<'a> Board<'a> {
     fn delete_symbol(&mut self, id: &str, unit: Option<u32>) -> Result<(), Vec<CheckResult>> {
         let i = self.find_symbol_unit_index(id, unit)?;
         let sch = self.schematic_mut()?;
-        sch.symbols.remove(i);
+        let removed = sch.symbols.remove(i);
+        sch_fields::drop_symbol_keys(sch, &removed.id, removed.unit);
         // Last unit gone: its user fields (`SchematicSection::user_fields`) go with it.
         if !sch.symbols.iter().any(|s| s.id == id) {
             sch.user_fields.remove(id);
@@ -4747,6 +4706,8 @@ impl<'a> Board<'a> {
         if let Some(fields) = sch.user_fields.remove(id) {
             sch.user_fields.insert(new_id.to_string(), fields);
         }
+        // where its fields are, and whether Autoplace Fields put them there, follow the new reference
+        sch_fields::rename_symbol_keys(sch, id, new_id);
         Ok(())
     }
 
@@ -4905,6 +4866,7 @@ impl<'a> Board<'a> {
         reference_visible: bool,
         value_visible: bool,
         model: Option<String>,
+        zone_connection: Option<PadConnection>,
     ) -> Result<(), Vec<CheckResult>> {
         let fp = self.library_footprint_mut(name)?;
         fp.description = description;
@@ -4913,6 +4875,7 @@ impl<'a> Board<'a> {
         fp.reference_visible = reference_visible;
         fp.value_visible = value_visible;
         fp.model = model;
+        fp.zone_connection = zone_connection;
         Ok(())
     }
 
@@ -5474,6 +5437,8 @@ mod pcb_props_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
 #[cfg(test)]
+mod pcb_groups_tests;
+#[cfg(test)]
 mod sch_clipboard_tests;
 
 pub mod board_control;
@@ -5492,7 +5457,12 @@ pub mod sch_move;
 mod sch_drag;
 mod sch_props;
 mod sch_scene;
+mod sch_fields;
 #[cfg(test)]
 mod sch_move_tests;
+#[cfg(test)]
+mod sch_fields_tests;
+#[cfg(test)]
+mod sch_body_style_tests;
 #[cfg(test)]
 mod sch_props_tests;

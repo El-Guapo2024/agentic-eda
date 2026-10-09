@@ -274,7 +274,10 @@ pub(crate) struct Scene<'m> {
     pub selected: BTreeSet<Item>,
     /// `SELECTED_BY_DRAG` on an item that is not a segment.
     pub by_drag: BTreeSet<Item>,
-    _model: std::marker::PhantomData<&'m ConstraintModel>,
+    /// The model the scene was made against: the parts and library symbols the fields of its symbols are measured by.
+    pub model: &'m ConstraintModel,
+    /// The fields the user picked on their own (`SCH_FIELD`), see `sch_fields.rs`.
+    pub fields: Vec<crate::sch_fields::FieldSel>,
 }
 
 impl<'m> Scene<'m> {
@@ -293,7 +296,7 @@ impl<'m> Scene<'m> {
         }
         let shapes = sch.symbols.iter().map(|s| symbol_shape(model, &sch, s)).collect();
         let power_shapes = sch.power_symbols.iter().map(|p| power_shape(model, p)).collect();
-        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), _model: std::marker::PhantomData }
+        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new() }
     }
 
     // -------------------------------------------------------------------------------------------------------------- items
@@ -987,14 +990,15 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
     let effective_id = if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() };
     let lib: Option<LibSymbol> = match (sch.imported_from_kicad, part) {
         (false, Some(p)) => {
-            let resolved = model.real_symbol_of(&s.lib_id, p);
+            let resolved = model.real_symbol_of_instance(sch, s, p);
             Some(eda_engine::placed::corner_symbol(&effective_id, p, resolved.as_ref(), s.unit))
         }
         _ => {
             if eda_model::is_synthetic_lib_id(&effective_id) {
                 None
             } else {
-                model.symbol_of(&effective_id)
+                // the body style the symbol is placed in, from the library symbol's own origin
+                model.symbol_of(&effective_id).map(|l| if l.has_alternate_body() { l.in_style(sch.body_style_of(s)).into_owned() } else { l })
             }
         }
     };

@@ -858,6 +858,13 @@ pub struct SymbolPathOverride {
 }
 
 impl SchematicSection {
+    /// The body style `sym` is drawn in (`SCH_SYMBOL::GetBodyStyle`): 1, the normal one, unless `SchExtras::body_styles` says 2, the alternate ("De Morgan")
+    /// one. The style of a symbol whose library symbol has no alternate is whatever is stored; [`crate::symbol::LibSymbol::in_style`] draws the normal body
+    /// for it, as `SCH_SYMBOL::GetLibSymbolRef` draws a one-style symbol in any style.
+    pub fn body_style_of(&self, sym: &SymbolInstance) -> u32 {
+        self.extras.body_styles.get(&field_key(&sym.id, sym.unit)).copied().unwrap_or(1).max(1)
+    }
+
     /// Assign a deterministic id to every wire/label/no-connect whose `id`
     /// is still empty — same contract as `RoutingSection::assign_missing_ids`/
     /// `DrawingsSection::assign_missing_ids` (stable per-kind processing
@@ -1887,7 +1894,41 @@ pub struct FieldPlacement {
     /// Drawn on the sheet (a hidden field keeps its place for when it is shown).
     #[serde(default = "d_true_field", skip_serializing_if = "is_true_field")]
     pub visible: bool,
+    /// The text's size (its height and its width), micrometres: `EDA_TEXT::GetTextWidth`. 0 is KiCad's default for a field, 50 mil
+    /// (`DEFAULT_SIZE_TEXT`, 1.27 mm), which is what every field has until Field Properties sets another.
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub size_um: Um,
+    /// `EDA_TEXT::IsBold` / `IsItalic`: the pen is a fifth of the size instead of an eighth, the strokes lean.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub italic: bool,
+    /// `SCH_FIELD::IsNameShown` (`(show_name yes)`): the text is drawn as `Name: value`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub name_shown: bool,
+    /// `!SCH_FIELD::CanAutoplace` (`(do_not_autoplace yes)`): Autoplace Fields leaves this field where it is.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_autoplace: bool,
 }
+
+impl FieldPlacement {
+    /// A visible field named `name` at its owner's origin, horizontal, centred, in the default size.
+    pub fn at_origin(name: &str) -> FieldPlacement {
+        FieldPlacement { name: name.to_string(), dx: 0, dy: 0, angle: 0, h: TextJustify::Center, v: TextVAlign::Center, visible: true, size_um: 0, bold: false, italic: false, name_shown: false, no_autoplace: false }
+    }
+
+    /// The size the text is set in, micrometres (the default when none was set).
+    pub fn text_size_um(&self) -> Um {
+        if self.size_um > 0 {
+            self.size_um
+        } else {
+            DEFAULT_FIELD_SIZE_UM
+        }
+    }
+}
+
+/// `DEFAULT_SIZE_TEXT` (50 mils): the size of a field, a label and a text until another is set.
+pub const DEFAULT_FIELD_SIZE_UM: Um = 1_270;
 
 fn d_true_field() -> bool {
     true
@@ -1965,16 +2006,18 @@ pub struct Group {
     /// `PCB_GROUP::GetName()`. Empty = unnamed (KiCad's own default).
     #[serde(default)]
     pub name: String,
-    /// Ids of every direct member -- a part reference, or a track/via/
-    /// zone/shape/text id. Never another group's id: this model has no
-    /// nested-group concept (`eda_group.h`'s `EDA_GROUP` allows a group of
-    /// groups upstream; out of scope here, see `eda_ops::group_items`'s
-    /// own doc).
+    /// Ids of every direct member -- a part reference, a track/via/zone/
+    /// shape/text/dimension id, or another group's id (`EDA_GROUP::m_items`
+    /// holds any item, so groups nest). An id is a member of one group at
+    /// most and the nesting never loops; `DrawingsSection::group_leaves`
+    /// and friends (`groups.rs`) read the tree.
     pub member_ids: Vec<String>,
 }
 
 impl Group {
-    fn id_seed(&self) -> String {
+    /// What the id of a group is derived from: its members, sorted (`next_item_id( "grp", .. )`). Public for the importer, which
+    /// names inner groups before the groups that hold them.
+    pub fn id_seed(&self) -> String {
         let mut members = self.member_ids.clone();
         members.sort();
         members.join(",")
@@ -2203,6 +2246,12 @@ pub struct DrawingsSection {
     /// that did not come from a `.kicad_pcb`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_extras: Vec<FootprintExtra>,
+    /// Zone-connection edits made on the board to placed footprints and their pads (Footprint Properties and Pad Properties:
+    /// Zone connection, relief gap, spoke width and angle, clearance). They sit over what a `.kicad_pcb` import left in
+    /// [`FootprintExtra`], and over a published library footprint's own: see [`Design::pad_zone_facts`]. Additive: absent in an
+    /// older `design.json` reads as "no edits".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_overrides: Vec<FootprintZoneOverrides>,
     /// Explicit per-via tenting overrides (`(via ... (tenting ..))`), looked
     /// up by position+net; a via with no entry follows the board setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2266,6 +2315,15 @@ pub struct DrawingsSection {
     /// absent in an older `design.json` reads as "nothing waived". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drc_exclusions: Vec<DrcExclusion>,
+    /// `true` when the board's outline is made of the shapes on layer `Edge.Cuts` in [`Self::shapes`] and of nothing else: an
+    /// imported board whose Edge.Cuts have arcs, circles, rectangles, curves, cutouts or several loops, which a closed polygon of
+    /// straight edges cannot hold. `placement.outline` is then only their summary (the outer ring of the largest outline, curves
+    /// flattened -- `eda_drc::outline::refresh_outline_summary`), kept for the readers that want one polygon, and it is not written
+    /// to the `.kicad_pcb`. `false` (the default, and an intent's outline) leaves `placement.outline` itself an Edge.Cuts item and any
+    /// shape on Edge.Cuts one more of them, a cutout drawn on a board. See `eda_model::outline::edge_cuts_shapes`. Additive: absent in
+    /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outline_is_shapes: bool,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
@@ -2312,6 +2370,180 @@ pub struct PadMaskInfo {
     /// `(pintype "..")`, e.g. `"free"` (see `PAD::IsFreePad`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_type: String,
+    /// `(clearance C)` (`PAD::GetLocalClearance`): the pad's own copper clearance, which replaces the net class's and the
+    /// zone's for this pad (`DRC_ENGINE::EvalRules`: a local override wins over everything but the board minimum). `None`
+    /// inherits the footprint's, then the rules'. Pre-9.0 files: 0 meant "inherit".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+    /// `(zone_connect N)` (`PAD::GetLocalZoneConnection`): how a zone connects to this pad, overriding the footprint's
+    /// and then the zone's own `pad_connection`. `None` is `INHERITED`. Read by the zone filler
+    /// (`ZONE_FILLER::knockoutThermalReliefs` -> `DRC_ENGINE::EvalZoneConnection`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    /// `(thermal_gap g)` (`PAD::GetLocalThermalGapOverride`): the pad's own thermal relief gap; `None` inherits the zone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_gap: Option<Um>,
+    /// `(thermal_bridge_width w)` (`PAD::GetLocalThermalSpokeWidthOverride`): the pad's own spoke width; `None` inherits the zone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_width: Option<Um>,
+    /// `(thermal_bridge_angle a)` (`PAD::GetThermalSpokeAngle`), millidegrees in KiCad's own sign convention (as in the
+    /// file). `None` is the shape's default: 90 degrees for an oval or (rounded) rectangle, 45 for a circle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// One placed pad's zone-connection facts, resolved: its own override over its footprint's, then the zone's own
+/// `pad_connection` (applied by the filler, `DRC_ENGINE::EvalZoneConnection`). See [`Design::pad_zone_facts`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PadZoneFacts {
+    /// The pad's own `(clearance ..)`; `None` inherits the footprint's. See [`PadZoneFacts::clearance`].
+    pub pad_clearance: Option<Um>,
+    /// The footprint's `(clearance ..)`.
+    pub footprint_clearance: Option<Um>,
+    /// The pad's own `(zone_connect ..)`; `None` inherits.
+    pub connection: Option<PadConnection>,
+    /// The footprint's `(zone_connect ..)`; `None` inherits (consulted when the pad inherits).
+    pub footprint_connection: Option<PadConnection>,
+    pub thermal_gap: Option<Um>,
+    pub thermal_spoke_width: Option<Um>,
+    /// Millidegrees, KiCad's sign convention; `None` is the shape's default.
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// An edit, made on the board, of the zone-connection facts of the pads that carry one pad number in one footprint (a number
+/// can be shared by several pads, all of which go on the same pin): every field is the pad's own and `None` inherits.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadZoneOverride {
+    pub number: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_gap: Option<Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_width: Option<Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// The footprint-level facts of a [`FootprintZoneOverrides`]: `FOOTPRINT::SetLocalZoneConnection` and `SetLocalClearance`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintZoneFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+}
+
+/// Board-level zone-connection edits of one placed footprint (`Cmd::SetFootprintZoneConnection`, `Cmd::SetPadZoneOverrides`).
+/// A footprint with `footprint` set has its footprint-level facts taken from here whole (`None` fields inherit); a pad number
+/// listed in `pads` has its facts taken from here whole. Whatever is not listed keeps the imported or published facts.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintZoneOverrides {
+    /// The footprint instance's reference designator.
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<FootprintZoneFacts>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pads: Vec<PadZoneOverride>,
+}
+
+impl Design {
+    /// The zone-connection facts of pad number `pad_number` (index `pad_idx` of `pad_count`) of placed footprint `fp_id`
+    /// whose definition is `footprint_name`, from the first source that has them for that pad: an edit made on the board
+    /// ([`DrawingsSection::zone_overrides`]); else the facts the footprint instance carries from a `.kicad_pcb` import
+    /// ([`FootprintExtra`], where each board pad holds its own copy, exactly KiCad); else a *published* library footprint of
+    /// that name (`Cmd::UpdateFootprintOnBoard`), since the board's pads then come from it.
+    pub fn pad_zone_facts(&self, fp_id: &str, footprint_name: &str, pad_idx: usize, pad_count: usize, pad_number: &str) -> PadZoneFacts {
+        let dr = self.drawings.as_ref();
+        // The pad's own clearance and its footprint's are kept apart until the end (the pad's wins).
+        let (mut pad_clearance, mut fp_clearance, mut facts) = (None, None, PadZoneFacts::default());
+        if let Some(extra) = dr.and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp_id)) {
+            let pad = if extra.pads.len() == pad_count { extra.pads.get(pad_idx) } else { None };
+            pad_clearance = pad.and_then(|p| p.clearance);
+            fp_clearance = extra.clearance;
+            facts = PadZoneFacts {
+                pad_clearance: None,
+                footprint_clearance: None,
+                connection: pad.and_then(|p| p.zone_connection),
+                footprint_connection: extra.zone_connection,
+                thermal_gap: pad.and_then(|p| p.thermal_gap),
+                thermal_spoke_width: pad.and_then(|p| p.thermal_spoke_width),
+                thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
+            };
+        } else if let Some(lib) = self.footprint_library.as_ref().and_then(|l| l.by_name(footprint_name)).filter(|f| f.published) {
+            let pad = if lib.pads.len() == pad_count { lib.pads.get(pad_idx) } else { None };
+            pad_clearance = pad.and_then(|p| p.clearance_override);
+            facts = PadZoneFacts {
+                pad_clearance: None,
+                footprint_clearance: None,
+                connection: pad.and_then(|p| p.zone_connection),
+                footprint_connection: lib.zone_connection,
+                thermal_gap: pad.and_then(|p| p.thermal_gap_override),
+                thermal_spoke_width: pad.and_then(|p| p.thermal_spoke_width_override),
+                thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
+            };
+        }
+        // Edits made on the board replace what they list, whole.
+        if let Some(edit) = dr.and_then(|d| d.zone_overrides.iter().find(|e| e.id == fp_id)) {
+            if let Some(f) = edit.footprint {
+                facts.footprint_connection = f.zone_connection;
+                fp_clearance = f.clearance;
+            }
+            if let Some(p) = edit.pads.iter().find(|p| p.number == pad_number) {
+                facts.connection = p.zone_connection;
+                facts.thermal_gap = p.thermal_gap;
+                facts.thermal_spoke_width = p.thermal_spoke_width;
+                facts.thermal_spoke_angle_mdeg = p.thermal_spoke_angle_mdeg;
+                pad_clearance = p.clearance;
+            }
+        }
+        facts.pad_clearance = pad_clearance;
+        facts.footprint_clearance = fp_clearance;
+        facts
+    }
+}
+
+impl Design {
+    /// The zone-connection facts of placed footprint `fp_id` and its pads (`pad_numbers`, in pad order; `footprint_name` is its
+    /// definition's name) as the board edit that gives another footprint the same ones, filed under `fp_id`: what a Copy, a Paste
+    /// and a Duplicate hand on, since a copy is a new footprint that has no import behind it. `None` when neither the footprint nor
+    /// any pad sets anything. See [`Design::pad_zone_facts`].
+    pub fn zone_overrides_of(&self, fp_id: &str, footprint_name: &str, pad_numbers: &[&str]) -> Option<FootprintZoneOverrides> {
+        let mut edit = FootprintZoneOverrides { id: fp_id.to_string(), ..Default::default() };
+        for (i, number) in pad_numbers.iter().enumerate() {
+            let f = self.pad_zone_facts(fp_id, footprint_name, i, pad_numbers.len(), number);
+            if edit.footprint.is_none() && (f.footprint_clearance.is_some() || f.footprint_connection.is_some()) {
+                edit.footprint = Some(FootprintZoneFacts { zone_connection: f.footprint_connection, clearance: f.footprint_clearance });
+            }
+            let own = PadZoneOverride {
+                number: (*number).to_string(),
+                clearance: f.pad_clearance,
+                zone_connection: f.connection,
+                thermal_gap: f.thermal_gap,
+                thermal_spoke_width: f.thermal_spoke_width,
+                thermal_spoke_angle_mdeg: f.thermal_spoke_angle_mdeg,
+            };
+            let is_set = own.clearance.is_some() || own.zone_connection.is_some() || own.thermal_gap.is_some() || own.thermal_spoke_width.is_some() || own.thermal_spoke_angle_mdeg.is_some();
+            // Pads that share a number share their facts (an edit names the number).
+            if is_set && !edit.pads.iter().any(|p| p.number == *number) {
+                edit.pads.push(own);
+            }
+        }
+        edit.pads.sort_by(|a, b| a.number.cmp(&b.number));
+        (edit.footprint.is_some() || !edit.pads.is_empty()).then_some(edit)
+    }
+}
+
+impl PadZoneFacts {
+    /// `PAD::GetClearanceOverrides`: the pad's own clearance, else its footprint's; `None` when neither sets one.
+    pub fn clearance(&self) -> Option<Um> {
+        self.pad_clearance.or(self.footprint_clearance)
+    }
 }
 
 /// A footprint-owned graphic (or mask-only pad) in board space.
@@ -2349,6 +2581,14 @@ pub struct FootprintExtra {
     /// `(net_tie_pad_groups "1,2" "3")`, verbatim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub net_tie_pad_groups: Vec<String>,
+    /// `(clearance C)` on the footprint (`FOOTPRINT::GetLocalClearance`): the copper clearance of every pad that does not
+    /// set its own. `None` inherits the rules'.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+    /// `(zone_connect N)` on the footprint (`FOOTPRINT::GetLocalZoneConnection`): how zones connect to every pad that
+    /// does not set its own. `None` is `INHERITED` (the zone's `pad_connection` applies).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
     /// Footprint graphics on silk/mask layers, board space.
@@ -2608,6 +2848,14 @@ pub struct LibraryPad {
     /// `PAD::GetLocalThermalSpokeWidthOverride()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thermal_spoke_width_override: Option<Um>,
+    /// `PAD::GetLocalZoneConnection()` -- the Pad Properties dialog's "Pad connection" choice; `None` is `INHERITED`
+    /// ("From parent footprint").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    /// `PAD::GetThermalSpokeAngle()` -- the dialog's "Spoke angle", millidegrees as in the file; `None` is the shape's
+    /// default (90 degrees for an oval or (rounded) rectangle, 45 for a circle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
 }
 
 /// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
@@ -2716,6 +2964,8 @@ impl LibraryPad {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 }
@@ -2796,6 +3046,10 @@ pub struct LibraryFootprint {
     /// change what's already placed without that separate, explicit step.
     #[serde(default)]
     pub published: bool,
+    /// `FOOTPRINT::GetLocalZoneConnection()` -- the Footprint Properties dialog's "Zone connection": how a zone connects to
+    /// every pad of this footprint that does not set its own. `None` is `INHERITED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
 }
 
 impl Default for LibraryFootprint {
@@ -2815,6 +3069,7 @@ impl Default for LibraryFootprint {
             model: None,
             anchor: Point { x: 0, y: 0 },
             published: false,
+            zone_connection: None,
         }
     }
 }
@@ -3224,6 +3479,12 @@ impl LibrarySymbolGraphic {
             Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } => *body_style,
         }
     }
+    pub fn set_body_style(&mut self, style: u32) {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } => *body_style = style,
+        }
+    }
     /// Every point this graphic touches, local mm -- for `assign_missing_ids`'s seed and a move/translate.
     pub fn points(&self) -> Vec<crate::symbol::SPoint> {
         use LibrarySymbolGraphic::*;
@@ -3455,6 +3716,40 @@ impl LibrarySymbol {
     /// own resolution) -- what the Symbol Editor materializes the first
     /// time an edit touches a symbol not already in `SymbolLibrarySection`.
     pub fn from_engine_symbol(sym: &crate::symbol::LibSymbol) -> Self {
+        // A symbol with an alternate body: what both bodies draw alike (an item equal in the two) is shared (`body_style` 0, KiCad's `Name_<unit>_0`
+        // sub-block), the rest belongs to its own style -- the reverse of what `to_engine_symbol` does.
+        let (mut graphics, mut pins): (Vec<LibrarySymbolGraphic>, Vec<LibrarySymbolPin>) = (Vec::new(), Vec::new());
+        let (normal, alternate) = sym.bodies();
+        match alternate {
+            None => {
+                graphics.extend(normal.0.iter().map(LibrarySymbolGraphic::from_engine_graphic));
+                pins.extend(normal.1.iter().map(LibrarySymbolPin::from_engine_pin));
+            }
+            Some(alt) => {
+                for (list, other, style) in [(normal.0, alt.0, 1u32), (alt.0, normal.0, 2u32)] {
+                    for g in list {
+                        let shared = other.contains(g);
+                        if shared && style == 2 {
+                            continue;
+                        }
+                        let mut item = LibrarySymbolGraphic::from_engine_graphic(g);
+                        item.set_body_style(if shared { 0 } else { style });
+                        graphics.push(item);
+                    }
+                }
+                for (list, other, style) in [(normal.1, alt.1, 1u32), (alt.1, normal.1, 2u32)] {
+                    for p in list {
+                        let shared = other.contains(p);
+                        if shared && style == 2 {
+                            continue;
+                        }
+                        let mut item = LibrarySymbolPin::from_engine_pin(p);
+                        item.body_style = if shared { 0 } else { style };
+                        pins.push(item);
+                    }
+                }
+            }
+        }
         LibrarySymbol {
             lib_id: sym.lib_id.clone(),
             reference_prefix: sym.reference_prefix.clone(),
@@ -3468,8 +3763,9 @@ impl LibrarySymbol {
             pin_numbers_hidden: sym.pin_numbers_hidden,
             pin_name_offset_mm: sym.pin_name_offset_mm,
             unit_count: sym.unit_count.max(1),
-            graphics: sym.graphics.iter().map(LibrarySymbolGraphic::from_engine_graphic).collect(),
-            pins: sym.pins.iter().map(LibrarySymbolPin::from_engine_pin).collect(),
+            has_alternate_body_style: sym.alternate.is_some(),
+            graphics,
+            pins,
             ..Default::default()
         }
     }
@@ -3478,18 +3774,17 @@ impl LibrarySymbol {
     /// `board::load`'s publish overlay and the derived `.kicad_sym` export:
     /// this symbol's graphics/pins as the engine's own `LibSymbol`.
     ///
-    /// Alternate-body-style (`body_style == 2`) items are dropped here,
-    /// not merged in: `crate::symbol::SymbolGraphic`/`LibPin` have no
-    /// `body_style` field at all (see this module's own intro), so the
-    /// only two honest choices are "merge both styles' graphics into one
-    /// unfilterable pile" (visually wrong -- a placed instance would show
-    /// both at once) or "publish the normal style only, alternate stays
-    /// authorable and exports correctly to `.kicad_sym` for real KiCad,
-    /// but this app's own placed-instance rendering never shows it". This
-    /// picks the second, documented in PARITY-symedit.md as a real,
-    /// narrow gap rather than silently drawing a broken double-exposure
-    /// symbol.
+    /// The normal body style is the items of `body_style` 0 (shared) and 1; a symbol that declares an alternate one (`has_alternate_body_style`)
+    /// also gets [`crate::symbol::LibSymbol::alternate`], the shared items and those of `body_style` 2, which is what a placed symbol in body style 2
+    /// draws and is written with (`LIB_SYMBOL::GetBodyStyleCount`). A symbol that declares none keeps no alternate even if a stray item is of
+    /// `body_style` 2: KiCad would not show it either.
     pub fn to_engine_symbol(&self) -> crate::symbol::LibSymbol {
+        let alternate = self.has_alternate_body_style.then(|| {
+            Box::new(crate::symbol::AlternateBody::new(
+                self.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == 2).map(|g| g.to_engine_graphic()).collect(),
+                self.pins.iter().filter(|p| p.body_style == 0 || p.body_style == 2).map(|p| p.to_engine_pin()).collect(),
+            ))
+        });
         crate::symbol::LibSymbol {
             lib_id: self.lib_id.clone(),
             graphics: self.graphics.iter().filter(|g| g.body_style() <= 1).map(|g| g.to_engine_graphic()).collect(),
@@ -3504,6 +3799,7 @@ impl LibrarySymbol {
             pin_names_hidden: self.pin_names_hidden,
             pin_numbers_hidden: self.pin_numbers_hidden,
             pin_name_offset_mm: self.pin_name_offset_mm,
+            alternate,
         }
     }
 
@@ -3867,6 +4163,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 
@@ -4022,21 +4320,58 @@ mod tests {
     }
 
     #[test]
-    fn symbol_library_to_engine_drops_alternate_body_style_only() {
-        // `to_engine_symbol` is the publish path a placed instance's
-        // rendering actually reads (`board::load`'s overlay) -- an
-        // alternate (DeMorgan, body_style 2) pin/graphic must not leak
-        // into it (see that method's own doc for why), while the normal
-        // (body_style 1) and common-to-both (0) items must survive.
+    fn symbol_library_to_engine_keeps_the_alternate_body_style_as_its_own_body() {
+        // `to_engine_symbol` is the publish path a placed instance's rendering reads (`board::load`'s overlay). The normal body style (`body_style` 0 and 1)
+        // is the symbol; the alternate one (0 and 2) is `LibSymbol::alternate`, which a placed symbol in style 2 draws -- never both at once.
         let mut sym = LibrarySymbol::new_empty("Test:Lib");
         sym.has_alternate_body_style = true;
         sym.pins = vec![lib_pin("1", 1, 0.0, 3.81), {
             let mut alt = lib_pin("1", 1, 0.0, 3.81);
             alt.body_style = 2;
+            alt.at.x = 1.27;
             alt
         }];
         let back = sym.to_engine_symbol();
-        assert_eq!(back.pins.len(), 1, "only the normal body style publishes");
+        assert_eq!(back.pins.len(), 1, "the normal body style publishes its own pins only");
+        let alt = back.alternate.as_ref().expect("a symbol that declares an alternate body style has one");
+        assert_eq!(alt.pins.len(), 1);
+        assert_eq!(alt.pins[0].at.x, 1.27, "the alternate body has the alternate style's pin");
+        assert_eq!(back.in_style(2).pins[0].at.x, 1.27, "a placed symbol in style 2 draws it");
+        assert_eq!(back.in_style(1).pins[0].at.x, back.pins[0].at.x);
+        // one that declares none has none, whatever stray item is of style 2
+        sym.has_alternate_body_style = false;
+        let single = sym.to_engine_symbol();
+        assert!(single.alternate.is_none());
+        assert_eq!(single.pins.len(), 1);
+        assert_eq!(single.in_style(2).pins.len(), 1, "a one-style symbol draws its body in any style");
+    }
+
+    #[test]
+    fn symbol_library_alternate_body_style_round_trips_through_the_engine_symbol() {
+        let mut sym = LibrarySymbol::new_empty("Test:Gate");
+        sym.has_alternate_body_style = true;
+        let rect = |style: u32, x: f64| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: crate::symbol::SPoint::new(-x, -1.0), end: crate::symbol::SPoint::new(x, 1.0), stroke_mm: 0.254, fill: LibraryFill::None };
+        // a shared outline, one body per style, a shared pin and one pin of the alternate style only
+        sym.graphics = vec![rect(0, 3.0), rect(1, 1.0), rect(2, 2.0)];
+        let mut pin_alt = lib_pin("2", 1, 0.0, 0.0);
+        pin_alt.body_style = 2;
+        let mut pin_shared = lib_pin("1", 1, 0.0, 3.81);
+        pin_shared.body_style = 0;
+        sym.pins = vec![pin_shared, pin_alt];
+        let engine = sym.to_engine_symbol();
+        assert_eq!(engine.graphics.len(), 2, "the shared outline and the normal body");
+        assert_eq!(engine.alternate.as_ref().unwrap().graphics.len(), 2, "the shared outline and the alternate body");
+        assert_eq!((engine.pins.len(), engine.alternate.as_ref().unwrap().pins.len()), (1, 2));
+        let back = LibrarySymbol::from_engine_symbol(&engine);
+        assert!(back.has_alternate_body_style);
+        let by_style = |style: u32| back.graphics.iter().filter(|g| g.body_style() == style).count();
+        assert_eq!((by_style(0), by_style(1), by_style(2)), (1, 1, 1), "shared stays shared");
+        let pins_by_style = |style: u32| back.pins.iter().filter(|p| p.body_style == style).count();
+        assert_eq!((pins_by_style(0), pins_by_style(1), pins_by_style(2)), (1, 0, 1));
+        // and publishing it again changes nothing
+        let again = back.to_engine_symbol();
+        assert_eq!((again.graphics.len(), again.pins.len()), (engine.graphics.len(), engine.pins.len()));
+        assert_eq!(again.alternate.as_ref().unwrap().pins.len(), 2);
     }
 
     #[test]

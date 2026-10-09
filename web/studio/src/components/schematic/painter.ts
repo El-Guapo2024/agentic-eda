@@ -41,6 +41,7 @@ import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLab
 import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_UM, PIN_TEXT_SIZE_UM, pinTextPlacements, type PinTexts } from "./pinText";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { defaultPenUm, FIELD_SIZE_UM, textOrigin, type SchField } from "../../kicad-port/schText";
+import { shownText } from "../../kicad-port/schFieldEdit";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { unitLetter } from "../../kicad-port/unitLetter";
@@ -338,16 +339,21 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
  * One line of text where KiCad puts it: `anchor` and the justification in the text's own axes, a vertical text turned a quarter
  * counter-clockwise about the anchor (`kicad-port/schText.ts`, `FONT::Draw`'s placement).
  */
-function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeUm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessUm?: number }) {
+function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeUm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessUm?: number; italic?: boolean }) {
   if (!text) return;
   const thickness = o.thicknessUm ?? defaultPenUm(o.sizeUm);
   const [dx, dy] = textOrigin(measureStrokeText(text, o.sizeUm), o.sizeUm, thickness, o.h, o.v);
   ctx.save();
   ctx.translate(anchor[0], anchor[1]);
   if (o.vertical) ctx.rotate(-Math.PI / 2);
-  drawStrokeText(ctx, text, dx, dy, { sizeUm: o.sizeUm, thicknessUm: thickness, justify: "left", color: o.color });
+  drawStrokeText(ctx, text, dx, dy, { sizeUm: o.sizeUm, thicknessUm: thickness, justify: "left", color: o.color, italic: o.italic });
   ctx.restore();
 }
+
+/** The field ids the sheet being painted has selected: a selected field is drawn in the selection colour (set by `paintSchematic` for the length of one paint). */
+let paintedSelection: ReadonlySet<string> = new Set();
+/** "Show Hidden Fields" while the sheet is being painted (`SCH_PAINTER::draw( SCH_FIELD )`: a hidden field is drawn, in the hidden-items colour, only while it is on). */
+let paintedShowHiddenFields = false;
 
 /** The colour KiCad draws a field of that name in. */
 function fieldColor(name: string): string {
@@ -365,11 +371,23 @@ function fieldColor(name: string): string {
   }
 }
 
-/** The fields of one item where the server says they are (`SchField`): every visible one, a Reference with its unit letter, in the item's own field colours (or `color`, when it is drawn selected). */
+/** The fields of one item where the server says they are (`SchField`): every visible one (and, with Show Hidden Fields, the hidden ones that have a text, in the hidden-items colour), a Reference with its unit letter, in the item's own field colours (or `color`, when it is drawn selected). */
 function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSuffix = "", color?: string) {
   for (const f of fields) {
-    if (!f.visible || !f.text) continue;
-    drawKicadText(ctx, f.name === "Reference" ? f.text + unitSuffix : f.text, f.at, { sizeUm: FIELD_SIZE_UM, h: f.h, v: f.v, vertical: f.vertical, color: color ?? fieldColor(f.name) });
+    if (!f.text || (!f.visible && !paintedShowHiddenFields)) continue;
+    const sizeUm = f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM;
+    const text = shownText({ name: f.name, text: f.name === "Reference" ? f.text + unitSuffix : f.text, name_shown: f.name_shown });
+    const picked = f.id !== undefined && paintedSelection.has(f.id);
+    drawKicadText(ctx, text, f.at, {
+      sizeUm,
+      h: f.h,
+      v: f.v,
+      vertical: f.vertical,
+      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : (color ?? fieldColor(f.name)),
+      // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
+      thicknessUm: f.bold ? Math.round(sizeUm / 5) : undefined,
+      italic: f.italic,
+    });
   }
 }
 
@@ -698,17 +716,23 @@ function drawPowerSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, ps:
 function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: SchematicLabel, wires: SchematicWire[], on: boolean) {
   const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : labelLayerColor(l.scope);
   const hair = 1 / view.scale;
+  // the size, bold and italic Label Properties set (`EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
+  const sizeUm = l.size_um && l.size_um > 0 ? l.size_um : LABEL_TEXT_SIZE_UM;
+  const look = { thicknessUm: l.bold ? Math.round(sizeUm / 5) : undefined, italic: l.italic };
 
   if (l.scope === "local" || !l.shape) {
     const spin = l.spin ?? inferSpin(wires, l.at);
-    const { pos, justify } = localLabelTextPlacement(spin, l.at);
-    const sizeUm = LABEL_TEXT_SIZE_UM;
+    const { pos, justify } = localLabelTextPlacement(spin, l.at, sizeUm);
     // V BOTTOM: stroke text has no native top/bottom baseline (see this
     // file's CAP_HEIGHT comment) -- a local label's text sits just above
     // its anchor, so the baseline itself (no cap-height push needed,
     // unlike the box-renderer's generic top/bottom approximation) lands
     // close enough.
-    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, justify, color });
+    if (spin === "up" || spin === "bottom") {
+      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, angleRad: -Math.PI / 2, justify, color, ...look });
+    } else {
+      drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, justify, color, ...look });
+    }
     return;
   }
 
@@ -717,16 +741,15 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(l.scope === "global" ? 159 : 159, hair);
   ctx.beginPath();
-  const outline = l.scope === "global" ? globalLabelOutline(l.net, shape, spin, l.at) : hierLabelOutline(shape, spin, l.at);
+  const outline = l.scope === "global" ? globalLabelOutline(l.net, shape, spin, l.at, sizeUm) : hierLabelOutline(shape, spin, l.at, sizeUm);
   outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.stroke();
 
-  const { pos, justify } = l.scope === "global" ? globalLabelTextPlacement(shape, spin, l.at) : hierLabelTextPlacement(l.net, spin, l.at);
-  const sizeUm = LABEL_TEXT_SIZE_UM;
+  const { pos, justify } = l.scope === "global" ? globalLabelTextPlacement(shape, spin, l.at, sizeUm) : hierLabelTextPlacement(l.net, spin, l.at, sizeUm);
   if (spin === "up" || spin === "bottom") {
-    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, angleRad: -Math.PI / 2, justify, color });
+    drawStrokeText(ctx, l.net, pos[0], pos[1], { sizeUm, angleRad: -Math.PI / 2, justify, color, ...look });
   } else {
-    drawStrokeText(ctx, l.net, pos[0], pos[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color });
+    drawStrokeText(ctx, l.net, pos[0], pos[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color, ...look });
   }
 }
 
@@ -910,6 +933,8 @@ function drawLintMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, sch
 export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransform, sch: Schematic, opts: SchematicPaintOptions): void {
   const hair = 1 / view.scale;
   const display = opts.display ?? DEFAULT_SCH_DISPLAY;
+  paintedSelection = opts.selection;
+  paintedShowHiddenFields = display.showHiddenFields;
 
   // Wires. `on`: net-highlighted (click a wire with no modifier), or
   // box/modified-click *selected* (new this session -- `opts.selection`
@@ -1033,7 +1058,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   if (opts.selection.size > 0) {
     for (const ref of allItems(sch)) {
       if (!opts.selection.has(ref.id)) continue;
-      if (ref.kind === "label" || ref.kind === "text" || ref.kind === "sheet" || ref.kind === "graphic" || ref.kind === "power" || ref.kind === "no_connect") {
+      if (ref.kind === "label" || ref.kind === "text" || ref.kind === "sheet" || ref.kind === "graphic" || ref.kind === "power" || ref.kind === "no_connect" || ref.kind === "field") {
         const b = itemBounds(sch, ref);
         if (b) drawSelectionBox(ctx, view, b);
       }

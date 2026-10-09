@@ -9,8 +9,9 @@ import { boxEncloses, boxesOverlap, boxOfPoints, distPointSegment, distToPolylin
 import { measureStrokeText } from "../text/strokeFont";
 import { globalLabelOutline, hierLabelOutline, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
 import { resolveLibSymbol, symbolBounds } from "./libSymbol";
+import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-port/schFieldEdit";
 
-export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "graphic";
+export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "graphic" | "field";
 
 export interface SchItemRef {
   id: string;
@@ -46,19 +47,31 @@ export function textItemBounds(t: SchematicText): Box {
 
 export function labelBounds(sch: Schematic, l: SchematicLabel): Box {
   const spin = l.spin ?? inferSpin(sch.wires, l.at);
+  const size = l.size_um && l.size_um > 0 ? l.size_um : LABEL_TEXT_SIZE_UM;
   if (l.scope !== "local" && l.shape) {
-    const outline = l.scope === "global" ? globalLabelOutline(l.net, l.shape, spin, l.at) : hierLabelOutline(l.shape, spin, l.at);
+    const outline = l.scope === "global" ? globalLabelOutline(l.net, l.shape, spin, l.at, size) : hierLabelOutline(l.shape, spin, l.at, size);
     return boxOfPoints(outline as P[]) ?? { minX: l.at[0], minY: l.at[1], maxX: l.at[0], maxY: l.at[1] };
   }
-  const { pos, justify } = localLabelTextPlacement(spin, l.at);
+  const { pos, justify } = localLabelTextPlacement(spin, l.at, size);
   const vertical = spin === "up" || spin === "bottom";
-  return textBox(l.net, pos as P, LABEL_TEXT_SIZE_UM, justify, vertical ? -90 : 0);
+  return textBox(l.net, pos as P, size, justify, vertical ? -90 : 0);
 }
 
 function powerSymbolBounds(sch: Schematic, ps: Schematic["power_symbols"][number]): Box {
   const resolved = resolveLibSymbol({ id: ps.id, lib_id: ps.lib_id, at: ps.at, rot: ps.rot, mirror: null, unit: 1, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [ps.pin] }, sch.lib_symbols);
   if (resolved) return resolved.bbox;
   return { minX: ps.at[0] - 600, minY: ps.at[1] - 600, maxX: ps.at[0] + 600, maxY: ps.at[1] + 600 };
+}
+
+/** The sheet's fields by id, built once per sheet object (a marquee asks for every one of them). */
+const fieldCache = new WeakMap<Schematic, Map<string, FieldItem>>();
+function fieldIndex(sch: Schematic): Map<string, FieldItem> {
+  let index = fieldCache.get(sch);
+  if (!index) {
+    index = new Map(fieldItems(sch).map((f) => [f.id, f]));
+    fieldCache.set(sch, index);
+  }
+  return index;
 }
 
 /** Every item of the sheet, in painting order (later items sit on top of earlier ones). */
@@ -80,6 +93,8 @@ export function allItems(sch: Schematic): SchItemRef[] {
     seen.add(s.id);
     out.push({ id: s.id, kind: "symbol" });
   }
+  // The shown fields (`SCH_FIELD`), on top of the item that has them: each is selected, moved and edited on its own.
+  for (const f of fieldItems(sch)) if (isShownField(f.field)) out.push({ id: f.id, kind: "field" });
   return out;
 }
 
@@ -138,6 +153,10 @@ export function itemBounds(sch: Schematic, ref: SchItemRef): Box | null {
     case "graphic": {
       const g = (sch.graphics ?? []).find((x) => x.id === ref.id);
       return g ? graphicBounds(g) : null;
+    }
+    case "field": {
+      const f = fieldIndex(sch).get(ref.id);
+      return f ? fieldBox(f.field, measureStrokeText) : null;
     }
   }
 }

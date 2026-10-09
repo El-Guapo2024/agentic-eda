@@ -283,7 +283,7 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
         for sym in &sch.symbols {
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
-                    let resolved = model.real_symbol_of(&sym.lib_id, part);
+                    let resolved = model.real_symbol_of_instance(sch, sym, part);
                     for (number, at) in eda_engine::placed::pin_points(sym, part, resolved.as_ref()) {
                         pin_world.insert(format!("{}.{number}", sym.id), at);
                     }
@@ -295,6 +295,7 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
             // Multi-unit: this placed instance only seeds `pin_world` for the pins that are actually drawn on its own unit
             // (plus any `unit == 0` pin, common to every unit) -- a pin of a *different* unit of the same reference is
             // positioned when *that* unit's own `SymbolInstance` is visited, not here.
+            let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
                 pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
@@ -1029,6 +1030,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Rip { part } => format!("rip {part}"),
         Cmd::Flip { part } => format!("flip {part}"),
         Cmd::SetLabelSide { part, side } => format!("label-side {part} --side {side:?}"),
+        Cmd::SetFootprintZoneConnection { part, zone_connection, clearance } => format!("footprint-zone-connection {part} --connection {zone_connection:?} --clearance {clearance:?}"),
+        Cmd::SetPadZoneOverrides { part, pad, zone_connection, thermal_gap, thermal_spoke_width, thermal_spoke_angle_mdeg, clearance } => {
+            format!("pad-zone-overrides {part}.{pad} --connection {zone_connection:?} --gap {thermal_gap:?} --spoke-width {thermal_spoke_width:?} --spoke-angle {thermal_spoke_angle_mdeg:?} --clearance {clearance:?}")
+        }
 
         Cmd::AddTrack { net, layer, width, pts: p } => format!("track add --net {net} --layer {layer} --width {} --pts \"{}\"", mm(*width), pts(p)),
         Cmd::DeleteTrack { id } => format!("track delete {id}"),
@@ -1305,6 +1310,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Rip { .. } => "rip",
         Cmd::Flip { .. } => "flip",
         Cmd::SetLabelSide { .. } => "label-side",
+        Cmd::SetFootprintZoneConnection { .. } | Cmd::SetPadZoneOverrides { .. } => "pad-zone",
         Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
         Cmd::AddVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
         Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } => "board-setup",
@@ -2259,6 +2265,50 @@ mod tests {
         assert_eq!(count(&dir, "clearance"), 0);
     }
 
+    /// A net class with a colour in the Appearance panel (`appearance.json`) reaches the derived project (slow tier): the classes move into the project file --
+    /// KiCad reads the project's classes only when the board has none of its own -- and kicad-cli judges the board by the same numbers as before.
+    #[test]
+    fn a_net_class_colour_moves_the_classes_into_the_project_and_kicad_cli_judges_the_board_the_same() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("class_colour");
+        setup(&dir);
+        two_close_tracks(&dir);
+        let count = |dir: &Path, kind: &str| drc_counts(dir).get(kind).copied().unwrap_or(0);
+        let (_, _, model) = load(&dir).unwrap();
+        let defaults = eda_model::rules::net_class_settings_of(&model.board);
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(200), clearance: Some(400), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults.clone() } }, false, "ui").unwrap();
+        let plain = count(&dir, "clearance");
+        assert!(plain >= 1, "the class asks for 400 um, the tracks are closer");
+        let board_text = |dir: &Path| std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pcb")).unwrap();
+        assert!(board_text(&dir).contains("(net_class \"power\""), "without a colour the classes stay in the board file, as before");
+
+        // The class gets a colour: the board file has no classes of its own any more, the project has them -- and kicad-cli finds the same clearance violations.
+        std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":{},"project":{"netclass_colors":{"power":"rgb(255, 160, 0)"}}}"#).unwrap();
+        assert_eq!(count(&dir, "clearance"), plain, "the project's classes say what the board's did");
+        assert!(!board_text(&dir).contains("(net_class"), "KiCad would take the board's classes over the project's, colours and all");
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        let classes = project["net_settings"]["classes"].as_array().expect("the classes are in the project");
+        let power = classes.iter().find(|c| c["name"] == "power").expect("power");
+        assert_eq!(power["pcb_color"], "rgb(255, 160, 0)");
+        assert_eq!(power["clearance"], 0.4);
+        assert!(project["net_settings"]["netclass_patterns"].as_array().unwrap().iter().any(|p| p["pattern"] == "VCC" && p["netclass"] == "power"));
+
+        // The colour taken away: the classes are back in the board file.
+        std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":{},"project":{}}"#).unwrap();
+        assert_eq!(count(&dir, "clearance"), plain);
+        assert!(board_text(&dir).contains("(net_class \"power\""));
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        assert!(project.get("net_settings").is_none());
+    }
+
     #[test]
     fn adding_copper_does_not_clear_existing_routing_but_moving_a_part_does() {
         let dir = scratch("copper_persists");
@@ -2353,6 +2403,7 @@ mod tests {
             pin_names_hidden: false,
             pin_numbers_hidden: false,
             pin_name_offset_mm: 0.508,
+            alternate: None,
         };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
@@ -3400,6 +3451,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         };
         step(&dir, Cmd::AddPad { footprint: "2PAD".into(), pad }, false, "test").unwrap();
 
@@ -3740,8 +3793,8 @@ mod tests {
         let start = sheet_of(&load(&dir).unwrap().1);
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let commands = vec![
-            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up) },
-            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None },
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None },
             V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000) },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
             V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
@@ -3754,6 +3807,98 @@ mod tests {
             undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
             assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the design back exactly after {cmd:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The fields of a symbol as items (move, turn, mirror, Field Properties, Autoplace Fields) and a label's look: each is a single undo step that changes the
+    /// sheet, and one Undo brings back exactly what was there (the stored places of the fields and the autoplaced flags included), on the user's board.
+    #[test]
+    fn every_schematic_field_verb_is_one_undo_step() {
+        use eda_engine::fields_edit::field_id;
+        use eda_ops::sch_edit::SchCmd as E;
+        use eda_ops::sch_move::SchMoveCmd as V;
+        let dir = scratch("sch_field_undo");
+        setup_mcu30_users_board(&dir);
+        let (_, design, _) = load(&dir).unwrap();
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents)).unwrap();
+        let start = sheet_of(&design);
+        let label = design.schematic.as_ref().unwrap().labels.first().map(|l| l.id.clone()).expect("the board has a net label");
+        let commands = vec![
+            Cmd::SchMove(V::Move { ids: vec![field_id("R1", "Reference")], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Rotate { ids: vec![field_id("R1", "Value")], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(V::Mirror { ids: vec![field_id("R1", "Value")], vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+            Cmd::SchMove(V::Rotate { ids: vec!["R1".into()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true) }),
+        ];
+        for cmd in commands {
+            let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
+            step(&dir, wrapped, false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let after = sheet_of(&load(&dir).unwrap().1);
+            assert_ne!(after, start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symbol placed in the alternate ("De Morgan") body style of its library symbol: Change Symbol onto a library symbol that has one, then Cycle Body Style, are each a
+    /// single undo step on the user's board; the studio's `GET /api/schematic` sends the style of the symbol and both bodies of the library symbol (each item of
+    /// `body_style` 1 or 2, so the painter draws the one the symbol is in), and the file KiCad reads has the style on the instance and both bodies in the symbol.
+    #[test]
+    fn cycle_body_style_is_one_undo_step_and_the_studio_draws_the_style() {
+        use eda_model::ir::{LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, SymbolLibrarySection};
+        use eda_model::symbol::SPoint;
+        use eda_ops::sch_edit::SchCmd as E;
+        let dir = scratch("sch_body_style_undo");
+        setup_mcu30_users_board(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        // a published library symbol with the pins of the resistor R1 is, a rectangle in its normal body and a wider one in the alternate body
+        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None };
+        let rect = |half: f64, style: u32| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: SPoint::new(-half, 2.54), end: SPoint::new(half, -2.54), stroke_mm: 0.254, fill: LibraryFill::None };
+        let mut lib = LibrarySymbol::new_empty("Test:Gate2");
+        lib.reference_prefix = "R".into();
+        lib.has_alternate_body_style = true;
+        lib.published = true;
+        lib.pins = vec![pin("1", 3.81, 270.0, 0), pin("2", -3.81, 90.0, 0)];
+        lib.graphics = vec![rect(1.016, 1), rect(2.032, 2)];
+        lib.assign_missing_ids();
+        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![lib] });
+        save(&dir, &design).unwrap();
+
+        let on_root = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents)).unwrap();
+        step(&dir, on_root(Cmd::SchEdit(E::ChangeSymbol { id: "R1".into(), lib_id: "Test:Gate2".into() })), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, placed, model) = load(&dir).unwrap();
+        let before = sheet_of(&placed);
+        assert!(placed.schematic.as_ref().unwrap().extras.body_styles.is_empty(), "a symbol is placed in its normal body style");
+
+        step(&dir, on_root(Cmd::SchEdit(E::SetBodyStyle { ids: vec!["R1".into()], style: None })), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, alt, model_alt) = load(&dir).unwrap();
+        assert_eq!(alt.schematic.as_ref().unwrap().extras.body_styles.get("R1"), Some(&2));
+        assert_ne!(sheet_of(&alt), before);
+
+        // what the studio is sent
+        let json = crate::studio::schematic_json_of(&alt, &model_alt, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap();
+        assert_eq!(r1["body_style"], 2, "the symbol says which body style it is drawn in");
+        let lib_json = &json["lib_symbols"]["Test:Gate2"];
+        assert_eq!(lib_json["body_style_count"], 2);
+        let styles_of = |items: &serde_json::Value| -> Vec<u64> { items.as_array().unwrap().iter().filter(|g| g["kind"] == "rectangle").map(|g| g["body_style"].as_u64().unwrap()).collect() };
+        assert_eq!(styles_of(&lib_json["graphics"]), vec![1, 2], "the normal body is of style 1 and the alternate one of style 2: the painter keeps the items of the style the symbol is in");
+        assert!(lib_json["pins"].as_array().unwrap().iter().all(|p| p["body_style"] == 0), "pins both bodies share are drawn in either");
+        let normal_json = crate::studio::schematic_json_of(&placed, &model, "");
+        assert_eq!(normal_json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap()["body_style"], 1);
+
+        // the file KiCad reads
+        let text = eda_kicad::export_kicad_sch(&alt, &model_alt, &eda_kicad::ExportMeta { date: "2026-01-01", title: "body_style" }).unwrap();
+        assert!(text.contains("(unit 1) (convert 2)"), "the instance is in body style 2");
+        assert!(text.contains("\"Gate2_1_1\"") && text.contains("\"Gate2_1_2\""), "both bodies are in the symbol");
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), before, "one Undo puts the body style back");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -4027,6 +4172,37 @@ mod tests {
         step(&dir, Cmd::UpdateSymbolOnBoard { lib_id: "TEST:R".into() }, false, "test").unwrap();
         let (_, _, model) = load(&dir).unwrap();
         assert_eq!(model.symbol_of("TEST:R").unwrap().pins.len(), 2, "an explicit Update Symbol on Board must republish the edited definition");
+    }
+
+    /// Pad Properties' and Footprint Properties' zone connection reach the fill the studio draws (and, through the derived
+    /// `.kicad_pcb`, the one kicad-cli makes), and Undo takes each edit back: a GND pour thermal-relieves U1's GND pad, a solid
+    /// connection floods it, "None" clears it, the pad's own choice beats its footprint's.
+    #[test]
+    fn a_pads_zone_connection_changes_the_fill_and_undo_takes_it_back() {
+        let dir = scratch("pad_zone_connection");
+        setup(&dir);
+        let outline = vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }];
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }, false, "test").unwrap();
+        let area = |dir: &Path| -> f64 {
+            let (_, design, model) = load(dir).unwrap();
+            let board = eda_drc::board::build(&design, &model);
+            let fills = eda_drc::fill::fill_all_zones(&board, &model.board);
+            fills.zones.values().map(|z| z.fill.area()).sum()
+        };
+        let relieved = area(&dir);
+        let set = |c: Option<eda_model::ir::PadConnection>| Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "1".into(), zone_connection: c, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
+
+        step(&dir, set(Some(eda_model::ir::PadConnection::Full)), false, "ui").unwrap();
+        let solid = area(&dir);
+        assert!(solid > relieved + 1_000_000.0, "a solid connection floods the pad's relief gap: {solid} against {relieved}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!((area(&dir) - relieved).abs() < 1.0, "Undo takes the edit back");
+
+        // the footprint says solid, the pad (its own choice) says thermal: the pad wins
+        step(&dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: None }, false, "ui").unwrap();
+        assert!(area(&dir) > relieved + 1_000_000.0, "the footprint's solid connection reaches its pad");
+        step(&dir, set(Some(eda_model::ir::PadConnection::Thermal)), false, "ui").unwrap();
+        assert!((area(&dir) - relieved).abs() < 1.0, "the pad's own thermal relief beats its footprint's solid one");
     }
 
     #[test]

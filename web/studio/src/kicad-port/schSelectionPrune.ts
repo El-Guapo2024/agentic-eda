@@ -3,8 +3,9 @@
 // command, so ids that no longer exist anywhere have to be dropped at that point -- and only then: a board refresh knows nothing
 // of a sheet's wires, labels or shapes and must not drop them.
 import type { Schematic } from "../api/types";
+import { fieldItems, isShownField } from "./schFieldEdit";
 
-/** Every id a sheet can have selected: its wires, bus entries, junctions, graphic lines, drawn shapes, sheets, no-connects, labels, texts, power symbols and symbol references. */
+/** Every id a sheet can have selected: its wires, bus entries, junctions, graphic lines, drawn shapes, sheets, no-connects, labels, texts, power symbols, symbol references and the shown fields of those. */
 export function sheetItemIds(sch: Schematic): Set<string> {
   const ids = new Set<string>();
   const add = (items: ReadonlyArray<{ id?: string }> | undefined) => {
@@ -21,6 +22,8 @@ export function sheetItemIds(sch: Schematic): Set<string> {
   add(sch.texts);
   add(sch.power_symbols);
   add(sch.symbols);
+  // the shown fields of symbols, power symbols and sheets (a hidden one cannot be selected, so a field hidden by Delete leaves the selection)
+  for (const f of fieldItems(sch)) if (isShownField(f.field)) ids.add(f.id);
   return ids;
 }
 

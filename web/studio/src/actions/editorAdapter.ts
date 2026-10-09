@@ -20,6 +20,7 @@ import { allItems, hitItems, itemBounds } from "../components/schematic/schItems
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { deleteCmds as schDeleteCmds } from "../kicad-port/schDelete";
 import { boardDeleteCmds } from "../kicad-port/deleteCmds";
+import { topLevelGroup } from "../kicad-port/groupTree";
 import { pickFootprintItem, pickSymbolItem } from "../kicad-port/libEditorHit";
 
 /** The four editors that have a canvas (the 3D viewer has its own camera and none of these tools). */
@@ -138,10 +139,9 @@ function describeSchematicItem(sch: Schematic | null, item: PickedItem): string 
   return item.kind.replace(/_/g, " ");
 }
 
-/** `FilterCollectorForHierarchy`: an item of a group that has not been entered is picked as the group. */
+/** `FilterCollectorForHierarchy`: an item of a group is picked as the outermost group that holds it inside the entered one (kicad-port/groupTree.ts). */
 function promoteToGroup(id: string, groups: readonly { id: string; member_ids: string[] }[], entered: string | null): string {
-  const g = groups.find((x) => x.member_ids.includes(id));
-  return g && g.id !== entered ? g.id : id;
+  return topLevelGroup(groups, id, entered) ?? id;
 }
 
 export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {

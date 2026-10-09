@@ -39,7 +39,7 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         b.apply(&cmd)?;
     }
     let (sch, _) = crate::studio::resolve_sheet(b.design(), &sheet);
-    Ok(patch_json(&sch))
+    Ok(patch_json(&sch, &model))
 }
 
 fn pt(p: eda_model::ir::Point) -> Value {
@@ -47,17 +47,22 @@ fn pt(p: eda_model::ir::Point) -> Value {
 }
 
 /// The geometry of a sheet's items, in the shapes `GET /api/schematic` reports them (`studio.rs::schematic_json`).
-pub(crate) fn patch_json(sch: &SchematicSection) -> Value {
+pub(crate) fn patch_json(sch: &SchematicSection, model: &eda_model::ConstraintModel) -> Value {
+    use crate::studio::{owner_fields_json, page_field_json};
+    // The fields go where their items go: a held symbol shows its Reference and Value with it, a held field shows where it would land.
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
-        .map(|s| json!({ "id": s.id, "unit": s.unit, "at": pt(s.at), "rot": s.rot as f64 / 1000.0, "mirror": if s.mirrored { Some("y") } else if s.mirror_y { Some("x") } else { None } }))
+        .map(|s| {
+            let owner = eda_model::ir::field_key(&s.id, s.unit);
+            json!({ "id": s.id, "unit": s.unit, "at": pt(s.at), "rot": s.rot as f64 / 1000.0, "mirror": if s.mirrored { Some("y") } else if s.mirror_y { Some("x") } else { None }, "fields": owner_fields_json(sch, model, &owner) })
+        })
         .collect();
     let labels: Vec<Value> = sch.labels.iter().map(|l| json!({ "id": l.id, "at": pt(l.at), "spin": sch.extras.label_spins.get(&l.id) })).collect();
     json!({
         "ok": true,
         "symbols": symbols,
-        "power_symbols": sch.power_symbols.iter().map(|p| json!({ "id": p.id, "at": pt(p.at), "rot": p.rot as f64 / 1000.0 })).collect::<Vec<_>>(),
+        "power_symbols": sch.power_symbols.iter().map(|p| json!({ "id": p.id, "at": pt(p.at), "rot": p.rot as f64 / 1000.0, "fields": eda_engine::fields::power_fields(sch, p).iter().map(|f| page_field_json(&p.id, f)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "wires": sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pts": w.pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "bus": w.bus })).collect::<Vec<_>>(),
         "labels": labels,
         "texts": sch.texts.iter().map(|t| json!({ "id": t.id, "at": pt(t.at), "angle": t.angle as f64 / 1000.0 })).collect::<Vec<_>>(),
@@ -66,6 +71,6 @@ pub(crate) fn patch_json(sch: &SchematicSection) -> Value {
         "junctions": sch.junctions.iter().map(|j| json!({ "id": j.id, "at": pt(j.at) })).collect::<Vec<_>>(),
         "lines": sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| pt(*p)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "graphics": serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null),
-        "sheets": sch.sheets.iter().map(|s| json!({ "id": s.id, "at": pt(s.at), "size": [s.size.0, s.size.1], "pins": s.pins.iter().map(|p| json!({ "id": p.id, "at": pt(p.at) })).collect::<Vec<_>>() })).collect::<Vec<_>>(),
+        "sheets": sch.sheets.iter().map(|s| json!({ "id": s.id, "at": pt(s.at), "size": [s.size.0, s.size.1], "pins": s.pins.iter().map(|p| json!({ "id": p.id, "at": pt(p.at) })).collect::<Vec<_>>(), "fields": eda_engine::fields::sheet_fields(sch, s).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
     })
 }

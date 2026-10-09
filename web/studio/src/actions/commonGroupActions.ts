@@ -23,7 +23,7 @@ export function registerGroupActions(m: Map<string, ActionHandler>, ctx: CommonA
   });
 
   // ACTIONS::pickNewGroupMember -- PCB_GROUP_TOOL::PickNewMember: the dialog is hidden, "Click on new member..." shows, the first click on an item adds it to
-  // the dialog's list (not a group, and not one already there) and the dialog comes back; Escape brings it back unchanged. Needs the dialog open.
+  // the dialog's list (not the group itself or one that holds it, and not one already there) and the dialog comes back; Escape brings it back unchanged. Needs the dialog open.
   m.set("common.Groups.selectNewGroupMember", () => {
     const dlg = getCommonDialogs().group;
     if (!dlg) return;
@@ -32,7 +32,7 @@ export function registerGroupActions(m: Map<string, ActionHandler>, ctx: CommonA
       kind: "item",
       prompt: "Click on new member...",
       onItem: (id) => {
-        const member = newMemberFromPick(id, groups());
+        const member = newMemberFromPick(id, groups(), dlg.id);
         if (!member) return true; // "still looking for an item"
         const now = getCommonDialogs().group;
         updateGroupDialog({ members: addMember(now?.members ?? dlg.members, member, dlg.id), hidden: false });
@@ -48,7 +48,7 @@ export function registerGroupActions(m: Map<string, ActionHandler>, ctx: CommonA
     const plan = planAddToGroup([...api.getState().selection], groups());
     if (!plan) return;
     void api.cmd({ op: "add_to_group", group_id: plan.groupId, ids: plan.ids }).then((ok) => {
-      if (ok) dispatch({ type: "SET_SELECTION", refs: [plan.groupId] });
+      if (ok) dispatch({ type: "SET_SELECTION", refs: [plan.groupId], raw: true });
     });
   });
 

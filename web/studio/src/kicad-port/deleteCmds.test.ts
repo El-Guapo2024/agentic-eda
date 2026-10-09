@@ -47,3 +47,33 @@ test("deleting a group deletes its members", () => {
   // a member named twice (directly and through its group) is deleted once
   assert.equal(boardDeleteCmds(board, ["grp_1", "T1"]).cmds.length, 2);
 });
+
+test("deleting a group of groups deletes every item below it", () => {
+  const nested = {
+    ...board,
+    drawings: { ...board.drawings, groups: [{ id: "outer", name: "", member_ids: ["inner", "X1"] }, { id: "inner", name: "", member_ids: ["T1", "S1"] }] },
+  } as unknown as BoardState;
+  const { cmds } = boardDeleteCmds(nested, ["outer"]);
+  assert.deepEqual(cmds, [
+    { op: "delete_track", id: "T1" },
+    { op: "delete_shape", id: "S1" },
+    { op: "delete_text", id: "X1" },
+  ]);
+});
+
+test("a group with a locked item below it, or that is locked itself, is not deleted at all", () => {
+  const lockedDeep = {
+    ...board,
+    locked: ["V2"],
+    drawings: { ...board.drawings, groups: [{ id: "outer", name: "", member_ids: ["inner", "X1"] }, { id: "inner", name: "", member_ids: ["V1", "V2"] }] },
+  } as unknown as BoardState;
+  const a = boardDeleteCmds(lockedDeep, ["outer", "T1"]);
+  assert.equal(a.skippedLocked, 1);
+  assert.deepEqual(a.cmds, [{ op: "delete_track", id: "T1" }], "nothing of the group goes");
+  const lockedGroup = { ...board, locked: ["grp_1"] } as unknown as BoardState;
+  const b = boardDeleteCmds(lockedGroup, ["grp_1"]);
+  assert.equal(b.skippedLocked, 1);
+  assert.deepEqual(b.cmds, []);
+  // a member of a locked group is locked too (`BOARD_ITEM::IsLocked` asks its group)
+  assert.equal(boardDeleteCmds(lockedGroup, ["T1"]).skippedLocked, 1);
+});

@@ -52,14 +52,16 @@ export function MenuNodeView({ node }: { node: MenuNode }) {
     );
   }
   const action = actionsByName.get(node.action);
-  const enabled = isEnabled(node.action);
+  // `node.disabled`: the menu's own condition for this entry (a context menu's Group when fewer than two items are selected).
+  const enabled = isEnabled(node.action) && !node.disabled;
   const label = node.label ?? action?.label ?? node.action;
-  const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""} (not ported yet)`.trim();
+  const tooltip = enabled ? action?.tooltip : `${action?.tooltip ?? ""}${isEnabled(node.action) ? "" : " (not ported yet)"}`.trim();
   const hotkey = action ? effectiveHotkey(action).hotkey : null;
-  // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate, the panes under View > Panels, Units ...) shows its state as a check mark.
-  const checked = enabled ? isChecked(node.action) : undefined;
+  // A toggle (View > Show Hidden Pins, Edit > Attributes > Do not Populate, the panes under View > Panels, Units ...) shows its state as a check mark; so does a
+  // check item a context menu builds from data (the grids, the zoom presets, the router's corner mode).
+  const checked = node.checked !== undefined ? node.checked : enabled ? isChecked(node.action) : undefined;
   return (
-    <div className="menu-node-item" role={checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={checked} aria-disabled={!enabled} title={tooltip} onClick={() => enabled && run(node.action)}>
+    <div className="menu-node-item" role={checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={checked} aria-disabled={!enabled} title={tooltip} onClick={() => enabled && run(node.action, node.arg)}>
       <span>
         {checked !== undefined && <span style={{ display: "inline-block", width: 14 }}>{checked ? "✓" : ""}</span>}
         {label}

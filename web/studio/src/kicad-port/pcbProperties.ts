@@ -230,6 +230,8 @@ function zoneCmd(z: Zone, patch: Partial<Zone>): Cmd {
     hatch_smoothing_value: s.hatch_smoothing_value,
     hatch_hole_min_area: s.hatch_hole_min_area,
     hatch_border_algorithm: s.hatch_border_algorithm,
+    smoothing: s.smoothing,
+    corner_radius: s.corner_radius,
     is_rule_area: s.is_rule_area,
     keepout_tracks: s.keepout_tracks,
     keepout_vias: s.keepout_vias,

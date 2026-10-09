@@ -17,7 +17,7 @@
 
 use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
-use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintInstance, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
+use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::{CheckResult, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -31,6 +31,8 @@ enum Member {
     Text(usize),
     Dimension(usize),
     Footprint(usize),
+    /// A group copy (`Copies::groups`); the groups a group holds are listed before it.
+    Group(usize),
 }
 
 /// A footprint to be copied onto the board.
@@ -47,6 +49,9 @@ struct FootprintCopy {
     side: Side,
     label: LabelSide,
     pad_nets: Vec<(String, String)>,
+    /// How zones connect to the footprint and to its pads, as the original had it (`PAD::GetLocalZoneConnection`, the thermal
+    /// relief and the clearance overrides): the copy is filed under its own reference in `DrawingsSection::zone_overrides`.
+    zone_overrides: Option<FootprintZoneOverrides>,
     /// A paste puts a part of this board that is not placed back, rather than making a second one.
     reuse_unplaced: bool,
 }
@@ -160,49 +165,60 @@ impl Board<'_> {
         let mut done: BTreeMap<String, Member> = BTreeMap::new();
 
         // Which group, if any, holds each item that is not itself copied along with its group.
-        let group_of = |id: &str| -> Option<String> { self.design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| g.member_ids.iter().any(|m| m == id)).map(|g| g.id.clone())) };
-        let groups: Vec<Group> = self.design.drawings.as_ref().map(|d| d.groups.clone()).unwrap_or_default();
+        let group_of = |id: &str| -> Option<String> { self.design.drawings.as_ref().and_then(|d| d.parent_group(id)).map(|g| g.id.clone()) };
 
-        let mut order: Vec<(String, Option<usize>)> = Vec::new();
         for id in ids {
-            if let Some((gi, g)) = groups.iter().enumerate().find(|(_, g)| &g.id == id) {
-                for m in &g.member_ids {
-                    order.push((m.clone(), Some(gi)));
-                }
-            } else {
-                order.push((id.clone(), None));
-            }
-        }
-        let mut copied_groups: BTreeMap<usize, Vec<Member>> = BTreeMap::new();
-        for (id, via_group) in order {
-            let member = match done.get(&id) {
-                Some(m) => *m,
-                None => match self.copy_of(&id, &mut copies) {
-                    Some(m) => {
-                        done.insert(id.clone(), m);
-                        // A copy that is not part of a copied group joins the group its original is in.
-                        if via_group.is_none() {
-                            if let Some(g) = group_of(&id) {
-                                copies.join.push((m, g));
-                            }
-                        }
-                        m
+            if self.design.drawings.as_ref().is_some_and(|d| d.is_group(id)) {
+                // A group is copied with everything below it, into a group of its own, which joins the group the original is in.
+                if let Some(copy) = self.copy_group(id, &mut copies, &mut done, &mut Vec::new()) {
+                    if let Some(above) = group_of(id) {
+                        copies.join.push((copy, above));
                     }
-                    // An id that is nothing duplicable is skipped, as in `Duplicate` over a mixed selection.
-                    None => continue,
-                },
-            };
-            if let Some(gi) = via_group {
-                copied_groups.entry(gi).or_default().push(member);
+                }
+            } else if !done.contains_key(id) {
+                // An id that is nothing duplicable is skipped, as in `Duplicate` over a mixed selection.
+                if let Some(m) = self.copy_of(id, &mut copies) {
+                    done.insert(id.clone(), m);
+                    // A copy that is not part of a copied group joins the group its original is in.
+                    if let Some(g) = group_of(id) {
+                        copies.join.push((m, g));
+                    }
+                }
             }
-        }
-        for (gi, members) in copied_groups {
-            copies.groups.push(GroupCopy { name: groups[gi].name.clone(), members });
         }
         if copies.is_empty() {
             return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text or dimension")]);
         }
         self.insert_copies_all(copies)
+    }
+
+    /// The copy of the group `id` and of everything below it (`PCB_GROUP::DeepDuplicate`): its items are copied once whoever asks, the
+    /// groups it holds before it. `None` for an id that is no group, or a loop.
+    fn copy_group(&self, id: &str, copies: &mut Copies, done: &mut BTreeMap<String, Member>, visiting: &mut Vec<String>) -> Option<Member> {
+        let dr = self.design.drawings.as_ref()?;
+        let g = dr.group(id)?;
+        if visiting.iter().any(|v| v == id) {
+            return None;
+        }
+        visiting.push(id.to_string());
+        let mut members: Vec<Member> = Vec::new();
+        for m in &g.member_ids {
+            let copy = if dr.is_group(m) {
+                self.copy_group(m, copies, done, visiting)
+            } else if let Some(c) = done.get(m) {
+                Some(*c)
+            } else {
+                let c = self.copy_of(m, copies);
+                if let Some(c) = c {
+                    done.insert(m.clone(), c);
+                }
+                c
+            };
+            members.extend(copy);
+        }
+        visiting.pop();
+        copies.groups.push(GroupCopy { name: g.name.clone(), members });
+        Some(Member::Group(copies.groups.len() - 1))
     }
 
     /// The copy of the item `id` names, filed into `copies`; `None` when it names nothing duplicable.
@@ -212,6 +228,10 @@ impl Board<'_> {
             let nets = self.pad_nets_of(id);
             // A part with no footprint at all has nothing to copy.
             let name = part.footprint.clone().or_else(|| part.package.clone())?;
+            let zone_overrides = self.model.footprint_of(part).and_then(|d| {
+                let numbers: Vec<&str> = d.pads.iter().map(|p| p.number.as_str()).collect();
+                self.design.zone_overrides_of(id, &d.name, &numbers)
+            });
             copies.footprints.push(FootprintCopy {
                 reference: part.reference.clone(),
                 value: part.value.clone(),
@@ -222,6 +242,7 @@ impl Board<'_> {
                 side: fp.side,
                 label: fp.label,
                 pad_nets: nets,
+                zone_overrides,
                 reuse_unplaced: false,
             });
             return Some(Member::Footprint(copies.footprints.len() - 1));
@@ -365,6 +386,7 @@ impl Board<'_> {
                 label: f.label,
                 // KiCad's single-footprint clipboard has no nets: its pads stay on none.
                 pad_nets: f.pad_nets.clone(),
+                zone_overrides: f.zone_overrides.clone(),
                 reuse_unplaced: true,
             });
         }
@@ -380,6 +402,8 @@ impl Board<'_> {
                     ClipRef::Text(i) => text_ix.get(i).copied().map(Member::Text),
                     ClipRef::Dimension(i) => dim_ix.get(i).copied().map(Member::Dimension),
                     ClipRef::Footprint(i) => fp_ix.get(i).copied().map(Member::Footprint),
+                    // An inner group is listed before the group that holds it: it is already a copy.
+                    ClipRef::Group(i) => (i < copies.groups.len()).then_some(Member::Group(i)),
                 })
                 .collect();
             copies.groups.push(GroupCopy { name: g.name.clone(), members });
@@ -439,15 +463,19 @@ impl Board<'_> {
         let mut fp_refs: Vec<String> = Vec::new();
         let mut new_parts: Vec<(BoardPart, FootprintInstance)> = Vec::new();
         let mut replaced: Vec<FootprintInstance> = Vec::new();
+        // The zone-connection edits of the copies, each under the reference its footprint ends up with.
+        let mut zone_edits: Vec<FootprintZoneOverrides> = Vec::new();
         for f in &copies.footprints {
             let at = self.snap_point(f.at.x, f.at.y);
             if f.reuse_unplaced && self.model.part(&f.reference).is_some() && self.pose_of(&f.reference).is_none() && !replaced.iter().any(|r| r.id == f.reference) {
                 replaced.push(FootprintInstance { id: f.reference.clone(), at, rot: f.rot, side: f.side, label: f.label });
+                zone_edits.extend(f.zone_overrides.iter().map(|z| FootprintZoneOverrides { id: f.reference.clone(), ..z.clone() }));
                 fp_refs.push(f.reference.clone());
                 continue;
             }
             let reference = unique_reference(&f.reference, &references);
             references.insert(reference.clone());
+            zone_edits.extend(f.zone_overrides.iter().map(|z| FootprintZoneOverrides { id: reference.clone(), ..z.clone() }));
             // Keep the pads and courtyard with the copy unless the model already knows the footprint by that name.
             let probe = Part { reference: reference.clone(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.footprint.clone()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
             let definition = match (&f.definition, self.model.footprint_of(&probe)) {
@@ -463,29 +491,33 @@ impl Board<'_> {
             fp_refs.push(reference);
         }
 
-        // Groups over the new ids.
-        let id_of = |m: &Member| -> String {
+        // Groups over the new ids, the inner ones first (a group names the groups it holds by their new ids).
+        let mut group_ids: Vec<Option<String>> = Vec::new();
+        let id_of = |m: &Member, group_ids: &[Option<String>]| -> Option<String> {
             match *m {
-                Member::Track(i) => track_ids[i].clone(),
-                Member::Via(i) => via_ids[i].clone(),
-                Member::Zone(i) => zone_ids[i].clone(),
-                Member::Shape(i) => shape_ids[i].clone(),
-                Member::Text(i) => text_ids[i].clone(),
-                Member::Dimension(i) => dim_ids[i].clone(),
-                Member::Footprint(i) => fp_refs[i].clone(),
+                Member::Track(i) => Some(track_ids[i].clone()),
+                Member::Via(i) => Some(via_ids[i].clone()),
+                Member::Zone(i) => Some(zone_ids[i].clone()),
+                Member::Shape(i) => Some(shape_ids[i].clone()),
+                Member::Text(i) => Some(text_ids[i].clone()),
+                Member::Dimension(i) => Some(dim_ids[i].clone()),
+                Member::Footprint(i) => Some(fp_refs[i].clone()),
+                Member::Group(i) => group_ids.get(i).cloned().flatten(),
             }
         };
         let mut new_groups: Vec<Group> = Vec::new();
         for g in &copies.groups {
-            // A group of fewer than two members is not a group (`prune_empty_groups`).
-            if g.members.len() < 2 {
+            let member_ids: Vec<String> = g.members.iter().filter_map(|m| id_of(m, &group_ids)).collect();
+            // A group of fewer than two members is not a group (`prune_groups`).
+            if member_ids.len() < 2 {
+                group_ids.push(None);
                 continue;
             }
-            let member_ids: Vec<String> = g.members.iter().map(&id_of).collect();
             let id = next_item_id("grp", &format!("copy|{}|{}", g.name, member_ids.join(",")), &taken_with(&taken, &new_groups));
+            group_ids.push(Some(id.clone()));
             new_groups.push(Group { id, name: g.name.clone(), member_ids });
         }
-        let joins: Vec<(String, String)> = copies.join.iter().map(|(m, g)| (id_of(m), g.clone())).collect();
+        let joins: Vec<(String, String)> = copies.join.iter().filter_map(|(m, g)| id_of(m, &group_ids).map(|id| (id, g.clone()))).collect();
 
         // Land them.
         if !copies.tracks.is_empty() || !copies.vias.is_empty() || !copies.zones.is_empty() {
@@ -512,6 +544,14 @@ impl Board<'_> {
                 dr.board_parts.push(bp.clone());
             }
             dr.board_parts.sort_by(|a, b| a.reference.cmp(&b.reference));
+        }
+        if !zone_edits.is_empty() {
+            let dr = self.drawings_mut();
+            for e in zone_edits {
+                dr.zone_overrides.retain(|x| x.id != e.id);
+                dr.zone_overrides.push(e);
+            }
+            dr.zone_overrides.sort_by(|a, b| a.id.cmp(&b.id));
         }
         if !new_parts.is_empty() || !replaced.is_empty() {
             let fps = &mut self.design.placement.as_mut().expect("a Board always carries a placement section").footprints;

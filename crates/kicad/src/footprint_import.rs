@@ -73,6 +73,7 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     fp.description = sexpr::find(root, "descr").and_then(|d| sexpr::txt(d, 1)).unwrap_or("").to_string();
     fp.keywords = sexpr::find(root, "tags").and_then(|d| sexpr::txt(d, 1)).unwrap_or("").to_string();
     fp.attributes = attributes(root);
+    fp.zone_connection = sexpr::find(root, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
     fp.model = crate::footprint_lib::model_from(root);
     fp.courtyard = crate::footprint_lib::courtyard_from(root);
 
@@ -261,6 +262,8 @@ fn parse_pad(pad: &[Sexpr], warnings: &mut Vec<String>) -> Option<LibraryPad> {
         clearance_override: um("clearance"),
         thermal_gap_override: um("thermal_gap"),
         thermal_spoke_width_override: um("thermal_bridge_width"),
+        zone_connection: sexpr::find(pad, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64)),
+        thermal_spoke_angle_mdeg: sexpr::find(pad, "thermal_bridge_angle").and_then(|a| sexpr::num(a, 1)).map(|d| ((d * 1000.0).round() as i64).rem_euclid(360_000) as eda_model::ir::Millideg),
     })
 }
 
@@ -289,6 +292,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 
@@ -356,6 +361,40 @@ mod tests {
         assert_eq!((t.content.as_str(), t.angle, t.size_um, t.stroke_width, t.justify, t.mirror), ("hello", 90_000, 1000, 150, TextJustify::Left, true));
         assert!(back.courtyard.is_some(), "the F.CrtYd circle gives a courtyard box");
         assert!(back.pads.iter().all(|p| !p.id.is_empty()) && back.graphics.iter().all(|g| !g.id().is_empty()));
+    }
+
+    #[test]
+    fn the_zone_connection_fields_of_a_footprint_and_its_pads_survive_a_kicad_mod_round_trip() {
+        // `parsePAD` / `format( const PAD* )`: zone_connect, thermal_bridge_width, thermal_bridge_angle, thermal_gap, clearance;
+        // `(footprint (zone_connect N))` for the footprint itself.
+        let mut fp = sample();
+        fp.zone_connection = Some(eda_model::ir::PadConnection::Thermal);
+        fp.pads[0].zone_connection = Some(eda_model::ir::PadConnection::Full);
+        fp.pads[0].thermal_gap_override = Some(250);
+        fp.pads[0].thermal_spoke_width_override = Some(300);
+        fp.pads[0].thermal_spoke_angle_mdeg = Some(30_500);
+        fp.pads[1].zone_connection = Some(eda_model::ir::PadConnection::ThtThermal);
+        // 90 degrees is an oval's default angle: KiCad does not write it, and the reader gives back "not set".
+        fp.pads[1].thermal_spoke_angle_mdeg = Some(90_000);
+        fp.pads[2].zone_connection = Some(eda_model::ir::PadConnection::None);
+        // 45 degrees is a circle's default and is not written either; any other angle is.
+        fp.pads[2].thermal_spoke_angle_mdeg = Some(45_000);
+
+        let text = export_kicad_mod(&fp);
+        assert!(text.contains("(zone_connect 1)"), "the footprint's own connection is written: {text}");
+        assert_eq!(text.matches("(thermal_bridge_angle").count(), 1, "only the angle that is not the shape's default is written");
+        let back = parse_library_footprint(&text).expect("parses").footprint;
+
+        assert_eq!(back.zone_connection, Some(eda_model::ir::PadConnection::Thermal));
+        let by = |n: &str| back.pads.iter().find(|p| p.number == n).unwrap();
+        let p1 = by("1");
+        assert_eq!(p1.zone_connection, Some(eda_model::ir::PadConnection::Full));
+        assert_eq!((p1.thermal_gap_override, p1.thermal_spoke_width_override, p1.thermal_spoke_angle_mdeg, p1.clearance_override), (Some(250), Some(300), Some(30_500), Some(200)));
+        assert_eq!((by("2").zone_connection, by("2").thermal_spoke_angle_mdeg), (Some(eda_model::ir::PadConnection::ThtThermal), None));
+        assert_eq!((by("3").zone_connection, by("3").thermal_spoke_angle_mdeg), (Some(eda_model::ir::PadConnection::None), None));
+        // a footprint that sets nothing writes nothing
+        let plain = export_kicad_mod(&sample());
+        assert!(!plain.contains("zone_connect") && !plain.contains("thermal_"), "{plain}");
     }
 
     #[test]
