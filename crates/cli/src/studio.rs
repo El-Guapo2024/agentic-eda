@@ -739,6 +739,9 @@ fn handle(
         }
         ("GET", "/api/view") => respond(stream, "200 OK", "application/json", crate::view_api::get(dir).to_string().as_bytes()),
         ("POST", "/api/view") => respond(stream, "200 OK", "application/json", crate::view_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
+        // The Appearance panel's per-project settings (`appearance.json`, never `design.json`).
+        ("GET", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::get(dir).to_string().as_bytes()),
+        ("POST", "/api/appearance") => respond(stream, "200 OK", "application/json", crate::appearance_api::post(dir, &String::from_utf8_lossy(&body)).to_string().as_bytes()),
         ("POST", "/api/undo") => {
             let scope = request_domain(&body);
             let reply = match board::undo(dir, "ui", scope) {
