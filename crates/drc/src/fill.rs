@@ -23,7 +23,7 @@ use eda_model::ir::{Point, Zone};
 use eda_model::BoardRules;
 use eda_shape_poly_set::ShapePolySet;
 use eda_zone_filler::shape::Shape as FillShape;
-use eda_zone_filler::{fill_zone, FillInput, FillKeepout, FillPad, FillTrack, FillVia, FillZoneRef, DEFAULT_MAX_ERROR};
+use eda_zone_filler::{fill_zone, FillInput, FillKeepout, FillPad, FillTrack, FillVia, FillZoneRef, PadGeometry, DEFAULT_MAX_ERROR};
 use std::collections::HashMap;
 
 #[inline]
@@ -43,6 +43,28 @@ fn convert_shape(s: &DrcShape) -> FillShape {
         // unreachable in practice; an empty polygon is a harmless knockout
         // no-op if it's ever hit.
         DrcShape::Strokes { .. } => FillShape::Polygon { pts: Vec::new() },
+    }
+}
+
+/// A pad as the filler sees it: the exact copper and drill, and what a thermal relief needs -- the pad's own size,
+/// orientation and spoke angle, and its zone-connection overrides.
+fn fill_pad(p: &crate::board::DrcPad) -> FillPad {
+    use eda_model::{PadKind, PadShape};
+    let circular = p.shape == PadShape::Circle || (p.shape == PadShape::Oval && p.size.0 == p.size.1);
+    // `PADSTACK::DefaultThermalSpokeAngleForShape`: 90 degrees for an oval or (rounded) rectangle, 45 for a circle.
+    let default_angle = if matches!(p.shape, PadShape::Oval | PadShape::Rect | PadShape::RoundRect) { 90_000 } else { 45_000 };
+    FillPad {
+        net: p.net.clone(),
+        layers: p.layers.clone(),
+        copper: convert_shape(&p.copper),
+        hole: p.hole.as_ref().map(convert_shape),
+        geometry: Some(PadGeometry { center: pt(p.center), size: p.size, circular, default_spoke_angle_mdeg: default_angle, orientation_mdeg: p.orientation_mdeg }),
+        zone_connection: p.zone.connection,
+        footprint_zone_connection: p.zone.footprint_connection,
+        thermal_gap: p.zone.thermal_gap,
+        spoke_width: p.zone.thermal_spoke_width,
+        spoke_angle_mdeg: p.zone.thermal_spoke_angle_mdeg.map(i64::from),
+        plated_through_hole: p.kind == PadKind::ThroughHole,
     }
 }
 
@@ -82,8 +104,7 @@ impl FillResults {
 pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
     let board_outline: Option<Vec<Point64>> = if board.outline.len() >= 3 { Some(board.outline.iter().map(|&p| pt(p)).collect()) } else { None };
 
-    let pads: Vec<FillPad> =
-        board.pads.iter().map(|p| FillPad { net: p.net.clone(), layers: p.layers.clone(), copper: convert_shape(&p.copper), hole: p.hole.as_ref().map(convert_shape) }).collect();
+    let pads: Vec<FillPad> = board.pads.iter().map(fill_pad).collect();
     // An arc knocks out its true curve: one `FillTrack` per chord of its
     // `ARC_HIGH_DEF` polyline (`PCB_ARC::TransformShapeToPolygon`).
     let tracks: Vec<FillTrack> = board
@@ -124,6 +145,16 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             island_removal_mode: z.island_removal_mode,
             min_island_area: z.min_island_area,
             teardrop: z.teardrop,
+            fill_mode: z.fill_mode,
+            hatch_thickness: z.hatch_thickness,
+            hatch_gap: z.hatch_gap,
+            hatch_orientation_mdeg: z.hatch_orientation_mdeg,
+            hatch_smoothing_level: z.hatch_smoothing_level,
+            hatch_smoothing_value: z.hatch_smoothing_value,
+            hatch_hole_min_area: z.hatch_hole_min_area,
+            hatch_border_algorithm: z.hatch_border_algorithm,
+            smoothing: z.smoothing,
+            corner_radius: z.corner_radius,
             ..Zone::default()
         };
 
@@ -131,7 +162,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             .zones
             .iter()
             .filter(|o| !std::ptr::eq(*o, z))
-            .map(|o| FillZoneRef { net: o.net.clone(), layer: o.layer.clone(), outline: o.outline.iter().map(|&p| pt(p)).collect(), priority: o.priority, teardrop: o.teardrop })
+            .map(|o| FillZoneRef { id: o.id.clone(), net: o.net.clone(), layer: o.layer.clone(), outline: o.outline.iter().map(|&p| pt(p)).collect(), priority: o.priority, teardrop: o.teardrop, clearance: o.clearance, fill: None })
             .collect();
 
         // Copper-pour keepouts on this zone's own layer (task item 3) --
@@ -139,7 +170,16 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
         let keepouts: Vec<FillKeepout> =
             board.keepouts.iter().filter(|k| k.no_copper_pour && k.layer == z.layer).map(|k| FillKeepout { layer: k.layer.clone(), outline: k.outline.iter().map(|&p| pt(p)).collect() }).collect();
 
-        let input = FillInput { pads: pads.clone(), tracks: tracks.clone(), vias: vias.clone(), other_zones, board_outline: board_outline.clone(), keepouts, hole_clearance: crate::constraints::hole_clearance_min(rules) };
+        let input = FillInput {
+            pads: pads.clone(),
+            tracks: tracks.clone(),
+            vias: vias.clone(),
+            other_zones,
+            board_outline: board_outline.clone(),
+            keepouts,
+            hole_clearance: crate::constraints::hole_clearance_min(rules),
+            worst_clearance: crate::constraints::worst_case_clearance(rules),
+        };
         let clearance_fn = |a: Option<&str>, b: Option<&str>| crate::constraints::clearance(rules, a, b);
         let fill = fill_zone(&zone, &zone.layer, &input, clearance_fn, DEFAULT_MAX_ERROR);
         out.zones.insert(z.id.clone(), ZoneFill { fill });

@@ -262,6 +262,8 @@ struct ParityRow {
     xor_area_mm2: f64,
     our_islands: usize,
     kicad_islands: usize,
+    /// The three largest XOR components (area mm², centre in mm), to locate a mismatch on a big board.
+    hot_spots: String,
 }
 
 /// Matches a `before`-zone to its `after` (refilled) block by comparing the
@@ -371,9 +373,73 @@ fn check_board(cli: &Path, board_name: &str) -> Vec<ParityRow> {
             xor_area_mm2: xor_area / 1_000_000.0,
             our_islands: our_paths.len(),
             kicad_islands: kicad_paths.len(),
+            hot_spots: hot_spots(&xor),
         });
     }
     rows
+}
+
+/// The three largest connected pieces of an XOR result, `area@(x,y)` in mm² / mm (net of holes, so a ring is not
+/// counted as the disc it encloses).
+fn hot_spots(xor: &Paths64) -> String {
+    let set = eda_shape_poly_set::ShapePolySet::from_paths(xor);
+    let mut parts: Vec<(f64, (f64, f64))> = set
+        .polys
+        .iter()
+        .map(|poly| {
+            let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+            for q in &poly[0] {
+                x0 = x0.min(q.x);
+                y0 = y0.min(q.y);
+                x1 = x1.max(q.x);
+                y1 = y1.max(q.y);
+            }
+            let net = eda_clipper2::area(&poly[0]).abs() - poly[1..].iter().map(|h| eda_clipper2::area(h).abs()).sum::<f64>();
+            (net / 1e6, ((x0 + x1) as f64 / 2000.0, (y0 + y1) as f64 / 2000.0))
+        })
+        .collect();
+    parts.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    parts.iter().take(3).map(|(a, (x, y))| format!("{a:.3}@({x:.2},{y:.2})")).collect::<Vec<_>>().join(" ")
+}
+
+/// With `PARITY_SVG_DIR` set: `<board>-<n>.svg` of kicad's fill (red) under ours (blue), for looking at a mismatch.
+/// `PARITY_CROP=x0,y0,x1,y1` (mm) frames a part of the board.
+fn write_svg(name: &str, ours: &Paths64, kicad: &Paths64) {
+    let Some(dir) = std::env::var_os("PARITY_SVG_DIR").map(PathBuf::from) else { return };
+    std::fs::create_dir_all(&dir).ok();
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in ours.iter().chain(kicad.iter()).flatten() {
+        x0 = x0.min(p.x as f64 / 1000.0);
+        y0 = y0.min(p.y as f64 / 1000.0);
+        x1 = x1.max(p.x as f64 / 1000.0);
+        y1 = y1.max(p.y as f64 / 1000.0);
+    }
+    if let Ok(crop) = std::env::var("PARITY_CROP") {
+        let v: Vec<f64> = crop.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        if v.len() == 4 {
+            (x0, y0, x1, y1) = (v[0], v[1], v[2], v[3]);
+        }
+    }
+    let path = |paths: &Paths64| -> String {
+        let mut d = String::new();
+        for ring in paths {
+            for (i, p) in ring.iter().enumerate() {
+                d.push_str(&format!("{}{:.3} {:.3} ", if i == 0 { "M" } else { "L" }, p.x as f64 / 1000.0, p.y as f64 / 1000.0));
+            }
+            d.push_str("Z ");
+        }
+        d
+    };
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='{x0} {y0} {} {}' width='1600'><rect x='{x0}' y='{y0}' width='{}' height='{}' fill='white'/><path d='{}' fill='red' fill-opacity='0.5' fill-rule='nonzero'/><path d='{}' fill='blue' fill-opacity='0.5' fill-rule='nonzero'/></svg>",
+        x1 - x0,
+        y1 - y0,
+        x1 - x0,
+        y1 - y0,
+        path(kicad),
+        path(ours)
+    );
+    std::fs::write(dir.join(format!("{name}.svg")), svg).ok();
 }
 
 #[test]
@@ -401,4 +467,116 @@ fn kicad_cli_zone_fill_parity() {
     println!("\n{md}");
     // Copy this run's table into PARITY.md by hand if it changes meaningfully
     // (not auto-written here, so PARITY.md can carry commentary alongside it).
+}
+
+
+// ---------------------------------------------------------------------------
+// Feature parity: boards whose zones use thermal spokes (rotated and circular
+// pads, per-pad and per-footprint connection overrides), hatch fill, corner
+// smoothing and priority interplay. Unlike `check_board` above, the zones here
+// are the ones `import_kicad_pcb` reads from the file, so every zone setting
+// the importer knows about (fill mode, hatch, smoothing, island removal, ...)
+// reaches our filler exactly as the studio would see it.
+// ---------------------------------------------------------------------------
+
+/// `qa/data/pcbnew`-relative boards of the feature table in `PARITY.md`.
+const FEATURE_BOARDS: &[&str] = &[
+    "zone_filler.kicad_pcb",
+    "test_starved_thermal.kicad_pcb",
+    "issue21746/issue21746.kicad_pcb",
+    "stonehenge.kicad_pcb",
+    "issue2568.kicad_pcb",
+    "fill_bad.kicad_pcb",
+];
+
+/// Our fill of every copper pour of `rel` against `kicad-cli pcb drc --refill-zones --save-board`.
+fn check_board_imported(cli: &Path, rel: &str) -> Vec<ParityRow> {
+    let src = qa_boards_dir().join(rel);
+    let name = rel.replace('/', "__");
+    let dir = std::env::var_os("PARITY_TMP").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("eda_zone_filler_parity"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let work = dir.join(&name);
+    std::fs::copy(&src, &work).unwrap_or_else(|e| panic!("copy {rel}: {e}"));
+
+    let before = std::fs::read_to_string(&work).unwrap();
+    let (mut design, model, _notes) = import_kicad_pcb(&before).unwrap_or_else(|e| panic!("import {rel}: {e:?}"));
+    if let Some(r) = design.routing.as_mut() {
+        r.assign_missing_ids();
+    }
+
+    let out = Command::new(cli).args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "report", "--output"]).arg(dir.join(format!("{name}.report"))).arg(&work).output().expect("run kicad-cli");
+    eprintln!("kicad-cli({rel}) stderr:\n{}", String::from_utf8_lossy(&out.stderr));
+    let after = std::fs::read_to_string(&work).unwrap_or_else(|e| panic!("read refilled {rel}: {e}"));
+    let after_blocks = all_zone_blocks(&after);
+
+    let drc_board = eda_drc::board::build(&design, &model);
+    let fills = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
+
+    let mut rows = Vec::new();
+    let Some(routing) = design.routing.as_ref() else { return rows };
+    for z in routing.zones.iter().filter(|z| !z.is_rule_area && !z.teardrop && z.parent_footprint.is_none()) {
+        let our_fill = fills.get(&z.id);
+        let our_paths: Paths64 = our_fill.map(|f| f.polys.iter().filter_map(|p| p.first()).cloned().collect()).unwrap_or_default();
+        let our_area = our_fill.map(|f| f.area()).unwrap_or(0.0);
+
+        let outline_mm: Vec<(f64, f64)> = z.outline.iter().map(|p| (p.x as f64 / 1000.0, p.y as f64 / 1000.0)).collect();
+        let Some(zone_block_after) = find_matching_after_block(&after_blocks, &outline_mm) else {
+            eprintln!("{rel}: zone net={} layer={} priority={} had no matching outline after refill, skipping", z.net, z.layer, z.priority);
+            continue;
+        };
+        let kicad_paths = extract_filled_polygons(zone_block_after, &z.layer);
+        let kicad_area = area_paths(&kicad_paths).abs();
+        let xor = xor_paths(&our_paths, &kicad_paths, FillRule::NonZero);
+        let xor_area = area_paths(&xor).abs();
+
+        write_svg(&format!("{}-{}-{}", name, z.layer.replace('.', "_"), rows.len()), &our_paths, &kicad_paths);
+        rows.push(ParityRow {
+            board: rel.to_string(),
+            net: format!("{} (prio {}{})", z.net, z.priority, if z.fill_mode == FillMode::HatchPattern { ", hatch" } else { "" }),
+            layer: z.layer.clone(),
+            our_area_mm2: our_area / 1_000_000.0,
+            kicad_area_mm2: kicad_area / 1_000_000.0,
+            area_pct_diff: if kicad_area > 0.0 { 100.0 * (our_area - kicad_area).abs() / kicad_area } else { 0.0 },
+            xor_area_mm2: xor_area / 1_000_000.0,
+            our_islands: our_paths.len(),
+            kicad_islands: kicad_paths.len(),
+            hot_spots: hot_spots(&xor),
+        });
+    }
+    rows
+}
+
+fn parity_table(rows: &[ParityRow]) -> String {
+    let mut md = String::from("| board | net | layer | our area mm² | kicad area mm² | area diff % | XOR area mm² | XOR % of kicad | our islands | kicad islands | largest XOR pieces mm² @ mm |\n");
+    md.push_str("|---|---|---|---|---|---|---|---|---|---|---|\n");
+    for r in rows {
+        let xor_pct = if r.kicad_area_mm2 > 0.0 { 100.0 * r.xor_area_mm2 / r.kicad_area_mm2 } else { 0.0 };
+        md.push_str(&format!(
+            "| {} | {} | {} | {:.3} | {:.3} | {:.2}% | {:.3} | {:.2}% | {} | {} | {} |\n",
+            r.board, r.net, r.layer, r.our_area_mm2, r.kicad_area_mm2, r.area_pct_diff, r.xor_area_mm2, xor_pct, r.our_islands, r.kicad_islands, r.hot_spots
+        ));
+    }
+    md
+}
+
+#[test]
+fn kicad_cli_zone_fill_feature_parity() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() && std::env::var_os("PARITY_BOARDS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    // `PARITY_BOARDS=a.kicad_pcb,dir/b.kicad_pcb` measures other boards of `qa/data/pcbnew`.
+    let boards: Vec<String> = match std::env::var("PARITY_BOARDS") {
+        Ok(list) => list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Err(_) => FEATURE_BOARDS.iter().map(|s| s.to_string()).collect(),
+    };
+    let mut rows = Vec::new();
+    for board in &boards {
+        rows.extend(check_board_imported(&cli, board));
+    }
+    println!("\n{}", parity_table(&rows));
 }

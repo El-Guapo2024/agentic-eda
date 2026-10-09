@@ -1379,6 +1379,8 @@ fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
         clearance_override: None,
         thermal_gap_override: None,
         thermal_spoke_width_override: None,
+        zone_connection: None,
+        thermal_spoke_angle_mdeg: None,
     }
 }
 
