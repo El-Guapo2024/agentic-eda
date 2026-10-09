@@ -1619,9 +1619,11 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
-            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } | Cmd::EmbedLibSymbol { .. } => false,
+            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
+            // A definition kept with the schematic changes no connection.
+            Cmd::EmbedLibSymbol { .. } => false,
             _ => true,
         }
     }
