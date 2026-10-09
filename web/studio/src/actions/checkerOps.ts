@@ -86,29 +86,36 @@ export function drcSelectedOf(state: Pick<StudioState, "drcSelected">, tab: DrcT
 }
 
 /**
- * `DIALOG_DRC::OnDRCItemSelected`: a marker clicked in the list selects the items it names on the board and frames them (the same click the real
- * dialog turns into `FocusOnItems`). `showPcb`: also bring the PCB tab up, for a click that may come from another editor.
+ * What a click on a DRC row does to the canvas, whichever list the row is in (`DIALOG_DRC::OnDRCItemSelected`): select the items the violation names on the
+ * board and frame them (the same click the real dialog turns into `FocusOnItems`). `showPcb`: also bring the PCB tab up, for a click that may come from
+ * another editor.
  */
+export function frameDrc(ctx: CheckerCtx, v: Pick<DrcViolation, "items"> | undefined, showPcb = false): void {
+  const { dispatch } = ctx;
+  if (v) {
+    const refs = v.items.flatMap((it) => (it.id && it.id !== "outline" ? [baseRef(it.id)] : []));
+    dispatch({ type: "SET_SELECTION", refs });
+    dispatch({ type: "SET_HOT", refs });
+    const rect = canvasRect();
+    if (rect && rect.width >= 50 && rect.height >= 50 && v.items.length > 0) {
+      const xs = v.items.map((it) => it.pos[0]);
+      const ys = v.items.map((it) => it.pos[1]);
+      const bounds = { minX: Math.min(...xs) - FRAME_PAD_UM, minY: Math.min(...ys) - FRAME_PAD_UM, maxX: Math.max(...xs) + FRAME_PAD_UM, maxY: Math.max(...ys) + FRAME_PAD_UM };
+      dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height, 60) });
+    }
+  }
+  if (showPcb) dispatch({ type: "SET_TAB", tab: "pcb" });
+}
+
+/** Select a row of one of the DRC dialog's marker pages, and its violation on the board ([`frameDrc`]). */
 export function selectDrc(ctx: CheckerCtx, tab: DrcTab, index: number, showPcb = false): void {
   const { api, dispatch } = ctx;
-  const v = drcListOf(api.getState().drc, tab)[index];
   if (tab === "violations") dispatch({ type: "SET_DRC_SELECTED", index });
   else {
     dispatch({ type: "SET_DRC_SELECTED", index: null });
     setDrcView(tab === "unconnected" ? { unconnectedSelected: index } : { paritySelected: index });
   }
-  if (!v) return;
-  const refs = v.items.flatMap((it) => (it.id && it.id !== "outline" ? [baseRef(it.id)] : []));
-  dispatch({ type: "SET_SELECTION", refs });
-  dispatch({ type: "SET_HOT", refs });
-  const rect = canvasRect();
-  if (rect && rect.width >= 50 && rect.height >= 50 && v.items.length > 0) {
-    const xs = v.items.map((it) => it.pos[0]);
-    const ys = v.items.map((it) => it.pos[1]);
-    const bounds = { minX: Math.min(...xs) - FRAME_PAD_UM, minY: Math.min(...ys) - FRAME_PAD_UM, maxX: Math.max(...xs) + FRAME_PAD_UM, maxY: Math.max(...ys) + FRAME_PAD_UM };
-    dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height, 60) });
-  }
-  if (showPcb) dispatch({ type: "SET_TAB", tab: "pcb" });
+  frameDrc(ctx, drcListOf(api.getState().drc, tab)[index], showPcb);
 }
 
 /**

@@ -39,7 +39,7 @@ import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
 import { allShown, canExclude, countKinds, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
 import { askExclusionComment, setDrcView, useCheckerView, type DrcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { drcListOf, drcSelectedOf, drcSettingSeverity, drcTitle, excludeDrc, excludeMarkerDrc, openSeveritySetup, restoreDrc, runMarkerMenu, selectDrc, setDrcSeverity, stepDrc, toMenuEntries } from "../actions/checkerOps";
+import { drcListOf, drcSelectedOf, drcSettingSeverity, drcTitle, excludeDrc, excludeMarkerDrc, frameDrc, openSeveritySetup, restoreDrc, runMarkerMenu, selectDrc, setDrcSeverity, stepDrc, toMenuEntries } from "../actions/checkerOps";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { RcList, type RcRow } from "./RcList";
 
@@ -129,13 +129,8 @@ export function DrcDialog() {
 
   /** Lint findings select the way a violation does (items on the board, frame them) but keep their own highlight. */
   const jumpToLint = (index: number) => {
-    const v = lint[index];
-    if (!v) return;
     dispatch({ type: "SET_DRC_LINT_SELECTED", index });
-    const refs = v.items.flatMap((it) => (it.id && it.id !== "outline" ? [it.id.split("#")[0]!.split(".")[0]!] : []));
-    dispatch({ type: "SET_SELECTION", refs });
-    dispatch({ type: "SET_HOT", refs });
-    dispatch({ type: "SET_TAB", tab: "pcb" });
+    frameDrc(cctx, lint[index], true);
   };
 
   const tab = view.tab;

@@ -1628,7 +1628,8 @@ pub fn run(
             Ok(())
         }
         "drc" => {
-            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc(&dir, has(rest, "--refill-zones"))?).unwrap_or_default());
+            // `--schematic-parity`: also compare the board with the schematic (the studio's "Test for parity between PCB and schematic").
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc_with(&dir, has(rest, "--refill-zones"), has(rest, "--schematic-parity"))?).unwrap_or_default());
             Ok(())
         }
         // Our own checks, the ones KiCad does not have (`eda-lint`):
@@ -1790,7 +1791,7 @@ mod tests {
 
     /// kicad-cli's violation counts by type on the board in `dir`, as the studio's DRC reports them.
     fn drc_counts(dir: &Path) -> std::collections::BTreeMap<String, u64> {
-        let report = crate::kicad_engine::drc(dir, false).expect("kicad-cli ran");
+        let report = crate::kicad_engine::drc_with(dir, false, false).expect("kicad-cli ran");
         report["counts"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap())).collect()
     }
 
@@ -1874,7 +1875,7 @@ mod tests {
         step(&dir, Cmd::AddVia { net: "VCC".into(), x: 6_100, y: 12_500, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
 
         let find = |report: &serde_json::Value, kind: &str| -> serde_json::Value { report["violations"].as_array().unwrap().iter().find(|v| v["type"] == kind).cloned().unwrap_or_else(|| panic!("no {kind} in {report:#}")) };
-        let first = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
+        let first = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
         let (via, track, clearance) = (find(&first, "annular_width"), find(&first, "track_width"), find(&first, "clearance"));
         assert!([&via, &track, &clearance].iter().all(|v| v["excluded"] == false), "nothing is waived yet");
         let counts = |r: &serde_json::Value, kind: &str| r["counts"][kind].as_u64().unwrap_or(0);
@@ -1882,7 +1883,7 @@ mod tests {
 
         // Exclude the three together, as "Exclude all of this type" would: one step.
         step(&dir, Cmd::AddDrcExclusions { exclusions: vec![exclusion_of(&via, ""), exclusion_of(&track, "thin on purpose"), exclusion_of(&clearance, "")] }, false, "ui").unwrap();
-        let after = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
+        let after = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
         for (kind, matched) in [("annular_width", true), ("track_width", true), ("clearance", false)] {
             let v = find(&after, kind);
             assert_eq!(v["excluded"], true, "{kind} is waived in the studio's report");
@@ -1903,7 +1904,7 @@ mod tests {
 
         // Remove one: back in the report, and kicad-cli finds it again.
         step(&dir, Cmd::DeleteDrcExclusions { exclusions: vec![eda_model::ir::DrcExclusionKey { check: "annular_width".into(), items: exclusion_of(&via, "").items }] }, false, "ui").unwrap();
-        let removed = crate::kicad_engine::drc(&dir, false).expect("kicad-cli ran");
+        let removed = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
         assert_eq!(find(&removed, "annular_width")["excluded"], false);
         assert_eq!(counts(&removed, "annular_width"), 1);
         assert_eq!(kicad_cli_lists(&dir, &plain, "annular_width").len(), 1, "kicad-cli reports it again");
