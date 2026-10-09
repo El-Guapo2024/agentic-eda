@@ -42,7 +42,9 @@ export function FootprintLibraryPropertiesDialog() {
   useEffect(() => {
     if (open && state.footprint) {
       const { description, keywords, attributes, reference_visible, value_visible, model } = state.footprint;
-      setForm({ description, keywords, attributes, reference_visible, value_visible, model, zone_connection: state.footprint.zone_connection ?? null });
+      // The backend leaves an empty description or keywords (and an unset model or zone connection) out of the JSON: read them as empty, or the
+      // command that sends them back is refused for a missing field.
+      setForm({ description: description ?? "", keywords: keywords ?? "", attributes, reference_visible, value_visible, model: model ?? null, zone_connection: state.footprint.zone_connection ?? null });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
