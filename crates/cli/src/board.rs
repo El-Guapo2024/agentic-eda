@@ -3990,6 +3990,36 @@ mod tests {
         assert_eq!(drc_counts(&dir).get("clearance").copied().unwrap_or(0), 0, "Undo takes the override back");
     }
 
+    /// A grid array of a footprint is one command and so one undo step: the copies are parts of the board for the gates and the
+    /// writer, on the original's nets, with the next free references; Undo takes every copy back at once.
+    #[test]
+    fn an_array_of_a_footprint_is_one_undo_step_and_its_copies_are_parts_of_the_board() {
+        let dir = scratch("array_footprint");
+        setup(&dir);
+        let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: 0, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+        // a zero spacing is the dialog's refusal; a real one
+        let bad = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test");
+        assert!(bad.is_err(), "horizontal delta of zero with 2 objects");
+        let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: 3_000, dy: 4_000, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+        let msg = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test").unwrap();
+        assert!(msg.contains("5/5 placed"), "three copies join the two parts: {msg}");
+        let (_, design, model) = load(&dir).unwrap();
+        let refs: Vec<String> = design.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.clone()).collect();
+        assert_eq!(refs, ["U1", "U2", "U3", "U4", "U5"]);
+        let at = |r: &str| design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == r).unwrap().at;
+        assert_eq!((at("U3"), at("U4"), at("U5")), (Point { x: at("U1").x + 3_000, y: at("U1").y }, Point { x: at("U1").x, y: at("U1").y + 4_000 }, Point { x: at("U1").x + 3_000, y: at("U1").y + 4_000 }));
+        let on = |net: &str| model.nets.iter().find(|n| n.name == net).unwrap().pins.clone();
+        assert!(on("GND").contains(&"U5.1".to_string()) && on("VCC").contains(&"U5.2".to_string()), "the copies are on U1's nets: {:?}", model.nets);
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        for r in ["U3", "U4", "U5"] {
+            assert!(pcb.contains(&format!("(property \"Reference\" \"{r}\"")), "{r} is in the file kicad-cli reads");
+        }
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, model) = load(&dir).unwrap();
+        assert_eq!(back.placement.as_ref().unwrap().footprints.len(), 2);
+        assert!(model.part("U3").is_none() && back.drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "one undo takes every copy away");
+    }
+
     #[test]
     fn reasons_says_a_repeated_sentence_once_with_how_many() {
         let track = |net: &str| CheckResult::fail("kicad.unknown_net", net.to_string(), format!("a track is on net {net:?}, which is not in the netlist"));

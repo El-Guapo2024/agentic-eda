@@ -52,6 +52,8 @@ pub use pcb_edit::BooleanOp;
 pub mod board_setup;
 mod review;
 pub mod library_editors;
+mod array;
+pub use array::ArrayGeometry;
 mod fp_edit;
 mod pcb_paste;
 mod pcb_props;
@@ -163,123 +165,6 @@ pub enum ViaSizeSpec {
     Value { diameter: Um, drill: Um },
 }
 
-/// `Cmd::CreateArray`'s geometry (task item 6) -- `ARRAY_GRID_OPTIONS`/
-/// `ARRAY_CIRCULAR_OPTIONS` (`include/array_options.h`). A dialog-session
-/// object in source too (`ARRAY_OPTIONS` is never written to the board
-/// file), so this lives here as a `Cmd` payload, not on the IR.
-///
-/// Angles are millidegrees in this crate's own `rotate_point_about`
-/// convention (positive = clockwise in this app's Y-down board
-/// coordinates -- see that function's doc). `Circular::clockwise` picks
-/// the sign applied to the computed angle before rotating, the same
-/// final step source's own `GetTransform` takes (`if (m_clockwise) angle
-/// = -angle;`) -- a caller-facing "Clockwise/Counterclockwise" direction
-/// choice never needs its own sign flip the way `Cmd::MoveExact`'s single
-/// signed field does (see `MoveExactDialog.tsx`'s header comment).
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum ArrayGeometry {
-    Grid {
-        nx: i64,
-        ny: i64,
-        dx: Um,
-        dy: Um,
-        #[serde(default)]
-        offset_x: Um,
-        #[serde(default)]
-        offset_y: Um,
-        #[serde(default)]
-        centred: bool,
-        /// `ARRAY_GRID_OPTIONS::m_stagger` -- a brick/honeycomb offset
-        /// every `stagger`-th row (or column, see `stagger_rows`). 0 or 1
-        /// disables it (source: `std::abs(m_stagger) > 1`).
-        #[serde(default)]
-        stagger: i64,
-        #[serde(default = "d_true")]
-        stagger_rows: bool,
-        /// `ARRAY_GRID_OPTIONS::m_horizontalThenVertical` -- fills a row
-        /// before moving to the next (vs. a column before the next
-        /// column). Only visible when `offset_x`/`offset_y` skews the
-        /// grid; with a plain rectangular grid every point is covered
-        /// either way.
-        #[serde(default = "d_true")]
-        horizontal_then_vertical: bool,
-    },
-    Circular {
-        center: Point,
-        count: i64,
-        /// Angle between consecutive points.
-        angle_millideg: i64,
-        #[serde(default)]
-        angle_offset_millideg: i64,
-        #[serde(default = "d_true")]
-        clockwise: bool,
-        /// `ARRAY_CIRCULAR_OPTIONS::m_rotateItems` -- spin each item about
-        /// its own (already-translated) anchor by the same angle, instead
-        /// of only moving it along the circle. Ported for `Part`/`Text`
-        /// only (the two kinds with a simple scalar orientation field);
-        /// a track/via/zone/shape only ever translates along the circle
-        /// in this port -- see `create_array`'s own doc.
-        #[serde(default)]
-        rotate_items: bool,
-    },
-}
-
-fn d_true() -> bool {
-    true
-}
-
-impl ArrayGeometry {
-    fn size(&self) -> i64 {
-        match self {
-            ArrayGeometry::Grid { nx, ny, .. } => nx * ny,
-            ArrayGeometry::Circular { count, .. } => *count,
-        }
-    }
-
-    /// The transform for the `n`-th array point (0 is the original),
-    /// given the item's own current position -- `ARRAY_OPTIONS::
-    /// GetTransform`. Returns a translation and an in-place rotation
-    /// (always `0` for a grid, source's own `ANGLE_0`).
-    fn transform(&self, n: i64, pos: Point) -> (Point, i64) {
-        match *self {
-            ArrayGeometry::Grid { nx, ny, dx, dy, offset_x, offset_y, centred, stagger, stagger_rows, horizontal_then_vertical } => {
-                let axis_size = (if horizontal_then_vertical { nx } else { ny }).max(1);
-                let (mut cx, mut cy) = (n % axis_size, n / axis_size);
-                if !horizontal_then_vertical {
-                    std::mem::swap(&mut cx, &mut cy);
-                }
-                let mut x = cx * dx + cy * offset_x;
-                let mut y = cy * dy + cx * offset_y;
-                if stagger.unsigned_abs() > 1 {
-                    let s = stagger.abs();
-                    let idx = if stagger_rows { cy.rem_euclid(s) } else { cx.rem_euclid(s) };
-                    let (sdx, sdy) = if stagger_rows { (dx, offset_y) } else { (offset_x, dy) };
-                    let frac = idx as f64 * stagger.signum() as f64 / s as f64;
-                    x += (sdx as f64 * frac).round() as Um;
-                    y += (sdy as f64 * frac).round() as Um;
-                }
-                if centred {
-                    let extent_x = (nx - 1) * dx + (ny - 1) * offset_x;
-                    let extent_y = (ny - 1) * dy + (nx - 1) * offset_y;
-                    x -= extent_x / 2;
-                    y -= extent_y / 2;
-                }
-                (Point { x: pos.x + x, y: pos.y + y }, 0)
-            }
-            ArrayGeometry::Circular { center, angle_millideg, angle_offset_millideg, clockwise, .. } => {
-                let total = angle_millideg * n + angle_offset_millideg;
-                let signed = if clockwise { total } else { -total };
-                (rotate_point_about(pos, center, signed), signed)
-            }
-        }
-    }
-
-    fn rotates_items(&self) -> bool {
-        matches!(self, ArrayGeometry::Circular { rotate_items: true, .. })
-    }
-}
-
 impl Region {
     pub const ALL: [Region; 9] = [
         Region::NorthWest, Region::North, Region::NorthEast,
@@ -315,6 +200,10 @@ impl Region {
 
 fn d_unit_one() -> u32 {
     1
+}
+
+fn d_true() -> bool {
+    true
 }
 
 /// One step a caller can take against a board.
@@ -545,24 +434,20 @@ pub enum Cmd {
     //
     // Task item 6: `pcbnew.Array.createArray` (Ctrl+T) --
     // `pcbnew/tools/array_tool.cpp`'s `ARRAY_TOOL::CreateArray`.
-    /// `arrange: false` (the dialog's default, "Keep selection, Duplicate"):
-    /// create `geometry.size() - 1` new copies of each resolved id (a
-    /// track, via, zone, shape or text -- same scope `Cmd::Duplicate`
-    /// already has, and for the same reason: a footprint can't be
-    /// conjured up without a matching schematic symbol, and this model
-    /// has no group-of-a-group-of-copies concept). `arrange: true`
-    /// ("Arrange selection") instead repositions the given ids -- which
-    /// may include placed parts, since that only ever moves something
-    /// that already exists -- into the array's slots in the order given,
-    /// creating nothing; a group id is skipped either way (no
-    /// "move every member together" concept yet, see PARITY-pcb.md
-    /// section 16's own list of group gaps).
-    ///
-    /// Footprint reannotation (`ShouldReannotateFootprints`) and
-    /// footprint-editor pad numbering (`ShouldNumberItems`,
-    /// `ARRAY_PAD_NUMBER_PROVIDER`) are not ported -- see
-    /// `create_array`'s own doc.
-    CreateArray { ids: Vec<String>, geometry: ArrayGeometry, #[serde(default)] arrange: bool },
+    /// `pcbnew.Array.createArray` (Ctrl+T), `ARRAY_TOOL::CreateArray` -- see [`array`]. `arrange: false` (the dialog's default,
+    /// "Duplicate selection") makes a copy of the whole selection for every point of the array but one -- footprints, tracks, vias,
+    /// zones, graphics, text, dimensions and groups -- and moves the selection to the other. `arrange: true` ("Arrange selection") makes
+    /// nothing and puts the selected items, in the order given, on the points.
+    CreateArray {
+        ids: Vec<String>,
+        geometry: ArrayGeometry,
+        #[serde(default)]
+        arrange: bool,
+        /// "Assign unique reference designators" (the dialog's default, `ShouldReannotateFootprints`): each copy of a footprint takes the
+        /// next free number. False is "Keep original reference designators": the copies show the original's text.
+        #[serde(default = "d_true")]
+        reannotate: bool,
+    },
 
     // ------------------------------------------------------- dimensions
     //
@@ -1865,6 +1750,8 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => board.names_routed_part(ids),
             Cmd::Rip { part } => board.names_routed_part(std::slice::from_ref(part)),
+            // An array leaves the selection where it was or moves it to the first point: only a footprint with copper on its pads matters.
+            Cmd::CreateArray { ids, .. } => board.names_routed_part(&board.array_selection(ids)),
             other => other.clears_routing(),
         }
     }
@@ -2132,7 +2019,7 @@ impl<'a> Board<'a> {
             Cmd::AddToGroup { group_id, ids } => self.add_to_group(group_id, ids),
             Cmd::RemoveFromGroup { ids } => self.remove_from_group(ids),
             Cmd::EditGroup { id, name, member_ids } => self.edit_group(id, name, member_ids),
-            Cmd::CreateArray { ids, geometry, arrange } => self.create_array(ids, geometry, *arrange),
+            Cmd::CreateArray { ids, geometry, arrange, reannotate } => self.create_array(ids, geometry, *arrange, *reannotate),
             Cmd::AddDimension { dimension } => self.add_dimension(dimension.clone()),
             Cmd::DeleteDimension { id } => self.delete_dimension(id),
             Cmd::MoveDimension { id, dx, dy } => self.move_dimension(id, *dx, *dy),
@@ -3350,279 +3237,6 @@ impl<'a> Board<'a> {
         g.member_ids = members;
         prune_empty_groups(dr);
         Ok(())
-    }
-
-    // --------------------------------------------------------- arrays
-
-    /// `Cmd::CreateArray`. Validates the geometry the same way source's
-    /// own dialog does (`TransferDataFromWindow`'s zero-delta checks)
-    /// before touching anything, then hands off to whichever of the two
-    /// modes `arrange` names.
-    ///
-    /// Not ported: footprint reannotation (`ShouldReannotateFootprints`,
-    /// `BOARD_REANNOTATE_TOOL`) -- a placed part's id *is* its schematic
-    /// symbol's id (`FootprintInstance`'s own doc), so there is no
-    /// "assign a fresh unique reference" operation this model's ops layer
-    /// could perform without breaking that link, unlike upstream where a
-    /// footprint's reference is just another editable field. Footprint-
-    /// editor pad numbering (`ShouldNumberItems`, `ARRAY_PAD_NUMBER_
-    /// PROVIDER`, the `ARRAY_AXIS` numeric/hex/alphabetic schemes) is
-    /// also not ported -- that half of source's own dialog only ever
-    /// activates in the footprint editor (`enableArrayNumbering =
-    /// m_isFootprintEditor`), and this app's footprint editor has no
-    /// multi-pad array/selection tooling of its own to hang it on yet.
-    /// See PARITY-pcb.md section 17 for the full scope list.
-    fn create_array(&mut self, ids: &[String], geometry: &ArrayGeometry, arrange: bool) -> Result<(), Vec<CheckResult>> {
-        if ids.is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_array", "array", "no ids given")]);
-        }
-        match *geometry {
-            ArrayGeometry::Grid { nx, ny, dx, dy, .. } => {
-                if nx < 1 || ny < 1 {
-                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "a grid array needs at least one row and one column")]);
-                }
-                if nx > 1 && dx == 0 {
-                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "horizontal spacing of zero with more than one column")]);
-                }
-                if ny > 1 && dy == 0 {
-                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "vertical spacing of zero with more than one row")]);
-                }
-            }
-            ArrayGeometry::Circular { count, angle_millideg, .. } => {
-                if count < 1 {
-                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "a circular array needs at least one point")]);
-                }
-                if count > 1 && angle_millideg == 0 {
-                    return Err(vec![CheckResult::fail("ops_bad_array", "array", "angular delta of zero with more than one point")]);
-                }
-            }
-        }
-        let array_size = geometry.size();
-        if arrange {
-            self.arrange_into_array(ids, geometry, array_size)
-        } else {
-            self.duplicate_into_array(ids, geometry, array_size)
-        }
-    }
-
-    /// `ARRAY_TOOL::CreateArray`'s `ShouldArrangeSelection()` branch:
-    /// reposition the given ids, in order, into the array's own slots. An
-    /// id that names nothing arrayable (unknown, or a group -- no group-
-    /// aware move yet, PARITY-pcb.md section 16) is skipped *for free*:
-    /// it does not consume a slot, the same way source's own inner
-    /// `selectionIndex` cursor advances past a non-`BOARD_ITEM`/deduped-
-    /// footprint-child without advancing the outer `arrayIndex`. `ids`
-    /// may resolve to more or fewer real items than `array_size` --
-    /// extras past the last slot are left untouched, same as source's
-    /// own loop simply running out of slots. A part moves via the same
-    /// `set_pose` `Cmd::MoveExact` already uses.
-    fn arrange_into_array(&mut self, ids: &[String], geometry: &ArrayGeometry, array_size: i64) -> Result<(), Vec<CheckResult>> {
-        let mut n: i64 = 0;
-        let mut touched = false;
-        for id in ids {
-            if n >= array_size {
-                break;
-            }
-            if let Some(fp) = self.pose_of(id).cloned() {
-                let (new_pos, rot) = geometry.transform(n, fp.at);
-                let new_rot = if geometry.rotates_items() { (fp.rot as i64 + rot).rem_euclid(360_000) as u32 } else { fp.rot };
-                self.set_pose(id, new_pos, new_rot)?;
-                n += 1;
-                touched = true;
-                continue;
-            }
-            let mut matched = false;
-            if let Some(rt) = self.design.routing.as_mut() {
-                if let Some(t) = rt.tracks.iter_mut().find(|t| &t.id == id) {
-                    if let Some(first) = t.pts.first().copied() {
-                        let (dx, dy) = array_offset(geometry, n, first);
-                        for p in t.pts.iter_mut() {
-                            p.x += dx;
-                            p.y += dy;
-                        }
-                    }
-                    matched = true;
-                } else if let Some(v) = rt.vias.iter_mut().find(|v| &v.id == id) {
-                    v.at = geometry.transform(n, v.at).0;
-                    matched = true;
-                } else if let Some(z) = rt.zones.iter_mut().find(|z| &z.id == id) {
-                    if let Some(first) = z.outline.first().copied() {
-                        let (dx, dy) = array_offset(geometry, n, first);
-                        for p in z.outline.iter_mut() {
-                            p.x += dx;
-                            p.y += dy;
-                        }
-                    }
-                    matched = true;
-                }
-            }
-            if !matched {
-                if let Some(dr) = self.design.drawings.as_mut() {
-                    if let Some(s) = dr.shapes.iter_mut().find(|s| s.id() == id) {
-                        if let Some(first) = s.points().first().copied() {
-                            let (dx, dy) = array_offset(geometry, n, first);
-                            s.translate(dx, dy);
-                        }
-                        matched = true;
-                    } else if let Some(t) = dr.texts.iter_mut().find(|t| &t.id == id) {
-                        let (new_pos, rot) = geometry.transform(n, t.at);
-                        t.at = new_pos;
-                        if geometry.rotates_items() {
-                            t.angle = (t.angle as i64 + rot).rem_euclid(360_000) as u32;
-                        }
-                        matched = true;
-                    }
-                }
-            }
-            // An unknown id, or a group's own id, is skipped without
-            // advancing `n` -- it never reaches here having consumed a
-            // slot the way a stale id would if it fell through to a
-            // refusal instead.
-            if matched {
-                n += 1;
-                touched = true;
-            }
-        }
-        if !touched {
-            return Err(vec![CheckResult::fail(
-                "ops_unknown_array",
-                "array",
-                "none of the given ids name a placed part, track, via, zone, shape or text",
-            )]);
-        }
-        Ok(())
-    }
-
-    /// `ARRAY_TOOL::CreateArray`'s default (`ShouldArrangeSelection() ==
-    /// false`) branch: `array_size - 1` new copies of each resolved
-    /// track/via/zone/shape/text (never a part or a group -- same scope
-    /// `duplicate_items` already has, and for the same reason), plus the
-    /// original itself moved to the array's own last slot -- source's own
-    /// reverse loop transforms the original by index `arraySize - 1`
-    /// rather than leaving it untouched at slot 0, which matters once
-    /// `centred` is on (every slot, including the one the original ends
-    /// up at, shares the same centring offset).
-    fn duplicate_into_array(&mut self, ids: &[String], geometry: &ArrayGeometry, array_size: i64) -> Result<(), Vec<CheckResult>> {
-        let mut tracks = Vec::new();
-        let mut vias = Vec::new();
-        let mut zones = Vec::new();
-        if let Some(rt) = self.design.routing.as_ref() {
-            tracks.extend(rt.tracks.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
-            vias.extend(rt.vias.iter().filter(|v| ids.iter().any(|id| id == &v.id)).cloned());
-            zones.extend(rt.zones.iter().filter(|z| ids.iter().any(|id| id == &z.id)).cloned());
-        }
-        let mut shapes = Vec::new();
-        let mut texts = Vec::new();
-        if let Some(dr) = self.design.drawings.as_ref() {
-            shapes.extend(dr.shapes.iter().filter(|s| ids.iter().any(|id| id == s.id())).cloned());
-            texts.extend(dr.texts.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
-        }
-        if tracks.is_empty() && vias.is_empty() && zones.is_empty() && shapes.is_empty() && texts.is_empty() {
-            return Err(vec![CheckResult::fail(
-                "ops_unknown_array",
-                "array",
-                "none of the given ids name a track, via, zone, shape or text (footprints and groups cannot be arrayed this way)",
-            )]);
-        }
-
-        let mut new_tracks = Vec::new();
-        for t in &tracks {
-            let first = t.pts.first().copied().unwrap_or_default();
-            for n in 0..array_size - 1 {
-                let (dx, dy) = array_offset(geometry, n, first);
-                let mut c = t.clone();
-                for p in c.pts.iter_mut() {
-                    p.x += dx;
-                    p.y += dy;
-                }
-                new_tracks.push(c);
-            }
-        }
-        let mut new_vias = Vec::new();
-        for v in &vias {
-            for n in 0..array_size - 1 {
-                let mut c = v.clone();
-                c.at = geometry.transform(n, v.at).0;
-                new_vias.push(c);
-            }
-        }
-        let mut new_zones = Vec::new();
-        for z in &zones {
-            let first = z.outline.first().copied().unwrap_or_default();
-            for n in 0..array_size - 1 {
-                let (dx, dy) = array_offset(geometry, n, first);
-                let mut c = z.clone();
-                for p in c.outline.iter_mut() {
-                    p.x += dx;
-                    p.y += dy;
-                }
-                new_zones.push(c);
-            }
-        }
-        let mut new_shapes = Vec::new();
-        for s in &shapes {
-            let first = s.points().first().copied().unwrap_or_default();
-            for n in 0..array_size - 1 {
-                let (dx, dy) = array_offset(geometry, n, first);
-                let mut c = s.clone();
-                c.translate(dx, dy);
-                new_shapes.push(c);
-            }
-        }
-        let mut new_texts = Vec::new();
-        for t in &texts {
-            for n in 0..array_size - 1 {
-                let (new_pos, rot) = geometry.transform(n, t.at);
-                let mut c = t.clone();
-                c.at = new_pos;
-                if geometry.rotates_items() {
-                    c.angle = (c.angle as i64 + rot).rem_euclid(360_000) as u32;
-                }
-                new_texts.push(c);
-            }
-        }
-
-        let last = array_size - 1;
-        if let Some(rt) = self.design.routing.as_mut() {
-            for t in rt.tracks.iter_mut().filter(|t| ids.iter().any(|id| id == &t.id)) {
-                if let Some(first) = t.pts.first().copied() {
-                    let (dx, dy) = array_offset(geometry, last, first);
-                    for p in t.pts.iter_mut() {
-                        p.x += dx;
-                        p.y += dy;
-                    }
-                }
-            }
-            for v in rt.vias.iter_mut().filter(|v| ids.iter().any(|id| id == &v.id)) {
-                v.at = geometry.transform(last, v.at).0;
-            }
-            for z in rt.zones.iter_mut().filter(|z| ids.iter().any(|id| id == &z.id)) {
-                if let Some(first) = z.outline.first().copied() {
-                    let (dx, dy) = array_offset(geometry, last, first);
-                    for p in z.outline.iter_mut() {
-                        p.x += dx;
-                        p.y += dy;
-                    }
-                }
-            }
-        }
-        if let Some(dr) = self.design.drawings.as_mut() {
-            for s in dr.shapes.iter_mut().filter(|s| ids.iter().any(|id| id == s.id())) {
-                if let Some(first) = s.points().first().copied() {
-                    let (dx, dy) = array_offset(geometry, last, first);
-                    s.translate(dx, dy);
-                }
-            }
-            for t in dr.texts.iter_mut().filter(|t| ids.iter().any(|id| id == &t.id)) {
-                let (new_pos, rot) = geometry.transform(last, t.at);
-                t.at = new_pos;
-                if geometry.rotates_items() {
-                    t.angle = (t.angle as i64 + rot).rem_euclid(360_000) as u32;
-                }
-            }
-        }
-
-        self.insert_copies(new_tracks, new_vias, new_zones, new_shapes, new_texts)
     }
 
     // ----------------------------------------------------- dimensions
@@ -5423,18 +5037,6 @@ fn rotate_point_about(pt: Point, pivot: Point, angle_millideg: i64) -> Point {
     Point { x: pivot.x + (dx * cos - dy * sin).round() as Um, y: pivot.y + (dx * sin + dy * cos).round() as Um }
 }
 
-/// `geometry.transform(n, reference).0 - reference`, as a `(dx, dy)` to
-/// add to *every* point of a multi-point item (a track's `pts`, a zone's
-/// `outline`, or a `Shape` via its own `translate`) so the whole item
-/// moves rigidly using just one of its own points as the position
-/// `ArrayGeometry::transform` expects -- see `Cmd::CreateArray`'s own doc
-/// on why that's a pure translation, never a per-point rotation, for
-/// every kind but `Part`/`Text`.
-fn array_offset(geometry: &ArrayGeometry, n: i64, reference: Point) -> (Um, Um) {
-    let new_pos = geometry.transform(n, reference).0;
-    (new_pos.x - reference.x, new_pos.y - reference.y)
-}
-
 /// How far a `Place` will slide along the anchor before giving up.
 ///
 /// In snap steps, so 400 is 40mm at the default 100µm grid -- most of a
@@ -5466,6 +5068,8 @@ mod sch_control_tests;
 mod board_setup_tests;
 #[cfg(test)]
 mod pcb_transform_tests;
+#[cfg(test)]
+mod array_tests;
 #[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]
