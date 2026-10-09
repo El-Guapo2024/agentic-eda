@@ -491,6 +491,39 @@ mod tests {
     }
 
     #[test]
+    fn pin_texts_sit_where_the_studio_painter_has_them() {
+        // the same cases, with the same numbers, as web/studio/src/components/schematic/pinText.test.ts
+        let style = TextStyle::new(HJustify::Center, VJustify::Center);
+        let off = 990.6; // 0.2032 + 0.635 + 0.1524 mm
+        let near = |a: (f64, f64), x: f64, y: f64| assert!((a.0 - x).abs() < 0.2 && (a.1 - y).abs() < 0.2, "{a:?} is not ({x}, {y})");
+        let inside = PinTexts { names_hidden: false, numbers_hidden: false, name_offset_mm: 0.508 };
+        let outside = PinTexts { name_offset_mm: 0.0, ..inside };
+
+        // a pin running right: the name starts the offset past the inner end, the number is over the line
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Right, 2540.0, "VIN", &style, &inside);
+        assert!((name.x0 - (2540.0 + 508.0)).abs() < 0.2, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Right, 2540.0, "3", &style, false).center(), 1270.0, -off);
+        // running left, mirrored
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Left, 2540.0, "OUT", &style, &inside);
+        assert!((name.x1 - -(2540.0 + 508.0)).abs() < 0.2, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Left, 2540.0, "2", &style, false).center(), -1270.0, -off);
+        // running up: the name runs up from the inner end, the number is left of the line
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Up, 2540.0, "VDD", &style, &inside);
+        assert!((name.y1 - -(2540.0 + 508.0)).abs() < 0.2, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Up, 2540.0, "1", &style, false).center(), -off, -1270.0);
+        // running down
+        let name = pin_name_rect((0.0, 0.0), PinOrient::Down, 2540.0, "GND", &style, &inside);
+        assert!((name.y0 - (2540.0 + 508.0)).abs() < 0.2, "{name:?}");
+        near(pin_number_rect((0.0, 0.0), PinOrient::Down, 2540.0, "2", &style, false).center(), -off, 1270.0);
+
+        // names at offset zero are over the pin and the numbers under it
+        near(pin_name_rect((0.0, 0.0), PinOrient::Right, 2540.0, "IN", &style, &outside).center(), 1270.0, -off);
+        near(pin_number_rect((0.0, 0.0), PinOrient::Right, 2540.0, "1", &style, true).center(), 1270.0, off);
+        near(pin_name_rect((0.0, 0.0), PinOrient::Up, 2540.0, "IN", &style, &outside).center(), -off, -1270.0);
+        near(pin_number_rect((0.0, 0.0), PinOrient::Up, 2540.0, "1", &style, true).center(), off, -1270.0);
+    }
+
+    #[test]
     fn quarter_turns_compose_like_set_orientation() {
         let t = Xf::of_instance(90.0, None);
         // a point to the right of the origin goes up the sheet when the symbol is turned counter-clockwise

@@ -1331,6 +1331,12 @@ export type LibGraphic =
 export interface LibSymbol {
   graphics: LibGraphic[];
   pins: LibPin[];
+  /** `(pin_names (hide yes))`: no pin name of the symbol is shown. KiCad's default (and what a server that does not say means) is shown. */
+  pin_names_hidden?: boolean;
+  /** `(pin_numbers (hide yes))`: no pin number of the symbol is shown. */
+  pin_numbers_hidden?: boolean;
+  /** `(pin_names (offset x))`, mm: names are written inside the body, from the pin's inner end on, when it is above zero; over the pin line when it is zero. KiCad's default is 0.508 mm (20 mils). */
+  pin_name_offset?: Mm;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
