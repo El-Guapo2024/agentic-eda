@@ -149,13 +149,11 @@ style when they are 1 (and empty text fields), so no pin ever matched the unit b
 
 ## Known gaps (not fixed, scope-bounded)
 
-- DeMorgan alternate body style is authorable and exports correctly to
-  `.kicad_sym`, but `LibrarySymbol::to_engine_symbol` (the publish path)
-  drops style-2 items -- `crate::symbol::SymbolGraphic`/`LibPin` have no
-  `body_style` field at all, a pre-existing engine-level gap (confirmed:
-  the *existing* `.kicad_sym` reader already discards the style suffix
-  too). Authoring/export is real; a placed instance showing the alternate
-  style is not.
+- DeMorgan alternate body style: authorable, exported to `.kicad_sym`, and (since the schematic item 12 work) shown by a placed symbol.
+  `LibrarySymbol::to_engine_symbol` (the publish path) keeps the style-2 items as `LibSymbol::alternate` (shared items, `body_style` 0, are in
+  both bodies), the `.kicad_sym` reader splits `Name_<unit>_<style>` sub-blocks the same way, and a placed symbol in style 2 (`SchExtras::
+  body_styles`, Cycle Body Style) draws, exports and connects by that body (`PARITY-sch.md` section 1). Left: only the normal and the De Morgan
+  pair are modelled (no named body styles), and the symbol chooser's preview shows the normal style.
 - No "Alternate pin function definitions" (KiCad's per-pin extra name/
   type/shape the same physical pin can switch between).
 - No dedicated Shape Properties dialog for symbol graphics (move/delete

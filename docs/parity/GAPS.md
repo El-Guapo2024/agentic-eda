@@ -63,9 +63,9 @@ New (the residual of #1). **Mostly done (2026-10-08).** Hit: every schematic ses
   (each verb is one undo step; the nets are untouched), a stroke round trip through a `.kicad_sch`, and 19 `node --test` cases; clicked through on a copy of mcu30
   (wire segment drag with bends, held R during a move, rotate and mirror of five kinds together and Undo, Align Left, Align to Grid, each Properties dialog).
 - Missing: the net-collision overlay of a drag (`sch_drag_net_collision.cpp`); `AutoRotateItem` after a label lands; a text has no justification to flip
-  when it is mirrored; fonts, bold, italic and colours of text and labels, a sheet's border and fill, extra fields and a label's fields have no place in the
-  IR, so their dialog pages are absent; sheet pins cannot be selected one by one; a power symbol has no Properties dialog; the `.kicad_sch` writer still
-  writes every label at angle 0, so a label's spin is not in the file yet; symbols that this project drew (not imported) and are turned or mirrored place
+  when it is mirrored; fonts and colours of text and labels (a label's size, bold and italic are in: item 12), a sheet's border and fill, extra fields and a
+  label's fields have no place in the IR, so their dialog pages are absent; sheet pins cannot be selected one by one; a power symbol has no Properties dialog (its Value is edited in Field
+  Properties); symbols that this project drew (not imported) and are turned or mirrored place
   their pins by `eda_engine::placed`, which disagrees with the drawn symbol for 90-degree and mirrored ones (older; the move tools use what is drawn).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
@@ -225,17 +225,33 @@ New (the UI half of old #19). **Mostly closed on 2026-10-08.** Hit: every review
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `common/dialogs/panel_setup_severities.cpp`, `eeschema/dialogs/dialog_schematic_setup.cpp`, `common/rc_item.cpp`.
 
 ### 12. Schematic symbols, fields and labels carry no per-instance geometry
-New. **Partial** (fields done, labels not). Hit: every schematic cleanup. Blocks: no. WP1, size M.
+New. **Done (2026-10-09)**, limits below. Hit: every schematic cleanup. Blocks: no. WP1, size M.
 - Done (2026-10-08, `PARITY-sch.md` section 15): the Reference, Value, Footprint and Datasheet of every symbol, the Value of a power
   symbol and the name and file of a sheet each have a position, an orientation, a justification and a visibility of their own
   (`SchematicSection::field_layout`, keyed by the item, in the item's own frame so a move, a turn or a mirror carries them), placed
   by a port of Autoplace Fields (`eeschema/autoplace_fields.cpp`, `crates/engine/src/fields.rs`) and moved to another side or further
   out where they would run over what is drawn; the `.kicad_sch` writer writes them, `GET /api/schematic` sends them (`fields`) and the
   painter draws them there. Generated symbols (`gen:<ref>`) draw their pins and texts the way KiCad's own do.
-- Missing: no editing of a field's place (no Move Field, no Properties text-placement fields, no Autoplace Fields command in the editor: the engine has the port, the action `eeschema.InteractiveEdit.autoplaceFields` is not wired to it), size or bold/italic; none of the above for a label (`NetLabel` is net, point and kind; its spin is read off the
-  wire), so no label rotation, size, justification or shape; DNP and exclusion flags (the schematic-control agent is adding some, so
-  take its IR fields); an alternate body style cannot show on a placed symbol (`to_engine_symbol` drops style 2); pins cannot be
-  selected (Swap Pins, pin-level highlight).
+- Done (2026-10-09, `PARITY-sch.md` sections 1 and 15): fields are items of their own. Each is picked (a click, a box), moved (`M`, a drag),
+  turned and mirrored, hidden with Delete and edited in Field Properties (text, position, size, orientation, bold, italic, justification,
+  visible, shown name, allow autoplacement; one undo step), and moving one on its own takes its item out of the autoplaced ones
+  (`SchExtras::fields_autoplaced`, `(fields_autoplaced yes)` in the file); Symbol Properties has a Show check for each of the four fields and
+  Show Hidden Fields draws the hidden ones (neither is selectable, as in KiCad). `eeschema.InteractiveEdit.autoplaceFields` runs the manual
+  Autoplace Fields (`AUTOPLACE_MANUAL`: the colliding-side and fit-between-wires search, the 10 mm drawable area) on the selection, and a
+  turn of a symbol alone places its autoplaced fields again (`AUTOPLACE_AUTO`). A label's spin, size, bold and italic are stored
+  (`SchExtras::label_spins`, `label_looks`), edited in Label Properties, written the way KiCad writes them (angle and justification) and
+  read back from a `.kicad_sch`. A placed symbol in the alternate ("De Morgan") body style is drawn and written in it: the library symbol
+  keeps both bodies (`LibSymbol::alternate`, `Name_<unit>_2` sub-blocks), `SchExtras::body_styles` says which style a symbol is in,
+  Cycle Body Style (`eeschema.InteractiveEdit.toggleDeMorgan`, `SchCmd::SetBodyStyle`) changes it and kicad-cli reads the pins of that style
+  where the file puts them (`crates/kicad/tests/sch_body_style.rs`). Measured: 44 Rust tests (26 for the fields, 5 for the label geometry, one
+  of them through KiCad's own writer, 13 for the body styles, one of them through kicad-cli's netlist and one reading KiCad's own De Morgan QA file), 17 `node --test` cases, the overlap
+  sweep unchanged, and the studio's fields, labels, Cycle Body Style and the Symbol Properties dialog clicked through on a copy of mcu30.
+- Missing: a field's font face and colour, a free text's justification, a label's own fields (netclass, intersheet references) and a
+  user-defined field's place on the sheet have no place in the IR; the fields of a symbol read from a KiCad file are not items (the
+  importer keeps KiCad's origin, the fields keep theirs in the file); the fields' preference `m_AutoplaceFields.enable` is always on;
+  Reorganize into Module Sheets lays the sheets out again and loses the stored places of fields, label spins and looks, and body styles;
+  only the normal and the De Morgan body style are modelled (a symbol with named body styles draws its first two) and the symbol
+  chooser always places in the normal style; pins cannot be selected (Swap Pins, pin-level highlight).
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`,
   `dialog_symbol_properties.cpp`.
 
