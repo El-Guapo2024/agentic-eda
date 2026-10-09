@@ -22,8 +22,8 @@ use eda_model::{ConstraintModel, Footprint, Part};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 // ----------------------------------------------------------------------- where the models are
 
@@ -234,6 +234,8 @@ pub struct Store {
     /// How long the worker waits for more requests before it converts what it has: the page asks for every model of the board at once.
     gather: Duration,
     inner: Mutex<Inner>,
+    /// Signalled when a batch has been converted (or has failed): what a request that waits for its model sleeps on.
+    settled: Condvar,
 }
 
 /// The most models one kicad-cli run converts: it loads them all at once.
@@ -245,7 +247,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 
 impl Store {
     pub fn new(cache_dir: PathBuf, convert: Converter, gather: Duration) -> Arc<Store> {
-        Arc::new(Store { cache_dir, convert, gather, inner: Mutex::new(Inner::default()) })
+        Arc::new(Store { cache_dir, convert, gather, inner: Mutex::new(Inner::default()), settled: Condvar::new() })
     }
 
     /// Where the converted file of `step` is kept: named after the model, and after the file's path, size and modification time, so a model that changes on
@@ -284,6 +286,23 @@ impl Store {
             }
         }
         Ask::Pending
+    }
+
+    /// Sleeps until the conversion of `step` is over -- it is in the cache or has failed -- or `timeout` has passed. A model that nobody asked for is not waited for.
+    /// What a request for a model that is not there yet does on its own thread, so the page needs no timer to learn that the model is in.
+    pub fn wait(&self, step: &Path, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        let mut inner = lock(&self.inner);
+        loop {
+            if !matches!(inner.state.get(step), Some(Entry::Queued | Entry::Running)) {
+                return;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return;
+            }
+            inner = self.settled.wait_timeout(inner, left).map(|(g, _)| g).unwrap_or_else(|e| e.into_inner().0);
+        }
     }
 
     /// Converts what is queued, a batch at a time, until nothing is.
@@ -326,6 +345,8 @@ impl Store {
                     Err(e) => Entry::Failed(e),
                 });
             }
+            drop(inner);
+            self.settled.notify_all();
         }
     }
 
@@ -432,11 +453,26 @@ fn file_reply(path: &Path) -> Reply {
 ///   - `404 {"status":"missing"}`: the name finds no model; `403 {"status":"forbidden"}`: it finds a file this route may not serve (nothing is read);
 ///     `400`: no usable name.
 pub fn reply(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
-    reply_with(dir, target, store, &models_dir(), &|v| std::env::var(v).ok())
+    reply_with(dir, target, store, &models_dir(), &|v| std::env::var(v).ok(), None)
 }
 
-/// [`reply`] with the model library and the environment given (the tests').
-pub fn reply_with(dir: &Path, target: &str, store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>) -> Reply {
+/// How long a request with `wait=1` is held for its model: the page asks again after this (a conversion that long is a conversion that is stuck, or a queue of
+/// big models). Long enough that the page almost never asks twice, short enough that a closed tab does not leave a thread sleeping for a minute.
+pub const WAIT_FOR_MODEL: Duration = Duration::from_secs(25);
+
+/// Whether `target` asks to be held until its model is ready (`&wait=1`): the studio then answers on a thread of its own ([`reply_waiting`]), not on the request loop.
+pub fn wants_wait(target: &str) -> bool {
+    target.split_once('?').is_some_and(|(_, q)| q.split('&').any(|kv| kv == "wait=1"))
+}
+
+/// [`reply`] for a request that waits: a STEP model still being converted is waited for (up to [`WAIT_FOR_MODEL`]) and then answered, so one request per model is
+/// all the page sends and the answer comes the moment the model is in. Blocks its thread: not for the request loop.
+pub fn reply_waiting(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
+    reply_with(dir, target, store, &models_dir(), &|v| std::env::var(v).ok(), Some(WAIT_FOR_MODEL))
+}
+
+/// [`reply`] with the model library and the environment given (the tests'), and how long to wait for a model that is being converted (`None`: not at all).
+pub fn reply_with(dir: &Path, target: &str, store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>, wait: Option<Duration>) -> Reply {
     let query = target.split_once('?').map_or("", |(_, q)| q);
     let value = |key: &str| query.split('&').find_map(|kv| kv.strip_prefix(key).and_then(|v| v.strip_prefix('=')));
     let Some(name) = value("name").and_then(percent_decode) else {
@@ -449,12 +485,48 @@ pub fn reply_with(dir: &Path, target: &str, store: &Arc<Store>, models: &Path, e
         Err(Reject::NotFound) => json_reply("404 Not Found", json!({ "status": "missing", "error": format!("no 3D model file for {name}") })),
         Err(Reject::Forbidden(why)) => json_reply("403 Forbidden", json!({ "status": "forbidden", "error": why })),
         Ok(Resolved { path, format: Format::Vrml }) => file_reply(&path),
-        Ok(Resolved { path, format: Format::Step }) => match store.ask(&path, retry) {
-            Ask::Ready(vrml) => file_reply(&vrml),
-            Ask::Pending => json_reply("202 Accepted", json!({ "status": "pending" })),
-            Ask::Failed(error) => json_reply("200 OK", json!({ "status": "failed", "error": error })),
-        },
+        Ok(Resolved { path, format: Format::Step }) => {
+            let mut asked = store.ask(&path, retry);
+            if let (Ask::Pending, Some(limit)) = (&asked, wait) {
+                store.wait(&path, limit);
+                asked = store.ask(&path, false);
+            }
+            match asked {
+                Ask::Ready(vrml) => file_reply(&vrml),
+                Ask::Pending => json_reply("202 Accepted", json!({ "status": "pending" })),
+                Ask::Failed(error) => json_reply("200 OK", json!({ "status": "failed", "error": error })),
+            }
+        }
     }
+}
+
+/// The most model names one `prepare` request may carry: a board has a few dozen distinct packages, a big one a few hundred.
+const MAX_PREPARE: usize = 1024;
+
+/// `POST /api/3dmodel/prepare {"names": [<model path>, ..]}`: queues the conversion of every STEP model among them that is not in the cache yet, all at once, and answers
+/// at once with how many of the names are in each state. The page sends it with every model of the board before it asks for the first, so they are converted in one
+/// kicad-cli run and not in the runs the browser's own pace of asking would make. Names that resolve to nothing, or to a file this route may not serve, are counted
+/// as missing and not read.
+pub fn prepare(dir: &Path, body: &[u8], store: &Arc<Store>) -> Value {
+    prepare_with(dir, body, store, &models_dir(), &|v| std::env::var(v).ok())
+}
+
+pub fn prepare_with(dir: &Path, body: &[u8], store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>) -> Value {
+    let names: Vec<String> = serde_json::from_slice::<Value>(body).ok().and_then(|v| v["names"].as_array().map(|a| a.iter().filter_map(|n| n.as_str().map(String::from)).collect())).unwrap_or_default();
+    let roots = Roots { models: models.to_path_buf(), project: dir.to_path_buf() };
+    let (mut ready, mut pending, mut failed, mut missing) = (0, 0, 0, 0);
+    for name in names.iter().take(MAX_PREPARE) {
+        match resolve(name, &roots, env) {
+            Ok(Resolved { format: Format::Vrml, .. }) => ready += 1,
+            Ok(Resolved { path, format: Format::Step }) => match store.ask(&path, false) {
+                Ask::Ready(_) => ready += 1,
+                Ask::Pending => pending += 1,
+                Ask::Failed(_) => failed += 1,
+            },
+            Err(_) => missing += 1,
+        }
+    }
+    json!({ "ready": ready, "pending": pending, "failed": failed, "missing": missing })
 }
 
 // ------------------------------------------------------------------------ the parts' models
@@ -574,7 +646,7 @@ mod tests {
         let t = Tree::new("route");
         let store = Store::new(t.root.join("cache"), Arc::new(|b: &[PathBuf]| b.iter().map(|_| Err("no converter".to_string())).collect()), Duration::from_millis(1));
         let (models, project) = (t.root.join("models"), t.root.join("project"));
-        let get = |target: &str| reply_with(&project, target, &store, &models, &no_env);
+        let get = |target: &str| reply_with(&project, target, &store, &models, &no_env, None);
         let enc = |s: &str| s.replace('%', "%25").replace('{', "%7B").replace('}', "%7D").replace('/', "%2F").replace(' ', "%20");
 
         let ok = get(&format!("/api/3dmodel?name={}", enc("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/a.wrl")));
@@ -691,6 +763,62 @@ mod tests {
         assert_eq!(store.ask(&b2, false), Ask::Pending);
         assert!(matches!(wait_for(&store, &b1), Ask::Ready(_)) && matches!(wait_for(&store, &b2), Ask::Ready(_)));
         assert_eq!(*runs.lock().unwrap(), vec![1, 1]);
+    }
+
+    fn delayed(inner: Converter, delay: Duration) -> Converter {
+        Arc::new(move |batch: &[PathBuf]| {
+            std::thread::sleep(delay);
+            inner(batch)
+        })
+    }
+
+    /// The page sends every model of the board in one `prepare` (one kicad-cli run converts them), then one request per model that waits for it on a thread of its
+    /// own: the answer comes when the model is in, with no polling and so no timer in the page.
+    #[test]
+    fn prepare_queues_a_boards_models_together_and_a_waiting_request_is_answered_when_its_model_is_in() {
+        let t = Tree::new("wait");
+        let runs = Arc::new(Mutex::new(Vec::new()));
+        let store = Store::new(t.root.join("cache"), delayed(counting_converter(t.root.join("work"), runs.clone()), Duration::from_millis(250)), Duration::from_millis(40));
+        let (models, project) = (t.root.join("models"), t.root.join("project"));
+        let body = json!({ "names": [
+            "${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.step",
+            "${KICAD10_3DMODEL_DIR}/Lib.3dshapes/C-d e.step",
+            "${KICAD10_3DMODEL_DIR}/Lib.3dshapes/a.wrl",
+            "${KICAD10_3DMODEL_DIR}/../outside/secret.wrl",
+            "nothing.step"
+        ] })
+        .to_string();
+        let got = prepare_with(&project, body.as_bytes(), &store, &models, &no_env);
+        assert_eq!(got, json!({ "ready": 1, "pending": 2, "failed": 0, "missing": 2 }), "a VRML is ready; two STEPs are queued; an escape and an unknown name are missing and not read");
+        assert_eq!(prepare_with(&project, b"not json", &store, &models, &no_env), json!({ "ready": 0, "pending": 0, "failed": 0, "missing": 0 }));
+
+        let enc = |s: &str| s.replace('{', "%7B").replace('}', "%7D").replace('/', "%2F").replace(' ', "%20");
+        let started = Instant::now();
+        let target = format!("/api/3dmodel?name={}&wait=1", enc("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.step"));
+        let r = reply_with(&project, &target, &store, &models, &no_env, Some(Duration::from_secs(20)));
+        assert_eq!((r.status, r.kind), ("200 OK", "model/vrml"), "{}", String::from_utf8_lossy(&r.body));
+        assert!(r.body.starts_with(b"#VRML V2.0 utf8") && started.elapsed() >= Duration::from_millis(200), "held until the conversion was over: {:?}", started.elapsed());
+        let r2 = reply_with(&project, &format!("/api/3dmodel?name={}&wait=1", enc("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/C-d e.step")), &store, &models, &no_env, Some(Duration::from_secs(20)));
+        assert_eq!(r2.status, "200 OK");
+        assert_eq!(*runs.lock().unwrap(), vec![2], "the two prepared models were one run");
+
+        // A wait that runs out answers pending: the page asks again.
+        std::fs::write(t.root.join("models/Lib.3dshapes/slow.step"), "x").unwrap();
+        let slow = format!("/api/3dmodel?name={}&wait=1", enc("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/slow.step"));
+        let short = reply_with(&project, &slow, &store, &models, &no_env, Some(Duration::from_millis(20)));
+        assert_eq!(short.status, "202 Accepted", "{}", String::from_utf8_lossy(&short.body));
+        let long = reply_with(&project, &slow, &store, &models, &no_env, Some(Duration::from_secs(20)));
+        assert_eq!(long.status, "200 OK");
+    }
+
+    #[test]
+    fn only_wait_equals_one_holds_a_request() {
+        assert!(wants_wait("/api/3dmodel?name=a&wait=1"));
+        assert!(wants_wait("/api/3dmodel?wait=1&name=a"));
+        assert!(!wants_wait("/api/3dmodel?name=a"));
+        assert!(!wants_wait("/api/3dmodel?name=a&wait=0"));
+        assert!(!wants_wait("/api/3dmodel?name=wait%3D1"));
+        assert!(!wants_wait("/api/3dmodel"));
     }
 
     #[test]

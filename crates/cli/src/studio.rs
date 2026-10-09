@@ -512,9 +512,26 @@ fn handle(
         // One footprint 3D model, read-only, for the 3D view's VRMLLoader: resolved like KiCad does and held to an allow-list; a STEP model is converted to
         // VRML by kicad-cli in the background and cached (crates/cli/src/model3d_api.rs).
         ("GET", "/api/3dmodel") => {
-            let r = crate::model3d_api::reply(dir, target, &crate::model3d_api::store(lane));
-            respond(stream, r.status, r.kind, &r.body)
+            let store = crate::model3d_api::store(lane);
+            if crate::model3d_api::wants_wait(target) {
+                // `&wait=1`: held until the model is converted, on a thread of its own so the loop goes on (the same hand-off `offload` makes).
+                let mut out = stream.try_clone().map_err(|e| e.to_string())?;
+                let (dir, target) = (dir.to_path_buf(), target.to_string());
+                std::thread::Builder::new()
+                    .name("3dmodel-wait".into())
+                    .spawn(move || {
+                        let r = crate::model3d_api::reply_waiting(&dir, &target, &store);
+                        let _ = respond(&mut out, r.status, r.kind, &r.body);
+                    })
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            } else {
+                let r = crate::model3d_api::reply(dir, target, &store);
+                respond(stream, r.status, r.kind, &r.body)
+            }
         }
+        // Every model of the board at once, queued for one conversion run (crates/cli/src/model3d_api.rs `prepare`).
+        ("POST", "/api/3dmodel/prepare") => respond(stream, "200 OK", "application/json", crate::model3d_api::prepare(dir, &body, &crate::model3d_api::store(lane)).to_string().as_bytes()),
         ("GET", "/api/schematic") => {
             // `?sheet=<id>/<id>/...`: a `/`-joined path of `SheetInstance::id`s
             // from the root down to whichever sheet the Hierarchy panel has
