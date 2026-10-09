@@ -240,7 +240,8 @@ impl Board<'_> {
     }
 
     /// Every item `ids` names. A group stands for the items below it, nested groups opened (`PCB_GROUP::Move`/`Rotate`/`Flip`
-    /// act on each child, `RECURSE`); an id that is not on the board refuses the whole command, so nothing is half applied.
+    /// hand the move to each member, and a member that is a group hands it on); an id that is not on the board refuses the whole
+    /// command, so nothing is half applied.
     fn resolve_targets(&self, verb: &str, ids: &[String]) -> Result<Targets, Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_transform", verb, "no items given")]);
