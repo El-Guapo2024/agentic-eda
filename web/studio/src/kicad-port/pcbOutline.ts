@@ -6,6 +6,11 @@
 // rectangles, circles and polygons are loops by themselves. When the Edge.Cuts
 // graphics form no closed loop the board's own outline polygon is used (the
 // studio keeps the placement outline apart from drawn Edge.Cuts shapes).
+//
+// The backend builds the same thing with the real port (`outline_polys`:
+// `eda_drc::outline`, arcs flattened at KiCad's error, cutouts as holes,
+// malformed outlines reported); `boardOutlinePolygons` / `boardOutlineRings`
+// take it when it is there, and this file's own chaining is the fallback.
 
 import type { BoardState, Shape } from "../api/types";
 import { tessellateArc } from "./trackArc";
@@ -66,8 +71,28 @@ export function chainClosedRings(lines: readonly P[][], eps = 1): P[][] {
   return rings;
 }
 
-/** The board's outline loops: the Edge.Cuts graphics when they close, else the board outline polygon. */
-export function boardOutlineRings(board: Pick<BoardState, "outline" | "drawings">): P[][] {
+/** One outline of the board with its cutouts. */
+export interface OutlinePolygon {
+  outer: P[];
+  holes: P[][];
+}
+
+/**
+ * The board's outlines with their cutouts, as KiCad builds them from Edge.Cuts (`BOARD::GetBoardPolygonOutlines`): the backend does the
+ * chaining (`crates/drc/src/outline.rs`, `ConvertOutlineToPolygon`) and sends the result as `outline_polys`; this is the one function a
+ * consumer reads it through -- the 3D board body, the canvas fit, the dogbone sweep -- so they all see the same outline. Without it (an older
+ * backend, a board state built by hand) the single `outline` polygon is the board.
+ */
+export function boardOutlinePolygons(board: Pick<BoardState, "outline" | "outline_polys">): OutlinePolygon[] {
+  const polys = board.outline_polys;
+  if (polys && polys.length > 0) return polys.map((p) => ({ outer: p.outer.map((q): P => [q[0], q[1]]), holes: p.holes.map((h) => h.map((q): P => [q[0], q[1]])) }));
+  if (board.outline && board.outline.length >= 3) return [{ outer: board.outline.map((p): P => [p[0], p[1]]), holes: [] }];
+  return [];
+}
+
+/** The board's outline loops, outer ones and cutouts alike: the backend's outline when it sent one, else the Edge.Cuts graphics when they close, else the board outline polygon. */
+export function boardOutlineRings(board: Pick<BoardState, "outline" | "drawings"> & Partial<Pick<BoardState, "outline_polys">>): P[][] {
+  if (board.outline_polys && board.outline_polys.length > 0) return board.outline_polys.flatMap((p) => [p.outer, ...p.holes].map((r) => r.map((q): P => [q[0], q[1]])));
   const edge = (board.drawings?.shapes ?? []).filter((s) => s.layer === "Edge.Cuts");
   const rings: P[][] = [];
   for (const s of edge) {

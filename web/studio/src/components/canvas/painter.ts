@@ -1128,12 +1128,13 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   const byLayer: Record<string, () => void> = {
     grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]),
     // The drawing sheet and the board area shadow lie under everything else, the outline on top of them.
+    // When the Edge.Cuts shapes are the outline (arcs, circles, cutouts), they are drawn as the shapes they are, below; the polygon is only their summary.
     background: () => {
       drawSheet(ctx, view, opts);
       drawBoardArea(ctx, board, opts);
       // Edge.Cuts is a layer like the others (the Layers tab and the presets switch it); in high contrast it is neither dimmed away nor hidden, only pushed back
       // -- "Graphics on Edge_Cuts layer are not fully dimmed or hidden because they are useful when working on another layer" (`dim_factor_Edge_Cuts`, at least 0.3).
-      if (layerIsVisible(opts.layerVisible, "Edge.Cuts")) withAlpha(ctx, opts.highContrast && opts.activeLayer && opts.activeLayer !== "board_edge" ? 0.3 : 1, () => drawOutline(ctx, view, board.outline));
+      if (layerIsVisible(opts.layerVisible, "Edge.Cuts")) withAlpha(ctx, opts.highContrast && opts.activeLayer && opts.activeLayer !== "board_edge" ? 0.3 : 1, () => drawOutline(ctx, view, board.outline_is_shapes ? null : board.outline));
     },
     ...Object.fromEntries(Object.keys(copper(board)).map((key) => [key, () => copperPasses.forEach((pass) => withAlpha(ctx, pass.alpha, () => pass.layers[key]?.()))])),
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw

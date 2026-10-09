@@ -55,6 +55,7 @@ import type { BoardState, BoardText, Part, Shape, Side } from "../../api/types";
 import { layerColor } from "../canvas/layers";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { boardOutlinePolygons } from "../../kicad-port/pcbOutline";
 import { fallbackBodyHeightMm, partBodyBoxUm } from "../../kicad-port/partBody";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 
@@ -311,6 +312,30 @@ function buildOutlineShape(outlineMm: ReadonlyArray<[number, number]>): THREE.Sh
   if (outlineMm.length < 3) return null;
   if (Math.abs(polygonAreaMm2(outlineMm)) < 1e-6) return null;
   return new THREE.Shape(outlineMm.map(([x, y]) => new THREE.Vector2(x, y)));
+}
+
+/**
+ * One `THREE.Shape` per outline of the board, its cutouts as holes: the outline the way KiCad builds it from Edge.Cuts
+ * (`kicad-port/pcbOutline.ts` `boardOutlinePolygons`: arcs flattened, cutouts and several outlines kept), so the slab and the mask
+ * have the board's holes and each separate piece, not only the first polygon.
+ */
+function buildOutlineShapes(board: BoardState): THREE.Shape[] {
+  const out: THREE.Shape[] = [];
+  for (const poly of boardOutlinePolygons(board)) {
+    const outer: Array<[number, number]> = poly.outer.map(([x, y]) => [mm(x), mm(y)]);
+    const shape = buildOutlineShape(outer);
+    if (!shape) continue;
+    const outerSign = Math.sign(polygonAreaMm2(outer));
+    for (const hole of poly.holes) {
+      const pts: Array<[number, number]> = hole.map(([x, y]) => [mm(x), mm(y)]);
+      if (pts.length < 3 || Math.abs(polygonAreaMm2(pts)) < 1e-6) continue;
+      // A hole winds the other way round from its outline.
+      if (Math.sign(polygonAreaMm2(pts)) === outerSign) pts.reverse();
+      shape.holes.push(new THREE.Path(pts.map(([x, y]) => new THREE.Vector2(x, y))));
+    }
+    out.push(shape);
+  }
+  return out;
 }
 
 /**
@@ -855,9 +880,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   const group = new THREE.Group();
   group.name = "viewer3d-board";
 
-  const outlineMm: Array<[number, number]> = (board.outline ?? []).map(([x, y]) => [mm(x), mm(y)]);
-  const shape = buildOutlineShape(outlineMm);
-  if (shape) {
+  for (const shape of buildOutlineShapes(board)) {
     if (showBoardBody) {
       const slab = buildSlab(shape);
       if (slab) group.add(slab);
@@ -1016,21 +1039,23 @@ export interface OutlineBounds {
   maxZ: number;
 }
 
-/** Board-space (mm, world X/Z) bounds of `board.outline` alone -- null when there's no usable outline. Cheap on purpose: computed on every board update just to decide whether the camera needs re-fitting, without building the full Three.js group first. */
+/** Board-space (mm, world X/Z) bounds of the board's outlines alone -- null when there's no usable outline. Cheap on purpose: computed on every board update just to decide whether the camera needs re-fitting, without building the full Three.js group first. */
 export function boardOutlineBounds(board: BoardState): OutlineBounds | null {
-  const outline = board.outline;
-  if (!outline || outline.length < 3) return null;
   let minX = Infinity;
   let minZ = Infinity;
   let maxX = -Infinity;
   let maxZ = -Infinity;
-  for (const [x, y] of outline) {
-    const mx = mm(x);
-    const mz = mm(y);
-    if (mx < minX) minX = mx;
-    if (mz < minZ) minZ = mz;
-    if (mx > maxX) maxX = mx;
-    if (mz > maxZ) maxZ = mz;
+  // Every outline of the board (a cutout is inside its outline, so only the outer rings count).
+  for (const poly of boardOutlinePolygons(board)) {
+    for (const [x, y] of poly.outer) {
+      const mx = mm(x);
+      const mz = mm(y);
+      if (mx < minX) minX = mx;
+      if (mz < minZ) minZ = mz;
+      if (mx > maxX) maxX = mx;
+      if (mz > maxZ) maxZ = mz;
+    }
   }
+  if (!Number.isFinite(minX)) return null;
   return { minX, minZ, maxX, maxZ };
 }

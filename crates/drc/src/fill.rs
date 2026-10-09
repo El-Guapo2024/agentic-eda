@@ -23,7 +23,7 @@ use eda_model::ir::{Point, Zone};
 use eda_model::BoardRules;
 use eda_shape_poly_set::ShapePolySet;
 use eda_zone_filler::shape::Shape as FillShape;
-use eda_zone_filler::{FillInput, FillKeepout, FillPad, FillTrack, FillVia, PadGeometry, DEFAULT_MAX_ERROR};
+use eda_zone_filler::{FillEdge, FillInput, FillKeepout, FillPad, FillTrack, FillVia, PadGeometry, DEFAULT_MAX_ERROR};
 use std::collections::HashMap;
 
 #[inline]
@@ -105,7 +105,17 @@ impl FillResults {
 /// down and knocked out by each other's copper, islands removed by connectivity, lower-priority zones refilled when a
 /// zone above them loses islands.
 pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
-    let board_outline: Option<Vec<Point64>> = if board.outline.len() >= 3 { Some(board.outline.iter().map(|&p| pt(p)).collect()) } else { None };
+    // `BOARD::GetBoardPolygonOutlines( m_boardOutline, true )` and the Edge.Cuts items the edge clearance is kept from.
+    let board_outline = (!board.board_outline.polys.is_empty()).then(|| board.board_outline.polys.clone());
+    let board_outline_invalid = !board.board_outline.valid;
+    let edge_cuts: Vec<FillEdge> = board
+        .edge_cuts
+        .iter()
+        .flat_map(|s| {
+            let filled = s.is_filled();
+            eda_model::outline::shape_chains(s, eda_model::outline::MAX_ERROR_UM as f64).into_iter().map(move |c| FillEdge { pts: c.pts.iter().map(|&p| pt(p)).collect(), closed: c.closed, filled })
+        })
+        .collect();
 
     let pads: Vec<FillPad> = board.pads.iter().map(fill_pad).collect();
     // An arc knocks out its true curve: one `FillTrack` per chord of its
@@ -144,6 +154,8 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
         vias,
         other_zones: Vec::new(),
         board_outline,
+        board_outline_invalid,
+        edge_cuts,
         keepouts,
         hole_clearance: crate::constraints::hole_clearance_min(rules),
         worst_clearance,

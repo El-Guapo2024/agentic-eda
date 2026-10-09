@@ -32,24 +32,25 @@
 //! - **Footprint-level zones**: imported as zones tagged with `parent_footprint`.
 //!   Board-level zones (pours, teardrops, rule areas) are imported by
 //!   [`import_zones`]; their stored fills are not read, fills are derived.
-//! - **Board-edge arcs**: KiCad's `(gr_arc ...)` on Edge.Cuts has no
-//!   analogue in our polyline-only `outline`; it is tessellated into short
-//!   straight segments (see [`eda_model::ir::tessellate_arc`]), counted in
-//!   [`ImportNotes::track_arcs_approximated`]. Exact at the sampled points,
-//!   not bit-identical on re-export. A track `(arc ...)` is kept as an arc
-//!   ([`eda_model::ir::Track::new_arc`], counted in
-//!   [`ImportNotes::track_arcs_kept`], and written back as an arc), and a
-//!   board-level `gr_arc` *not* on Edge.Cuts becomes a
-//!   [`eda_model::ir::Shape::Arc`], exactly (KiCad's own three-point arc
-//!   storage is our `Arc`'s storage too).
+//! - **The board outline** (Edge.Cuts) is built the way KiCad builds it (`eda_drc::outline`:
+//!   `ConvertOutlineToPolygon`). A board whose Edge.Cuts are lines that chain into one closed loop gets
+//!   that loop as `placement.outline`, as before. Anything else -- arcs, circles, rectangles, polygons,
+//!   curves, cutouts, several loops, an outline that does not close -- stays what it is: every item is a
+//!   [`eda_model::ir::Shape`] on layer `Edge.Cuts` ([`eda_model::ir::DrawingsSection::outline_is_shapes`]),
+//!   the writer emits the same shapes, and `placement.outline` is only the summary of the outline they
+//!   make. A footprint's own Edge.Cuts graphics become board-level shapes. Nothing is closed that was not
+//!   closed: what KiCad reports as a malformed outline is in [`ImportNotes::outline_errors`]. A track
+//!   `(arc ...)` is kept as an arc ([`eda_model::ir::Track::new_arc`], counted in
+//!   [`ImportNotes::track_arcs_kept`], and written back as an arc), and a board-level `gr_arc` is a
+//!   [`eda_model::ir::Shape::Arc`], exactly (KiCad's own three-point arc storage is our `Arc`'s storage
+//!   too).
 //! - **Non-rect/roundrect/circle/oval pads** (trapezoid, custom): mapped to
 //!   `PadShape::Rect` at the pad's nominal `size`, counted in
 //!   [`ImportNotes::non_rect_pad_shapes_approximated`].
 //! - **Board-level graphics and text** (`gr_line`/`gr_rect`/`gr_circle`/
-//!   `gr_poly`/`gr_arc`/`gr_text`, any layer other than Edge.Cuts, which
-//!   stays outline-only as before): imported into `design.drawings` as
+//!   `gr_poly`/`gr_arc`/`gr_curve`/`gr_text`): imported into `design.drawings` as
 //!   [`eda_model::ir::Shape`]/[`eda_model::ir::Text`] (see
-//!   [`import_drawings`]).
+//!   [`import_drawings`]). Those on Edge.Cuts are the board outline: see above.
 //! - **Not imported at all**: barcodes, generator objects, and the
 //!   project-level component classes and tuning profiles (a board that
 //!   depends on them is judged differently by kicad-cli once re-exported;
@@ -57,9 +58,10 @@
 //!   the stackup, net ties, 3D model references and footprint-local
 //!   graphics and text are read.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
+use eda_model::outline as edge;
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
 use crate::import_items::{self, ItemRef, Refs};
@@ -70,7 +72,8 @@ use crate::sexpr::{self, Sexpr};
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ImportNotes {
     pub zones_skipped: usize,
-    /// Edge.Cuts arcs, tessellated into the outline's straight segments (a track `(arc ...)` is exact: [`Self::track_arcs_kept`]).
+    /// Always 0 now: an Edge.Cuts arc is kept as an arc ([`Self::outline_shapes`]), not tessellated into the outline's straight segments.
+    /// (Kept so an `ImportNotes` written by an older build still reads.)
     pub track_arcs_approximated: usize,
     /// Track `(arc ...)`s kept as arcs (`Track::arc_mid_offset`); informational, nothing was lost.
     #[serde(default)]
@@ -93,15 +96,21 @@ pub struct ImportNotes {
     /// nearby via as if they were).
     #[serde(default)]
     pub non_copper_pads_skipped: usize,
-    /// How the board outline was reconstructed: "poly" (one closed
-    /// `gr_poly`), "circle" (one `gr_circle`), "lines" (chained
-    /// `gr_line`/`gr_rect`/`gr_arc` edges), or "none" (nothing found).
+    /// How the board outline was reconstructed: "lines" (`gr_line`s chained into one closed loop, which is `placement.outline`),
+    /// "shapes" (every Edge.Cuts item kept as a shape: [`eda_model::ir::DrawingsSection::outline_is_shapes`]), or "none" (no Edge.Cuts).
     #[serde(default)]
     pub outline_source: &'static str,
-    /// The chained edges did not close into a loop (bad/partial board, or
-    /// an outline shape this importer's chaining does not follow).
+    /// The Edge.Cuts did not chain into closed outlines (a gap wider than the chaining epsilon, a stray segment): the outline is
+    /// malformed, the items are kept as they are, and `placement.outline` is the rectangle round them.
     #[serde(default)]
     pub outline_open: bool,
+    /// How many Edge.Cuts items were kept as shapes (`outline_source == "shapes"`).
+    #[serde(default)]
+    pub outline_shapes: usize,
+    /// What KiCad would report as `invalid_outline` ("Board has malformed outline") for this board, one line per finding with the
+    /// place it is at, mm (`eda_drc::outline::check_edge_cuts`).
+    #[serde(default)]
+    pub outline_errors: Vec<String>,
 }
 
 /// Parse a `.kicad_pcb` file's text into our own design + constraint
@@ -126,9 +135,10 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let nets = build_nets(&net_names, &pin_nets);
-    let outline = import_outline(root, &mut notes);
     let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
-    let (shapes, texts) = import_drawings(root, &mut refs);
+    let (mut shapes, texts) = import_drawings(root, &mut refs);
+    // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
+    let (outline, outline_is_shapes) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
@@ -140,16 +150,10 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     if outline.len() >= 3 {
         board.outline = Some(outline.clone());
     }
-    // `eda_drc::providers::outline`'s `invalid_outline` check (task item 5)
-    // reads this back at DRC time -- see `BoardRules::outline_closed`'s own
-    // doc comment for why it lives here rather than on `PlacementSection`.
-    // A `gr_poly`/`gr_circle`-derived outline is inherently one closed
-    // loop; a chained-edges one carries `chain_edges`'s own verdict
-    // (`ImportNotes::outline_open`, negated); no Edge.Cuts graphics at all
-    // leaves this `None` (nothing to assert either way).
+    // `BoardRules::outline_closed`: whether the Edge.Cuts chained into closed outlines (`ImportNotes::outline_open`, negated); no
+    // Edge.Cuts at all leaves this `None` (nothing to assert either way).
     board.outline_closed = match notes.outline_source {
-        "poly" | "circle" => Some(true),
-        "lines" => Some(!notes.outline_open),
+        "lines" | "shapes" => Some(!notes.outline_open),
         _ => None,
     };
 
@@ -165,7 +169,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, outline_is_shapes, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
@@ -1630,53 +1634,23 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 // --------------------------------------------------------- drawings
 
 /// Board-level graphics (`gr_line`/`gr_arc`/`gr_rect`/`gr_circle`/
-/// `gr_poly`) and text (`gr_text`), any layer other than Edge.Cuts -- that
-/// one stays dedicated to [`import_outline`], unchanged, so a shape is
-/// never represented twice.
+/// `gr_poly`/`gr_curve`) and text (`gr_text`), any layer. Those on Edge.Cuts are
+/// the board outline's items; [`import_outline`] decides what becomes of them.
 fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
-    let stroke_width = |item: &[Sexpr]| -> i64 {
-        sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
-    };
-    let layer_of = |item: &[Sexpr]| -> String { sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string() };
-    let filled = |item: &[Sexpr]| -> bool { sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).is_some_and(|s| s == "yes" || s == "solid") };
-
     let mut shapes = Vec::new();
-    for item in sexpr::find_all(root, "gr_line").filter(|it| !is_edge_cuts(it)) {
-        let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
-        shapes.push(Shape::Segment { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
-        refs.shapes.push(ItemRef::of(item));
+    for item in sexpr::find_all(root, "gr_line") {
+        if let Some(shape) = graphic_shape(item, "gr_line", |p| p) {
+            shapes.push(shape);
+            refs.shapes.push(ItemRef::of(item));
+        }
     }
-    for item in sexpr::find_all(root, "gr_arc").filter(|it| !is_edge_cuts(it)) {
-        let (Some(start), Some(mid), Some(end)) =
-            (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "mid").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point))
-        else {
-            continue;
-        };
-        shapes.push(Shape::Arc { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, mid, end });
-        refs.shapes.push(ItemRef::of(item));
-    }
-    for item in sexpr::find_all(root, "gr_rect").filter(|it| !is_edge_cuts(it)) {
-        let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
-        shapes.push(Shape::Rect { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), start, end });
-        refs.shapes.push(ItemRef::of(item));
-    }
-    for item in sexpr::find_all(root, "gr_circle").filter(|it| !is_edge_cuts(it)) {
-        let (Some(center), Some(end)) = (sexpr::find(item, "center").and_then(xy_point), sexpr::find(item, "end").and_then(xy_point)) else { continue };
-        shapes.push(Shape::Circle { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), center, end });
-        refs.shapes.push(ItemRef::of(item));
-    }
-    for item in sexpr::find_all(root, "gr_poly").filter(|it| !is_edge_cuts(it)) {
-        let Some(pts) = poly_points(item) else { continue };
-        shapes.push(Shape::Polygon { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: filled(item), pts });
-        refs.shapes.push(ItemRef::of(item));
-    }
-    // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`). A curve on
-    // Edge.Cuts is not chained into the board outline (`import_outline` only walks lines/rects/arcs).
-    for item in sexpr::find_all(root, "gr_curve").filter(|it| !is_edge_cuts(it)) {
-        let Some(pts) = poly_points(item) else { continue };
-        let [start, c1, c2, end] = pts[..] else { continue };
-        shapes.push(Shape::Bezier { id: String::new(), layer: layer_of(item), stroke_width: stroke_width(item), filled: false, start, c1, c2, end });
-        refs.shapes.push(ItemRef::of(item));
+    for tag in ["gr_arc", "gr_rect", "gr_circle", "gr_poly", "gr_curve"] {
+        for item in sexpr::find_all(root, tag) {
+            if let Some(shape) = graphic_shape(item, tag, |p| p) {
+                shapes.push(shape);
+                refs.shapes.push(ItemRef::of(item));
+            }
+        }
     }
 
     let mut texts = Vec::new();
@@ -1707,102 +1681,142 @@ fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
     (shapes, texts)
 }
 
+/// An item's `(stroke (width ..))`, or the `(width ..)` of the files before it (KiCad 6 and older), micrometres.
+fn stroke_width_of(item: &[Sexpr]) -> i64 {
+    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
+}
+
+/// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
+/// three points of the arc (`parsePCB_SHAPE`: `SetCenter`, `SetStart`, `SetArcAngleAndEnd( A )` -- the end is the start turned by A, the
+/// middle by half of it, the same way, in the file's own axes). Returns (start, mid, end).
+fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
+    let turn = |deg: f64| -> Point {
+        let (s, c) = deg.to_radians().sin_cos();
+        let (dx, dy) = ((start.x - center.x) as f64, (start.y - center.y) as f64);
+        Point { x: center.x + (dx * c - dy * s).round() as i64, y: center.y + (dx * s + dy * c).round() as i64 }
+    };
+    (start, turn(angle_deg / 2.0), turn(angle_deg))
+}
+
+/// An item's `(layer ..)`.
+fn layer_of(item: &[Sexpr]) -> String {
+    sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)).unwrap_or("Cmts.User").to_string()
+}
+
+/// `(fill yes|solid)`.
+fn filled_of(item: &[Sexpr]) -> bool {
+    sexpr::find(item, "fill").and_then(|f| sexpr::txt(f, 1)).is_some_and(|s| s == "yes" || s == "solid")
+}
+
+/// One `PCB_SHAPE` item (`gr_line`, `gr_arc`, `gr_rect`, `gr_circle`, `gr_poly`, `gr_curve`, or the footprint-level `fp_` form of
+/// each: `tag` is the board-level name) as a [`Shape`]; every point goes through `at`, which takes a footprint's local frame to the
+/// board's. `None` when the item lacks what it needs.
+fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Point) -> Option<Shape> {
+    let pt = |name: &str| sexpr::find(item, name).and_then(xy_point).map(&at);
+    let (layer, stroke_width, filled) = (layer_of(item), stroke_width_of(item), filled_of(item));
+    Some(match tag {
+        "gr_line" => Shape::Segment { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
+        "gr_arc" => match sexpr::find(item, "angle").and_then(|a| sexpr::num(a, 1)).filter(|_| sexpr::find(item, "mid").is_none()) {
+            // The legacy grammar: `start` is the centre and `end` the start of the arc.
+            Some(angle) => {
+                let (start, mid, end) = legacy_arc(pt("start")?, pt("end")?, angle);
+                Shape::Arc { id: String::new(), layer, stroke_width, filled, start, mid, end }
+            }
+            None => Shape::Arc { id: String::new(), layer, stroke_width, filled, start: pt("start")?, mid: pt("mid")?, end: pt("end")? },
+        },
+        "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
+        "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width, filled, center: pt("center")?, end: pt("end")? },
+        "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts: poly_points(item)?.into_iter().map(&at).collect() },
+        // `(gr_curve (pts (xy start) (xy c1) (xy c2) (xy end)))`: a cubic Bezier (`SHAPE_T::BEZIER`), never filled.
+        "gr_curve" => {
+            let pts: Vec<Point> = poly_points(item)?.into_iter().map(&at).collect();
+            let [start, c1, c2, end] = pts[..] else { return None };
+            Shape::Bezier { id: String::new(), layer, stroke_width, filled: false, start, c1, c2, end }
+        }
+        _ => return None,
+    })
+}
+
 // ---------------------------------------------------------------- outline
 
 fn is_edge_cuts(item: &[Sexpr]) -> bool {
     sexpr::find(item, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("Edge.Cuts")
 }
 
-/// Board outline from Edge.Cuts graphics, in one of three shapes real
-/// boards use: a single closed polygon, a single circle, or a set of
-/// lines/rects/arcs to chain end-to-end into a loop. See [`ImportNotes`]
-/// for which one was used (and whether chaining actually closed).
-fn import_outline(root: &[Sexpr], notes: &mut ImportNotes) -> Vec<Point> {
-    // `BOARD::GetBoardPolygonOutlines`: every closed Edge.Cuts contour is a
-    // candidate, and the board outline is the outer one -- the others are
-    // holes/cutouts inside it. Candidates here: each `gr_poly`, each
-    // `gr_circle`, and the loop chained from `gr_line`/`gr_rect`/`gr_arc`
-    // edges; the largest by area wins.
-    let mut candidates: Vec<(Vec<Point>, &'static str, bool)> = Vec::new();
-    for poly in sexpr::find_all(root, "gr_poly").filter(|it| is_edge_cuts(it)) {
-        if let Some(pts) = poly_points(poly) {
-            candidates.push((pts, "poly", true));
-        }
-    }
-    for c in sexpr::find_all(root, "gr_circle").filter(|it| is_edge_cuts(it)) {
-        if let Some(pts) = circle_points(c) {
-            candidates.push((pts, "circle", true));
-        }
-    }
-
-    let mut edges: Vec<(Point, Point)> = Vec::new();
-    for l in sexpr::find_all(root, "gr_line").filter(|it| is_edge_cuts(it)) {
-        if let (Some(s), Some(e)) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point)) {
-            edges.push((s, e));
-        }
-    }
-    for r in sexpr::find_all(root, "gr_rect").filter(|it| is_edge_cuts(it)) {
-        if let (Some(p0), Some(p1)) = (sexpr::find(r, "start").and_then(xy_point), sexpr::find(r, "end").and_then(xy_point)) {
-            let (tl, br) = (Point { x: p0.x, y: p0.y }, Point { x: p1.x, y: p1.y });
-            let (tr, bl) = (Point { x: br.x, y: tl.y }, Point { x: tl.x, y: br.y });
-            edges.extend([(tl, tr), (tr, br), (br, bl), (bl, tl)]);
-        }
-    }
-    for a in sexpr::find_all(root, "gr_arc").filter(|it| is_edge_cuts(it)) {
-        if let (Some(s), Some(e)) = (sexpr::find(a, "start").and_then(xy_point), sexpr::find(a, "end").and_then(xy_point)) {
-            notes.track_arcs_approximated += 1;
-            edges.push((s, e));
-        }
-    }
-    // Footprint Edge.Cuts graphics count too (`BuildBoardPolygonOutlines`
-    // collects every Edge.Cuts shape, footprints' included -- e.g. a card-
-    // edge connector's tab). They are stored in footprint-local
-    // coordinates: board = position + RotatePoint( local, orientation ).
+/// A footprint's own Edge.Cuts graphics (`fp_line`, `fp_arc`, `fp_rect`, `fp_circle`, `fp_poly`, `fp_curve`) as board-level shapes.
+/// `BuildBoardPolygonOutlines` collects every Edge.Cuts shape of the board, a footprint's included -- a card-edge connector's tab, a
+/// connector's mounting slot -- and chains them with the board's own, so they are board-level shapes here. A footprint's items are in its own
+/// frame: board = position + RotatePoint( local, orientation ). A rectangle that the footprint's turn leaves tilted is a polygon.
+fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs) {
     for fp in sexpr::find_all(root, "footprint").chain(sexpr::find_all(root, "module")) {
         let Some(at) = sexpr::find(fp, "at") else { continue };
         let (Some(fx), Some(fy)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
-        let (sin, cos) = sexpr::num(at, 3).unwrap_or(0.0).to_radians().sin_cos();
+        let angle = sexpr::num(at, 3).unwrap_or(0.0);
+        let (sin, cos) = angle.to_radians().sin_cos();
         let (ox, oy) = (mm_to_um(fx), mm_to_um(fy));
         let to_board = |p: Point| -> Point {
             let (x, y) = (p.x as f64, p.y as f64);
             Point { x: ox + (x * cos + y * sin).round() as i64, y: oy + (-x * sin + y * cos).round() as i64 }
         };
-        for l in sexpr::find_all(fp, "fp_line").chain(sexpr::find_all(fp, "fp_arc")).filter(|it| is_edge_cuts(it)) {
-            if let (Some(s), Some(e)) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point)) {
-                edges.push((to_board(s), to_board(e)));
-            }
-        }
-        for r in sexpr::find_all(fp, "fp_rect").filter(|it| is_edge_cuts(it)) {
-            if let (Some(a), Some(b)) = (sexpr::find(r, "start").and_then(xy_point), sexpr::find(r, "end").and_then(xy_point)) {
-                let c = [a, Point { x: b.x, y: a.y }, b, Point { x: a.x, y: b.y }].map(to_board);
-                edges.extend([(c[0], c[1]), (c[1], c[2]), (c[2], c[3]), (c[3], c[0])]);
-            }
-        }
-        for poly in sexpr::find_all(fp, "fp_poly").filter(|it| is_edge_cuts(it)) {
-            if let Some(pts) = poly_points(poly) {
-                candidates.push((pts.into_iter().map(to_board).collect(), "poly", true));
+        let square_turn = angle.rem_euclid(90.0) == 0.0;
+        for tag in ["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"] {
+            for item in sexpr::find_all(fp, tag).filter(|it| is_edge_cuts(it)) {
+                let board_tag = tag.replace("fp_", "gr_");
+                let Some(shape) = graphic_shape(item, &board_tag, to_board) else { continue };
+                let shape = match shape {
+                    Shape::Rect { id, layer, stroke_width, filled, start, end } if !square_turn => {
+                        // Turn the corners one by one: `start` and `end` of a tilted rectangle are not opposite corners of a rectangle.
+                        let (a, b) = (sexpr::find(item, "start").and_then(xy_point).unwrap_or(start), sexpr::find(item, "end").and_then(xy_point).unwrap_or(end));
+                        let pts = edge::rect_corners(a, b).map(to_board).to_vec();
+                        Shape::Polygon { id, layer, stroke_width, filled, pts }
+                    }
+                    other => other,
+                };
+                shapes.push(shape);
+                refs.shapes.push(ItemRef::of(item));
             }
         }
     }
-    if !edges.is_empty() {
-        let (pts, closed) = chain_edges(&edges);
-        candidates.push((pts, "lines", closed));
+}
+
+/// The board outline, from the Edge.Cuts shapes in `shapes` (the board's and, promoted, its footprints').
+///
+/// KiCad builds the board outline from these (`BOARD::GetBoardPolygonOutlines`, ported in `eda_drc::outline`): lines, arcs, circles, rectangles,
+/// polygons and curves chained end to end into closed contours, a contour inside another being a cutout. The common board is lines that chain
+/// into one closed loop, and that loop is `placement.outline`, as it always was; its shapes are dropped here, the writer emits the loop as lines.
+/// Any other board keeps every item as the shape it is -- an arc is an arc, not the chord of one -- and `placement.outline` is the summary of
+/// what they make. An outline that does not chain is kept as it is, too, and reported ([`ImportNotes::outline_errors`]): the exported file then
+/// has the same gap, and kicad-cli says so, instead of a loop closed behind the user's back.
+///
+/// Returns the polygon for `placement.outline` and whether the shapes are the outline.
+fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool) {
+    footprint_edge_cuts(root, shapes, refs);
+    let items: Vec<Shape> = shapes.iter().filter(|s| edge::is_edge_cuts(s)).cloned().collect();
+    if items.is_empty() {
+        notes.outline_source = "none";
+        return (Vec::new(), false);
     }
 
-    let area = |pts: &[Point]| -> f64 {
-        let n = pts.len();
-        if n < 3 {
-            return 0.0;
-        }
-        (0..n).map(|i| (pts[i].x as f64) * (pts[(i + 1) % n].y as f64) - (pts[(i + 1) % n].x as f64) * (pts[i].y as f64)).sum::<f64>().abs() / 2.0
-    };
-    let Some((pts, source, closed)) = candidates.into_iter().max_by(|a, b| area(&a.0).total_cmp(&area(&b.0))) else {
-        notes.outline_source = "none";
-        return Vec::new();
-    };
-    notes.outline_source = source;
-    notes.outline_open = !closed;
-    pts
+    let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_UM as f64, edge::CHAINING_EPSILON_UM, true);
+    let one_loop = chained && polys.outline_count() == 1 && !polys.has_holes();
+    if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) {
+        // The loop, in the order its sides chain; the sides themselves are not kept.
+        let ring: Vec<Point> = polys.outline(0).iter().map(|p| Point { x: p.x, y: p.y }).collect();
+        let keep: Vec<bool> = shapes.iter().map(|s| !edge::is_edge_cuts(s)).collect();
+        let mut k = keep.iter();
+        shapes.retain(|_| *k.next().expect("one flag per shape"));
+        let mut k = keep.iter();
+        refs.shapes.retain(|_| *k.next().expect("one flag per shape"));
+        notes.outline_source = "lines";
+        return (ring, false);
+    }
+
+    let built = eda_drc::outline::board_outline_of(&items, true);
+    notes.outline_source = "shapes";
+    notes.outline_open = !built.valid;
+    notes.outline_shapes = items.len();
+    notes.outline_errors = eda_drc::outline::check_edge_cuts(&items).iter().map(|e| format!("{} at ({:.3}, {:.3}) mm", e.describe(), e.at.x as f64 / 1000.0, e.at.y as f64 / 1000.0)).collect();
+    (built.main_ring(), true)
 }
 
 // ---------------------------------------------------------------- zones
@@ -2014,110 +2028,26 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
     (out.len() >= 3).then_some(out)
 }
 
-fn circle_points(c: &[Sexpr]) -> Option<Vec<Point>> {
-    let center = sexpr::find(c, "center").and_then(xy_point)?;
-    let end = sexpr::find(c, "end").and_then(xy_point)?;
-    let r = (((end.x - center.x).pow(2) + (end.y - center.y).pow(2)) as f64).sqrt();
-    const N: usize = 48;
-    Some(
-        (0..N)
-            .map(|i| {
-                let a = i as f64 / N as f64 * std::f64::consts::TAU;
-                Point { x: center.x + (r * a.cos()).round() as i64, y: center.y + (r * a.sin()).round() as i64 }
-            })
-            .collect(),
-    )
-}
-
-/// Walk a bag of undirected edges into the longest closed loop they form
-/// (a board with an internal cutout has more than one; the outer boundary
-/// is the one this heuristic keeps). Tries every edge as a chain start,
-/// which is quadratic in edge count -- fine for the dozens of segments a
-/// real board outline has.
-/// `DEFAULT_CHAINING_EPSILON_MM` (board.h): 0.01 mm.
-const CHAINING_EPSILON: i64 = 10;
-
-fn chain_edges(edges: &[(Point, Point)]) -> (Vec<Point>, bool) {
-    let mut by_point: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    for (i, (a, b)) in edges.iter().enumerate() {
-        by_point.entry((a.x, a.y)).or_default().push(i);
-        by_point.entry((b.x, b.y)).or_default().push(i);
-    }
-
-    let mut best: Vec<Point> = Vec::new();
-    let mut best_closed = false;
-    for start_idx in 0..edges.len() {
-        let mut used = vec![false; edges.len()];
-        used[start_idx] = true;
-        let (a0, b0) = edges[start_idx];
-        let mut chain = vec![a0, b0];
-        let mut cur = b0;
-        let close = |p: Point, q: Point| (p.x - q.x).pow(2) + (p.y - q.y).pow(2) <= CHAINING_EPSILON * CHAINING_EPSILON;
-        let closed = loop {
-            if close(cur, a0) && chain.len() > 2 {
-                break true;
-            }
-            // Exact match first, else the nearest free endpoint within
-            // KiCad's chaining epsilon (`close_enough`/`closer_to_first`).
-            let exact = by_point.get(&(cur.x, cur.y)).and_then(|c| c.iter().copied().find(|&i| !used[i]));
-            let ei = match exact {
-                Some(i) => i,
-                None => {
-                    let d = |p: Point| (p.x - cur.x).pow(2) + (p.y - cur.y).pow(2);
-                    let Some(i) = (0..edges.len()).filter(|&i| !used[i] && (close(edges[i].0, cur) || close(edges[i].1, cur))).min_by_key(|&i| d(edges[i].0).min(d(edges[i].1))) else { break false };
-                    i
-                }
-            };
-            used[ei] = true;
-            let (a, b) = edges[ei];
-            cur = if (a.x - cur.x).pow(2) + (a.y - cur.y).pow(2) <= (b.x - cur.x).pow(2) + (b.y - cur.y).pow(2) { b } else { a };
-            chain.push(cur);
-        };
-        let pts = if closed { chain[..chain.len() - 1].to_vec() } else { chain };
-        if pts.len() > best.len() {
-            best = pts;
-            best_closed = closed;
-        }
-    }
-    (best, best_closed)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))`: the end is the start turned by A about the centre (`SetArcAngleAndEnd`), the
+    /// middle by A/2, in the file's own axes, whichever way A goes.
+    #[test]
+    fn a_legacy_arc_is_three_points_turned_about_its_centre() {
+        let p = |x, y| Point { x, y };
+        assert_eq!(legacy_arc(p(15_000, 5_000), p(20_000, 5_000), 90.0), (p(20_000, 5_000), p(18_536, 8_536), p(15_000, 10_000)));
+        assert_eq!(legacy_arc(p(15_000, 5_000), p(20_000, 5_000), -90.0), (p(20_000, 5_000), p(18_536, 1_464), p(15_000, 0)));
+        // A half turn goes through the far side of the circle: the middle is a quarter turn on.
+        assert_eq!(legacy_arc(p(0, 0), p(1_000, 0), 180.0), (p(1_000, 0), p(0, 1_000), p(-1_000, 0)));
+    }
 
     #[test]
     fn rotation_negation_round_trips() {
         assert_eq!(import_rot_millideg(0.0), 0);
         assert_eq!(import_rot_millideg(-90.0), 90_000);
         assert_eq!(import_rot_millideg(90.0), 270_000);
-    }
-
-    #[test]
-    fn chains_a_rectangle_regardless_of_edge_order() {
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 10_000, y: 0 };
-        let c = Point { x: 10_000, y: 10_000 };
-        let d = Point { x: 0, y: 10_000 };
-        // Deliberately out of geometric order and reversed on one edge.
-        let edges = vec![(c, d), (a, b), (d, a), (c, b)];
-        let (pts, closed) = chain_edges(&edges);
-        assert!(closed);
-        assert_eq!(pts.len(), 4);
-    }
-
-    #[test]
-    fn chains_endpoints_within_kicads_chaining_epsilon() {
-        // `issue22826`: a board line ending at 145.000675 mm meets a
-        // footprint Edge.Cuts line at 145 mm.
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 10_000, y: 0 };
-        let c = Point { x: 10_000, y: 10_000 };
-        let d = Point { x: 0, y: 10_000 };
-        let edges = vec![(a, b), (Point { x: 10_001, y: 0 }, c), (c, d), (d, a)];
-        let (pts, closed) = chain_edges(&edges);
-        assert!(closed);
-        assert_eq!(pts.len(), 4);
     }
 
     /// GAPS.md #3's clearance-over-firing root cause, pinned down directly:

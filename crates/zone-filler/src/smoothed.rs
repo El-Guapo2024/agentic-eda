@@ -105,10 +105,9 @@ pub fn build_smoothed_poly(zone: &Zone, layer: &str, input: &FillInput, max_erro
         }
     }
 
-    if let Some(board) = &input.board_outline {
-        if board.len() >= 3 {
-            smoothed.boolean_intersection(&ShapePolySet::from_outline(board.clone()));
-        }
+    // `BuildSmoothedPoly( .., aBoardOutline )`: the board's outlines with their cutouts, when they are well-formed (`m_brdOutlinesValid`).
+    if let Some(board) = input.board_outline.as_ref().filter(|b| !input.board_outline_invalid && !b.is_empty()) {
+        smoothed.boolean_intersection(board);
     }
 
     let with_same_net = smoothed.clone();
