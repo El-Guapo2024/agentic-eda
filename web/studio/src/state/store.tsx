@@ -1829,9 +1829,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (source) dispatch({ type: "SET_SCH_REPEAT", cmds: source });
       }
       await refresh();
+      // The schematic tab draws `state.schematic`, which the version poll refetches up to a poll later: an edit made there (the Properties grid shows what the board
+      // answered) wants the new sheet at once.
+      if (stateRef.current.tab === "schematic") await refreshSchematic();
       return reply.ok;
     },
-    [refresh]
+    [refresh, refreshSchematic]
   );
 
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */

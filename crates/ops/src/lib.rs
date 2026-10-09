@@ -53,6 +53,7 @@ pub mod board_setup;
 mod review;
 pub mod library_editors;
 mod pcb_paste;
+mod pcb_props;
 mod pcb_transform;
 mod sch_clipboard;
 pub mod sch_control;
@@ -823,6 +824,26 @@ pub enum Cmd {
     /// board -- a footprint's side, a track's, zone's, shape's, text's and dimension's layer (`::FlipLayer`), a blind or
     /// buried via's layer pair.
     FlipItems { ids: Vec<String>, pivot: Point, direction: FlipDirection },
+
+    // ------------------------------------------------- Properties panel (see [`pcb_props`])
+    //
+    // The four properties of the grid that no verb above sets. A grid edit is one `Batch` of these and the others.
+    /// "Start X" / "Start Y" / "End X" / "End Y" of a track or an arc (`PCB_TRACK::SetStart`, `SetEnd`): the first and/or last point
+    /// moves; a field left out stays. An arc keeps its mid point.
+    EditTrack {
+        id: String,
+        #[serde(default)]
+        start: Option<Point>,
+        #[serde(default)]
+        end: Option<Point>,
+    },
+    /// "Net" (`BOARD_CONNECTED_ITEM::SetNetCode`) of every named track, via or zone. Only a zone may be given "" (no net).
+    SetItemNet { ids: Vec<String>, net: String },
+    /// "Name" of a zone (`ZONE::SetZoneName`).
+    SetZoneName { id: String, name: String },
+    /// A shape's new geometry (and whatever else of it changed), in place: the id and the lock stay. The panel's "Start X", "Radius",
+    /// "Width" and the like (`EDA_SHAPE` setters) send the whole shape.
+    ReplaceShape { id: String, shape: Shape },
 
     /// Apply `cmds` in order as ONE command: one undo step, one activity
     /// entry, all-or-nothing (the first refused sub-command restores the
@@ -1658,7 +1679,8 @@ impl Cmd {
             Cmd::OnSheet { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
-            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2202,6 +2224,10 @@ impl<'a> Board<'a> {
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
             Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
             Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
+            Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
+            Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
+            Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
+            Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
                 for c in cmds {
@@ -5411,6 +5437,8 @@ mod sch_control_tests;
 mod board_setup_tests;
 #[cfg(test)]
 mod pcb_transform_tests;
+#[cfg(test)]
+mod pcb_props_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
 #[cfg(test)]

@@ -991,6 +991,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 // Task item 4: true for a generated teardrop, never a
                 // hand-drawn zone -- see `eda_model::ir::Zone::teardrop`.
                 "teardrop": z.teardrop,
+                // `ZONE::GetZoneName()`: the Properties panel's "Name" row (`Cmd::SetZoneName`).
+                "name": z.name,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable
@@ -1201,6 +1203,8 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "keep_text_aligned": d.keep_text_aligned,
         "text_angle": d.text_angle,
         "text_size_um": d.text_size_um,
+        // `EDA_TEXT::GetTextThickness()` of the label; null = 15 % of the size (the Properties panel's "Thickness").
+        "text_thickness_um": d.text_thickness_um,
         "stroke_width": d.stroke_width,
         "arrow_length": d.arrow_length,
         "extension_offset": d.extension_offset,

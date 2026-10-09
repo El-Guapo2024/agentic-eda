@@ -171,6 +171,8 @@ export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   layer: string;
   /** Task item 4: true for a generated teardrop (`eda_model::ir::Zone::teardrop`), never a hand-drawn zone. */
   teardrop: boolean;
+  /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
+  name?: string;
   outline: [Um, Um][];
 }
 
@@ -308,6 +310,8 @@ export interface Dimension {
    * otherwise `computed_text_angle` below is what actually applies. */
   text_angle: number;
   text_size_um: Um;
+  /** The label's pen, µm; null/absent = 15 % of `text_size_um` (`EDA_TEXT::GetTextThickness`). */
+  text_thickness_um?: Um | null;
   stroke_width: Um;
   arrow_length: Um;
   extension_offset: Um;
@@ -360,6 +364,8 @@ export interface CmdDimension {
   keep_text_aligned: boolean;
   text_angle: number;
   text_size_um: Um;
+  /** Null/absent = the default pen (15 % of the size). */
+  text_thickness_um?: Um | null;
   stroke_width: Um;
   arrow_length: Um;
   extension_offset: Um;
@@ -948,6 +954,14 @@ export type Cmd =
   | { op: "move_items"; ids: string[]; dx: Um; dy: Um }
   | { op: "rotate_items"; ids: string[]; pivot: PointXY; angle_millideg: number }
   | { op: "flip_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
+  /**
+   * The Properties panel's own verbs (crates/ops/src/pcb_props.rs): a track's or arc's first and last point (a field left out stays), the net of tracks, vias and zones
+   * (only a zone may be given ""), a zone's name, and a shape's new geometry in place (its id and lock stay). Every other row of the grid goes through the verbs above.
+   */
+  | { op: "edit_track"; id: string; start?: PointXY; end?: PointXY }
+  | { op: "set_item_net"; ids: string[]; net: string }
+  | { op: "set_zone_name"; id: string; name: string }
+  | { op: "replace_shape"; id: string; shape: CmdShape }
   /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
   | { op: "batch"; cmds: Cmd[] }
   /** `Cmd::OnSheet`: run a schematic command on the sheet at `sheet` (the `/`-joined `SheetInstance::id`s from the root, what `GET /api/schematic?sheet=` takes) instead of the root. */
