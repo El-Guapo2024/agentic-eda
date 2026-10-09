@@ -33,8 +33,8 @@ doc and the code disagree, the code wins and the doc is named.
      recorded as unwired for that reason. `design.json` already overrides the model in places (`design.nets`,
      the footprint and symbol libraries); extending that overlay unlocks items 3, 5 and 9. **The rules now have
      their overlay (`drawings.rules`, applied in `board::load`) and seven undoable verbs; every Board Setup page
-     edits through them (item 3). Items 5 and 9 (parts and footprints on the board) still wait for the same kind
-     of overlay.**
+     edits through them (item 3). Item 9 (footprints on the board) has its overlay since 2026-10-09
+     (`drawings.footprint_edits`: fields, attributes and pad edits, three verbs); item 5 (parts) still waits for one.**
 - **Docs.** Action level: `UI-ACTIONS.md`. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 200 added since have not been compared) and
   `CODE-COMPARE-router.md`, `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and
@@ -200,14 +200,21 @@ Old #12, and the PCB parts of #14 and #25. **Mostly done (2026-10-08).** Hit: ev
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are not editable objects
-New (the residual of old #11; blocks #26). **Open.** Hit: every board (silkscreen cleanup, mounting holes). Blocks: partly. WP6, size L.
-- Exists: pose, side and a four-way reference text side (`FootprintInstance` in `crates/model/src/ir.rs`, `Cmd::SetLabelSide`,
-  `components/FootprintPropertiesDialog.tsx`).
-- Missing: reference and value text position, size, layer and visibility, user fields; per-instance attributes (DNP, exclude from
-  BOM or position files); per-pad overrides (pads are selectable since 2026-10-08, item 8); board-only footprints (mounting holes, fiducials, logos: the
-  microwave tools are declined for the same reason); Change Footprint(s), Update Footprints from Library and geographical
-  reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); new copies of a footprint by Array (Duplicate and Paste make them since 2026-10-08, item 8).
-- Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_exchange_footprints.cpp`, `dialog_update_pcb.cpp`,
+New (the residual of old #11; blocked #26). **Mostly done (2026-10-09).** Hit: every board (silkscreen cleanup, mounting holes). Blocks: no longer. WP6, size L (done except the last bullet).
+- Done (`PARITY-pcb.md` section 24; `crates/model/src/fp_edit.rs`, `crates/ops/src/fp_edit.rs`, `crates/kicad/src/fp_fields.rs`, `kicad-port/fpFields.ts`,
+  `components/{FootprintPropertiesDialog,BoardPadPropertiesDialog}.tsx`): a footprint's Reference and Value are fields with a position, size, thickness, layer, visibility, rotation, justification, mirror, bold, italic, keep upright and
+  knockout; user fields can be added, renamed and deleted; the attributes (SMD, through hole or unspecified, not in schematic, exclude from position files, exclude from BOM, do not populate, exempt from the courtyard
+  requirement) are per instance, and do not populate and exclude from BOM stay in step with the schematic symbol; pads carry their own type, shape, size, offset, rotation, corner radius, hole (round or oblong), clearance and
+  mask and paste margins. It is all `DrawingsSection::footprint_edits` (additive, serde defaults), three undoable verbs (`edit_board_footprint`, `edit_board_field`, `edit_board_pad`), written to the `.kicad_pcb` as `property` /
+  `attr` / pad extras that kicad-cli loads and whose position and BOM exports honour (slow test `kicad_cli_loads_the_edited_board_and_its_position_and_bom_exports_honour_the_attributes`), and read back by the importer. A field is an
+  item of the board (`REF:Name`): selected, drawn, moved with M, dragged, moved with Move Exactly, turned, flipped. Editing is the Footprint Properties dialog (the field grid), the Pad Properties dialog and the Properties panel
+  (item 10). Duplicate, Paste and Create Array take the edits with a copy. Board-only footprints (mounting holes, fiducials) are the "not in schematic" attribute.
+- Measured: 65 new Rust tests and 38 new `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 15 scenarios through `window.__eda` on a served board (each undone, the board compared), and real kicad-cli
+  honoured do-not-populate and exclude-from-position-files in `/api/fab/pos` and do-not-populate in `/api/fab/bom` on an edited scratch board.
+- Missing: Change Footprint(s), Update Footprints from Library and geographical reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); per-footprint clearance and paste margin
+  overrides; a pad's zone connection and thermal relief overrides (the zone filler's, item 13); trapezoid, chamfered and custom pads, padstacks, fabrication property, pad number and pin function edits; Datasheet and
+  Description fields and text variables in field text; our own placement and courtyard checks do not read a pad's offset or margins (kicad-cli does).
+- Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_pad_properties.cpp`, `dialog_exchange_footprints.cpp`, `dialog_update_pcb.cpp`,
   `pcbnew/pcb_field.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
 
 ### 10. The Properties panel is a read-only summary
@@ -226,8 +233,11 @@ New (old #11). **Mostly done (2026-10-08).** Hit: constantly. Blocks: no longer;
 - Measured: 87 `node --test` cases (the registry's order and masks, the grid merge, validators, every class's list and every setter's commands), 9 Rust tests for the four verbs and one
   in `board.rs` (a panel edit of several items is one undo step); clicked through on a scratch board with one of every kind: each editable row of each kind was edited, its value read back and
   the edit undone to the exact item, three tracks edited at once were one undo step, and so were items of different kinds locked together (`web/studio/e2e/properties-panel.check.js` repeats it).
-- Missing: what the IR has no place for is not registered: a pad's own shape, type, size and drill (read-only summary only), footprint attributes and overrides, a footprint's reference, value
-  and library link (read-only: they come from the schematic and the intent, item 9), via tenting and backdrill, text fonts, bold, italic, vertical justification and colour, a shape's line style
+- Done since (2026-10-09, item 9): a footprint field (`PCB_FIELD`: position, layer, orientation, text size and thickness, visibility, justification, bold, italic, mirror, knockout, keep upright), a footprint's
+  attributes (component type, not in schematic, exclude from position files, exclude from BOM, do not populate, exempt from the courtyard requirement) and a pad's type, shape, size, corner radius and hole are
+  rows that edit (`edit_board_field`, `edit_board_footprint`, `edit_board_pad`), each one undo step.
+- Missing: what the IR has no place for is not registered: a pad's clearance and margins in the panel (they are in the Pad Properties dialog), a footprint's reference, value and library link text (read-only: they come
+  from the schematic and the intent), via tenting and backdrill, board text's fonts, bold, italic, vertical justification and colour, a shape's line style
   and colour, a sheet's border and fill, symbol pin names and numbers, extra fields; a wire's end points and length are read-only (they are dragged); the grid is not in the Footprint and
   Symbol editors; a footprint's position lands on the placement grid like every pose; a pad's position moves its footprint (and twice for two pads of one).
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp` and the
@@ -346,9 +356,16 @@ New. **Open.** Hit: often on big boards. Blocks: no. WP3, size S-M.
 - Port from: `pcbnew/dialogs/dialog_find.cpp`.
 
 ### 22. Arrays of footprints
-Old #26. **Partial.** Hit: connector rows, LED grids. Blocks: partly. WP6 (after item 9), size M.
-- Grid and circular arrays work for tracks, vias, zones, shapes and text, and Arrange Selection repositions placed footprints
-  (`PARITY-pcb.md` section 17). New footprint copies and pad renumbering are impossible while a footprint's id is its schematic symbol's id.
+Old #26. **Mostly done (2026-10-09).** Hit: connector rows, LED grids. Blocks: no. WP6 (after item 9), size M.
+- Done (`PARITY-pcb.md` section 17; `crates/ops/src/array.rs`, `kicad-port/arrayOptions.ts`, `components/CreateArrayDialog.tsx`): Create Array makes grid and circular arrays of footprints, tracks, vias, zones, graphics, text, dimensions and groups
+  (a group with copies of its members), as copies of the whole selection or as an arrangement of the selected items, in one undo step. A footprint copy is a new part of the board on the same nets with the original's
+  side, rotation, fields, attributes and pad edits, and the next free reference ("Assign unique reference designators", `ReannotateDuplicates`) or the original's text ("Keep existing reference designators"). Stagger,
+  skew, centring, Full circle, the first item angle and "Rotate items" (every kind turns about its own position) follow `ARRAY_GRID_OPTIONS` / `ARRAY_CIRCULAR_OPTIONS`. The dialog is KiCad's (tabs, boxes and wording,
+  text entries read at OK with its messages, the last values kept, "Select Point..." and "Select Item..." on the board) with a picture of where the items go.
+- Measured: 23 Rust tests (`array_tests.rs`), 17 `node --test` cases, one `board.rs` test, and the browser check (a 3 x 2 grid of a footprint, four on a circle, Arrange selection, one undo step each).
+- Missing: the footprint editor's array of pads and its numbering (`ARRAY_AXIS`: numerals, hexadecimal, alphabets, 2D coordinates, `ARRAY_PAD_NUMBER_PROVIDER`): the library editor has no array tool and the board dialog never
+  shows those controls; the original keeps the first point where KiCad's reverse loop leaves it on the last (same points, same references); the circle's centre starts at the selection, where KiCad's dialog (this version)
+  ignores the origin it is given.
 
 ### 23. The 3D viewer
 Old honorable mention. **Partial.** Backlog, size L.
@@ -428,7 +445,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 - KiCad: `common/libraries/{library_manager,library_table}.cpp`, `common/{lib_tree_model_adapter,footprint_info}.cpp`, `eeschema/libraries/symbol_library_adapter.cpp`,
   `eeschema/{symbol_chooser_frame,symbol_library_manager}.cpp`, `pcbnew/{footprint_chooser_frame,footprint_library_adapter,pcb_field}.cpp`,
   `pcbnew/dialogs/{dialog_footprint_properties,dialog_exchange_footprints,dialog_update_pcb}.cpp`, `pcbnew/tools/{board_editor_control,footprint_editor_control,pad_tool}.cpp`.
-- Order: library tables and the chooser (5); board footprint fields, attributes and pad selection (9); Change and Update Footprints and board-only footprints once the overlay exists; editor leftovers (19); arrays (22).
+- Order: library tables and the chooser (5); board footprint fields, attributes and pad edits (9, **done 2026-10-09**: `drawings.footprint_edits`; board-only footprints are the "not in schematic" attribute); Change and Update Footprints now that the overlay exists; editor leftovers (19); arrays (22, **done 2026-10-09** but for the footprint editor's pad numbering).
 
 ## Appendix A. The original 30, one verdict each
 
@@ -444,7 +461,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 8 | Footprint editor and pad tool | Partial | editor, pad tools, dialogs, import and export (`components/footprint/`, `crates/ops/src/library_editors.rs`); item 19. |
 | 9 | Board Setup | Partial | `BoardSetupDialog.tsx`: all 10 pages edit (rules overlay and 7 verbs, item 3); 8 of KiCad's pages have no model yet. |
 | 10 | Net classes and rules | Partial | importer (`crates/kicad/src/import.rs::merge_project_net_classes`, `custom_rules.rs`) and editing (Net Classes, Custom Rules, Assign Netclass) done, item 3; open: regex patterns, the rule-tree designer. |
-| 11 | Property dialogs | Partial | via, shape, zone, text, dimension and track width edit (`Cmd::EditVia`, `EditShape`, `EditZone`, `EditText`); footprint, pads, panel: items 9, 10. |
+| 11 | Property dialogs | Partial | via, shape, zone, text, dimension and track width edit (`Cmd::EditVia`, `EditShape`, `EditZone`, `EditText`); the footprint (fields, attributes) and pad dialogs edit since 2026-10-09 (`Cmd::EditBoardFootprint`, `EditBoardPad`, items 9, 10). |
 | 12 | Move excludes tracks and zones | **Closed** | `Cmd::MoveItems`, `RotateItems`, `FlipItems` (`crates/ops/src/pcb_transform.rs`), `kicad-port/pcbTransform.ts`, `pcbEditActions.ts::movableItem` for every kind; item 8. |
 | 13 | Selection modifiers and box select | **Closed** | `kicad-port/selection.ts`, `components/canvas/selectionCandidates.ts::collectBoxSelection`, `Canvas.tsx`; `PARITY-pcb.md` section 3. |
 | 14 | Clipboard | Partial | PCB: every item kind, footprints included, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `Cmd::Duplicate`, `components/canvas/clipboard.ts`); schematic: done in KiCad's format (`Cmd::PasteSch`, item 6). Left: Paste Special on the PCB (item 8). |
@@ -455,7 +472,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 19 | DRC schematic parity | Out of scope | kicad-cli has `--schematic-parity`; the dialog passes it (2026-10-08, item 11): the Schematic Parity page lists what it reports. |
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | Partial | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`); schematic Align: item 1. |
-| 26 | Array tool | Partial | `Cmd::CreateArray`, `CreateArrayDialog.tsx`; item 22. |
+| 26 | Array tool | Partial | `Cmd::CreateArray` (`crates/ops/src/array.rs`), `CreateArrayDialog.tsx`: footprints and every other kind, since 2026-10-09; the footprint editor's pad numbering is left (item 22). |
 | 27 | Grouping | Partial | `Cmd::Group` family, `state/store.tsx::withGroupSubstitution`; item 17. |
 | 28 | Dimensions and measure | **Closed** | `crates/connectivity/src/dimension.rs`, `Cmd::AddDimension` family, `components/DimensionPropertiesDialog.tsx`, the measure tool. Left: the interactive height click, text border, manual text position, export (item 2). |
 | 29 | Pan | Partial | `kicad-port/viewControls.ts`, `Canvas.tsx` (PCB); item 20. |

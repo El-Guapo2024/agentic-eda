@@ -19,7 +19,9 @@
 //! * A pad or a field in the selection stands for its footprint, once (`GetParentFootprint`, `fpDeDupe`).
 //!
 //! The footprint editor's half of the dialog -- numbering the pads of the new copies (`ARRAY_AXIS`, `ARRAY_PAD_NUMBER_PROVIDER`) -- is
-//! the studio's: the pad numbering schemes are in `web/studio/src/kicad-port/arrayNumbering.ts`.
+//! not ported: the library editor has no array tool, and the board editor never shows those controls
+//! (`enableArrayNumbering = m_isFootprintEditor`). The grid's numbering direction and the serpentine (`horizontal_then_vertical`,
+//! `reverse_alternate`) are here because they decide which point is which; the board dialog leaves them at KiCad's defaults.
 
 use super::pcb_paste::{Copies, Member};
 use super::pcb_transform::{part_pose, transform_dimension, transform_shape, transform_text, transform_track, transform_via, transform_zone, Xform};
