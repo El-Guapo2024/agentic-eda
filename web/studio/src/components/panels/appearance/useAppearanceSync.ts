@@ -7,6 +7,7 @@ import { useStudioDispatch, useStudioState } from "../../../state/store";
 import { fetchAppearance, postAppearance } from "../../../api/appearanceClient";
 import { netsContext, hiddenNetsOnLoad } from "../../../kicad-port/appearanceNets";
 import { toAppearanceFile } from "../../../kicad-port/appearanceFile";
+import { layerStateKey, panelLayers } from "../../../kicad-port/layerPresets";
 import type { ViewSlice } from "../../../kicad-port/appearanceOps";
 
 const SAVE_DELAY_MS = 500;
@@ -41,12 +42,16 @@ export function useAppearanceSync(): void {
   // `LoadProjectSettings`: the nets of a hidden class are hidden too -- once the board's nets are known.
   const hiddenClasses = state.appearance.hiddenNetclasses;
   const hiddenNets = state.bcx.hiddenRatsnestNets;
+  const activeLayer = state.activeLayer;
   useEffect(() => {
     if (!loaded.current || !board || classesExpanded.current || nets.nets.length === 0) return;
     classesExpanded.current = true;
     const next = hiddenNetsOnLoad(hiddenNets, hiddenClasses, nets);
     if (next.length !== hiddenNets.length || next.some((n) => !hiddenNets.includes(n))) dispatch({ type: "BCX", patch: { hiddenRatsnestNets: next } });
-  }, [board, nets, hiddenClasses, hiddenNets, dispatch, loaded.current]); // eslint-disable-line react-hooks/exhaustive-deps
+    // An active layer the file names but this board does not have (a 4-layer board's In2.Cu on a 2-layer one) is not kept.
+    const known = new Set(panelLayers(board.layers).map(layerStateKey));
+    if (activeLayer !== null && !known.has(activeLayer)) dispatch({ type: "SET_ACTIVE_LAYER", layer: null });
+  }, [board, nets, hiddenClasses, hiddenNets, activeLayer, dispatch, loaded.current]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // What the file holds, as text, recomputed only when one of the fields it is made of changes.
   const slice: ViewSlice = useMemo(

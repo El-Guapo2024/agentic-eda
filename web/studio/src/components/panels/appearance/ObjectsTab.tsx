@@ -2,7 +2,7 @@
 // object has a theme colour, an eye, the name, and an opacity slider for tracks, vias, pads, zones and filled shapes. Footprint Text drags References and
 // Values along with it (`onObjectVisibilityChanged`).
 import { useAppearanceView } from "./useAppearanceView";
-import { Eye, Swatch } from "./shared";
+import { Eye, Pane, Swatch } from "./shared";
 import { layerColor } from "../../canvas/layers";
 import { OBJECT_ROWS, type ObjectId } from "../../../kicad-port/appearance";
 import { objectChecked } from "../../../kicad-port/appearanceOps";
@@ -22,7 +22,7 @@ const COLOR_KEY: Partial<Record<ObjectId, string>> = {
 };
 
 export function ObjectsTab() {
-  const { state, op } = useAppearanceView();
+  const { state, op, dispatch } = useAppearanceView();
   return (
     <div className="ap-scroll">
       {OBJECT_ROWS.map((row, i) => {
@@ -50,6 +50,13 @@ export function ObjectsTab() {
           </div>
         );
       })}
+      {/* Not a row of KiCad's Objects tab: Preferences > Display Options "Show pad numbers" (`m_DisplayPadNumbers`, `pcbnew.Control.showPadNumbers`), kept where the studio's panel always had it. */}
+      <Pane title="Display Options">
+        <label className="ap-check">
+          <input type="checkbox" checked={state.bcx.showPadNumbers} onChange={() => dispatch({ type: "BCX", patch: { showPadNumbers: !state.bcx.showPadNumbers } })} />
+          Show pad numbers
+        </label>
+      </Pane>
     </div>
   );
 }

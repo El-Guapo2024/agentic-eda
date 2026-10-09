@@ -1131,7 +1131,9 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     background: () => {
       drawSheet(ctx, view, opts);
       drawBoardArea(ctx, board, opts);
-      drawOutline(ctx, view, board.outline);
+      // Edge.Cuts is a layer like the others (the Layers tab and the presets switch it); in high contrast it is neither dimmed away nor hidden, only pushed back
+      // -- "Graphics on Edge_Cuts layer are not fully dimmed or hidden because they are useful when working on another layer" (`dim_factor_Edge_Cuts`, at least 0.3).
+      if (layerIsVisible(opts.layerVisible, "Edge.Cuts")) withAlpha(ctx, opts.highContrast && opts.activeLayer && opts.activeLayer !== "board_edge" ? 0.3 : 1, () => drawOutline(ctx, view, board.outline));
     },
     ...Object.fromEntries(Object.keys(copper(board)).map((key) => [key, () => copperPasses.forEach((pass) => withAlpha(ctx, pass.alpha, () => pass.layers[key]?.()))])),
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw
