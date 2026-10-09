@@ -2,6 +2,7 @@
 import type { Schematic } from "../../api/types";
 import { emptySummary, type SchSelectionSummary } from "../../kicad-port/schContextMenu";
 import { canAddCorner, canRemoveCorner, type P, type PolyKind } from "../../kicad-port/schPolyCorners";
+import { isFieldId } from "../../kicad-port/schFieldEdit";
 
 /** The outline of a drawn polygon or rule area, or null for anything else. */
 export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pts: P[] } | null {
@@ -51,7 +52,8 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
       else if (g.shape.type === "directive") s.directiveLabels++;
       else if (g.shape.type === "rule_area") s.ruleAreas++;
       else s.shapes++;
-    } else known = false;
+    } else if (isFieldId(id)) s.fields++;
+    else known = false;
     if (!known) continue;
     s.total++;
     if (locked.has(id)) s.locked++;

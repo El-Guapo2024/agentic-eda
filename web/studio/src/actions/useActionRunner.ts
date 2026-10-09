@@ -74,6 +74,8 @@ import { registerSchControlActions, schControlChecked } from "./schControlAction
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
+import { hitField } from "../kicad-port/schFieldEdit";
+import { measureStrokeText } from "../components/text/strokeFont";
 import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
 import { deleteCmds } from "../kicad-port/schDelete";
 import { withoutLocked } from "../kicad-port/schLock";
@@ -160,6 +162,9 @@ export function useActionRunner() {
         // `itemPassesFilter`: an item the selection filter keeps out (a category that is off, a locked item without "Locked items") cannot be picked up by the cursor.
         const selectable = schSelectable(sch, state.schSelectionFilter);
         const pick = (id: string | null | undefined): string | null => (id && selectable(id) ? id : null);
+        // a shown field under the cursor (the Reference, the Value, ...) is what a key acts on before the symbol whose box it may sit over
+        const field = pick(hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText));
+        if (field) return [field];
         const sym = pick(hitSymbol(sch, state.cursorUm.x, state.cursorUm.y));
         if (sym) return [sym];
         // Any other placed item (label, text, power symbol, sheet, shape, junction, ...) under the cursor, then a wire.
@@ -2295,7 +2300,7 @@ export function useActionRunner() {
       return schControlChecked(name, {
         control: schControl,
         state,
-        requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
+        requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText) ?? hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
       });
     },
     [registry, schControl, state, commonOptions]

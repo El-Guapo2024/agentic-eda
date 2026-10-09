@@ -57,6 +57,8 @@ import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
 import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
 import type { MenuNode } from "../kicad/types";
 import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
+import { hitField } from "../kicad-port/schFieldEdit";
+import { measureStrokeText } from "./text/strokeFont";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
 import { isStale } from "../kicad-port/checkRevision";
@@ -611,10 +613,12 @@ export function SchematicView() {
         // The item under the pointer, topmost first: a symbol, any other placed item (a label, text, power symbol, junction, no-connect, bus entry,
         // sheet or drawn shape -- tight, screen-sized tolerance) and last a wire (`SCH_SELECTION_TOOL::selectPoint`: a click on a wire selects it;
         // the net highlight is a tool of its own). Every kind of item is picked up and dragged the same way.
-        const symId = pickable(hitSymbol(sch, wx, wy));
-        const placedItem = symId ? null : (hitItems(sch, wx, wy, tolerance).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? null);
-        const wireId = symId || placedItem ? null : pickable(hitWire(sch, wx, wy, tolerance));
-        const picked = symId ?? placedItem ?? wireId;
+        // A shown field (the Reference, the Value, ...) is picked before the symbol whose box it may sit over: its own text box is what a click hits.
+        const fieldId = pickable(hitField(sch, wx, wy, tolerance / 2, measureStrokeText));
+        const symId = fieldId ? null : pickable(hitSymbol(sch, wx, wy));
+        const placedItem = fieldId || symId ? null : (hitItems(sch, wx, wy, tolerance).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? null);
+        const wireId = fieldId || symId || placedItem ? null : pickable(hitWire(sch, wx, wy, tolerance));
+        const picked = fieldId ?? symId ?? placedItem ?? wireId;
         if (picked) {
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
           if (hasModifier(modifiers)) {
@@ -723,7 +727,7 @@ export function SchematicView() {
         // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
         const scale = state.schematicView.scale || 1;
-        const hit = pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
+        const hit = pickable(hitField(sch, wx, wy, 3 / scale, measureStrokeText)) ?? pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
         let ids = [...state.selection];
         if (hit && !state.selection.has(hit)) ids = [hit];
         else if (!hit && ids.length > 0) ids = [];
@@ -741,7 +745,7 @@ export function SchematicView() {
             return;
           }
           const scale = state.schematicView.scale || 1;
-          const under = pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
+          const under = pickable(hitField(sch, wx, wy, 3 / scale, measureStrokeText)) ?? pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
           const ids = state.selection.size > 0 ? [...state.selection] : under ? [under] : [];
           if (openSchProperties(sch, ids, dispatch)) return;
         }

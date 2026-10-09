@@ -133,7 +133,6 @@
   "eeschema.SymbolLibraryControl.nextSymbol": "belongs to the Symbol Viewer frame (toolbars_symbol_viewer.cpp: a read-only library browser with its own symbol list); the studio has no Symbol Viewer -- the editor's library tree is where symbols are browsed",
   "eeschema.SymbolLibraryControl.previousSymbol": "belongs to the Symbol Viewer frame (toolbars_symbol_viewer.cpp: a read-only library browser with its own symbol list); the studio has no Symbol Viewer -- the editor's library tree is where symbols are browsed",
   "eeschema.InteractiveDrawing.placeDesignBlock": "needs a design-block library (reusable sub-schematic blocks); this studio has no block library or block IR",
-  "eeschema.InteractiveEdit.autoplaceFields": "needs per-instance symbol field positions (the schematic IR stores no field placement: reference and value are drawn at fixed offsets, so there is nothing to autoplace) and text metrics for the placement search",
   "eeschema.EditorControl.showSimulator": "deferred: the simulator comes after the UI parity sweep (ngspice 45.2 is installed; plan: kicad-cli sch export netlist --format spice + ngspice -b)",
   "eeschema.EditorControl.showOperatingPointCurrents": "deferred: the simulator comes after the UI parity sweep (ngspice 45.2 is installed; plan: kicad-cli sch export netlist --format spice + ngspice -b)",
   "eeschema.EditorControl.showOperatingPointVoltages": "deferred: the simulator comes after the UI parity sweep (ngspice 45.2 is installed; plan: kicad-cli sch export netlist --format spice + ngspice -b)",

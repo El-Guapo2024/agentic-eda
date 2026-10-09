@@ -527,7 +527,8 @@ fn set_locked(sch: &mut SchematicSection, ids: &[String], locked: bool) -> Resul
     for id in ids {
         if known.contains(id.as_str()) {
             targets.push(id.clone());
-        } else if !sheet_pins.contains(id.as_str()) {
+        } else if !sheet_pins.contains(id.as_str()) && !crate::sch_fields::is_field_id(id) {
+            // (`modifyLockSelected` skips pins, fields and sheet pins: "they inherit from parent")
             return Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, wire, label, text, junction, line, sheet or graphic with this id to lock")]);
         }
     }
