@@ -277,6 +277,67 @@ pub fn with_scratch<T>(f: impl FnOnce(&Path) -> T) -> T {
     r
 }
 
+// ------------------------------------------------------------ 3D models as VRML
+
+/// A KiCad board with one footprint per model (side by side, 30 mm apart, each carrying nothing but a `(model ...)`), the smallest board `kicad-cli pcb export
+/// vrml` will read the models of. `models` are the paths of the model files as KiCad's 3D cache is to open them.
+pub fn models_board_text(models: &[PathBuf]) -> String {
+    let quote = |p: &Path| format!("\"{}\"", p.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\""));
+    let mut pcb = String::from(
+        "(kicad_pcb\n\t(version 20241229)\n\t(generator \"eda-kicad\")\n\t(generator_version \"9.0\")\n\t(general\n\t\t(thickness 1.6)\n\t\t(legacy_teardrops no)\n\t)\n\t(paper \"A4\")\n\t(layers\n\t\t(0 \"F.Cu\" signal)\n\t\t(31 \"B.Cu\" signal)\n\t\t(37 \"F.SilkS\" user)\n\t\t(39 \"F.Mask\" user)\n\t\t(44 \"Edge.Cuts\" user)\n\t)\n",
+    );
+    for (i, model) in models.iter().enumerate() {
+        pcb.push_str(&format!(
+            "\t(footprint \"eda:model{i}\"\n\t\t(layer \"F.Cu\")\n\t\t(uuid \"00000000-0000-0000-0000-{i:012x}\")\n\t\t(at {} 0)\n\t\t(model {}\n\t\t\t(offset\n\t\t\t\t(xyz 0 0 0)\n\t\t\t)\n\t\t\t(scale\n\t\t\t\t(xyz 1 1 1)\n\t\t\t)\n\t\t\t(rotate\n\t\t\t\t(xyz 0 0 0)\n\t\t\t)\n\t\t)\n\t)\n",
+            i * 30,
+            quote(model)
+        ));
+    }
+    pcb.push_str(")\n");
+    pcb
+}
+
+/// The VRML file kicad-cli wrote for `model` into `dir`: `<file stem>.wrl` (commas, dots and dashes are kept: `PhoenixContact_MC_1,5_6-G-5.08_..._Horizontal.wrl`),
+/// else the same with every character that is not a plain file-name character turned into `_`, else one that differs only in case.
+fn vrml_named(dir: &Path, model: &Path) -> Option<PathBuf> {
+    let stem = model.file_stem()?.to_string_lossy().into_owned();
+    let exact = dir.join(format!("{stem}.wrl"));
+    if exact.is_file() {
+        return Some(exact);
+    }
+    let plain = file_stem(&stem);
+    let sanitized = dir.join(format!("{plain}.wrl"));
+    if sanitized.is_file() {
+        return Some(sanitized);
+    }
+    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "wrl") && p.file_stem().is_some_and(|s| s.to_string_lossy().eq_ignore_ascii_case(&stem)))
+}
+
+/// Converts 3D model files (STEP and whatever else KiCad's 3D cache reads) to VRML, the format KiCad's own libraries are written in and three.js's
+/// `VRMLLoader` reads: `kicad-cli pcb export vrml --models-dir` on a board that carries one footprint per model writes every model as a `.wrl` of its own,
+/// in units of 0.1 inch, z up from the footprint -- the model with nothing of the board in it. One kicad-cli run converts them all (a run costs a second or
+/// two before it loads anything), so the caller hands over every model it wants at once. The files are written under `work`; the answer has one entry per
+/// model, `None` for one kicad-cli could not read. Two models of one file name would share a `.wrl`: the caller keeps them in separate runs.
+pub fn convert_models_to_vrml(work: &Path, models: &[PathBuf]) -> Result<Vec<Option<PathBuf>>, Vec<CheckResult>> {
+    if models.is_empty() {
+        return Ok(Vec::new());
+    }
+    let cli = need_cli()?;
+    work_dir(work)?;
+    let board = work.join("models.kicad_pcb");
+    let models_dir = work.join("m");
+    let _ = std::fs::remove_dir_all(&models_dir);
+    write_file(&board, models_board_text(models))?;
+    let mut cmd = Command::new(&cli);
+    cmd.args(["pcb", "export", "vrml", "--units", "mm", "--models-dir", "m", "-f", "-o"]).arg(work.join("models.wrl")).arg(&board);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    if !out.status.success() {
+        let said = String::from_utf8_lossy(&out.stderr);
+        return Err(fail("kicad_cli_export", "pcb export vrml", format!("kicad-cli pcb export vrml failed: {}", said.trim())));
+    }
+    Ok(models.iter().map(|m| vrml_named(&models_dir, m)).collect())
+}
+
 // --------------------------------------------------------------------- reports
 
 /// One item a violation names: kicad-cli's own description and position

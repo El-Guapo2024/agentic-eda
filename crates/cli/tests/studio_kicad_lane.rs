@@ -42,6 +42,17 @@ sleep {secs}
 case "$1-$2" in
   pcb-drc) echo '{{"coordinate_units":"mm","kicad_version":"10.99.0-fake","violations":[],"unconnected_items":[]}}' > "$out" ;;
   sch-erc) echo '{{"coordinate_units":"mm","kicad_version":"10.99.0-fake","sheets":[]}}' > "$out" ;;
+  pcb-export)
+    # `pcb export vrml --models-dir m`: one VRML file per `(model ...)` of the board, in `m` beside the output.
+    if [ "$3" = vrml ]; then
+      for a in "$@"; do board="$a"; done
+      outdir=$(dirname "$out"); mkdir -p "$outdir/m"
+      grep -o '(model "[^"]*"' "$board" | sed 's/(model "//; s/"$//' | while read -r p; do
+        stem=$(basename "$p" | sed 's/\.[^.]*$//')
+        printf '#VRML V2.0 utf8\n# fake %s\n' "$stem" > "$outdir/m/$stem.wrl"
+      done
+      printf '#VRML V2.0 utf8\n' > "$out"
+    fi ;;
 esac
 rmdir "$FAKE_KICAD_LOG.running" 2>/dev/null
 echo "end $1-$2" >> "$FAKE_KICAD_LOG"
@@ -338,4 +349,64 @@ fn a_hung_kicad_cli_is_killed_with_a_clear_error_and_the_lane_goes_on() {
     let (status, _, took) = studio.request("GET", "/api/version", "");
     assert_eq!(status, 200);
     assert!(took < Duration::from_secs(2), "{took:?}");
+}
+
+/// `GET /api/3dmodel?name=<model path>` over real HTTP, for a model KiCad's library holds as STEP only (all of them in the installed 10.99 library): the
+/// route answers at once and the request loop is not held up by kicad-cli's conversion; the models asked for together are one kicad-cli run; the answer is
+/// cached; and nothing outside the model library and the board's directory is readable through it.
+#[test]
+fn the_3d_model_route_converts_in_the_lane_without_holding_the_loop_and_reads_nothing_outside() {
+    let name = "models";
+    let base = std::env::temp_dir().join(format!("eda_cli_lane_{}_{name}", std::process::id()));
+    let (library, cache) = (base.join("3dmodels"), base.join("cache"));
+    let studio = Studio::start_with(name, 2, &[("EDA_KICAD_3DMODELS_DIR", library.to_str().unwrap()), ("EDA_3DMODEL_CACHE", cache.to_str().unwrap())]);
+    std::fs::create_dir_all(library.join("Lib.3dshapes")).unwrap();
+    for part in ["a", "b"] {
+        std::fs::write(library.join(format!("Lib.3dshapes/{part}.step")), "ISO-10303-21;").unwrap();
+    }
+    std::fs::write(base.join("secret.wrl"), "#VRML V2.0 utf8\n# SECRET").unwrap();
+    let url = |model: &str| format!("/api/3dmodel?name={}", model.replace('{', "%7B").replace('}', "%7D").replace('/', "%2F"));
+    let (a, b) = (url("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/a.step"), url("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.wrl"));
+
+    // Two models of the board, asked for together (the page asks for every model at once): both pending at once, and the loop is free while kicad-cli runs.
+    let (s1, body1, took1) = studio.request("GET", &a, "");
+    let (s2, body2, took2) = studio.request("GET", &b, "");
+    assert_eq!((s1, s2), (202, 202), "{body1} / {body2}");
+    assert_eq!(serde_json::from_str::<Value>(&body1).unwrap()["status"], "pending");
+    quick("/api/3dmodel pending", &[took1, took2]);
+    studio.wait_for_kicad_cli("pcb-export");
+    let polls: Vec<Duration> = (0..5).map(|_| studio.request("GET", "/api/version", "").2).collect();
+    quick("/api/version while a model converts", &polls);
+
+    // The conversion lands in the cache; a b.wrl the library lacks is its b.step (kicad-cli's --subst-models).
+    let until = Instant::now() + Duration::from_secs(60);
+    let (mut ra, mut rb) = (studio.request("GET", &a, ""), studio.request("GET", &b, ""));
+    while (ra.0 != 200 || rb.0 != 200) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(100));
+        ra = studio.request("GET", &a, "");
+        rb = studio.request("GET", &b, "");
+    }
+    assert_eq!((ra.0, rb.0), (200, 200), "{} / {}", ra.1, rb.1);
+    assert!(ra.1.starts_with("#VRML V2.0 utf8") && ra.1.contains("fake a"), "{}", ra.1);
+    assert!(rb.1.contains("fake b"), "{}", rb.1);
+    assert_eq!(studio.kicad_cli_runs("pcb-export"), 1, "two models asked together, one kicad-cli run: {:?}", studio.kicad_cli_log());
+    // Asked again: from the cache, no new run, and as quick as any other answer.
+    let (status, _, took) = studio.request("GET", &a, "");
+    assert_eq!(status, 200);
+    assert!(took < INSTANT, "{took:?}");
+    assert_eq!(studio.kicad_cli_runs("pcb-export"), 1);
+
+    // Nothing outside the library and the board: not by `..`, not by an absolute path, not by an encoded one, not a file that is no model.
+    for target in [
+        url("${KICAD10_3DMODEL_DIR}/../secret.wrl"),
+        url(&base.join("secret.wrl").to_string_lossy()),
+        "/api/3dmodel?name=%2e%2e%2fsecret.wrl".to_string(),
+        url("/etc/passwd"),
+        url("${KIPRJMOD}/design.json"),
+        url("${KICAD10_3DMODEL_DIR}/../board/design.json"),
+    ] {
+        let (status, body, _) = studio.request("GET", &target, "");
+        assert!(status == 403 || status == 404, "{target} -> {status} {body}");
+        assert!(!body.contains("SECRET") && !body.contains("root:") && !body.contains("\"schema\""), "{target} leaked a file: {body}");
+    }
 }
