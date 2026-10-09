@@ -80,8 +80,12 @@ never edited as masters.
   - live connectivity / ratsnest / zone fill while editing,
   - our own additions: intent, placement, schematic derivation.
   - The geometry core they share stays in `crates/drc` (shapes, collision,
-    clearance and rule expressions, rtree, zone-fill driver, stroke font); that
-    crate is no longer a checker and keeps its name for now.
+    clearance and rule expressions, rtree, zone-fill driver, stroke font, and
+    the board outline built from Edge.Cuts as KiCad builds it: `outline.rs`,
+    which the filler, the router, the placement gates and the 3D body read; the
+    malformed-outline finding it makes is the live view of what kicad-cli's
+    `invalid_outline` reports on the export, and kicad-cli stays the judge);
+    that crate is no longer a checker and keeps its name for now.
 - **Never duplicate kicad-cli in Rust**, not even as a faster version
   (decided 2026-10-02, replacing "the Rust DRC/ERC ports stay as fast
   previews"). One answer per question, no parity work. A kicad-cli DRC run
