@@ -48,12 +48,13 @@ export function shownPinName(name: string | null | undefined): string {
 }
 
 /**
- * The name and the number of a pin. `tip` is its connection point, `root` the end that meets the body, `dir` the unit vector from the tip
- * toward the body (all in micrometres on the sheet, y down).
+ * The name and the number of a pin. `tip` is its connection point and `root` the end that meets the body (micrometres on the sheet, y
+ * down); the way the pin runs, from the tip toward the body, is read off the two (a pin of no length runs right).
  */
-export function pinTextPlacements(pin: { name: string | null; number: string }, tip: [number, number], root: [number, number], dir: [number, number], texts: PinTexts = DEFAULT_PIN_TEXTS, sizeUm: number = PIN_TEXT_SIZE_UM): PinTextPlacements {
-  const horizontal = dir[0] !== 0;
+export function pinTextPlacements(pin: { name: string | null; number: string }, tip: [number, number], root: [number, number], texts: PinTexts = DEFAULT_PIN_TEXTS, sizeUm: number = PIN_TEXT_SIZE_UM): PinTextPlacements {
   const length = Math.hypot(root[0] - tip[0], root[1] - tip[1]);
+  const dir: [number, number] = length === 0 ? [1, 0] : [(root[0] - tip[0]) / length, (root[1] - tip[1]) / length];
+  const horizontal = Math.abs(dir[0]) >= Math.abs(dir[1]);
   const mid: [number, number] = [tip[0] + (dir[0] * length) / 2, tip[1] + (dir[1] * length) / 2];
   const name = shownPinName(pin.name);
   const showName = name !== "" && !texts.namesHidden;

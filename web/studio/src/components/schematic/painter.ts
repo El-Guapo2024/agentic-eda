@@ -590,8 +590,8 @@ export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin
  * labels in the hidden colour, `getColorForLayer`).
  */
 export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colors?: { name: string; number: string }, texts: PinTexts = DEFAULT_PIN_TEXTS) {
-  const { pin, tip, root, dir } = rp;
-  const placed = pinTextPlacements(pin, tip, root, dir, texts);
+  const { pin, tip, root } = rp;
+  const placed = pinTextPlacements(pin, tip, root, texts);
   if (placed.name) {
     drawKicadText(ctx, placed.name.text, placed.name.at, { sizeUm: PIN_TEXT_SIZE_UM, h: placed.name.h, v: placed.name.v, vertical: placed.name.vertical, color: colors?.name ?? layerColor("LAYER_PINNAM"), thicknessUm: PIN_TEXT_PEN_UM });
   }
