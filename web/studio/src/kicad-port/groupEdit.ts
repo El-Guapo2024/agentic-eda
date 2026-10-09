@@ -4,6 +4,8 @@
 //   common/dialogs/dialog_group_properties.cpp DIALOG_GROUP_PROPERTIES::DoAddMember / OnRemoveMember / TransferDataFromWindow
 //   pcbnew/tools/pcb_group_tool.cpp           PCB_GROUP_TOOL::PickNewMember
 
+import { groupHolds } from "./groupTree";
+
 export interface GroupLike {
   id: string;
   member_ids: readonly string[];
@@ -51,9 +53,11 @@ export function removeMemberAt(members: readonly string[], index: number): strin
 }
 
 /**
- * The item a click on a new member answers with (`PickNewMember`'s click handler): the picked item, promoted past a group that was
- * not entered the way every pick is -- but a group dialog cannot hold another group, so a group id is refused (null keeps picking).
+ * The item a click on a new member answers with (`PickNewMember`'s click handler): the picked item, promoted past a group that was not entered the way
+ * every pick is. A group may be a member of another (groups nest), but not of itself or of a group below it -- that would be a loop -- so such a pick is
+ * refused (null keeps picking).
  */
-export function newMemberFromPick(pickedId: string, groups: readonly GroupLike[]): string | null {
-  return groups.some((g) => g.id === pickedId) ? null : pickedId;
+export function newMemberFromPick(pickedId: string, groups: readonly GroupLike[], groupId?: string): string | null {
+  if (groupId !== undefined && groups.some((g) => g.id === pickedId) && groupHolds(groups, pickedId, groupId)) return null;
+  return pickedId;
 }

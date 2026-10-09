@@ -52,8 +52,10 @@ where it does something -- an action an editor does not offer stays dimmed there
 
 | Behaviour | Status | KiCad file:function |
 |---|---|---|
-| Group Properties | partial | `DIALOG_GROUP_PROPERTIES`: name and member list, the plus button hides the dialog and asks for a click on a new member (`PCB_GROUP_TOOL::PickNewMember`), the trash button drops a row, a click on a row shows the item. OK is one undo step (`Cmd::EditGroup`: rename, replace the members, an item leaves any other group, under two members dissolves it). Not ported: the Locked box and the design-block library link |
-| Add Items to Group, Remove Items from Group | identical | `GROUP_TOOL::AddToGroup` / `RemoveFromGroup` under `GROUP_CONTEXT_MENU`'s conditions, listed in the board's context menu where they apply |
+| Group Properties | partial | `DIALOG_GROUP_PROPERTIES`: name and member list, the plus button hides the dialog and asks for a click on a new member (`PCB_GROUP_TOOL::PickNewMember`), the trash button drops a row, a click on a row shows the item. OK is one undo step (`Cmd::EditGroup`: rename, replace the members, an item leaves any other group, under two members dissolves it; a member may be another group, but not this one or one that holds it). Not ported: the Locked box and the design-block library link |
+| Add Items to Group, Remove Items from Group | identical | `GROUP_TOOL::AddToGroup` / `RemoveFromGroup` under `GROUP_CONTEXT_MENU`'s conditions, listed in the board's context menu where they apply (it lists them since 2026-10-08: `PARITY-pcb.md` section 7) |
+| Group, Ungroup | identical in effect, nested (2026-10-08) | `GROUP_TOOL::Group` / `Ungroup`, `PCB_GROUP_TOOL::Group`: grouping a selection that holds groups makes them members of the new one, ungrouping frees the members of the group above too, a group under two members dissolves up the tree (`PARITY-pcb.md` section 16) |
+| Enter Group, Leave Group | identical (2026-10-08) | `PCB_SELECTION_TOOL::EnterGroup` / `ExitGroup`: Enter Group (the menu, or a double click) selects the group's members and only they can be picked; Leave Group (the menu, which selects the group), Escape, a click outside the group and selecting something outside it leave it. The rest of the board is drawn dimmed meanwhile (`PARITY-pcb.md` section 16) |
 
 ## 5. Checker markers, Find and Replace
 
@@ -133,7 +135,7 @@ there (or, for Group / Ungroup on the schematic, leaves enabled and inert), with
 
 | Action | Editor | Why |
 |---|---|---|
-| Find, Find Next / Previous, Find and Replace, Update Find, Find Next Marker | PCB | `GAPS.md` item 21: there is no Find on the board; the actions are the schematic find dialog's |
+| Find and Replace, Update Find, Find Next Marker | PCB | KiCad's board editor does not offer them either; they are the schematic find dialog's. Find, Find Next and Find Previous are live on the board since 2026-10-08 (`PARITY-pcb.md` section 7a, `GAPS.md` item 21) |
 | Find, Find and Replace | Symbol Editor | `editor_toolbar_support.json`: Find searches the schematic, not an open library symbol |
 | Left / Center / Right Justify | Schematic | `SchematicText` has no justification yet (`GAPS.md` item 12) |
 | Group Properties, Add / Remove Items, New Group Member | Schematic | the schematic has no groups (`GAPS.md` item 17); Group / Ungroup are registered for the board only and do nothing there |

@@ -29,7 +29,11 @@ test("the member list of the dialog: no duplicates, never the group itself, rows
   assert.deepEqual(removeMemberAt(["a"], 5), ["a"]);
 });
 
-test("a picked group is not a new member", () => {
-  assert.equal(newMemberFromPick("g2", groups), null);
-  assert.equal(newMemberFromPick("x", groups), "x");
+test("a picked group is a new member unless it would hold itself", () => {
+  assert.equal(newMemberFromPick("g2", groups, "g1"), "g2", "groups nest: another group is a fine member");
+  assert.equal(newMemberFromPick("x", groups, "g1"), "x");
+  assert.equal(newMemberFromPick("g1", groups, "g1"), null, "the group itself");
+  const nested = [...groups, { id: "top", member_ids: ["g1", "z"] }];
+  assert.equal(newMemberFromPick("top", nested, "g1"), null, "a group that holds it");
+  assert.equal(newMemberFromPick("g1", nested, "top"), "g1", "a group below it is fine");
 });

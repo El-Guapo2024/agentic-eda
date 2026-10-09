@@ -31,6 +31,8 @@ enum Member {
     Text(usize),
     Dimension(usize),
     Footprint(usize),
+    /// A group copy (`Copies::groups`); the groups a group holds are listed before it.
+    Group(usize),
 }
 
 /// A footprint to be copied onto the board.
@@ -160,49 +162,60 @@ impl Board<'_> {
         let mut done: BTreeMap<String, Member> = BTreeMap::new();
 
         // Which group, if any, holds each item that is not itself copied along with its group.
-        let group_of = |id: &str| -> Option<String> { self.design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| g.member_ids.iter().any(|m| m == id)).map(|g| g.id.clone())) };
-        let groups: Vec<Group> = self.design.drawings.as_ref().map(|d| d.groups.clone()).unwrap_or_default();
+        let group_of = |id: &str| -> Option<String> { self.design.drawings.as_ref().and_then(|d| d.parent_group(id)).map(|g| g.id.clone()) };
 
-        let mut order: Vec<(String, Option<usize>)> = Vec::new();
         for id in ids {
-            if let Some((gi, g)) = groups.iter().enumerate().find(|(_, g)| &g.id == id) {
-                for m in &g.member_ids {
-                    order.push((m.clone(), Some(gi)));
-                }
-            } else {
-                order.push((id.clone(), None));
-            }
-        }
-        let mut copied_groups: BTreeMap<usize, Vec<Member>> = BTreeMap::new();
-        for (id, via_group) in order {
-            let member = match done.get(&id) {
-                Some(m) => *m,
-                None => match self.copy_of(&id, &mut copies) {
-                    Some(m) => {
-                        done.insert(id.clone(), m);
-                        // A copy that is not part of a copied group joins the group its original is in.
-                        if via_group.is_none() {
-                            if let Some(g) = group_of(&id) {
-                                copies.join.push((m, g));
-                            }
-                        }
-                        m
+            if self.design.drawings.as_ref().is_some_and(|d| d.is_group(id)) {
+                // A group is copied with everything below it, into a group of its own, which joins the group the original is in.
+                if let Some(copy) = self.copy_group(id, &mut copies, &mut done, &mut Vec::new()) {
+                    if let Some(above) = group_of(id) {
+                        copies.join.push((copy, above));
                     }
-                    // An id that is nothing duplicable is skipped, as in `Duplicate` over a mixed selection.
-                    None => continue,
-                },
-            };
-            if let Some(gi) = via_group {
-                copied_groups.entry(gi).or_default().push(member);
+                }
+            } else if !done.contains_key(id) {
+                // An id that is nothing duplicable is skipped, as in `Duplicate` over a mixed selection.
+                if let Some(m) = self.copy_of(id, &mut copies) {
+                    done.insert(id.clone(), m);
+                    // A copy that is not part of a copied group joins the group its original is in.
+                    if let Some(g) = group_of(id) {
+                        copies.join.push((m, g));
+                    }
+                }
             }
-        }
-        for (gi, members) in copied_groups {
-            copies.groups.push(GroupCopy { name: groups[gi].name.clone(), members });
         }
         if copies.is_empty() {
             return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text or dimension")]);
         }
         self.insert_copies_all(copies)
+    }
+
+    /// The copy of the group `id` and of everything below it (`PCB_GROUP::DeepDuplicate`): its items are copied once whoever asks, the
+    /// groups it holds before it. `None` for an id that is no group, or a loop.
+    fn copy_group(&self, id: &str, copies: &mut Copies, done: &mut BTreeMap<String, Member>, visiting: &mut Vec<String>) -> Option<Member> {
+        let dr = self.design.drawings.as_ref()?;
+        let g = dr.group(id)?;
+        if visiting.iter().any(|v| v == id) {
+            return None;
+        }
+        visiting.push(id.to_string());
+        let mut members: Vec<Member> = Vec::new();
+        for m in &g.member_ids {
+            let copy = if dr.is_group(m) {
+                self.copy_group(m, copies, done, visiting)
+            } else if let Some(c) = done.get(m) {
+                Some(*c)
+            } else {
+                let c = self.copy_of(m, copies);
+                if let Some(c) = c {
+                    done.insert(m.clone(), c);
+                }
+                c
+            };
+            members.extend(copy);
+        }
+        visiting.pop();
+        copies.groups.push(GroupCopy { name: g.name.clone(), members });
+        Some(Member::Group(copies.groups.len() - 1))
     }
 
     /// The copy of the item `id` names, filed into `copies`; `None` when it names nothing duplicable.
@@ -380,6 +393,8 @@ impl Board<'_> {
                     ClipRef::Text(i) => text_ix.get(i).copied().map(Member::Text),
                     ClipRef::Dimension(i) => dim_ix.get(i).copied().map(Member::Dimension),
                     ClipRef::Footprint(i) => fp_ix.get(i).copied().map(Member::Footprint),
+                    // An inner group is listed before the group that holds it: it is already a copy.
+                    ClipRef::Group(i) => (i < copies.groups.len()).then_some(Member::Group(i)),
                 })
                 .collect();
             copies.groups.push(GroupCopy { name: g.name.clone(), members });
@@ -463,29 +478,33 @@ impl Board<'_> {
             fp_refs.push(reference);
         }
 
-        // Groups over the new ids.
-        let id_of = |m: &Member| -> String {
+        // Groups over the new ids, the inner ones first (a group names the groups it holds by their new ids).
+        let mut group_ids: Vec<Option<String>> = Vec::new();
+        let id_of = |m: &Member, group_ids: &[Option<String>]| -> Option<String> {
             match *m {
-                Member::Track(i) => track_ids[i].clone(),
-                Member::Via(i) => via_ids[i].clone(),
-                Member::Zone(i) => zone_ids[i].clone(),
-                Member::Shape(i) => shape_ids[i].clone(),
-                Member::Text(i) => text_ids[i].clone(),
-                Member::Dimension(i) => dim_ids[i].clone(),
-                Member::Footprint(i) => fp_refs[i].clone(),
+                Member::Track(i) => Some(track_ids[i].clone()),
+                Member::Via(i) => Some(via_ids[i].clone()),
+                Member::Zone(i) => Some(zone_ids[i].clone()),
+                Member::Shape(i) => Some(shape_ids[i].clone()),
+                Member::Text(i) => Some(text_ids[i].clone()),
+                Member::Dimension(i) => Some(dim_ids[i].clone()),
+                Member::Footprint(i) => Some(fp_refs[i].clone()),
+                Member::Group(i) => group_ids.get(i).cloned().flatten(),
             }
         };
         let mut new_groups: Vec<Group> = Vec::new();
         for g in &copies.groups {
-            // A group of fewer than two members is not a group (`prune_empty_groups`).
-            if g.members.len() < 2 {
+            let member_ids: Vec<String> = g.members.iter().filter_map(|m| id_of(m, &group_ids)).collect();
+            // A group of fewer than two members is not a group (`prune_groups`).
+            if member_ids.len() < 2 {
+                group_ids.push(None);
                 continue;
             }
-            let member_ids: Vec<String> = g.members.iter().map(&id_of).collect();
             let id = next_item_id("grp", &format!("copy|{}|{}", g.name, member_ids.join(",")), &taken_with(&taken, &new_groups));
+            group_ids.push(Some(id.clone()));
             new_groups.push(Group { id, name: g.name.clone(), member_ids });
         }
-        let joins: Vec<(String, String)> = copies.join.iter().map(|(m, g)| (id_of(m), g.clone())).collect();
+        let joins: Vec<(String, String)> = copies.join.iter().filter_map(|(m, g)| id_of(m, &group_ids).map(|id| (id, g.clone()))).collect();
 
         // Land them.
         if !copies.tracks.is_empty() || !copies.vias.is_empty() || !copies.zones.is_empty() {

@@ -14,7 +14,7 @@ doc and the code disagree, the code wins and the doc is named.
   (eeschema 77, common 105) are being wired now by the schematic-control and common-actions agents. Single
   actions are tracked in `UI-ACTIONS.md` and not repeated here.
 - **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"):
-  **6 closed, 14 partial, 2 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports).
+  **8 closed, 13 partial, 1 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports; the counts are those of Appendix A).
 - **12 items are new**, found in `PARITY-*.md`, `CODE-COMPARE-*.md` and by reading the code. The ranked list marks them.
 - **Three findings change the picture.**
   1. *A wired action is not a working feature.* `UI-ACTIONS.md` counted schematic Move, Drag, Rotate, Mirror,
@@ -308,21 +308,29 @@ New (from `CODE-COMPARE-ui.md`). **Partial.** Hit: constantly, one detail at a t
   collapses to one flag; Add Corner inserts the cursor point instead of the nearest point on the edge.
 
 ### 16. The PCB context menu
-Old #30. **Partial.** Hit: constantly. Blocks: no. WP3, size S-M.
-- Exists: conditional entries for the edit tools (`actions/pcbSweepMenu.ts`) and zone and net-inspection groups (`Canvas.tsx`); the
-  schematic menu already follows KiCad's conditions (`kicad-port/schContextMenu.ts`).
-- Missing: the base block (Rotate, Flip, Move Exactly, Create Array, Copy, Cut, Duplicate, Delete, Align, Distribute) is always listed,
-  greyed out when it does not apply, where KiCad lists only what applies; no Properties, Lock, Group, Select Connection or router
-  entries; a flat list without submenus.
-- Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`.
+Old #30. **Mostly done (2026-10-08).** Hit: constantly. Blocks: no. WP3, size S-M (done).
+- Done (`PARITY-pcb.md` section 7): the menu is built the way KiCad builds it, from the entries every tool adds with its condition and order number
+  (`kicad-port/pcbContextMenu.ts`: `ConditionalMenu` and `buildSelectionMenu`, in `PCB_EDIT_FRAME::setupTools` order, so the order is KiCad's), and lists only what
+  applies: Select, Routing, Mirror / Rotate, Shape Modification, Position, Locking, Zones, Net Inspection Tools, Align/Distribute, Create from Selection and Grouping
+  as submenus, then Cut, Copy, Paste, Duplicate and Delete, Zoom and Grid, and Properties last. The router's menu opens while a route is drawn, the drawing tools' while one runs, and the picker
+  tools offer Cancel, Zoom and Grid. The entries run the existing actions (`components/canvas/pcbMenuBuilder.ts`, `actions/pcbMenuActions.ts`); `actions/pcbSweepMenu.ts`
+  and the flat list in `Canvas.tsx` are gone. A right click keeps a selection and selects the item under the pointer only when there is none, as KiCad does.
+- Missing: table cells, gate swap and generators have no IR, so no entries; the pad settings are listed dimmed (they belong to the Footprint Editor tab) and so are most
+  of the router's via, posture and corner-mode actions (Place Through Via works while routing; Track Corner Mode always shows 45); Zone Priority raise and lower go by
+  the zones' boxes overlapping, not their filled shapes.
+- Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`, `board_inspection_tool.cpp`, `router/router_tool.cpp`.
 
 ### 17. Groups
-Old #27. **Partial.** Hit: sometimes. Blocks: no. WP3, with WP1 for the schematic, size S-M.
-- Exists: Group, Ungroup, whole-group selection, enter and leave (`Cmd::Group`, `state/store.tsx` `withGroupSubstitution`).
-- Done since: Add Items, Remove Items and Group Properties on the board (`PARITY-common.md` section 4: one undo step, `Cmd::EditGroup`).
-- Missing: group-aware move, rotate, flip and delete; nested groups; the entered-group overlay; export (item 2); no groups in the
-  schematic or the footprint editor (their Group / Ungroup and the group dialogs are dimmed or do nothing there).
-- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
+Old #27. **Mostly done on the board (2026-10-08); the schematic and the footprint editor have none.** Hit: sometimes. Blocks: no. WP3, with WP1 for the schematic, size S-M.
+- Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`PARITY-common.md` section 4: one undo step, `Cmd::EditGroup`);
+  and, since 2026-10-08 (`PARITY-pcb.md` section 16): groups nest (`EDA_GROUP`: a group may hold groups; `crates/model/src/groups.rs`, `crates/ops/src/pcb_groups.rs`, a loop is
+  refused, a group under two members dissolves up the tree); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree, with a locked leaf locking its group
+  for the tools; a deleted member leaves its group; selecting a member picks the outermost group, a double click or Enter Group enters one (only its members can be picked),
+  and Escape, a click outside it, selecting something outside it or Leave Group leave it; the entered group is drawn with its box and name and everything outside it dimmed, a selected
+  group with its box and name; the `.kicad_pcb` file and the clipboard text hold the tree; the Grouping submenu of the right-click menu lists the four actions (item 16).
+- Missing: items drawn or pasted while a group is entered do not join it (`BOARD_COMMIT::Push`); Create Array skips groups (item 22); no groups in the schematic or the
+  footprint editor (their Group / Ungroup and the group dialogs are dimmed or do nothing there).
+- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
 
 ### 18. Appearance and display options
 New. **Partial.** Hit: every session. Blocks: no. WP3, size M.
@@ -349,9 +357,14 @@ Old #29. **Partial.** Hit: constantly. Blocks: no. WP1, size S.
 - Port from: `common/view/wx_view_controls.cpp`.
 
 ### 21. No Find on the PCB
-New. **Open.** Hit: often on big boards. Blocks: no. WP3, size S-M.
-- Find, Find and Replace and Find Next are registered on the Schematic tab only; `common.Interactive.search` jumps to the Activity
-  tab; Find by Properties is recorded unwired (`actions/useActionRunner.ts`, `ui-parity-missing.json`).
+New. **Mostly done (2026-10-08).** Hit: often on big boards. Blocks: no. WP3, size S-M (done).
+- Done (`PARITY-pcb.md` section 7a): Find (Ctrl+F), Find Next (F3) and Find Previous (Shift+F3) on the board, from `DIALOG_FIND`: the search text with its history, Match case,
+  Whole words only, Wildcards, Wrap, the footprint references, values, other texts, DRC markers and net names, Restart Search and the status line; the hit list in KiCad's
+  order (footprints, texts, markers, nets); the hit selected (a net: its tracks and vias) and the view brought to it as `PCB_SELECTION_TOOL::FindItem` does; the dialog opens
+  with the selected footprint's value or text (`kicad-port/pcbFind.ts`, `state/pcbFind.ts`, `actions/pcbFindActions.ts`, `components/PcbFindDialog.tsx`).
+- Missing: Find by Properties (`pcbnew.EditorControl.findByProperties` stays unwired: it needs the property manager and a PCBEXPR search over every item, the reason is in
+  `ui-parity-missing.json`); Include hidden fields does nothing (a footprint has no hidden field here) and a zone has no name, so none matches; the dialog's "Show search panel"
+  link (`common.Interactive.search` still jumps to the Activity tab). Find and Replace is the schematic's only, as in KiCad.
 - Port from: `pcbnew/dialogs/dialog_find.cpp`.
 
 ### 22. Arrays of footprints
@@ -465,10 +478,10 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | Partial | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`); schematic Align: item 1. |
 | 26 | Array tool | Partial | `Cmd::CreateArray`, `CreateArrayDialog.tsx`; item 22. |
-| 27 | Grouping | Partial | `Cmd::Group` family, `state/store.tsx::withGroupSubstitution`; item 17. |
+| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic and the footprint editor have no groups; item 17. |
 | 28 | Dimensions and measure | **Closed** | `crates/connectivity/src/dimension.rs`, `Cmd::AddDimension` family, `components/DimensionPropertiesDialog.tsx`, the measure tool. Left: the interactive height click, text border, manual text position, export (item 2). |
 | 29 | Pan | Partial | `kicad-port/viewControls.ts`, `Canvas.tsx` (PCB); item 20. |
-| 30 | Context menu | Partial | `actions/pcbSweepMenu.ts`, `Canvas.tsx`; item 16. |
+| 30 | Context menu | **Closed** | `kicad-port/pcbContextMenu.ts` (KiCad's `CONDITIONAL_MENU` and the entries of every tool's `Init()`), `pcbSelectionSummary.ts`, `components/canvas/pcbMenuBuilder.ts`, `Canvas.tsx`. Left: table cells, gate swap, generators, most of the router's via and posture entries (item 16, item 7). |
 
 ## Appendix B. Out of scope and deferred
 
