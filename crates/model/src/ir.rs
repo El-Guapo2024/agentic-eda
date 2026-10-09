@@ -2161,6 +2161,11 @@ pub struct PadMaskInfo {
     /// `(pintype "..")`, e.g. `"free"` (see `PAD::IsFreePad`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_type: String,
+    /// `(clearance C)` (`PAD::GetLocalClearance`): the pad's own copper clearance, which replaces the net class's and the
+    /// zone's for this pad (`DRC_ENGINE::EvalRules`: a local override wins over everything but the board minimum). `None`
+    /// inherits the footprint's, then the rules'. Pre-9.0 files: 0 meant "inherit".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
     /// `(zone_connect N)` (`PAD::GetLocalZoneConnection`): how a zone connects to this pad, overriding the footprint's
     /// and then the zone's own `pad_connection`. `None` is `INHERITED`. Read by the zone filler
     /// (`ZONE_FILLER::knockoutThermalReliefs` -> `DRC_ENGINE::EvalZoneConnection`).
@@ -2182,6 +2187,8 @@ pub struct PadMaskInfo {
 /// `pad_connection` (applied by the filler, `DRC_ENGINE::EvalZoneConnection`). See [`Design::pad_zone_facts`].
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct PadZoneFacts {
+    /// `PAD::GetClearanceOverrides`: the pad's own clearance, else its footprint's; `None` when neither sets one.
+    pub clearance: Option<Um>,
     /// The pad's own `(zone_connect ..)`; `None` inherits.
     pub connection: Option<PadConnection>,
     /// The footprint's `(zone_connect ..)`; `None` inherits (consulted when the pad inherits).
@@ -2202,6 +2209,7 @@ impl Design {
         if let Some(extra) = self.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp_id)) {
             let pad = if extra.pads.len() == pad_count { extra.pads.get(pad_idx) } else { None };
             return PadZoneFacts {
+                clearance: pad.and_then(|p| p.clearance).or(extra.clearance),
                 connection: pad.and_then(|p| p.zone_connection),
                 footprint_connection: extra.zone_connection,
                 thermal_gap: pad.and_then(|p| p.thermal_gap),
@@ -2212,6 +2220,7 @@ impl Design {
         let Some(lib) = self.footprint_library.as_ref().and_then(|l| l.by_name(footprint_name)).filter(|f| f.published) else { return PadZoneFacts::default() };
         let pad = if lib.pads.len() == pad_count { lib.pads.get(pad_idx) } else { None };
         PadZoneFacts {
+            clearance: pad.and_then(|p| p.clearance_override),
             connection: pad.and_then(|p| p.zone_connection),
             footprint_connection: lib.zone_connection,
             thermal_gap: pad.and_then(|p| p.thermal_gap_override),
@@ -2256,6 +2265,10 @@ pub struct FootprintExtra {
     /// `(net_tie_pad_groups "1,2" "3")`, verbatim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub net_tie_pad_groups: Vec<String>,
+    /// `(clearance C)` on the footprint (`FOOTPRINT::GetLocalClearance`): the copper clearance of every pad that does not
+    /// set its own. `None` inherits the rules'.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
     /// `(zone_connect N)` on the footprint (`FOOTPRINT::GetLocalZoneConnection`): how zones connect to every pad that
     /// does not set its own. `None` is `INHERITED` (the zone's `pad_connection` applies).
     #[serde(default, skip_serializing_if = "Option::is_none")]

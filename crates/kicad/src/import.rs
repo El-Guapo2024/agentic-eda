@@ -1248,6 +1248,11 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     // `(zone_connect N)` (`FOOTPRINT::SetLocalZoneConnection`); the legacy `(thermal_width ..)` / `(thermal_gap ..)` are
     // read and dropped by KiCad itself ("never exposed in the GUI").
     e.zone_connection = sexpr::find(fp, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
+    // `(clearance C)` (`FOOTPRINT::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
+    if let Some(c) = sexpr::find(fp, "clearance").and_then(|f| sexpr::num(f, 1)) {
+        let c = mm_to_um(c);
+        e.clearance = if file_version <= 20240201 && c == 0 { None } else { Some(c) };
+    }
     e
 }
 
@@ -1292,6 +1297,10 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64) -> PadMask
         info.pin_type = t.to_string();
     }
     // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.
+    if let Some(c) = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)) {
+        let c = mm_to_um(c);
+        info.clearance = if file_version <= 20240201 && c == 0 { None } else { Some(c) };
+    }
     info.zone_connection = sexpr::find(pad, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
     info.thermal_spoke_width = sexpr::find(pad, "thermal_bridge_width").or_else(|| sexpr::find(pad, "thermal_width")).and_then(|f| sexpr::num(f, 1)).map(mm_to_um);
     info.thermal_spoke_angle_mdeg = sexpr::find(pad, "thermal_bridge_angle").and_then(|f| sexpr::num(f, 1)).map(|d| ((d * 1000.0).round() as i64).rem_euclid(360_000) as eda_model::ir::Millideg);

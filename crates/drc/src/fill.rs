@@ -59,6 +59,7 @@ fn fill_pad(p: &crate::board::DrcPad) -> FillPad {
         copper: convert_shape(&p.copper),
         hole: p.hole.as_ref().map(convert_shape),
         geometry: Some(PadGeometry { center: pt(p.center), size: p.size, circular, default_spoke_angle_mdeg: default_angle, orientation_mdeg: p.orientation_mdeg }),
+        clearance_override: p.zone.clearance,
         zone_connection: p.zone.connection,
         footprint_zone_connection: p.zone.footprint_connection,
         thermal_gap: p.zone.thermal_gap,
@@ -129,6 +130,9 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
     let vias: Vec<FillVia> =
         board.vias.iter().map(|v| FillVia { net: v.net.clone(), at: pt(v.at), diameter: v.diameter, drill: v.drill, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone(), layer_order: board.layers.clone() }).collect();
 
+    // `BOARD::GetMaxClearanceValue`: the rules' largest clearance, and every local override of a pad, footprint or zone.
+    let worst_clearance = board.pads.iter().filter_map(|p| p.zone.clearance).chain(board.zones.iter().map(|z| z.clearance)).fold(crate::constraints::worst_case_clearance(rules), i64::max);
+
     let mut out = FillResults { zones: HashMap::new() };
     for z in &board.zones {
         let zone = Zone {
@@ -178,7 +182,9 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             board_outline: board_outline.clone(),
             keepouts,
             hole_clearance: crate::constraints::hole_clearance_min(rules),
-            worst_clearance: crate::constraints::worst_case_clearance(rules),
+            worst_clearance,
+            edge_clearance: crate::constraints::edge_clearance_min(rules),
+            min_clearance: rules.min_clearance_um,
         };
         let clearance_fn = |a: Option<&str>, b: Option<&str>| crate::constraints::clearance(rules, a, b);
         let fill = fill_zone(&zone, &zone.layer, &input, clearance_fn, DEFAULT_MAX_ERROR);

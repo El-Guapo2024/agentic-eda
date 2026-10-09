@@ -83,6 +83,9 @@ pub struct FillPad {
     pub zone_connection: Option<PadConnection>,
     /// `FOOTPRINT::GetLocalZoneConnection` of the pad's footprint.
     pub footprint_zone_connection: Option<PadConnection>,
+    /// `PAD::GetClearanceOverrides`: the pad's own clearance, else its footprint's. Replaces the net class's and the zone's
+    /// for this pad, but never goes below the board's minimum clearance; 0 is no override.
+    pub clearance_override: Option<i64>,
     /// `PAD::GetLocalThermalGapOverride`.
     pub thermal_gap: Option<i64>,
     /// `PAD::GetLocalThermalSpokeWidthOverride`.
@@ -103,6 +106,7 @@ impl Default for FillPad {
             geometry: None,
             zone_connection: None,
             footprint_zone_connection: None,
+            clearance_override: None,
             thermal_gap: None,
             spoke_width: None,
             spoke_angle_mdeg: None,
@@ -218,6 +222,11 @@ pub struct FillInput {
     pub hole_clearance: i64,
     /// `BOARD::GetMaxClearanceValue`: how far outside a zone's bounding box an item can still reach into it.
     pub worst_clearance: i64,
+    /// `EDGE_CLEARANCE_CONSTRAINT` (the board's copper-to-edge clearance): the fill stays this far from every segment of
+    /// `board_outline` (`knockoutGraphicClearance` on the Edge.Cuts items, line widths ignored). 0 = no edge knockout.
+    pub edge_clearance: i64,
+    /// `BOARD_DESIGN_SETTINGS::m_MinClearance`: the floor a pad's own clearance override cannot go below.
+    pub min_clearance: i64,
 }
 
 /// `max_error`: the polygon-approximation tolerance for circles/arcs
@@ -437,11 +446,19 @@ where
     // -------------------------------------------------------------------
     for &i in &no_connection_pads {
         let pad = &input.pads[i];
-        // `knockoutPadClearance`: the copper at the clearance, the drill at the larger hole clearance.
-        let gap = clearance_fn(zone_net, pad.net.as_deref()).max(zone.clearance);
+        // `knockoutPadClearance`: the copper at the clearance, the drill at the larger hole clearance. A pad's own clearance
+        // (or its footprint's) replaces the net class's and the zone's -- `EvalRules`: a local override takes precedence
+        // over everything except the board minimum (and 0 is not an override).
+        let (gap, hole_gap) = match pad.clearance_override.filter(|&c| c != 0) {
+            Some(c) => (c.max(input.min_clearance), c.max(input.hole_clearance)),
+            None => {
+                let g = clearance_fn(zone_net, pad.net.as_deref()).max(zone.clearance);
+                (g, g.max(input.hole_clearance))
+            }
+        };
         add_knockout(&mut clearance_holes, &pad.copper, gap, max_error);
         if let Some(hole) = &pad.hole {
-            add_knockout(&mut clearance_holes, hole, gap.max(input.hole_clearance), max_error);
+            add_knockout(&mut clearance_holes, hole, hole_gap, max_error);
         }
     }
 
@@ -491,6 +508,19 @@ where
             continue;
         }
         clearance_holes.add_outline(keepout.outline.clone());
+    }
+
+    // Board edge: `knockoutGraphicClearance` of the Edge.Cuts items at the board's copper-to-edge clearance, the line's
+    // own width ignored (a zero-width stadium round each outline segment).
+    if let (Some(outline), true) = (&input.board_outline, input.edge_clearance > 0) {
+        let n = outline.len();
+        for i in 0..n {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            let seg = Shape::Stadium { a, b, r: 0 };
+            if bboxes_intersect(bbox_of(&seg), inflate_bbox(zone_bbox, input.edge_clearance + EXTRA_MARGIN + max_error)) {
+                add_knockout(&mut clearance_holes, &seg, input.edge_clearance, max_error);
+            }
+        }
     }
 
     // -------------------------------------------------------------------
