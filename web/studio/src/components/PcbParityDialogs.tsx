@@ -12,10 +12,10 @@
 //                      Cartesian or polar offset, "Clear" buttons that reset an
 //                      offset to the current one, OK applies
 //                      `RelativeItemSelectionMove`.
-//   place_footprint    pcbnew.EditorControl.placeFootprint ("A") -- arms an
-//                      unplaced footprint for click-to-place (this project's
-//                      footprints come from the schematic, not a library
-//                      chooser).
+//   place_footprint    pcbnew.EditorControl.placeFootprint ("A") -- the
+//                      Footprint Chooser: a footprint of KiCad's installed
+//                      libraries, or an unplaced part of the schematic, armed
+//                      for click-to-place.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
@@ -23,6 +23,7 @@ import { movableItem, polarTranslation, positionRelativeSelectionAnchor, relativ
 import { editableSelection } from "../kicad-port/pcbTransform";
 import { itemPosition } from "../kicad-port/pcbReference";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
+import { FootprintChooserDialog } from "./FootprintChooserDialog";
 
 export function PcbParityDialogs() {
   const which = useStudioState().pcbx.pcbDialog;
@@ -322,50 +323,38 @@ function PositionRelativeDialog() {
   );
 }
 
-/** `BOARD_EDITOR_CONTROL::PlaceFootprint` -- pick one, then the next canvas click places it (Canvas.tsx's armed-part path). */
+/**
+ * `BOARD_EDITOR_CONTROL::PlaceFootprint` -- the Footprint Chooser (components/FootprintChooserDialog.tsx): pick a footprint of KiCad's installed libraries
+ * (a mounting hole, a fiducial, a connector), then the next canvas click puts it on the board as a part of its own (`place_footprint`, Canvas.tsx's armed
+ * path). The schematic's parts that are not on the board yet are the group at the top ("-- Unplaced --"): picking one arms it as before.
+ */
 function PlaceFootprintDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const close = useClose();
-  const unplaced = (state.board?.parts ?? []).filter((p) => !p.placed).sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0));
-  const [sel, setSel] = useState(unplaced[0]?.ref ?? "");
-  useEffect(() => {
-    if (!sel && unplaced[0]) setSel(unplaced[0].ref);
-  }, [sel, unplaced]);
-
-  const choose = (ref: string) => {
-    close();
-    if (!ref) return;
-    dispatch({ type: "SET_SELECTION", refs: [] });
-    dispatch({ type: "SET_ARMED", ref });
-  };
-
+  const parts = state.board?.parts;
+  const unplaced = useMemo(
+    () =>
+      (parts ?? [])
+        .filter((p) => !p.placed)
+        .sort((a, b) => (a.ref < b.ref ? -1 : a.ref > b.ref ? 1 : 0))
+        .map((p) => ({ ref: p.ref, label: p.value ?? p.package ?? "" })),
+    [parts]
+  );
   return (
-    <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 340 }} onClick={(e) => e.stopPropagation()}>
-        <div className="dialog-header">
-          <span>Place Footprints</span>
-        </div>
-        <div className="dialog-body">
-          {unplaced.length === 0 ? (
-            <div style={{ fontSize: 12 }}>Every footprint is already placed.</div>
-          ) : (
-            <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border, #444)" }}>
-              {unplaced.map((p) => (
-                <div key={p.ref} style={{ padding: "2px 6px", cursor: "pointer", whiteSpace: "pre", fontFamily: "monospace", background: p.ref === sel ? "var(--accent-bg, #2a4a6a)" : undefined }} onClick={() => setSel(p.ref)} onDoubleClick={() => choose(p.ref)}>
-                  {`${p.ref}    ( ${p.value ?? p.package ?? ""} )`}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        <div className="dialog-footer">
-          <button onClick={close}>Cancel</button>
-          <button className="primary" disabled={!sel} onClick={() => choose(sel)}>
-            OK
-          </button>
-        </div>
-      </div>
-    </div>
+    <FootprintChooserDialog
+      unplaced={unplaced}
+      onCancel={close}
+      onChoose={(pick) => {
+        close();
+        if (pick.kind === "unplaced") {
+          dispatch({ type: "SET_SELECTION", refs: [] });
+          dispatch({ type: "SET_ARMED", ref: pick.ref });
+        } else {
+          dispatch({ type: "SET_ARMED_FOOTPRINT", name: pick.name });
+          dispatch({ type: "TOAST", message: `Click on the board to place ${pick.name.slice(pick.name.indexOf(":") + 1)} (Esc cancels).`, kind: "info" });
+        }
+      }}
+    />
   );
 }

@@ -9,8 +9,12 @@
 // form and just autofocuses the one field the hotkey named, a deliberate
 // simplification (one component to maintain, same backend Cmds either
 // way) rather than building two dialogs with identical plumbing.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchAnySymbol } from "../api/libraryClient";
+import { uniquePinCount } from "../kicad-port/footprintFilter";
+import { expandStackedPinNotation } from "../kicad-port/stackedPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { FootprintChooserDialog } from "./FootprintChooserDialog";
 
 export function SymbolPropertiesDialog() {
   const state = useStudioState();
@@ -24,6 +28,23 @@ export function SymbolPropertiesDialog() {
   const [footprint, setFootprint] = useState("");
   const [datasheet, setDatasheet] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The Footprint field's browse button: the Footprint Chooser, narrowed by this symbol's pin count and its library symbol's footprint filters.
+  const [choosingFootprint, setChoosingFootprint] = useState(false);
+  const [libInfo, setLibInfo] = useState<{ filters: string[]; pins: number } | null>(null);
+  const libId = symbol?.lib_id ?? null;
+  useEffect(() => {
+    setLibInfo(null);
+    if (!libId) return;
+    let cancelled = false;
+    // The pins of the whole library symbol, every unit (`GetGraphicalPins( 0, 1 )`): the placed instance lists the pins of its own unit only.
+    fetchAnySymbol(libId)
+      .then((r) => !cancelled && setLibInfo({ filters: r.symbol.footprint_filters ?? [], pins: uniquePinCount(r.symbol.pins, (n) => expandStackedPinNotation(n).numbers) }))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [libId]);
+  const instancePins = useMemo(() => new Set((symbol?.pins ?? []).map((p) => p.number)).size, [symbol]);
 
   const refInput = useRef<HTMLInputElement>(null);
   const valueInput = useRef<HTMLInputElement>(null);
@@ -91,14 +112,20 @@ export function SymbolPropertiesDialog() {
               }}
             />
             <span>Footprint</span>
-            <input
-              ref={footprintInput}
-              value={footprint}
-              onChange={(e) => setFootprint(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-            />
+            <div style={{ display: "flex", gap: 4 }}>
+              <input
+                ref={footprintInput}
+                style={{ flex: 1, minWidth: 0 }}
+                value={footprint}
+                onChange={(e) => setFootprint(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+              />
+              <button onClick={() => setChoosingFootprint(true)} title="Choose a footprint from KiCad's libraries (Footprint Chooser)" data-browse-footprint>
+                Browse…
+              </button>
+            </div>
             <span>Datasheet</span>
             <input
               ref={datasheetInput}
@@ -125,6 +152,18 @@ export function SymbolPropertiesDialog() {
           </button>
         </div>
       </div>
+      {choosingFootprint && (
+        <FootprintChooserDialog
+          preselect={footprint.includes(":") ? footprint : null}
+          pinCount={libInfo?.pins ?? instancePins}
+          fpFilters={libInfo?.filters}
+          onCancel={() => setChoosingFootprint(false)}
+          onChoose={(pick) => {
+            setChoosingFootprint(false);
+            if (pick.kind === "footprint") setFootprint(pick.name);
+          }}
+        />
+      )}
     </div>
   );
 }

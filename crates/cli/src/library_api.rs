@@ -22,28 +22,17 @@ fn path_safe(part: &str) -> bool {
 /// and pad layer the file holds (`eda_kicad::parse_library_footprint`, the reader behind Import -- the engine's own loader keeps only pads and a courtyard)
 /// and named `Lib:Name`, the key the library tree shows it under.
 fn installed_footprint_in(root: &Path, name: &str) -> Option<LibraryFootprint> {
-    let (lib, item) = name.split_once(':')?;
-    if !path_safe(lib) || !path_safe(item) {
-        return None;
-    }
-    let text = std::fs::read_to_string(eda_kicad::find_footprint_file(root, name)?).ok()?;
-    let mut fp = eda_kicad::parse_library_footprint(&text).ok()?.footprint;
-    fp.name = name.to_string();
-    fp.assign_missing_ids();
-    Some(fp)
+    crate::library_search::installed_footprint(root, name)
 }
 
-/// A symbol of KiCad's installed libraries (`Lib:Name` in `<root>/Lib.kicad_sym`) in the editable type. The library file is parsed once and kept
-/// (`eda_kicad::resolve_symbol`'s own cache), so a library is read on the first symbol anyone opens from it, not before.
+/// A symbol of KiCad's installed libraries (`Lib:Name` in `<root>/Lib.kicad_sym`) in the editable type: units, body styles, keywords and footprint
+/// filters as the file has them. Only that symbol (and the ones it extends) is cut out of the file and parsed -- a library of hundreds of symbols is
+/// scanned once for the chooser and kept (`library_search::symbol_lib`), never parsed whole to open one of them.
 fn installed_symbol_in(root: &Path, lib_id: &str) -> Option<LibrarySymbol> {
-    let (lib, item) = lib_id.split_once(':')?;
-    if !path_safe(lib) || !path_safe(item) {
+    if !path_safe(lib_id.split_once(':')?.0) || !path_safe(lib_id.split_once(':')?.1) {
         return None;
     }
-    let sym = eda_kicad::resolve_symbol(root, lib_id)?;
-    let mut sym = LibrarySymbol::from_engine_symbol(&sym);
-    sym.assign_missing_ids();
-    Some(sym)
+    crate::library_search::installed_symbol(root, lib_id).map(|(sym, _)| sym)
 }
 
 /// A footprint by name from the project library, else KiCad's installed libraries, else whatever the model resolves it to (intent, a loaded
@@ -107,6 +96,57 @@ pub fn symbol(dir: &Path, lib_id: &str) -> Value {
         Ok((symbol, in_project)) => json!({ "symbol": symbol, "in_project": in_project }),
         Err(e) => json!({ "error": board::reasons(&e) }),
     }
+}
+
+/// `GET /api/library/project`: the symbols the chooser lists beside the installed libraries -- the project's own and the ones the design uses --
+/// as `{"entries": [{"id": "Lib:Name", "source", "placed", "description", "reference", "units", "pins", "power", "keywords"}]}`, sorted by id.
+/// `source` is `project` (an entry of the project symbol library: authored here, imported, or the copy a placed symbol keeps -- editable), `design`
+/// (the board's model resolves it: the intent's own or an installed one it already uses) or `builtin` (the small table that stands in for
+/// `Device:R`, `C`, `L`, `D`, `LED` where KiCad's libraries are not installed). `placed` is set for a symbol with an instance on the schematic,
+/// KiCad's "Already Placed" group.
+pub fn project_symbols(dir: &Path) -> Value {
+    let (_, design, model) = match board::load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return json!({ "error": board::reasons(&e) }),
+    };
+    let mut placed: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    match design.schematic.as_ref() {
+        Some(root) => {
+            for sch in std::iter::once(root).chain(design.sheet_contents.iter().flat_map(|c| c.values())) {
+                placed.extend(sch.symbols.iter().map(|s| s.lib_id.clone()).filter(|id| !id.is_empty()));
+            }
+        }
+        // No stored schematic: the studio shows the one derived from the intent, whose symbols are the parts' own.
+        None => placed.extend(model.parts.iter().map(|p| model.lib_id_of(p)).filter(|id| !id.is_empty())),
+    }
+    placed.retain(|id| !eda_model::is_synthetic_lib_id(id));
+
+    let mut entries: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
+    let mut put = |id: &str, source: &str, description: &str, reference: &str, units: u32, pins: usize, power: bool, keywords: &str| {
+        entries.entry(id.to_string()).or_insert_with(|| {
+            json!({ "id": id, "source": source, "placed": placed.contains(id), "description": description, "reference": reference, "units": units.max(1), "pins": pins, "power": power, "keywords": keywords })
+        });
+    };
+    let distinct_pins = |numbers: &mut dyn Iterator<Item = &str>| numbers.collect::<std::collections::BTreeSet<&str>>().len();
+    if let Some(lib) = &design.symbol_library {
+        for s in &lib.symbols {
+            put(&s.lib_id, "project", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().filter(|p| p.body_style <= 1).map(|p| p.number.as_str())), s.power, &s.keywords);
+        }
+    }
+    for s in &model.symbols {
+        if !eda_model::is_synthetic_lib_id(&s.lib_id) {
+            put(&s.lib_id, "design", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+        }
+    }
+    for id in &placed {
+        if let Some(s) = model.symbol_of(id) {
+            put(id, "design", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+        }
+    }
+    for s in eda_model::symbol::builtin_catalog() {
+        put(&s.lib_id, "builtin", &s.description, &s.reference_prefix, s.unit_count, distinct_pins(&mut s.pins.iter().map(|p| p.number.as_str())), s.power, "");
+    }
+    json!({ "entries": entries.into_values().collect::<Vec<_>>() })
 }
 
 /// `GET /api/library/footprint?name=` -- the footprint sibling of [`symbol`].
@@ -248,6 +288,47 @@ mod tests {
         assert!(fp.model.as_deref().is_some_and(|m| m.contains("SOIC-16_3.9x9.9mm_P1.27mm")), "and its 3D model path: {:?}", fp.model);
         let r = installed_symbol_in(&sym_root, "Device:R").expect("Device:R is installed");
         assert_eq!(r.pins.len(), 2);
+    }
+
+    /// A board directory of its own (`board.json`, an empty intent, a design with the sections the chooser's project list reads).
+    fn scratch_board(tag: &str, design_json: &str) -> std::path::PathBuf {
+        let dir = temp_root(tag);
+        let intent = dir.join("intent.yaml");
+        std::fs::write(&intent, serde_yaml::to_string(&ConstraintModel::default()).unwrap()).unwrap();
+        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": intent.display().to_string(), "snap_um": 100, "spacing_um": 300 })).unwrap()).unwrap();
+        std::fs::write(dir.join("design.json"), design_json).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_choosers_project_list_has_the_project_library_what_is_placed_and_the_stand_ins() {
+        let dir = scratch_board(
+            "project",
+            r#"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]},
+                "placement":{"outline":[],"footprints":[],"modules":[]},
+                "schematic":{"symbols":[
+                    {"id":"R1","at":{"x":0,"y":0},"rot":0,"lib_id":"Device:R"},
+                    {"id":"U1","at":{"x":9000,"y":0},"rot":0,"lib_id":"Mine:Part"},
+                    {"id":"U2","at":{"x":19000,"y":0},"rot":0,"lib_id":"Amp:LM358"}],"wires":[]},
+                "symbol_library":{"symbols":[
+                    {"lib_id":"Mine:Part","reference_prefix":"U","description":"My part","keywords":"mine custom","unit_count":2,"pins":[{"number":"1","name":"A","electrical_type":"input","shape":"line","at":{"x":0,"y":0},"angle_deg":0,"length_mm":2.54,"unit":1},{"number":"1","name":"A","electrical_type":"input","shape":"line","at":{"x":0,"y":0},"angle_deg":0,"length_mm":2.54,"unit":2},{"number":"2","name":"B","electrical_type":"output","shape":"line","at":{"x":0,"y":2.54},"angle_deg":0,"length_mm":2.54,"unit":1}]},
+                    {"lib_id":"eda:Unused","description":"Never placed"},
+                    {"lib_id":"Amp:LM358","reference_prefix":"U","description":"Dual op-amp","published":true,"unit_count":3}]}}"#,
+        );
+        let v = project_symbols(&dir);
+        let entries = v["entries"].as_array().unwrap_or_else(|| panic!("{v}"));
+        let by = |id: &str| entries.iter().find(|e| e["id"] == id).unwrap_or_else(|| panic!("no {id} in {v}"));
+        let mine = by("Mine:Part");
+        assert_eq!((mine["source"].clone(), mine["placed"].clone(), mine["units"].clone(), mine["pins"].clone(), mine["keywords"].clone()), (json!("project"), json!(true), json!(2), json!(2), json!("mine custom")), "distinct pin numbers, the first body style");
+        assert_eq!((by("eda:Unused")["placed"].clone(), by("eda:Unused")["source"].clone()), (json!(false), json!("project")));
+        assert_eq!((by("Amp:LM358")["placed"].clone(), by("Amp:LM358")["units"].clone()), (json!(true), json!(3)), "a placed installed symbol keeps its definition in the project library");
+        // what the design resolves, and the stand-ins for where KiCad's libraries are not installed
+        assert_eq!(by("Device:R")["placed"], true);
+        assert_eq!(by("Device:R")["source"], "design", "the model resolves it: the built-in table or the library file");
+        assert_eq!(by("Device:LED")["source"], "builtin");
+        assert!(entries.iter().all(|e| e["id"].as_str().is_some_and(|id| !id.starts_with("power:"))), "power symbols are not in the list");
+        assert!(entries.windows(2).all(|w| w[0]["id"].as_str() <= w[1]["id"].as_str()), "sorted by id");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

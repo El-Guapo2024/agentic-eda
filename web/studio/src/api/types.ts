@@ -942,6 +942,8 @@ export type Cmd =
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
   | { op: "paste_clipboard"; text: string; at: PointXY }
+  /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
+  | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */

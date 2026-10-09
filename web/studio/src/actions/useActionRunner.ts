@@ -1649,7 +1649,7 @@ export function useActionRunner() {
 
     // common/lib_tree / LIB_TREE's ACTIONS::libraryTreeSearch (Ctrl+L): focus
     // the search field of the symbol chooser. Registered only while that
-    // dialog is open. (This app has no footprint chooser.)
+    // dialog is open. (The Footprint Chooser takes the focus when it opens.)
     if (state.symbolChooserOpen) {
       m.set("common.Control.libraryTreeSearch", () => {
         const el = document.getElementById("library-tree-search") as HTMLInputElement | null;
