@@ -34,6 +34,31 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     inside
 }
 
+/// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for the board's Edge.Cuts, from the live port of the same
+/// check (`eda_drc::outline::check_board_outline`): a gap wider than the chaining epsilon, a chain that crosses itself, a contour that crosses another,
+/// a line a few nanometres long. One finding per place, located at the Edge.Cuts items it names (or `outline`). A board whose outline is its polygon has
+/// nothing to check, and says nothing; one with other Edge.Cuts items passes once when they chain cleanly. This is not a second DRC -- kicad-cli's
+/// run on the exported file is the judge -- it is the outline the zone filler, the router and the 3D view are working from, reported while it is drawn.
+fn outline_malformed(design: &Design) -> Vec<CheckResult> {
+    if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design)) {
+        return Vec::new();
+    }
+    let errors = eda_drc::outline::check_board_outline(design);
+    if errors.is_empty() {
+        return vec![CheckResult::pass("placement_outline_malformed")];
+    }
+    errors
+        .iter()
+        .map(|e| {
+            let mut ids: Vec<&str> = e.item_a.iter().chain(e.item_b.iter()).map(String::as_str).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            let location = if ids.is_empty() { "outline".to_string() } else { ids.join("/") };
+            CheckResult::fail("placement_outline_malformed", location, format!("{} at ({:.3}, {:.3}) mm", e.describe(), e.at.x as f64 / 1000.0, e.at.y as f64 / 1000.0))
+        })
+        .collect()
+}
+
 /// Where the board's parts and copper must lie: `placement.outline` as the plain polygon it is for a board that has nothing else on Edge.Cuts, or,
 /// when Edge.Cuts has cutouts, arcs or several outlines, the outline KiCad builds from them (`eda_drc::outline`) -- a courtyard in a cutout is not
 /// on the board. A malformed outline (it does not chain) falls back to the polygon, which is then the rectangle round the edges.
@@ -191,6 +216,7 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
         out.push(CheckResult::fail("placement_outline", "design.placement.outline", "outline needs at least 3 points"));
         return out;
     }
+    out.extend(outline_malformed(design));
 
     // Coverage.
     let mut seen: HashMap<&str, usize> = HashMap::new();
@@ -1649,6 +1675,24 @@ mod tests {
         assert!(f.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("via (10000,6500)"))), "{f:?}");
         let (d, m) = wfixture(rt);
         assert!(fails(&d, &m, "routing_within_outline").is_empty());
+    }
+
+    #[test]
+    fn a_malformed_outline_is_a_placement_gate_and_a_plain_polygon_has_nothing_to_say() {
+        let malformed = |d: &Design, m: &ConstraintModel| -> Vec<CheckResult> { check_placement(d, m).into_iter().filter(|c| c.check == "placement_outline_malformed").collect() };
+        // A plain polygon outline: no such check at all.
+        let (d, m) = wfixture(clean_routing());
+        assert!(malformed(&d, &m).is_empty());
+        // A cutout that chains cleanly: one pass.
+        let (d, m) = with_a_cutout_round_c1(clean_routing());
+        let r = malformed(&d, &m);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].status, CheckStatus::Pass, "{r:?}");
+        // A stray line off the polygon's corner, and a circle across the edge, are not a clean outline.
+        let (mut d, m) = with_a_cutout_round_c1(clean_routing());
+        d.drawings.as_mut().expect("drawings").shapes.push(eda_model::ir::Shape::Circle { id: "crossing".into(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: Point { x: 20_000, y: 10_000 }, end: Point { x: 21_500, y: 10_000 } });
+        let r = malformed(&d, &m);
+        assert!(r.iter().any(|c| c.status == CheckStatus::Fail && c.hint.as_deref().is_some_and(|h| h.starts_with("Board has malformed outline (self-intersecting)")) && c.location.as_deref().is_some_and(|l| l.contains("crossing"))), "{r:?}");
     }
 
     #[test]
