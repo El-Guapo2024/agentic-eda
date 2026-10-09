@@ -9,8 +9,16 @@
 // form and just autofocuses the one field the hotkey named, a deliberate
 // simplification (one component to maintain, same backend Cmds either
 // way) rather than building two dialogs with identical plumbing.
+//
+// The "Show" column of the fields table (`DIALOG_SYMBOL_PROPERTIES`) shows or hides each of the four fields, and the Body style choice (Standard / Alternate, only for a symbol
+// whose library symbol has two) puts the symbol in the other body style (`SCH_EDIT_FRAME::SelectBodyStyle`): both go in the same undo step as the texts.
 import { useEffect, useRef, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { bodyStyleCount, setBodyStyleCmd } from "../kicad-port/schBodyStyle";
+import { fieldVisibilityCmds, ownerKey } from "../kicad-port/schFieldEdit";
+import type { Cmd } from "../api/types";
+
+const MAIN_FIELDS = ["Reference", "Value", "Footprint", "Datasheet"] as const;
 
 export function SymbolPropertiesDialog() {
   const state = useStudioState();
@@ -24,6 +32,9 @@ export function SymbolPropertiesDialog() {
   const [footprint, setFootprint] = useState("");
   const [datasheet, setDatasheet] = useState("");
   const [error, setError] = useState<string | null>(null);
+  /** The "Show" check of each main field, by name; `undefined` for a field the server did not send (an older one). */
+  const [shown, setShown] = useState<Record<string, boolean>>({});
+  const [bodyStyle, setBodyStyle] = useState(1);
 
   const refInput = useRef<HTMLInputElement>(null);
   const valueInput = useRef<HTMLInputElement>(null);
@@ -36,6 +47,8 @@ export function SymbolPropertiesDialog() {
     setValue(symbol.value ?? "");
     setFootprint(symbol.footprint ?? "");
     setDatasheet(symbol.datasheet ?? "");
+    setShown(Object.fromEntries((symbol.fields ?? []).filter((f) => (MAIN_FIELDS as readonly string[]).includes(f.name)).map((f) => [f.name, f.visible])));
+    setBodyStyle(symbol.body_style || 1);
     setError(null);
     const focusTarget = { reference: refInput, value: valueInput, footprint: footprintInput, datasheet: datasheetInput }[open?.field ?? "reference"];
     // Let the dialog mount before stealing focus.
@@ -60,18 +73,34 @@ export function SymbolPropertiesDialog() {
         return;
       }
     }
-    await api.cmd({ op: "edit_symbol_fields", id: trimmedRef, value, footprint, datasheet });
+    // the texts, the shown fields and the body style are one undo step (fields are keyed by the reference the symbol has now)
+    const cmds: Cmd[] = [{ op: "edit_symbol_fields", id: trimmedRef, value, footprint, datasheet }, ...fieldVisibilityCmds(ownerKey({ id: trimmedRef, unit: symbol.unit }), symbol.fields, shown)];
+    if (state.schematic && bodyStyle !== (symbol.body_style || 1)) {
+      const change = setBodyStyleCmd(state.schematic, [trimmedRef], bodyStyle);
+      if (change) cmds.push(change);
+    }
+    await api.cmdBatch(cmds);
     close();
   };
+  const bodyStyles = state.schematic ? bodyStyleCount(state.schematic, symbol) : 1;
+  /** The "Show" check of a main field's row; nothing for a field the server did not send. */
+  const showBox = (name: string) =>
+    shown[name] === undefined ? (
+      <span />
+    ) : (
+      <label title={`Show the ${name} field on the sheet`} style={{ whiteSpace: "nowrap" }}>
+        <input type="checkbox" checked={shown[name]} onChange={(e) => setShown({ ...shown, [name]: e.target.checked })} /> Show
+      </label>
+    );
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Symbol Properties</span>
         </div>
         <div className="dialog-body">
-          <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr" }}>
+          <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr auto" }}>
             <span>Reference</span>
             <input
               ref={refInput}
@@ -81,6 +110,7 @@ export function SymbolPropertiesDialog() {
                 if (e.key === "Enter") submit();
               }}
             />
+            {showBox("Reference")}
             <span>Value</span>
             <input
               ref={valueInput}
@@ -90,6 +120,7 @@ export function SymbolPropertiesDialog() {
                 if (e.key === "Enter") submit();
               }}
             />
+            {showBox("Value")}
             <span>Footprint</span>
             <input
               ref={footprintInput}
@@ -99,6 +130,7 @@ export function SymbolPropertiesDialog() {
                 if (e.key === "Enter") submit();
               }}
             />
+            {showBox("Footprint")}
             <span>Datasheet</span>
             <input
               ref={datasheetInput}
@@ -108,8 +140,24 @@ export function SymbolPropertiesDialog() {
                 if (e.key === "Enter") submit();
               }}
             />
+            {showBox("Datasheet")}
             <span>Library</span>
             <span style={{ opacity: 0.7 }}>{symbol.lib_id ?? "(generic)"}</span>
+            <span />
+            {bodyStyles > 1 && (
+              <>
+                <span>Body style</span>
+                <select value={bodyStyle} onChange={(e) => setBodyStyle(Number(e.target.value))}>
+                  {Array.from({ length: bodyStyles }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>
+                      {/* `LIB_SYMBOL::GetBodyStyleDescription`: a De Morgan pair is Standard and Alternate */}
+                      {n === 1 ? "Standard" : n === 2 ? "Alternate" : `Style ${n}`}
+                    </option>
+                  ))}
+                </select>
+                <span />
+              </>
+            )}
           </div>
           {error && (
             <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }}>{error}</p>

@@ -352,6 +352,8 @@ function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [num
 
 /** The field ids the sheet being painted has selected: a selected field is drawn in the selection colour (set by `paintSchematic` for the length of one paint). */
 let paintedSelection: ReadonlySet<string> = new Set();
+/** "Show Hidden Fields" while the sheet is being painted (`SCH_PAINTER::draw( SCH_FIELD )`: a hidden field is drawn, in the hidden-items colour, only while it is on). */
+let paintedShowHiddenFields = false;
 
 /** The colour KiCad draws a field of that name in. */
 function fieldColor(name: string): string {
@@ -369,10 +371,10 @@ function fieldColor(name: string): string {
   }
 }
 
-/** The fields of one item where the server says they are (`SchField`): every visible one, a Reference with its unit letter, in the item's own field colours (or `color`, when it is drawn selected). */
+/** The fields of one item where the server says they are (`SchField`): every visible one (and, with Show Hidden Fields, the hidden ones that have a text, in the hidden-items colour), a Reference with its unit letter, in the item's own field colours (or `color`, when it is drawn selected). */
 function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSuffix = "", color?: string) {
   for (const f of fields) {
-    if (!f.visible || !f.text) continue;
+    if (!f.text || (!f.visible && !paintedShowHiddenFields)) continue;
     const sizeUm = f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM;
     const text = shownText({ name: f.name, text: f.name === "Reference" ? f.text + unitSuffix : f.text, name_shown: f.name_shown });
     const picked = f.id !== undefined && paintedSelection.has(f.id);
@@ -381,7 +383,7 @@ function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSu
       h: f.h,
       v: f.v,
       vertical: f.vertical,
-      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : (color ?? fieldColor(f.name)),
+      color: picked ? layerColor("LAYER_SELECTION_SHADOWS") : !f.visible ? layerColor("LAYER_HIDDEN") : (color ?? fieldColor(f.name)),
       // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
       thicknessUm: f.bold ? Math.round(sizeUm / 5) : undefined,
       italic: f.italic,
@@ -932,6 +934,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   const hair = 1 / view.scale;
   const display = opts.display ?? DEFAULT_SCH_DISPLAY;
   paintedSelection = opts.selection;
+  paintedShowHiddenFields = display.showHiddenFields;
 
   // Wires. `on`: net-highlighted (click a wire with no modifier), or
   // box/modified-click *selected* (new this session -- `opts.selection`

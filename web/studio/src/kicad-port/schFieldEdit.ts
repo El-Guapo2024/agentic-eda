@@ -182,6 +182,19 @@ export function fieldEditCmd(field: SchField & { id: string }, c: FieldChanges):
   return changed ? (cmd as unknown as Cmd) : null;
 }
 
+/**
+ * The `edit_field` commands that show or hide the fields of the item `owner` as `wanted` says (field name -> shown), the "Show" column of Symbol Properties
+ * (`DIALOG_SYMBOL_PROPERTIES`): a name not in `wanted`, or one already as asked, is left alone.
+ */
+export function fieldVisibilityCmds(owner: string, fields: readonly Pick<SchField, "name" | "visible">[] | undefined, wanted: Readonly<Record<string, boolean>>): Cmd[] {
+  const out: Cmd[] = [];
+  for (const f of fields ?? []) {
+    const want = wanted[f.name];
+    if (want !== undefined && want !== f.visible) out.push({ op: "sch_edit", verb: "edit_field", id: fieldId(owner, f.name), visible: want } as unknown as Cmd);
+  }
+  return out;
+}
+
 /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on the selection: the items that have fields, and the items of the fields selected. Null when it holds neither. */
 export function autoplaceCmd(sch: Pick<Schematic, "symbols" | "power_symbols" | "sheets">, selection: readonly string[]): Cmd | null {
   const owners = new Set<string>();

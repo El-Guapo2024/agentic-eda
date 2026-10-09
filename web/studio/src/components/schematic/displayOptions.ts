@@ -4,6 +4,8 @@
 export interface SchDisplayOptions {
   /** `show_hidden_pins` -- `eeschema.EditorControl.showHiddenPins`: pins marked hidden are drawn too, in the hidden-items colour. */
   showHiddenPins: boolean;
+  /** `show_hidden_fields` -- `eeschema.EditorControl.showHiddenFields`: a field marked hidden is drawn too, in the hidden-items colour (it is no more selectable for that: `SCH_SELECTION_TOOL::Selectable`). */
+  showHiddenFields: boolean;
   /** `show_directive_labels` -- `showDirectiveLabels`. */
   showDirectiveLabels: boolean;
   /** `show_erc_errors` / `show_erc_warnings` / `show_erc_exclusions` -- `showERCErrors` / `showERCWarnings` / `showERCExclusions`: which ERC markers are drawn. */
@@ -14,9 +16,10 @@ export interface SchDisplayOptions {
   markSimExclusions: boolean;
 }
 
-/** KiCad's defaults (`eeschema_settings.cpp`: hidden pins off, directive labels on, ERC errors and warnings on, exclusions off, sim marks on). */
+/** KiCad's defaults (`eeschema_settings.cpp`: hidden pins and fields off, directive labels on, ERC errors and warnings on, exclusions off, sim marks on). */
 export const DEFAULT_SCH_DISPLAY: SchDisplayOptions = {
   showHiddenPins: false,
+  showHiddenFields: false,
   showDirectiveLabels: true,
   showErcErrors: true,
   showErcWarnings: true,

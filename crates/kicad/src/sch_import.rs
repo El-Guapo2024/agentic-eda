@@ -1441,6 +1441,30 @@ mod tests {
         }
     }
 
+    /// A KiCad 10 file with a symbol that declares `(body_styles demorgan)` and has `Name_1_1` and `Name_1_2` sub-blocks: the importer reads both bodies of the
+    /// library symbol (the normal one is no longer drawn doubled with the alternate one) and the instances, all in the normal body style, keep no body style entry.
+    #[test]
+    fn real_qa_de_morgan_symbol_reads_both_bodies() {
+        let data = std::env::var_os("KICAD_QA_DATA").map(std::path::PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| std::path::PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
+        let file = data.join("eeschema/variants/pic_sockets.kicad_sch");
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            eprintln!("QA corpus not found at {}; skipping", file.display());
+            return;
+        };
+        let (design, model, notes) = import_kicad_sch(&text).expect("real QA file imports");
+        assert_eq!(notes.unresolved_symbols, 0);
+        let pic = model.symbols.iter().find(|s| s.lib_id == "pic_programmer:PIC16F54").expect("the PIC16F54 library symbol");
+        let alt = pic.alternate.as_ref().expect("declared (body_styles demorgan), with PIC16F54_1_2");
+        assert!(!pic.pins.is_empty() && !alt.pins.is_empty(), "each body has its pins");
+        assert_eq!(pic.pins.len(), alt.pins.len(), "the same pins in both bodies");
+        // the sub-blocks are split, not merged: the pins are not listed twice in the normal body
+        let mut numbers: Vec<&str> = pic.pins.iter().map(|p| p.number.as_str()).collect();
+        numbers.sort();
+        numbers.dedup();
+        assert_eq!(numbers.len(), pic.pins.len(), "a pin appears once in a body");
+        assert!(design.schematic.unwrap().extras.body_styles.is_empty(), "the symbols are placed in the normal style");
+    }
+
     /// A bus wire, a bus entry, and a bus alias (GAPS.md #20) all survive
     /// `export_kicad_sch` -> `import_kicad_sch` -- no real symbols/parts
     /// needed, this is purely about the three new sexpr shapes

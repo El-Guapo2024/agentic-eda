@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { applyPatch } from "./schMove";
 import type { Schematic, SchField } from "../api/types";
 import type { SchMovePatch } from "../api/schEditTypes";
-import { autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeUm, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText } from "./schFieldEdit";
+import { autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeUm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText } from "./schFieldEdit";
 
 // the width of a text in these tests: 600 um a character at 1270 um, in proportion to the size
 const measure = (text: string, size: number) => text.length * 0.5 * size;
@@ -162,4 +162,19 @@ test("a preview patch carries the fields to where the server put them", () => {
   // an older server sends none: the fields stay
   const old = applyPatch(s, { ...patch, symbols: [{ id: "R1", unit: 1, at: [2540, 0], rot: 0, mirror: null }] });
   assert.deepEqual(old.symbols[0]!.fields, s.symbols[0]!.fields);
+});
+
+test("the Show column of Symbol Properties sends one edit per field whose visibility changed", () => {
+  const fields = [field("Reference", "R1", [0, 0]), field("Value", "330", [0, 0]), field("Footprint", "", [0, 0], { visible: false })];
+  const cmds = fieldVisibilityCmds("R1", fields, { Reference: true, Value: false, Footprint: true, Datasheet: true }) as unknown as Array<{ verb: string; id: string; visible: boolean }>;
+  assert.deepEqual(
+    cmds.map((c) => [c.verb, c.id, c.visible]),
+    [
+      ["edit_field", fieldId("R1", "Value"), false],
+      ["edit_field", fieldId("R1", "Footprint"), true],
+    ],
+    "Reference is shown already, Datasheet is a field the symbol does not have"
+  );
+  assert.deepEqual(fieldVisibilityCmds("R1", fields, {}), []);
+  assert.deepEqual(fieldVisibilityCmds("R1", undefined, { Value: false }), [], "an older server sends no fields");
 });
