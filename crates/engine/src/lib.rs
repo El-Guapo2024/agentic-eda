@@ -9,13 +9,17 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use eda_layout::{graph, layout, EdgeEndpoint, LayoutGraph, LayoutOptions, Node};
-use eda_model::ir::{Design, LabelKind, NetLabel, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SymbolInstance, Wire};
-use eda_model::{resolve_lib_id, CheckResult, ConstraintModel, Part, Pin, PinKind};
+use eda_model::ir::{Design, NoConnect, Point, Provenance, SchematicSection, SymbolInstance, Wire};
+use eda_model::{CheckResult, ConstraintModel, Part, Pin, PinKind};
 
+pub mod fields;
+mod flat;
 pub mod geometry;
 pub mod hier;
 pub mod nets;
+pub mod obstacles;
 pub mod placed;
+pub mod symgeom;
 
 pub use hier::{derive_hierarchy, derive_schematic_modules_with, Keep};
 
@@ -86,6 +90,26 @@ const TIGHT_MARGIN_UM: i64 = 2 * eda_layout::DEFAULT_GRID;
 /// anchor that passives and connectors hang off.
 const ANCHOR_MIN_PINS: usize = 5;
 
+/// `um` rounded down to a whole number of grid cells.
+fn on_grid(um: i64) -> i64 {
+    um / eda_layout::DEFAULT_GRID * eda_layout::DEFAULT_GRID
+}
+
+/// The extra room (grid cells) between parts, block by block, a flat layout is tried with, in turn.
+const HANG_ROOM_CELLS: [i64; 7] = [0, 3, 6, 10, 14, 20, 28];
+
+/// One laying out of a flat schematic: what is drawn, and how many of the hung nets found no room.
+struct FlatAttempt {
+    symbols: Vec<SymbolInstance>,
+    wires: Vec<Wire>,
+    labels: Vec<eda_model::ir::NetLabel>,
+    power_symbols: Vec<eda_model::ir::PowerSymbol>,
+    no_connects: Vec<NoConnect>,
+    failures: usize,
+    /// The routed nets something hung off a pin could not keep clear of.
+    blockers: BTreeSet<String>,
+}
+
 /// One cluster's finished sub-layout, in its own local coordinates.
 struct Laid {
     positions: BTreeMap<String, graph::Point>,
@@ -130,7 +154,7 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     let mut node_of: BTreeMap<String, Node> = BTreeMap::new();
     let mut pin_port_of: BTreeMap<String, Vec<Option<usize>>> = BTreeMap::new();
     for part in &model.parts {
-        let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
+        let resolved = model.real_symbol_of(&model.lib_id_of(part), part);
         // `derive_schematic` never splits a part across multiple placed
         // units (see `SymbolInstance::unit`'s own doc) -- every node it
         // builds is unit 1, regardless of how many units the resolved real
@@ -211,292 +235,181 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
         }
     }
 
-    // ---- per-cluster two-pass layout ----
-    let layout_opts = LayoutOptions {
-        label_slot_above: geometry::SLOT_ABOVE_UM,
-        label_slot_below: geometry::SLOT_BELOW_UM,
-        ..LayoutOptions::default()
-    };
+    // ---- the layout, the packing and the nets hung off the pins ----
+    //
+    // A rail's power symbol or a net's label hangs off its pin on a stub (`flat`) and takes room around the part. A layout that left too
+    // little is laid out again with more between the parts, until everything finds its place or the room is spent; the attempt with the
+    // fewest things left where they do not fit stands.
+    let attempt = |room: i64, forced: &BTreeSet<String>| -> FlatAttempt {
+        let mut label_nets = label_nets.clone();
+        let layout_opts = {
+            let d = LayoutOptions::default();
+            LayoutOptions {
+                label_slot_above: geometry::SLOT_ABOVE_UM + room,
+                label_slot_below: geometry::SLOT_BELOW_UM + room,
+                layer_spacing: d.layer_spacing + room,
+                node_spacing: d.node_spacing + room,
+                ..d
+            }
+        };
 
-    let mut blocks: Vec<Laid> = Vec::with_capacity(clusters.len());
-    for (ci, members) in clusters.iter().enumerate() {
-        let refs = cluster_order(members, opts.seed, ci);
-        // Demotion is a fixed-point, not a single pass: dropping a long net
-        // re-lays the block out, which can stretch a net that was inside
-        // budget before. Iterate until nothing is over (bounded, since each
-        // round strictly removes at least one net).
-        let mut kept: Vec<(usize, String, Vec<(String, String)>)> = per_cluster_nets[ci].clone();
-        let laid = loop {
-            let laid = layout_cluster(&refs, &node_of, &pin_port_of, &parts_by_ref, &kept, &layout_opts);
-            // Any net with an over-budget edge is demoted *whole* — never
-            // half wired, half labelled — so a reader never has to guess
-            // whether a labelled pin is also on the drawn wire.
-            let mut over: BTreeSet<String> = BTreeSet::new();
-            for (net, _, poly) in &laid.edges {
-                if polyline_len(poly) > WIRE_BUDGET_UM {
-                    over.insert(net.clone());
-                }
-            }
-            if over.is_empty() {
-                break laid;
-            }
-            for name in &over {
+        let mut blocks: Vec<Laid> = Vec::with_capacity(clusters.len());
+        for (ci, members) in clusters.iter().enumerate() {
+            let refs = cluster_order(members, opts.seed, ci);
+            // Demotion is a fixed-point, not a single pass: dropping a long net
+            // re-lays the block out, which can stretch a net that was inside
+            // budget before. Iterate until nothing is over (bounded, since each
+            // round strictly removes at least one net).
+            let mut kept: Vec<(usize, String, Vec<(String, String)>)> = per_cluster_nets[ci].clone();
+            // the nets a hung thing could not keep clear of on an earlier try are labelled from the start
+            for (_, name, _) in kept.iter().filter(|(_, n, _)| forced.contains(n)) {
                 if let Some(pins) = net_pins_by_name.get(name) {
                     label_nets.push((name.clone(), pins.clone(), false));
                 }
             }
-            kept.retain(|(_, n, _)| !over.contains(n));
-        };
-        blocks.push(laid);
-    }
-
-    // ---- pack the blocks ----
-    let offsets = pack_blocks(&blocks, &node_of, CLUSTER_GAP_UM, CLUSTER_MARGIN_UM);
-
-    let mut positions: BTreeMap<String, graph::Point> = BTreeMap::new();
-    let mut wires: Vec<Wire> = Vec::new();
-    for (block, off) in blocks.iter().zip(offsets.iter()) {
-        for (r, p) in &block.positions {
-            positions.insert(r.clone(), graph::Point { x: p.x + off.x, y: p.y + off.y });
+            kept.retain(|(_, n, _)| !forced.contains(n));
+            let laid = loop {
+                let laid = layout_cluster(&refs, &node_of, &pin_port_of, &parts_by_ref, &kept, &layout_opts, room);
+                // Any net with an over-budget edge is demoted *whole* — never
+                // half wired, half labelled — so a reader never has to guess
+                // whether a labelled pin is also on the drawn wire.
+                let mut over: BTreeSet<String> = BTreeSet::new();
+                for (net, _, poly) in &laid.edges {
+                    if polyline_len(poly) > WIRE_BUDGET_UM {
+                        over.insert(net.clone());
+                    }
+                }
+                // A wire that runs through the end of a pin that is not on its net touches that pin (KiCad joins what meets at a pin's end):
+                // the net is drawn with labels instead.
+                for (net, _, poly) in &laid.edges {
+                    if over.contains(net) {
+                        continue;
+                    }
+                    let own: BTreeSet<&str> = net_pins_by_name.get(net).map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
+                    'tips: for (r, top_left) in &laid.positions {
+                        let node = &node_of[r];
+                        for (pin_idx, pin) in parts_by_ref[r.as_str()].pins.iter().enumerate() {
+                            let Some(port) = pin_port_of[r][pin_idx] else { continue };
+                            if own.contains(format!("{r}.{}", pin.number).as_str()) {
+                                continue;
+                            }
+                            let tip = node.stub_tip(*top_left, port);
+                            if poly.windows(2).any(|w| on_segment(w[0], w[1], tip)) {
+                                over.insert(net.clone());
+                                break 'tips;
+                            }
+                        }
+                    }
+                }
+                if over.is_empty() {
+                    break laid;
+                }
+                for name in &over {
+                    if let Some(pins) = net_pins_by_name.get(name) {
+                        label_nets.push((name.clone(), pins.clone(), false));
+                    }
+                }
+                kept.retain(|(_, n, _)| !over.contains(n));
+            };
+            blocks.push(laid);
         }
-        for (net, pins, poly) in &block.edges {
-            wires.push(Wire {
-                id: String::new(),
-                net: net.clone(),
-                pins: pins.clone(),
-                pts: poly.iter().map(|p| Point { x: p.x + off.x, y: p.y + off.y }).collect(),
-                bus: false,
+
+        // ---- pack the blocks ----
+        let offsets = pack_blocks(&blocks, &node_of, CLUSTER_GAP_UM + room, CLUSTER_MARGIN_UM + on_grid(room / 2));
+
+        let mut positions: BTreeMap<String, graph::Point> = BTreeMap::new();
+        let mut wires: Vec<Wire> = Vec::new();
+        for (block, off) in blocks.iter().zip(offsets.iter()) {
+            for (r, p) in &block.positions {
+                positions.insert(r.clone(), graph::Point { x: p.x + off.x, y: p.y + off.y });
+            }
+            for (net, pins, poly) in &block.edges {
+                wires.push(Wire {
+                    id: String::new(),
+                    net: net.clone(),
+                    pins: pins.clone(),
+                    pts: poly.iter().map(|p| Point { x: p.x + off.x, y: p.y + off.y }).collect(),
+                    bus: false,
+                });
+            }
+        }
+
+        let mut symbols: Vec<SymbolInstance> = Vec::new();
+        for part in &model.parts {
+            let at = positions.get(&part.reference).copied().unwrap_or(graph::Point { x: 0, y: 0 });
+            symbols.push(SymbolInstance {
+                id: part.reference.clone(),
+                at: Point { x: at.x, y: at.y },
+                rot: 0,
+                mirrored: false,
+                mirror_y: false,
+                lib_id: model.lib_id_of(part),
+                unit: 1,
+                value: part.value.clone().unwrap_or_default(),
+                footprint: part.footprint.clone().unwrap_or_default(),
+                datasheet: part.datasheet.clone().unwrap_or_default(),
+                dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false,
             });
         }
-    }
 
-    let mut symbols: Vec<SymbolInstance> = Vec::new();
-    for part in &model.parts {
-        let at = positions.get(&part.reference).copied().unwrap_or(graph::Point { x: 0, y: 0 });
-        symbols.push(SymbolInstance {
-            id: part.reference.clone(),
-            at: Point { x: at.x, y: at.y },
-            rot: 0,
-            mirrored: false,
-            mirror_y: false,
-            lib_id: resolve_lib_id(part),
-            unit: 1,
-            value: part.value.clone().unwrap_or_default(),
-            footprint: part.footprint.clone().unwrap_or_default(),
-            datasheet: part.datasheet.clone().unwrap_or_default(),
-            dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false,
-        });
-    }
-
-    // ---- no-connect flags: one at every `nc`-kind pin ----
-    // A part's own pin keeps whatever electrical type it would otherwise
-    // get (see `eda_kicad`'s exporter): the flag, not a retyped pin, is
-    // what tells KiCad's ERC the dangling pin is deliberate — exactly the
-    // same convention a human draws for an MCU's unused GPIO.
-    let mut no_connects: Vec<NoConnect> = Vec::new();
-    for part in &model.parts {
-        let Some(top_left) = positions.get(&part.reference).copied() else { continue };
-        let node = &node_of[&part.reference];
-        let resolved = model.real_symbol_of(&resolve_lib_id(part), part);
-        for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref(), 1) {
-            let at = graph::Point { x: top_left.x + local.x, y: top_left.y + local.y };
-            no_connects.push(NoConnect { id: String::new(), at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
-        }
-    }
-
-    // ---- labels and power symbols ----
-    label_nets.sort();
-    label_nets.dedup();
-    let mut labels = Vec::new();
-    // Collected first, then turned into deterministically-numbered
-    // `#PWR<nn>` instances below (KiCad's own auto-reference convention)
-    // — numbering by iteration order would depend on `label_nets`'
-    // (already-deterministic) order, but sorting explicitly here keeps the
-    // numbering obviously stable under refactors of the loop above.
-    let mut power_pins: Vec<(String, String)> = Vec::new(); // (net, "REF.PIN")
-    for (net, pin_refs, is_power) in label_nets {
-        // Group this net's pins by part, since two flags only merge when
-        // they belong to the same symbol.
-        let mut by_part: BTreeMap<&str, Vec<(String, usize)>> = BTreeMap::new();
-        for pin_ref in &pin_refs {
-            let (part_ref, pin_num) = split_pin_ref(pin_ref);
-            let Some(part) = parts_by_ref.get(part_ref) else { continue };
-            if let Some(port_idx) = pin_port_of[part_ref][pin_index(part, pin_num)] {
-                by_part.entry(part_ref).or_default().push((pin_ref.clone(), port_idx));
+        // ---- no-connect flags: one at every `nc`-kind pin ----
+        // A part's own pin keeps whatever electrical type it would otherwise
+        // get (see `eda_kicad`'s exporter): the flag, not a retyped pin, is
+        // what tells KiCad's ERC the dangling pin is deliberate — exactly the
+        // same convention a human draws for an MCU's unused GPIO.
+        let mut no_connects: Vec<NoConnect> = Vec::new();
+        for part in &model.parts {
+            let Some(top_left) = positions.get(&part.reference).copied() else { continue };
+            let node = &node_of[&part.reference];
+            let resolved = model.real_symbol_of(&model.lib_id_of(part), part);
+            for (pin_idx, local) in geometry::nc_pin_local_points(part, node.width, node.height, resolved.as_ref(), 1) {
+                let at = graph::Point { x: top_left.x + local.x, y: top_left.y + local.y };
+                no_connects.push(NoConnect { id: String::new(), at: Point { x: at.x, y: at.y }, pin: format!("{}.{}", part.reference, part.pins[pin_idx].number) });
             }
         }
-        if is_power {
-            // Power/ground: every pin gets its own power symbol, coincident
-            // with its own stub tip — real KiCad style (an MCU's VDD/VDD2
-            // each get their own dropped-on symbol, never merged the way
-            // adjacent signal-net flags are).
-            for (_part_ref, pins) in by_part {
-                for (pin_ref, _) in pins {
-                    power_pins.push((net.clone(), pin_ref));
-                }
+
+        // ---- labels and power symbols, hung off the pins on a wire (`flat`) ----
+        label_nets.sort();
+        label_nets.dedup();
+        let corners: BTreeMap<String, (i64, i64)> = positions.iter().map(|(r, p)| (r.clone(), (p.x, p.y))).collect();
+        let (labels, power_symbols, failures, blockers) = flat::hang_nets(model, &parts_by_ref, &corners, &mut wires, &no_connects, &label_nets, &power_style_nets);
+
+        // an attempt that spreads over more than the largest paper holds is no use, however well its nets are placed
+    let probe = SchematicSection { symbols: symbols.clone(), wires: wires.clone(), labels: labels.clone(), power_symbols: power_symbols.clone(), no_connects: no_connects.clone(), ..Default::default() };
+    let spills = hier::flat_extent(&probe, model).is_some_and(|bb| !hier::fits_a_sheet(bb));
+    FlatAttempt { symbols, wires, labels, power_symbols, no_connects, failures: failures + if spills { 1_000_000 } else { 0 }, blockers }
+
+    };
+    let mut best: Option<FlatAttempt> = None;
+    for cells in HANG_ROOM_CELLS {
+        // a routed net in the way of what hangs on a pin is drawn with labels, and the layout tried again with it
+        let mut forced: BTreeSet<String> = BTreeSet::new();
+        let a = loop {
+            let a = attempt(cells * eda_layout::DEFAULT_GRID, &forced);
+            let before = forced.len();
+            forced.extend(a.blockers.iter().cloned());
+            if forced.len() == before {
+                break a;
             }
-            continue;
+        };
+        let done = a.failures == 0;
+        if best.as_ref().map_or(true, |b| a.failures < b.failures) {
+            best = Some(a);
         }
-        for (part_ref, mut pins) in by_part {
-            // Port indices are assigned side-by-side within one contiguous
-            // block per side (`geometry::build_ports`), so consecutive
-            // integers here are physically neighboring pins on the same
-            // side of the box.
-            pins.sort_by_key(|(_, idx)| *idx);
-            let node = &node_of[part_ref];
-            let top_left = positions.get(part_ref).copied().unwrap_or(graph::Point { x: 0, y: 0 });
-            // Split into runs of strictly-consecutive port indices that also
-            // share a side (a +1 step can straddle a side boundary, which
-            // must never be treated as "adjacent").
-            let mut runs: Vec<Vec<(String, usize)>> = Vec::new();
-            for p in pins {
-                let same_side = |a: usize, b: usize| node.ports[a].side == node.ports[b].side;
-                match runs.last_mut() {
-                    Some(run) if p.1 == run.last().unwrap().1 + 1 && same_side(run.last().unwrap().1, p.1) => {
-                        run.push(p);
-                    }
-                    _ => runs.push(vec![p]),
-                }
-            }
-            for run in runs {
-                // The pin's own *electrical* connection point, in KiCad's
-                // file, is its stub tip (`write_lib_symbol` draws every pin
-                // `at` the tip, `length` back toward the box) — not the
-                // port point on the box boundary. A label anchored at the
-                // port point would sit on the pin's drawn line but not on
-                // its connection point, which real KiCad ERC sees as two
-                // separate dangling items (the label *and* the pin); anchor
-                // at the stub tip instead so the label is genuinely on the
-                // net.
-                // Anchored at the stub tip (not `port_point`'s on-box
-                // point): that's the pin's own *electrical* connection
-                // point in KiCad's file (see the doc comment above), and
-                // also exactly the polyline a merged run's connecting wire
-                // below needs -- one vector serves both.
-                let points: Vec<graph::Point> =
-                    run.iter().map(|(_, port_idx)| node.stub_tip(top_left, *port_idx)).collect();
-                let stub_len: i64 = points.windows(2).map(|w| (w[0].x - w[1].x).abs() + (w[0].y - w[1].y).abs()).sum();
-                let stub_bends = points.len().saturating_sub(2);
-                if points.len() == 1 || stub_len > MAX_MERGED_STUB_LEN_UM || stub_bends > MAX_MERGED_STUB_BENDS {
-                    // A single pin, or a run too wide to read as one local
-                    // jumper (see `MAX_MERGED_STUB_LEN_UM`): flag each pin
-                    // independently, with no connecting wire at all.
-                    for p in &points {
-                        labels.push(NetLabel { id: String::new(), kind: LabelKind::Local, net: net.clone(), at: Point { x: p.x, y: p.y } });
-                    }
-                } else {
-                    // Adjacent same-net pins on one part: a single flag at
-                    // the run's midpoint plus a short bus stub joining the
-                    // pins, so each still shows a physical connection
-                    // instead of two texts crowding each other
-                    // (`schematic_flag_adjacent`).
-                    let mid_x = points.iter().map(|p| p.x).sum::<i64>() / points.len() as i64;
-                    let mid_y = points.iter().map(|p| p.y).sum::<i64>() / points.len() as i64;
-                    labels.push(NetLabel { id: String::new(), kind: LabelKind::Local, net: net.clone(), at: Point { x: mid_x, y: mid_y } });
-                    wires.push(Wire {
-                        id: String::new(),
-                        net: net.clone(),
-                        pins: run.iter().map(|(pin_ref, _)| pin_ref.clone()).collect(),
-                        pts: points.into_iter().map(|p| Point { x: p.x, y: p.y }).collect(),
-                        bus: false,
-                    });
-                }
-            }
+        if done {
+            break;
         }
     }
-
-    power_pins.sort();
-    power_pins.dedup();
-    let mut power_symbols: Vec<PowerSymbol> = Vec::new();
-    for (i, (net, pin_ref)) in power_pins.into_iter().enumerate() {
-        let (part_ref, pin_num) = split_pin_ref(&pin_ref);
-        let Some(part) = parts_by_ref.get(part_ref) else { continue };
-        let Some(port_idx) = pin_port_of[part_ref][pin_index(part, pin_num)] else { continue };
-        let node = &node_of[part_ref];
-        let top_left = positions.get(part_ref).copied().unwrap_or(graph::Point { x: 0, y: 0 });
-        let tip = node.stub_tip(top_left, port_idx);
-        power_symbols.push(PowerSymbol {
-            id: format!("#PWR{:02}", i + 1),
-            lib_id: power_symbol_lib_id(&net),
-            at: Point { x: tip.x, y: tip.y },
-            rot: 0,
-            net,
-            pin: pin_ref,
-        });
-    }
-
-    // ---- PWR_FLAG: one per net that has a power-input pin and no natural
-    // power-output driver anywhere on it ----
-    //
-    // This is a whole-model concern, not just the power-symbol nets above:
-    // a net stays an ordinary wire whenever it mixes power-kind pins with
-    // passive/signal ones (VIN tied to a cap and a header pin, say), but a
-    // `Power`-kind pin without an "OUT"-ish name on *any* net still maps to
-    // KiCad's `power_in` electrical type (see `eda_kicad`'s
-    // `electrical_type`), and a net with a `power_in` pin and no
-    // `power_out` pin fails `power_pin_not_driven` in real KiCad ERC
-    // exactly like it would if a human wired the same circuit — the
-    // textbook case a `PWR_FLAG` exists for. A `Power`-kind pin whose name
-    // *does* read as an output (a regulator's own VOUT) already satisfies
-    // this on its own once mapped to `power_out`, the same name convention
-    // `eda_kicad::electrical_type` uses, so it needs no flag.
-    let mut nets_sorted = model.nets.clone();
-    nets_sorted.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut flag_n = power_symbols.len();
-    for net in &nets_sorted {
-        // Seeded `true` for a net that earned power/ground-symbol
-        // treatment by name alone (see `power_style_nets`'s own doc):
-        // every pin on it was just drawn as a `power_in`-typed symbol
-        // regardless of its own `PinKind`, so it needs a driver exactly
-        // like one a real `Power`/`Ground`-kind pin put it there.
-        let mut has_power_in = power_style_nets.contains(&net.name);
-        let mut has_power_out = false;
-        for pin_ref in &net.pins {
-            let Some((_, part, pin)) = resolve_pin_ref(pin_ref, &parts_by_ref) else { continue };
-            let _ = part;
-            let is_out = pin.kind == PinKind::Power && pin.name.as_deref().unwrap_or("").to_ascii_uppercase().contains("OUT");
-            match pin.kind {
-                PinKind::Power if is_out => has_power_out = true,
-                PinKind::Power | PinKind::Ground => has_power_in = true,
-                _ => {}
-            }
-        }
-        if !has_power_in || has_power_out {
-            continue;
-        }
-        // Anchor on the net's own first (sorted) pin's stub tip — defined
-        // for every real pin regardless of whether this net ended up drawn
-        // as a wire, a label, or power symbols.
-        let mut sorted_pins = net.pins.clone();
-        sorted_pins.sort();
-        let Some(anchor_ref) = sorted_pins.first() else { continue };
-        let (anchor_ref_part, anchor_pin_num) = split_pin_ref(anchor_ref);
-        let Some(part) = parts_by_ref.get(anchor_ref_part) else { continue };
-        let Some(port_idx) = pin_port_of[anchor_ref_part][pin_index(part, anchor_pin_num)] else { continue };
-        let node = &node_of[anchor_ref_part];
-        let top_left = positions.get(anchor_ref_part).copied().unwrap_or(graph::Point { x: 0, y: 0 });
-        let anchor_tip = node.stub_tip(top_left, port_idx);
-        let anchor_at = Point { x: anchor_tip.x, y: anchor_tip.y };
-
-        flag_n += 1;
-        // Coincident with the anchor point, not offset by a drawn wire: a
-        // `PWR_FLAG`'s own pin sits at that exact point (same convention as
-        // every per-pin power symbol above — KiCad treats coincident points
-        // as joined with no wire needed). An offset-plus-connector-wire was
-        // tried first and reliably created an *accidental* T-junction
-        // wherever that offset happened to land on some other already-
-        // routed wire's path (`schematic_missing_junction`/
-        // `schematic_wire_through_symbol`) — this sidesteps the problem by
-        // never drawing new wire geometry for the flag at all. The
-        // trade-off is purely cosmetic: the flag's glyph overlaps whatever
-        // is already at that point, exactly like two power symbols
-        // deliberately stacked in a hand-drawn KiCad sheet.
-        power_symbols.push(PowerSymbol { id: format!("#FLG{flag_n:02}"), lib_id: "power:PWR_FLAG".to_string(), at: anchor_at, rot: 0, net: net.name.clone(), pin: String::new() });
-    }
+    let FlatAttempt { symbols, wires, labels, power_symbols, no_connects, .. } = best.expect("at least one attempt is made");
 
     // The pack above starts at the origin, which is the sheet's corner, not its drawing area: move everything inside the frame (and
     // onto the smallest paper that holds it) so the first row no longer sits on the border.
-    let mut schematic = SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default() };
+    let mut schematic = SchematicSection { symbols, wires, labels, texts: vec![], power_symbols, no_connects, bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false, title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), field_layout: Default::default() };
+    // The fields are placed on the sheet where they will be (Autoplace Fields rounds to the grid of the sheet's own coordinates, so a first fit
+    // puts everything inside the frame), keeping clear of what is drawn; the paper then has to hold them too, and the placements, which
+    // are relative to their symbols, move with them.
+    hier::fit_flat(&mut schematic, model);
+    fields::fill_layout(&mut schematic, model);
     hier::fit_flat(&mut schematic, model);
 
     Ok(Design {
@@ -516,17 +429,9 @@ pub fn derive_schematic(model: &ConstraintModel, opts: &EngineOptions) -> Result
     })
 }
 
-/// `"power:GND"` for a ground-style rail, `"power:<NAME>"` for any other
-/// rail — see `eda_model::symbol::builtin`'s matching fallback, which
-/// draws the generic upward-arrow glyph for any name it does not have a
-/// hand-transcribed symbol for.
-fn power_symbol_lib_id(net: &str) -> String {
-    let upper = net.to_ascii_uppercase();
-    if upper.starts_with("GND") || upper.starts_with("AGND") || upper.starts_with("DGND") {
-        "power:GND".to_string()
-    } else {
-        format!("power:{net}")
-    }
+/// Is `p` on the straight, axis-aligned segment from `a` to `b` (ends included)?
+fn on_segment(a: graph::Point, b: graph::Point, p: graph::Point) -> bool {
+    (a.x == b.x && p.x == a.x && p.y >= a.y.min(b.y) && p.y <= a.y.max(b.y)) || (a.y == b.y && p.y == a.y && p.x >= a.x.min(b.x) && p.x <= a.x.max(b.x))
 }
 
 fn polyline_len(poly: &[graph::Point]) -> i64 {
@@ -597,6 +502,7 @@ fn layout_cluster(
     parts_by_ref: &HashMap<&str, &Part>,
     cnets: &[(usize, String, Vec<(String, String)>)],
     opts: &LayoutOptions,
+    room: i64,
 ) -> Laid {
     let comps = connected_components(refs, cnets);
     if comps.len() <= 1 {
@@ -612,7 +518,7 @@ fn layout_cluster(
             .collect();
         sub.push(run_layout(comp, node_of, pin_port_of, parts_by_ref, &nets, opts));
     }
-    let offsets = pack_blocks(&sub, node_of, TIGHT_GAP_UM, TIGHT_MARGIN_UM);
+    let offsets = pack_blocks(&sub, node_of, TIGHT_GAP_UM + room, TIGHT_MARGIN_UM + on_grid(room / 2));
     let mut positions = BTreeMap::new();
     let mut edges = Vec::new();
     for (block, off) in sub.iter().zip(offsets.iter()) {
@@ -1345,6 +1251,12 @@ mod tests {
         assert_eq!(ids, vec!["CIN", "COUT", "U1"]);
     }
 
+    /// A rail is drawn as power symbols hung off the pins on short wires: nothing but stubs (a wire out of a pin, at most a bend along the row of pins)
+    /// and the joins across the stubs of pins side by side.
+    fn only_short_stubs(sch: &SchematicSection, net: &str) -> bool {
+        sch.wires.iter().filter(|w| w.net == net).all(|w| w.pts.len() <= 3 && polyline_len(&w.pts.iter().map(|p| graph::Point { x: p.x, y: p.y }).collect::<Vec<_>>()) <= 12 * GRID)
+    }
+
     #[test]
     fn wires_carry_correct_pin_refs() {
         let d = derive_schematic(&ldo_model(), &opts(1)).unwrap();
@@ -1355,9 +1267,8 @@ mod tests {
         // both stay as ordinary wires between the two parts.
         assert!(sch.wires.iter().any(|w| w.net == "VIN"), "VIN should be a wire");
         assert!(sch.wires.iter().any(|w| w.net == "VOUT"), "VOUT should be a wire");
-        // GND is a true rail name, so it draws a power symbol at each pin
-        // (no wire, no label).
-        assert!(sch.wires.iter().all(|w| w.net != "GND"), "GND is a power-style net: no wires");
+        // GND is a true rail name, so it draws a power symbol at each pin, hung off it on a short wire (no label, no routed wire).
+        assert!(only_short_stubs(&sch, "GND"), "GND is a power-style net: its wires are stubs");
         assert!(sch.labels.iter().all(|l| l.net != "GND"), "GND is a power symbol, not a label");
         let gnd_power: Vec<_> = sch.power_symbols.iter().filter(|p| p.net == "GND" && p.lib_id == "power:GND").collect();
         assert_eq!(gnd_power.len(), 3, "one GND power symbol per pin (U1.2, CIN.2, COUT.2)");
@@ -1367,8 +1278,8 @@ mod tests {
         // KiCad ground net needs one for.
         assert!(sch.power_symbols.iter().any(|p| p.net == "GND" && p.lib_id == "power:PWR_FLAG"), "undriven GND net should get a PWR_FLAG");
         // Every power symbol is unique KiCad-style (#PWR01, #PWR02, ...) and
-        // coincides exactly with its own pin's stub tip (checked precisely
-        // in `power_symbol_sits_on_pin_stub_tip`).
+        // hangs off its own pin's stub tip (checked precisely
+        // in `power_symbol_hangs_off_the_pin_stub_tip_on_a_wire`).
         let mut ids: Vec<_> = sch.power_symbols.iter().map(|p| p.id.clone()).collect();
         ids.sort();
         ids.dedup();
@@ -1376,21 +1287,27 @@ mod tests {
     }
 
     #[test]
-    fn power_symbol_sits_on_pin_stub_tip() {
+    fn power_symbol_hangs_off_the_pin_stub_tip_on_a_wire() {
         let model = ldo_model();
         let d = derive_schematic(&model, &opts(1)).unwrap();
         let sch = d.schematic.unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
-        let (width, height) = geometry::node_size(part, None, 1);
-        let (ports, pin_port) = geometry::build_ports(part, width, height, None, 1);
+        let resolved = model.real_symbol_of(&u1.lib_id, part);
+        let (width, height) = geometry::node_size(part, resolved.as_ref(), 1);
+        let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref(), 1);
         // U1 pin "2" (GND) -> its port -> stub tip, must equal the power
         // symbol's own `at`.
         let port_idx = pin_port[1].unwrap();
         let node = Node { id: 0, width, height, ports };
         let tip = node.stub_tip(graph::Point { x: u1.at.x, y: u1.at.y }, port_idx);
         let ps = sch.power_symbols.iter().find(|p| p.pin == "U1.2").expect("U1.2 has a power symbol");
-        assert_eq!(ps.at, Point { x: tip.x, y: tip.y });
+        // the symbol stands off the tip, on a wire that starts at the tip and ends at the symbol's pin
+        let tip = Point { x: tip.x, y: tip.y };
+        assert_ne!(ps.at, tip);
+        let stub = sch.wires.iter().find(|w| w.net == "GND" && w.pins == ["U1.2"]).expect("U1.2's power symbol hangs on a wire");
+        assert_eq!(stub.pts.first(), Some(&tip), "the wire starts at the pin's tip");
+        assert_eq!(stub.pts.last(), Some(&ps.at), "and ends at the power symbol's pin");
     }
 
     #[test]
@@ -1444,7 +1361,7 @@ mod tests {
         let model = ConstraintModel { parts, nets: vec![net("GND", &net_pins.iter().map(|s| s.as_str()).collect::<Vec<_>>())], ..Default::default() };
         let d = derive_schematic(&model, &opts(3)).unwrap();
         let sch = d.schematic.unwrap();
-        assert!(sch.wires.iter().all(|w| w.net != "GND"), "dense GND net must not be wired");
+        assert!(only_short_stubs(&sch, "GND"), "dense GND net must not be wired: only stubs to its symbols");
         assert!(sch.labels.iter().all(|l| l.net != "GND"));
         let gnd_power: Vec<_> = sch.power_symbols.iter().filter(|p| p.net == "GND" && p.lib_id == "power:GND").collect();
         assert_eq!(gnd_power.len(), 6, "one power symbol per pin on the dense GND net");
@@ -1491,10 +1408,11 @@ mod tests {
         };
         let d = derive_schematic(&model, &opts(7)).unwrap();
         let sch = d.schematic.unwrap();
-        assert!(sch.wires.iter().all(|w| w.net != "GND"), "a widely spread same-part GND run must not become one bendy wire: {:?}", sch.wires);
+        assert!(only_short_stubs(&sch, "GND"), "a widely spread same-part GND run must not become one bendy wire: {:?}", sch.wires);
         assert!(sch.labels.iter().all(|l| l.net != "GND"), "GND is power-style: a real power:GND symbol per pin, not a label");
         let gnd_power: Vec<_> = sch.power_symbols.iter().filter(|p| p.net == "GND" && p.lib_id == "power:GND").collect();
-        assert_eq!(gnd_power.len(), 5, "one power symbol per ground pin, not one bus stub for the whole run");
+        // pins 5 and 6, and 8 and 9, are side by side and share a symbol; pin 1 has the other pins between it and them
+        assert_eq!(gnd_power.len(), 3, "one power symbol per run of ground pins side by side, not one bus stub for the whole connector");
     }
 
     #[test]

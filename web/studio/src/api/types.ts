@@ -1489,10 +1489,31 @@ export type LibGraphic =
 export interface LibSymbol {
   graphics: LibGraphic[];
   pins: LibPin[];
+  /** `(pin_names (hide yes))`: no pin name of the symbol is shown. KiCad's default (and what a server that does not say means) is shown. */
+  pin_names_hidden?: boolean;
+  /** `(pin_numbers (hide yes))`: no pin number of the symbol is shown. */
+  pin_numbers_hidden?: boolean;
+  /** `(pin_names (offset x))`, mm: names are written inside the body, from the pin's inner end on, when it is above zero; over the pin line when it is zero. KiCad's default is 0.508 mm (20 mils). */
+  pin_name_offset?: Mm;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
 export type LibSymbols = Record<string, LibSymbol>;
+
+/** One field of a symbol, power symbol or sheet as `GET /api/schematic` sends it: the text and where KiCad draws it on the sheet (`eda_engine::fields::PageField`). */
+export interface SchField {
+  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
+  name: string;
+  text: string;
+  /** The text's anchor on the sheet, micrometres. */
+  at: [Um, Um];
+  /** The text runs upward: a quarter turn counter-clockwise about the anchor. */
+  vertical: boolean;
+  /** How the text is justified against the anchor, in its own axes. */
+  h: "left" | "center" | "right";
+  v: "top" | "center" | "bottom";
+  visible: boolean;
+}
 
 export interface SchematicSymbol {
   /** Reference designator ("U1") -- the same id PCB parts use. */
@@ -1519,6 +1540,8 @@ export interface SchematicSymbol {
   exclude_from_bom?: boolean;
   exclude_from_board?: boolean;
   exclude_from_sim?: boolean;
+  /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
+  fields?: SchField[];
 }
 
 /**
@@ -1544,6 +1567,8 @@ export interface PowerSymbol {
   rot: Degrees;
   net: string;
   pin: SchematicPin;
+  /** The Value (its net name) where KiCad draws it, and the hidden Reference. */
+  fields?: SchField[];
 }
 
 export interface NoConnect {
@@ -1662,6 +1687,8 @@ export interface Sheet {
   at: [Um, Um];
   size: [Um, Um];
   pins: SheetPin[];
+  /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
+  fields?: SchField[];
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */

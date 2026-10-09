@@ -1454,6 +1454,7 @@ fn empty_schematic_section() -> SchematicSection {
         erc_exclusions: vec![],
         erc_pin_map: None,
         user_fields: Default::default(),
+        field_layout: Default::default(),
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],

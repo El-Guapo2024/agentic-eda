@@ -42,6 +42,9 @@
     // geometry/type modules, no React/DOM-component imports, same
     // "dependency-free pure port" criterion as the kicad-port glob above.
     "src/components/schematic/libSymbol.ts",
+    // Where a pin's name and number are written (PIN_LAYOUT_CACHE) -- pure geometry; libSymbol.ts hands it each symbol's flags.
+    "src/components/schematic/pinText.ts",
+    "src/components/schematic/pinText.test.ts",
     "src/components/schematic/layout.ts",
     "src/components/schematic/transform.ts",
     // ERC canvas-marker/cross-probe location parsing -- same "pure,

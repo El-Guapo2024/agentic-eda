@@ -9,7 +9,6 @@
 use eda_layout::Side;
 use eda_model::ir::Point;
 use eda_model::modules::{is_anchor_part, natural_cmp, FunctionalModule, ModuleKind};
-use eda_model::resolve_lib_id;
 
 use super::items::{Ctx, Items, NetClass, RailPin, View};
 use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, PAPERS};
@@ -18,7 +17,13 @@ use super::kit::{side_dir, snap_down, snap_up, Paper, Placed, Rect, G, PAPERS};
 pub fn placed(ctx: &Ctx, reference: &str) -> Placed {
     let part = ctx.model.part(reference).unwrap_or_else(|| panic!("module part {reference} is in the model"));
     let kept = ctx.keep.symbols.get(reference);
-    let lib_id = kept.map(|k| k.lib_id.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| resolve_lib_id(part));
+    let lib_id = match kept.map(|k| k.lib_id.clone()).filter(|l| !l.is_empty()) {
+        // a symbol drawn before generated symbols (`eda:<ref>`, the box the layout engine sized) is drawn as a generated one: the sheet
+        // is laid out afresh round it anyway
+        Some(kept_id) if kept_id.starts_with("eda:") => ctx.model.lib_id_of(part),
+        Some(kept_id) => ctx.model.fitting_lib_id(part, kept_id),
+        None => ctx.model.lib_id_of(part),
+    };
     let resolved = ctx.model.real_symbol_of(&lib_id, part);
     let value = kept.map(|k| k.value.clone()).unwrap_or_else(|| part.value.clone().unwrap_or_default());
     let footprint = kept.map(|k| k.footprint.clone()).filter(|f| !f.is_empty()).or_else(|| part.package.clone()).unwrap_or_default();
@@ -271,17 +276,21 @@ fn single_block(ctx: &Ctx, view: &View, r: &str) -> Block {
     items.symbol(ctx, &p);
     items.core = Some(p.box_rect());
     let mut rail: Vec<RailPin> = Vec::new();
+    let mut others: Vec<(String, Point, Side)> = Vec::new();
     for pin in &p.part.pins {
         if let Some((tip, side)) = p.tip(&pin.number) {
             let pin_ref = format!("{r}.{}", pin.number);
             match ctx.net_of_pin.get(&pin_ref).filter(|n| view.class_of(n) == Some(NetClass::Rail)) {
-                Some(net) => rail.push(RailPin { pin_ref, tip, side, net: net.clone() }),
-                None => items.connect(ctx, view, &pin_ref, tip, side),
+                Some(net) => rail.push(RailPin { flag: ctx.flag_pins.contains(&pin_ref), pin_ref, tip, side, net: net.clone() }),
+                None => others.push((pin_ref, tip, side)),
             }
         }
     }
-    // the rails last: pins side by side on one rail share a symbol, out beyond the part's texts
+    // the rails first: pins side by side on one rail share a symbol, out beyond the part's texts; the labels then keep clear of them
     items.rail_pins(rail);
+    for (pin_ref, tip, side) in others {
+        items.connect(ctx, view, &pin_ref, tip, side);
+    }
     finish(items)
 }
 

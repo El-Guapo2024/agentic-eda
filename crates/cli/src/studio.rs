@@ -1281,7 +1281,7 @@ pub(crate) fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) ->
     let mut current = design.schematic.clone().unwrap_or(eda_model::ir::SchematicSection {
         power_symbols: vec![],
         no_connects: vec![], bus_entries: vec![],
-        erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(),
+        erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(),
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],
@@ -1347,8 +1347,22 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                         .collect()
                 })
                 .unwrap_or_default();
+            // Where each field is drawn on the sheet (`eda_engine::fields`): the placements the section keeps, else Autoplace Fields'. Not for a
+            // schematic read from a KiCad file, whose symbols are placed by their own origin rather than the engine's box corner.
+            let fields: Vec<Value> = match (part, sch.imported_from_kicad) {
+                (Some(p), false) => {
+                    let mut placed = s.clone();
+                    if placed.lib_id.is_empty() {
+                        placed.lib_id = format!("eda:{}", s.id);
+                    }
+                    let geom = eda_engine::symgeom::SymbolGeom::of(&placed, p, resolved.as_ref());
+                    eda_engine::fields::symbol_fields(&sch, &placed, Some(p), resolved.as_ref(), &geom).iter().map(page_field_json).collect()
+                }
+                _ => Vec::new(),
+            };
             json!({
                 "id": s.id,
+                "fields": fields,
                 "at": [s.at.x, s.at.y],
                 // Millideg -> plain degrees, same convention `state()` uses for a PCB part's `rot`.
                 "rot": s.rot as f64 / 1000.0,
@@ -1434,7 +1448,7 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
     let power_symbols: Vec<Value> = sch
         .power_symbols
         .iter()
-        .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin }))
+        .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(page_field_json).collect::<Vec<_>>() }))
         .collect();
     let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
     let title_block = sch.title_block.as_ref().map(crate::page_json::title_block_json);
@@ -1482,6 +1496,7 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
         .map(|s| {
             json!({
                 "id": s.id, "name": s.name, "file": s.file, "page": s.page,
+                "fields": eda_engine::fields::sheet_fields(&sch, s).iter().map(page_field_json).collect::<Vec<_>>(),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
             })
@@ -1633,6 +1648,9 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         description: String::new(),
         reference_prefix: reference_prefix.clone(),
         unit_count: 1,
+        pin_names_hidden: false,
+        pin_numbers_hidden: false,
+        pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
     };
     let Some(part) = model.part(reference) else { return empty() };
     let wireable: Vec<&eda_model::Pin> = part.pins.iter().filter(|p| p.kind != eda_model::PinKind::Nc).collect();
@@ -1687,7 +1705,25 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         description: String::new(),
         reference_prefix,
         unit_count: 1,
+        pin_names_hidden: false,
+        pin_numbers_hidden: false,
+        pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
     }
+}
+
+/// A field on the sheet as the painter reads it: the text, its anchor in micrometres, whether it runs vertically, how it is justified
+/// against the anchor (in the text's own axes) and whether it is drawn.
+fn page_field_json(f: &eda_engine::fields::PageField) -> Value {
+    use eda_model::kicad_font::{HJustify, VJustify};
+    json!({
+        "name": f.name,
+        "text": f.text,
+        "at": [f.at.0.round(), f.at.1.round()],
+        "vertical": f.vertical,
+        "h": match f.h { HJustify::Left => "left", HJustify::Center => "center", HJustify::Right => "right" },
+        "v": match f.v { VJustify::Top => "top", VJustify::Center => "center", VJustify::Bottom => "bottom" },
+        "visible": f.visible,
+    })
 }
 
 /// One `LibSymbol` as JSON: graphics/pins in the symbol's own local frame,
@@ -1721,9 +1757,10 @@ fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     let pins: Vec<Value> = s
         .pins
         .iter()
-        .map(|p| json!({ "number": p.number, "name": p.name, "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": 0, "hidden": false }))
+        .map(|p| json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": 0, "hidden": false }))
         .collect();
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description })
+    // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document
@@ -1969,7 +2006,7 @@ mod tests {
     use eda_model::ir::{Point, Provenance, SchematicSection, SheetInstance};
 
     fn sch(sheets: Vec<SheetInstance>) -> SchematicSection {
-        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
+        SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets, instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
     }
 
     fn design(root: SchematicSection, screens: std::collections::BTreeMap<String, SchematicSection>) -> eda_model::ir::Design {
@@ -2037,6 +2074,9 @@ mod tests {
             description: String::new(),
             reference_prefix: String::new(),
             unit_count: 1,
+            pin_names_hidden: false,
+            pin_numbers_hidden: false,
+            pin_name_offset_mm: 0.508,
         });
         let g = gnd["graphics"].as_array().unwrap();
         assert_eq!((g[0]["fill"].as_str(), g[1]["fill"].as_str(), g[1]["radius"].as_f64()), (Some("background"), Some("outline"), Some(0.5)));

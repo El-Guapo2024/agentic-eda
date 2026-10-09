@@ -240,6 +240,11 @@ pub struct SchematicSection {
     /// (`userAdded`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub user_fields: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Where the fields of each placed symbol, power symbol and sheet are drawn, by [`field_key`] (a power symbol's id, a sheet's id):
+    /// see [`FieldPlacement`]. An item with no entry has its fields placed the way KiCad's Autoplace Fields would
+    /// (`eda_engine::fields`), so a design written before this existed reads the same as one that has them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub field_layout: std::collections::BTreeMap<String, Vec<FieldPlacement>>,
     /// Title block. `None` keeps relying on the caller-supplied
     /// `ExportMeta` (title/date) the way every export always has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1794,6 +1799,67 @@ pub enum TextJustify {
     Right,
 }
 
+/// Vertical text justification, KiCad's `justify top|bottom` (absent = centred).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextVAlign {
+    Top,
+    #[default]
+    Center,
+    Bottom,
+}
+
+/// Where one field of a symbol, a power symbol or a sheet is drawn: KiCad's `SCH_FIELD` position, angle, justification and
+/// visibility (`eeschema/sch_field.cpp`), kept per instance because the library only knows where a field goes on an unplaced
+/// symbol, and Autoplace Fields moves them.
+///
+/// The placement is in the frame of the *unturned, unmirrored* item, measured from its origin (a symbol's box corner, a power symbol's
+/// pin, a sheet's top-left corner), the way a pin is: a move, a turn or a mirror carries the field along with no edit of its own.
+/// `SymbolInstance::rot`/`mirrored` take it to the sheet, as KiCad's `TRANSFORM` does for `SCH_FIELD::GetPosition`
+/// (`eda_engine::fields::page_field`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldPlacement {
+    /// `Reference`, `Value`, `Footprint`, `Datasheet`; a sheet's `Sheetname`, `Sheetfile`; a user field's own name.
+    pub name: String,
+    /// The text's anchor, micrometres from the item's origin.
+    pub dx: Um,
+    pub dy: Um,
+    /// The text's own angle before the item turns it: 0 (horizontal) or 90_000 (vertical).
+    #[serde(default, skip_serializing_if = "is_zero_angle")]
+    pub angle: Millideg,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub h: TextJustify,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub v: TextVAlign,
+    /// Drawn on the sheet (a hidden field keeps its place for when it is shown).
+    #[serde(default = "d_true_field", skip_serializing_if = "is_true_field")]
+    pub visible: bool,
+}
+
+fn d_true_field() -> bool {
+    true
+}
+fn is_true_field(b: &bool) -> bool {
+    *b
+}
+fn is_zero_angle(a: &Millideg) -> bool {
+    *a == 0
+}
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// The key of a placed symbol's fields in [`SchematicSection::field_layout`]: its reference, with the unit after a `#` for any
+/// unit but the first (each placed unit draws its own).
+pub fn field_key(id: &str, unit: u32) -> String {
+    if unit <= 1 {
+        id.to_string()
+    } else {
+        format!("{id}#{unit}")
+    }
+}
+
 /// Free-standing board text (KiCad's `PCB_TEXT` / `gr_text`): silkscreen
 /// labels, fab notes -- anything that is not a footprint's own reference or
 /// value field (those stay on `FootprintInstance`/`Part`, exactly as
@@ -3341,6 +3407,9 @@ impl LibrarySymbol {
             power: sym.power,
             in_bom: sym.in_bom,
             on_board: sym.on_board,
+            pin_names_hidden: sym.pin_names_hidden,
+            pin_numbers_hidden: sym.pin_numbers_hidden,
+            pin_name_offset_mm: sym.pin_name_offset_mm,
             unit_count: sym.unit_count.max(1),
             graphics: sym.graphics.iter().map(LibrarySymbolGraphic::from_engine_graphic).collect(),
             pins: sym.pins.iter().map(LibrarySymbolPin::from_engine_pin).collect(),
@@ -3375,6 +3444,9 @@ impl LibrarySymbol {
             description: self.description.clone(),
             reference_prefix: self.reference_prefix.clone(),
             unit_count: self.unit_count.max(1),
+            pin_names_hidden: self.pin_names_hidden,
+            pin_numbers_hidden: self.pin_numbers_hidden,
+            pin_name_offset_mm: self.pin_name_offset_mm,
         }
     }
 
@@ -3555,7 +3627,7 @@ mod tests {
                 power_symbols: vec![],
                 no_connects: vec![],
                 bus_entries: vec![],
-                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![],

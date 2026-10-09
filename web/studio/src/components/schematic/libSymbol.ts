@@ -8,6 +8,7 @@
 // comment).
 import type { LibFill, LibGraphic, LibSymbols, Mm, SchematicSymbol } from "../../api/types";
 import { resolveSymbol } from "./layout";
+import { DEFAULT_PIN_TEXTS, type PinTexts } from "./pinText";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 
 export type ResolvedGraphic =
@@ -22,6 +23,8 @@ export interface ResolvedLibSymbol {
   pins: ResolvedPin[];
   /** World-space, um -- every graphic point and pin tip/root, so it covers pins sticking out past the body outline (a generic box's bounds, by contrast, are defined to just be the box). */
   bbox: { minX: number; minY: number; maxX: number; maxY: number };
+  /** How this symbol's pins show their names and numbers. */
+  texts: PinTexts;
 }
 
 const mmToUm = (v: Mm) => v * 1000;
@@ -79,7 +82,12 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
     maxY += oy;
   }
 
-  return { graphics, pins, bbox: { minX, minY, maxX, maxY } };
+  const texts: PinTexts = {
+    namesHidden: sym.pin_names_hidden ?? DEFAULT_PIN_TEXTS.namesHidden,
+    numbersHidden: sym.pin_numbers_hidden ?? DEFAULT_PIN_TEXTS.numbersHidden,
+    nameOffsetUm: sym.pin_name_offset === undefined ? DEFAULT_PIN_TEXTS.nameOffsetUm : sym.pin_name_offset * 1000,
+  };
+  return { graphics, pins, bbox: { minX, minY, maxX, maxY }, texts };
 }
 
 function resolveGraphic(g: LibGraphic, m: ReturnType<typeof symbolTransformMatrix>, at: [number, number], grow: (p: [number, number]) => void): ResolvedGraphic {
