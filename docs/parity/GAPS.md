@@ -151,13 +151,22 @@ Old #7. **Partial.** Hit: dragging, a route that starts or ends mid-segment, dif
   45-degree re-shape of the via's tracks, `runOptimizer` over every shoved line, widths kept, and the head walked around pads first
   (`rhShoveOnly`). KiCad's own `simple-shove-1` and `issue22749` pushes are replayed (`crates/pns/tests/qa_regressions.rs`): the same
   13 and 5 tracks move, no new violation. Still open in Shove: a head that ends in a via is not shoved with its via, no springback or
-  time limit, the settings dialog exposes only mode and remove-loops (`shove_vias`, `jump_over_obstacles`, `optimizer_effort` are read
-  now but have no control).
-- Missing (`CODE-COMPARE-router.md`): a drag moves the nearer end instead of sliding the segment, at any angle, and is refused onto
-  obstacles in the default mode (D7), and a dragged via is never shoved against (`dragViaWalkaround`/`propagateViaForces`); a route cannot start or end mid-segment
+  time limit.
+- **Status (2026-10-08, follow-ups): the clearance gate, the board edge, the settings and the via drag are done.**
+  `routing_clearance` measures every pad by its exact outline (`eda_drc::board::placed_pad_copper`, `Shape::gap_to`; a gap is a
+  violation under `clearance - 0.5 um`, as kicad-cli counts it), so a valid shove is no longer refused at a round pad's corner; on
+  `mcu30`, `pic_programmer` and `backspace1` every pair it fails is a pair kicad-cli reports (slow test), where the old rectangles
+  failed six pairs of TO-92 pads kicad-cli calls clean. The board outline is a router obstacle with the copper-to-edge clearance
+  (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`): a shove toward the edge stops at it, and kicad-cli sees no `copper_edge_clearance`
+  on eight shoves toward `mcu30`'s edge. Every `RoutingSettings` field is read (D16) and Interactive Router Settings has
+  `dialog_pns_settings.cpp`'s rows. Dragging a via is a shove (D7), and a Walk around drag walks around. IR limits: a trapezoid or
+  custom pad reaches the IR as its rectangle, so the gate and the router measure that; an inner Edge.Cuts cutout is not an obstacle.
+- Missing (`CODE-COMPARE-router.md`): a drag moves the nearer end instead of sliding the segment, and at any angle (D7: the segment
+  slide, `dragCorner45`, the optimize-after-drag); a route cannot start or end mid-segment
   and Route From Other End works only before the first fix; a diff pair has no coupled shove or walkaround and no via; length tuning
   is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs
-  (`ARC_T`), mouse-trail posture or springback; three `RoutingSettings` fields are never read (`fix_all_segments`, `walkaround_hug_length_threshold`, `via_force_prop_iteration_limit`; D16).
+  (`ARC_T`), mouse-trail posture (so the dialog's "Use mouse path to set track posture", "Smooth dragged segments" and "Optimize entire
+  track being dragged" rows are disabled) or springback.
 - Port from: `pcbnew/router/` (`pns_shove.cpp`, `pns_walkaround.cpp`, `pns_dragger.cpp`, `pns_line_placer.cpp`,
   `pns_diff_pair_placer.cpp`, `pns_meander*.cpp`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`.
 

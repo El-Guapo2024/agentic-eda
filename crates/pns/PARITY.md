@@ -152,8 +152,8 @@ skipped when the corpus is absent):
 | `backspace1` (9 fixes undone by Backspace, one redone) | one run, 2 segments | the same 2 segments (needed the posture to return to the initial one after the last undo) |
 | `issue22749-shove-weird-drag-track-end` (a route from a track end, Shove) | 5 tracks pushed, 11 segments | the same **5** tracks; 4 of 11 within 3 um (the wrap around the head's diagonal is ~70 um further out in KiCad's), 0 new violations, also through the `RouteCommit` |
 | `issue23449` (lone via drag), `walk_drag_seg_against_board_edge`, `simple-drag-shove-singlelayer` (drags) | no violation recorded | replayed with this port's corner drag (KiCad slides the segment; D7): no panic, 0 new violations on every accepted preview. `video-v10` is a slow-tier test (about a minute in a debug build). |
-| a scratch copy of `work/mcu30` (133 tracks, 12 vias) driven through the studio's own `POST /api/route/{start,move,finish}` in Shove mode | -- | 60 random routes from track ends; 12 of them push something (up to 7 IR tracks and a via). The studio's `--strict` gates accepted 2 of the 12 and refused 10 (`routing_clearance` measures a pad by its bounding rectangle, so a track hugging a round pad's real outline at the clearance is "too close"; also `routing_pass_through_pad`, `routing_over_refdes`, `routing_via_in_pad`). The same gates refuse the Walkaround route for one of the two moves compared, and a refused LED5 shove committed with `strict: false` has no clearance violation in **kicad-cli's** DRC. The 2 accepted commits were one undo step each (a line on 3 IR tracks became 1 track + 2 removals, no duplicated segment), `Undo` restored the board exactly, and kicad-cli reported no copper clearance violation; what it did report is `track_dangling` (the free-hand end I chose) and `copper_edge_clearance` on a shoved track pushed toward the board edge (see the gap below). |
-| random routes from random pads (`simple`, `pic_programmer`, `backspace1`, `dp_test`) and random corner drags in Shove mode | -- | 0 new violations: 250 routes per board while writing it, 50 per board in the committed test; Shove never failed where Walkaround succeeded. Dragging a *via* is the exception and is not new: the dragged via itself is never shoved against (`DRAGGER::dragViaWalkaround`/`propagateViaForces`, D7), so a via dropped onto a track leaves a violation (6 of 200 random via drags on `simple`). |
+| a scratch copy of `work/mcu30` (133 tracks, 12 vias) driven through the studio's own `POST /api/route/{start,move,finish}` in Shove mode | -- | 60 random routes from track ends; 12 of them push something (up to 7 IR tracks and a via). The studio's `--strict` gates accepted 2 of the 12 and refused 10 (`routing_clearance` measured a pad by its bounding rectangle, so a track hugging a round pad's real outline at the clearance was "too close" -- **fixed 2026-10-08: the gate measures the exact outline now** (`eda_drc::board::placed_pad_copper`, `Shape::gap_to`), and on `mcu30`, `pic_programmer` and `backspace1` every pair it fails is a pair kicad-cli reports; also `routing_pass_through_pad`, `routing_over_refdes`, `routing_via_in_pad`, workmanship gates that are not clearance and are unchanged apart from `routing_via_in_pad` measuring the exact outline too). The same gates refuse the Walkaround route for one of the two moves compared, and a refused LED5 shove committed with `strict: false` has no clearance violation in **kicad-cli's** DRC. The 2 accepted commits were one undo step each (a line on 3 IR tracks became 1 track + 2 removals, no duplicated segment), `Undo` restored the board exactly, and kicad-cli reported no copper clearance violation; what it did report is `track_dangling` (the free-hand end I chose) and `copper_edge_clearance` on a shoved track pushed toward the board edge (**fixed 2026-10-08: the board outline is a router obstacle**, see "Known gaps" below). |
+| random routes from random pads (`simple`, `pic_programmer`, `backspace1`, `dp_test`) and random corner drags in Shove mode | -- | 0 new violations: 250 routes per board while writing it, 50 per board in the committed test; Shove never failed where Walkaround succeeded. Dragging a *via* was the exception: the dragged via itself was never shoved against, so a via dropped onto a track left a violation (6 of 200 random via drags on `simple`). **Fixed 2026-10-08 (D7):** `random_via_drags_never_leave_a_new_violation`, 60 drags per board and mode on `simple` and `pic_programmer`, Shove and Walk around, leaves none. |
 
 Fixtures that do not need the corpus: `tests/shove_scenarios.rs` (a track
 pushed past a pad row, a via pushed just far enough and between two tracks,
@@ -248,9 +248,18 @@ Scoped down further than `shove`/`walkaround` already are (see
   segment's middle to slide the whole run sideways) isn't implemented.
 - **Free-angle corner relocation**, not KiCad's default 45-degree-
   constrained `dragCorner45`.
-- `Mode::Walkaround` while dragging behaves like `Mode::MarkObstacles`
-  (reports collisions, doesn't resolve them) -- only `Mode::Shove` keeps a
-  drag obstacle-free.
+- ~~`Mode::Walkaround` while dragging behaves like `Mode::MarkObstacles`~~
+  **Fixed (D7, 2026-10-08).** Walk around mode walks a dragged corner around
+  what it lands on (`dragWalkaround`/`tryWalkaround`), and a dragged **via** is a
+  pusher in Shove mode (`shove::shove_via`: the via is the head of the shove,
+  `pushOrShoveVia` drags the tracks attached to it, the main loop pushes aside
+  what they hit; it ends where the shove left it, which a pad or the board edge
+  can make further than the cursor) and in Walk around mode `dragViaWalkaround`
+  (`VIA::PushoutForce`, `ViaForcePropIterationLimit` steps, then the attached
+  tracks walked around what they hit). A via that may not be shoved (`ShoveVias()`
+  off, locked) or whose shove fails is dragged the Walk around way, as `dragShove`
+  falls back. The attached tracks are re-solved at 45 degrees (`DragCorner`), where a
+  corner drag is still free-angle.
 
 A real bug surfaced and fixed while wiring the via-drag commit path: a via
 displaced by a drag's own shove was being removed from the board but never
@@ -355,20 +364,26 @@ setting turned off is a no-op). Drag sessions don't get this treatment --
 upstream's own `DRAGGER` never calls `removeLoops` either.
 
 **Frontend: `RouterSettingsDialog.tsx` (`Ctrl+<`,
-`pcbnew.InteractiveRouter.SettingsDialog`)**, backing `state.routerSettings
-= { mode, removeLoops }` -- see `web/studio/PARITY-pcb.md` for the full
-field-by-field scope (deliberately narrower than upstream's own dialog:
-only `mode` and `removeLoops` have any real effect in this crate, so only
-those two are exposed as working controls; Free Angle Mode is shown
-disabled with its reason rather than omitted, since the task named it
-explicitly). `POST /api/route/start` gained `remove_loops`;
-`POST /api/route/drag_start` gained `mode` (previously silently always
-`Mode::Walkaround` regardless of what a route session was using -- a
-small, real inconsistency this closes in passing). A setting change takes
-effect on the *next* `X`/`D` session, not a live one already in progress
--- this app starts a brand new `Router`/session per route or drag (no
-persistent one to push a live update into the way upstream's own dialog
-does), a deliberate, documented adaptation rather than a gap.
+`pcbnew.InteractiveRouter.SettingsDialog`)**, backing `state.routerSettings`
+(`kicad-port/routerSettings.ts`). **Updated 2026-10-08 (D16):** every
+`RoutingSettings` field is read by the router now, and the dialog has
+`dialog_pns_settings.cpp`'s rows: Highlight collisions (Free angle mode,
+Allow DRC violations), Shove (Shove vias, Jump over obstacles), Walk around;
+Remove redundant tracks, Optimize pad connections, Fix all segments on click
+(labels and tool tips as `dialog_pns_settings_base.cpp`; enabled as
+`onModeChange` does), plus an Optimizer effort select -- KiCad keeps
+`OptimizerEffort` in its settings file only. Smooth dragged segments, Optimize
+entire track being dragged and Use mouse path to set track posture have
+nothing behind them here and are shown disabled with the reason in their tool
+tip. `POST /api/route/{start,drag_start,dp_start}` take a `settings` object
+(`route_api.rs` `settings_of`: those switches and `shove_iteration_limit`,
+`walkaround_iteration_limit`, `via_force_prop_iteration_limit`,
+`walkaround_hug_length_threshold`, which KiCad has no row for); `mode` and
+`remove_loops` at the top level still work. **OK in the dialog also applies
+the settings to the route, drag or diff pair in progress**
+(`POST /api/route/settings`), so a change takes effect from the next move as
+upstream's does; the session itself is still a fresh backend `Router` per
+route or drag.
 
 ## Stage 7 -- differential pairs
 
@@ -556,29 +571,31 @@ axis-aligned run** (one 2-point track each) side by side on one layer.
   `line_placer.rs`. The placer never passes the `FANOUT_CLEANUP` flag
   (`docs/parity/CODE-COMPARE-router.md` section D). The other settings
   fields named below are still never read.
-  **Status (2026-10-08):** `shove_vias`, `jump_over_obstacles`,
-  `optimizer_effort`, `smart_pads`, `shove_iteration_limit` and
-  `walkaround_iteration_limit` are now read by the shove and the placer
-  (`shove_vias` off makes a via `SH_TRY_WALK`; `OE_LOW` merges nothing in
-  the head). `fix_all_segments`, `walkaround_hug_length_threshold` and
-  `via_force_prop_iteration_limit` are still never read, and the settings
-  dialog still exposes only `mode` and `remove_loops`.
-- **The board outline is not an obstacle.** KiCad adds `Edge.Cuts` (and `Margin`)
-  graphics to the router's world as items on every copper layer
-  (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`); `from_ir::build_node` adds
-  none, and `Node::clearance` only knows net classes, not the copper-to-edge
-  rule. A route or a shoved track can therefore end closer to the board edge
-  than `min_copper_edge_clearance` (found driving a shove on `mcu30`: kicad-cli
-  `copper_edge_clearance` on a pushed track). Shove makes it easier to hit than
-  Walkaround because it moves tracks that were already near the edge.
+  **Status (2026-10-08):** closed -- every `RoutingSettings` field is read:
+  `shove_vias`, `jump_over_obstacles`, `optimizer_effort`, `smart_pads`,
+  `shove_iteration_limit` and `walkaround_iteration_limit` by the shove and the
+  placer, and now `fix_all_segments` (`LinePlacer::fix`),
+  `walkaround_hug_length_threshold` (`walkaround::walk_base`) and
+  `via_force_prop_iteration_limit` (`shove::via_pushout_force`), plus the new
+  `free_angle_mode`. The settings dialog has a row for each KiCad has.
+- ~~The board outline is not an obstacle.~~ **Fixed 2026-10-08.** The outline
+  is one `Solid` per segment on every copper layer (`from_ir::add_board_outline`,
+  `Solid::edge`), asked only for the board's copper-to-edge clearance
+  (`Node::clearance_to`), as `syncGraphicalItem` and `Clearance( .., CT_EDGE_CLEARANCE )`
+  do. A shove toward the edge stops at the clearance
+  (`tests/board_edge.rs`; eight shoves toward `mcu30`'s top edge leave kicad-cli no
+  `copper_edge_clearance`). The IR keeps one closed outline: an inner cutout and a
+  footprint's own Edge.Cuts graphic are not obstacles. A walk around an edge in a
+  shove may not grow past 2 x `WalkaroundHugLengthThreshold` of the line's own
+  length (KiCad has no bound; with no room left the shortest clear walk is the long
+  way round the whole outline).
 - `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints
   (every candidate is still collision-checked, which is the one
   constraint that must never be skipped; the others are refinements).
 - Rounded (arc-filleted) corners -- no arc geometry in this port's `Item`
   at all (decision #3).
-- `VIA::PushoutForce`'s iterative lead-direction search for via lead-in
-  while routing (`buildInitialLine`'s via-placement path uses a simpler
-  direct placement -- see `line_placer.rs`).
+- ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
+  second lead KiCad tries (`m_last_p_end`) is not kept.
 - `MOUSE_TRAIL_TRACER` (posture guessed from the swept mouse trail) and
   springback (an incremental undo stack so backing the cursor up reverts
   shove/walkaround decisions instead of recomputing from scratch) --
