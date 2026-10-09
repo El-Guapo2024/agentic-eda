@@ -42,7 +42,7 @@ const MAX_DRAWN = 400;
 /** The picture: the positions the first item goes to, the centre and the circle for a circular array. */
 function Preview({ points, circle }: { points: Array<[number, number]>; circle: { centre: [number, number]; through: [number, number] } | null }) {
   const W = 436;
-  const H = 110;
+  const H = 96;
   const edge = 10;
   const drawn = points.slice(0, MAX_DRAWN);
   const all: Array<[number, number]> = circle ? [...drawn, circle.centre] : drawn;
@@ -215,6 +215,12 @@ function ArrayForm() {
             </button>
           </div>
 
+          <div style={{ marginBottom: 6 }}>
+            <Preview points={points} circle={circular && parsed.ok && origin ? { centre: [parsed.options.centerX, parsed.options.centerY], through: origin } : null} />
+            <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", textAlign: "right" }} data-testid="array-count-note">
+              {points.length > 0 ? `${points.length} position${points.length === 1 ? "" : "s"}${ids.length > 1 && !flags.arrange ? `, ${points.length * ids.length} items` : ""}` : ""}
+            </div>
+          </div>
           {!circular && (
             <>
               {group(
@@ -338,12 +344,6 @@ function ArrayForm() {
               </>
             )}
 
-          <div style={{ marginTop: 4 }}>
-            <Preview points={points} circle={circular && parsed.ok && origin ? { centre: [parsed.options.centerX, parsed.options.centerY], through: origin } : null} />
-            <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", textAlign: "right" }} data-testid="array-count-note">
-              {points.length > 0 ? `${points.length} position${points.length === 1 ? "" : "s"}${ids.length > 1 && !flags.arrange ? `, ${points.length * ids.length} items` : ""}` : ""}
-            </div>
-          </div>
           {ids.length === 0 && <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>Select at least one item first.</div>}
           {error && (
             <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "8px 0 0", fontSize: 12, whiteSpace: "pre-line" }} data-testid="array-error">

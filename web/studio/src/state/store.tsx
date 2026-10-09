@@ -19,6 +19,7 @@ import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
+import { subItemIds } from "../kicad-port/pcbItems";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import { editableSelection, planCarry, planFlip, planRotate, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
@@ -1128,6 +1129,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       // On the schematic tab the selection also holds the sheet's wires, labels, shapes... which are no parts: SCHEMATIC_OK prunes those against the sheet.
       const live = allItemIds(action.board);
       for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
+      // A pad and a footprint's field are items too (`REF.NUMBER`, `REF:Name`): they stay selected while their footprint has them, hidden or not.
+      for (const id of subItemIds(action.board)) live.add(id);
       const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
       return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };

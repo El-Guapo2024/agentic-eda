@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, FieldInfo, Pad, Part } from "../api/types";
 import { attrsOf, checkFieldRow, checkPadValues, drawAngle, editAttrsCmd, editFieldCmd, editPadCmd, fieldAsText, fieldById, fieldId, layoutOf, localAngleOf, newFieldLayout, newFieldName, nthOfPad, padEditOf, padEditWith, parseFieldId, userFieldsOf } from "./fpFields";
+import { subItemIds } from "./pcbItems";
 
 const field = (over: Partial<FieldInfo> = {}): FieldInfo => ({
   id: "U1:Reference",
@@ -48,6 +49,12 @@ test("the board finds a field by its id, only on a placed footprint that has it"
   assert.equal(fieldById(b, "U1:Vendor")?.field.text, "ACME");
   assert.equal(fieldById(b, "U1:Nope"), null);
   assert.equal(fieldById(board(part({ placed: false })), "U1:Vendor")?.field.name, undefined);
+});
+
+test("the pads and the fields of the placed footprints stay selectable after a refresh, a hidden field too", () => {
+  assert.deepEqual(subItemIds(board()), ["U1.1", "U1.2", "U1.2#2", "U1:Reference", "U1:Value", "U1:Vendor"]);
+  assert.deepEqual(subItemIds(board(part({ placed: false }))), [], "an unplaced footprint has none");
+  assert.deepEqual(subItemIds(board(part({ fields: undefined, pads: undefined }))), []);
 });
 
 test("the layout the verbs take is the field's own frame, size as [width, height]", () => {

@@ -28,6 +28,14 @@ export function padIds(part: { ref: string; pads?: readonly { num: string }[] })
   });
 }
 
+/**
+ * The pads and the fields of the placed footprints: items of their own (`REF.NUMBER[#k]`, `REF:Name`) that are selected through their footprint and last as long
+ * as it does, so a refresh of the board must not drop them from the selection (a field that is hidden is still there to be edited).
+ */
+export function subItemIds(board: Pick<BoardState, "parts">): string[] {
+  return board.parts.filter((p) => p.placed).flatMap((p) => [...padIds(p), ...(p.fields ?? []).map((f) => f.id)]);
+}
+
 /** The pad `id` names and the footprint it belongs to, or null (a `REF.NUMBER[#k]` of a placed footprint). */
 export function padById(board: BoardState, id: string): { part: Part; pad: Pad; index: number } | null {
   const dot = id.indexOf(".");
