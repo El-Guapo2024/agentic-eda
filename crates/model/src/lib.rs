@@ -2,6 +2,7 @@
 //! Coordinates never appear here; they are derived by the engine.
 //! JSON internally, YAML at LLM-facing edges.
 
+pub mod annotate;
 pub mod bezier;
 pub mod board;
 mod drc_checks;
@@ -19,6 +20,7 @@ pub mod page;
 pub mod rules;
 pub mod sch_clipboard;
 pub mod sch_extras;
+pub mod sheet_list;
 pub mod symbol;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};
