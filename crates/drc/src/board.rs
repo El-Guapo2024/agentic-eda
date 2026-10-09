@@ -646,7 +646,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     shape: pad.shape,
                     // `pad_file_angle`: the footprint's rotation plus the pad's own (whose sense flips on the bottom), negated.
                     orientation_mdeg: (-(board_rot + if fp.side == Side::Bottom { -(pad.rot as i64) } else { pad.rot as i64 })).rem_euclid(360_000),
-                    zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len()),
+                    zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number),
                 });
             }
         }
