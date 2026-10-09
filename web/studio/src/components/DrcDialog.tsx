@@ -74,6 +74,13 @@ export function DrcDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, state.version === null]);
 
+  // A new run is a new list: the rows selected on the Unconnected Items and Schematic Parity pages belonged to the last one. (A patch -- an exclusion, a
+  // severity change -- keeps the report's `revision`, so it keeps the selection.)
+  const runStamp = report?.revision ?? (report ? "unstamped" : null);
+  useEffect(() => {
+    setDrcView({ unconnectedSelected: null, paritySelected: null });
+  }, [runStamp]);
+
   if (!open) return null;
   const close = () => dispatch({ type: "SET_DRC_OPEN", open: false });
   const setTab = (tab: DrcTab) => setDrcView({ tab });
