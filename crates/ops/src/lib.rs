@@ -51,6 +51,7 @@ pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
 pub mod library_editors;
+mod library_place;
 mod pcb_paste;
 mod pcb_transform;
 mod sch_clipboard;
@@ -737,6 +738,23 @@ pub enum Cmd {
     /// copy made on another board or in KiCad itself, and one undo step takes the whole paste back. See [`pcb_paste`] for how
     /// nets, layers, groups and footprints land.
     PasteClipboard { text: String, at: Point },
+    /// `BOARD_EDITOR_CONTROL::PlaceFootprint` (`A`): put a footprint of a library on the board at `at`, as a footprint of its own -- a
+    /// mounting hole, a fiducial, a test point, a connector nobody drew a symbol for (`DrawingsSection::board_parts`, the same kind of
+    /// part a Duplicate or a Paste makes) -- unplaced pads on no net, top side, not turned. `footprint` is `Lib:Name`; `definition`
+    /// is its pads, graphics and courtyard, carried with the command (like a paste) so the board needs no library to be redrawn: the
+    /// studio's server fills it in from the installed KiCad libraries when it is left out, and it is not needed when the board's model
+    /// already resolves the name. `reference` empty takes the next free number of the footprint's usual prefix (`H1` for a
+    /// `MountingHole`, `TP1` for a `TestPoint`, ...), `value` empty the footprint's own name. One undo step.
+    PlaceFootprint {
+        footprint: String,
+        at: Point,
+        #[serde(default)]
+        reference: String,
+        #[serde(default)]
+        value: String,
+        #[serde(default)]
+        definition: Option<LibraryFootprint>,
+    },
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
     /// the studio's Cmd+V. Unlike `Duplicate` (which looks up existing
@@ -1032,6 +1050,13 @@ pub enum Cmd {
     /// literal text `"U?"` would be mis-numbered as one; placing additional
     /// units of an already-numbered reference is unaffected by this.
     AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String, #[serde(default = "d_unit_one")] unit: u32 },
+    /// `SCH_SCREEN::AddLibSymbol`: keep a copy of a library symbol's definition with the schematic (KiCad's `lib_symbols` cache), so an instance
+    /// that names it draws, exports and passes ERC without the library it came from -- what placing a symbol of an installed library
+    /// does first (`SCH_DRAWING_TOOLS::PlaceSymbol` -> `SCH_SCREEN::AddLibSymbol`). Stored as a published entry of the project symbol library,
+    /// the one place a definition the intent does not hold is kept (a paste does the same). A no-op when the design already has a definition
+    /// under that `lib_id` -- the one in the schematic wins, as in `SCH_EDITOR_CONTROL::Paste`. The studio's server wraps an `AddSymbol`
+    /// of an installed symbol and this in one command, so adding the symbol and keeping its definition are one undo step.
+    EmbedLibSymbol { symbol: LibrarySymbol },
 
     /// `E` (Properties -- Value/Footprint/Datasheet only; see below for
     /// `U`'s own reference rename) and `V`/`F` (`sch_edit_tool.cpp::
@@ -1523,6 +1548,7 @@ impl Cmd {
             | Cmd::AddPowerSymbol { .. }
             | Cmd::DeletePowerSymbol { .. }
             | Cmd::AddSymbol { .. }
+            | Cmd::EmbedLibSymbol { .. }
             | Cmd::EditSymbolFields { .. }
             | Cmd::RenameSymbol { .. }
             | Cmd::SetSymbolFields { .. }
@@ -1593,7 +1619,7 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
-            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
+            Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } | Cmd::EmbedLibSymbol { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
             _ => true,
@@ -1635,6 +1661,7 @@ impl Cmd {
             Cmd::AddText { text } => vec![text.content.as_str()],
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => vec!["paste"],
+            Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } => cmd.subjects(),
@@ -1682,6 +1709,7 @@ impl Cmd {
             | Cmd::AddSymbol { id, .. }
             | Cmd::EditSymbolFields { id, .. }
             | Cmd::RenameSymbol { id, .. } => vec![id],
+            Cmd::EmbedLibSymbol { symbol } => vec![symbol.lib_id.as_str()],
             Cmd::AddWire { .. } => vec!["wire"],
             Cmd::DeleteWire { id }
             | Cmd::DeleteNoConnect { id }
@@ -2172,6 +2200,7 @@ impl<'a> Board<'a> {
 
             Cmd::Duplicate { ids } => self.duplicate_all(ids),
             Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
+            Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
@@ -2221,6 +2250,7 @@ impl<'a> Board<'a> {
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
+            Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
