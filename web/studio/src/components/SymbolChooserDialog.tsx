@@ -20,7 +20,7 @@ import { useStudioDispatch, useStudioState } from "../state/store";
 import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
 import { FootprintPreview, SymbolPreview } from "./chooser/ChooserPreview";
 import { LibChooserTree } from "./chooser/LibChooserTree";
-import { useChooser } from "./chooser/useChooser";
+import { chooserFocusGuard, useChooser } from "./chooser/useChooser";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
 import "../styles/chooser.css";
 
@@ -177,8 +177,8 @@ function SymbolChooser() {
 
   return (
     <>
-      <div className="dialog-backdrop" data-symbol-chooser>
-        <div className="dialog chooser-dialog" onKeyDown={onKeyDown} role="dialog" aria-label="Symbol Chooser">
+      <div className="dialog-backdrop" data-symbol-chooser onKeyDown={(e) => e.stopPropagation()}>
+        <div className="dialog chooser-dialog" onKeyDown={onKeyDown} {...chooserFocusGuard} role="dialog" aria-label="Symbol Chooser">
           <div className="dialog-header">
             <span>
               Symbol Chooser

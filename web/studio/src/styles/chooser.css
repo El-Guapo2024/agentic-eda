@@ -79,10 +79,10 @@
   font-weight: 600;
 }
 .chooser-row.item > div:first-child {
-  padding-left: 24px;
+  padding-left: 14px;
 }
 .chooser-row.unit > div:first-child {
-  padding-left: 44px;
+  padding-left: 34px;
 }
 .chooser-row .twisty {
   display: inline-block;

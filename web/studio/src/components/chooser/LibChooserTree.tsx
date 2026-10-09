@@ -86,18 +86,20 @@ export function LibChooserTree({ kind, rows, selectedKey, loading, onSelect, onC
               onDoubleClick={() => onChoose(row)}
             >
               <div title={row.item.id}>
-                {row.expandable ? (
-                  <span
-                    className="twisty"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelect(row.key);
-                      onToggleItem(row.key);
-                    }}
-                  >
-                    {row.open ? "▾" : "▸"}
-                  </span>
-                ) : null}
+                <span
+                  className="twisty"
+                  onClick={
+                    row.expandable
+                      ? (e) => {
+                          e.stopPropagation();
+                          onSelect(row.key);
+                          onToggleItem(row.key);
+                        }
+                      : undefined
+                  }
+                >
+                  {row.expandable ? (row.open ? "▾" : "▸") : ""}
+                </span>
                 {row.item.name}
               </div>
               <div title={row.item.description}>{row.item.description}</div>

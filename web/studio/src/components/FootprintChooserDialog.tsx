@@ -13,7 +13,7 @@ import { recentItems, rememberChosen } from "../state/chooserRecent";
 import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
 import { FootprintPreview } from "./chooser/ChooserPreview";
 import { LibChooserTree } from "./chooser/LibChooserTree";
-import { useChooser } from "./chooser/useChooser";
+import { chooserFocusGuard, useChooser } from "./chooser/useChooser";
 import "../styles/chooser.css";
 
 export type FootprintPick = { kind: "footprint"; name: string } | { kind: "unplaced"; ref: string };
@@ -139,7 +139,7 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
   return (
     // Rendered inside the dialog that opened it (Symbol Properties, Assign Footprints): a click or a key in here is not that dialog's.
     <div className="dialog-backdrop" data-footprint-chooser onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
-      <div className="dialog chooser-dialog" ref={root} onKeyDown={onKeyDown} role="dialog" aria-label={title}>
+      <div className="dialog chooser-dialog" ref={root} onKeyDown={onKeyDown} {...chooserFocusGuard} role="dialog" aria-label={title}>
         <div className="dialog-header">
           <span>
             {title}

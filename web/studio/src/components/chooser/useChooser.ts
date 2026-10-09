@@ -322,3 +322,14 @@ export function useChooser(o: ChooserOptions): Chooser {
     libraries: installed.length,
   };
 }
+
+/**
+ * A modal chooser keeps the keyboard: a click on something that is not a field or a button (a row of the tree, the preview) does not take the focus from the
+ * search box, so typing goes on there, and a key pressed anywhere inside never reaches the board's hotkeys (`M`, `R`, ... must not move a part behind the
+ * dialog). The tree's own keys (arrows, Enter, Escape) are the dialogs' `onKeyDown`.
+ */
+export const chooserFocusGuard = {
+  onMouseDown: (e: React.MouseEvent) => {
+    if (!(e.target as HTMLElement).closest("input, textarea, select, a, button")) e.preventDefault();
+  },
+};
