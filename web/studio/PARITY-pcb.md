@@ -413,6 +413,12 @@ The list model is `RC_TREE_MODEL` (`kicad-port/rcItems.ts`, `components/RcList.t
 | Schematic Parity: board against schematic | identical, by running KiCad's own | `kicad-cli pcb drc --schematic-parity`: the derived schematic (the one the engine derives from the intent when none is stored) is written beside the derived board, which is where `JobExportDrc` looks for it. A reason kicad-cli gives for skipping the test ("Schematic parity tests require a fully annotated schematic.") is shown on the page. A design whose schematic is not connected or has no footprint links shows every footprint and pad as a difference, as kicad-cli reports them |
 | Delete Marker / Delete All Markers, Save report, Report all errors for each track, cross-probe options | not ported | markers are the report's rows (Run DRC replaces them); `--all-track-errors` is not asked for |
 
+Verified in the browser (port 8802, a scratch copy of mcu30, the real pointer never touched): `e2e/drc-review.check.js` is a 33-step check through `window.__eda`
+that passes -- Run DRC, Next / Previous / Exclude Marker on both editors, the marker menu on a row and on a canvas marker (right click on the circle, Show in the
+dialog), Exclude with comment (the prompt, the comment under the row, the comment back from `GET /api/drc`), Exclude all of a check, Remove, the Show boxes, Ignored Tests
+(the radio menu changes a check's severity), Schematic Parity (a run with the box on fills the page), ERC's Change severity, Schematic Setup opening on Violation
+Severity, and no console errors. Seen by eye: the dialogs, the Schematic Setup page, both canvas menus.
+
 ## 10. Property dialogs (GAPS.md #11)
 
 | Dialog | Status | KiCad file |
