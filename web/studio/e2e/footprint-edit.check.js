@@ -209,6 +209,43 @@
       t((await snapshot()) === base, "undo puts the board back");
     });
 
+    // ----- the Appearance panel's rows hide fields
+    await scenario("Appearance: the References, Values and Footprint Text rows hide a footprint's fields, and a field that is hidden cannot be picked", async (t) => {
+      const f0 = await fieldOf(refA, "Reference");
+      const v0 = await fieldOf(refA, "Value");
+      [...document.querySelectorAll(".dock-tab")].find((e) => /^Objects$/.test(e.textContent.trim()))?.click();
+      await sleep(300);
+      const box = (id) => document.querySelector(`.ap-row[data-object="${id}"] .ap-eye`); // the eye of an Objects row
+      const to = await screenOf();
+      if (!to) return t(false, "no mapping");
+      const at = (f) => to(f.x / 1000, f.y / 1000);
+      const pick = async (f) => {
+        const [px, py] = at(f);
+        await __eda.run("common.InteractiveSelection.clear");
+        fire("pointermove", px, py, { buttons: 0 }); await sleep(120);
+        fire("pointerdown", px, py, { buttons: 1 }); await sleep(100);
+        fire("pointerup", px, py); await sleep(400);
+        return __eda.state().selection.map((x) => x.id).join();
+      };
+      t((await pick(f0)) === `${refA}:Reference` && (await pick(v0)) === `${refA}:Value`, "with the rows on a press on the Reference or the Value picks it");
+      const refs = box("footprint_references");
+      refs.click(); await sleep(250);
+      t((await pick(f0)) !== `${refA}:Reference`, "with References off the Reference is not picked");
+      t((await pick(v0)) === `${refA}:Value`, "and the Value still is");
+      refs.click(); await sleep(250);
+      const values = box("footprint_values");
+      values.click(); await sleep(250);
+      t((await pick(v0)) !== `${refA}:Value` && (await pick(f0)) === `${refA}:Reference`, "with Values off it is the Value that is not picked");
+      values.click(); await sleep(250);
+      const text = box("footprint_text");
+      text.click(); await sleep(250);
+      t((await pick(f0)) !== `${refA}:Reference` && (await pick(v0)) !== `${refA}:Value`, "with Footprint Text off neither is");
+      text.click(); await sleep(250);
+      t((await pick(f0)) === `${refA}:Reference`, "the rows back on, the Reference is picked again");
+      await __eda.run("common.InteractiveSelection.clear");
+      [...document.querySelectorAll(".dock-tab")].find((e) => /^Layers$/.test(e.textContent.trim()))?.click();
+    });
+
     // ----- the Properties panel edits a field
     await scenario("field: the Properties panel edits visibility, thickness, justification and layer; each is one undo step", async (t) => {
       await select([`${refA}:Reference`]);

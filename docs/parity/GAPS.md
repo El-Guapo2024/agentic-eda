@@ -233,7 +233,7 @@ New (the residual of old #11; blocked #26). **Mostly done (2026-10-09).** Hit: e
   as a part of its own (Place Footprint, item 5). A pad's and a footprint's zone connection, relief gap, spoke width and angle and clearance are the zone filler's overlay (`drawings.zone_overrides`,
   `Cmd::SetFootprintZoneConnection` / `SetPadZoneOverrides`, item 13), and the same dialogs edit them: Footprint Properties and Pad Properties show the fields and the zone fields, one OK, one undo step;
   a pad has one clearance (the zone overlay's), and one `(pad ..)` form in the file carries both overlays' fields.
-- Measured: 69 new Rust tests and 39 new `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 18 scenarios through `window.__eda` on a served board (each undone, the board compared), and real kicad-cli
+- Measured: 69 new Rust tests and 39 new `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 19 scenarios through `window.__eda` on a served board (each undone, the board compared), and real kicad-cli
   honoured do-not-populate and exclude-from-position-files in `/api/fab/pos` and do-not-populate in `/api/fab/bom` on an edited scratch board.
 - Missing: Change Footprint(s), Update Footprints from Library and geographical reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); per-footprint mask and paste
   margin overrides; logos and the microwave tools (declined for the same reason as before); trapezoid, chamfered and custom pads, padstacks, fabrication property, pad number and pin function edits; Datasheet and
