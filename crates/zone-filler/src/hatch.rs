@@ -84,7 +84,7 @@ fn rotate_chain(chain: &LineChain, mdeg: i64) -> LineChain {
         .collect()
 }
 
-fn chain_bounds(chain: &LineChain) -> (i64, i64, i64, i64) {
+pub(crate) fn chain_bounds(chain: &LineChain) -> (i64, i64, i64, i64) {
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
     for p in chain {
         x0 = x0.min(p.x);
@@ -95,7 +95,7 @@ fn chain_bounds(chain: &LineChain) -> (i64, i64, i64, i64) {
     (x0, y0, x1, y1)
 }
 
-fn even_odd(chain: &LineChain, pt: Point64) -> bool {
+pub(crate) fn even_odd(chain: &LineChain, pt: Point64) -> bool {
     let n = chain.len();
     if n < 3 {
         return false;
@@ -115,7 +115,7 @@ fn even_odd(chain: &LineChain, pt: Point64) -> bool {
 }
 
 /// Whether segments `a1-a2` and `b1-b2` share a point (touching counts).
-fn segments_intersect(a1: Point64, a2: Point64, b1: Point64, b2: Point64) -> bool {
+pub(crate) fn segments_intersect(a1: Point64, a2: Point64, b1: Point64, b2: Point64) -> bool {
     fn cross(o: Point64, a: Point64, b: Point64) -> i128 {
         (a.x - o.x) as i128 * (b.y - o.y) as i128 - (a.y - o.y) as i128 * (b.x - o.x) as i128
     }

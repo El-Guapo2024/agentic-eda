@@ -23,7 +23,7 @@ use eda_model::ir::{Point, Zone};
 use eda_model::BoardRules;
 use eda_shape_poly_set::ShapePolySet;
 use eda_zone_filler::shape::Shape as FillShape;
-use eda_zone_filler::{fill_zone, FillInput, FillKeepout, FillPad, FillTrack, FillVia, FillZoneRef, PadGeometry, DEFAULT_MAX_ERROR};
+use eda_zone_filler::{FillInput, FillKeepout, FillPad, FillTrack, FillVia, PadGeometry, DEFAULT_MAX_ERROR};
 use std::collections::HashMap;
 
 #[inline]
@@ -101,7 +101,9 @@ impl FillResults {
 }
 
 /// `ZONE_FILLER::Fill`, for every zone in `board.zones`: each zone's own
-/// layer (this model has no multi-layer zones) via `eda_zone_filler::fill_zone`.
+/// layer (this model has no multi-layer zones) via `eda_zone_filler::fill_board` -- zones filled from the highest priority
+/// down and knocked out by each other's copper, islands removed by connectivity, lower-priority zones refilled when a
+/// zone above them loses islands.
 pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
     let board_outline: Option<Vec<Point64>> = if board.outline.len() >= 3 { Some(board.outline.iter().map(|&p| pt(p)).collect()) } else { None };
 
@@ -133,9 +135,26 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
     // `BOARD::GetMaxClearanceValue`: the rules' largest clearance, and every local override of a pad, footprint or zone.
     let worst_clearance = board.pads.iter().filter_map(|p| p.zone.clearance).chain(board.zones.iter().map(|z| z.clearance)).fold(crate::constraints::worst_case_clearance(rules), i64::max);
 
-    let mut out = FillResults { zones: HashMap::new() };
-    for z in &board.zones {
-        let zone = Zone {
+    // Copper-pour keepouts (task item 3): the filler's own unconditional knockout, see `FillKeepout`'s doc.
+    let keepouts: Vec<FillKeepout> = board.keepouts.iter().filter(|k| k.no_copper_pour).map(|k| FillKeepout { layer: k.layer.clone(), outline: k.outline.iter().map(|&p| pt(p)).collect() }).collect();
+
+    let input = FillInput {
+        pads,
+        tracks,
+        vias,
+        other_zones: Vec::new(),
+        board_outline,
+        keepouts,
+        hole_clearance: crate::constraints::hole_clearance_min(rules),
+        worst_clearance,
+        edge_clearance: crate::constraints::edge_clearance_min(rules),
+        min_clearance: rules.min_clearance_um,
+    };
+
+    let zones: Vec<Zone> = board
+        .zones
+        .iter()
+        .map(|z| Zone {
             id: z.id.clone(),
             net: z.net.clone().unwrap_or_default(),
             layer: z.layer.clone(),
@@ -160,34 +179,14 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
             smoothing: z.smoothing,
             corner_radius: z.corner_radius,
             ..Zone::default()
-        };
+        })
+        .collect();
 
-        let other_zones: Vec<FillZoneRef> = board
-            .zones
-            .iter()
-            .filter(|o| !std::ptr::eq(*o, z))
-            .map(|o| FillZoneRef { id: o.id.clone(), net: o.net.clone(), layer: o.layer.clone(), outline: o.outline.iter().map(|&p| pt(p)).collect(), priority: o.priority, teardrop: o.teardrop, clearance: o.clearance, fill: None })
-            .collect();
+    let clearance_fn = |a: Option<&str>, b: Option<&str>| crate::constraints::clearance(rules, a, b);
+    let fills = eda_zone_filler::fill_board(&zones, &input, clearance_fn, DEFAULT_MAX_ERROR);
 
-        // Copper-pour keepouts on this zone's own layer (task item 3) --
-        // the filler's own unconditional knockout, see `FillKeepout`'s doc.
-        let keepouts: Vec<FillKeepout> =
-            board.keepouts.iter().filter(|k| k.no_copper_pour && k.layer == z.layer).map(|k| FillKeepout { layer: k.layer.clone(), outline: k.outline.iter().map(|&p| pt(p)).collect() }).collect();
-
-        let input = FillInput {
-            pads: pads.clone(),
-            tracks: tracks.clone(),
-            vias: vias.clone(),
-            other_zones,
-            board_outline: board_outline.clone(),
-            keepouts,
-            hole_clearance: crate::constraints::hole_clearance_min(rules),
-            worst_clearance,
-            edge_clearance: crate::constraints::edge_clearance_min(rules),
-            min_clearance: rules.min_clearance_um,
-        };
-        let clearance_fn = |a: Option<&str>, b: Option<&str>| crate::constraints::clearance(rules, a, b);
-        let fill = fill_zone(&zone, &zone.layer, &input, clearance_fn, DEFAULT_MAX_ERROR);
+    let mut out = FillResults { zones: HashMap::new() };
+    for (z, fill) in board.zones.iter().zip(fills) {
         out.zones.insert(z.id.clone(), ZoneFill { fill });
     }
     out

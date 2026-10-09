@@ -23,7 +23,9 @@
 //! * min-width deflate/prune/reinflate, the iterative refill's pre-knockout
 //!   cache (`m_preKnockoutFillCache`) and `postKnockoutMinWidthPrune`, the
 //!   same-net higher-priority subtraction, and a final `Fracture()`;
-//! * geometric island removal (`ISLAND_REMOVAL_MODE`).
+//! * island removal by connectivity (`ISLAND_REMOVAL_MODE`, [`islands`]) and the whole-board `ZONE_FILLER::Fill`
+//!   ([`orchestrate`]): zones filled from the highest priority down and knocked out by each other's *fills*, islands removed
+//!   by copper clusters, and the iterative refill of the zones below a zone that lost islands.
 //!
 //! Not ported, each a documented, bounded cut: `connect_nearby_polys` (a
 //! robustness pass for concave near-touching geometry); per-item DRC-rule
@@ -37,9 +39,13 @@
 
 pub mod corner;
 pub mod hatch;
+pub mod islands;
+pub mod orchestrate;
 pub mod shape;
 pub mod smoothed;
 pub mod spokes;
+
+pub use orchestrate::fill_board;
 
 use eda_clipper2::Point64;
 use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, Point, Zone};

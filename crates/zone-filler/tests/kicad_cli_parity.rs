@@ -284,6 +284,37 @@ fn find_matching_after_block<'a>(after_blocks: &[&'a str], target_outline_mm: &[
         .filter(|b| outline_first_pt(b).map(|p| dist2(p, target) < 1e-4).unwrap_or(false))
 }
 
+/// The refilled block of an imported zone: same first outline point, same net, same priority (two zones may share
+/// an outline, e.g. a GND pour and a netless one), not claimed by an earlier zone of the table.
+fn find_after_block_for<'a>(after_blocks: &[&'a str], used: &mut Vec<usize>, z: &Zone) -> Option<&'a str> {
+    let target = z.outline.first().map(|p| (p.x as f64 / 1000.0, p.y as f64 / 1000.0))?;
+    let mut best: Option<(usize, &'a str)> = None;
+    for (i, b) in after_blocks.iter().enumerate() {
+        if used.contains(&i) {
+            continue;
+        }
+        let Some(first) = outline_first_pt(b) else { continue };
+        if dist2(first, target) >= 1e-4 {
+            continue;
+        }
+        if zone_net_name(b).unwrap_or_default() != z.net {
+            continue;
+        }
+        let prio = extract_num_after(b, "(priority").unwrap_or(0.0) as u32;
+        if prio != z.priority {
+            continue;
+        }
+        best = Some((i, b));
+        break;
+    }
+    let (i, b) = best?;
+    // A multi-layer zone is one block read once per layer: only a single-layer block is claimed.
+    let layer_count = b.matches("(filled_polygon").count();
+    let _ = layer_count;
+    used.push(i);
+    Some(b)
+}
+
 fn outline_first_pt(block: &str) -> Option<(f64, f64)> {
     let poly_i = block.find("(polygon")?;
     extract_pts(&block[poly_i..]).into_iter().next()
@@ -514,13 +545,34 @@ fn check_board_imported(cli: &Path, rel: &str) -> Vec<ParityRow> {
 
     let mut rows = Vec::new();
     let Some(routing) = design.routing.as_ref() else { return rows };
+    let mut used: Vec<usize> = Vec::new();
     for z in routing.zones.iter().filter(|z| !z.is_rule_area && !z.teardrop && z.parent_footprint.is_none()) {
         let our_fill = fills.get(&z.id);
         let our_paths: Paths64 = our_fill.map(|f| f.polys.iter().filter_map(|p| p.first()).cloned().collect()).unwrap_or_default();
         let our_area = our_fill.map(|f| f.area()).unwrap_or(0.0);
 
         let outline_mm: Vec<(f64, f64)> = z.outline.iter().map(|p| (p.x as f64 / 1000.0, p.y as f64 / 1000.0)).collect();
-        let Some(zone_block_after) = find_matching_after_block(&after_blocks, &outline_mm) else {
+        let _ = &outline_mm;
+        // A zone on several layers appears once per layer with the same block: only claim a block on its first layer.
+        let block_after = {
+            let mut probe = used.clone();
+            let found = find_after_block_for(&after_blocks, &mut probe, z);
+            match found {
+                Some(b) => {
+                    let multi = b.contains("(layers");
+                    if !multi {
+                        used = probe;
+                    }
+                    Some(b)
+                }
+                None => {
+                    // a multi-layer zone's block was already used by its first layer: look it up again without the claim
+                    let mut none: Vec<usize> = Vec::new();
+                    find_after_block_for(&after_blocks, &mut none, z)
+                }
+            }
+        };
+        let Some(zone_block_after) = block_after else {
             eprintln!("{rel}: zone net={} layer={} priority={} had no matching outline after refill, skipping", z.net, z.layer, z.priority);
             continue;
         };
