@@ -19,10 +19,14 @@ import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/vi
 import { paintSymbol, mmPointToUm, umPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
 import { snapPoint } from "../canvas/gridHelper";
+import { useGridSettings } from "../../state/gridSettings";
+import { useGridOverrides } from "../../state/gridOverrides";
+import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
+import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
 import { distToSegment } from "../canvas/itemHitTest";
 import { nextPinNumber } from "../../kicad-port/pinNumbering";
@@ -141,14 +145,36 @@ function symbolGraphicFromDraw(kind: SymShapeKind, ptsUm: [number, number][], un
 // placement only ever ends on an explicit Enter/double-click.
 const AUTO_FINISH: Partial<Record<SymShapeKind, number>> = { segment: 2, rect: 2, circle: 2, arc: 3 };
 
+/** The grid category a symbol editor tool places on (`EE_GRID_HELPER::GetItemGrid`: a pin on the connectable grid, a shape on the graphics one, text on the text one; the anchor tool aligns to the graphics one). */
+function toolCategory(tool: SymToolId): GridCategory {
+  if (tool === "pin") return "connectable";
+  if (tool === "text") return "text";
+  if (tool === "anchor" || tool.startsWith("draw_")) return "graphics";
+  return "current";
+}
+
 export function SymbolEditorCanvas() {
   const state = useSymState();
   const dispatch = useSymDispatch();
   const api = useSymApi();
+  // Grid overrides (`common.Control.toggleGridOverrides`): each kind of item snaps to the grid its category is overridden to while they are on.
+  const gridList = useGridSettings("symbol").grids;
+  const gridOverrides = useGridOverrides("symbol");
+  const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridUm, gridList, gridOverrides);
+  const toolGrid = (): number => gridOf(toolCategory(state.activeTool));
+  /** `GetSelectionGrid`: the coarsest of the grids of what is held (a pin is a connectable item, a graphic is text or a shape). */
+  const heldGrid = (ids: readonly string[]): number => {
+    const cats = ids.map((id): GridCategory => (api.pinById(id) ? "connectable" : api.graphicById(id)?.kind === "text" ? "text" : "graphics"));
+    return gridOf(selectionGrid(cats, gridOf));
+  };
   const { run } = useActionRunner();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag. Made at every press. */
+  const gestureRef = useRef<ClickDragGesture | null>(null);
+  /** A right-button press that became a pan-drag: the `contextmenu` event that follows its release must not open the menu (a drag is not a click). */
+  const justPannedRef = useRef(false);
   const pinTemplateRef = useRef<Omit<LibrarySymbolPin, "id" | "number" | "at" | "unit" | "body_style">>(DEFAULT_PIN_TEMPLATE);
   /** The number the Pin tool gave its latest pin, per open symbol -- see the pin-tool branch of onPointerDown. */
   const lastPlacedPinRef = useRef<{ libId: string | null; number: string } | null>(null);
@@ -327,7 +353,17 @@ export function SymbolEditorCanvas() {
   );
 
   const onPointerDown = (e: React.PointerEvent) => {
-    (e.target as Element).setPointerCapture(e.pointerId);
+    // Throws for a synthesized pointer (the Enter-key click of common.Control.cursorClick), which has no real pointer to capture.
+    try {
+      (e.target as Element).setPointerCapture(e.pointerId);
+    } catch {
+      /* synthetic pointer */
+    }
+    // tool_dispatcher.cpp's BUTTON_STATE for this press (kicad-port/dragThreshold.ts): is it a click or has it become a drag?
+    const gesture = new ClickDragGesture(dragRuleFor(isMac()));
+    gesture.down(e.clientX, e.clientY, e.timeStamp);
+    gestureRef.current = gesture;
+    justPannedRef.current = false;
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
 
@@ -337,7 +373,7 @@ export function SymbolEditorCanvas() {
     }
     if (e.button !== 0) return;
 
-    const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+    const [sx, sy] = snapPoint(wx, wy, toolGrid());
 
     if (state.activeTool === "pin" && sym) {
       // The pin just placed may not be in `sym.pins` yet (the document is re-polled after the round trip), so seed from it too:
@@ -398,8 +434,11 @@ export function SymbolEditorCanvas() {
       const refs = applySingleClickModifier(state.selection, hit.id, modifiers);
       dispatch({ type: "SET_SELECTION", refs });
       if (refs.includes(hit.id)) {
-        dragRef.current = { kind: "move", refs: refs.length > 1 ? refs : [hit.id], moveKind: hit.kind, startWorld: [wx, wy] };
-        dispatch({ type: "SET_MOVE_ORIGIN", at: { x: sx, y: sy } });
+        const held = refs.length > 1 ? refs : [hit.id];
+        dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy] };
+        // `GetSelectionGrid`: what is picked up snaps on its own grid.
+        const [ox, oy] = snapPoint(wx, wy, heldGrid(held));
+        dispatch({ type: "SET_MOVE_ORIGIN", at: { x: ox, y: oy } });
       }
     } else if (!hasModifier(modifiers)) {
       dispatch({ type: "CLEAR_SELECTION" });
@@ -409,19 +448,24 @@ export function SymbolEditorCanvas() {
   const onPointerMove = (e: React.PointerEvent) => {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+    const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.kind === "pan") {
       userMovedRef.current = true;
+      if (motion?.dragging) justPannedRef.current = drag.button === 2;
       dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + (e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
     } else if (drag.kind === "move") {
-      const [sx, sy] = snapPoint(wx, wy, state.gridUm);
+      // Nothing is picked up until the press has become a drag (tool_dispatcher.cpp: 8 px, or on macOS a motion after 300 ms held).
+      if (!motion?.dragging) return;
+      const [sx, sy] = snapPoint(wx, wy, heldGrid(drag.refs));
       const origin = state.moveOriginUm ?? { x: sx, y: sy };
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxUm: sx - origin.x, dyUm: sy - origin.y } });
     }
   };
 
   const onPointerUp = () => {
+    gestureRef.current?.up();
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
@@ -509,6 +553,11 @@ export function SymbolEditorCanvas() {
 
   const onContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
+    // A right-drag pans and opens nothing: the button went up as a drag (TA_MOUSE_UP), not a click, so no menu.
+    if (justPannedRef.current) {
+      justPannedRef.current = false;
+      return;
+    }
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
     if (hit && !state.selection.has(hit.id)) dispatch({ type: "SET_SELECTION", refs: [hit.id] });

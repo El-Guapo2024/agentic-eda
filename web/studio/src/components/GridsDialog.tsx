@@ -5,7 +5,9 @@
 // have their own list, and OK keeps all of them (state/gridSettings.ts) and makes the row selected on each page the current grid of that editor.
 //
 // Add and Edit ask for one size in the display unit, checked the way `DIALOG_GRID_SETTINGS` checks it (0.001 to 1000 mm; "Grid size '%s' already exists." for one in the
-// list). Not here: the grid's name, a different Y size and the grid overrides -- see kicad-port/gridSettings.ts.
+// list). Under the list, "Grid Overrides": a grid of its own for each category of item (connected items, wires, vias, text, graphics -- the rows each editor has are
+// `PANEL_GRID_SETTINGS`'s), which the snapping uses while Grid Overrides (Ctrl+Shift+G) is on; an override follows its grid when the list is edited (`RebuildGridSizes` keeps
+// the selection by name). Not here: the grid's name and a different Y size -- see kicad-port/gridSettings.ts.
 import { useState } from "react";
 import actionsData from "../kicad/actions.json";
 import type { ActionsFile } from "../kicad/types";
@@ -14,15 +16,21 @@ import { useFpDispatch, useFpState } from "../state/footprintEditorStore";
 import { useSymDispatch, useSymState } from "../state/symbolEditorStore";
 import { setGridsDialogOpen, useCommonDialogs } from "../state/commonDialogs";
 import { getGridSettings, setGridSettings } from "../state/gridSettings";
+import { getGridOverrides, setGridOverrides } from "../state/gridOverrides";
 import { formatLength, umTo, type LengthUnit } from "../state/units";
 import { effectiveHotkey, displayHotkey } from "../actions/hotkeys";
 import { GRID_EDITORS, GRID_EDITOR_LABEL, insertGrid, moveGrid, parseGridSize, removeGrid, replaceGrid, resetGrids, type GridEdit, type GridEditor, type GridSettings } from "../kicad-port/gridSettings";
+import { overrideRows, rebuildOverrides, safeOverrideIndex, type GridOverrides } from "../kicad-port/gridOverrides";
 
 interface Page {
   settings: GridSettings;
   /** The row selected: the current grid, and the one the buttons act on. */
   row: number;
+  /** The Grid Overrides section: which categories have a grid of their own, and which. */
+  overrides: GridOverrides;
 }
+
+const sameSize = (a: number | undefined, b: number | undefined) => a !== undefined && b !== undefined && Math.abs(a - b) < 1e-9;
 
 const actionsByName = new Map((actionsData as unknown as ActionsFile).actions.map((a) => [a.name, a]));
 
@@ -58,13 +66,13 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
   const symDispatch = useSymDispatch();
   const units = state.units;
 
-  const currentGrid: Record<GridEditor, number> = { pcb: state.gridUm, footprint: fp.gridUm, symbol: sym.gridUm };
+  const currentGrid: Record<GridEditor, number> = { pcb: state.gridUm, footprint: fp.gridUm, symbol: sym.gridUm, schematic: state.schGridUm };
   const [pages, setPages] = useState<Record<GridEditor, Page>>(() => {
     const page = (e: GridEditor): Page => {
       const settings = getGridSettings(e);
-      return { settings, row: Math.max(0, settings.grids.findIndex((g) => Math.abs(g - currentGrid[e]) < 1e-9)) };
+      return { settings, row: Math.max(0, settings.grids.findIndex((g) => Math.abs(g - currentGrid[e]) < 1e-9)), overrides: getGridOverrides(e) };
     };
-    return { pcb: page("pcb"), footprint: page("footprint"), symbol: page("symbol") };
+    return { pcb: page("pcb"), footprint: page("footprint"), symbol: page("symbol"), schematic: page("schematic") };
   });
   const [editor, setEditor] = useState<GridEditor>(initial);
   /** The pages that were shown: OK makes the row selected on each of them the current grid of its editor (a page never opened is left as it was). */
@@ -87,11 +95,13 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
   const ok = () => {
     for (const e of GRID_EDITORS) {
       if (!seen.has(e)) continue;
-      const { settings: s, row: r } = pages[e];
+      const { settings: s, row: r, overrides: o } = pages[e];
       setGridSettings(e, s);
+      setGridOverrides(e, o);
       const um = s.grids[r];
       if (um === undefined || Math.abs(um - currentGrid[e]) < 1e-9) continue;
       if (e === "pcb") dispatch({ type: "SET_GRID_UM", um });
+      else if (e === "schematic") dispatch({ type: "SET_SCH_GRID_UM", um });
       else if (e === "footprint") fpDispatch({ type: "SET_GRID_UM", um });
       else symDispatch({ type: "SET_GRID_UM", um });
     }
@@ -107,23 +117,27 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
       setError(result.error === "duplicate" ? `Grid size '${formatLength(um ?? 0, units)}' already exists.` : "Grid size out of range.");
       return;
     }
-    setPage({ settings: result.settings, row: result.row });
+    setPage({ settings: result.settings, row: result.row, overrides: rebuildOverrides(page.overrides, settings.grids, result.settings.grids, sameSize) });
     setEntry(null);
     setError(null);
   };
 
   const apply = (next: { settings: GridSettings; row: number }) => {
-    setPage(next);
+    setPage({ ...next, overrides: rebuildOverrides(page.overrides, settings.grids, next.settings.grids, sameSize) });
     setError(null);
   };
 
   const reset = () => {
     const next = resetGrids(settings, editor);
     const keptAt = next.grids.findIndex((g) => Math.abs(g - (settings.grids[row] ?? NaN)) < 1e-9);
-    setPage({ settings: next, row: Math.max(0, keptAt) });
+    // `ResetPanel` puts the list back (only the list); the overrides keep their grids by size, as after any edit of the list.
+    setPage({ settings: next, row: Math.max(0, keptAt), overrides: rebuildOverrides(page.overrides, settings.grids, next.grids, sameSize) });
     setEntry(null);
     setError(null);
   };
+
+  const setOverride = (category: Exclude<keyof GridOverrides, "enabled">, patch: Partial<{ on: boolean; index: number }>) =>
+    setPage({ ...page, overrides: { ...page.overrides, [category]: { ...page.overrides[category], ...patch } } });
 
   const gridOptions = settings.grids.map((um, i) => (
     <option key={`${i}-${um}`} value={i}>
@@ -201,6 +215,21 @@ function GridsDialogBody({ initial }: { initial: GridEditor }) {
               {error}
             </div>
           )}
+
+          <div style={{ marginTop: 12, fontWeight: 600 }}>Grid Overrides</div>
+          <div className="kv-grid" style={{ gridTemplateColumns: "130px 1fr", marginTop: 4, rowGap: 4 }}>
+            {overrideRows(editor).map(({ category, label }) => (
+              <span key={category} style={{ display: "contents" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input type="checkbox" aria-label={`${label} grid override`} checked={page.overrides[category].on} onChange={(e) => setOverride(category, { on: e.target.checked })} />
+                  {label}:
+                </label>
+                <select aria-label={`${label} override grid`} value={safeOverrideIndex(page.overrides[category].index, settings.grids.length)} disabled={!page.overrides[category].on} onChange={(e) => setOverride(category, { index: Number(e.target.value) })}>
+                  {gridOptions}
+                </select>
+              </span>
+            ))}
+          </div>
 
           <div style={{ marginTop: 12, fontWeight: 600 }}>Fast Grid Switching</div>
           <div className="kv-grid" style={{ gridTemplateColumns: "70px 1fr 70px", marginTop: 4 }}>

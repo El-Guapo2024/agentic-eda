@@ -33,7 +33,13 @@ import { buildPaintAppearance } from "./appearancePaint";
 import { netsContext } from "../../kicad-port/appearanceNets";
 import { isStale } from "../../kicad-port/checkRevision";
 import { layerColor } from "./layers";
-import { snapPoint, snapWithAnchors, type GridSnapModifiers } from "./gridHelper";
+import { snapPoint } from "./gridHelper";
+import { PcbSnap, type PointOpts, type SnapMods } from "./pcbSnap";
+import { paintSnapOverlay } from "./snapOverlayPainter";
+import { useGridOverrides } from "../../state/gridOverrides";
+import { useGridSettings } from "../../state/gridSettings";
+import { toPcbMagnetic } from "../../kicad-port/preferences";
+import { heldCursor } from "../../kicad-port/heldCursor";
 import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
 import { createMoveThrottle, createRequestGuard, drawStateFromPreview } from "../../kicad-port/routeTool";
@@ -47,6 +53,7 @@ import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { isMac } from "../../platform";
+import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, applyBoxSelectionModifiers, hasModifier, type ClickModifiers } from "../../kicad-port/selection";
 import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
 import { openPropertiesFor } from "./properties";
@@ -80,14 +87,16 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
  */
 const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field"]);
 
+/** The tools whose clicks go through a grid helper: `BestSnapAnchor` on every event, or the router's `snapToItem`. */
+const PLACING_TOOLS = new Set<string>(["route", "diffpair", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "measure", "drill_origin", "local_ratsnest", "picker"]);
+
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
-/** Screen-px movement past which a right-button press counts as a pan-drag rather than a click-to-open-the-context-menu. */
-const PAN_CLICK_TOLERANCE_PX = 4;
+// (A right-button press is a pan-drag rather than a click-to-open-the-context-menu, and a held press stops being a long press, by the dispatcher's rule:
+// kicad-port/dragThreshold.ts, tool_dispatcher.cpp -- more than 8 px of travel along an axis, or on macOS a motion after 300 ms held.)
 
 const LONG_PRESS_MS = 500;
-const LONG_PRESS_MOVE_TOLERANCE_PX = 6;
-/** A click within this many board um of a pad/via/track-end counts as landing on it -- generous enough to be usable at a typical zoom without needing pixel-perfect precision, same idea as pcb_grid_helper's own anchor snapping (not ported here, see gridHelper.ts). */
+/** A click within this many board um of a pad/via/track-end counts as landing on it (which net a route click joins) -- generous enough to be usable at a typical zoom without needing pixel-perfect precision. Where the click goes is the snapping's (`PcbSnap.routePoint`, components/canvas/pcbSnap.ts). */
 const ANCHOR_SNAP_UM = 500;
 /** No per-board "default graphic line width" setting exists (board_rules only covers track/via) -- a plain 0.15mm default, same order of magnitude as KiCad's own out-of-the-box default (0.15-0.2mm silkscreen line width, by version/theme). */
 // (DEFAULT_STROKE_WIDTH_UM now lives in kicad-port/pcbParityState.ts -- incWidth/decWidth step state.pcbx.drawStrokeWidthUm from it.)
@@ -176,6 +185,8 @@ export function Canvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag (kicad-port/dragThreshold.ts). Made at every press, read by the move, the up and the long press. */
+  const gestureRef = useRef<ClickDragGesture | null>(null);
   const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number; crossing: boolean } | null>(null);
   /** pcb_point_editor.cpp's live corner-drag preview -- local, like `marquee` above, since only this component's own render loop needs it. */
   const [zoneCornerPreview, setZoneCornerPreview] = useState<{ zoneId: string; outline: [number, number][] } | null>(null);
@@ -232,6 +243,22 @@ export function Canvas() {
   // The Appearance panel's settings as the painter reads them: opacities, the colour each net gets, the sheet (rebuilt only when they or the board change).
   const nets = useMemo(() => netsContext(board), [board]);
   const paintAppearance = useMemo(() => buildPaintAppearance(state.appearance, nets, board), [state.appearance, nets, board]);
+
+  // The grid helper of the tool in force (kicad-port/pcbGridHelper.ts, pcbSnap.ts), kept fed with the view, the grid list and its overrides and the magnetic settings.
+  const snapRef = useRef<PcbSnap | null>(null);
+  if (!snapRef.current) snapRef.current = new PcbSnap();
+  const snap = snapRef.current;
+  const gridList = useGridSettings("pcb").grids;
+  const gridOverrides = useGridOverrides("pcb");
+  const [, bumpSnap] = useState(0);
+  snap.update({ board, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, magnetic: toPcbMagnetic(state.prefs, state.magneticAllLayers), layerVisible: state.layerVisible, highContrast: state.highContrast, activeLayer: state.activeLayer });
+  snap.onChange = () => bumpSnap((n) => n + 1);
+  // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
+  useEffect(() => {
+    snap.reset();
+    bumpSnap((n) => n + 1);
+  }, [snap, state.activeTool]);
+  useEffect(() => () => snap.reset(), [snap]);
 
   // The canvas's backing size tracks its container's actual box, not a
   // value computed once at mount -- a side panel opening/closing or the
@@ -369,11 +396,19 @@ export function Canvas() {
       gridOrigin: board.grid_origin ?? null,
       drawState: state.drawState,
       cursorUm: state.cursorUm,
+      snappedCursor: PLACING_TOOLS.has(state.activeTool) ? snap.lastPoint() : null,
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
       enteredGroup: state.enteredGroupId,
       appearance: paintAppearance,
     });
+    // What the grid helper shows (kicad-port/pcbGridHelper.ts `overlay()`): the snap marker and its icon, the snap guides and snap line, the construction geometry.
+    // (The visible world is the same flipped or not: a mirrored screen x is still `width - x`.)
+    const snapOverlay = snap.overlay();
+    if (snapOverlay) {
+      const k = state.view.scale || 1;
+      paintSnapOverlay(ctx, k, [-state.view.x / k, -state.view.y / k, (width - state.view.x) / k, (height - state.view.y) / k], snapOverlay, { marker: layerColor("LAYER_AUX_ITEMS"), construction: layerColor("anchor"), guideActive: layerColor("anchor") });
+    }
     ctx.restore();
 
     // Marquee (screen space, on top of everything).
@@ -401,17 +436,64 @@ export function Canvas() {
     [state.view, state.bcx.boardFlipped]
   );
 
-  /** tool_event.h/edit_tool_move_fct.cpp's real move-tool modifiers (see kicad-port/gridSnap.ts's header comment): Ctrl (Cmd on macOS) disables grid round-off, Shift disables anchor snapping. */
-  const gridSnapModifiers = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): GridSnapModifiers => ({
-    ctrlOrCmd: isMac() ? e.metaKey : e.ctrlKey,
-    shiftKey: e.shiftKey,
-  });
+  /** The modifiers of an event as the grid helper takes them: Ctrl (Cmd on a Mac) turns the grid off (`TOOL_EVENT::DisableGridSnapping`), Shift the anchor snapping (`MD_SHIFT`). */
+  const snapMods = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): SnapMods => ({ ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey });
 
-  /** pcb_grid_helper.cpp BestSnapAnchor, applied to a single reference point -- see gridHelper.ts:snapWithAnchors. Falls back to plain grid snap when there's no board yet (shouldn't happen once a drag is possible, but keeps this total). */
-  const snapRef = (wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, excludeOwnerId?: string): [number, number] => {
-    if (!board) return snapPoint(wx, wy, state.gridUm);
-    const { x, y } = snapWithAnchors(wx, wy, board.snap ?? state.gridUm, state.view.scale, board, gridSnapModifiers(e), excludeOwnerId, { allLayers: state.magneticAllLayers, activeLayer: state.activeLayer });
-    return [x, y];
+  /**
+   * Where the cursor of a placing tool goes: the tool's own `PCB_GRID_HELPER::BestSnapAnchor` call -- drawing_tool.cpp `drawShape` / `drawArc` / `DrawZone` snap on the active
+   * layer and the graphics grid, `PlaceText` on the text grid, `DrawDimension` on every layer and the graphics grid, the picker and the ruler on every layer and the current
+   * grid; the router's tools use its `snapToItem` instead (`routePoint`). Run on every pointer move (so the marker follows) and again for the press.
+   */
+  const toolPoint = (tool: string, wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): [number, number] => {
+    const mods = snapMods(e);
+    const draw = state.drawState;
+    if (tool === "route" || tool === "diffpair" || tool === "drag") {
+      const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
+      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started });
+      return [p[0], p[1]];
+    }
+    const opts: PointOpts = {};
+    switch (tool) {
+      case "via":
+        opts.layers = "all";
+        opts.category = "vias";
+        break;
+      case "text":
+        opts.category = "text";
+        break;
+      case "dimension":
+        opts.layers = "all";
+        opts.category = "graphics";
+        break;
+      case "picker":
+      case "measure":
+      case "drill_origin":
+      case "local_ratsnest":
+        opts.layers = "all";
+        break;
+      default:
+        opts.category = "graphics"; // the zone and the shape tools
+    }
+    // `grid.SetSkipPoint( cursorPos )` when a shape starts: it must not snap back onto its own start.
+    opts.skipPoint = draw?.kind === "shape" && draw.pts.length > 0 ? draw.pts[0]! : null;
+    const p = snap.point(tool, [wx, wy], mods, opts);
+    return [p[0], p[1]];
+  };
+
+  /** `BestDragOrigin`: the point of the items picked up that the move starts from -- the nearest of their origins and corners to the mouse. */
+  const moveOrigin = (wx: number, wy: number, refs: readonly string[]): [number, number] => {
+    const p = snap.dragOrigin("move", [wx, wy], refs, state.selectionFilter);
+    return [p[0], p[1]];
+  };
+
+  /**
+   * The cursor of a move: `BestSnapAnchor( cursor, { active layer }, selection grid, selection )`. KiCad warps the pointer to the held point (`BestDragOrigin`) when the move
+   * starts, so from then on the cursor is that point plus how far the pointer has travelled; a page may not move the pointer, so the same cursor is computed: `held` + (pointer now
+   * - pointer at the start), which keeps the item under the pointer where it was grabbed.
+   */
+  const moveCursor = (wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, refs: readonly string[], held: readonly [number, number], grabbed: readonly [number, number]): [number, number] => {
+    const p = snap.moveCursor(heldCursor(held, grabbed, [wx, wy]), snapMods(e), refs);
+    return [p[0], p[1]];
   };
 
   /** A human-readable label for a disambiguation-menu row. */
@@ -515,7 +597,7 @@ export function Canvas() {
       if (draw.shapeKind === "arc") return;
       if (draw.shapeKind === "bezier") {
         // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
-        const at = state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, board?.snap ?? state.gridUm) : draw.bezier?.lastPoint;
+        const at = snap.lastPoint() ?? (state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, state.gridUm) : draw.bezier?.lastPoint);
         const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
         if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm) });
         dispatch({ type: "SET_DRAW_STATE", draw: null });
@@ -543,6 +625,10 @@ export function Canvas() {
     } catch {
       /* synthetic pointer */
     }
+    const gesture = new ClickDragGesture(dragRuleFor(isMac()));
+    gesture.down(e.clientX, e.clientY, e.timeStamp);
+    gestureRef.current = gesture;
+    justPannedRef.current = false; // a new press: the last right-drag no longer vetoes the menu (the browsers that open it on the press fire it right after this)
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
     setPcbMenu(null);
@@ -551,7 +637,7 @@ export function Canvas() {
     // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts) a left click answers it -- snapped like
     // PCB_GRID_HELPER::BestSnapAnchor, or the item under it for an item session -- and does nothing else.
     if (e.button === 0 && picker.session()) {
-      const [px, py] = snapRef(wx, wy, e);
+      const [px, py] = toolPoint("picker", wx, wy, e);
       picker.click({
         point: { x: px, y: py },
         item: () => {
@@ -568,7 +654,7 @@ export function Canvas() {
     // from the select/move flow below, which only applies to the
     // "select"/"move" tools.
     if (board && e.button === 0 && !e.altKey) {
-      const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+      const [sx, sy] = toolPoint(state.activeTool, wx, wy, e);
 
       // `pcbnew.EditorControl.drillOrigin`: `DrillOrigin`'s picker click handler -- the drill/place file origin goes here and the tool is done
       // ("drill origin is a one-shot; don't continue with tool").
@@ -728,7 +814,8 @@ export function Canvas() {
         if (already.length > 0 && (shapeKind === "segment" || shapeKind === "rect")) {
           const last = already[already.length - 1]!;
           const constrained = constrainByAngleMode(state.pcbx.angleSnapMode, last, [sx, sy]);
-          point = snapPoint(constrained[0], constrained[1], board.snap ?? state.gridUm);
+          // Constrained onto the line mode's ray, then back on the grid -- unless it did not move (an anchor already on the ray keeps its exact place).
+          point = constrained[0] === sx && constrained[1] === sy ? [sx, sy] : (([x, y]) => [x, y] as [number, number])(snap.align("shape", constrained, snapMods(e), "graphics"));
         }
         const pts = [...already, point];
         const finishAt = shapeAutoFinishCount(shapeKind);
@@ -785,12 +872,12 @@ export function Canvas() {
       return;
     }
     if (state.armed) {
-      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      const [sx, sy] = snap.align("place", [wx, wy], snapMods(e), "connectable");
       api.placeArmedAt(sx, sy);
       return;
     }
     if (state.armedFootprint) {
-      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      const [sx, sy] = snap.align("place", [wx, wy], snapMods(e), "connectable");
       void api.placeLibraryFootprintAt(sx, sy);
       return;
     }
@@ -899,10 +986,9 @@ export function Canvas() {
       if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0 && board) {
         // What the drag picks up: the selection as the click leaves it (a group stands for its members, a pad for its footprint), locked items out
         // (`FilterCollectorForLockedItems`), and the points an R / F pressed on the way acts about.
-        const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), (p) => snapPoint(p[0], p[1], board.snap ?? state.gridUm));
+        const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), (p) => snapPoint(p[0], p[1], state.gridUm));
         if (start.refs.length > 0) {
-          const soleRef = start.refs.length === 1 ? start.refs[0] : undefined;
-          dragRef.current = { kind: "move", refs: start.refs, pivotUm: start.pivotUm, flipPivotUm: start.flipPivotUm, startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
+          dragRef.current = { kind: "move", refs: start.refs, pivotUm: start.pivotUm, flipPivotUm: start.flipPivotUm, startWorld: [wx, wy], snapOrigin: moveOrigin(wx, wy, start.refs), moved: false };
         } else if (start.lockedOut) {
           dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
         }
@@ -922,10 +1008,14 @@ export function Canvas() {
     const containerRectForAutoPan = containerRef.current?.getBoundingClientRect();
     if (containerRectForAutoPan) lastPointerScreenRef.current = { x: e.clientX - containerRectForAutoPan.left, y: e.clientY - containerRectForAutoPan.top };
 
-    if (longPressRef.current) {
-      const [sx, sy] = longPressRef.current.startScreen;
-      if (Math.hypot(e.clientX - sx, e.clientY - sy) > LONG_PRESS_MOVE_TOLERANCE_PX) clearLongPress();
-    }
+    // tool_dispatcher.cpp handleMouseButton: a held button becomes a drag after 8 px (or, on macOS, 300 ms) -- not at the first grid step of travel.
+    const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
+    if (longPressRef.current && motion?.dragging) clearLongPress();
+
+    // The snapping of the tool in force follows the cursor, as `BestSnapAnchor` runs on every event of a KiCad tool: the marker, the snap lines and the construction
+    // geometry are the helper's state after this call (and the click that follows takes the same point).
+    const tracking = picker.session() != null ? "picker" : state.activeTool;
+    const snapped: [number, number] | null = board && !dragRef.current && !moveMode && PLACING_TOOLS.has(tracking) ? toolPoint(tracking, wx, wy, e) : null;
 
     // Interactive router (gap #7) live preview: every move asks the
     // backend to re-resolve the head toward the cursor (walkaround/shove/
@@ -936,7 +1026,7 @@ export function Canvas() {
     if (board && state.activeTool === "route" && state.drawState?.kind === "route") {
       const draw = state.drawState;
       if (routeMoveThrottleRef.current.shouldSend(performance.now())) {
-        const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+        const [sx, sy] = snapped ?? toolPoint("route", wx, wy, e);
         const token = routeMoveGuardRef.current.next();
         routeMove(sx, sy).then((preview) => {
           if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
@@ -951,7 +1041,7 @@ export function Canvas() {
     if (board && state.activeTool === "diffpair" && state.drawState?.kind === "diffpair") {
       const draw = state.drawState;
       if (routeMoveThrottleRef.current.shouldSend(performance.now())) {
-        const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+        const [sx, sy] = snapped ?? toolPoint("diffpair", wx, wy, e);
         const token = routeMoveGuardRef.current.next();
         dpMove(sx, sy).then((preview) => {
           if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
@@ -966,7 +1056,7 @@ export function Canvas() {
     if (board && state.activeTool === "drag" && state.drawState?.kind === "drag") {
       const draw = state.drawState;
       if (routeMoveThrottleRef.current.shouldSend(performance.now())) {
-        const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+        const [sx, sy] = snapped ?? toolPoint("drag", wx, wy, e);
         const token = routeMoveGuardRef.current.next();
         routeDragMove(sx, sy).then((preview) => {
           if (!routeMoveGuardRef.current.isCurrent(token) || !preview.ok) return;
@@ -978,7 +1068,7 @@ export function Canvas() {
     // `drawArc` / `drawOneBezier`'s motion branch: update the construction manager's geometry (never its step) with the snapped cursor.
     if (board && state.drawState?.kind === "shape" && (state.drawState.arc || state.drawState.bezier)) {
       const draw = state.drawState;
-      const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+      const [sx, sy] = snapped ?? toolPoint(state.activeTool, wx, wy, e);
       if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap(state.pcbx.angleSnapMode, e)) } });
       else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
     }
@@ -989,7 +1079,7 @@ export function Canvas() {
       // once (the first pointer move) so the points an R / F acts about stay where the selection was picked up.
       const packing = state.movePreview?.perRefOffsetUm != null;
       const held = state.movePreview?.kind === "pcb" ? state.movePreview : null;
-      const start = packing || held ? null : carryStart(board, [...state.selection], (p) => snapPoint(p[0], p[1], board.snap ?? state.gridUm));
+      const start = packing || held ? null : carryStart(board, [...state.selection], (p) => snapPoint(p[0], p[1], state.gridUm));
       if (!packing && !held && start && start.refs.length === 0) {
         if (start.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
@@ -1006,9 +1096,8 @@ export function Canvas() {
       // the dragged item's own anchors for a single-item move; a
       // multi-select drag doesn't exclude any member (a reasonable,
       // documented simplification -- see PARITY-pcb.md).
-      const soleRef = refs.length === 1 ? refs[0] : undefined;
-      const [ox, oy] = snapRef(origin.x, origin.y, e, soleRef);
-      const [sx, sy] = snapRef(wx, wy, e, soleRef);
+      const [ox, oy] = moveOrigin(origin.x, origin.y, refs);
+      const [sx, sy] = moveCursor(wx, wy, e, refs, [ox, oy], [origin.x, origin.y]);
       // Preserve whatever R/Shift+R/F have already accumulated on this
       // same preview (useActionRunner.ts) -- a fresh preview object every
       // pointer-move must not reset the live rotate/flip state.
@@ -1022,23 +1111,31 @@ export function Canvas() {
     if (!drag) return;
     if (drag.kind === "pan") {
       userMovedRef.current = true;
-      if (Math.hypot(e.clientX - drag.startScreen[0], e.clientY - drag.startScreen[1]) > PAN_CLICK_TOLERANCE_PX) drag.moved = true;
+      if (motion?.dragging) drag.moved = true;
       dispatch({ type: "SET_VIEW", view: { ...state.view, x: drag.startView[0] + panDeltaX(state.bcx.boardFlipped, e.clientX - drag.startScreen[0]), y: drag.startView[1] + (e.clientY - drag.startScreen[1]) } });
     } else if (drag.kind === "move") {
-      const [sx, sy] = snapRef(wx, wy, e, drag.refs.length === 1 ? drag.refs[0] : undefined);
+      // Until the press has become a drag it is a click that may still be released: nothing is picked up.
+      if (!motion?.dragging) return;
+      drag.moved = true;
+      const [sx, sy] = moveCursor(wx, wy, e, drag.refs, drag.snapOrigin, drag.startWorld);
       const dx = sx - drag.snapOrigin[0];
       const dy = sy - drag.snapOrigin[1];
-      if (dx !== 0 || dy !== 0) drag.moved = true;
       const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "pcb", dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped, pivotUm: drag.pivotUm, flipPivotUm: drag.flipPivotUm } : null });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "pcb", dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped, pivotUm: drag.pivotUm, flipPivotUm: drag.flipPivotUm } });
     } else if (drag.kind === "zoneCorner") {
-      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      if (!motion?.dragging) return; // PCB_POINT_EDITOR::Main starts editing at the drag (`evt->IsDrag`), not at the press
+      // `grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ), { item } )`: on the zone's layer, not onto the zone itself.
+      const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([board?.routing?.zones.find((z) => z.id === drag.zoneId)?.layer ?? state.activeLayer ?? "F.Cu"]), category: "current", skip: new Set([drag.zoneId]) });
+      const [sx, sy] = [p[0], p[1]];
       setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
     } else if (drag.kind === "shapePoint") {
-      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      if (!motion?.dragging) return;
+      const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.layer]), category: "graphics", skip: new Set([drag.shapeId]) });
+      const [sx, sy] = [p[0], p[1]];
       const next = moveShapePoint(drag.base, drag.point, [sx, sy], state.pcbx.arcEditMode);
       setShapePointPreview(next ? { id: drag.shapeId, shape: cmdShapeToShape(next, drag.shapeId) } : null);
     } else if (drag.kind === "box") {
+      if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
       const rect = containerRef.current!.getBoundingClientRect();
       const x0 = drag.startScreen[0] - rect.left,
         y0 = drag.startScreen[1] - rect.top;
@@ -1050,14 +1147,20 @@ export function Canvas() {
 
   const onPointerUp = (e: React.PointerEvent) => {
     clearLongPress();
+    gestureRef.current?.up();
     const drag = dragRef.current;
     dragRef.current = null;
     if (!drag) return;
     if (drag.kind === "pan") {
       justPannedRef.current = drag.button === 2 && drag.moved;
     } else if (drag.kind === "move") {
-      if (drag.moved && state.movePreview) {
-        api.commitMove(state.movePreview.refs, state.movePreview.dxUm, state.movePreview.dyUm, state.movePreview.kind, state.movePreview.rotateQuarterTurns, state.movePreview.flipped);
+      const held = state.movePreview;
+      if (drag.moved && held) {
+        // A drag that ended where it began (and turned and flipped nothing) leaves the board as it was: no undo step.
+        if (held.dxUm === 0 && held.dyUm === 0 && !held.rotateQuarterTurns && !held.flipped) dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+        else api.commitMove(held.refs, held.dxUm, held.dyUm, held.kind, held.rotateQuarterTurns, held.flipped);
+      } else if (drag.moved) {
+        dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
       } else {
         dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
         // No real movement: this was a plain click, not a drag -- apply
@@ -1247,7 +1350,7 @@ export function Canvas() {
         if (findNearestCorner(zone.outline, wx, wy, toleranceUm) == null) {
           const insertAt = findNearestEdgeInsertionIndex(zone.outline, wx, wy, toleranceUm);
           if (insertAt != null) {
-            const [sx, sy] = snapPoint(wx, wy, board.snap ?? state.gridUm);
+            const [sx, sy] = snap.align("insert", [wx, wy], snapMods(e), "current");
             const next = insertCorner(zone.outline, insertAt, sx, sy);
             api.cmd({ op: "set_zone_outline", id: zone.id, outline: next.map(([x, y]) => ({ x, y })) });
             return;

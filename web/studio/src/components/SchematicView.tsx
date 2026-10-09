@@ -27,12 +27,17 @@ import { useWheelPrefs } from "../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../hooks/useNonPassiveWheel";
 import { paintSchematic } from "./schematic/painter";
 import { resolveLibSymbol } from "./schematic/libSymbol";
-import { GRID } from "./schematic/layout";
+import { SchSnap, SCH_PLACING_TOOLS, toolCategory, type SchSnapMods } from "./schematic/schSnap";
+import { useGridOverrides } from "../state/gridOverrides";
+import { useGridSettings } from "../state/gridSettings";
+import { computeVisibleGridSize } from "../kicad-port/grid";
+import { heldCursor } from "../kicad-port/heldCursor";
+import { paintSnapOverlay } from "./canvas/snapOverlayPainter";
 import { layerColor } from "./canvas/layers";
 import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, pageOf } from "./schematic/drawingSheet";
 import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, applyBoxSelectionModifiers, hasModifier } from "../kicad-port/selection";
-import { alignToGrid } from "../kicad-port/gridSnap";
 import { isMac } from "../platform";
+import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
 import { applyPatch, heldCmd, holdPoint, pickedVertices, previewBody, wirePick } from "../kicad-port/schMove";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
@@ -80,16 +85,14 @@ type DragState =
    * handler (see this file's onPointerDown for the full port): KiCad's
    * real default for a plain drag on a movable item is "Drag" (rubber-
    * band), not "Move", so that's what this defaults to as well, same as
-   * `G` itself arms. `moved` is this app's existing click-vs-drag
-   * distinguisher (ported from Canvas.tsx's own identical PCB-side
-   * pattern -- "did the snapped position actually change" rather than
-   * tool_dispatcher.cpp's literal 8px/300ms thresholds, a documented
-   * simplification PARITY-pcb.md already notes for the PCB side): false
-   * until the live preview's delta is first nonzero, so a plain
-   * zero-movement click-release still falls through to an ordinary
-   * select instead of committing a no-op drag.
+   * `G` itself arms. `moved` is tool_dispatcher.cpp's click-versus-drag
+   * rule (kicad-port/dragThreshold.ts): false until the press has become
+   * a drag -- more than 8 px of travel along an axis, or on macOS a
+   * motion after 300 ms held -- so a click-release with a grid step of
+   * jitter still falls through to an ordinary select instead of
+   * committing a drag.
    */
-  | { kind: "move"; refs: string[]; startWorld: [number, number]; moved: boolean; vertices?: Record<string, number[]> };
+  | { kind: "move"; refs: string[]; startWorld: [number, number]; /** `BestDragOrigin`: the point of the held items the drag holds them by. */ origin: [number, number]; moved: boolean; vertices?: Record<string, number[]> };
 
 /** Which `add_label` scope each of the three label tools commits -- `L`/Ctrl+`L`/`H`, see useActionRunner.ts's own `eeschema.InteractiveDrawing.place*Label` bindings for how each one arms its tool id. */
 const LABEL_TOOL_SCOPE: Partial<Record<ToolId, LabelScope>> = {
@@ -99,16 +102,9 @@ const LABEL_TOOL_SCOPE: Partial<Record<ToolId, LabelScope>> = {
 };
 
 /**
- * Every pin's resolved world-space tip, for the wire tool's "snap to a
- * pin when close" (sch_line_wire_bus_tool.cpp's own grid.BestSnapAnchor
- * on the GRID_CONNECTABLE grid, simplified here to a flat radius check,
- * same scope reduction as `SchematicView.tsx`'s header comment notes for
- * the move tool's own grid-only snap). Only symbols with real resolved
- * `lib_symbols` graphics contribute a pin -- a symbol still drawn as the
- * generic box (no `lib_id` resolved) has no world-space pin geometry
- * computed on this side yet (`layout.ts`'s box layout is local-space
- * only); a wire can still be drawn to one, it just won't snap-assist.
- * See PARITY-sch.md.
+ * Every pin's resolved world-space tip, for the junction analysis (`JUNCTION_HELPERS::AnalyzePoint`) and the wire tool's auto-finish on a pin. Only symbols with real
+ * resolved `lib_symbols` graphics contribute a pin -- a symbol still drawn as the generic box (no `lib_id` resolved) has no world-space pin geometry computed on this side
+ * yet (`layout.ts`'s box layout is local-space only). Where a click goes is the grid helper's (components/schematic/schSnap.ts), which has the same pins as anchors.
  */
 function pinSnapPoints(sch: Schematic): Array<[number, number]> {
   const pts: Array<[number, number]> = [];
@@ -154,6 +150,8 @@ export function SchematicView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag. Made at every press. */
+  const gestureRef = useRef<ClickDragGesture | null>(null);
   const userMovedRef = useRef(false);
   /** Previous wire-preview elbow, for computeBreakPoint's "maintain current line shape" hint (kicad-port/schLineMode.ts). */
   const elbowRef = useRef<{ mid: readonly [number, number]; end: readonly [number, number] } | null>(null);
@@ -173,6 +171,22 @@ export function SchematicView() {
   const dragMode = state.activeTool === "drag";
   /** `M` and `G`: which `sch_move` verb a committed preview becomes (a plain click-drag is a `sch_drag`, sch_selection_tool.cpp's own default for a plain drag). */
   const armedKind: "sch_move" | "sch_drag" | null = moveMode ? "sch_move" : dragMode ? "sch_drag" : null;
+
+  // The grid helper of the tool in force (kicad-port/schGridHelper.ts, schematic/schSnap.ts), fed with the sheet, the view, the grid list and its overrides.
+  const snapRef = useRef<SchSnap | null>(null);
+  if (!snapRef.current) snapRef.current = new SchSnap();
+  const snap = snapRef.current;
+  const gridList = useGridSettings("schematic").grids;
+  const gridOverrides = useGridOverrides("schematic");
+  const gridUm = state.schGridUm;
+  snap.update({ sch, scale: state.schematicView.scale, gridUm, grids: gridList, overrides: gridOverrides });
+  // A tool of its own starts a helper of its own: the anchor snapped to and the snap line go with the last one.
+  useEffect(() => snap.reset(), [snap, state.activeTool]);
+  /** The modifiers of the last pointer event (Ctrl, Cmd on a Mac, turns the grid off; Shift the anchors): the click handlers below snap through `snapToGrid` without an event. */
+  const modsRef = useRef<SchSnapMods>({ ctrl: false, shift: false });
+  const NO_MODS: SchSnapMods = { ctrl: false, shift: false };
+  /** The grid the view draws: the current grid, coarsened while it is too fine to see (`GAL::GetVisibleGridSize`). */
+  const visibleGridUm = computeVisibleGridSize(gridUm, state.schematicView.scale);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -209,7 +223,7 @@ export function SchematicView() {
     const origin = state.moveOriginUm;
     const cmd = held
       ? heldCmd(
-          { mode: held.kind === "sch_drag" ? "drag" : "move", ids: held.refs, vertices: held.vertices, dxUm: held.dxUm, dyUm: held.dyUm, turns: held.turns, holdUm: holdPoint(origin, held.dxUm, held.dyUm) },
+          { mode: held.kind === "sch_drag" ? "drag" : "move", ids: held.refs, vertices: held.vertices, dxUm: held.dxUm, dyUm: held.dyUm, turns: held.turns, holdUm: held.holdUm ?? holdPoint(origin, held.dxUm, held.dyUm) },
           { ortho: state.schLineMode !== LINE_MODE_FREE }
         )
       : null;
@@ -244,14 +258,14 @@ export function SchematicView() {
   }, []);
   // A Break / Slice in progress shows the cut lines as their pieces, the new end at the (grid-snapped) cursor (kicad-port/schBreak.ts).
   const breaking = state.drawState?.kind === "sch_shape" ? state.drawState.brk : undefined;
-  const breakSnap = breaking && state.cursorUm ? alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false }) : null;
-  const breakCursor: [number, number] | null = breakSnap ? [breakSnap.x, breakSnap.y] : null;
+  const breakSnap = breaking && state.cursorUm ? (snap.lastPoint() ?? snap.align([state.cursorUm.x, state.cursorUm.y], NO_MODS, "wires")) : null;
+  const breakCursor: [number, number] | null = breakSnap ? [breakSnap[0], breakSnap[1]] : null;
   const baseDisplaySch: Schematic | null = sch && held && patch ? applyPatch(sch, patch) : sch && breaking && breakCursor ? breakPreviewSheet(sch, breaking, breakCursor) : sch;
   // A paste in progress: what it would add, shifted so its anchor sits on the grid-snapped cursor (`SCH_MOVE_TOOL::Main`'s `delta = m_cursor - *m_anchorPos`) and drawn
   // selected, as KiCad selects the pasted items. The sheet itself is untouched until the click (kicad-port/schClipboard.ts).
-  const pasteSnap = paste && state.cursorUm ? alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false }) : null;
-  const pasteDx = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap.x, pasteSnap.y])[0] : 0;
-  const pasteDy = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap.x, pasteSnap.y])[1] : 0;
+  const pasteSnap = paste && state.cursorUm ? snap.align([state.cursorUm.x, state.cursorUm.y], NO_MODS, "connectable") : null;
+  const pasteDx = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[0] : 0;
+  const pasteDy = paste && pasteSnap ? pasteOffset(paste.anchor, [pasteSnap[0], pasteSnap[1]])[1] : 0;
   const pasteShown = paste != null && pasteSnap != null;
   const displaySch: Schematic | null = useMemo(() => (baseDisplaySch && paste && pasteShown ? withPaste(baseDisplaySch, paste.preview, pasteDx, pasteDy) : baseDisplaySch), [baseDisplaySch, paste, pasteShown, pasteDx, pasteDy]);
   const pasteSelection = useMemo(() => (paste && pasteShown ? new Set(previewIds(paste.preview)) : null), [paste, pasteShown]);
@@ -283,7 +297,7 @@ export function SchematicView() {
     // The paper this sheet is laid out for (A4 unless the sheet says otherwise), and where in the hierarchy it is.
     const page = pageOf(sch.paper);
     drawPageAndFrame(ctx, state.schematicView, page);
-    drawGridDots(ctx, state.schematicView, width, height, GRID, page);
+    if (state.gridVisible) drawGridDots(ctx, state.schematicView, width, height, visibleGridUm, page);
     drawZoneReferences(ctx, state.schematicView, page);
     const tb = sch.title_block;
     const crumbs = sch.sheet_path ?? [];
@@ -308,8 +322,8 @@ export function SchematicView() {
       // elbow) in LINE_MODE_90/45, one straight segment in LINE_MODE_FREE.
       let pts = state.drawState.pts;
       if (state.cursorUm) {
-        const c = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
-        const tail = wireTail(pts[pts.length - 1]!, [c.x, c.y], state.schLineMode, state.schPosture, elbowRef.current);
+        const c = snap.lastPoint() ?? snap.align([state.cursorUm.x, state.cursorUm.y], NO_MODS, state.activeTool === "sch_line" ? "graphics" : "wires");
+        const tail = wireTail(pts[pts.length - 1]!, [c[0], c[1]], state.schLineMode, state.schPosture, elbowRef.current);
         elbowRef.current = tail.length === 2 ? { mid: tail[0]!, end: tail[1]! } : null;
         pts = [...pts, ...(tail as [number, number][])];
       }
@@ -332,20 +346,26 @@ export function SchematicView() {
     }
     // The shape or rule area being drawn (kicad-port/schShapeEdit.ts, polygonGeom.ts), rubber-banded to the cursor.
     if (state.drawState?.kind === "sch_shape" && state.cursorUm) {
-      paintShapePreview(ctx, state.schematicView, state.drawState, shapeSnap(state.cursorUm.x, state.cursorUm.y), state.schLineMode);
+      paintShapePreview(ctx, state.schematicView, state.drawState, shapeSnap(state.cursorUm.x, state.cursorUm.y, true), state.schLineMode);
       // The sheet pin the next click would drop.
-      if (state.drawState.pin) paintPinPreview(ctx, state.schematicView, sch, state.drawState.pin, shapeSnap(state.cursorUm.x, state.cursorUm.y));
+      if (state.drawState.pin) paintPinPreview(ctx, state.schematicView, sch, state.drawState.pin, shapeSnap(state.cursorUm.x, state.cursorUm.y, true));
     }
     // `S`: the sheet being sized, from its first corner to the (grid-snapped) cursor.
     if (state.drawState?.kind === "sheet" && state.cursorUm) {
       const start = state.drawState.start;
-      const c = alignToGrid({ x: state.cursorUm.x, y: state.cursorUm.y }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
-      const [w, h] = sheetSize(start, [c.x, c.y], GRID);
+      const c = snap.lastPoint() ?? snap.align([state.cursorUm.x, state.cursorUm.y], NO_MODS, "connectable");
+      const [w, h] = sheetSize(start, [c[0], c[1]], snap.gridSize("connectable"));
       ctx.strokeStyle = layerColor("LAYER_SHEET");
       ctx.lineWidth = Math.max(150, (1 / state.schematicView.scale) * 1.5);
       ctx.setLineDash([4 / state.schematicView.scale, 3 / state.schematicView.scale]);
       ctx.strokeRect(start[0], start[1], w, h);
       ctx.setLineDash([]);
+    }
+    // What the grid helper shows: the snap marker and the snap line (`SNAP_INDICATOR`, `CONSTRUCTION_GEOM`).
+    const snapOverlay = snap.overlay();
+    if (snapOverlay) {
+      const k = state.schematicView.scale || 1;
+      paintSnapOverlay(ctx, k, [-state.schematicView.x / k, -state.schematicView.y / k, (width - state.schematicView.x) / k, (height - state.schematicView.y) / k], snapOverlay, { marker: "#001966", construction: layerColor("LAYER_SCHEMATIC_ANCHOR"), guideActive: layerColor("LAYER_SCHEMATIC_ANCHOR"), guides: false });
     }
     if (marquee) {
       const x0 = (marquee.x0 - state.schematicView.x) / state.schematicView.scale;
@@ -371,15 +391,28 @@ export function SchematicView() {
     return [(sx - state.schematicView.x) / state.schematicView.scale, (sy - state.schematicView.y) / state.schematicView.scale];
   };
 
-  /** `edit_tool_move_fct.cpp`'s grid round-off alone (see kicad-port/gridSnap.ts's header) -- no anchor/pin snap yet, a documented gap (PARITY-sch.md): real eeschema also snaps a move to a nearby pin. */
+  /**
+   * Where a click of the tool in force goes: `EE_GRID_HELPER::BestSnapAnchor` on the tool's grid (kicad-port/schGridHelper.ts) -- the grid of its category (connected items and
+   * wires 50 mil, text 10 mil, ... under the grid overrides), or an anchor (a pin, a wire end, a label) with the grid off. Ctrl and Shift are the last event's.
+   */
   const snapToGrid = (xUm: number, yUm: number): [number, number] => {
-    const p = alignToGrid({ x: xUm, y: yUm }, GRID, { x: 0, y: 0 }, { ctrlOrCmd: false });
-    return [p.x, p.y];
+    const p = snap.point(state.activeTool, [xUm, yUm], modsRef.current, toolCategory(state.activeTool));
+    return [p[0], p[1]];
   };
 
-  /** The point a shape tool takes for the cursor: the grid (`GRID_GRAPHICS`), or for a rule area also a pin it is near (`GRID_CONNECTABLE`). */
-  const shapeSnap = (xUm: number, yUm: number): [number, number] =>
-    (state.activeTool === "sch_rule_area" && sch ? nearestSnapPoint(pinSnapPoints(sch), xUm, yUm, 400 / state.schematicView.scale) : null) ?? snapToGrid(xUm, yUm);
+  /**
+   * The point a shape tool takes for the cursor: the grid of its category (`GRID_GRAPHICS`, `GRID_CONNECTABLE` for a rule area) and the anchors of the grid helper.
+   * `live` is the render path: the point the last pointer event put the cursor at, without running the helper again.
+   */
+  const shapeSnap = (xUm: number, yUm: number, live = false): [number, number] => {
+    if (live) {
+      const last = snap.lastPoint();
+      if (last) return [last[0], last[1]];
+      const p = snap.align([xUm, yUm], NO_MODS, toolCategory(state.activeTool));
+      return [p[0], p[1]];
+    }
+    return snapToGrid(xUm, yUm);
+  };
 
   /**
    * Commit a finished click-to-add-point polyline: a wire or bus (`add_wire`), or -- with the Draw Lines tool -- a graphic line
@@ -444,6 +477,10 @@ export function SchematicView() {
       style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
+        modsRef.current = { ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey };
+        const gesture = new ClickDragGesture(dragRuleFor(isMac()));
+        gesture.down(e.clientX, e.clientY, e.timeStamp);
+        gestureRef.current = gesture;
         if (e.button === 1) {
           userMovedRef.current = true;
           (e.target as Element).setPointerCapture(e.pointerId);
@@ -484,8 +521,8 @@ export function SchematicView() {
         // (`GRID_GRAPHICS` instead of `GRID_WIRES` in `SCH_LINE_WIRE_BUS_TOOL::DrawSegments`).
         if (state.activeTool === "wire" || state.activeTool === "bus" || state.activeTool === "sch_line") {
           const isLine = state.activeTool === "sch_line";
-          const thresholdUm = 400 / state.schematicView.scale;
-          const snapped = (isLine ? null : nearestSnapPoint(pinSnapPoints(sch), wx, wy, thresholdUm)) ?? snapToGrid(wx, wy);
+          // `BestSnapAnchor` on the tool's grid (wires: `GRID_WIRES`, lines: `GRID_GRAPHICS`): a pin is reached through the grid it sits on, or as an anchor with the grid off.
+          const snapped = snapToGrid(wx, wy);
           const draw = state.drawState;
           if (draw?.kind !== "wire") {
             dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [snapped] } });
@@ -539,7 +576,7 @@ export function SchematicView() {
             return;
           }
           dispatch({ type: "SET_DRAW_STATE", draw: null });
-          dispatch({ type: "SET_SCH_SHEET_PENDING", pending: { at: draw.start, size: sheetSize(draw.start, c, GRID) } });
+          dispatch({ type: "SET_SCH_SHEET_PENDING", pending: { at: draw.start, size: sheetSize(draw.start, c, snap.gridSize("connectable")) } });
           return;
         }
 
@@ -547,19 +584,16 @@ export function SchematicView() {
         // TwoClickPlace): every one of these tools stays armed after a
         // click (same as the wire tool above) for chained placement --
         // real eeschema does too (Escape, or the hotkey again, is how you
-        // leave the tool). `L`/`P` pin-snap the same way the wire tool
-        // does (a label commonly tags a wire/pin; a power symbol's own
-        // `pin` field needs to land on a real pin to resolve at all, see
-        // `Cmd::AddPowerSymbol`'s doc) -- `T` is free text, plain grid
-        // snap only.
+        // leave the tool). Every one clicks where `BestSnapAnchor` puts the cursor, on the grid of its category (labels, power symbols and no-connects on the
+        // connectable grid, text on the text grid): a label or power symbol on a pin's end connects to it by position, as in KiCad.
         const labelScope = LABEL_TOOL_SCOPE[state.activeTool];
         if (labelScope) {
-          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          const snapped = snapToGrid(wx, wy);
           dispatch({ type: "SET_SCH_LABEL_PENDING", pending: { at: snapped, scope: labelScope } });
           return;
         }
         if (state.activeTool === "sch_power") {
-          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          const snapped = snapToGrid(wx, wy);
           dispatch({ type: "SET_SCH_POWER_PENDING", pending: { at: snapped } });
           return;
         }
@@ -568,7 +602,7 @@ export function SchematicView() {
           return;
         }
         if (state.activeTool === "sch_no_connect") {
-          const [sx, sy] = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          const [sx, sy] = snapToGrid(wx, wy);
           api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
           return;
         }
@@ -645,8 +679,10 @@ export function SchematicView() {
           const wire = wireId ? sch.wires.find((w) => w.id === wireId) : undefined;
           const vertices = wire && refs.length === 1 ? (wirePick(wire, [wx, wy], tolerance) ?? undefined) : undefined;
           dispatch({ type: "SET_SCH_WIRE_PICK", pick: wire && vertices && refs.length === 1 ? { id: wire.id, vertices } : null });
+          const dragOrigin = snap.dragOrigin([wx, wy], refs);
+          const origin: [number, number] = [dragOrigin[0], dragOrigin[1]];
           dispatch({ type: "SET_MOVE_ORIGIN", at: { x: wx, y: wy } });
-          dragRef.current = { kind: "move", refs, startWorld: [wx, wy], moved: false, vertices: wire && vertices ? { [wire.id]: vertices } : undefined };
+          dragRef.current = { kind: "move", refs, startWorld: [wx, wy], origin, moved: false, vertices: wire && vertices ? { [wire.id]: vertices } : undefined };
           return;
         }
 
@@ -660,13 +696,23 @@ export function SchematicView() {
         if (!sch) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
+        const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
+        modsRef.current = { ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey };
+
+        // The snapping of the tool in force follows the cursor (`BestSnapAnchor` runs on every event of a KiCad tool): the marker, the snap line, the point a rubber band goes to.
+        if (SCH_PLACING_TOOLS.has(state.activeTool) && !dragRef.current) snapToGrid(wx, wy);
 
         if (armedKind && state.selection.size > 0) {
+          // `SCH_MOVE_TOOL::doMoveSelection`: the selection is held by its reference point (`BestDragOrigin`: the nearest pin or origin of what is held to where it was picked up)
+          // and goes to the cursor snapped with `BestSnapAnchor` on the coarsest grid of the selection, skipping the selection itself.
+          // (KiCad warps the pointer to the held point when the move starts; a page may not, so the cursor is that point plus the pointer's travel since: the item stays where it was grabbed.)
           const origin = state.moveOriginUm ?? { x: wx, y: wy };
-          const [ox, oy] = snapToGrid(origin.x, origin.y);
-          const [sx, sy] = snapToGrid(wx, wy);
+          const ids = [...state.selection];
+          const [ox, oy] = snap.dragOrigin([origin.x, origin.y], ids);
+          const [sx, sy] = snap.moveCursor(heldCursor([ox, oy], [origin.x, origin.y], [wx, wy]), modsRef.current, ids);
           // R, Shift+R, X and Y pressed since the items were picked up stay on the preview as it follows the cursor
-          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind: armedKind, dxUm: sx - ox, dyUm: sy - oy, vertices: pickedVertices(state), turns: state.movePreview?.turns } });
+          // (Whole micrometres, as KiCad's integer coordinates are: with the grid off (Ctrl) the cursor is wherever the pointer is, and the verbs take integer deltas.)
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: ids, kind: armedKind, dxUm: Math.round(sx - ox), dyUm: Math.round(sy - oy), holdUm: [sx, sy], vertices: pickedVertices(state), turns: state.movePreview?.turns } });
           return;
         }
 
@@ -678,6 +724,7 @@ export function SchematicView() {
           const dy = e.clientY - drag.startScreen[1];
           dispatch({ type: "SET_SCHEMATIC_VIEW", view: { ...state.schematicView, x: drag.startView[0] + dx, y: drag.startView[1] + dy } });
         } else if (drag.kind === "box") {
+          if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
           const rect = containerRef.current!.getBoundingClientRect();
           const x0 = drag.startScreen[0] - rect.left,
             y0 = drag.startScreen[1] - rect.top;
@@ -685,19 +732,12 @@ export function SchematicView() {
             y1 = e.clientY - rect.top;
           setMarquee({ x0, y0, x1, y1, crossing: isCrossingSelection(x0, x1) });
         } else if (drag.kind === "move") {
-          // The click-vs-drag distinguisher: "moved" flips true the first
-          // time the snapped position actually changes (see DragState's
-          // own doc on why this, not a literal 8px/300ms timer, is this
-          // app's existing threshold convention -- Canvas.tsx's identical
-          // PCB-side pattern). Until then the preview stays null, so a
-          // release here is still a plain click, not a committed no-op
-          // drag.
-          const [sx, sy] = snapToGrid(wx, wy);
-          const [ox, oy] = snapToGrid(drag.startWorld[0], drag.startWorld[1]);
-          const dx = sx - ox,
-            dy = sy - oy;
-          if (dx !== 0 || dy !== 0) drag.moved = true;
-          dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "sch_drag", dxUm: dx, dyUm: dy, vertices: drag.vertices, turns: state.movePreview?.turns } : null });
+          // The click-vs-drag distinguisher is tool_dispatcher.cpp's (kicad-port/dragThreshold.ts): until the press has become a drag -- more than 8 px
+          // of travel along an axis, or on macOS a motion after 300 ms held -- nothing is picked up, so the release is still a plain click.
+          if (!motion?.dragging) return;
+          drag.moved = true;
+          const [sx, sy] = snap.moveCursor(heldCursor(drag.origin, drag.startWorld, [wx, wy]), modsRef.current, drag.refs);
+          dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "sch_drag", dxUm: Math.round(sx - drag.origin[0]), dyUm: Math.round(sy - drag.origin[1]), holdUm: [sx, sy], vertices: drag.vertices, turns: state.movePreview?.turns } });
         }
       }}
       onContextMenu={(e) => {
@@ -761,12 +801,15 @@ export function SchematicView() {
         dispatch({ type: "SET_DRAW_STATE", draw: null });
       }}
       onPointerUp={(e) => {
+        gestureRef.current?.up();
         const drag = dragRef.current;
         dragRef.current = null;
         if (!drag) return;
         if (drag.kind === "move") {
           if (drag.moved && state.movePreview) {
             void api.commitSchHeld(state.movePreview);
+          } else if (drag.moved) {
+            dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
           } else {
             // No real movement: a plain click, not a drag -- apply
             // whatever selection effect onPointerDown deferred (see
