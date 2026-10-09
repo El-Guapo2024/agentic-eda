@@ -41,8 +41,10 @@
 
 use eda_model::footprint::{placed_courtyard, placed_keepout, placed_pads, Footprint};
 use eda_model::ir::{
-    Design, Dimension, DimensionSettings, DrawingsSection, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, Group, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
+    Design, Dimension, DimensionSettings, DrawingsSection, DrcExclusion, DrcExclusionKey, ErcExclusion, FillMode, FootprintAttributes, FootprintInstance, FootprintLibrarySection, IslandRemovalMode, Junction, LabelKind, LabelSide, LibraryFill, LibraryFootprint, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, Millideg, NetLabel, NoConnect, PadConnection, Point, PowerSymbol, RoutingSection, SchLine, SchematicSection, SchematicText, Shape, Side, SheetInstance, SymbolInstance, SymbolLibrarySection, TeardropSettings, Text, TextJustify, Track, Um, Via, ViaPreset, Wire, Zone,
 };
+#[cfg(test)]
+use eda_model::ir::Group;
 use eda_model::rules::{Constraints, MaskPaste, NetClassSettings, StackupSettings, TextGraphicsDefaults};
 use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use std::collections::{BTreeMap, BTreeSet};
@@ -50,11 +52,18 @@ use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
+mod review;
 pub mod library_editors;
+mod library_place;
+mod pcb_groups;
+mod pcb_paste;
+mod pcb_props;
+mod pcb_transform;
 mod zone_overrides;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
+pub use pcb_transform::{flip_layer, FlipDirection};
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one
@@ -533,40 +542,30 @@ pub enum Cmd {
 
     // ------------------------------------------------------------ groups
     //
-    // Task item 5: `common/tool/group_tool.cpp` -- see `eda_model::ir::
-    // Group`'s own doc for the storage choice and the no-nested-groups
-    // scope.
-    /// Ctrl+G: create a new group from `ids` (parts, tracks, vias, zones,
-    /// shapes, texts). Refused with fewer than 2 ids -- a one-item "group"
-    /// is meaningless, matching source's own `ACTIONS::group.Enable(
-    /// selectionCount >= 2)`. Any named id that is itself an existing
-    /// group is flattened into the new one (its own members are pulled in
-    /// and it is deleted) rather than nested, since this model has no
-    /// group-of-groups concept.
+    // `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`: implemented in pcb_groups.rs. Groups nest -- a
+    // member id may be another group's.
+    /// Ctrl+G: create a new group from `ids` (parts, tracks, vias, zones, shapes, texts, dimensions, groups). Refused with fewer
+    /// than 2 ids -- a one-item "group" is meaningless, matching source's own `ACTIONS::group.Enable( selectionCount >= 2 )`.
+    /// A named id that is itself a group becomes a member of the new one (it nests). Each id leaves the group it was in; when
+    /// they all shared one, the new group takes their place in it.
     Group { ids: Vec<String> },
-    /// Ctrl+Shift+G: dissolve every named group, releasing its members
-    /// (which stay on the board, exactly where they are, just no longer
-    /// grouped). An id that does not name a group is silently skipped,
-    /// not refused -- the dialog's own context menu only ever sends real
-    /// group ids, but a stale id from a since-changed board should not
-    /// abort the rest of the batch.
+    /// Ctrl+Shift+G: dissolve every named group, releasing its members (which stay on the board, exactly where they are, just no
+    /// longer grouped, nor in the group above the dissolved one either -- `GROUP_TOOL::Ungroup`'s `RemoveAll()`). An id that
+    /// does not name a group is silently skipped, not refused -- the dialog's own context menu only ever sends real group ids,
+    /// but a stale id from a since-changed board should not abort the rest of the batch.
     Ungroup { ids: Vec<String> },
-    /// `ACTIONS::addToGroup`: add `ids` to an existing group, pulling each
-    /// one out of whatever other group it already belonged to first (an
-    /// item is only ever in one group at a time, matching the no-nested-
-    /// groups scope).
+    /// `ACTIONS::addToGroup`: add `ids` to an existing group, pulling each one out of whatever other group it already belonged to
+    /// first (an item is only ever in one group at a time). A group is refused as a member of itself or of a group below it.
     AddToGroup { group_id: String, ids: Vec<String> },
-    /// `ACTIONS::removeFromGroup`: remove `ids` from whatever group each
-    /// currently belongs to (a no-op for one that isn't in any group). A
-    /// group left with fewer than 2 members is dissolved entirely --
-    /// `GROUP_TOOL::RemoveFromGroup`'s own `if (group->GetItems().size() <
-    /// 2) group->RemoveAll()` rule, ported exactly.
+    /// `ACTIONS::removeFromGroup`: remove `ids` from whatever group each currently belongs to (a no-op for one that isn't in any
+    /// group). A group left with fewer than 2 members is dissolved entirely -- `GROUP_TOOL::RemoveFromGroup`'s own
+    /// `if (group->GetItems().size() < 2) group->RemoveAll()` rule, ported exactly.
     RemoveFromGroup { ids: Vec<String> },
     /// `DIALOG_GROUP_PROPERTIES::TransferDataFromWindow` (`ACTIONS::groupProperties`, Group Properties...): rename the group `id` and
     /// make its members exactly `member_ids` -- each one pulled out of whatever other group it was in (an item is in one group at a
     /// time), the group's own previous members that are not listed released. A group left with fewer than 2 members dissolves, as
     /// everywhere else. The name is `PCB_GROUP::SetName`; the dialog's other two fields (locked, design-block link) have no
-    /// counterpart in this model. A group cannot hold itself or another group (no nested groups).
+    /// counterpart in this model. A member may be a group, but not this group or one that holds it.
     EditGroup { id: String, name: String, member_ids: Vec<String> },
 
     // ------------------------------------------------------------ arrays
@@ -633,6 +632,20 @@ pub enum Cmd {
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
     SetCustomRules { text: String },
+
+    // ------------------------------------------------------- DRC and ERC review
+    //
+    // `pcbnew/dialogs/dialog_drc.cpp` and `eeschema/dialogs/dialog_erc.cpp`: waiving a violation, and the schematic's per-check
+    // severities (`common/dialogs/panel_setup_severities.cpp`). See `review`.
+    /// "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
+    /// Marker) on the board: waive the DRC violations `exclusions` name, as one step. An exclusion whose `(check, items)` is waived already
+    /// is replaced by this one (that edits its comment). Refused when `exclusions` is empty or one names no check or no item.
+    AddDrcExclusions { exclusions: Vec<DrcExclusion> },
+    /// "Remove exclusion for this violation": put the violations `exclusions` name back in the report. Refused when none of them is waived.
+    DeleteDrcExclusions { exclusions: Vec<DrcExclusionKey> },
+    /// Schematic Setup > Violation Severity: the ERC checks reported at a severity other than their default, by settings key
+    /// (`eda_model::erc_checks`) -> `error` | `warning` | `ignore`. Whole table in, whole table replaced.
+    SetErcSeverities { severities: BTreeMap<String, String> },
 
     /// Task item 8: `GLOBAL_EDIT_TOOL::SwapLayers`/`DIALOG_SWAP_LAYERS`.
     /// `mapping` is "move items on this layer to that one" pairs (a
@@ -756,15 +769,35 @@ pub enum Cmd {
         text_thickness: Option<Um>,
     },
 
-    /// Copy existing tracks/vias/zones/shapes/texts named by id, in
-    /// place (same position, fresh ids) -- the studio's Cmd+D. Footprints
-    /// are deliberately not supported: duplicating one would add a part
-    /// instance the intent/BOM does not have, which needs a human
-    /// decision this verb cannot make on its own (see the report). An id
-    /// naming a footprint, or anything else this can't duplicate, is
-    /// simply not among the ones found -- only refused if NONE of the
-    /// given ids match anything duplicable.
+    /// `EDIT_TOOL::Duplicate` (the studio's Cmd+D): exact copies of the named items in place, under fresh ids -- placed footprints,
+    /// tracks, vias, zones, shapes, texts, dimensions and groups (a group with copies of its members). A copied footprint is a new
+    /// part (`DrawingsSection::board_parts`) under the next free reference, with its pads on the same nets; a copy of a member of a
+    /// group joins that group. An id that names nothing duplicable is skipped; the command is refused only if NONE of the given ids
+    /// match anything.
     Duplicate { ids: Vec<String> },
+    /// `PCB_CONTROL::Paste` of KiCad's own clipboard text (`pcbnew/kicad_clipboard.cpp`, [`eda_kicad::parse_pcb_clipboard`]): the
+    /// items it holds -- footprints, tracks, vias, zones, graphics, text, dimensions and groups -- put on the board with the
+    /// clipboard's origin (the copy's reference point) at `at`. The clipboard travels with the command, so a paste works from a
+    /// copy made on another board or in KiCad itself, and one undo step takes the whole paste back. See [`pcb_paste`] for how
+    /// nets, layers, groups and footprints land.
+    PasteClipboard { text: String, at: Point },
+    /// `BOARD_EDITOR_CONTROL::PlaceFootprint` (`A`): put a footprint of a library on the board at `at`, as a footprint of its own -- a
+    /// mounting hole, a fiducial, a test point, a connector nobody drew a symbol for (`DrawingsSection::board_parts`, the same kind of
+    /// part a Duplicate or a Paste makes) -- unplaced pads on no net, top side, not turned. `footprint` is `Lib:Name`; `definition`
+    /// is its pads, graphics and courtyard, carried with the command (like a paste) so the board needs no library to be redrawn: the
+    /// studio's server fills it in from the installed KiCad libraries when it is left out, and it is not needed when the board's model
+    /// already resolves the name. `reference` empty takes the next free number of the footprint's usual prefix (`H1` for a
+    /// `MountingHole`, `TP1` for a `TestPoint`, ...), `value` empty the footprint's own name. One undo step.
+    PlaceFootprint {
+        footprint: String,
+        at: Point,
+        #[serde(default)]
+        reference: String,
+        #[serde(default)]
+        value: String,
+        #[serde(default)]
+        definition: Option<LibraryFootprint>,
+    },
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
     /// the studio's Cmd+V. Unlike `Duplicate` (which looks up existing
@@ -817,6 +850,45 @@ pub enum Cmd {
     /// resolves to an actual board point since this crate has no
     /// selection/UI-origin concept of its own.
     MoveExact { parts: Vec<String>, dx: Um, dy: Um, rotate_millideg: i64, pivot: Option<Point> },
+
+    // --------------------------------------------- move, rotate, flip: any item
+    //
+    // `EDIT_TOOL::Move` / `Rotate` / `Flip` (`pcbnew/tools/edit_tool.cpp`) for every kind of item at once, as one undo
+    // step each -- see [`pcb_transform`] for what each item class does with the transform. `ids` are placed parts'
+    // references and track, via, zone, shape, text, dimension and group ids, mixed freely; a group stands for its
+    // members. Which items a selection holds, which of them a lock keeps out, and about which point a turn or a flip
+    // happens are the tool's rules, which the studio applies before it sends one of these
+    // (`web/studio/src/kicad-port/pcbTransform.ts`).
+    /// Translate every item by `(dx, dy)`. Tracks keep their ids and shapes, a footprint lands on the placement grid.
+    MoveItems { ids: Vec<String>, dx: Um, dy: Um },
+    /// Turn every item about `pivot` by `angle_millideg`, positive clockwise on the screen (the sense of `MoveExact`'s
+    /// `rotate_millideg`). Each item turns about the one shared point, and its own orientation follows: a footprint's
+    /// `rot`, a text's and a dimension's text angle.
+    RotateItems { ids: Vec<String>, pivot: Point, angle_millideg: i64 },
+    /// `Change Side / Flip`: mirror every item across the axis through `pivot` and put it on the other side of the
+    /// board -- a footprint's side, a track's, zone's, shape's, text's and dimension's layer (`::FlipLayer`), a blind or
+    /// buried via's layer pair.
+    FlipItems { ids: Vec<String>, pivot: Point, direction: FlipDirection },
+
+    // ------------------------------------------------- Properties panel (see [`pcb_props`])
+    //
+    // The four properties of the grid that no verb above sets. A grid edit is one `Batch` of these and the others.
+    /// "Start X" / "Start Y" / "End X" / "End Y" of a track or an arc (`PCB_TRACK::SetStart`, `SetEnd`): the first and/or last point
+    /// moves; a field left out stays. An arc keeps its mid point.
+    EditTrack {
+        id: String,
+        #[serde(default)]
+        start: Option<Point>,
+        #[serde(default)]
+        end: Option<Point>,
+    },
+    /// "Net" (`BOARD_CONNECTED_ITEM::SetNetCode`) of every named track, via or zone. Only a zone may be given "" (no net).
+    SetItemNet { ids: Vec<String>, net: String },
+    /// "Name" of a zone (`ZONE::SetZoneName`).
+    SetZoneName { id: String, name: String },
+    /// A shape's new geometry (and whatever else of it changed), in place: the id and the lock stay. The panel's "Start X", "Radius",
+    /// "Width" and the like (`EDA_SHAPE` setters) send the whole shape.
+    ReplaceShape { id: String, shape: Shape },
 
     /// Apply `cmds` in order as ONE command: one undo step, one activity
     /// entry, all-or-nothing (the first refused sub-command restores the
@@ -1041,6 +1113,13 @@ pub enum Cmd {
     /// literal text `"U?"` would be mis-numbered as one; placing additional
     /// units of an already-numbered reference is unaffected by this.
     AddSymbol { id: String, lib_id: String, at: Point, rot_millideg: Millideg, value: String, footprint: String, #[serde(default = "d_unit_one")] unit: u32 },
+    /// `SCH_SCREEN::AddLibSymbol`: keep a copy of a library symbol's definition with the schematic (KiCad's `lib_symbols` cache), so an instance
+    /// that names it draws, exports and passes ERC without the library it came from -- what placing a symbol of an installed library
+    /// does first (`SCH_DRAWING_TOOLS::PlaceSymbol` -> `SCH_SCREEN::AddLibSymbol`). Stored as a published entry of the project symbol library,
+    /// the one place a definition the intent does not hold is kept (a paste does the same). A no-op when the design already has a definition
+    /// under that `lib_id` -- the one in the schematic wins, as in `SCH_EDITOR_CONTROL::Paste`. The studio's server wraps an `AddSymbol`
+    /// of an installed symbol and this in one command, so adding the symbol and keeping its definition are one undo step.
+    EmbedLibSymbol { symbol: LibrarySymbol },
 
     /// `E` (Properties -- Value/Footprint/Datasheet only; see below for
     /// `U`'s own reference rename) and `V`/`F` (`sch_edit_tool.cpp::
@@ -1467,6 +1546,7 @@ fn empty_schematic_section() -> SchematicSection {
         erc_exclusions: vec![],
         erc_pin_map: None,
         user_fields: Default::default(),
+        field_layout: Default::default(),
         imported_from_kicad: false,
         title_block: None,
         sheets: vec![],
@@ -1535,12 +1615,14 @@ impl Cmd {
             | Cmd::AddPowerSymbol { .. }
             | Cmd::DeletePowerSymbol { .. }
             | Cmd::AddSymbol { .. }
+            | Cmd::EmbedLibSymbol { .. }
             | Cmd::EditSymbolFields { .. }
             | Cmd::RenameSymbol { .. }
             | Cmd::SetSymbolFields { .. }
             | Cmd::ReplaceText { .. }
             | Cmd::SetErcPinMapCell { .. }
             | Cmd::ResetErcPinMap
+            | Cmd::SetErcSeverities { .. }
             | Cmd::SetSchematicPage { .. }
             | Cmd::Annotate { .. }
             | Cmd::SetSymbolAttrs { .. }
@@ -1605,9 +1687,13 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
+            // A severity table is about the report, not the drawing.
+            Cmd::SetErcSeverities { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
+            // A definition kept with the schematic changes no connection.
+            Cmd::EmbedLibSymbol { .. } => false,
             _ => true,
         }
     }
@@ -1648,12 +1734,15 @@ impl Cmd {
             Cmd::AddShape { shape } => vec![shape.layer()],
             Cmd::AddText { text } => vec![text.content.as_str()],
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
-            Cmd::PasteItems { .. } => vec!["paste"],
+            Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => vec!["paste"],
+            Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
+            Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -1674,6 +1763,9 @@ impl Cmd {
             Cmd::SetStackup { .. } => vec!["stackup"],
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
+            Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::SwapChain { parts } => parts.iter().map(String::as_str).collect(),
@@ -1695,6 +1787,7 @@ impl Cmd {
             | Cmd::AddSymbol { id, .. }
             | Cmd::EditSymbolFields { id, .. }
             | Cmd::RenameSymbol { id, .. } => vec![id],
+            Cmd::EmbedLibSymbol { symbol } => vec![symbol.lib_id.as_str()],
             Cmd::AddWire { .. } => vec!["wire"],
             Cmd::DeleteWire { id }
             | Cmd::DeleteNoConnect { id }
@@ -1801,6 +1894,20 @@ impl Cmd {
                 | Cmd::CreateArray { .. }
         )
     }
+
+    /// [`Cmd::clears_routing`], told what the board holds: the commands that move, turn or flip *any* kind of item
+    /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`]) and the one that takes a footprint off the board
+    /// ([`Cmd::Rip`]) leave the routing alone unless a footprint they name (directly, or as a member of a group) has routed
+    /// copper on a pad, because only such a footprint can be moved out from under a track -- a fresh copy, or one nothing
+    /// was routed to, takes nothing with it. `board` is the board as it was before the command.
+    pub fn clears_routing_in(&self, board: &Board<'_>) -> bool {
+        match self {
+            Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
+            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => board.names_routed_part(ids),
+            Cmd::Rip { part } => board.names_routed_part(std::slice::from_ref(part)),
+            other => other.clears_routing(),
+        }
+    }
 }
 
 /// A board under construction.
@@ -1852,15 +1959,6 @@ impl Outcome {
     pub fn level(&self) -> bool {
         self.after == self.before
     }
-}
-
-/// A group with fewer than 2 members is meaningless and dissolves --
-/// `GROUP_TOOL::RemoveFromGroup`'s own rule (`task item 5`), applied
-/// uniformly everywhere a group's membership can shrink: explicit
-/// `RemoveFromGroup`, and a member getting pulled into a different group
-/// via `Group`/`AddToGroup`.
-fn prune_empty_groups(dr: &mut DrawingsSection) {
-    dr.groups.retain(|g| g.member_ids.len() >= 2);
 }
 
 impl<'a> Board<'a> {
@@ -2028,8 +2126,15 @@ impl<'a> Board<'a> {
         (fails, warns)
     }
 
-    /// Apply a command, or refuse it.
+    /// Apply a command, or refuse it. A group keeps only the members that are still on the board afterwards (`pcb_groups.rs`).
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
+        let groups_before = self.group_universe();
+        self.apply_cmd(cmd)?;
+        self.tidy_groups(groups_before);
+        Ok(())
+    }
+
+    fn apply_cmd(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         match cmd {
             Cmd::Place { part, anchor, side } => self.place_beside(part, anchor, *side),
             Cmd::PlaceEdge { part, edge, fraction } => self.place_on_edge(part, *edge, *fraction),
@@ -2083,6 +2188,9 @@ impl<'a> Board<'a> {
             Cmd::SetTextGraphicsDefaults { settings } => board_setup::set_text_graphics(&mut self.design, settings),
             Cmd::SetStackup { settings } => board_setup::set_stackup(&mut self.design, self.model, settings),
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
+            Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
+            Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
+            Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
@@ -2179,10 +2287,19 @@ impl<'a> Board<'a> {
                 self.edit_text_and_graphics(shape_ids, text_ids, layer.as_deref(), *line_width, *text_size, *text_thickness)
             }
 
-            Cmd::Duplicate { ids } => self.duplicate_items(ids),
+            Cmd::Duplicate { ids } => self.duplicate_all(ids),
+            Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
+            Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
+            Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
+            Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
+            Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
+            Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
+            Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
+            Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
+            Cmd::ReplaceShape { id, shape } => self.replace_shape(id, shape.clone()),
             Cmd::Batch { cmds } => {
                 let saved = self.design.clone();
                 for c in cmds {
@@ -2226,6 +2343,7 @@ impl<'a> Board<'a> {
             Cmd::AddPowerSymbol { lib_id, at, rot_millideg, net, pin } => self.add_power_symbol(lib_id, *at, *rot_millideg, net, pin),
             Cmd::DeletePowerSymbol { id } => self.delete_power_symbol(id),
             Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => self.add_symbol(id, lib_id, *at, *rot_millideg, value, footprint, *unit),
+            Cmd::EmbedLibSymbol { symbol } => self.embed_lib_symbol(symbol),
             Cmd::EditSymbolFields { id, value, footprint, datasheet } => self.edit_symbol_fields(id, value.as_deref(), footprint.as_deref(), datasheet.as_deref()),
             Cmd::RenameSymbol { id, new_id } => self.rename_symbol(id, new_id),
             Cmd::SetSymbolAttrs { ids, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim } => self.set_symbol_attrs(ids, *dnp, *exclude_from_bom, *exclude_from_board, *exclude_from_sim),
@@ -2699,6 +2817,10 @@ impl<'a> Board<'a> {
     fn rip(&mut self, part: &str) -> Result<(), Vec<CheckResult>> {
         self.require_placed(part)?;
         self.design.placement.as_mut().unwrap().footprints.retain(|f| f.id != part);
+        // A footprint that exists only on the board (a copy) has no intent to go back to: deleting it deletes the part too.
+        if let Some(dr) = self.design.drawings.as_mut() {
+            dr.board_parts.retain(|b| b.reference != part);
+        }
         Ok(())
     }
 
@@ -3186,104 +3308,7 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    // ----------------------------------------------------------- groups
-
-    /// `Cmd::Group`: create a new group, flattening in any selected
-    /// existing group's own members (see `Cmd::Group`'s own doc on why --
-    /// no nested groups). An item pulled in that belonged to some other,
-    /// untouched group leaves that group (one group per item at a time).
-    fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if ids.len() < 2 {
-            return Err(vec![CheckResult::fail("ops_bad_group", "group", "a group needs at least two items")]);
-        }
-        let dr = self.drawings_mut();
-        let mut members: Vec<String> = Vec::new();
-        let mut flattened: Vec<String> = Vec::new();
-        for id in ids {
-            if let Some(g) = dr.groups.iter().find(|g| &g.id == id) {
-                members.extend(g.member_ids.iter().cloned());
-                flattened.push(id.clone());
-            } else {
-                members.push(id.clone());
-            }
-        }
-        dr.groups.retain(|g| !flattened.contains(&g.id));
-
-        let mut seen = BTreeSet::new();
-        members.retain(|m| seen.insert(m.clone()));
-
-        for g in dr.groups.iter_mut() {
-            g.member_ids.retain(|m| !members.contains(m));
-        }
-        prune_empty_groups(dr);
-
-        dr.groups.push(Group { id: String::new(), name: String::new(), member_ids: members });
-        dr.assign_missing_ids();
-        Ok(())
-    }
-
-    /// `Cmd::Ungroup`: dissolve every named group. An id not naming a
-    /// group is silently skipped -- see `Cmd::Ungroup`'s own doc.
-    fn ungroup_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if let Some(dr) = self.design.drawings.as_mut() {
-            dr.groups.retain(|g| !ids.iter().any(|id| id == &g.id));
-        }
-        Ok(())
-    }
-
-    /// `Cmd::AddToGroup`.
-    fn add_to_group(&mut self, group_id: &str, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let dr = self.drawings_mut();
-        if !dr.groups.iter().any(|g| g.id == group_id) {
-            return Err(vec![CheckResult::fail("ops_unknown_group", group_id, "no group with this id")]);
-        }
-        for g in dr.groups.iter_mut().filter(|g| g.id != group_id) {
-            g.member_ids.retain(|m| !ids.contains(m));
-        }
-        prune_empty_groups(dr);
-        // `group_id`'s own group is never itself a candidate for pruning
-        // above (its membership only grows here), so it is always still
-        // present to find and extend.
-        let g = dr.groups.iter_mut().find(|g| g.id == group_id).expect("group_id was checked present and is never pruned by this function");
-        for id in ids {
-            if !g.member_ids.contains(id) {
-                g.member_ids.push(id.clone());
-            }
-        }
-        Ok(())
-    }
-
-    /// `Cmd::RemoveFromGroup`.
-    fn remove_from_group(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if let Some(dr) = self.design.drawings.as_mut() {
-            for g in dr.groups.iter_mut() {
-                g.member_ids.retain(|m| !ids.contains(m));
-            }
-            prune_empty_groups(dr);
-        }
-        Ok(())
-    }
-
-    /// `Cmd::EditGroup`.
-    fn edit_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let dr = self.drawings_mut();
-        if !dr.groups.iter().any(|g| g.id == id) {
-            return Err(vec![CheckResult::fail("ops_unknown_group", id, "no group with this id")]);
-        }
-        if member_ids.iter().any(|m| m == id || dr.groups.iter().any(|g| &g.id == m)) {
-            return Err(vec![CheckResult::fail("ops_bad_group", id, "a group cannot hold a group")]);
-        }
-        let mut seen = BTreeSet::new();
-        let members: Vec<String> = member_ids.iter().filter(|m| seen.insert((*m).clone())).cloned().collect();
-        for g in dr.groups.iter_mut().filter(|g| g.id != id) {
-            g.member_ids.retain(|m| !members.contains(m));
-        }
-        let g = dr.groups.iter_mut().find(|g| g.id == id).expect("the group was checked present");
-        g.name = name.to_string();
-        g.member_ids = members;
-        prune_empty_groups(dr);
-        Ok(())
-    }
+    // The group verbs (Group, Ungroup, AddToGroup, RemoveFromGroup, EditGroup) are in pcb_groups.rs.
 
     // --------------------------------------------------------- arrays
 
@@ -3874,44 +3899,7 @@ impl<'a> Board<'a> {
 
     // ------------------------------------------------- duplicate / paste
 
-    /// `Cmd::Duplicate`: resolve each id against whichever collection
-    /// actually has it (a track, via, zone, shape or text -- never a
-    /// footprint, which has no match in any of these and so is simply
-    /// skipped, not specially detected) and hand the found copies to
-    /// `insert_copies`.
-    fn duplicate_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        if ids.is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_duplicate", "duplicate", "no ids given")]);
-        }
-
-        let mut tracks = Vec::new();
-        let mut vias = Vec::new();
-        let mut zones = Vec::new();
-        if let Some(rt) = self.design.routing.as_ref() {
-            tracks.extend(rt.tracks.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
-            vias.extend(rt.vias.iter().filter(|v| ids.iter().any(|id| id == &v.id)).cloned());
-            zones.extend(rt.zones.iter().filter(|z| ids.iter().any(|id| id == &z.id)).cloned());
-        }
-        let mut shapes = Vec::new();
-        let mut texts = Vec::new();
-        if let Some(dr) = self.design.drawings.as_ref() {
-            shapes.extend(dr.shapes.iter().filter(|s| ids.iter().any(|id| id == s.id())).cloned());
-            texts.extend(dr.texts.iter().filter(|t| ids.iter().any(|id| id == &t.id)).cloned());
-        }
-
-        if tracks.is_empty() && vias.is_empty() && zones.is_empty() && shapes.is_empty() && texts.is_empty() {
-            return Err(vec![CheckResult::fail(
-                "ops_unknown_duplicate",
-                "duplicate",
-                "none of the given ids name a track, via, zone, shape or text (footprints cannot be duplicated this way)",
-            )]);
-        }
-
-        self.insert_copies(tracks, vias, zones, shapes, texts)
-    }
-
-    /// Shared by `Duplicate` (copies resolved from existing ids) and
-    /// `PasteItems` (copies that travelled with the command): blank every
+    /// Shared by `PasteItems` (copies that travelled with the command) and `CreateArray`: blank every
     /// incoming id -- never trust a caller's or a stale copy's id, same
     /// rule `add_shape`/`add_track`/etc. already follow -- insert, and
     /// assign fresh deterministic ones the same way a brand new item
@@ -5429,11 +5417,21 @@ fn overlaps(a: (Um, Um, Um, Um), b: (Um, Um, Um, Um)) -> bool {
 }
 
 #[cfg(test)]
+mod review_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod sch_control_tests;
 #[cfg(test)]
 mod board_setup_tests;
+#[cfg(test)]
+mod pcb_transform_tests;
+#[cfg(test)]
+mod pcb_props_tests;
+#[cfg(test)]
+mod pcb_paste_tests;
+#[cfg(test)]
+mod pcb_groups_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 

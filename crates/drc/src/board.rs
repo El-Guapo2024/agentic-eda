@@ -499,6 +499,20 @@ fn rotated_pad_shape(fp: &eda_model::ir::FootprintInstance, pad: &Pad, center: P
     }
 }
 
+/// The copper outline of `pad` on the footprint instance `fp`, in board space (`PAD::GetEffectiveShape` of its copper):
+/// exact for a circle, an oval, a rectangle or a rounded rectangle at any rotation (a multiple of 90 degrees reduces to the
+/// axis-aligned shape, anything else to the true rotated outline). The router's world, the DRC board and the routing gates
+/// all measure a pad by this one function.
+pub fn placed_pad_copper(fp: &eda_model::ir::FootprintInstance, pad: &Pad) -> Shape {
+    let center = pad_center(fp, pad.at);
+    let pad_rot = fp.rot as i64 + pad.rot as i64;
+    if pad_rot.rem_euclid(90_000) == 0 {
+        shape_of(center, rotated_extent_by(pad_rot, pad.size), pad.shape, pad.roundrect_ratio)
+    } else {
+        rotated_pad_shape(fp, pad, center)
+    }
+}
+
 fn pad_hole_shape(center: Point, pad: &Pad, board_rot: i64) -> Option<Shape> {
     if let Some(d) = pad.drill {
         return Some(Shape::Circle { c: center, r: d / 2 });
@@ -609,8 +623,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             for (pad_idx, pad) in footprint.pads.iter().enumerate() {
                 let center = pad_center(fp, pad.at);
                 let pad_rot = board_rot + pad.rot as i64;
-                let size = rotated_extent_by(pad_rot, pad.size);
-                let copper = if pad_rot.rem_euclid(90_000) == 0 { shape_of(center, size, pad.shape, pad.roundrect_ratio) } else { rotated_pad_shape(fp, pad, center) };
+                let copper = placed_pad_copper(fp, pad);
                 let hole = pad_hole_shape(center, pad, pad_rot);
                 let drill_slot = pad.drill_slot.map(|s| rotated_extent_by(pad_rot, s));
                 let net = pin_net.get(&format!("{}.{}", fp.id, pad.number)).cloned();

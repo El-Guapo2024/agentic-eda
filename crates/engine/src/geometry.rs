@@ -228,11 +228,15 @@ pub fn real_symbol_bbox(sym: &eda_model::symbol::LibSymbol, unit: u32) -> (f64, 
     // and `STUB_LEN` itself is exactly one grid cell, so a pin-derived
     // edge is already grid-aligned; snapping only ever matters for a
     // graphics-derived fallback edge, and is harmless (a no-op) otherwise.
+    //
+    // A hair of slack on each side: an edge that is already on the grid (7.62 mm is six cells of 1.27, and 7.62 / 1.27 is
+    // 6.000000000000001) must stay where it is, not move out a whole cell, or its pins' stub tips would no longer sit the
+    // `STUB` outside it the layout puts them.
     let grid_mm = GRID as f64 / 1000.0;
-    let x0 = (x0 / grid_mm).floor() * grid_mm;
-    let y0 = (y0 / grid_mm).floor() * grid_mm;
-    let x1 = (x1 / grid_mm).ceil() * grid_mm;
-    let y1 = (y1 / grid_mm).ceil() * grid_mm;
+    let x0 = ((x0 / grid_mm) + 1e-6).floor() * grid_mm;
+    let y0 = ((y0 / grid_mm) + 1e-6).floor() * grid_mm;
+    let x1 = ((x1 / grid_mm) - 1e-6).ceil() * grid_mm;
+    let y1 = ((y1 / grid_mm) - 1e-6).ceil() * grid_mm;
     (x0, y0, x1, y1)
 }
 

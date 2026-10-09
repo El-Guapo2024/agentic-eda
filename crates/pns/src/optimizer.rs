@@ -563,7 +563,7 @@ mod tests {
         use crate::layer::LayerRange;
         let net = net_of("SIG");
         let mut node = Node::new();
-        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Rect { x0: -1000, y0: -250, x1: 1000, y1: 250 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net.clone(), layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Rect { x0: -1000, y0: -250, x1: 1000, y1: 250 }, source: "U1.1".into(), edge: false }));
         // Drawn leaving the pad centre straight down, then across.
         let line = Line::from_points(net, 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 0, y: 3000 }, Point { x: 5000, y: 3000 }, Point { x: 8000, y: 3000 }]);
         let out = optimize_with(&line, &node, &rules(), &[], effort::SMART_PADS);
@@ -584,9 +584,9 @@ mod tests {
     fn rect_pad_has_eight_breakouts_and_circle_eight() {
         use crate::item::{Item, Solid};
         use crate::layer::LayerRange;
-        let rect = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Rect { x0: -500, y0: -250, x1: 500, y1: 250 }, source: "U1.1".into() });
+        let rect = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Rect { x0: -500, y0: -250, x1: 500, y1: 250 }, source: "U1.1".into(), edge: false });
         assert_eq!(breakouts(200, &rect).len(), 8);
-        let circ = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 300 }, source: "U1.2".into() });
+        let circ = Item::Solid(Solid { net: None, layers: LayerRange::new(0, 0), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 300 }, source: "U1.2".into(), edge: false });
         assert_eq!(breakouts(200, &circ).len(), 8);
     }
 
@@ -626,7 +626,7 @@ mod tests {
         use crate::layer::LayerRange;
         let mut node = Node::new();
         // a pad the line's first leg already runs through
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 300 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 0, y: 0 }, shape: Shape::Circle { c: Point { x: 0, y: 0 }, r: 300 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let line = Line::from_points(net_of("SIG"), 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 3000, y: 0 }, Point { x: 3500, y: 500 }, Point { x: 5000, y: 500 }, Point { x: 5500, y: 1000 }, Point { x: 8000, y: 1000 }]);
         let out = optimize_in_area(&line, &node, &rules, &[], effort::MERGE_SEGMENTS, None);
@@ -643,7 +643,7 @@ mod tests {
         // A pad directly in the path of the straight-line shortcut between
         // the line's endpoints, but clear of the detour the line already
         // takes around it.
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1500, y: 0 }, shape: Shape::Circle { c: Point { x: 1500, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 1500, y: 0 }, shape: Shape::Circle { c: Point { x: 1500, y: 0 }, r: 400 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let line = Line::from_points(net_of("SIG"), 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 0, y: 1000 }, Point { x: 3000, y: 1000 }, Point { x: 3000, y: 0 }]);
         assert!(!collides(&node, &line.pts, 0, 200, &net_of("SIG"), &rules, &[]), "test setup: the original detour must itself be collision-free");
@@ -701,7 +701,7 @@ mod tests {
         // approach to it to be genuinely clear, while still sitting
         // exactly on the (0,0)-(35000,0) shortcut the merge would
         // otherwise produce.
-        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 20_000, y: 0 }, shape: Shape::Circle { c: Point { x: 20_000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 20_000, y: 0 }, shape: Shape::Circle { c: Point { x: 20_000, y: 0 }, r: 400 }, source: "U1.1".into(), edge: false }));
         let rules = rules();
         let net = net_of("SIG");
         let pts = vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 30_000, y: -5_000 }, Point { x: 40_000, y: 5_000 }, Point { x: 50_000, y: 5_000 }];

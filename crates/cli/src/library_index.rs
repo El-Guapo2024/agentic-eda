@@ -41,7 +41,7 @@ impl Kind {
         }
     }
 
-    fn root(self) -> PathBuf {
+    pub(crate) fn root(self) -> PathBuf {
         match self {
             Kind::Footprint => default_footprint_library_root(),
             Kind::Symbol => default_symbol_library_root(),
@@ -58,18 +58,18 @@ impl Kind {
 }
 
 /// A library nickname is a file name: nothing in it may lead out of the library root.
-fn legal_library_name(name: &str) -> bool {
+pub(crate) fn legal_library_name(name: &str) -> bool {
     !name.is_empty() && !name.starts_with('.') && !name.contains(['/', '\\']) && !name.contains("..")
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct LibraryInfo {
-    name: String,
+pub(crate) struct LibraryInfo {
+    pub(crate) name: String,
     /// How many items it holds, when that is cheap to know (a footprint library: its directory listing; a symbol library: unknown until it is opened).
-    count: Option<usize>,
+    pub(crate) count: Option<usize>,
 }
 
-fn modified(path: &Path) -> Option<SystemTime> {
+pub(crate) fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
@@ -90,7 +90,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 /// The libraries under `root`, sorted by name (case-insensitively, like the tree).
-fn libraries_in(kind: Kind, root: &Path) -> Arc<Vec<LibraryInfo>> {
+pub(crate) fn libraries_in(kind: Kind, root: &Path) -> Arc<Vec<LibraryInfo>> {
     let stamp = modified(root);
     let key = (kind, root.to_path_buf());
     if let Some((s, hit)) = lock(cache()).libraries.get(&key) {
@@ -225,15 +225,23 @@ fn items_in(kind: Kind, root: &Path, lib: &str) -> Result<Arc<Vec<String>>, Stri
     Ok(names)
 }
 
-/// `GET /api/library/index?kind=footprint|symbol`: `{"available": bool, "libraries": [{"name", "count"?}]}` -- the installed libraries, names only.
+/// `GET /api/library/index?kind=footprint|symbol`: `{"available": bool, "libraries": [{"name", "count"?, "description"?}]}` -- the installed
+/// libraries, names only, with the description KiCad's library table gives each (the choosers' Description column).
 pub fn libraries(kind: Kind) -> Value {
     let root = kind.root();
     let libs = libraries_in(kind, &root);
+    let described = crate::library_search::library_descriptions(kind, &root);
     json!({
         "available": root.is_dir(),
-        "libraries": libs.iter().map(|l| match l.count {
-            Some(count) => json!({ "name": l.name, "count": count }),
-            None => json!({ "name": l.name }),
+        "libraries": libs.iter().map(|l| {
+            let mut v = match l.count {
+                Some(count) => json!({ "name": l.name, "count": count }),
+                None => json!({ "name": l.name }),
+            };
+            if let Some(d) = described.get(&l.name) {
+                v["description"] = json!(d);
+            }
+            v
         }).collect::<Vec<_>>(),
     })
 }

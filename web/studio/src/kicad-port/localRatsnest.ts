@@ -27,7 +27,7 @@ export interface RatsnestBoardLike {
 
 export interface MovePreviewLike {
   refs: readonly string[];
-  kind?: "part" | "via" | "shape" | "text";
+  kind?: string;
   dxUm: number;
   dyUm: number;
   /** Pack and Move (`P`): each ref's own extra shift, on top of the shared `dxUm`/`dyUm`. */
@@ -61,5 +61,28 @@ export function offsetRatsnestForPreview<E extends RatsnestEdgeLike>(edges: read
     return d ? [pt[0] + d[0], pt[1] + d[1]] : [pt[0], pt[1]];
   };
 
+  return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to) }));
+}
+
+/**
+ * The same for a whole PCB selection in the hand (kicad-port/pcbCarry.ts): every ratsnest endpoint that sits on a carried footprint's pad
+ * (or anchor), a carried via or the end of a carried track goes where the carry transform `map` takes it -- turned and flipped as well as moved.
+ */
+export function carryRatsnest<E extends RatsnestEdgeLike>(
+  edges: readonly E[],
+  _board: RatsnestBoardLike,
+  carried: { moving: { parts: RatsnestBoardLike["parts"]; routing: { vias: ReadonlyArray<{ x: number; y: number }>; tracks: ReadonlyArray<{ pts: ReadonlyArray<readonly [number, number]> }> } | null } },
+  map: (pt: readonly [number, number]) => [number, number]
+): E[] {
+  const key = (x: number, y: number) => `${x},${y}`;
+  const moving = new Set<string>();
+  for (const part of carried.moving.parts) {
+    for (const pad of part.pads ?? []) moving.add(key(pad.x, pad.y));
+    if (part.at) moving.add(key(part.at[0], part.at[1]));
+  }
+  for (const via of carried.moving.routing?.vias ?? []) moving.add(key(via.x, via.y));
+  for (const track of carried.moving.routing?.tracks ?? []) for (const pt of track.pts) moving.add(key(pt[0], pt[1]));
+  if (moving.size === 0) return [...edges];
+  const shift = (pt: readonly [number, number]): [number, number] => (moving.has(key(pt[0], pt[1])) ? map(pt) : [pt[0], pt[1]]);
   return edges.map((e) => ({ ...e, from: shift(e.from), to: shift(e.to) }));
 }

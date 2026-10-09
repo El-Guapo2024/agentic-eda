@@ -455,6 +455,24 @@ impl Node {
         eda_drc::constraints::clearance(rules, Self::net_str(a), Self::net_str(b))
     }
 
+    /// `PNS_PCBNEW_RULE_RESOLVER::Clearance( aA, aB )` for a copper item on `net` against `item`: the clearance
+    /// [`Node::clearance`] gives for two nets, except against the board outline. An Edge.Cuts graphic is not copper
+    /// (`isCopper` is false for it), so `CT_CLEARANCE` is never asked; `isEdge( aB )` asks `CT_EDGE_CLEARANCE`, which is
+    /// the board's copper-to-edge clearance (`bds.m_CopperEdgeClearance`, [`eda_drc::constraints::edge_clearance_min`]) --
+    /// whatever net class the copper is in.
+    pub fn clearance_to(rules: &BoardRules, net: &Net, item: &Item) -> Um {
+        match item {
+            Item::Solid(s) if s.edge => eda_drc::constraints::edge_clearance_min(rules),
+            _ => Self::clearance(rules, net, item.net()),
+        }
+    }
+
+    /// How far from an item the search for what it could collide with has to look: the largest clearance anything can ask for
+    /// (the net classes', the holes', and the board edge's).
+    fn search_margin(rules: &BoardRules) -> Um {
+        eda_drc::constraints::worst_case_clearance(rules).max(eda_drc::constraints::edge_clearance_min(rules))
+    }
+
     /// `NODE::QueryColliding`/`ITEM::Collide`, narrowed to "every obstacle
     /// a candidate shape on `layers`, net `net`, would hit" -- the broad
     /// phase (spatial index, inflated by the board's worst-case clearance)
@@ -470,7 +488,7 @@ impl Node {
     /// and filter are tested first (`DEFAULT_OBSTACLE_VISITOR::operator()`),
     /// and `use_epsilon` switches `m_useClearanceEpsilon`.
     pub fn colliding_with(&self, shape: &Shape, net: &Net, layers: LayerRange, rules: &BoardRules, exclude: &[ItemId], opts: QueryOpts) -> Vec<Obstacle> {
-        let margin = eda_drc::constraints::worst_case_clearance(rules);
+        let margin = Self::search_margin(rules);
         let bbox = shape.bbox(margin);
         let mut out = Vec::new();
         for id in self.index.query(bbox) {
@@ -497,7 +515,7 @@ impl Node {
             // Hull vertices here are rounded to whole µm (KiCad: nm), so the
             // epsilon is one µm -- the same "a hull-hugging path is not a
             // collision" tolerance at this IR's resolution.
-            let clearance = Self::clearance(rules, net, item.net());
+            let clearance = Self::clearance_to(rules, net, item);
             let clearance = if opts.use_epsilon && clearance > 0 { (clearance - CLEARANCE_EPSILON).max(0) } else { clearance };
             // A multilayer item (a via) may present a different shape per
             // layer in a fuller port; this one shape per item is exact for
@@ -541,10 +559,10 @@ impl Node {
         for (id, o) in &found {
             let item = &self.items[id];
             // `GetClearance( item, aLine ) + aLine->Width() / 2`, hull thickness 0.
-            let hull = item.hull(eps(Self::clearance(rules, &line.net, item.net())) + line.width / 2, 0, line.layer);
+            let hull = item.hull(eps(Self::clearance_to(rules, &line.net, item)) + line.width / 2, 0, line.layer);
             let mut dist: Option<(i64, Point)> = first_entry(&hull);
             if let Some(v) = via {
-                let via_hull = item.hull(eps(Self::clearance(rules, &v.net, item.net())) + v.diameter / 2, 0, line.layer);
+                let via_hull = item.hull(eps(Self::clearance_to(rules, &v.net, item)) + v.diameter / 2, 0, line.layer);
                 if let Some(d) = first_entry(&via_hull) {
                     if dist.is_none_or(|(bd, _)| d.0 < bd) {
                         dist = Some(d);
@@ -713,8 +731,8 @@ impl Node {
         let mut best: Option<(ItemId, Um)> = None;
         for id in self.index.query(bbox) {
             let Some(item) = self.items.get(&id) else { continue };
-            if !item.layers().overlaps(&layers) {
-                continue;
+            if !item.layers().overlaps(&layers) || matches!(item, Item::Solid(s) if s.edge) {
+                continue; // the board outline is an obstacle, never something to pick up
             }
             let (actual, _) = probe.clearance_to(&item.shape(item.layers().start()));
             if actual <= max_dist && best.as_ref().map(|(_, d)| actual < *d).unwrap_or(true) {
@@ -844,7 +862,7 @@ mod tests {
     fn collision_ignores_same_net_and_excluded() {
         let mut n = Node::new();
         let rules = rules();
-        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), shape: Shape::Circle { c: p(0, 0), r: 500 }, source: "U1.1".into() }));
+        let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(0, 0), shape: Shape::Circle { c: p(0, 0), r: 500 }, source: "U1.1".into(), edge: false }));
         let shape = Shape::Stadium { a: p(0, 0), b: p(1000, 0), r: 100 };
         // Same net as the pad: must not collide.
         assert!(n.first_colliding(&shape, &net_of("GND"), LayerRange::single(0), &rules, &[]).is_none());
@@ -858,7 +876,7 @@ mod tests {
     #[test]
     fn nearest_anchor_finds_pad_within_threshold() {
         let mut n = Node::new();
-        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1000, 1000), shape: Shape::Circle { c: p(1000, 1000), r: 400 }, source: "U1.1".into() }));
+        n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1000, 1000), shape: Shape::Circle { c: p(1000, 1000), r: 400 }, source: "U1.1".into(), edge: false }));
         let hit = n.nearest_anchor(p(1050, 1000), LayerRange::single(0), 200, None);
         assert_eq!(hit.map(|(_, p)| p), Some(p(1000, 1000)));
         assert!(n.nearest_anchor(p(5000, 5000), LayerRange::single(0), 200, None).is_none());
@@ -872,7 +890,7 @@ mod tests {
         // followed the table's iteration order would differ from round to round
         for _ in 0..40 {
             let mut n = Node::new();
-            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1000, 1000), shape: Shape::Circle { c: p(1000, 1000), r: 400 }, source: "U1.1".into() }));
+            let pad = n.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: p(1000, 1000), shape: Shape::Circle { c: p(1000, 1000), r: 400 }, source: "U1.1".into(), edge: false }));
             n.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: p(1000, 1000), b: p(3000, 1000), width: 200, source_track: None, locked: false }));
             assert_eq!(n.nearest_anchor(p(1100, 1000), LayerRange::single(0), 500, None).map(|(id, _)| id), Some(pad));
         }
@@ -893,7 +911,7 @@ mod tests {
     }
 
     fn pad_item(net: &str, c: Point, r: Um) -> Item {
-        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into() })
+        Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into(), edge: false })
     }
 
     /// D12: `NearestObstacle` is the first hull the line enters, not the item it overlaps most.

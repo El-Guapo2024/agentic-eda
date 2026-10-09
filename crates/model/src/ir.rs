@@ -215,7 +215,7 @@ pub struct SchematicSection {
     /// Drawn shapes, text boxes, rule areas, directive labels, locks and body styles -- see
     /// [`crate::sch_extras::SchExtras`]. Additive; empty (and not written) for every design that
     /// never used those tools.
-    #[serde(default, skip_serializing_if = "crate::sch_extras::SchExtras::is_empty")]
+    #[serde(default, skip_serializing_if = "crate::sch_extras::SchExtras::writes_nothing")]
     pub extras: crate::sch_extras::SchExtras,
     /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
     /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
@@ -240,6 +240,11 @@ pub struct SchematicSection {
     /// (`userAdded`).
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub user_fields: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    /// Where the fields of each placed symbol, power symbol and sheet are drawn, by [`field_key`] (a power symbol's id, a sheet's id):
+    /// see [`FieldPlacement`]. An item with no entry has its fields placed the way KiCad's Autoplace Fields would
+    /// (`eda_engine::fields`), so a design written before this existed reads the same as one that has them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub field_layout: std::collections::BTreeMap<String, Vec<FieldPlacement>>,
     /// Title block. `None` keeps relying on the caller-supplied
     /// `ExportMeta` (title/date) the way every export always has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -687,6 +692,58 @@ pub struct ErcExclusion {
     /// excluded (nothing to key on), same limitation `Exclusions` itself
     /// already has.
     pub location: String,
+}
+
+/// A waived DRC violation: `BOARD_DESIGN_SETTINGS::m_DrcExclusions` with its `m_DrcExclusionComments`
+/// (`dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", Exclude Marker).
+///
+/// KiCad keys an exclusion by the marker's serialization (`PCB_MARKER::SerializeToString`): the check's settings key, the marker's
+/// position and the uuids of the items it names. The derived project writes these as `board.design_settings.drc_exclusions`, so
+/// kicad-cli reports the violation as excluded and leaves it out of a report that does not ask for exclusions. Here the identity of a
+/// violation is `(check, items)` -- the uuids of the derived board's own items, which `eda_kicad::export_kicad_pcb_mapped` mints
+/// deterministically, so the key survives an export and a restart -- and the report is judged against it by the studio too, since
+/// kicad-cli's report carries no marker position (see [`positions_nm`](Self::positions_nm)).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrcExclusion {
+    /// The check's KiCad settings key (`clearance`, `unconnected_items`, ...): `RC_ITEM::GetSettingsKey`.
+    pub check: String,
+    /// The uuids of the items the violation names in the derived board, main item first (`RC_ITEM::GetMainItemID` then
+    /// `GetAuxItemID`); never empty.
+    pub items: Vec<String>,
+    /// Our ids for the same items, in the same order (`R1.2`, a track id, ...): what the studio selects. Empty when unknown.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ids: Vec<String>,
+    /// Where kicad-cli's marker for this violation may sit, in nanometres (KiCad's board unit). KiCad matches an exclusion to a marker by
+    /// the exact serialization, position included, and kicad-cli's report does not say where a marker is -- only where its items are. So
+    /// these are the positions worth trying (the items' own, a track's middle, the middle of the first two items): the derived project
+    /// lists one serialization for each, and the one that is the marker's is the one kicad-cli matches (the rest are dropped on load,
+    /// as KiCad drops an exclusion no marker matches). Empty: the exclusion is the studio's alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub positions_nm: Vec<[i64; 2]>,
+    /// `PCB_MARKER::GetComment`: why it was waived. Empty for none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
+}
+
+impl DrcExclusion {
+    /// What identifies the violation: the check and the items it names.
+    pub fn key(&self) -> DrcExclusionKey {
+        DrcExclusionKey { check: self.check.clone(), items: self.items.clone() }
+    }
+
+    /// Whether this waives the violation `(check, items)`.
+    pub fn matches(&self, check: &str, items: &[String]) -> bool {
+        self.check == check && self.items == items
+    }
+}
+
+/// The identity of a [`DrcExclusion`]: what `Cmd::DeleteDrcExclusions` names.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrcExclusionKey {
+    pub check: String,
+    pub items: Vec<String>,
 }
 
 /// Title block. Every field optional/empty by default; the exporter falls
@@ -1794,6 +1851,67 @@ pub enum TextJustify {
     Right,
 }
 
+/// Vertical text justification, KiCad's `justify top|bottom` (absent = centred).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TextVAlign {
+    Top,
+    #[default]
+    Center,
+    Bottom,
+}
+
+/// Where one field of a symbol, a power symbol or a sheet is drawn: KiCad's `SCH_FIELD` position, angle, justification and
+/// visibility (`eeschema/sch_field.cpp`), kept per instance because the library only knows where a field goes on an unplaced
+/// symbol, and Autoplace Fields moves them.
+///
+/// The placement is in the frame of the *unturned, unmirrored* item, measured from its origin (a symbol's box corner, a power symbol's
+/// pin, a sheet's top-left corner), the way a pin is: a move, a turn or a mirror carries the field along with no edit of its own.
+/// `SymbolInstance::rot`/`mirrored` take it to the sheet, as KiCad's `TRANSFORM` does for `SCH_FIELD::GetPosition`
+/// (`eda_engine::fields::page_field`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldPlacement {
+    /// `Reference`, `Value`, `Footprint`, `Datasheet`; a sheet's `Sheetname`, `Sheetfile`; a user field's own name.
+    pub name: String,
+    /// The text's anchor, micrometres from the item's origin.
+    pub dx: Um,
+    pub dy: Um,
+    /// The text's own angle before the item turns it: 0 (horizontal) or 90_000 (vertical).
+    #[serde(default, skip_serializing_if = "is_zero_angle")]
+    pub angle: Millideg,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub h: TextJustify,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub v: TextVAlign,
+    /// Drawn on the sheet (a hidden field keeps its place for when it is shown).
+    #[serde(default = "d_true_field", skip_serializing_if = "is_true_field")]
+    pub visible: bool,
+}
+
+fn d_true_field() -> bool {
+    true
+}
+fn is_true_field(b: &bool) -> bool {
+    *b
+}
+fn is_zero_angle(a: &Millideg) -> bool {
+    *a == 0
+}
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+/// The key of a placed symbol's fields in [`SchematicSection::field_layout`]: its reference, with the unit after a `#` for any
+/// unit but the first (each placed unit draws its own).
+pub fn field_key(id: &str, unit: u32) -> String {
+    if unit <= 1 {
+        id.to_string()
+    } else {
+        format!("{id}#{unit}")
+    }
+}
+
 /// Free-standing board text (KiCad's `PCB_TEXT` / `gr_text`): silkscreen
 /// labels, fab notes -- anything that is not a footprint's own reference or
 /// value field (those stay on `FootprintInstance`/`Part`, exactly as
@@ -1847,16 +1965,18 @@ pub struct Group {
     /// `PCB_GROUP::GetName()`. Empty = unnamed (KiCad's own default).
     #[serde(default)]
     pub name: String,
-    /// Ids of every direct member -- a part reference, or a track/via/
-    /// zone/shape/text id. Never another group's id: this model has no
-    /// nested-group concept (`eda_group.h`'s `EDA_GROUP` allows a group of
-    /// groups upstream; out of scope here, see `eda_ops::group_items`'s
-    /// own doc).
+    /// Ids of every direct member -- a part reference, a track/via/zone/
+    /// shape/text/dimension id, or another group's id (`EDA_GROUP::m_items`
+    /// holds any item, so groups nest). An id is a member of one group at
+    /// most and the nesting never loops; `DrawingsSection::group_leaves`
+    /// and friends (`groups.rs`) read the tree.
     pub member_ids: Vec<String>,
 }
 
 impl Group {
-    fn id_seed(&self) -> String {
+    /// What the id of a group is derived from: its members, sorted (`next_item_id( "grp", .. )`). Public for the importer, which
+    /// names inner groups before the groups that hold them.
+    pub fn id_seed(&self) -> String {
         let mut members = self.member_ids.clone();
         members.sort();
         members.join(",")
@@ -2135,6 +2255,12 @@ pub struct DrawingsSection {
     /// derived `.kicad_pcb` as `(grid_origin x y)`. Additive: absent in an older `design.json` reads as "no origin set".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grid_origin: Option<Point>,
+    /// Footprints that exist only on the board: copies of a footprint, and footprints pasted in from another board or from KiCad's
+    /// clipboard, which have no part in the intent and no symbol in the schematic (KiCad's footprint without a schematic link).
+    /// `board::load` folds each into the model as a part of its own -- see [`BoardPart`]. Additive: absent in an older
+    /// `design.json` reads as "every footprint is one of the intent's parts".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub board_parts: Vec<BoardPart>,
     /// Board Setup's edits to the board's rules (net classes, constraints, solder mask and paste, text defaults,
     /// the stackup, violation severities, custom rules): laid over the intent's rules each time the board is
     /// loaded (`crate::rules::RulesOverlay::apply`, `crates/cli/src/board.rs::load`), the way `Design::nets` is.
@@ -2143,6 +2269,33 @@ pub struct DrawingsSection {
     /// `design.json` reads as "the intent's rules stand".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<crate::rules::RulesOverlay>,
+    /// The DRC violations the user waived (`dialog_drc.cpp`'s "Exclude this violation"): `BOARD_DESIGN_SETTINGS::m_DrcExclusions`, written
+    /// to the derived `.kicad_pro` as `board.design_settings.drc_exclusions`. Sorted by key, one entry per `(check, items)`. Additive:
+    /// absent in an older `design.json` reads as "nothing waived". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drc_exclusions: Vec<DrcExclusion>,
+}
+
+/// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
+/// the footprint stands for has to exist for it to be placed. It plays the role of an intent part for everything downstream --
+/// `board::load` adds a [`crate::Part`] named `reference` to the model, joins its pads to the nets in `pad_nets` (a net the board
+/// does not have yet is created), and gives its footprint name `definition`'s pads when nothing else resolves that name. The pose
+/// is an ordinary `FootprintInstance` in `placement.footprints`; Delete removes the pose and this entry together.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoardPart {
+    /// The reference designator, unique among every part of the board.
+    pub reference: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// The footprint's name ("Lib:Name" or a bare name), as `Part::footprint` carries it.
+    pub footprint: String,
+    /// The footprint as the copy was made from it: its pads and courtyard, used when the model resolves nothing under `footprint`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<LibraryFootprint>,
+    /// Pad number -> net name, sorted by pad number. A pad not listed is on no net.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pad_nets: Vec<(String, String)>,
 }
 
 /// `PADSTACK`/`PAD` facts for one imported pad that [`crate::Pad`] has no
@@ -2302,6 +2455,37 @@ impl Design {
         facts.pad_clearance = pad_clearance;
         facts.footprint_clearance = fp_clearance;
         facts
+    }
+}
+
+impl Design {
+    /// The zone-connection facts of placed footprint `fp_id` and its pads (`pad_numbers`, in pad order; `footprint_name` is its
+    /// definition's name) as the board edit that gives another footprint the same ones, filed under `fp_id`: what a Copy, a Paste
+    /// and a Duplicate hand on, since a copy is a new footprint that has no import behind it. `None` when neither the footprint nor
+    /// any pad sets anything. See [`Design::pad_zone_facts`].
+    pub fn zone_overrides_of(&self, fp_id: &str, footprint_name: &str, pad_numbers: &[&str]) -> Option<FootprintZoneOverrides> {
+        let mut edit = FootprintZoneOverrides { id: fp_id.to_string(), ..Default::default() };
+        for (i, number) in pad_numbers.iter().enumerate() {
+            let f = self.pad_zone_facts(fp_id, footprint_name, i, pad_numbers.len(), number);
+            if edit.footprint.is_none() && (f.footprint_clearance.is_some() || f.footprint_connection.is_some()) {
+                edit.footprint = Some(FootprintZoneFacts { zone_connection: f.footprint_connection, clearance: f.footprint_clearance });
+            }
+            let own = PadZoneOverride {
+                number: (*number).to_string(),
+                clearance: f.pad_clearance,
+                zone_connection: f.connection,
+                thermal_gap: f.thermal_gap,
+                thermal_spoke_width: f.thermal_spoke_width,
+                thermal_spoke_angle_mdeg: f.thermal_spoke_angle_mdeg,
+            };
+            let is_set = own.clearance.is_some() || own.zone_connection.is_some() || own.thermal_gap.is_some() || own.thermal_spoke_width.is_some() || own.thermal_spoke_angle_mdeg.is_some();
+            // Pads that share a number share their facts (an edit names the number).
+            if is_set && !edit.pads.iter().any(|p| p.number == *number) {
+                edit.pads.push(own);
+            }
+        }
+        edit.pads.sort_by(|a, b| a.number.cmp(&b.number));
+        (edit.footprint.is_some() || !edit.pads.is_empty()).then_some(edit)
     }
 }
 
@@ -3485,6 +3669,9 @@ impl LibrarySymbol {
             power: sym.power,
             in_bom: sym.in_bom,
             on_board: sym.on_board,
+            pin_names_hidden: sym.pin_names_hidden,
+            pin_numbers_hidden: sym.pin_numbers_hidden,
+            pin_name_offset_mm: sym.pin_name_offset_mm,
             unit_count: sym.unit_count.max(1),
             graphics: sym.graphics.iter().map(LibrarySymbolGraphic::from_engine_graphic).collect(),
             pins: sym.pins.iter().map(LibrarySymbolPin::from_engine_pin).collect(),
@@ -3519,6 +3706,9 @@ impl LibrarySymbol {
             description: self.description.clone(),
             reference_prefix: self.reference_prefix.clone(),
             unit_count: self.unit_count.max(1),
+            pin_names_hidden: self.pin_names_hidden,
+            pin_numbers_hidden: self.pin_numbers_hidden,
+            pin_name_offset_mm: self.pin_name_offset_mm,
         }
     }
 
@@ -3619,7 +3809,10 @@ fn fnv1a_hex(bytes: &[u8]) -> String {
 /// two items hash the same (an exact duplicate, e.g. a hand-add repeated
 /// verbatim) -- so ids are always unique within one design, and, given the
 /// same seed and the same existing set, always the same.
-pub(crate) fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTreeSet<String>) -> String {
+///
+/// Public so a verb that makes several linked items at once (a pasted group and its members, a duplicated footprint and its
+/// copper) can name them all before it inserts any.
+pub fn next_item_id(prefix: &str, seed: &str, existing: &std::collections::BTreeSet<String>) -> String {
     let base = format!("{prefix}_{}", &fnv1a_hex(seed.as_bytes())[..12]);
     if !existing.contains(&base) {
         return base;
@@ -3696,7 +3889,7 @@ mod tests {
                 power_symbols: vec![],
                 no_connects: vec![],
                 bus_entries: vec![],
-                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: false,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![],

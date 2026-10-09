@@ -20,12 +20,15 @@ mod board;
 mod board_control_api;
 mod board_output_api;
 mod body_api;
+mod clipboard_api;
 mod bom_plugins;
 mod cleanup_api;
 mod convert_api;
 mod fab_api;
 mod library_api;
 mod library_index;
+mod library_place;
+mod library_search;
 mod page_json;
 mod sch_api;
 mod sch_clipboard_api;
@@ -33,6 +36,8 @@ mod sch_control_api;
 mod sch_export_api;
 mod sch_move_api;
 mod fab_cmd;
+#[cfg(test)]
+mod gate_vs_kicad;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;
@@ -127,7 +132,8 @@ fn print_checks(title: &str, checks: &[CheckResult]) -> bool {
 /// does.
 fn print_drc(d: &eda_model::ir::Design, model: &ConstraintModel, work: &Path) -> Result<bool, Vec<CheckResult>> {
     let report = eda_kicad_engine::drc(d, model, work, false)?;
-    let all: Vec<_> = report.violations.iter().chain(report.unconnected_items.iter()).collect();
+    // A violation the design waived (`design.drawings.drc_exclusions`) is reported flagged, and is not a finding.
+    let all: Vec<_> = report.violations.iter().chain(report.unconnected_items.iter()).filter(|v| !v.excluded).collect();
     let errors = all.iter().filter(|v| v.severity == "error").count();
     let warnings = all.iter().filter(|v| v.severity == "warning").count();
     println!("drc ({}): {} violations, {errors} error, {warnings} warning", report.engine, all.len());

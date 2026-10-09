@@ -17,7 +17,10 @@
 //   - R / Shift+R rotate by a quarter turn each way; Delete rips.
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
-import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../../state/store";
+import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
+import { carryStart } from "../../kicad-port/pcbTransform";
+import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
+import { isGroup, substituteSelection, topLevelGroup, withinScope } from "../../kicad-port/groupTree";
 import type { ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
 import { activeEditPoint, cmdShapeToShape, moveShapePoint, shapeEditPoints, shapeToCmd, type EditPoint } from "../../kicad-port/pcbPointEdit";
@@ -45,14 +48,20 @@ import { computeClickModifiers, isCrossingSelection, applySingleClickModifier, a
 import { pickSelectionCandidates, collectBoxSelection, type SelectionCandidate, type SelectableKind } from "./selectionCandidates";
 import { openPropertiesFor } from "./properties";
 import { useActionRunner } from "../../actions/useActionRunner";
-import { pcbSweepMenuEntries } from "../../actions/pcbSweepMenu";
-import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner, removeCorner } from "../../kicad-port/zonePointEditor";
+import { SchContextMenu } from "../schematic/SchContextMenu";
+import { buildPcbMenu } from "./pcbMenuBuilder";
+import type { MenuNode } from "../../kicad/types";
+import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner } from "../../kicad-port/zonePointEditor";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
-import { connectedTrackWidth, displayedRatsnest, flipLocalX, flipPan, highlightedNets, netsOfSelection, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
+import { connectedTrackWidth, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
+import { DRC_MARKER_HIT_UM, nearestMarker } from "../../kicad-port/markerHit";
+import { canExclude, rcMenu } from "../../kicad-port/rcItems";
+import { drcSettingSeverity, drcTitle, runMarkerMenu, toMenuEntries } from "../../actions/checkerOps";
+import { askExclusionComment } from "../../state/checkerView";
 import "../../styles/canvas.css";
 
 /** `ZONE_SETTINGS << aSrcZone` (zone_create_helper.cpp createZoneFromExisting): the fill + rule-area settings of an existing zone, as `api.addZone` takes them. */
@@ -62,8 +71,11 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
   return out as unknown as ZoneSettingsFields & RuleAreaFields;
 }
 
-/** A candidate's own kind determines which Cmd a drag of it would commit through -- tracks/zones have no move_* Cmd (api/types.ts), so they're selectable but never draggable, same as before this session. */
-const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "via", "shape", "text", "dimension"]);
+/**
+ * What a plain drag of a clicked item picks up. Every kind can be: the drop is one `move_items` (kicad-port/pcbTransform.ts `planCarry`), and a pad
+ * stands for its footprint (`FilterCollectorForFreePads`) -- dragging a pad drags the footprint, as in pcbnew.
+ */
+const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
@@ -122,7 +134,7 @@ const SHAPE_TOOL_KIND: Partial<Record<ToolId, ShapeToolKind>> = {
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
-  | { kind: "move"; refs: string[]; moveKind: "part" | "via" | "shape" | "text" | "dimension"; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
+  | { kind: "move"; refs: string[]; pivotUm?: [number, number]; flipPivotUm?: [number, number]; startWorld: [number, number]; snapOrigin: [number, number]; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] }
@@ -154,14 +166,8 @@ export function Canvas() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  // Only for onContextMenu's Delete/Cut entries below, so they resolve a
-  // mixed-kind selection (track/via/zone/shape/text/part) the same
-  // correct, per-kind way the Del hotkey's common.Interactive.delete
-  // already does -- a plain api.ripSelection() call only ever handles
-  // footprints, which used to make a right-click Delete on anything else
-  // silently do nothing.
-  const { run, isEnabled } = useActionRunner();
-  /** The registry of the latest render: a context-menu entry runs after the selection its right click made has rendered. */
+  const { run } = useActionRunner();
+  /** The registry of the latest render: an action run from the canvas (Close Outline, the Enter key) uses what the last render saw. */
   const runRef = useRef(run);
   runRef.current = run;
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -175,6 +181,8 @@ export function Canvas() {
   const moveMode = state.activeTool === "move";
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  /** The right-click menu of whichever tool owns the click (kicad-port/pcbContextMenu.ts): nested, with the menu bar's own entries. */
+  const [pcbMenu, setPcbMenu] = useState<{ x: number; y: number; nodes: MenuNode[] } | null>(null);
   const longPressRef = useRef<{ timer: ReturnType<typeof setTimeout>; startScreen: [number, number] } | null>(null);
   // wx_view_controls.cpp LoadSettings(): the zoom controller is a
   // long-lived object across wheel events (ACCELERATING_ZOOM_CONTROLLER
@@ -356,6 +364,7 @@ export function Canvas() {
       cursorUm: state.cursorUm,
       activeTool: state.activeTool,
       angleSnapMode: state.pcbx.angleSnapMode,
+      enteredGroup: state.enteredGroupId,
     });
     ctx.restore();
 
@@ -374,7 +383,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -418,6 +427,10 @@ export function Canvas() {
         case "dimension": {
           const kind = api.dimensionById(c.id)?.kind ?? "dimension";
           return `${kind[0]!.toUpperCase()}${kind.slice(1)} Dimension`;
+        }
+        case "pad": {
+          const hit = board ? padById(board, c.id) : null;
+          return hit ? `Pad ${hit.pad.num} of ${hit.part.ref}${hit.pad.net ? ` (${hit.pad.net})` : ""}` : `Pad ${c.id}`;
         }
       }
     },
@@ -520,6 +533,7 @@ export function Canvas() {
     }
     const [wx, wy] = worldAt(e);
     setContextMenu(null);
+    setPcbMenu(null);
     if (state.pcbx.menuCursorUm) dispatch({ type: "PCBX", patch: { menuCursorUm: null } });
 
     // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts) a left click answers it -- snapped like
@@ -763,6 +777,11 @@ export function Canvas() {
       api.placeArmedAt(sx, sy);
       return;
     }
+    if (state.armedFootprint) {
+      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      void api.placeLibraryFootprintAt(sx, sy);
+      return;
+    }
     if (PAN_BUTTONS.has(e.button)) {
       // wx_view_controls.cpp onButton: MiddleDown/RightDown both start
       // DRAG_PANNING by default. A right-button press might still turn
@@ -780,8 +799,21 @@ export function Canvas() {
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
     const toleranceUm = Math.max(150, 6 / state.view.scale);
     const onePixelUm = 1 / state.view.scale;
+    // pcb_selection_tool.cpp selectPoint: "if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) ) ExitGroup();" -- a click
+    // outside the box of the entered group leaves it, then picks as with no group entered. Inside it, only the group's own members and the groups
+    // directly in it can be picked (`FilterCollectorForHierarchy`: "If a group is entered, disallow selections of objects outside the group").
+    let scope = state.enteredGroupId;
+    if (board && scope) {
+      const box = itemBounds(board, scope);
+      if (!box || wx < box[0] || wx > box[2] || wy < box[1] || wy > box[3]) {
+        dispatch({ type: "SET_ENTERED_GROUP", id: null });
+        scope = null;
+      }
+    }
+    const groupsNow = board?.drawings?.groups ?? [];
+    const pickable = (id: string): boolean => scope === null || (board != null && withinScope(groupsNow, padParent(board, id) ?? id, scope));
     const runPick = (skipHeuristics: boolean): SelectionCandidate[] =>
-      board ? pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics) : [];
+      board ? pickSelectionCandidates(board, wx, wy, toleranceUm, onePixelUm, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, modifiers.subtractive, skipHeuristics).filter((c) => pickable(c.id)) : [];
 
     // pcb_selection_tool.cpp SELECTION_TOOL::hasModifier's `m_skip_heuristics`
     // (Alt): go straight to the full candidate list/clarification menu,
@@ -852,9 +884,16 @@ export function Canvas() {
         refs = applySingleClickModifier(state.selection, hit.id, modifiers);
         dispatch({ type: "SET_SELECTION", refs });
       }
-      if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0) {
-        const soleRef = refs.length === 1 ? refs[0] : undefined;
-        dragRef.current = { kind: "move", refs, moveKind: hit.kind as "part" | "via" | "shape" | "text" | "dimension", startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
+      if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0 && board) {
+        // What the drag picks up: the selection as the click leaves it (a group stands for its members, a pad for its footprint), locked items out
+        // (`FilterCollectorForLockedItems`), and the points an R / F pressed on the way acts about.
+        const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), (p) => snapPoint(p[0], p[1], board.snap ?? state.gridUm));
+        if (start.refs.length > 0) {
+          const soleRef = start.refs.length === 1 ? start.refs[0] : undefined;
+          dragRef.current = { kind: "move", refs: start.refs, pivotUm: start.pivotUm, flipPivotUm: start.flipPivotUm, startWorld: [wx, wy], snapOrigin: snapRef(wx, wy, e, soleRef), moved: false };
+        } else if (start.lockedOut) {
+          dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+        }
       }
       return;
     }
@@ -932,10 +971,20 @@ export function Canvas() {
       else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
     }
 
-    if (moveMode && state.selection.size > 0) {
+    if (moveMode && state.selection.size > 0 && board) {
       const origin = state.moveOriginUm ?? { x: wx, y: wy };
-      const first = [...state.selection][0]!;
-      const kind = api.viaById(first) ? "via" : api.shapeById(first) ? "shape" : api.textById(first) ? "text" : "part";
+      // Pack and Move (`P`) carries footprints, each with its own packed shift; every other move is the one `pcb` kind -- any mix of items, taken in the hand
+      // once (the first pointer move) so the points an R / F acts about stay where the selection was picked up.
+      const packing = state.movePreview?.perRefOffsetUm != null;
+      const held = state.movePreview?.kind === "pcb" ? state.movePreview : null;
+      const start = packing || held ? null : carryStart(board, [...state.selection], (p) => snapPoint(p[0], p[1], board.snap ?? state.gridUm));
+      if (!packing && !held && start && start.refs.length === 0) {
+        if (start.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
+        return;
+      }
+      const kind = packing ? "part" : "pcb";
+      const refs = packing ? [...state.selection] : (held?.refs ?? start!.refs);
       // pcb_grid_helper.cpp BestSnapAnchor applied to both ends: the
       // delta is "where the (snapped) cursor is now" minus "where the
       // (snapped) cursor started" -- not a plain grid-rounded delta --
@@ -945,7 +994,7 @@ export function Canvas() {
       // the dragged item's own anchors for a single-item move; a
       // multi-select drag doesn't exclude any member (a reasonable,
       // documented simplification -- see PARITY-pcb.md).
-      const soleRef = state.selection.size === 1 ? first : undefined;
+      const soleRef = refs.length === 1 ? refs[0] : undefined;
       const [ox, oy] = snapRef(origin.x, origin.y, e, soleRef);
       const [sx, sy] = snapRef(wx, wy, e, soleRef);
       // Preserve whatever R/Shift+R/F have already accumulated on this
@@ -953,7 +1002,7 @@ export function Canvas() {
       // pointer-move must not reset the live rotate/flip state.
       // (`perRefOffsetUm` is Pack and Move's per-footprint packed shift -- it rides along until the drop.)
       const { rotateQuarterTurns, flipped, perRefOffsetUm } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: [...state.selection], kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetUm } });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs, kind, dxUm: sx - ox, dyUm: sy - oy, rotateQuarterTurns, flipped, perRefOffsetUm, pivotUm: held?.pivotUm ?? start?.pivotUm, flipPivotUm: held?.flipPivotUm ?? start?.flipPivotUm } });
       return;
     }
 
@@ -969,7 +1018,7 @@ export function Canvas() {
       const dy = sy - drag.snapOrigin[1];
       if (dx !== 0 || dy !== 0) drag.moved = true;
       const { rotateQuarterTurns, flipped } = state.movePreview ?? {};
-      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: drag.moveKind, dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped } : null });
+      dispatch({ type: "SET_MOVE_PREVIEW", preview: drag.moved ? { refs: drag.refs, kind: "pcb", dxUm: dx, dyUm: dy, rotateQuarterTurns, flipped, pivotUm: drag.pivotUm, flipPivotUm: drag.flipPivotUm } : null });
     } else if (drag.kind === "zoneCorner") {
       const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
       setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
@@ -1025,7 +1074,9 @@ export function Canvas() {
         const [x0, y0] = drag.startWorld;
         const [x1, y1] = screenToWorld(state.view, flipLocalX(state.bcx.boardFlipped, containerSize.width, marquee.x1), marquee.y1);
         const selBox: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-        const hits = collectBoxSelection(board, selBox, crossing, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast);
+        const entered = state.enteredGroupId;
+        const groupsNow = board.drawings?.groups ?? [];
+        const hits = collectBoxSelection(board, selBox, crossing, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast).filter((h) => entered === null || withinScope(groupsNow, padParent(board, h.id) ?? h.id, entered));
         if (hits.length > 0 || hasModifier(modifiers)) {
           dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits.map((h) => h.id), modifiers) });
         }
@@ -1082,128 +1133,37 @@ export function Canvas() {
     }
     if (!board) return;
     const [wx, wy] = worldAt(e);
-    const hit = partHit(board.parts, wx, wy);
-    if (hit && !state.selection.has(hit.ref)) dispatch({ type: "SET_SELECTION", refs: [hit.ref] });
+    // A right click on a DRC marker (a circle the last run left on the board) opens the marker's menu -- Exclude, Exclude all of this type, Change severity,
+    // Show in the dialog -- instead of the item menu: a `PCB_MARKER` is an item of its own with its own entries (kicad-port/rcItems.ts `rcMenu`).
+    const markerIndex = nearestMarker((state.drc?.violations ?? []).map((v) => v.items[0]?.pos ?? null), wx, wy, DRC_MARKER_HIT_UM);
+    if (markerIndex >= 0) {
+      const v = state.drc!.violations[markerIndex]!;
+      dispatch({ type: "SET_DRC_SELECTED", index: markerIndex });
+      const spec = rcMenu({ domain: "drc", title: drcTitle(v.type), excluded: v.excluded === true, severity: drcSettingSeverity(state, v.type), onCanvas: true });
+      const entries = toMenuEntries(spec, (id) => void runMarkerMenu({ api, dispatch }, { domain: "drc", tab: "violations", index: markerIndex }, id, askExclusionComment), canExclude(v));
+      setPcbMenu(null);
+      setContextMenu({ x: e.clientX, y: e.clientY, entries });
+      return;
+    }
     dispatch({ type: "PCBX", patch: { menuCursorUm: { x: wx, y: wy } } }); // `GetMenuCursorPos()`
-    // pcb_selection_tool.cpp Main(): a right click on an item that is not selected selects it first (here for the non-footprint
-    // kinds -- tracks, vias, zones, shapes, text -- whose own entries below depend on it).
-    let pickedId: string | null = null;
-    if (!hit) {
+    // pcb_selection_tool.cpp Main(): "Right click? if there is any object - show the context menu" -- with an empty selection the item under the pointer is
+    // selected first (`selectPoint`, a hover selection); a selection that exists is the one the menu is for, wherever the click is.
+    let refs = [...state.selection];
+    if (refs.length === 0 && (state.activeTool === "select" || state.activeTool === "move")) {
       const toleranceUm = Math.max(150, 6 / state.view.scale);
-      const top = pickSelectionCandidates(board, wx, wy, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)[0];
-      if (top && !state.selection.has(top.id)) {
-        pickedId = top.id;
-        dispatch({ type: "SET_SELECTION", refs: [top.id] });
+      const groupsNow = board.drawings?.groups ?? [];
+      const top = pickSelectionCandidates(board, wx, wy, toleranceUm, 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false).find(
+        (c) => state.enteredGroupId === null || withinScope(groupsNow, padParent(board, c.id) ?? c.id, state.enteredGroupId)
+      );
+      const id = top?.id ?? partHit(board.parts, wx, wy)?.ref ?? null;
+      if (id) {
+        refs = substituteSelection(groupsNow, [id], state.enteredGroupId).ids;
+        dispatch({ type: "SET_SELECTION", refs: [id] });
       }
     }
-    const refs = pickedId ? [pickedId] : hit ? (state.selection.has(hit.ref) ? [...state.selection] : [hit.ref]) : [...state.selection];
-    const placedRefs = refs.filter((r) => api.partByRef(r)?.placed);
-
-    const entries: MenuEntry[] = [
-      { label: placedRefs.length > 1 ? `Rotate ${placedRefs.length} Items (R)` : "Rotate Clockwise (Shift+R)", onSelect: () => api.rotateSelection(3), disabled: placedRefs.length === 0 },
-      { label: "Rotate Counterclockwise (R)", onSelect: () => api.rotateSelection(1), disabled: placedRefs.length === 0 },
-      { label: "Flip Side (F)", onSelect: () => api.flipSelection(), disabled: placedRefs.length === 0 },
-      { label: "Move Exactly... (Shift+M)", onSelect: () => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true }), disabled: placedRefs.length === 0 },
-      { label: "Create Array... (Ctrl+T)", onSelect: () => dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: true }), disabled: refs.length === 0 },
-      { label: "Copy (Cmd+C)", onSelect: () => api.copySelection(), disabled: refs.length === 0 },
-      { label: "Cut (Cmd+X)", onSelect: () => run("common.Interactive.cut"), disabled: refs.length === 0 },
-      { label: "Duplicate (Cmd+D)", onSelect: () => api.duplicateSelection(), disabled: refs.length === 0 },
-      { label: "Delete (Del)", onSelect: () => run("common.Interactive.delete"), disabled: refs.length === 0 },
-    ];
-    // align_distribute_tool.cpp's own menu-visibility floors: MoreThan(1)
-    // for align, MoreThan(2) for distribute -- see kicad-port/
-    // alignDistribute.ts's doc for why this is placed-footprints-only.
-    if (placedRefs.length > 1) {
-      entries.push(
-        { label: "Align Left", onSelect: () => api.alignSelection("left") },
-        { label: "Align Right", onSelect: () => api.alignSelection("right") },
-        { label: "Align Top", onSelect: () => api.alignSelection("top") },
-        { label: "Align Bottom", onSelect: () => api.alignSelection("bottom") },
-        { label: "Align Center Horizontally", onSelect: () => api.alignSelection("centerX") },
-        { label: "Align Center Vertically", onSelect: () => api.alignSelection("centerY") }
-      );
-    }
-    if (placedRefs.length > 2) {
-      entries.push(
-        { label: "Distribute Horizontally (Even Gaps)", onSelect: () => api.distributeSelection("x", "gaps") },
-        { label: "Distribute Horizontally (By Centers)", onSelect: () => api.distributeSelection("x", "centers") },
-        { label: "Distribute Vertically (Even Gaps)", onSelect: () => api.distributeSelection("y", "gaps") },
-        { label: "Distribute Vertically (By Centers)", onSelect: () => api.distributeSelection("y", "centers") }
-      );
-    }
-    // Task item 7: `GLOBAL_EDIT_TOOL`'s "Switch Dimension Arrows" is a
-    // context-menu-only action in source too (no menus.json/toolbars.json
-    // entry in this extraction either).
-    if (refs.some((r) => api.dimensionById(r))) {
-      entries.push({ label: "Switch Dimension Arrows", onSelect: () => run("pcbnew.InteractiveDrawing.changeDimensionArrows") });
-    }
-    if (refs.length === 1) {
-      const part = api.partByRef(refs[0]!);
-      const net = part?.pads?.[0]?.net ?? null;
-      entries.push({ label: state.netHighlight ? "Clear Net Highlight" : "Highlight Net (`)", onSelect: () => dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net }), disabled: !net });
-
-      // pcb_point_editor.cpp: right-clicking a corner of the single
-      // selected zone offers to delete just that corner, same floor
-      // `Cmd::SetZoneOutline` itself enforces (a zone always keeps 3+ points).
-      const zone = api.zoneById(refs[0]!);
-      if (zone) {
-        const idx = findNearestCorner(zone.outline, wx, wy, zoneCornerToleranceUm(state.view.scale));
-        if (idx != null) {
-          const next = removeCorner(zone.outline, idx);
-          entries.push({
-            label: "Delete Corner",
-            onSelect: () => {
-              if (next) api.cmd({ op: "set_zone_outline", id: zone.id, outline: next.map(([x, y]) => ({ x, y })) });
-            },
-            disabled: !next,
-          });
-        }
-      }
-    }
-    // board_inspection_tool.cpp NET_CONTEXT_MENU ("Net Inspection Tools"), which the selection tool's menu carries when the selection is
-    // connected items -- flat here, and offered when the selection has a net to act on (a selected footprint stands for its pads).
-    if (refs.length > 0 && netsOfSelection(refs, board).length > 0) {
-      entries.push(
-        { label: "Show Net in Ratsnest", onSelect: () => run("pcbnew.EditorControl.showNet") },
-        { label: "Hide Net in Ratsnest", onSelect: () => run("pcbnew.EditorControl.hideNet") },
-        { label: "Highlight Net of Selection", onSelect: () => run("pcbnew.EditorControl.highlightNetSelection") },
-        { label: "Clear Net Highlighting (~)", onSelect: () => run("pcbnew.EditorControl.clearHighlight") }
-      );
-    }
-    // board_editor_control.cpp ZONE_CONTEXT_MENU, which the selection tool's menu carries when only zones are selected
-    // (`SELECTION_CONDITIONS::OnlyTypes( { PCB_ZONE_T } )`) -- flat here, with its "Zone Priority" submenu's four entries after it.
-    if (refs.length > 0 && refs.every((r) => api.zoneById(r))) {
-      const one = refs.length === 1;
-      entries.push(
-        { label: "Draft Fill Selected Zone(s)", onSelect: () => run("pcbnew.ZoneFiller.zoneFill") },
-        { label: "Fill All Zones", onSelect: () => run("pcbnew.ZoneFiller.zoneFillAll") },
-        { label: "Unfill Selected Zone(s)", onSelect: () => run("pcbnew.ZoneFiller.zoneUnfill") },
-        { label: "Unfill All Zones", onSelect: () => run("pcbnew.ZoneFiller.zoneUnfillAll") },
-        { label: "Merge Zones", onSelect: () => run("pcbnew.EditorControl.zoneMerge"), disabled: refs.length < 2 },
-        { label: "Duplicate Zone onto Layer...", onSelect: () => run("pcbnew.EditorControl.zoneDuplicate"), disabled: !one },
-        { label: "Add a Zone Cutout", onSelect: () => run("pcbnew.InteractiveDrawing.zoneCutout"), disabled: !one },
-        { label: "Add a Similar Zone", onSelect: () => run("pcbnew.InteractiveDrawing.similarZone"), disabled: !one },
-        { label: "Zone Priority: Move to Top", onSelect: () => run("pcbnew.EditorControl.zonePriorityMoveToTop"), disabled: !one },
-        { label: "Zone Priority: Raise", onSelect: () => run("pcbnew.EditorControl.zonePriorityRaise"), disabled: !one },
-        { label: "Zone Priority: Lower", onSelect: () => run("pcbnew.EditorControl.zonePriorityLower"), disabled: !one },
-        { label: "Zone Priority: Move to Bottom", onSelect: () => run("pcbnew.EditorControl.zonePriorityMoveToBottom"), disabled: !one },
-        { label: "Zone Manager...", onSelect: () => run("pcbnew.Control.zonesManager") }
-      );
-    }
-    // drawing_tool.cpp's `canCloseOutline`: while a zone, rule area or graphic polygon is being drawn, the menu offers to close it.
-    if (state.drawState?.kind === "zone" || (state.drawState?.kind === "shape" && state.drawState.shapeKind === "polygon")) {
-      entries.unshift({ label: "Close Outline", onSelect: () => runRef.current("pcbnew.InteractiveDrawing.closeOutline") });
-    }
-    // The pcbnew edit tools' own entries (actions/pcbSweepMenu.ts): Select, Break/Fillet Tracks, Mirror, Shape Modification...
-    entries.push(...pcbSweepMenuEntries(state, api, refs, (name) => runRef.current(name), isEnabled, [wx, wy]));
-    if (!hit && refs.length === 0 && board.outline) {
-      const bounds = boundsOfPoints(board.outline);
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (bounds && rect) {
-        entries.push({ label: "Zoom to Fit (Ctrl+Home)", onSelect: () => dispatch({ type: "SET_VIEW", view: fitTransform(bounds, rect.width, rect.height) }) });
-      }
-    }
-    setContextMenu({ x: e.clientX, y: e.clientY, entries });
+    // The menu of whichever tool owns the click -- the router, a drawing tool, a picker, the selection tool: kicad-port/pcbContextMenu.ts, built in components/canvas/pcbMenuBuilder.ts.
+    setPcbMenu({ x: e.clientX, y: e.clientY, nodes: buildPcbMenu(state, board, refs, [wx, wy]) });
+    setContextMenu(null);
   };
 
   // Escape/M/rotate/delete/undo/redo/net-highlight-toggle are all
@@ -1302,10 +1262,11 @@ export function Canvas() {
       // either case. Re-entering the group already entered falls through
       // to properties instead, same as double-clicking a member while
       // already inside its own group.
+      // `m_selection.GetSize() == 1 && m_selection[0]->Type() == PCB_GROUP_T` -> `EnterGroup()` (leaving the group entered, if any, first), else Properties.
       const groups = board.drawings?.groups ?? [];
-      const hitGroup = groups.find((g) => g.id === refs[0] || g.member_ids.includes(refs[0]!));
-      if (hitGroup && hitGroup.id !== state.enteredGroupId) {
-        dispatch({ type: "SET_ENTERED_GROUP", id: hitGroup.id });
+      const hitGroup = isGroup(groups, refs[0]!) ? refs[0]! : topLevelGroup(groups, refs[0]!, state.enteredGroupId);
+      if (hitGroup && hitGroup !== state.enteredGroupId) {
+        dispatch({ type: "ENTER_GROUP", id: hitGroup });
         return;
       }
       openPropertiesFor(refs[0]!, api, dispatch);
@@ -1323,11 +1284,12 @@ export function Canvas() {
       onDoubleClick={onDoubleClick}
       onKeyDown={onCanvasKeyDown}
       onContextMenu={onContextMenu}
-      data-armed={state.armed ? "true" : "false"}
+      data-armed={state.armed || state.armedFootprint ? "true" : "false"}
     >
       <canvas ref={canvasRef} />
       {!board && <div className="pcb-canvas-empty">{state.boardError ?? "Loading board…"}</div>}
       {contextMenu && <ContextMenu x={contextMenu.x} y={contextMenu.y} entries={contextMenu.entries} onClose={() => setContextMenu(null)} />}
+      {pcbMenu && <SchContextMenu x={pcbMenu.x} y={pcbMenu.y} nodes={pcbMenu.nodes} onClose={() => setPcbMenu(null)} />}
     </div>
   );
 }

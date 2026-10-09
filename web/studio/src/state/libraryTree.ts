@@ -97,3 +97,10 @@ export function pinSelectedLibraries(kind: TreeKind, pin: boolean): boolean {
   set(kind, { pinned }, true);
   return true;
 }
+
+/** `LIB_TREE_MODEL_ADAPTER::PinLibrary` / `UnpinLibrary` from the choosers: the pins are the editors' own (KiCad saves one list of pinned libraries per kind for both). */
+export function setLibraryPinned(kind: TreeKind, lib: string, pin: boolean): void {
+  const ui = states[kind];
+  const pinned = withPinned(ui.pinned, [lib], pin);
+  if (pinned !== ui.pinned) set(kind, { pinned }, true);
+}

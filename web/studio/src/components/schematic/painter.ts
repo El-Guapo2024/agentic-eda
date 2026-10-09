@@ -38,7 +38,9 @@ import { resolveSymbol, STUB, type ResolvedSymbol } from "./layout";
 import { resolveLibSymbol, symbolBounds as libSymbolBounds, type ResolvedGraphic } from "./libSymbol";
 import { resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
 import { globalLabelOutline, globalLabelTextPlacement, hierLabelOutline, hierLabelTextPlacement, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement, type LabelSpin } from "./labelShape";
-import { drawStrokeText } from "../text/strokeFont";
+import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_UM, PIN_TEXT_SIZE_UM, pinTextPlacements, type PinTexts } from "./pinText";
+import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { defaultPenUm, FIELD_SIZE_UM, textOrigin, type SchField } from "../../kicad-port/schText";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { unitLetter } from "../../kicad-port/unitLetter";
@@ -112,12 +114,8 @@ const FIELD_FONT = 1.0; // footprint field: small, per the task's "footprint fie
 const PIN_DECOR_UM = 635;
 /** 2x PIN_DECOR_UM -- how far past the body-attachment point (R) an inverted/inverted-clock pin's bubble-to-tip line, or a low-input/low-clock/low-output wedge's leg, reaches. */
 const PIN_DECOR_D_UM = PIN_DECOR_UM * 2;
-/** sch_pin.cpp/pin_layout_cache.cpp: the gap between a pin's own line and its number/name text -- `2032 IU = 0.2032mm`, confirmed directly from source (not the same as DEFAULT_PIN_NAME_OFFSET, which is how far a pin's *name* sits past the body-attachment point into the body, not this text-to-line clearance). */
-const PIN_TEXT_CLEARANCE_UM = 203.2;
 /** eeschema/default_values.h DEFAULT_PIN_NAME_OFFSET (20 mil) -- how far a pin's name sits past its body-attachment point, into the body ("inside" placement). This app's `LibSymbol` carries no per-symbol `(pin_names (offset ...))` override (not part of the coordinator's described contract), so every symbol uses KiCad's own factory default rather than varying per real library symbol -- real symbols that explicitly set `offset 0` (name drawn *outside*, past the pin's free end, as GND/power symbols typically do, though their pin is hidden anyway so it goes unseen) are the one case this simplification visibly diverges from. */
 const PIN_NAME_OFFSET_UM = 508;
-/** eeschema's `GetEffectiveTextPenWidth`/`ClampTextPenSize` for pin number/name text: `min(DEFAULT_LINE_WIDTH_MILS pen, round(0.18*size))` -- at this app's PIN_FONT sizes the 0.18*size clamp never binds (it only matters for a much smaller font), so this app just uses the plain default pen directly, matching every other piece of schematic ink (DEFAULT_LINE_WIDTH_MILS, 6 mil = 152.4um). */
-const PIN_TEXT_PEN_UM = 152.4;
 
 /** eeschema's `scope`-based label coloring (LAYER_LOCLABEL/LAYER_GLOBLABEL/LAYER_HIERLABEL) -- replaces an earlier heuristic (power/ground net-name sniffing) that only ever approximated "is this a global rail", now that the real scope is reported directly. */
 function labelLayerColor(scope: LabelScope): string {
@@ -266,7 +264,7 @@ function drawBoxSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, r: Re
     }
   });
 
-  drawFieldsAbout(ctx, symbol, { minX: 0, minY: 0, maxX: width, maxY: height }, false, unitSuffix);
+  if (!symbol.fields?.length) drawFieldsAbout(ctx, symbol, { minX: 0, minY: 0, maxX: width, maxY: height }, false, unitSuffix);
   ctx.restore();
 }
 
@@ -333,6 +331,45 @@ function drawPassiveGlyph(ctx: CanvasRenderingContext2D, kind: NonNullable<Resol
       ctx.stroke();
       return;
     }
+  }
+}
+
+/**
+ * One line of text where KiCad puts it: `anchor` and the justification in the text's own axes, a vertical text turned a quarter
+ * counter-clockwise about the anchor (`kicad-port/schText.ts`, `FONT::Draw`'s placement).
+ */
+function drawKicadText(ctx: CanvasRenderingContext2D, text: string, anchor: [number, number], o: { sizeUm: number; h: "left" | "center" | "right"; v: "top" | "center" | "bottom"; vertical: boolean; color: string; thicknessUm?: number }) {
+  if (!text) return;
+  const thickness = o.thicknessUm ?? defaultPenUm(o.sizeUm);
+  const [dx, dy] = textOrigin(measureStrokeText(text, o.sizeUm), o.sizeUm, thickness, o.h, o.v);
+  ctx.save();
+  ctx.translate(anchor[0], anchor[1]);
+  if (o.vertical) ctx.rotate(-Math.PI / 2);
+  drawStrokeText(ctx, text, dx, dy, { sizeUm: o.sizeUm, thicknessUm: thickness, justify: "left", color: o.color });
+  ctx.restore();
+}
+
+/** The colour KiCad draws a field of that name in. */
+function fieldColor(name: string): string {
+  switch (name) {
+    case "Reference":
+      return layerColor("LAYER_REFERENCEPART");
+    case "Value":
+      return layerColor("LAYER_VALUEPART");
+    case "Sheetname":
+      return layerColor("LAYER_SHEETNAME");
+    case "Sheetfile":
+      return layerColor("LAYER_SHEETFILENAME");
+    default:
+      return layerColor("LAYER_FIELDS");
+  }
+}
+
+/** The fields of one item where the server says they are (`SchField`): every visible one, a Reference with its unit letter, in the item's own field colours (or `color`, when it is drawn selected). */
+function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSuffix = "", color?: string) {
+  for (const f of fields) {
+    if (!f.visible || !f.text) continue;
+    drawKicadText(ctx, f.name === "Reference" ? f.text + unitSuffix : f.text, f.at, { sizeUm: FIELD_SIZE_UM, h: f.h, v: f.v, vertical: f.vertical, color: color ?? fieldColor(f.name) });
   }
 }
 
@@ -548,52 +585,23 @@ export function drawPinDecoration(ctx: CanvasRenderingContext2D, rp: ResolvedPin
 }
 
 /**
- * Pin name/number text -- pin_layout_cache.cpp's placement math, read
- * directly. This app's contract has no per-symbol `pin_names` offset
- * (see PIN_NAME_OFFSET_UM's doc comment), so every name renders at
- * eeschema's own "inside" position rather than varying between inside
- * and outside per real symbol; number placement always assumes
- * `nameOutsideShown = false` for the same reason (both are a direct,
- * documented consequence of the same missing field, not two separate
- * approximations). `colors` overrides the two label colours (the symbol
- * editor draws a hidden pin's labels in the hidden colour, `getColorForLayer`).
+ * Pin name/number text where KiCad writes it (`PIN_LAYOUT_CACHE::GetPinNameInfo`/`GetPinNumberInfo`, `pinText.ts`): the symbol says whether its
+ * names are inside the body (an offset above zero) or over the pins, and whether names and numbers are shown at all; both are set in 50
+ * mils, and a no-connect pin's are written like any other's. `colors` overrides the two label colours (the symbol editor draws a hidden pin's
+ * labels in the hidden colour, `getColorForLayer`).
  */
-export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colors?: { name: string; number: string }) {
-  const { pin, tip: P, root: R, dir } = rp;
-  if (pin.electrical_type === "no_connect") return;
-  const horizontal = isHorizontalPin(dir);
-  const mid: [number, number] = [(P[0] + R[0]) / 2, (P[1] + R[1]) / 2];
-  const vertAngle = -Math.PI / 2; // KiCad's 90 deg (CCW-positive) -> Canvas rotate(-deg*pi/180)
-
-  if (pin.name) {
-    const sizeUm = PIN_FONT * 1000;
-    const color = colors?.name ?? layerColor("LAYER_PINNAM");
-    const anchor: [number, number] = [R[0] + dir[0] * PIN_NAME_OFFSET_UM, R[1] + dir[1] * PIN_NAME_OFFSET_UM];
-    // RIGHT (dir=(1,0)): H LEFT. LEFT (dir=(-1,0)): H RIGHT. UP
-    // (dir=(0,-1)): angle 90, H LEFT. DOWN (dir=(0,1)): angle 90, H RIGHT.
-    if (horizontal) {
-      const justify = dir[0] >= 0 ? "left" : "right";
-      drawStrokeText(ctx, pin.name, anchor[0], anchor[1] + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify, color });
-    } else {
-      const justify = dir[1] < 0 ? "left" : "right";
-      drawStrokeText(ctx, pin.name, anchor[0], anchor[1], { sizeUm, angleRad: vertAngle, justify, color });
-    }
+export function drawPinText(ctx: CanvasRenderingContext2D, rp: ResolvedPin, colors?: { name: string; number: string }, texts: PinTexts = DEFAULT_PIN_TEXTS) {
+  const { pin, tip, root } = rp;
+  const placed = pinTextPlacements(pin, tip, root, texts);
+  if (placed.name) {
+    drawKicadText(ctx, placed.name.text, placed.name.at, { sizeUm: PIN_TEXT_SIZE_UM, h: placed.name.h, v: placed.name.v, vertical: placed.name.vertical, color: colors?.name ?? layerColor("LAYER_PINNAM"), thicknessUm: PIN_TEXT_PEN_UM });
   }
-
-  if (pin.number) {
-    const sizeUm = PIN_FONT * 0.85 * 1000;
-    const color = colors?.number ?? layerColor("LAYER_PINNUM");
-    const off = sizeUm / 2 + PIN_TEXT_CLEARANCE_UM + PIN_TEXT_PEN_UM;
-    if (horizontal) {
-      // s = -1 (above the line) -- nameOutsideShown is always false here.
-      drawStrokeText(ctx, pin.number, mid[0], P[1] - off + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "center", color });
-    } else {
-      drawStrokeText(ctx, pin.number, P[0] - off, mid[1], { sizeUm, angleRad: vertAngle, justify: "center", color });
-    }
+  if (placed.number) {
+    drawKicadText(ctx, placed.number.text, placed.number.at, { sizeUm: PIN_TEXT_SIZE_UM, h: placed.number.h, v: placed.number.v, vertical: placed.number.vertical, color: colors?.number ?? layerColor("LAYER_PINNUM"), thicknessUm: PIN_TEXT_PEN_UM });
   }
 }
 
-function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[], showHiddenPins = false) {
+function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: ResolvedPin[], showHiddenPins = false, texts: PinTexts = DEFAULT_PIN_TEXTS) {
   const hair = 1 / view.scale;
   ctx.strokeStyle = layerColor("LAYER_PIN");
   ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM, hair);
@@ -605,11 +613,11 @@ function drawPins(ctx: CanvasRenderingContext2D, view: ViewTransform, pins: Reso
     ctx.beginPath();
     drawPinDecoration(ctx, rp);
     ctx.stroke();
-    drawPinText(ctx, rp, hidden ? { name: layerColor("LAYER_HIDDEN"), number: layerColor("LAYER_HIDDEN") } : undefined);
+    drawPinText(ctx, rp, hidden ? { name: layerColor("LAYER_HIDDEN"), number: layerColor("LAYER_HIDDEN") } : undefined, texts);
   }
 }
 
-function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string, showHiddenPins = false) {
+function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, instance: SchematicSymbol, graphics: ResolvedGraphic[], pins: ResolvedPin[], bbox: { minX: number; minY: number; maxX: number; maxY: number }, selected: boolean, unitSuffix: string, showHiddenPins = false, texts: PinTexts = DEFAULT_PIN_TEXTS) {
   const hair = 1 / view.scale;
   const strokeColor = layerColor("LAYER_DEVICE");
   ctx.strokeStyle = strokeColor;
@@ -623,8 +631,8 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
     ctx.restore();
   }
 
-  drawPins(ctx, view, pins, showHiddenPins);
-  drawFieldsAbout(ctx, instance, bbox, isVerticalTwoPin(pins), unitSuffix);
+  drawPins(ctx, view, pins, showHiddenPins, texts);
+  if (!instance.fields?.length) drawFieldsAbout(ctx, instance, bbox, isVerticalTwoPin(pins), unitSuffix);
 }
 
 /**
@@ -639,6 +647,10 @@ function drawRealSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, inst
  * reasonable default matching where GND/power text conventionally sits.
  */
 function drawPowerSymbolText(ctx: CanvasRenderingContext2D, ps: PowerSymbol, resolvedPin: ResolvedPin | null, on: boolean) {
+  if (ps.fields?.length) {
+    drawSchFields(ctx, ps.fields, "", on ? layerColor("LAYER_SELECTION_SHADOWS") : undefined);
+    return;
+  }
   const sizeUm = VALUE_FONT * 1000;
   const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_VALUEPART");
   if (resolvedPin && (resolvedPin.dir[0] !== 0 || resolvedPin.dir[1] !== 0)) {
@@ -747,8 +759,12 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
   ctx.restore();
 
   const nameSizeUm = 1270;
-  drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
-  drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+  if (s.fields?.length) {
+    drawSchFields(ctx, s.fields);
+  } else {
+    drawStrokeText(ctx, s.name, x, y - 400, { sizeUm: nameSizeUm, justify: "left", color: layerColor("LAYER_SHEETNAME") });
+    drawStrokeText(ctx, s.file, x, y + h + 400 + nameSizeUm * 0.8, { sizeUm: nameSizeUm * 0.8, justify: "left", color: layerColor("LAYER_SHEETFILENAME") });
+  }
 
   // A sheet pin sits on the border it names (`SCH_SHEET_PIN::SetSide`): its flag points into the sheet from that edge and its name is
   // written inside, after the flag -- so a wire reaches the pin from outside and the name never runs over it.
@@ -999,11 +1015,13 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     const unitSuffix = (unitCounts.get(s.id) ?? 1) > 1 ? unitLetter(s.unit) : "";
     const real = resolveLibSymbol(s, sch.lib_symbols);
     if (real) {
-      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins);
+      drawRealSymbol(ctx, view, s, real.graphics, real.pins, real.bbox, selected, unitSuffix, display.showHiddenPins, real.texts);
     } else {
       const r = resolveSymbol(s);
       drawBoxSymbol(ctx, view, r, selected, unitSuffix);
     }
+    // Its fields, where KiCad puts them on the sheet (not turned with the symbol's own frame).
+    if (s.fields?.length) drawSchFields(ctx, s.fields, unitSuffix);
     // Do not Populate / Exclude from Simulation marks over the symbol body.
     if (s.dnp || s.exclude_from_sim) {
       const all = real ? real.bbox : libSymbolBounds(s, sch.lib_symbols);

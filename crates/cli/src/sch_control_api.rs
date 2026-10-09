@@ -143,6 +143,7 @@ mod tests {
             erc_exclusions: vec![],
             erc_pin_map: None,
             user_fields: Default::default(),
+            field_layout: Default::default(),
             title_block: None,
             sheets,
             instance_overrides: vec![],

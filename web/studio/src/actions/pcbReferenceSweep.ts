@@ -7,9 +7,9 @@
 //   pcbnew.PositionRelative.interactiveOffsetTool POSITION_RELATIVE_TOOL::InteractiveOffset + DIALOG_OFFSET_ITEM
 
 import { createElement } from "react";
-import { collectClipboardContents } from "../components/canvas/clipboard";
 import { OffsetItemDialog } from "../components/PcbReferenceDialogs";
 import { movableItem } from "../kicad-port/pcbEditActions";
+import { editableSelection } from "../kicad-port/pcbTransform";
 import { interactiveOffsetMove, moveSelectionCommands, offsetVector, type Vec } from "../kicad-port/pcbReference";
 import type { PickerSession } from "../kicad-port/pickerHost";
 import { applyCommands, createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
@@ -33,7 +33,7 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
       const hovered = state.selection.size === 0;
       const ids = requestFiltered(() => true);
       if (!ids.some((id) => movableItem(board, id) !== null)) {
-        toast("Select a footprint, via, graphic or text item to move.");
+        toast("Select an item to move.");
         return;
       }
       if (hovered) dispatch({ type: "SET_SELECTION", refs: ids });
@@ -61,8 +61,8 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
     pcbOnly(() => {
       if (!board) return;
       const ids = ctx.requestSelection();
-      if (!collectClipboardContents(board, new Set(ids))) {
-        toast("Select tracks, vias, zones, graphics or text to copy.");
+      if (editableSelection(board, ids, { respectLocks: false }).ids.length === 0) {
+        toast("Select something to copy.");
         return;
       }
       picker.start({
@@ -91,7 +91,7 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
       const hovered = state.selection.size === 0;
       const ids = requestFiltered(() => true);
       if (!ids.some((id) => movableItem(board, id) !== null)) {
-        toast("Select a footprint, via, graphic or text item first.");
+        toast("Select an item first.");
         return;
       }
       if (hovered) dispatch({ type: "SET_SELECTION", refs: ids });
@@ -107,7 +107,7 @@ export function registerPcbReferenceSweep(m: Map<string, () => void>, ctx: Sweep
         const movable = [...live.selection].filter((id) => live.board && movableItem(live.board, id) && !(live.board.locked ?? []).includes(id));
         const cmds = live.board ? moveSelectionCommands(live.board, movable, interactiveOffsetMove(first, second, edited)) : [];
         if (cmds.length) await applyCommands(api, dispatch, cmds);
-        else if (movable.length === 0) toast("Select a footprint, via, graphic or text item first.");
+        else if (movable.length === 0) toast("Select an item first.");
       };
 
       const stageOne = (): PickerSession => ({

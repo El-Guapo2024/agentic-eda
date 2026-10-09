@@ -23,6 +23,8 @@ use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod pcb;
 mod pcb_items;
+mod clipboard;
+pub use clipboard::{export_pcb_clipboard, parse_pcb_clipboard, ClipFootprint, ClipGroup, ClipRef, Clipboard};
 pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
@@ -43,6 +45,12 @@ pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_f
 mod symbol_import;
 pub use symbol_import::{parse_library_symbols, ParsedSymbols};
 
+// What the Symbol and Footprint Choosers index of the installed libraries without parsing their drawings (see each module's doc).
+mod symbol_scan;
+pub use symbol_scan::{inherit as inherit_symbol_summaries, parse_symbol, scan_symbols, symbol_text, SymbolSummary};
+mod footprint_scan;
+pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
+
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
@@ -52,8 +60,13 @@ pub use bus::expand_bus_members;
 mod sch_clipboard;
 pub use sch_clipboard::{parse_clipboard, write_clipboard, CopyInput, CopyOutput};
 mod sch_extras_io;
+pub mod sch_overlap;
 mod sch_import;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_electrical_type, reconcile, transform_local_point};
+
+// The review workflow's share of the derived project: the waived DRC violations as KiCad's marker texts, and the per-check ERC severities.
+pub mod drc_exclusions;
+pub use pcb::effective_erc_severities;
 
 const STUB_MM: f64 = 1.27;
 
@@ -265,10 +278,22 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         } else {
             resolved.as_ref().map(|s| s.datasheet.as_str()).filter(|s| !s.is_empty()).unwrap_or("")
         };
-        write_property(&mut out, "Reference", &sym.id, 0.0, -2.0, false);
-        write_property(&mut out, "Value", value, 0.0, 2.0, false);
-        write_property(&mut out, "Footprint", footprint, 0.0, 4.0, true);
-        write_property(&mut out, "Datasheet", datasheet, 0.0, 6.0, true);
+        // where each field is drawn: the placements the section keeps for this symbol, else Autoplace Fields' (`eda_engine::fields`)
+        let lib_for_geometry = model.real_symbol_of(&lib_id, part);
+        let geom = eda_engine::symgeom::SymbolGeom::of(sym, part, lib_for_geometry.as_ref());
+        let mut shown = eda_engine::fields::symbol_fields(sch, sym, Some(part), lib_for_geometry.as_ref(), &geom);
+        // the texts this symbol is written with (the instance's own, else the part's), which the placement is for
+        for f in shown.iter_mut() {
+            match f.name.as_str() {
+                "Value" => f.text = value.to_string(),
+                "Footprint" => f.text = footprint.to_string(),
+                "Datasheet" => f.text = datasheet.to_string(),
+                _ => {}
+            }
+        }
+        for f in &shown {
+            write_page_field(&mut out, f);
+        }
         // Only this instance's own unit's pins (plus any `unit == 0`
         // common-to-every-unit pin) -- a multi-unit instance's pin-uuid
         // list must not claim pins that are actually drawn on a sibling
@@ -297,14 +322,19 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let x = mm(ps.at.x);
         let y = mm(ps.at.y);
         let uuid = duid_for(&format!("pwr:{}", ps.id), &ps.id);
-        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
+        // KiCad turns counter-clockwise; the engine's `rot` runs the other way round
+        let angle = (360 - (ps.rot / 1000) as i64 % 360) % 360;
+        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} {angle}) (unit 1)", sexpr_str(&ps.lib_id)).unwrap();
         writeln!(out, "\t\t(exclude_from_sim no) (in_bom no) (on_board no) (dnp no)").unwrap();
         if sch.extras.is_locked(&ps.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-        write_property(&mut out, "Reference", &ps.id, 0.0, -2.0, true);
-        write_property(&mut out, "Value", &ps.net, 0.0, 2.0, false);
+        // the file keeps a turned symbol's field where it is on the sheet, with the angle and justification it has before the turn
+        for (p, text) in eda_engine::fields::power_placements(sch, ps) {
+            let (ox, oy) = eda_engine::symgeom::bake(ps.rot, false, 0.0, p.dx as f64, p.dy as f64);
+            write_field_text(&mut out, &p.name, &text, (ps.at.x as f64 + ox, ps.at.y as f64 + oy), p.angle == 90_000, eda_engine::fields::to_hj(p.h), eda_engine::fields::to_vj(p.v), !p.visible);
+        }
         write_property(&mut out, "Footprint", "", 0.0, 0.0, true);
         write_property(&mut out, "Datasheet", "", 0.0, 0.0, true);
         let pin_uuid = duid_for(&format!("pwrpin:{}", ps.id), &ps.id);
@@ -460,8 +490,11 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         if let Some(shape) = shape {
             write!(out, " (shape {})", label_shape_token(shape)).unwrap();
         }
-        writeln!(out, " (at {x} {y} 0)").unwrap();
-        writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify left))").unwrap();
+        // `SCH_LABEL_BASE::SetSpinStyle`: the angle and justification that make the text run on away from the wire the label ends
+        let (angle, justify) = label_spin(sch, l);
+        let vertical_justify = if tag == "label" { " bottom" } else { "" };
+        writeln!(out, " (at {x} {y} {angle})").unwrap();
+        writeln!(out, "\t\t(effects (font (size 1.27 1.27)) (justify {justify}{vertical_justify}))").unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&l.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
@@ -505,10 +538,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         if sch.extras.is_locked(&s.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();
         }
-        let name_y = mm(s.at.y - 600);
-        let file_y = mm(s.at.y + s.size.1 + 600);
-        writeln!(out, "\t\t(property \"Sheetname\" {} (at {x} {name_y} 0) (effects (font (size 1.27 1.27))))", sexpr_str(&s.name)).unwrap();
-        writeln!(out, "\t\t(property \"Sheetfile\" {} (at {x} {file_y} 0) (effects (font (size 1.27 1.27))))", sexpr_str(&s.file)).unwrap();
+        for f in eda_engine::fields::sheet_fields(sch, s) {
+            write_page_field(&mut out, &f);
+        }
         for p in &s.pins {
             let px = mm(p.at.x);
             let py = mm(p.at.y);
@@ -527,7 +559,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             writeln!(out, "\t\t(pin {} {}", sexpr_str(&p.name), label_shape_token(p.shape)).unwrap();
             writeln!(out, "\t\t\t(at {px} {py} {angle})").unwrap();
             writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
-            writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify left)))").unwrap();
+            // the pin's text reads into the sheet: left-justified from a pin on the left edge, right-justified from one on the right
+            let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
+            writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify {justify})))").unwrap();
         }
         writeln!(out, "\t\t(instances").unwrap();
         writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
@@ -643,6 +677,65 @@ fn label_shape_token(shape: eda_model::ir::LabelShape) -> &'static str {
     }
 }
 
+/// A label's file angle and horizontal justification, `SetSpinStyle`'s: the text runs on from the anchor, away from the wire that ends
+/// there (to the right of a wire that comes from the left, upward from one that comes from below, and so on). A label no wire ends at
+/// reads to the right.
+fn label_spin(sch: &eda_model::ir::SchematicSection, l: &NetLabel) -> (u32, &'static str) {
+    match eda_engine::obstacles::label_run_dir(sch, l) {
+        // the wire is above the label: the text hangs below it, reading up and ending at the anchor
+        (0, 1) => (90, "right"),
+        // the wire is below: the text rises from the anchor
+        (0, -1) => (90, "left"),
+        // the wire is on the right: the text runs left
+        (-1, 0) => (0, "right"),
+        _ => (0, "left"),
+    }
+}
+
+/// `(justify ...)` tokens for a text justified `h`, `v`; nothing when it is centred both ways.
+fn justify_tokens(h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::VJustify) -> String {
+    use eda_model::kicad_font::{HJustify, VJustify};
+    let mut t = Vec::new();
+    match h {
+        HJustify::Left => t.push("left"),
+        HJustify::Right => t.push("right"),
+        HJustify::Center => {}
+    }
+    match v {
+        VJustify::Top => t.push("top"),
+        VJustify::Bottom => t.push("bottom"),
+        VJustify::Center => {}
+    }
+    if t.is_empty() {
+        String::new()
+    } else {
+        format!(" (justify {})", t.join(" "))
+    }
+}
+
+/// One `(property ...)` of a symbol, a power symbol or a sheet: the text, its anchor (micrometres) and angle, how it is justified, and
+/// whether it is hidden.
+#[allow(clippy::too_many_arguments)]
+fn write_field_text(out: &mut String, key: &str, value: &str, at: (f64, f64), vertical: bool, h: eda_model::kicad_font::HJustify, v: eda_model::kicad_font::VJustify, hide: bool) {
+    let hide = if hide { " (hide yes)" } else { "" };
+    writeln!(
+        out,
+        "\t\t(property {} {} (at {} {} {})\n\t\t\t(effects (font (size 1.27 1.27)){}{})\n\t\t)",
+        sexpr_str(key),
+        sexpr_str(value),
+        fmt_mm_f(at.0 / 1000.0),
+        fmt_mm_f(at.1 / 1000.0),
+        if vertical { 90 } else { 0 },
+        justify_tokens(h, v),
+        hide
+    )
+    .unwrap();
+}
+
+fn write_page_field(out: &mut String, f: &eda_engine::fields::PageField) {
+    write_field_text(out, &f.name, &f.text, f.at, f.vertical, f.h, f.v, !f.visible);
+}
+
 fn write_property(out: &mut String, key: &str, value: &str, x: f64, y: f64, hide: bool) {
     if hide {
         writeln!(
@@ -696,18 +789,16 @@ fn baked_real_point(sym: &SymbolInstance, width_um: f64, x0: f64, y1: f64, p: ed
     eda_model::symbol::SPoint::new(x, y)
 }
 
-/// A real pin's own `angle_deg`, composed with the instance's mirror the
-/// same way [`baked_real_point`] composes position (rotation, never
-/// non-zero today, is left for whoever adds rotated-instance support).
-/// Mirroring is a flip across a vertical axis, so it swaps East/West
-/// (0<->180) and leaves North/South (90/270) alone -- the standard
-/// `angle -> 180 - angle` reflection.
+/// A real pin's own `angle_deg`, composed with the instance's mirror and turn the
+/// same way [`baked_real_point`] composes position. Mirroring is a flip across a
+/// vertical axis, so it swaps East/West (0<->180) and leaves North/South
+/// (90/270) alone -- the standard `angle -> 180 - angle` reflection -- and a
+/// turn adds its own angle (a symbol turned half a turn has every pin pointing
+/// the other way: a pin line that ran in from the left runs in from the right).
 fn baked_real_angle(sym: &SymbolInstance, angle_deg: f64) -> f64 {
-    if sym.mirrored {
-        (180.0 - angle_deg).rem_euclid(360.0)
-    } else {
-        angle_deg
-    }
+    let mirrored = if sym.mirrored { 180.0 - angle_deg } else { angle_deg };
+    // the instance's turn is clockwise on the sheet, which the library's y-up frame reads as the opposite sense
+    (mirrored - sym.rot as f64 / 1000.0).rem_euclid(360.0)
 }
 
 /// [`write_symbol_graphic`]'s input, but with every point run through
@@ -769,6 +860,17 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
     // file at all. Confirmed empirically against real `kicad-cli sch erc`.
     let bare_name = lib_id.rsplit(':').next().unwrap_or(lib_id);
     writeln!(out, "\t\t(symbol {}", sexpr_str(lib_id)).unwrap();
+    // how this symbol draws its pins' texts (`(pin_numbers (hide yes))`, `(pin_names (offset x) (hide yes))`): without them KiCad shows
+    // every number, and names inside the body at its own 0.508 mm
+    if let Some(r) = &resolved {
+        if r.pin_numbers_hidden {
+            writeln!(out, "\t\t\t(pin_numbers (hide yes))").unwrap();
+        }
+        let hide = if r.pin_names_hidden { " (hide yes)" } else { "" };
+        if r.pin_names_hidden || (r.pin_name_offset_mm - eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM).abs() > 1e-9 {
+            writeln!(out, "\t\t\t(pin_names (offset {}){hide})", fmt_mm_f(r.pin_name_offset_mm)).unwrap();
+        }
+    }
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
     write_property(out, "Reference", "U", 0.0, 0.0, false);
     write_property(out, "Value", bare_name, 0.0, 0.0, false);
@@ -883,11 +985,18 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
             let (bx, by) = baked_local(baker, width as f64, local.x as f64, local.y as f64);
             let etype = resolve_pin_electrical_type(pin, resolved.as_ref());
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
+            // a library symbol draws its no-connect pin like any other, along its own line; only a pin the symbol does not have is a point
+            let (angle, length) = match resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)) {
+                Some(rp) => (baked_real_angle(baker, rp.angle_deg), rp.length_mm),
+                None => (0.0, 0.0),
+            };
             writeln!(
                 out,
-                "\t\t\t\t(pin {etype} line (at {} {} 0) (length 0)\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
+                "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",
                 fmt_mm_f(bx),
                 fmt_mm_f(by),
+                fmt_mm_f(angle),
+                fmt_mm_f(length),
                 sexpr_str(&name),
                 sexpr_str(&pin.number),
             )
@@ -906,6 +1015,7 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
 fn write_power_lib_symbol(out: &mut String, lib_id: &str, resolved: &eda_model::LibSymbol) {
     writeln!(out, "\t\t(symbol {}", sexpr_str(lib_id)).unwrap();
     writeln!(out, "\t\t\t(power)").unwrap();
+    writeln!(out, "\t\t\t(pin_numbers (hide yes))").unwrap();
     writeln!(out, "\t\t\t(pin_names (offset 0) (hide yes))").unwrap();
     writeln!(out, "\t\t\t(exclude_from_sim no) (in_bom yes) (on_board yes)").unwrap();
     let value = lib_id.strip_prefix("power:").unwrap_or(lib_id);
@@ -1343,7 +1453,11 @@ mod tests {
     #[test]
     fn pin_coordinates_round_trip_within_1um() {
         let model = ldo_model();
-        let design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
+        let mut design = derive_schematic(&model, &EngineOptions::new(1, "hash")).unwrap();
+        // the box the layout engine sized for a part with no library symbol: what a design written before generated symbols holds
+        for s in design.schematic.as_mut().unwrap().symbols.iter_mut().filter(|s| s.id == "U1") {
+            s.lib_id = "eda:U1".to_string();
+        }
         let sch = design.schematic.as_ref().unwrap();
         let u1 = sch.symbols.iter().find(|s| s.id == "U1").unwrap();
         let part = model.part("U1").unwrap();
@@ -1457,7 +1571,7 @@ mod tests {
             texts: vec![],
             power_symbols: vec![],
             no_connects: vec![], bus_entries: vec![],
-            erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(),
+            erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(),
             title_block: None,
             sheets: vec![SheetInstance {
                 id: String::new(),

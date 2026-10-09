@@ -152,10 +152,13 @@ export interface ZoneSettingsFields {
   hatch_smoothing_value: number;
   hatch_hole_min_area: number;
   hatch_border_algorithm: number;
-  /** "Outline smoothing": chamfer or fillet the outline's corners by `corner_radius` before filling (`ZONE::BuildSmoothedPoly`). */
-  smoothing: ZoneSmoothing;
+  /**
+   * "Corner smoothing": chamfer or fillet the outline's corners by `corner_radius` before filling (`ZONE::BuildSmoothedPoly`). Always in the
+   * backend's zone JSON; optional here so that an `edit_zone` built without it (it keeps the zone's) and a zone literal in a test still type.
+   */
+  smoothing?: ZoneSmoothing;
   /** The chamfer distance or fillet radius, µm; only meaningful with `smoothing`. */
-  corner_radius: Um;
+  corner_radius?: Um;
 }
 
 /**
@@ -189,6 +192,8 @@ export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   layer: string;
   /** Task item 4: true for a generated teardrop (`eda_model::ir::Zone::teardrop`), never a hand-drawn zone. */
   teardrop: boolean;
+  /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
+  name?: string;
   outline: [Um, Um][];
 }
 
@@ -326,6 +331,8 @@ export interface Dimension {
    * otherwise `computed_text_angle` below is what actually applies. */
   text_angle: number;
   text_size_um: Um;
+  /** The label's pen, µm; null/absent = 15 % of `text_size_um` (`EDA_TEXT::GetTextThickness`). */
+  text_thickness_um?: Um | null;
   stroke_width: Um;
   arrow_length: Um;
   extension_offset: Um;
@@ -378,6 +385,8 @@ export interface CmdDimension {
   keep_text_aligned: boolean;
   text_angle: number;
   text_size_um: Um;
+  /** Null/absent = the default pen (15 % of the size). */
+  text_thickness_um?: Um | null;
   stroke_width: Um;
   arrow_length: Um;
   extension_offset: Um;
@@ -894,6 +903,16 @@ export type Cmd =
   | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
   /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
   | { op: "set_custom_rules"; text: string }
+  /**
+   * `dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
+   * Marker): waive the DRC violations as one undo step. An exclusion whose `(check, items)` is waived already is replaced (that edits its comment).
+   * Persisted in `design.drawings.drc_exclusions` and written into the derived `.kicad_pro` for kicad-cli (`DrcExclusionSpec`).
+   */
+  | { op: "add_drc_exclusions"; exclusions: DrcExclusionSpec[] }
+  /** "Remove exclusion for this violation" (and "Remove all exclusions ..."): put the violations back in the report. */
+  | { op: "delete_drc_exclusions"; exclusions: Array<{ check: string; items: string[] }> }
+  /** Schematic Setup > Violation Severity (`panel_setup_severities.cpp`): ERC settings key -> severity, the whole table (see `ErcSeveritiesReply`). */
+  | { op: "set_erc_severities"; severities: Record<string, RuleSeverity> }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
   | { op: "swap_layers"; mapping: [string, string][] }
   /** `Cmd::CommitRoute`: delete several tracks/vias (unknown ids tolerated) and add `tracks`/`vias` as ONE undo step -- what `unrouteSegment`/`deleteFull` (removal only) and the track edits (break, fillet, mirror) send. */
@@ -950,12 +969,32 @@ export type Cmd =
    * own client-side job.
    */
   | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
-  /** Cmd+D: copy existing tracks/vias/zones/shapes/texts named by id, in place, with fresh ids. Never footprints -- see crates/ops/src/lib.rs `Cmd::Duplicate`'s own doc comment. */
+  /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
+  /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
+  | { op: "paste_clipboard"; text: string; at: PointXY }
+  /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
+  | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
   | { op: "move_exact"; parts: string[]; dx: Um; dy: Um; rotate_millideg: number; pivot: PointXY | null }
+  /**
+   * `EDIT_TOOL::Move` / `Rotate` / `Flip` of any mix of footprints (references), tracks, vias, zones, shapes, texts, dimensions and groups,
+   * as one undo step each (crates/ops/src/pcb_transform.rs). `rotate_items`'s angle is positive CLOCKWISE on the screen, KiCad's runs the other
+   * way; `kicad-port/pcbTransform.ts` plans all three.
+   */
+  | { op: "move_items"; ids: string[]; dx: Um; dy: Um }
+  | { op: "rotate_items"; ids: string[]; pivot: PointXY; angle_millideg: number }
+  | { op: "flip_items"; ids: string[]; pivot: PointXY; direction: "left_right" | "top_bottom" }
+  /**
+   * The Properties panel's own verbs (crates/ops/src/pcb_props.rs): a track's or arc's first and last point (a field left out stays), the net of tracks, vias and zones
+   * (only a zone may be given ""), a zone's name, and a shape's new geometry in place (its id and lock stay). Every other row of the grid goes through the verbs above.
+   */
+  | { op: "edit_track"; id: string; start?: PointXY; end?: PointXY }
+  | { op: "set_item_net"; ids: string[]; net: string }
+  | { op: "set_zone_name"; id: string; name: string }
+  | { op: "replace_shape"; id: string; shape: CmdShape }
   /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
   | { op: "batch"; cmds: Cmd[] }
   /** `Cmd::OnSheet`: run a schematic command on the sheet at `sheet` (the `/`-joined `SheetInstance::id`s from the root, what `GET /api/schematic?sheet=` takes) instead of the root. */
@@ -1507,10 +1546,31 @@ export type LibGraphic =
 export interface LibSymbol {
   graphics: LibGraphic[];
   pins: LibPin[];
+  /** `(pin_names (hide yes))`: no pin name of the symbol is shown. KiCad's default (and what a server that does not say means) is shown. */
+  pin_names_hidden?: boolean;
+  /** `(pin_numbers (hide yes))`: no pin number of the symbol is shown. */
+  pin_numbers_hidden?: boolean;
+  /** `(pin_names (offset x))`, mm: names are written inside the body, from the pin's inner end on, when it is above zero; over the pin line when it is zero. KiCad's default is 0.508 mm (20 mils). */
+  pin_name_offset?: Mm;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
 export type LibSymbols = Record<string, LibSymbol>;
+
+/** One field of a symbol, power symbol or sheet as `GET /api/schematic` sends it: the text and where KiCad draws it on the sheet (`eda_engine::fields::PageField`). */
+export interface SchField {
+  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
+  name: string;
+  text: string;
+  /** The text's anchor on the sheet, micrometres. */
+  at: [Um, Um];
+  /** The text runs upward: a quarter turn counter-clockwise about the anchor. */
+  vertical: boolean;
+  /** How the text is justified against the anchor, in its own axes. */
+  h: "left" | "center" | "right";
+  v: "top" | "center" | "bottom";
+  visible: boolean;
+}
 
 export interface SchematicSymbol {
   /** Reference designator ("U1") -- the same id PCB parts use. */
@@ -1537,6 +1597,8 @@ export interface SchematicSymbol {
   exclude_from_bom?: boolean;
   exclude_from_board?: boolean;
   exclude_from_sim?: boolean;
+  /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
+  fields?: SchField[];
 }
 
 /**
@@ -1562,6 +1624,8 @@ export interface PowerSymbol {
   rot: Degrees;
   net: string;
   pin: SchematicPin;
+  /** The Value (its net name) where KiCad draws it, and the hidden Reference. */
+  fields?: SchField[];
 }
 
 export interface NoConnect {
@@ -1680,6 +1744,8 @@ export interface Sheet {
   at: [Um, Um];
   size: [Um, Um];
   pins: SheetPin[];
+  /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
+  fields?: SchField[];
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */
@@ -1869,6 +1935,8 @@ export interface DrcItem {
   pos: [Um, Um];
   /** Our id for the referenced item (track/via/zone id, or `<ref>.<pad>`/`<ref>` for a footprint/pad; `outline` for the Edge.Cuts outline) -- enough to select it without re-matching on position. `null` for an item that isn't one of ours (e.g. a fill polygon KiCad computed). */
   id: string | null;
+  /** The item's uuid in the derived board (kicad-cli's own name for it); what an exclusion is keyed on. Absent on a lint finding. */
+  uuid?: string;
 }
 
 /** `crates/lint`'s agent-repair metadata for a placement finding: which part to move, toward what, how far. kicad-cli's report has no such thing, so only lint findings carry one. */
@@ -1886,10 +1954,38 @@ export interface DrcViolation {
   /** KiCad's own DRC type name ("clearance", "courtyards_overlap", ...) for a kicad-cli violation; the check's own name ("placement_proximity", ...) for a lint finding. */
   type: string;
   description: string;
+  /** The severity the check has -- a waived violation keeps the one it would have had (`excluded` says it is waived). */
   severity: DrcSeverity;
   items: DrcItem[];
   /** Lint findings only. */
   fix?: DrcFix | null;
+  /** `RC_JSON::VIOLATION::excluded`: the violation is waived (`design.drawings.drc_exclusions`). Absent on a lint finding and on a report from an older server. */
+  excluded?: boolean;
+  /** Why it was waived (`PCB_MARKER::GetComment`); empty for none. */
+  comment?: string;
+  /** Whether kicad-cli itself matched the exclusion in the derived project. KiCad keys an exclusion by the marker's exact position, which a report does not give, so an exclusion the studio holds can be one kicad-cli's own report still lists. */
+  kicad_matched?: boolean;
+  /** Where the violation's marker may sit, in nanometres: the positions an exclusion keeps for the derived project (`eda_kicad_engine::marker_candidates`). */
+  marker_nm?: Array<[number, number]>;
+}
+
+/** What `add_drc_exclusions` takes for one violation (`eda_model::ir::DrcExclusion`). */
+export interface DrcExclusionSpec {
+  /** The check's KiCad settings key (`DrcViolation.type`). */
+  check: string;
+  /** The uuids of the items in the derived board, main item first (`DrcItem.uuid`). */
+  items: string[];
+  /** Our ids for the same items (empty string for an item that is not one of ours). */
+  ids?: string[];
+  /** `DrcViolation.marker_nm`. */
+  positions_nm?: Array<[number, number]>;
+  comment?: string;
+}
+
+/** A check set to Ignore, which kicad-cli does not run (`ignored_checks` of its report): the Ignored Tests tab. */
+export interface IgnoredCheck {
+  key: string;
+  description: string;
 }
 
 export interface DrcReport {
@@ -1904,6 +2000,14 @@ export interface DrcReport {
   zones_refilled_by_kicad?: boolean;
   /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
   revision?: string;
+  /** `--schematic-parity`: where the board differs from the schematic (the Schematic Parity tab). Empty unless the test ran (`schematic_parity_run`). */
+  schematic_parity?: DrcViolation[];
+  /** Whether kicad-cli ran the parity test on this report. */
+  schematic_parity_run?: boolean;
+  /** Set when the test was asked for and kicad-cli could not run it, in its own words ("Schematic parity tests require a fully annotated schematic."). */
+  schematic_parity_error?: string;
+  /** The checks whose severity is Ignore (the Ignored Tests tab). */
+  ignored_checks?: IgnoredCheck[];
 }
 
 // ---------------------------------------------------------------- ERC
@@ -1932,6 +2036,8 @@ export interface ErcViolation {
   /** KiCad's own ERC type name ("pin_not_connected", "wire_dangling", ...) for a kicad-cli violation; the readability check's own name ("schematic_wire_overlap", ...) for a lint finding. */
   check: string;
   severity: ErcSeverity;
+  /** What the finding is when it is not excluded (`severity` folds the two together): `error` or `warning`. kicad-cli findings only. */
+  base_severity?: "error" | "warning";
   /**
    * Our id for the first item the violation names (see the block comment
    * above). A lint finding's `location` keeps the shapes those checks have
@@ -1953,6 +2059,18 @@ export interface ErcReport {
   engine?: string;
   /** The design revision this run started from -- see `DrcReport.revision`. */
   revision?: string;
+  /** The checks whose severity is Ignore (the Ignored Tests tab). */
+  ignored_checks?: IgnoredCheck[];
+}
+
+/** GET /api/sch/erc_severities: the ERC severities Schematic Setup > Violation Severity edits. */
+export interface ErcSeveritiesReply {
+  ok: boolean;
+  message?: string;
+  /** ERC settings key -> severity, for the checks that differ from KiCad's default (plus the two library-link checks the derived project ignores unless the table says otherwise). */
+  severities: Record<string, RuleSeverity>;
+  /** True when the design stores a table of its own. */
+  custom: boolean;
 }
 
 // ---------------------------------------------------------------- Lint

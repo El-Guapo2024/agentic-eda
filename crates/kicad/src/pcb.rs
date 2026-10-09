@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
-use crate::pcb_items::{write_dimension, write_group, write_zone, DimensionArgs, ZoneArgs};
+use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{fmt_mm_f, mm, sexpr_str};
 
 /// [`export_kicad_pcb`], also returning every exported item's KiCad uuid
@@ -69,33 +69,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     // ---- layers ----
-    writeln!(out, "\t(layers").unwrap();
-    let copper_layers = &model.board.layers;
-    let n_cu = copper_layers.len().max(2);
-    for (i, name) in copper_layers.iter().enumerate() {
-        let ltype = if i == 0 { "signal" } else if i + 1 == copper_layers.len() { "signal" } else { "signal" };
-        let ord = if i == 0 { 0 } else if i + 1 == copper_layers.len() { 31 } else { i };
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
-    }
-    let _ = n_cu;
-    for (ord, name, ltype) in [
-        (32, "B.Adhes", "user"),
-        (33, "F.Adhes", "user"),
-        (34, "B.Paste", "user"),
-        (35, "F.Paste", "user"),
-        (36, "B.SilkS", "user"),
-        (37, "F.SilkS", "user"),
-        (38, "B.Mask", "user"),
-        (39, "F.Mask", "user"),
-        (44, "Edge.Cuts", "user"),
-        (46, "B.CrtYd", "user"),
-        (47, "F.CrtYd", "user"),
-        (49, "F.Fab", "user"),
-        (50, "B.Fab", "user"),
-    ] {
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
-    }
-    writeln!(out, "\t)").unwrap();
+    write_layers(&mut out, &model.board.layers);
 
     // ---- setup ----
     let clearance_mm = mm(model.board.clearance);
@@ -421,13 +395,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // ---- groups ---- written last, as KiCad does: a group names its members by uuid, and the parser
     // resolves them once every item has been read.
     if let Some(drawings) = &design.drawings {
-        let mut groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
-        groups.sort_by(|a, b| a.id.cmp(&b.id));
-        for g in &groups {
-            let members: Vec<String> = g.member_ids.iter().filter_map(|m| written.get(m)).flatten().cloned().collect();
-            let uuid = crate::duid_for(&format!("group:{}", g.id), &g.id);
-            write_group(&mut out, g, &uuid, is_locked(&g.id), members);
-        }
+        let groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
+        write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
     }
 
     writeln!(out, ")").unwrap();
@@ -435,6 +404,34 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         return Err(net_errors);
     }
     Ok(out)
+}
+
+/// `(layers ..)`: the board's copper layers, outer first, then the technical and user layers this writer uses.
+pub(crate) fn write_layers(out: &mut String, copper_layers: &[String]) {
+    writeln!(out, "\t(layers").unwrap();
+    for (i, name) in copper_layers.iter().enumerate() {
+        let ltype = "signal";
+        let ord = if i == 0 { 0 } else if i + 1 == copper_layers.len() { 31 } else { i };
+        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+    }
+    for (ord, name, ltype) in [
+        (32, "B.Adhes", "user"),
+        (33, "F.Adhes", "user"),
+        (34, "B.Paste", "user"),
+        (35, "F.Paste", "user"),
+        (36, "B.SilkS", "user"),
+        (37, "F.SilkS", "user"),
+        (38, "B.Mask", "user"),
+        (39, "F.Mask", "user"),
+        (44, "Edge.Cuts", "user"),
+        (46, "B.CrtYd", "user"),
+        (47, "F.CrtYd", "user"),
+        (49, "F.Fab", "user"),
+        (50, "B.Fab", "user"),
+    ] {
+        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+    }
+    writeln!(out, "\t)").unwrap();
 }
 
 /// A net class's microvia size and differential-pair width and gap: `(uvia_dia ..) (uvia_drill ..)` always (KiCad's
@@ -609,23 +606,45 @@ pub fn custom_erc_pin_map(design: &Design) -> Option<Vec<Vec<u8>>> {
     (m.len() == 12 && m.iter().all(|r| r.len() == 12 && r.iter().all(|&c| c <= 2))).then(|| m.clone())
 }
 
-/// [`export_kicad_pro`] plus the schematic side of the project (`erc`): the
-/// design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix
-/// the user set up and not only by KiCad's default; and the two library-link
-/// checks ignored (every symbol is embedded in the derived schematic, so
-/// there is no library for KiCad to compare it against and each one would
-/// report a meaningless `lib_symbol_mismatch`).
+/// The per-check ERC severities the derived project holds: Schematic Setup's choices (`SchExtras::erc_severities`), with "ignore" for the
+/// two library-link checks -- every symbol is embedded in the derived schematic, so there is no library for KiCad to compare it against and
+/// each one would report a meaningless `lib_symbol_mismatch` -- unless the table says otherwise. Keyed by the ERC settings key, valued
+/// `error` | `warning` | `ignore`; only the checks that differ from KiCad's default are named (the project's own `rule_severities` loader
+/// leaves a check it does not find at its default).
+pub fn effective_erc_severities(design: &Design) -> BTreeMap<String, String> {
+    let mut severities: BTreeMap<String, String> = BTreeMap::from([("lib_symbol_issues".to_string(), "ignore".to_string()), ("lib_symbol_mismatch".to_string(), "ignore".to_string())]);
+    if let Some(sch) = design.schematic.as_ref() {
+        for (key, value) in &sch.extras.erc_severities {
+            severities.insert(key.clone(), value.clone());
+        }
+    }
+    severities
+}
+
+/// [`export_kicad_pro`] plus the parts of the project the design's own data decides:
+///
+/// - `erc`: the design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix the user set up and not only by KiCad's
+///   default, and the per-check severities ([`effective_erc_severities`]);
+/// - `board.design_settings.drc_exclusions`: the violations the user waived ([`crate::drc_exclusions`]), so kicad-cli reports each as
+///   excluded and leaves it out of a report that does not ask for exclusions.
 pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String {
-    let base = export_kicad_pro(model);
-    let mut erc = serde_json::json!({ "rule_severities": { "lib_symbol_issues": "ignore", "lib_symbol_mismatch": "ignore" } });
+    let mut project: serde_json::Value = serde_json::from_str(&export_kicad_pro(model)).unwrap_or_else(|_| serde_json::json!({}));
+    let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
     if let Some(m) = custom_erc_pin_map(design) {
         erc["pin_map"] = serde_json::json!(m);
     }
-    base.replacen("{\n", &format!("{{\n  \"erc\": {},\n", serde_json::to_string(&erc).unwrap_or_else(|_| "{}".into())), 1)
+    project["erc"] = erc;
+    let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
+    if !waived.is_empty() {
+        project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
+    }
+    let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
+    text.push('\n');
+    text
 }
 
 /// One footprint; returns the uuid it was written with (a group's `(members ..)` names it).
-fn write_footprint(
+pub(crate) fn write_footprint(
     out: &mut String,
     fp: &FootprintInstance,
     part: &Part,
@@ -871,7 +890,7 @@ fn write_footprint(
 /// PCB_SHAPE*)`: stroke width and type first, `fill` only for the three
 /// shapes KiCad actually fills (rect/circle/poly -- a line or an arc has no
 /// interior, and KiCad's own writer never emits `fill` for either).
-fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
+pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
     let sw = |w: Um| mm(w.max(0));
     let uuid = crate::duid_for(&format!("shape:{}", shape.id()), shape.id());
     let layer = sexpr_str(shape.layer());
@@ -935,7 +954,7 @@ fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> String {
 /// (thickness t)) (justify ...))`, `justify` present only when the text is
 /// not centred/unmirrored (exactly KiCad's own rule, so a plain centred
 /// label round-trips without growing a token it never had).
-fn write_text(out: &mut String, text: &Text, locked: bool) -> String {
+pub(crate) fn write_text(out: &mut String, text: &Text, locked: bool) -> String {
     let uuid = crate::duid_for(&format!("text:{}", text.id), &text.id);
     let lock = if locked { " (locked yes)" } else { "" };
     let angle_deg = fmt_mm_f(text.angle as f64 / 1000.0);
@@ -1114,7 +1133,7 @@ mod tests {
         design.schematic = Some(eda_model::ir::SchematicSection {
             symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![],
             erc_pin_map: Some(eda_model::ir::ErcPinMap { matrix: { let mut m = eda_model::ir::ErcPinMap::default_matrix(); m[1][1] = 0; m } }),
-            user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false,
+            user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false,
         });
         let custom = export_kicad_pro_for(&design, &model);
         let json: serde_json::Value = serde_json::from_str(&custom).expect("valid json");
@@ -1126,6 +1145,39 @@ mod tests {
         design.schematic.as_mut().unwrap().erc_pin_map = Some(eda_model::ir::ErcPinMap { matrix: vec![vec![0; 3]; 3] });
         let bad: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         assert!(bad["erc"]["pin_map"].is_null());
+    }
+
+    #[test]
+    fn the_project_lists_the_waived_violations_and_the_chosen_erc_severities() {
+        use eda_model::ir::{DrawingsSection, DrcExclusion};
+        let (mut design, model) = fixture();
+        let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        assert!(plain["board"]["design_settings"]["drc_exclusions"].is_null(), "nothing waived: the key is not written");
+        assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2), "only the two library checks, which are always ignored");
+
+        design.drawings = Some(DrawingsSection {
+            drc_exclusions: vec![
+                DrcExclusion { check: "annular_width".into(), items: vec!["via-uuid".into()], ids: vec!["v1".into()], positions_nm: vec![[12_459_000, 18_390_000]], comment: "tight on purpose".into() },
+                DrcExclusion { check: "clearance".into(), items: vec!["a".into(), "b".into()], ids: vec![], positions_nm: vec![], comment: String::new() },
+            ],
+            ..Default::default()
+        });
+        design.schematic = Some(eda_model::ir::SchematicSection {
+            symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None,
+            user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![],
+            extras: eda_model::sch_extras::SchExtras { erc_severities: [("pin_not_connected".to_string(), "warning".to_string()), ("lib_symbol_mismatch".to_string(), "warning".to_string())].into(), ..Default::default() },
+            imported_from_kicad: false,
+            field_layout: Default::default(),
+        });
+        let json: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
+        let entries = json["board"]["design_settings"]["drc_exclusions"].as_array().expect("a list");
+        assert_eq!(entries.len(), 1, "an exclusion with no position to try is the studio's alone: {entries:?}");
+        assert_eq!(entries[0][0], "annular_width|12459000|18390000|via-uuid|00000000-0000-0000-0000-000000000000");
+        assert_eq!(entries[0][1], "tight on purpose");
+        assert_eq!(json["erc"]["rule_severities"]["pin_not_connected"], "warning", "the schematic's own choice");
+        assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "warning", "and it can undo the embedded-library default");
+        assert_eq!(json["erc"]["rule_severities"]["lib_symbol_issues"], "ignore");
+        assert!(json["board"]["design_settings"]["rules"]["min_clearance"].is_number(), "the board half is untouched");
     }
 
     #[test]
@@ -1538,6 +1590,47 @@ mod tests {
         for t in brt.tracks.iter().filter(|t| t.net == "GND") {
             assert!(groups[0].member_ids.contains(&t.id), "both segments of the track are members");
         }
+    }
+
+    #[test]
+    fn a_group_inside_a_group_is_written_by_its_uuid_and_read_back_nested() {
+        use eda_model::ir::{DrawingsSection, Group, Point};
+        let (mut design, model) = fixture();
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "GND".into(), at: Point { x: 12_000, y: 12_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.assign_missing_ids();
+        let rt = design.routing.as_ref().unwrap();
+        let (track_id, via_a, via_b) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.vias[1].id.clone());
+        let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|m| m.to_string()).collect() };
+        design.drawings = Some(DrawingsSection {
+            groups: vec![
+                group("grp_a_outer", "outer", &["U1", "grp_b_middle"]),
+                group("grp_b_middle", "middle", &["C1", "grp_c_inner"]),
+                group("grp_c_inner", "inner", &[via_a.as_str(), track_id.as_str()]),
+                // nothing of it is on the board: not written, and not named by the group above it either
+                group("grp_d_ghost", "ghost", &["no such item", "nor this one"]),
+                group("grp_e_holder", "holder", &[via_b.as_str(), "grp_d_ghost"]),
+            ],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(group ").count(), 4, "outer, middle, inner and the holder; the ghost is not written:\n{out}");
+        let block = |name: &str| out.split("\t(group ").skip(1).find(|g| g.starts_with(&format!("\"{name}\""))).unwrap_or_else(|| panic!("no group {name}")).to_string();
+        let uuids_in = |block: &str| block.split("(members").nth(1).unwrap().matches('"').count() / 2;
+        assert_eq!(uuids_in(&block("outer")), 2, "U1 and the middle group: {}", block("outer"));
+        assert_eq!(uuids_in(&block("holder")), 1, "the via alone: {}", block("holder"));
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let dr = back.drawings.as_ref().unwrap();
+        let by_name = |n: &str| dr.groups.iter().find(|g| g.name == n).unwrap_or_else(|| panic!("no group {n} in {:?}", dr.groups));
+        let (outer, middle, inner) = (by_name("outer"), by_name("middle"), by_name("inner"));
+        let brt = back.routing.as_ref().unwrap();
+        assert!(outer.member_ids.contains(&"U1".to_string()) && outer.member_ids.contains(&middle.id), "{outer:?}");
+        assert!(middle.member_ids.contains(&"C1".to_string()) && middle.member_ids.contains(&inner.id), "{middle:?}");
+        assert!(inner.member_ids.contains(&brt.tracks[0].id) && inner.member_ids.iter().any(|m| brt.vias.iter().any(|v| &v.id == m)), "{inner:?}");
+        assert!(!dr.groups.iter().any(|g| g.name == "holder"), "a group of one item is dropped on the way in: {:?}", dr.groups);
+        assert_eq!(dr.group_leaves(&outer.id).len(), 4, "U1, C1, the track and a via: {:?}", dr.group_leaves(&outer.id));
     }
 
     #[test]

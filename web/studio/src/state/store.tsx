@@ -7,28 +7,34 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
+import { patchDrcExcluded, patchDrcSeverity, patchErcSeverity } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
 import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/canvas/selectionCandidates";
-import { allItemIds, collectClipboardContents, type ClipboardContents } from "../components/canvas/clipboard";
+import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
+import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
+import { editableSelection, planCarry, planFlip, planRotate, type TransformPlan } from "../kicad-port/pcbTransform";
+import { snapPoint } from "../components/canvas/gridHelper";
+import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
+import { substituteSelection } from "../kicad-port/groupTree";
 import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
-import { pasteMoveOrigin } from "../kicad-port/pcbReference";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
+import { DEFAULT_ROUTER_SETTINGS, type RouterSettings } from "../kicad-port/routerSettings";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
 import type { SchToolDialog, SchTurn } from "../api/schEditTypes";
@@ -37,8 +43,7 @@ import type { ShapeEdit } from "../kicad-port/schShapeEdit";
 import type { PolyGeom } from "../kicad-port/polygonGeom";
 import type { BreakState } from "../kicad-port/schBreak";
 import type { PinPlacement } from "../components/schematic/schPinTool";
-import { mirrorCoord, rotateQuarter } from "../kicad-port/editTargets";
-import { alignAxis, alignDeltas, getDeltasForDistributeByGaps, getDeltasForDistributeByPoints, type AlignEdge, type Box } from "../kicad-port/alignDistribute";
+import type { AlignEdge } from "../kicad-port/alignDistribute";
 
 export type RightDockTab = "appearance" | "filter" | "activity";
 /**
@@ -305,8 +310,8 @@ export interface ViewTransform {
 /** A part being dragged, previewed locally before `move_to` commits it on drop (see pcb_grid_helper-style snap in canvas/gridHelper.ts). */
 export interface MovePreview {
   refs: string[];
-  /** Which kind of item `refs` names -- each commits through a different Cmd (parts: move_to per ref; via/shape/text/dimension: their own move_* by id; sch_move / sch_drag: the schematic's `sch_move` verb for items of every kind, see kicad-port/schMove.ts). Defaults to "part" (every pre-existing caller moves parts). */
-  kind?: "part" | "via" | "shape" | "text" | "dimension" | "sch_move" | "sch_drag";
+  /** Which kind of item `refs` names -- each commits through a different Cmd (pcb: any mix of PCB items, one batch, see below; parts: move_to per ref; via/shape/text/dimension: their own move_* by id; sch_move / sch_drag: the schematic's `sch_move` verb for items of every kind, see kicad-port/schMove.ts). Defaults to "part" (every pre-existing caller moves parts). */
+  kind?: "pcb" | "part" | "via" | "shape" | "text" | "dimension" | "sch_move" | "sch_drag";
   /** `sch_move` / `sch_drag`: the picked points of a wire (a click near a wire's end picks that end); a wire not named is picked whole. */
   vertices?: Record<string, number[]>;
   /** `sch_move` / `sch_drag`: R, Shift+R, X and Y pressed while the items are held, in order -- committed with the move as one step. */
@@ -314,13 +319,21 @@ export interface MovePreview {
   dxUm: number;
   dyUm: number;
   /**
+   * `"pcb"`: any mix of footprints, tracks, vias, zones, graphics, text, dimensions and groups (the Move tool's own selection, locked items already
+   * taken out). R and F turn and flip the whole selection about the point it was picked up at (`pivotUm` for a turn, `flipPivotUm` for a flip --
+   * `EDIT_TOOL::Rotate` / `::Flip` act about the selection's reference point, which travels with the cursor), and the drop commits one batch
+   * (kicad-port/pcbTransform.ts `planCarry`). The older kinds below move one kind each.
+   */
+  pivotUm?: [number, number];
+  flipPivotUm?: [number, number];
+  /**
    * edit_tool.cpp Rotate/Flip during an active Move: both act on the
    * live preview instead of committing immediately (updateModificationPoint's
    * `m_dragging && HasReferencePoint()` guard -- the item hasn't been
-   * pushed to the board yet, so there's nothing to commit to). Only
-   * meaningful for `kind === "part"` (the only kind with a real
-   * rotate/flip Cmd); harmless and ignored for the others. Quarter turns
-   * 0-3, same units as `Cmd::Rotate`.
+   * pushed to the board yet, so there's nothing to commit to). On the PCB
+   * it is the number of R presses, counter-clockwise quarter turns 0-3
+   * (Shift+R takes one away); the schematic's kinds (`sch_move`, `sch_drag`)
+   * carry `turns` instead.
    */
   rotateQuarterTurns?: number;
   flipped?: boolean;
@@ -517,6 +530,8 @@ export interface StudioState {
   schNav: NavHistory;
   /** An unplaced part ref chosen from the panel, waiting for a canvas click to place it. */
   armed: string | null;
+  /** A footprint of a library (`Lib:Name`) chosen in the Footprint Chooser (Place Footprint), waiting for a canvas click: it becomes a part of its own on the board (`place_footprint`). */
+  armedFootprint: string | null;
   movePreview: MovePreview | null;
   activeTool: ToolId;
   drawState: DrawState | null;
@@ -733,6 +748,8 @@ export interface StudioState {
   drcVersion: string | null;
   /** "Refill all zones before performing DRC" (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills. */
   drcRefillZones: boolean;
+  /** "Test for parity between PCB and schematic" (`--schematic-parity`): the next run also compares the board with the schematic (the Schematic Parity tab). */
+  drcParity: boolean;
   /** Index into `drc.violations` the dialog's list has clicked, for the canvas's marker highlight and the "selects and zooms to it" behavior -- null selects nothing. */
   drcSelected: number | null;
   /** Same, for the dialog's Lint tab (`lint.pcb.violations`). */
@@ -796,20 +813,13 @@ export interface StudioState {
   /** `pcbnew.Array.createArray` (Ctrl+T, task item 6) -- components/CreateArrayDialog.tsx. */
   createArrayDialogOpen: boolean;
   /**
-   * `eda_pns::RoutingSettings`, the subset this app's router actually
-   * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
-   * most of upstream's own `DIALOG_PNS_SETTINGS` fields -- shove vias,
-   * jump-over-obstacles/back-pressure, smart pads, smooth dragged
-   * segments, auto posture, suggest ending -- exist on the Rust struct
-   * (or don't exist at all) but are never actually read by any routing
-   * code, so there is nothing real for a toggle to do yet; only `mode`
-   * and `removeLoops` have a genuine effect). Read fresh by `X`/`D`'s own
-   * session start (`routeStart`/`routeDragStart`) -- this app's "start a
-   * fresh session every time" architecture (PARITY.md's own doc on why)
-   * means a setting changed here takes effect on the *next* route/drag,
-   * not one already in progress, unlike upstream's live mid-route dialog.
+   * `eda_pns::RoutingSettings`, the subset of `PNS::ROUTING_SETTINGS` this app's router implements
+   * (kicad-port/routerSettings.ts; `Ctrl+<` edits them, components/RouterSettingsDialog.tsx). Every field is read by the
+   * router. Sent with `X`/`D`'s own session start (`routeStart`/`routeDragStart`) -- this app starts a fresh backend session
+   * for every route or drag -- and, when the dialog is closed with OK while one is running, to that session
+   * (`routeSetSettings`), so a change applies from the next move as upstream's does.
    */
-  routerSettings: { mode: RouteMode; removeLoops: boolean };
+  routerSettings: RouterSettings;
 }
 
 /** The browser's local storage, or null where it is absent or reading it throws (private windows, blocked site data, node tests). */
@@ -839,6 +849,7 @@ const initialState: StudioState = {
   schPosture: false,
   schNav: initialNavHistory(),
   armed: null,
+  armedFootprint: null,
   movePreview: null,
   activeTool: "select",
   drawState: null,
@@ -918,6 +929,7 @@ const initialState: StudioState = {
   drcError: null,
   drcVersion: null,
   drcRefillZones: false,
+  drcParity: false,
   drcSelected: null,
   drcLintSelected: null,
   ercDialogOpen: false,
@@ -943,7 +955,7 @@ const initialState: StudioState = {
   editTextAndGraphicsDialogOpen: false,
   createArrayDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
-  routerSettings: { mode: "walkaround", removeLoops: true },
+  routerSettings: DEFAULT_ROUTER_SETTINGS,
 };
 
 export type Action =
@@ -958,14 +970,18 @@ export type Action =
   | { type: "SET_RIGHT_DOCK_TAB"; tab: RightDockTab }
   | { type: "SET_VIEWER3D_OPTIONS"; options: Partial<Viewer3DOptions> }
   | { type: "SET_GLB_STATUS"; status: GlbStatus; error?: string }
-  | { type: "SET_SELECTION"; refs: string[] }
+  /** `raw`: the items as they are, with no group standing in for its members (`select( item )` of a group that was just made or left). */
+  | { type: "SET_SELECTION"; refs: string[]; raw?: boolean }
   | { type: "SET_ENTERED_GROUP"; id: string | null }
+  /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
+  | { type: "ENTER_GROUP"; id: string }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
   | { type: "SET_HOT"; refs: string[] }
   | { type: "SET_NET_HIGHLIGHT"; net: string | null }
   | { type: "SET_ARMED"; ref: string | null }
+  | { type: "SET_ARMED_FOOTPRINT"; name: string | null }
   | { type: "SET_MOVE_PREVIEW"; preview: MovePreview | null }
   | { type: "SET_ACTIVE_TOOL"; tool: ToolId }
   | { type: "SET_VIEW"; view: ViewTransform }
@@ -1013,6 +1029,13 @@ export type Action =
   /** `BOARD::DeleteMARKERs` (Global Deletions > Delete Markers): the last report and its markers go. */
   | { type: "DRC_CLEAR" }
   | { type: "SET_DRC_REFILL"; refill: boolean }
+  | { type: "SET_DRC_PARITY"; parity: boolean }
+  /** Waive or restore DRC violations in the report on screen without running kicad-cli again (the exclusion itself is a persisted `Cmd`); `version` as for `ERC_MARK_EXCLUDED`. */
+  | { type: "DRC_PATCH_EXCLUDED"; keys: ReadonlyArray<{ check: string; items: string[] }>; excluded: boolean; comment: string; version: string | null }
+  /** A check's severity changed (`set_rule_severities`): the report on screen takes it (`patchDrcSeverity`) -- an ignored check leaves the list and joins the ignored ones. */
+  | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
+  /** The same for the schematic (`set_erc_severities`). */
+  | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
   | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
@@ -1076,22 +1099,14 @@ export type Action =
   | { type: "SET_CREATE_ARRAY_DIALOG_OPEN"; open: boolean };
 
 /**
- * `pcb_selection_tool.cpp`'s "clicking a group member selects the group"
- * rule (task item 5): any ref that is a member of a group becomes that
- * group's own id instead, *unless* `enteredGroupId` names that same group
- * (`common.Interactive.groupEnter` -- see `StudioState.enteredGroupId`'s
- * own doc), in which case the ref passes through unchanged so individual
- * members can be picked while "inside" the group. A ref naming a group
- * directly, or not in any group, also passes through unchanged.
+ * `pcb_selection_tool.cpp`'s "clicking a group member selects the group" rule (`FilterCollectorForHierarchy`): any ref that is a member of a group
+ * becomes the outermost group that holds it inside `enteredGroupId` -- the group being worked in, whose own members (and the groups directly in it)
+ * can be picked one by one (`common.Interactive.groupEnter`, `StudioState.enteredGroupId`). A ref naming a group directly, or not in any group, passes
+ * through. The tree is kicad-port/groupTree.ts.
  */
-function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
+export function withGroupSubstitution(refs: string[], groups: Group[] | undefined, enteredGroupId: string | null): string[] {
   if (!groups || groups.length === 0) return refs;
-  const byMember = new Map<string, string>();
-  for (const g of groups) for (const m of g.member_ids) byMember.set(m, g.id);
-  return refs.map((id) => {
-    const groupId = byMember.get(id);
-    return groupId && groupId !== enteredGroupId ? groupId : id;
-  });
+  return substituteSelection(groups, refs, enteredGroupId).ids;
 }
 
 function reducer(state: StudioState, action: Action): StudioState {
@@ -1113,7 +1128,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       for (const g of action.board.drawings?.groups ?? []) live.add(g.id);
       const selection = state.tab === "schematic" ? state.selection : new Set([...state.selection].filter((r) => refs.has(r) || live.has(r)));
       const hot = new Set([...state.hot].filter((r) => refs.has(r)));
-      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot };
+      // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
+      const enteredGroupId = state.enteredGroupId != null && (action.board.drawings?.groups ?? []).some((g) => g.id === state.enteredGroupId) ? state.enteredGroupId : null;
+      return { ...state, board: action.board, boardError: null, layerVisible, layerOpacity, selection, hot, enteredGroupId };
     }
     case "BOARD_ERR":
       return { ...state, boardError: action.message };
@@ -1135,10 +1152,21 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, viewer3d: { ...state.viewer3d, ...action.options } };
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
-    case "SET_SELECTION":
-      return { ...state, selection: new Set(withGroupSubstitution(action.refs, state.board?.drawings?.groups, state.enteredGroupId)), armed: null };
+    case "SET_SELECTION": {
+      const groups = state.board?.drawings?.groups;
+      if (action.raw || !groups || groups.length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
+      // Selecting something outside the entered group leaves it (`PCB_SELECTION_TOOL::select`: `ExitGroup()`).
+      const { ids, exits } = substituteSelection(groups, action.refs, state.enteredGroupId);
+      return { ...state, selection: new Set(ids), armed: null, armedFootprint: null, enteredGroupId: exits ? null : state.enteredGroupId };
+    }
     case "SET_ENTERED_GROUP":
       return { ...state, enteredGroupId: action.id };
+    case "ENTER_GROUP": {
+      // `PCB_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its members -- each as it is, a group inside it too.
+      const group = state.board?.drawings?.groups.find((g) => g.id === action.id);
+      if (!group) return state;
+      return { ...state, enteredGroupId: group.id, selection: new Set(group.member_ids), armed: null };
+    }
     case "TOGGLE_SELECTION": {
       const next = new Set(state.selection);
       if (next.has(action.ref)) next.delete(action.ref);
@@ -1155,6 +1183,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         ...state,
         selection: new Set(),
         armed: null,
+        armedFootprint: null,
         movePreview: null,
         activeTool: "select",
         drawState: null,
@@ -1183,11 +1212,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       // replaced also wiped the selection on every Escape, even mid-move
       // -- wrong: EDIT_TOOL::doMoveSelection's own cancel just reverts
       // the move and leaves the pre-move selection exactly as it was.
-      const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
+      const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.armedFootprint != null || state.movePreview != null;
       if (inProgress) {
         return {
           ...state,
           armed: null,
+          armedFootprint: null,
           movePreview: null,
           activeTool: "select",
           drawState: null,
@@ -1211,14 +1241,10 @@ function reducer(state: StudioState, action: Action): StudioState {
       if (state.selection.size > 0) {
         return { ...state, selection: new Set() };
       }
-      // Task item 5: nothing selected but still inside a group -- source's
-      // own next `else if` tier, `ExitGroup()` (re-selecting the group
-      // itself, `ExitGroup(true)`'s default -- matches
-      // `common.Interactive.groupLeave`'s own `SET_SELECTION` in
-      // useActionRunner.ts).
+      // Nothing selected but still inside a group: the selection tool's next `else if` tier, `ExitGroup()` -- which leaves the group and does not select
+      // it (`ExitGroup( bool aSelectGroup = false )`; only the Leave Group action, `ExitGroup( true )`, does).
       if (state.enteredGroupId != null) {
-        const leftId = state.enteredGroupId;
-        return { ...state, enteredGroupId: null, selection: new Set([leftId]) };
+        return { ...state, enteredGroupId: null };
       }
       // Idle, nothing selected, no entered group: pcbnew_settings.cpp m_ESCClearsNetHighlight defaults true.
       return { ...state, netHighlight: null, bcx: withHighlight(state.bcx, state.netHighlight, []) };
@@ -1230,7 +1256,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_NET_HIGHLIGHT_SET":
       return { ...state, netHighlight: action.nets[0] ?? null, bcx: withHighlight(state.bcx, state.netHighlight, action.nets) };
     case "SET_ARMED":
-      return { ...state, armed: action.ref, selection: new Set() };
+      return { ...state, armed: action.ref, armedFootprint: null, selection: new Set() };
+    case "SET_ARMED_FOOTPRINT":
+      return { ...state, armedFootprint: action.name, armed: null, selection: new Set() };
     case "SET_MOVE_PREVIEW":
       return { ...state, movePreview: action.preview };
     case "SET_ACTIVE_TOOL":
@@ -1326,6 +1354,17 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, drc: null, drcVersion: null, drcSelected: null };
     case "SET_DRC_REFILL":
       return { ...state, drcRefillZones: action.refill };
+    case "SET_DRC_PARITY":
+      return { ...state, drcParity: action.parity };
+    case "DRC_PATCH_EXCLUDED":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcExcluded(state.drc, action.keys, action.excluded, action.comment), drcVersion: action.version };
+    case "DRC_PATCH_SEVERITY":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcSeverity(state.drc, action.check, action.severity, action.description), drcVersion: action.version, drcSelected: null };
+    case "ERC_PATCH_SEVERITY":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description), ercVersion: action.version, ercSelected: null };
     case "SET_DRC_SELECTED":
       return { ...state, drcSelected: action.index, drcLintSelected: action.index === null ? state.drcLintSelected : null };
     case "SET_DRC_LINT_SELECTED":
@@ -1345,7 +1384,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         if (v.check !== action.check || v.location !== action.location) return v;
         if (action.excluded && v.severity !== "excluded") counts[v.check] = Math.max(0, (counts[v.check] ?? 0) - 1);
         if (!action.excluded && v.severity === "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
-        return { ...v, severity: action.excluded ? ("excluded" as const) : ("error" as const) };
+        return { ...v, severity: action.excluded ? ("excluded" as const) : (v.base_severity ?? ("error" as const)) };
       });
       return { ...state, erc: { ...state.erc, violations, counts }, ercVersion: action.version };
     }
@@ -1484,11 +1523,15 @@ export interface StudioApi {
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
   commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetUm?: MovePreview["perRefOffsetUm"]) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
+  /** Place Footprint's click: the footprint of a library armed in the Footprint Chooser becomes a part of its own at this point (`place_footprint`, one undo step). */
+  placeLibraryFootprintAt: (xUm: number, yUm: number) => Promise<void>;
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
   navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
   route: () => Promise<void>;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
+  /** Escape while a Duplicate's or a Paste's new items are carried: takes them away again (one undo step), provided nothing else was edited since. True when it did. */
+  revertCarriedPlacement: () => Promise<boolean>;
   partByRef: (ref: string) => Part | undefined;
   trackById: (id: string) => Track | undefined;
   viaById: (id: string) => Via | undefined;
@@ -1525,21 +1568,18 @@ export interface StudioApi {
   /** `moveIndividually` hand-off to the next queued item (state.pcbx.moveQueue) -- after a drop commits, or for `skip` (Tab) without committing. */
   advanceMoveQueue: () => void;
   /**
-   * Cmd+D on the current selection's tracks/vias/zones/shapes/text
-   * (footprints excluded -- see `Cmd::Duplicate`'s own doc comment).
-   * Duplicates in place, then selects the new copies and arms the Move
-   * tool on them at the current cursor, same as EDIT_TOOL::Duplicate
-   * handing straight off to doMoveSelection in source.
+   * Cmd+D on the current selection: footprints (as new parts), tracks, vias, zones, graphics, text, dimensions and groups -- see `Cmd::Duplicate`'s
+   * own doc comment. Duplicates in place, then selects the new copies and arms the Move tool on them at the current cursor, same as
+   * EDIT_TOOL::Duplicate handing straight off to doMoveSelection in source.
    */
   duplicateSelection: () => Promise<void>;
   /** Ctrl+G: group the current selection (2+ items), then select the new group as a unit. */
   groupSelection: () => Promise<void>;
   /** Ctrl+Shift+G: dissolve every group named in the current selection, then select their former members. */
   ungroupSelection: () => Promise<void>;
-  /** Cmd+C: snapshot the current selection's tracks/vias/zones/shapes/text into the clipboard (state.clipboard). A no-op if none of the selection is copyable. */
-  /** `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback. */
-  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => void;
-  /** Cmd+V: insert fresh copies of whatever's in the clipboard, then select and arm Move on them, same as duplicateSelection. */
+  /** Cmd+C: the selection as KiCad's clipboard text, on the system clipboard and in `state.clipboard`. `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback; `reference` is the point Copy with Reference Point picked. */
+  copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<void>;
+  /** Cmd+V: put what is on the clipboard on the board (KiCad's text, else this session's copy, else plain text as a text item), then select it and arm Move on it, same as duplicateSelection. */
   pasteClipboard: () => Promise<void>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
@@ -1573,6 +1613,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   }, [state.prefs]);
   const stateRef = useRef(state);
   stateRef.current = state;
+  /**
+   * `EDIT_TOOL::Duplicate` and `PCB_CONTROL::Paste` hand their new items to the Move tool inside the one commit the move finishes: cancelling the move
+   * reverts it (`commit.Revert()`), so Escape leaves nothing behind. Here the duplicate or the paste is a step of its own, so a cancel undoes exactly that
+   * step: this notes which one (the board's version right after it) while the new items are being carried.
+   */
+  const carriedPlacementRef = useRef<{ version: string } | null>(null);
+  useEffect(() => {
+    if (state.activeTool !== "move") carriedPlacementRef.current = null;
+  }, [state.activeTool]);
 
   const refresh = useCallback(async () => {
     try {
@@ -1621,7 +1670,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     const askedAt = stateRef.current.version;
     dispatch({ type: "DRC_RUNNING" });
     try {
-      const drc = await fetchDrc(stateRef.current.drcRefillZones);
+      const drc = await fetchDrc(stateRef.current.drcRefillZones, stateRef.current.drcParity);
       dispatch({ type: "DRC_OK", drc, version: revisionOf(drc, askedAt) });
     } catch (e) {
       dispatch({ type: "DRC_ERR", message: e instanceof Error ? e.message : String(e) });
@@ -1797,15 +1846,42 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         if (source) dispatch({ type: "SET_SCH_REPEAT", cmds: source });
       }
       await refresh();
+      // The schematic tab draws `state.schematic`, which the version poll refetches up to a poll later: an edit made there (the Properties grid shows what the board
+      // answered) wants the new sheet at once.
+      if (stateRef.current.tab === "schematic") await refreshSchematic();
       return reply.ok;
     },
-    [refresh]
+    [refresh, refreshSchematic]
   );
 
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
   const runBatch = async (cmds: Cmd[]): Promise<boolean> => {
     if (cmds.length === 0) return true;
     return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+  };
+
+  /** The grid point nearest a reference point (`PCB_GRID_HELPER::BestSnapAnchor`, its grid half): what a multi-item Rotate and Move snap their reference to. */
+  const gridSnap = () => (p: readonly [number, number]): [number, number] => snapPoint(p[0], p[1], stateRef.current.gridUm);
+
+  /** Sends a transform plan (kicad-port/pcbTransform.ts) as one undo step; says so when the locks left nothing to do (`ReportFilteredLockedItems`). */
+  const runPlan = async (plan: TransformPlan): Promise<boolean> => {
+    if (plan.cmds.length === 0) {
+      if (plan.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
+      return false;
+    }
+    return runBatch(plan.cmds);
+  };
+
+  /** Where a Paste lands the clipboard's origin: the cursor's grid point, else the middle of the board. */
+  const pasteAt = (): { x: number; y: number } => {
+    const st = stateRef.current;
+    if (st.cursorUm) {
+      const [x, y] = snapPoint(st.cursorUm.x, st.cursorUm.y, st.gridUm);
+      return { x, y };
+    }
+    const o = st.board?.outline;
+    if (o && o.length > 0) return { x: Math.round((Math.min(...o.map((p) => p[0])) + Math.max(...o.map((p) => p[0]))) / 2), y: Math.round((Math.min(...o.map((p) => p[1])) + Math.max(...o.map((p) => p[1]))) / 2) };
+    return { x: 0, y: 0 };
   };
 
   /**
@@ -1901,43 +1977,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     cmd: (c) => runCmd(c),
     advanceMoveQueue: () => advanceMoveQueue(),
-    // edit_tool.cpp's real Rotate: a single selected item spins about its
-    // own anchor (dx=dy=0, no pivot -- Cmd::MoveExact's own pivot:None
-    // branch lands on exactly the same pose Cmd::Rotate's simpler
-    // part+quarter_turns shape would); 2+ items share ONE pivot --
-    // updateModificationPoint's `aSelection.GetCenter()`, the selection's
-    // union-bounding-box center -- and commit as ONE MoveExact, matching
-    // source's own single BOARD_COMMIT::Push() for the whole group
-    // (previously: one independent Cmd::Rotate per part, each spinning in
-    // place about its own anchor -- see PARITY-pcb.md's "Edit tool"
-    // section for why that was a documented simplification, not the real
-    // behavior).
+    // edit_tool.cpp's Rotate over any selection (kicad-port/pcbTransform.ts `planRotate`): one item turns about its own position, several about the
+    // centre of their box snapped to the grid, a lone rectangle or polygon about its centre; locked items stay. One `rotate_items`, so one undo
+    // step, as one BOARD_COMMIT::Push. R is counter-clockwise: the callers pass 1 for R and 3 for Shift+R.
     rotateSelection: async (quarterTurns, explicit) => {
       const st = stateRef.current;
-      const given = explicit ?? [...st.selection];
-      const refs = given.filter((r) => api.partByRef(r)?.placed);
-      const viaIds = given.filter((r) => api.viaById(r));
-      if (refs.length + viaIds.length === 0) return;
+      if (!st.board) return;
       const q = ((quarterTurns % 4) + 4) % 4;
-      const rotateMillideg = q * 90_000;
-      const cmds: Cmd[] = [];
-      if (refs.length + viaIds.length === 1) {
-        // a single item spins about its own anchor
-        if (refs.length) cmds.push({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot: null });
-        return void (await runBatch(cmds)); // a lone via has no orientation: nothing to do
-      }
-      // 2+ items share the selection's bounding-box center (updateModificationPoint / GetCenter)
-      const center = selectionBoundsCenterWithVias(st.board?.parts ?? [], st.board?.routing?.vias ?? [], refs, viaIds);
-      const pivot = center ? { x: Math.round(center.x), y: Math.round(center.y) } : null;
-      if (refs.length) cmds.push({ op: "move_exact", parts: refs, dx: 0, dy: 0, rotate_millideg: rotateMillideg, pivot });
-      if (pivot) {
-        for (const id of viaIds) {
-          const v = api.viaById(id)!;
-          const r = rotateQuarter(v.x, v.y, pivot.x, pivot.y, q);
-          if (r.x !== v.x || r.y !== v.y) cmds.push({ op: "move_via", id, x: r.x, y: r.y });
-        }
-      }
-      await runBatch(cmds);
+      await runPlan(planRotate(st.board, explicit ?? [...st.selection], q === 3 ? -1 : q, gridSnap()));
     },
     cmdBatch: (cmds) => runBatch(cmds),
     ripSelection: async () => {
@@ -1945,80 +1992,39 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "CLEAR_SELECTION" });
       await runBatch(refs.map((ref): Cmd => ({ op: "rip", part: ref })));
     },
-    // edit_tool.cpp's real Flip: a single item flips about its own anchor
-    // (no position change, only `side` toggles -- Cmd::Flip's existing
-    // shape already does exactly this); 2+ items share the selection's
-    // bounding-box center as the mirror line's X, same `updateModification
-    // Point`/`GetCenter()` rule Rotate uses above. Cmd::Flip has no pivot
-    // concept of its own (it only ever toggles `side`), so a group flip is
-    // composed client-side as "move to the mirrored X, then flip" per
-    // part, the same two-Cmd composition `commitMove` already uses for a
-    // single dragged-and-flipped part.
+    // edit_tool.cpp's Flip ("Change Side / Flip", F) over any selection (`planFlip`): mirrored about the centre of the selection's box (a lone item
+    // about its own position), each item put on the other side of the board -- a footprint's side, a track's, zone's, graphic's, text's and
+    // dimension's layer. One `flip_items`, one undo step.
     flipSelection: async (explicit) => {
-      const refs = (explicit ?? [...stateRef.current.selection]).filter((r) => api.partByRef(r)?.placed);
-      if (refs.length === 0) return;
-      const center = refs.length > 1 ? selectionBoundsCenter(stateRef.current.board?.parts ?? [], refs) : null;
-      const cmds: Cmd[] = [];
-      for (const ref of refs) {
-        if (center) {
-          const p = api.partByRef(ref)!;
-          const [x] = p.at!;
-          cmds.push({ op: "move_to", part: ref, x: Math.round(mirrorCoord(x, center.x)), y: p.at![1] });
-        }
-        cmds.push({ op: "flip", part: ref });
-      }
-      await runBatch(cmds); // one undo step, like source's single BOARD_COMMIT::Push
+      const st = stateRef.current;
+      if (!st.board) return;
+      await runPlan(planFlip(st.board, explicit ?? [...st.selection]));
     },
+    // align_distribute_tool.cpp (kicad-port/alignDistribute.ts): every kind of item, a locked item is the target and never moves, the cursor can
+    // pick the target; one move per item, one undo step.
     alignSelection: async (edge) => {
-      const refs = [...stateRef.current.selection].filter((r) => {
-        const p = api.partByRef(r);
-        return p?.placed && p.courtyard && p.at;
-      });
-      if (refs.length < 2) return;
-      const boxes: Box[] = refs.map((r) => api.partByRef(r)!.courtyard!);
-      const deltas = alignDeltas(boxes, edge);
-      const axis = alignAxis(edge);
-      const cmds: Cmd[] = [];
-      for (let i = 0; i < refs.length; i++) {
-        const d = deltas[i]!;
-        if (d === 0) continue;
-        const p = api.partByRef(refs[i]!)!;
-        const [x, y] = p.at!;
-        cmds.push({ op: "move_to", part: refs[i]!, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
-      }
-      await runBatch(cmds);
+      const st = stateRef.current;
+      if (!st.board) return;
+      const cursor: [number, number] | null = st.cursorUm ? [st.cursorUm.x, st.cursorUm.y] : null;
+      const cmds = planAlignSelection(st.board, [...st.selection], edge, cursor);
+      if (cmds.length > 0) await runBatch(cmds);
     },
     distributeSelection: async (axis, mode) => {
-      const refs = [...stateRef.current.selection].filter((r) => {
-        const p = api.partByRef(r);
-        return p?.placed && p.courtyard && p.at;
-      });
-      if (refs.length < 3) return;
-      // align_distribute_tool.cpp's doDistributeGaps/doDistributeCenters:
-      // sort by start (gaps) or by center (centers) along the chosen axis
-      // before computing deltas -- the end caps of THIS sort never move.
-      const key = (box: Box): number => {
-        const lo = axis === "x" ? box[0] : box[1];
-        const hi = axis === "x" ? box[2] : box[3];
-        return mode === "gaps" ? lo : (lo + hi) / 2;
-      };
-      const sorted = refs.map((r) => ({ r, box: api.partByRef(r)!.courtyard! })).sort((a, b) => key(a.box) - key(b.box));
-      const deltas =
-        mode === "gaps"
-          ? getDeltasForDistributeByGaps(sorted.map(({ box }) => (axis === "x" ? [box[0], box[2]] : [box[1], box[3]]) as [number, number]))
-          : getDeltasForDistributeByPoints(sorted.map(({ box }) => key(box)));
-      const cmds: Cmd[] = [];
-      for (let i = 0; i < sorted.length; i++) {
-        const d = deltas[i]!;
-        if (d === 0) continue;
-        const p = api.partByRef(sorted[i]!.r)!;
-        const [x, y] = p.at!;
-        cmds.push({ op: "move_to", part: sorted[i]!.r, x: axis === "x" ? x + d : x, y: axis === "y" ? y + d : y });
-      }
-      await runBatch(cmds);
+      const st = stateRef.current;
+      if (!st.board) return;
+      const cmds = planDistributeSelection(st.board, [...st.selection], axis, mode);
+      if (cmds.length > 0) await runBatch(cmds);
     },
     commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetUm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
+      carriedPlacementRef.current = null; // dropped: the duplicate or paste stands
+      // Any mix of PCB items: turned and flipped about where it was picked up, then moved, as one batch (`planCarry`).
+      if (kind === "pcb") {
+        const board = stateRef.current.board;
+        if (board) await runPlan(planCarry(board, refs, dxUm, dyUm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap()));
+        advanceMoveQueue();
+        return;
+      }
       const cmds: Cmd[] = [];
       for (const ref of refs) {
         if (kind === "part") {
@@ -2031,7 +2037,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           // when they're called, so applying them after the move lands on
           // the same final pose as KiCad's live in-place spin during a
           // single-item drag -- see MovePreview's own doc comment.
-          if (rotateQuarterTurns) cmds.push({ op: "rotate", part: ref, quarter_turns: ((rotateQuarterTurns % 4) + 4) % 4 });
+          // (R presses count counter-clockwise; `Cmd::Rotate` turns clockwise.)
+          if (rotateQuarterTurns) cmds.push({ op: "rotate", part: ref, quarter_turns: (4 - (((rotateQuarterTurns % 4) + 4) % 4)) % 4 });
           if (flipped) cmds.push({ op: "flip", part: ref });
         } else if (kind === "via") {
           const v = api.viaById(ref);
@@ -2048,6 +2055,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // One undo step for the whole drop (BOARD_COMMIT::Push once).
       await runBatch(cmds);
       advanceMoveQueue();
+    },
+    placeLibraryFootprintAt: async (xUm, yUm) => {
+      const name = stateRef.current.armedFootprint;
+      if (!name) return;
+      // `BOARD_EDITOR_CONTROL::PlaceFootprint` commits on the click and goes back to asking for the next footprint; here the tool is done after one.
+      dispatch({ type: "SET_ARMED_FOOTPRINT", name: null });
+      await runCmd({ op: "place_footprint", footprint: name, at: { x: xUm, y: yUm } });
     },
     placeArmedAt: async (xUm, yUm) => {
       const ref = stateRef.current.armed;
@@ -2085,6 +2099,15 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
     },
+    revertCarriedPlacement: async () => {
+      const token = carriedPlacementRef.current;
+      carriedPlacementRef.current = null;
+      if (!token || (await fetchVersion().catch(() => null)) !== token.version) return false;
+      const reply = await postUndo("pcb");
+      if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
+      await refresh();
+      return reply.ok;
+    },
     redo: async () => {
       dispatch({ type: "CLEAR_SELECTION" });
       const reply = await postRedo(stateRef.current.tab === "schematic" ? "schematic" : "pcb");
@@ -2093,16 +2116,14 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // EDIT_TOOL::Duplicate hands straight off to doMoveSelection in
     // source -- the duplicate appears glued to the cursor until the user
-    // clicks to drop it (or Escape, which now -- see the "ESCAPE" reducer
-    // case -- cancels the in-progress move without touching the
-    // selection, so the fresh duplicate stays selected right where it
-    // was created rather than being un-done; a real cancel-removes-the-
-    // duplicate would need this move to carry its own undo token, which
-    // the backend's plain undo-stack doesn't expose per-ref).
+    // clicks to drop it, or cancels with Escape, which takes the duplicate
+    // away again (`commit.Revert()`; here `revertCarriedPlacement`, one undo
+    // step for the step the duplicate was).
     duplicateSelection: async () => {
       const board = stateRef.current.board;
       if (!board) return;
-      const ids = [...stateRef.current.selection].filter((id) => api.trackById(id) || api.viaById(id) || api.zoneById(id) || api.shapeById(id) || api.textById(id));
+      // `Duplicate` filters markers, groups and free pads only: a locked item is copied too (the copy is not locked), a pad stands for its footprint.
+      const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
       if (ids.length === 0) return;
       const before = allItemIds(board);
       const ok = await runCmd({ op: "duplicate", ids });
@@ -2111,8 +2132,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // and the Move tool would never pick them up.
       const after = await fetchState().catch(() => null);
       if (!after) return;
-      const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
+      const newIds = newItemIds(before, after);
       if (newIds.length === 0) return;
+      const version = await fetchVersion().catch(() => null);
+      carriedPlacementRef.current = version ? { version } : null;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
@@ -2129,9 +2152,11 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = new Set((board.drawings?.groups ?? []).map((g) => g.id));
       const ok = await runCmd({ op: "group", ids });
       if (!ok) return;
-      const after = stateRef.current.board;
+      // The board as the backend has it now (`stateRef` only catches up on the next render): the new group is what is selected afterwards
+      // (`RunAction( ACTIONS::selectItem, group )`), as it is -- not as the group above it, when it was made inside an entered group.
+      const after = await fetchState().catch(() => null);
       const newGroupId = (after?.drawings?.groups ?? []).map((g) => g.id).find((id) => !before.has(id));
-      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId] });
+      if (newGroupId) dispatch({ type: "SET_SELECTION", refs: [newGroupId], raw: true });
     },
     ungroupSelection: async () => {
       const groupIds = [...stateRef.current.selection].filter((id) => api.groupById(id));
@@ -2142,7 +2167,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const members = groupIds.flatMap((id) => api.groupById(id)?.member_ids ?? []);
       const ok = await runCmd({ op: "ungroup", ids: groupIds });
       if (!ok) return;
-      dispatch({ type: "SET_SELECTION", refs: members });
+      dispatch({ type: "SET_SELECTION", refs: members, raw: true });
     },
     addZone: async (net, layer, outline, settings) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
@@ -2163,28 +2188,54 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
       if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
     },
-    copySelection: (refs, reference) => {
-      const board = stateRef.current.board;
-      if (!board) return;
-      const clipboard = collectClipboardContents(board, refs ? new Set(refs) : stateRef.current.selection);
-      if (clipboard) dispatch({ type: "SET_CLIPBOARD", clipboard: reference ? { ...clipboard, reference } : clipboard });
+    // edit_tool.cpp copyToClipboard: the selection (a pad stands for its footprint, a locked item is copied) as KiCad's own clipboard text, measured
+    // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.
+    copySelection: async (refs, reference) => {
+      const st = stateRef.current;
+      if (!st.board) return;
+      const { ids } = editableSelection(st.board, refs ? [...refs] : [...st.selection], { respectLocks: false });
+      if (ids.length === 0) return;
+      const at = reference ?? (st.cursorUm ? (([x, y]) => ({ x, y }))(snapPoint(st.cursorUm.x, st.cursorUm.y, st.gridUm)) : null);
+      const reply = await postClipboardCopy(ids, at);
+      if (!reply.ok) {
+        dispatch({ type: "TOAST", message: reply.message, kind: "error" });
+        return;
+      }
+      dispatch({ type: "SET_CLIPBOARD", clipboard: at ? { text: reply.text, reference: at } : { text: reply.text } });
+      await writeClipboardText(reply.text);
     },
+    // pcb_control.cpp Paste: whatever KiCad text is on the system clipboard (a copy made in KiCad, or on another board), else this session's own copy
+    // where the browser will not hand the system clipboard over; text that is not KiCad's is pasted as a text item on the active layer ("If it wasn't
+    // content, then paste as a text object"). The items land with the clipboard's origin on the cursor and are selected, the Move tool armed on them.
     pasteClipboard: async () => {
-      const clip = stateRef.current.clipboard;
-      const board = stateRef.current.board;
-      if (!clip || !board) return;
+      const st = stateRef.current;
+      const board = st.board;
+      if (!board) return;
+      const system = await readClipboardText();
+      const at = pasteAt();
+      let cmd: Cmd;
+      if (system != null && isKicadPcbText(system)) {
+        cmd = { op: "paste_clipboard", text: system, at };
+      } else if (system != null && system.trim() !== "") {
+        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: st.activeLayer ?? "F.SilkS", size_um: 1000, stroke_width: 150, justify: "center", mirror: false } };
+      } else if (st.clipboard) {
+        cmd = { op: "paste_clipboard", text: st.clipboard.text, at };
+      } else {
+        return;
+      }
       const before = allItemIds(board);
-      const ok = await runCmd({ op: "paste_items", tracks: clip.tracks, vias: clip.vias, zones: clip.zones, shapes: clip.shapes, texts: clip.texts });
+      const ok = await runCmd(cmd);
       if (!ok) return;
       // As in `duplicateSelection`: read the board from the backend, `stateRef` is still the one from before the paste.
       const after = await fetchState().catch(() => null);
       if (!after) return;
-      const newIds = [...allItemIds(after)].filter((id) => !before.has(id));
+      const newIds = newItemIds(before, after);
       if (newIds.length === 0) return;
+      const version = await fetchVersion().catch(() => null);
+      carriedPlacementRef.current = version ? { version } : null;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
-      // A copy made with a reference point is carried by that point (see kicad-port/pcbReference.ts).
-      dispatch({ type: "SET_MOVE_ORIGIN", at: pasteMoveOrigin(clip.reference, stateRef.current.cursorUm) });
+      dispatch({ type: "SET_MOVE_ORIGIN", at });
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });

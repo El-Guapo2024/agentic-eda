@@ -423,7 +423,7 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
     let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() } };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() }, field_layout: Default::default() };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -1021,13 +1021,14 @@ mod tests {
         let text = export_kicad_sch(&design, &model, &ExportMeta { date: "2026-01-01", title: "mirror_roundtrip" }).unwrap();
         assert!(!text.contains("(mirror "), "sanity: our own exporter never emits a mirror tag on the instance (it bakes the transform instead)");
 
-        let with_mirror_x = text.replacen("(lib_id \"eda:U1\") (at ", "(lib_id \"eda:U1\") (mirror x) (at ", 1);
+        let lib_id = design.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "U1").unwrap().lib_id.clone();
+        let with_mirror_x = text.replacen(&format!("(lib_id \"{lib_id}\") (at "), &format!("(lib_id \"{lib_id}\") (mirror x) (at "), 1);
         let (design_x, _, _) = import_kicad_sch(&with_mirror_x).expect("parses with an injected (mirror x)");
         let u1_x = design_x.schematic.unwrap().symbols.into_iter().find(|s| s.id == "U1").unwrap();
         assert!(u1_x.mirror_y, "(mirror x) must set mirror_y");
         assert!(!u1_x.mirrored, "(mirror x) must not also set mirrored");
 
-        let with_mirror_y = text.replacen("(lib_id \"eda:U1\") (at ", "(lib_id \"eda:U1\") (mirror y) (at ", 1);
+        let with_mirror_y = text.replacen(&format!("(lib_id \"{lib_id}\") (at "), &format!("(lib_id \"{lib_id}\") (mirror y) (at "), 1);
         let (design_y, _, _) = import_kicad_sch(&with_mirror_y).expect("parses with an injected (mirror y)");
         let u1_y = design_y.schematic.unwrap().symbols.into_iter().find(|s| s.id == "U1").unwrap();
         assert!(u1_y.mirrored, "(mirror y) must set mirrored");
@@ -1160,6 +1161,9 @@ mod tests {
             description: "Dual gate".into(),
             reference_prefix: "U".into(),
             unit_count: 2,
+            pin_names_hidden: false,
+            pin_numbers_hidden: false,
+            pin_name_offset_mm: 0.508,
         };
         let u1 = part(
             "U1",
@@ -1182,7 +1186,7 @@ mod tests {
             texts: vec![],
             power_symbols: vec![],
             no_connects: vec![], bus_entries: vec![],
-            erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(),
+            erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(),
             title_block: None,
             sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
             imported_from_kicad: false,
@@ -1338,7 +1342,7 @@ mod tests {
             wires: vec![Wire { id: String::new(), net: "DATA[0..3]".into(), pins: vec![], pts: vec![Point { x: 0, y: 10_000 }, bus_pt], bus: true }],
             bus_entries: vec![eda_model::ir::BusEntry { id: String::new(), at: bus_pt, size: Point { x: 2_540, y: 2_540 } }],
             labels: vec![eda_model::ir::NetLabel { id: String::new(), net: "DATA2".into(), at: net_pt, kind: LabelKind::Local }],
-            ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
+            ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
         };
         let design = Design {
             schema: 1,
@@ -1386,7 +1390,7 @@ mod tests {
                 ],
                 junctions,
                 lines: vec![eda_model::ir::SchLine { id: String::new(), pts: vec![Point { x: 0, y: 30_000 }, Point { x: 5_000, y: 30_000 }, Point { x: 5_000, y: 35_000 }], width_um: 254 }],
-                ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
+                ..SchematicSection { symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false }
             };
             let design = Design {
                 schema: 1,

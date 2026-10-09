@@ -1,7 +1,7 @@
 # Shared (`common.*`) action parity with KiCad
 
 One row per behaviour of the shared actions KiCad runs in every editor frame: `COMMON_TOOLS` (`common_tools.cpp`), `COMMON_CONTROL`
-(`common_control.cpp`), `LIBRARY_EDITOR_CONTROL`, the selection, group and picker tools, the Checker's marker stepping, and the dialogs they open.
+(`common_control.cpp`), `LIBRARY_EDITOR_CONTROL`, the selection, group and picker tools, the Checker's marker stepping and exclusion, and the dialogs they open.
 Same status words as `PARITY-pcb.md`: **identical** (same logic and constants, browser adaptations noted), **partial** (the core is ported, a real
 gap is named) and **missing** (not wired; every such action has its reason in `tools/ui-parity-missing.json`, which `tools/ui-parity-audit.mjs`
 checks, and `docs/parity/UI-ACTIONS.md` lists).
@@ -52,15 +52,17 @@ where it does something -- an action an editor does not offer stays dimmed there
 
 | Behaviour | Status | KiCad file:function |
 |---|---|---|
-| Group Properties | partial | `DIALOG_GROUP_PROPERTIES`: name and member list, the plus button hides the dialog and asks for a click on a new member (`PCB_GROUP_TOOL::PickNewMember`), the trash button drops a row, a click on a row shows the item. OK is one undo step (`Cmd::EditGroup`: rename, replace the members, an item leaves any other group, under two members dissolves it). Not ported: the Locked box and the design-block library link |
-| Add Items to Group, Remove Items from Group | identical | `GROUP_TOOL::AddToGroup` / `RemoveFromGroup` under `GROUP_CONTEXT_MENU`'s conditions, listed in the board's context menu where they apply |
+| Group Properties | partial | `DIALOG_GROUP_PROPERTIES`: name and member list, the plus button hides the dialog and asks for a click on a new member (`PCB_GROUP_TOOL::PickNewMember`), the trash button drops a row, a click on a row shows the item. OK is one undo step (`Cmd::EditGroup`: rename, replace the members, an item leaves any other group, under two members dissolves it; a member may be another group, but not this one or one that holds it). Not ported: the Locked box and the design-block library link |
+| Add Items to Group, Remove Items from Group | identical | `GROUP_TOOL::AddToGroup` / `RemoveFromGroup` under `GROUP_CONTEXT_MENU`'s conditions, listed in the board's context menu where they apply (it lists them since 2026-10-08: `PARITY-pcb.md` section 7) |
+| Group, Ungroup | identical in effect, nested (2026-10-08) | `GROUP_TOOL::Group` / `Ungroup`, `PCB_GROUP_TOOL::Group`: grouping a selection that holds groups makes them members of the new one, ungrouping frees the members of the group above too, a group under two members dissolves up the tree (`PARITY-pcb.md` section 16) |
+| Enter Group, Leave Group | identical (2026-10-08) | `PCB_SELECTION_TOOL::EnterGroup` / `ExitGroup`: Enter Group (the menu, or a double click) selects the group's members and only they can be picked; Leave Group (the menu, which selects the group), Escape, a click outside the group and selecting something outside it leave it. The rest of the board is drawn dimmed meanwhile (`PARITY-pcb.md` section 16) |
 
 ## 5. Checker markers, Find and Replace
 
 | Behaviour | Status | KiCad file:function |
 |---|---|---|
-| Next Marker, Previous Marker | identical | `DRC_TOOL::NextMarker` / `PrevMarker`, `SCH_INSPECTION_TOOL`'s, over `RC_TREE_MODEL`'s order: step the open DRC / ERC list, select the items the marker names and frame them |
-| Exclude Marker | identical (schematic) | `DIALOG_ERC::ExcludeMarker` -> `add_erc_exclusion`; the board has no DRC exclusions to store, so the entry stays off on the PCB tab |
+| Next Marker, Previous Marker | identical (2026-10-08) | `DRC_TOOL::NextMarker` / `PrevMarker`, `SCH_INSPECTION_TOOL`'s, over `RC_TREE_MODEL`'s order: with the dialog up they step the page it shows (Violations, Unconnected Items or Schematic Parity on the board; Violations on the schematic) among the rows its Show boxes list, select the items the marker names and frame them; with no dialog the board's opens it and stops (`ShowDRCDialog`). Nothing to step on the Ignored Tests page. KiCad assigns no default hotkey to these three actions (`ACTIONS::nextMarker` / `prevMarker` / `excludeMarker`), so none is bound; they are in both Inspect menus and the dialogs' own buttons (`actions/commonCheckerActions.ts`, `checkerOps.ts`, `kicad-port/rcItems.ts` `stepListed`) |
+| Exclude Marker | identical (2026-10-08), board and schematic | `DIALOG_DRC::ExcludeMarker` (the Violations page, a marker not excluded yet) -> `add_drc_exclusions`; `DIALOG_ERC::ExcludeMarker` -> `add_erc_exclusion`. The row stays dim when exclusions are shown; when they are hidden it leaves the list and the selection moves to the next one (`RC_TREE_MODEL::DeleteCurrentItem`). The report on screen is patched in place, a current report stays current |
 | Replace, Replace All, Update Find, Find and Replace | identical | the schematic find dialog's own actions (`SCH_EDITOR_CONTROL::ReplaceAndFindNext` / `ReplaceAll`, `UpdateFind`); matches are brightened while the dialog is open |
 | Activate Point Editor, Update Menu | identical in effect | satisfied by construction: the point editor is always on, the menus read state |
 
@@ -133,9 +135,8 @@ there (or, for Group / Ungroup on the schematic, leaves enabled and inert), with
 
 | Action | Editor | Why |
 |---|---|---|
-| Find, Find Next / Previous, Find and Replace, Update Find, Find Next Marker | PCB | `GAPS.md` item 21: there is no Find on the board; the actions are the schematic find dialog's |
+| Find and Replace, Update Find, Find Next Marker | PCB | KiCad's board editor does not offer them either; they are the schematic find dialog's. Find, Find Next and Find Previous are live on the board since 2026-10-08 (`PARITY-pcb.md` section 7a, `GAPS.md` item 21) |
 | Find, Find and Replace | Symbol Editor | `editor_toolbar_support.json`: Find searches the schematic, not an open library symbol |
-| Exclude Marker | PCB | DRC exclusions are not modelled (ERC's are) |
 | Left / Center / Right Justify | Schematic | `SchematicText` has no justification yet (`GAPS.md` item 12) |
 | Group Properties, Add / Remove Items, New Group Member | Schematic | the schematic has no groups (`GAPS.md` item 17); Group / Ungroup are registered for the board only and do nothing there |
 | Group, Ungroup | Footprint Editor | `editor_toolbar_support.json`: a library footprint has no groups |

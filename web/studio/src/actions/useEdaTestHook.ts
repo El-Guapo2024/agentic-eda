@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], counts, grid, dialogs, open }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, dialogs, open }
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
 // This file is the page glue: the capture that has to start at load (console.error, window errors, the fetch wrapper that counts the studio's requests and reads the
@@ -51,6 +51,8 @@ export interface HookState {
   /** The prompt of the picker session running (the delete tool's "Delete: click an item to delete it"), or null. */
   picker: string | null;
   selection: SelectedItem[];
+  /** The group being worked in on the board (`PCB_SELECTION_TOOL::m_enteredGroup`), or null. */
+  entered: string | null;
   counts: Counts;
   /** The grid of the editor on screen, in um; null on the tabs whose grid is not a choice (the schematic's is the fixed 50 mil, the 3D viewer has none). */
   grid: number | null;
@@ -207,6 +209,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         tool,
         picker: picker.session()?.prompt ?? null,
         selection: selectionWithKinds(selection, kindIndex(lists)),
+        entered: studio.tab === "pcb" ? studio.enteredGroupId : null,
         counts: countsOf(studio.board, studio.schematic),
         grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : null,
         dialogs: dialogTitles(),

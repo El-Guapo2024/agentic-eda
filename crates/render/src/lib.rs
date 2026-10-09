@@ -37,7 +37,7 @@ pub fn render_schematic(design: &Design, model: &ConstraintModel) -> Result<Stri
     let mut boxes = Vec::with_capacity(sch.symbols.len());
     for sym in &sch.symbols {
         match model.part(&sym.id) {
-            Some(part) => boxes.push(SymbolBox::build(sym, part, model)),
+            Some(part) => boxes.push(SymbolBox::build(sym, part, model, sch)),
             None => errors.push(CheckResult::fail(
                 "render.missing_part",
                 sym.id.clone(),
@@ -338,11 +338,14 @@ struct SymbolBox<'a> {
     ports: Vec<Port>,
     pin_of_port: Vec<Option<usize>>, // port idx -> pin idx in part.pins
     resolved: Option<eda_model::symbol::LibSymbol>,
+    /// The shown fields where the section keeps them (`None` for a drawing that keeps none: ref and value are then placed by the rules below).
+    fields: Option<Vec<eda_engine::fields::PageField>>,
 }
 
 impl<'a> SymbolBox<'a> {
-    fn build(sym: &'a SymbolInstance, part: &'a Part, model: &ConstraintModel) -> Self {
+    fn build(sym: &'a SymbolInstance, part: &'a Part, model: &ConstraintModel, sch: &eda_model::ir::SchematicSection) -> Self {
         let resolved = model.real_symbol_of(&sym.lib_id, part);
+        let fields = eda_engine::fields::stored_visible_fields(sch, sym, part, resolved.as_ref());
         let (width, height) = geometry::node_size(part, resolved.as_ref(), sym.unit);
         let (ports, pin_port) = geometry::build_ports(part, width, height, resolved.as_ref(), sym.unit);
         let mut pin_of_port = vec![None; ports.len()];
@@ -351,7 +354,7 @@ impl<'a> SymbolBox<'a> {
                 pin_of_port[*pi] = Some(pin_idx);
             }
         }
-        Self { sym, part, width, height, ports, pin_of_port, resolved }
+        Self { sym, part, width, height, ports, pin_of_port, resolved, fields }
     }
 
     /// Local-space (box top-left = 0,0) corners, before the symbol's own
@@ -409,6 +412,11 @@ impl<'a> SymbolBox<'a> {
     /// gets label-vs-ref/value AND ref/value-vs-ref/value clearance for
     /// free.
     fn ref_value_boxes(&self, wires: &[eda_model::ir::Wire], obstacles: &mut Vec<geometry::TextBox>) -> Vec<geometry::TextBox> {
+        if let Some(fields) = &self.fields {
+            let out: Vec<geometry::TextBox> = fields.iter().map(eda_engine::fields::field_box_mm).collect();
+            obstacles.extend(out.iter().copied());
+            return out;
+        }
         let is_passive = geometry::is_two_pin_passive(self.part);
         let h_mm = self.height as f64 / 1000.0;
         let cy = h_mm / 2.0;
@@ -472,6 +480,12 @@ impl<'a> SymbolBox<'a> {
             }
         }
 
+        // A symbol whose fields have places of their own is drawn with them there (below, after the symbol's own group closes).
+        if let Some(fields) = &self.fields {
+            for f in fields {
+                obstacles.push(eda_engine::fields::field_box_mm(f));
+            }
+        }
         // Ref sits above-left of the box; value sits below-left. Both are
         // left-anchored (rather than centered) so they don't collide with a
         // south-side net-label glyph, which is centered under the box.
@@ -485,16 +499,19 @@ impl<'a> SymbolBox<'a> {
         let (_, base_ref_y) = geometry::ref_slot_local(self.part, self.height, self.resolved.as_ref());
         let sym_x = self.sym.at.x as f64 / 1000.0;
         let sym_y = self.sym.at.y as f64 / 1000.0;
-        let ref_y = geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles);
-        obstacles.push(geometry::text_bbox(sym_x, sym_y + ref_y, &self.sym.id, 1.6, geometry::HAnchor::Start));
-        let _ = writeln!(
-            svg,
-            r#"<text class="ref" x="{x}" y="{y}">{t}</text>"#,
-            x = fmt_f(0.0),
-            y = fmt_f(ref_y),
-            t = xml_escape(&self.sym.id),
-        );
-        if let Some(val) = symbol_value(self.part) {
+        let legacy_fields = self.fields.is_none();
+        let ref_y = if legacy_fields { geometry::resolve_text_y_obs(sym_x, sym_y, 0.0, base_ref_y, -1.0, &self.sym.id, 1.6, geometry::HAnchor::Start, wires, obstacles) } else { 0.0 };
+        if legacy_fields {
+            obstacles.push(geometry::text_bbox(sym_x, sym_y + ref_y, &self.sym.id, 1.6, geometry::HAnchor::Start));
+            let _ = writeln!(
+                svg,
+                r#"<text class="ref" x="{x}" y="{y}">{t}</text>"#,
+                x = fmt_f(0.0),
+                y = fmt_f(ref_y),
+                t = xml_escape(&self.sym.id),
+            );
+        }
+        if let Some(val) = symbol_value(self.part).filter(|_| legacy_fields) {
             // Value sits at the box's bottom-right, clear of both the east
             // pin row (so it doesn't collide with that pin's number/wire)
             // and the south net-label column (centered under the box, so a
@@ -568,6 +585,23 @@ impl<'a> SymbolBox<'a> {
             }
         }
         svg.push_str("</g>\n");
+        // the shown fields, on the sheet (not turned with the symbol): the text hangs from its anchor the way its justification says
+        for f in self.fields.iter().flatten() {
+            let anchor = match f.h {
+                eda_model::kicad_font::HJustify::Left => "start",
+                eda_model::kicad_font::HJustify::Center => "middle",
+                eda_model::kicad_font::HJustify::Right => "end",
+            };
+            let class = if f.name == "Reference" { "ref" } else { "value" };
+            let b = eda_engine::fields::field_box_mm(f);
+            let _ = writeln!(
+                svg,
+                r#"<text class="{class}" x="{x}" y="{y}" style="font-size:1.27px;text-anchor:{anchor}">{t}</text>"#,
+                x = fmt_f(f.at.0 / 1000.0),
+                y = fmt_f((b.y0 + b.y1) / 2.0 + 0.45),
+                t = xml_escape(&f.text),
+            );
+        }
     }
 }
 
@@ -1021,14 +1055,15 @@ mod tests {
     fn wire_polyline_matches_design_points() {
         // Only GND is a true rail name on this fixture (see
         // `geometry::is_power_or_ground_net_name`); VIN/VOUT stay ordinary
-        // wires. GND draws no wire and no label — every pin gets its own
-        // real `power:GND` symbol instead (see `eda_engine::derive_schematic`).
-        // Check that each one's glyph is anchored exactly at its own point.
+        // wires. GND draws no routed wire and no label — every pin gets a
+        // real `power:GND` symbol, hung off the pin on a short wire (see
+        // `eda_engine::derive_schematic`). Check that each one's glyph is
+        // anchored exactly at its own point.
         let model = ldo_model();
         let design = ldo_design();
         let svg = render_schematic(&design, &model).unwrap();
         let sch = design.schematic.unwrap();
-        assert!(sch.wires.iter().all(|w| w.net != "GND"), "GND is power-style: no wire expected");
+        assert!(sch.wires.iter().filter(|w| w.net == "GND").all(|w| w.pts.len() <= 3), "GND is power-style: only short stubs to its symbols expected");
         assert!(sch.labels.iter().all(|l| l.net != "GND"), "GND is power-style: no label expected");
         let gnd_power = sch.power_symbols.iter().find(|p| p.net == "GND" && p.lib_id == "power:GND").unwrap();
         let expected_anchor = format!(r#"x1="{}" y1="{}""#, fmt_mm(gnd_power.at.x), fmt_mm(gnd_power.at.y));

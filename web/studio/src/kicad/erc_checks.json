@@ -1,0 +1,306 @@
+{
+  "commit": "8303b2ada05226fa603e5ac0420d240fd65ce52b",
+  "source": [
+    "eeschema/erc/erc_item.cpp",
+    "eeschema/erc/erc_settings.cpp"
+  ],
+  "groups": [
+    {
+      "title": "Connections",
+      "items": [
+        {
+          "key": "pin_not_connected",
+          "title": "Pin not connected",
+          "code": "ERCE_PIN_NOT_CONNECTED",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "pin_not_driven",
+          "title": "Input pin not driven by any Output pins",
+          "code": "ERCE_PIN_NOT_DRIVEN",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "power_pin_not_driven",
+          "title": "Input Power pin not driven by any Output Power pins",
+          "code": "ERCE_POWERPIN_NOT_DRIVEN",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "no_connect_connected",
+          "title": "A pin with a \"no connection\" flag is connected",
+          "code": "ERCE_NOCONNECT_CONNECTED",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "no_connect_dangling",
+          "title": "Unconnected \"no connection\" flag",
+          "code": "ERCE_NOCONNECT_NOT_CONNECTED",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "label_dangling",
+          "title": "Label not connected",
+          "code": "ERCE_LABEL_NOT_CONNECTED",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "isolated_pin_label",
+          "title": "Label connected to only one pin",
+          "code": "ERCE_LABEL_SINGLE_PIN",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "single_global_label",
+          "title": "Global label only appears once in the schematic",
+          "code": "ERCE_SINGLE_GLOBAL_LABEL",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "same_local_global_label",
+          "title": "Local and global labels have same name",
+          "code": "ERCE_SAME_LOCAL_GLOBAL_LABEL",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "same_local_global_power",
+          "title": "Local and global power symbols have same name",
+          "code": "ERCE_SAME_LOCAL_GLOBAL_POWER",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "wire_dangling",
+          "title": "Wires not connected to anything",
+          "code": "ERCE_WIRE_DANGLING",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "bus_entry_needed",
+          "title": "Bus Entry needed",
+          "code": "ERCE_BUS_ENTRY_NEEDED",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "endpoint_off_grid",
+          "title": "Symbol pin or wire end off connection grid",
+          "code": "ERCE_ENDPOINT_OFF_GRID",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "four_way_junction",
+          "title": "Four connection points are joined together",
+          "code": "ERCE_FOUR_WAY_JUNCTION",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "label_multiple_wires",
+          "title": "Label connects more than one wire",
+          "code": "ERCE_LABEL_MULTIPLE_WIRES",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "unconnected_wire_endpoint",
+          "title": "Unconnected wire endpoint",
+          "code": "ERCE_UNCONNECTED_WIRE_ENDPOINT",
+          "defaultSeverity": "warning"
+        }
+      ]
+    },
+    {
+      "title": "Conflicts",
+      "items": [
+        {
+          "key": "duplicate_reference",
+          "title": "Duplicate reference designators",
+          "code": "ERCE_DUPLICATE_REFERENCE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "unit_value_mismatch",
+          "title": "Units of same symbol have different values",
+          "code": "ERCE_DIFFERENT_UNIT_VALUE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "different_unit_footprint",
+          "title": "Different footprint assigned in another unit of the symbol",
+          "code": "ERCE_DIFFERENT_UNIT_FP",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "different_unit_net",
+          "title": "Different net assigned to a shared pin in another unit of the symbol",
+          "code": "ERCE_DIFFERENT_UNIT_NET",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "duplicate_sheet_names",
+          "title": "Duplicate sheet names within a given sheet",
+          "code": "ERCE_DUPLICATE_SHEET_NAME",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "hier_label_mismatch",
+          "title": "Mismatch between hierarchical labels and sheet pins",
+          "code": "ERCE_HIERACHICAL_LABEL",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "multiple_net_names",
+          "title": "More than one name given to this bus or net",
+          "code": "ERCE_DRIVER_CONFLICT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "bus_definition_conflict",
+          "title": "Conflict between bus alias definitions across schematic sheets",
+          "code": "ERCE_BUS_ALIAS_CONFLICT",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "bus_to_bus_conflict",
+          "title": "Buses are graphically connected but share no bus members",
+          "code": "ERCE_BUS_TO_BUS_CONFLICT",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "bus_to_net_conflict",
+          "title": "Invalid connection between bus and net items",
+          "code": "ERCE_BUS_TO_NET_CONFLICT",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "net_not_bus_member",
+          "title": "Net is graphically connected to a bus but not a bus member",
+          "code": "ERCE_BUS_ENTRY_CONFLICT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "ground_pin_not_ground",
+          "title": "Ground pin not connected to ground net",
+          "code": "ERCE_GROUND_PIN_NOT_GROUND",
+          "defaultSeverity": "warning"
+        }
+      ]
+    },
+    {
+      "title": "Miscellaneous",
+      "items": [
+        {
+          "key": "stacked_pin_name",
+          "title": "Pin name resembles stacked pin",
+          "code": "ERCE_STACKED_PIN_SYNTAX",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "field_name_whitespace",
+          "title": "Field name has leading or trailing whitespace",
+          "code": "ERCE_FIELD_NAME_WHITESPACE",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "unannotated",
+          "title": "Symbol is not annotated",
+          "code": "ERCE_UNANNOTATED",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "unresolved_variable",
+          "title": "Unresolved text variable",
+          "code": "ERCE_UNRESOLVED_VARIABLE",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "undefined_netclass",
+          "title": "Undefined netclass",
+          "code": "ERCE_UNDEFINED_NETCLASS",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "simulation_model_issue",
+          "title": "SPICE model issue",
+          "code": "ERCE_SIMULATION_MODEL",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "similar_labels",
+          "title": "Labels are similar (lower/upper case difference only)",
+          "code": "ERCE_SIMILAR_LABELS",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "similar_power",
+          "title": "Power pins are similar (lower/upper case difference only)",
+          "code": "ERCE_SIMILAR_POWER",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "similar_label_and_power",
+          "title": "Power pin and label are similar (lower/upper case difference only)",
+          "code": "ERCE_SIMILAR_LABEL_AND_POWER",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "lib_symbol_issues",
+          "title": "Library symbol issue",
+          "code": "ERCE_LIB_SYMBOL_ISSUES",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "lib_symbol_mismatch",
+          "title": "Symbol doesn't match copy in library",
+          "code": "ERCE_LIB_SYMBOL_MISMATCH",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "footprint_link_issues",
+          "title": "Footprint link issue",
+          "code": "ERCE_FOOTPRINT_LINK_ISSUES",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "footprint_filter",
+          "title": "Assigned footprint doesn't match footprint filters",
+          "code": "ERCE_FOOTPRINT_FILTERS",
+          "defaultSeverity": "ignore"
+        },
+        {
+          "key": "extra_units",
+          "title": "Symbol has more units than are defined",
+          "code": "ERCE_EXTRA_UNITS",
+          "defaultSeverity": "error"
+        },
+        {
+          "key": "missing_unit",
+          "title": "Symbol has units that are not placed",
+          "code": "ERCE_MISSING_UNIT",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "missing_input_pin",
+          "title": "Symbol has input pins that are not placed",
+          "code": "ERCE_MISSING_INPUT_PIN",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "missing_bidi_pin",
+          "title": "Symbol has bidirectional pins that are not placed",
+          "code": "ERCE_MISSING_BIDI_PIN",
+          "defaultSeverity": "warning"
+        },
+        {
+          "key": "missing_power_pin",
+          "title": "Symbol has power input pins that are not placed",
+          "code": "ERCE_MISSING_POWER_INPUT_PIN",
+          "defaultSeverity": "error"
+        }
+      ]
+    }
+  ],
+  "pinMap": {
+    "key": "pin_to_pin",
+    "title": "Conflict problem between pins",
+    "code": "ERCE_PIN_TO_PIN_WARNING",
+    "defaultSeverity": "warning"
+  }
+}

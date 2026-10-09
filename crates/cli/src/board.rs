@@ -141,6 +141,11 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     }
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
     fold_unknown_symbols(&design, &mut model);
+    // A footprint copied onto the board has no part in the intent either; `board_parts` is where it lives.
+    fold_board_parts(&design, &mut model);
+    // A placed symbol's own Footprint field (its library's default, or the one the Footprint Chooser assigned) names a library footprint the same
+    // way an intent part does: resolve what the folded parts name, so it can be placed on the board.
+    crate::resolve_footprint_libraries(&mut model);
     Ok((meta, design, model))
 }
 
@@ -195,6 +200,61 @@ fn fold_unknown_symbols(design: &eda_model::ir::Design, model: &mut ConstraintMo
             body_um: None,
             edge: None,
         });
+    }
+}
+
+/// A `Part` in `model` for every footprint that lives only on the board (`DrawingsSection::board_parts`): the copies Duplicate and
+/// Paste make. [`load`] calls it after the intent is read, so a copy is a part like any other for everything downstream -- the
+/// gates, the router, the exports. Its pads join the nets it was copied on (a net the board has not got yet is made, as
+/// KiCad's Paste makes one), and a footprint nothing else resolves under that name takes the copy's own pads and courtyard.
+/// A reference the model already has is left alone: the intent's part wins.
+fn fold_board_parts(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+    let Some(dr) = design.drawings.as_ref() else { return };
+    for bp in &dr.board_parts {
+        if model.part(&bp.reference).is_some() {
+            continue;
+        }
+        if let Some(def) = &bp.definition {
+            if model.footprints.iter().all(|f| f.name != bp.footprint) {
+                let mut fp = def.to_engine_footprint();
+                fp.name = bp.footprint.clone();
+                model.footprints.push(fp);
+            }
+        }
+        let mut part = eda_model::Part {
+            reference: bp.reference.clone(),
+            mpn: None,
+            lcsc: None,
+            value: bp.value.clone(),
+            package: None,
+            footprint: Some(bp.footprint.clone()),
+            symbol: None,
+            datasheet: None,
+            pins: vec![],
+            body_um: None,
+            edge: None,
+        };
+        // The part's pins are its electrical pads: one per number, a non-plated hole is none.
+        if let Some(fp) = model.footprint_of(&part) {
+            let mut seen = std::collections::BTreeSet::new();
+            for pad in fp.pads.iter().filter(|p| p.kind != eda_model::PadKind::NonPlatedHole) {
+                if seen.insert(pad.number.clone()) {
+                    part.pins.push(eda_model::Pin { number: pad.number.clone(), name: None, kind: eda_model::PinKind::Passive });
+                }
+            }
+        }
+        model.parts.push(part);
+        for (pad, net) in &bp.pad_nets {
+            let pin = format!("{}.{pad}", bp.reference);
+            match model.nets.iter_mut().find(|n| &n.name == net) {
+                Some(n) => {
+                    if !n.pins.contains(&pin) {
+                        n.pins.push(pin);
+                    }
+                }
+                None => model.nets.push(eda_model::Net { name: net.clone(), pins: vec![pin] }),
+            }
+        }
     }
 }
 
@@ -639,10 +699,18 @@ fn clear_dir(stack_dir: &Path) {
     let _ = std::fs::remove_dir_all(stack_dir);
 }
 
-/// The Schematic scope's undo also follows `LibrarySymbol::published`: Update Symbol(s) (`SchCmd::UpdateLibrarySymbols`) is run from the
-/// schematic but flips that flag in the symbol library, which the Schematic scope does not otherwise restore -- so the edit could never be
-/// undone. Only the flags come from the snapshot (a symbol the snapshot does not have keeps its own), never the symbols' own edits.
-fn follow_published(mut library: Option<eda_model::ir::SymbolLibrarySection>, snapshot: Option<&eda_model::ir::SymbolLibrarySection>) -> Option<eda_model::ir::SymbolLibrarySection> {
+/// The Schematic scope's undo also follows the symbol library's published entries. Update Symbol(s) (`SchCmd::UpdateLibrarySymbols`) is run from the
+/// schematic but flips `LibrarySymbol::published` in the symbol library, which the Schematic scope does not otherwise restore -- so the edit could
+/// never be undone: the flags come from the snapshot (a symbol the snapshot does not have keeps its own), never the symbols' own edits.
+///
+/// A schematic command can also ADD published entries: a paste brings the symbols of its fragment, and placing a symbol of an installed library keeps
+/// its definition (`Cmd::EmbedLibSymbol`). Undo takes those back with the command: a published entry the snapshot lacks goes when nothing in the
+/// restored schematic (`used`: the `lib_id`s of its symbols, on every sheet) draws from it; and redo, whose snapshot has it, puts it back.
+fn follow_published(
+    mut library: Option<eda_model::ir::SymbolLibrarySection>,
+    snapshot: Option<&eda_model::ir::SymbolLibrarySection>,
+    used: &std::collections::BTreeSet<String>,
+) -> Option<eda_model::ir::SymbolLibrarySection> {
     if let (Some(lib), Some(snap)) = (library.as_mut(), snapshot) {
         for sym in lib.symbols.iter_mut() {
             if let Some(old) = snap.by_lib_id(&sym.lib_id) {
@@ -650,7 +718,28 @@ fn follow_published(mut library: Option<eda_model::ir::SymbolLibrarySection>, sn
             }
         }
     }
+    if let Some(lib) = library.as_mut() {
+        lib.symbols.retain(|s| !(s.published && !used.contains(&s.lib_id) && snapshot.is_none_or(|snap| snap.by_lib_id(&s.lib_id).is_none())));
+    }
+    if let Some(snap) = snapshot {
+        for sym in snap.symbols.iter().filter(|s| s.published && used.contains(&s.lib_id)) {
+            let lib = library.get_or_insert_with(Default::default);
+            if lib.by_lib_id(&sym.lib_id).is_none() {
+                lib.symbols.push(sym.clone());
+                lib.symbols.sort_by(|a, b| a.lib_id.cmp(&b.lib_id));
+            }
+        }
+    }
+    // A library the schematic command made out of nothing is none again.
+    if snapshot.is_none() && library.as_ref().is_some_and(|l| l.symbols.is_empty()) {
+        library = None;
+    }
     library
+}
+
+/// The `lib_id` of every symbol and power symbol on every sheet of the schematic.
+fn schematic_lib_ids(root: Option<&eda_model::ir::SchematicSection>, sheets: Option<&std::collections::BTreeMap<String, eda_model::ir::SchematicSection>>) -> std::collections::BTreeSet<String> {
+    root.into_iter().chain(sheets.into_iter().flat_map(|c| c.values())).flat_map(|sch| sch.symbols.iter().map(|s| s.lib_id.clone()).chain(sch.power_symbols.iter().map(|p| p.lib_id.clone()))).collect()
 }
 
 /// Overlay `scope`'s own half of `snapshot` onto `current`, leaving
@@ -666,7 +755,8 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
     match scope {
         None => snapshot,
         Some(Domain::Schematic) => {
-            let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref());
+            let used = schematic_lib_ids(snapshot.schematic.as_ref(), snapshot.sheet_contents.as_ref());
+            let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref(), &used);
             // The sheets' own content (`sheet_contents`) is schematic too: an edit inside a sheet is undone with the root.
             eda_model::ir::Design { schematic: snapshot.schematic, sheet_contents: snapshot.sheet_contents, nets: snapshot.nets, symbol_library, ..current }
         }
@@ -769,6 +859,9 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, Vec<CheckResult>> {
     let (meta, mut design, mut model) = load(dir)?;
+    // A symbol or footprint out of KiCad's installed libraries goes in with its definition (`crate::library_place`).
+    let with_definitions = crate::library_place::with_installed_definitions(cmd, &design, &model);
+    let cmd = with_definitions.as_ref().unwrap_or(cmd);
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
@@ -790,17 +883,32 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     }
     let before = all_failures(&board, &model);
     let was = board.fork();
+    // What the command clears is judged against the board it found: a move of copper alone leaves the routing be, and so does
+    // one that takes a footprint nothing was routed to; one that takes a footprint with copper on its pads does not
+    // (`Cmd::clears_routing_in`).
+    let clears_routing = cmd.clears_routing_in(&was);
 
     // A refused command is not a crash: it is an answer. The caller
     // asked whether this move is possible and the gates said no, with a
     // reason -- which is exactly the signal a decision layer needs.
     board.apply(cmd)?;
 
-    let after = all_failures(&board, &model);
+    // A command that made footprints of its own (Duplicate, Paste) added parts the model loaded before it ran has not heard of;
+    // the board that results is judged against a model that has them, as the next load will have.
+    let board_parts = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.board_parts.clone()).unwrap_or_default();
+    let refolded: Option<ConstraintModel> = (board_parts(board.design()) != board_parts(was.design())).then(|| {
+        let mut m = model.clone();
+        fold_board_parts(board.design(), &mut m);
+        m
+    });
+    let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
+    let board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_um, meta.spacing_um) } else { board };
+
+    let after = all_failures(&board, judged);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
     if strictness != Strictness::Off && after > before {
-        let new: Vec<String> = all_checks(&board, &model)
+        let new: Vec<String> = all_checks(&board, judged)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
             .filter(|c| !all_checks(&was, &model).iter().any(|w| w.check == c.check && w.location == c.location && matches!(w.status, eda_model::CheckStatus::Fail)))
@@ -819,7 +927,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
             return Err(fail("kicad_cli_missing", "kicad-cli", "--strict judges a move with KiCad's own gates (courtyard overlap, edge clearance), which need kicad-cli; set EDA_KICAD_CLI or install KiCad"));
         }
         let was_all = judged_checks(&was, &model);
-        let now_all = judged_checks(&board, &model);
+        let now_all = judged_checks(&board, judged);
         let (strict_before, strict_after) = (failures_in(&was_all), failures_in(&now_all));
         if strict_after > strict_before {
             let new: Vec<String> = now_all
@@ -836,9 +944,10 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
         }
     }
 
-    let (done, placed, failures) = progress(&board, &model);
+    let (done, placed, failures) = progress(&board, judged);
+    let n_parts = judged.parts.len();
     let mut design = board.design().clone();
-    // `board` borrows `model` for its whole lifetime (pad/pin lookups,
+    // `board` borrows the model for its whole lifetime (pad/pin lookups,
     // decoupling pairs); `reconcile_schematic` below needs `model` back
     // mutably (a brand-new symbol can add a `Part` nothing else has heard
     // of yet), so this drop makes that borrow's end explicit rather than
@@ -848,7 +957,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // a part edit does -- a part edit can move a footprint out from under
     // a track, a copper/drawing edit cannot invalidate anything by
     // construction. See `Cmd::clears_routing`.
-    let stale = if cmd.clears_routing() { design.routing.take().is_some() } else { false };
+    let stale = if clears_routing { design.routing.take().is_some() } else { false };
     // Schematic connectivity only needs retracing after a schematic edit
     // -- see `reconcile_schematic`'s own doc on why this is the entire
     // "one netlist" mechanism and why it never touches a PCB-only board.
@@ -859,7 +968,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     Ok(format!(
         "{}: {placed}/{} placed ({:.0}%), {failures} failure(s){}{}",
         cmd_name(cmd),
-        model.parts.len(),
+        n_parts,
         done * 100.0,
         match after as i64 - before as i64 {
             0 => String::new(),
@@ -977,6 +1086,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
+        Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
+        Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
+        Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
         Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
         Cmd::SwapChain { parts } => format!("swap-chain {}", parts.join(" ")),
@@ -997,6 +1109,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PasteItems { tracks, vias, zones, shapes, texts } => {
             format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
         }
+        Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), text.len()),
         Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => format!(
             "move-exact {} --by {},{} --rotate {:.3} --pivot {}",
             parts.join(" "),
@@ -1005,6 +1118,16 @@ fn cmd_line(c: &Cmd) -> String {
             *rotate_millideg as f64 / 1000.0,
             pivot.map_or("self".to_string(), |p| format!("{},{}", mm(p.x), mm(p.y)))
         ),
+        Cmd::MoveItems { ids, dx, dy } => format!("move-items {} --by {},{}", ids.join(" "), mm(*dx), mm(*dy)),
+        Cmd::RotateItems { ids, pivot, angle_millideg } => format!("rotate-items {} --by {:.3} --pivot {},{}", ids.join(" "), *angle_millideg as f64 / 1000.0, mm(pivot.x), mm(pivot.y)),
+        Cmd::FlipItems { ids, pivot, direction } => format!("flip-items {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
+        Cmd::EditTrack { id, start, end } => {
+            let at = |p: &Option<Point>| p.map(|p| format!("{},{}", mm(p.x), mm(p.y)));
+            format!("track edit {id}{}{}", at(start).map(|s| format!(" --start {s}")).unwrap_or_default(), at(end).map(|e| format!(" --end {e}")).unwrap_or_default())
+        }
+        Cmd::SetItemNet { ids, net } => format!("net-set {} --net {net}", ids.join(" ")),
+        Cmd::SetZoneName { id, name } => format!("zone name {id} --name {name:?}"),
+        Cmd::ReplaceShape { id, .. } => format!("shape replace {id}"),
 
         // No real `eda board` CLI subcommand parses these yet (the studio
         // UI is their only caller so far) -- this text exists purely for
@@ -1052,6 +1175,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::EmbedLibSymbol { symbol } => format!("schematic keep-symbol {:?}", symbol.lib_id),
+        Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x), mm(at.y)),
         Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
         Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
         Cmd::Annotate { reset_existing, order, ids } => format!(
@@ -1214,6 +1339,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetStackup { .. } => "stackup",
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
+        Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
+        Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::SetLocked { .. } => "lock",
         Cmd::SwapChain { .. } => "swap",
@@ -1224,10 +1351,17 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetBoardPage { .. } => "page",
         Cmd::SetSchematicPage { .. } => "schematic-page",
         Cmd::RepairBoard => "repair",
-        Cmd::Duplicate { .. } | Cmd::PasteItems { .. } => "duplicate",
+        Cmd::Duplicate { .. } | Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
+        Cmd::MoveItems { .. } => "move-items",
+        Cmd::RotateItems { .. } => "rotate-items",
+        Cmd::FlipItems { .. } => "flip-items",
+        Cmd::EditTrack { .. } => "track",
+        Cmd::SetItemNet { .. } => "net-set",
+        Cmd::SetZoneName { .. } => "zone",
+        Cmd::ReplaceShape { .. } => "shape",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",
@@ -1249,6 +1383,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
         Cmd::AddSymbol { .. } => "schematic-place",
+        Cmd::EmbedLibSymbol { .. } => "schematic-keep-symbol",
+        Cmd::PlaceFootprint { .. } => "place-footprint",
         Cmd::OnSheet { cmd, .. } => cmd_name(cmd),
         Cmd::ReorganizeSheets => "schematic-reorganize-sheets",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
@@ -1630,7 +1766,8 @@ pub fn run(
             Ok(())
         }
         "drc" => {
-            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc(&dir, has(rest, "--refill-zones"))?).unwrap_or_default());
+            // `--schematic-parity`: also compare the board with the schematic (the studio's "Test for parity between PCB and schematic").
+            println!("{}", serde_json::to_string_pretty(&crate::kicad_engine::drc_with(&dir, has(rest, "--refill-zones"), has(rest, "--schematic-parity"))?).unwrap_or_default());
             Ok(())
         }
         // Our own checks, the ones KiCad does not have (`eda-lint`):
@@ -1792,7 +1929,7 @@ mod tests {
 
     /// kicad-cli's violation counts by type on the board in `dir`, as the studio's DRC reports them.
     fn drc_counts(dir: &Path) -> std::collections::BTreeMap<String, u64> {
-        let report = crate::kicad_engine::drc(dir, false).expect("kicad-cli ran");
+        let report = crate::kicad_engine::drc_with(dir, false, false).expect("kicad-cli ran");
         report["counts"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap())).collect()
     }
 
@@ -1826,6 +1963,251 @@ mod tests {
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(clearance(&dir), 0, "Undo takes the edit back, overlay and all");
         assert_eq!(load(&dir).unwrap().2.board.clearance, model.board.clearance);
+    }
+
+    fn track_ids(dir: &Path) -> Vec<(String, String, Vec<Point>)> {
+        let (_, design, _) = load(dir).unwrap();
+        design.routing.map(|r| r.tracks.iter().map(|t| (t.id.clone(), t.net.clone(), t.pts.clone())).collect()).unwrap_or_default()
+    }
+
+    /// Move, Rotate and Flip of any selection are one command and so one undo step: Undo puts every item back, and
+    /// only that step goes -- the track and via added before it stay.
+    #[test]
+    fn moving_copper_is_one_undo_step_and_leaves_the_routing_alone() {
+        let dir = scratch("move_items_undo");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        let (_, before, _) = load(&dir).unwrap();
+        let (track, via) = (before.routing.as_ref().unwrap().tracks[0].id.clone(), before.routing.as_ref().unwrap().vias[0].id.clone());
+
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), via.clone()], dx: 1_500, dy: -500 }, false, "test").unwrap();
+        assert!(!msg.contains("routing cleared"), "copper alone leaves the routing be: {msg}");
+        let (_, moved, _) = load(&dir).unwrap();
+        let rt = moved.routing.as_ref().unwrap();
+        assert_eq!((rt.tracks[0].id.as_str(), rt.tracks[0].pts[0], rt.vias[0].at), (track.as_str(), Point { x: 3_500, y: 11_500 }, Point { x: 13_500, y: 11_500 }));
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, _) = load(&dir).unwrap();
+        assert_eq!(back.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts, "the whole move undone in one step");
+        assert_eq!(back.routing.as_ref().unwrap().vias.len(), 1, "and no more than the move");
+        assert_eq!(back.routing.as_ref().unwrap().vias[0].at, before.routing.as_ref().unwrap().vias[0].at);
+
+        // A footprint nothing is routed to (U1 sits at (5000, 5000), the track is at y = 12000) takes no routing with it...
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        // ...one with a track on its pad does, as every footprint move always has.
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 4_000, y: 5_000 }, Point { x: 4_000, y: 9_000 }] }, false, "test").unwrap();
+        let msg = step(&dir, Cmd::MoveItems { ids: vec![track, "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
+        assert!(msg.contains("routing cleared"), "{msg}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 2, "Undo brings the routing back");
+    }
+
+    /// The Properties panel sends one edit of a row as one `Batch` (`PCB_PROPERTIES_PANEL::valueChanged` pushes one
+    /// `BOARD_COMMIT`): the net of a track, a via and a zone at once is one step, Undo puts all three back, and the end of a
+    /// track, a shape's geometry and a zone's name go through the same way.
+    #[test]
+    fn a_properties_panel_edit_of_several_items_is_one_undo_step() {
+        let dir = scratch("panel_edit_undo");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 20_000 }, Point { x: 5_000, y: 20_000 }, Point { x: 5_000, y: 25_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddShape { shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 30_000 }, end: Point { x: 4_000, y: 30_000 } } }, false, "test").unwrap();
+        let (_, before, _) = load(&dir).unwrap();
+        let rt = before.routing.as_ref().unwrap();
+        let (track, via, zone) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.zones[0].id.clone());
+        let shape = before.drawings.as_ref().unwrap().shapes[0].id().to_string();
+
+        let net = Cmd::Batch { cmds: vec![Cmd::SetItemNet { ids: vec![track.clone()], net: "VCC".into() }, Cmd::SetItemNet { ids: vec![via.clone(), zone.clone()], net: "VCC".into() }] };
+        step(&dir, net, false, "test").unwrap();
+        let nets_of = |d: &eda_model::ir::Design| {
+            let rt = d.routing.as_ref().unwrap();
+            (rt.tracks[0].net.clone(), rt.vias[0].net.clone(), rt.zones[0].net.clone())
+        };
+        assert_eq!(nets_of(&load(&dir).unwrap().1), ("VCC".into(), "VCC".into(), "VCC".into()));
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(nets_of(&load(&dir).unwrap().1), ("GND".into(), "GND".into(), "GND".into()), "one Undo takes all three back");
+
+        let edits = Cmd::Batch {
+            cmds: vec![
+                Cmd::EditTrack { id: track.clone(), start: None, end: Some(Point { x: 14_000, y: 12_000 }) },
+                Cmd::SetZoneName { id: zone.clone(), name: "pour".into() },
+                Cmd::ReplaceShape { id: shape.clone(), shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 30_000 }, end: Point { x: 9_000, y: 30_000 } } },
+            ],
+        };
+        step(&dir, edits, false, "test").unwrap();
+        let (_, after, _) = load(&dir).unwrap();
+        assert_eq!(after.routing.as_ref().unwrap().tracks[0].pts.last(), Some(&Point { x: 14_000, y: 12_000 }));
+        assert_eq!(after.routing.as_ref().unwrap().zones[0].name, "pour");
+        assert_eq!(after.drawings.as_ref().unwrap().shapes[0].points()[1], Point { x: 9_000, y: 30_000 });
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, _) = load(&dir).unwrap();
+        assert_eq!(back.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts);
+        assert_eq!(back.routing.as_ref().unwrap().zones[0].name, "");
+        assert_eq!(back.drawings.as_ref().unwrap().shapes[0].points(), before.drawings.as_ref().unwrap().shapes[0].points());
+        assert_eq!(back.routing.as_ref().unwrap().vias.len(), 1, "no more than the one step went");
+    }
+
+    /// Duplicate a footprint on a routed board, place the copy and delete it again: the copy has nothing routed to it, so
+    /// none of it clears the routing -- and moving the original, which has copper on its pad, still does.
+    #[test]
+    fn placing_and_deleting_a_copied_footprint_leaves_the_routing_alone() {
+        let dir = scratch("copy_keeps_routing");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 4_000, y: 5_000 }, Point { x: 4_000, y: 9_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, false, "test").unwrap();
+
+        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 8_000 }, true, "test").expect("the copy moves under --strict");
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        let msg = step(&dir, Cmd::RotateItems { ids: vec!["U3".into()], pivot: Point { x: 5_000, y: 13_000 }, angle_millideg: -90_000 }, true, "test").unwrap();
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        let msg = step(&dir, Cmd::Rip { part: "U3".into() }, true, "test").expect("the copy goes again under --strict");
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        let (_, design, model) = load(&dir).unwrap();
+        assert_eq!(design.routing.as_ref().unwrap().tracks.len(), 1, "the routing is still there");
+        assert!(model.part("U3").is_none(), "and the copy is gone");
+
+        // The original has a track on its pad: that is a move out from under it.
+        let msg = step(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 0, dy: 100 }, false, "test").unwrap();
+        assert!(msg.contains("routing cleared"), "{msg}");
+    }
+
+    /// Turn a selection about a point and flip it: each is one step, each undoes, and the same two verbs reach the file kicad-cli reads.
+    #[test]
+    fn rotating_and_flipping_a_mix_of_items_each_undo_in_one_step() {
+        let dir = scratch("transform_items_undo");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddText { text: eda_model::ir::Text { id: String::new(), content: "hi".into(), at: Point { x: 8_000, y: 16_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: eda_model::ir::TextJustify::Center, mirror: false } }, false, "test").unwrap();
+        let (_, before, _) = load(&dir).unwrap();
+        let (track, text) = (before.routing.as_ref().unwrap().tracks[0].id.clone(), before.drawings.as_ref().unwrap().texts[0].id.clone());
+        let pivot = Point { x: 10_000, y: 10_000 };
+
+        step(&dir, Cmd::RotateItems { ids: vec![track.clone(), text.clone()], pivot, angle_millideg: -90_000 }, false, "test").unwrap();
+        let (_, turned, _) = load(&dir).unwrap();
+        // Counter-clockwise on the screen: (dx, dy) -> (dy, -dx).
+        assert_eq!(turned.routing.as_ref().unwrap().tracks[0].pts, vec![Point { x: 12_000, y: 18_000 }, Point { x: 12_000, y: 8_000 }]);
+        assert_eq!((turned.drawings.as_ref().unwrap().texts[0].at, turned.drawings.as_ref().unwrap().texts[0].angle), (Point { x: 16_000, y: 12_000 }, 90_000));
+
+        step(&dir, Cmd::FlipItems { ids: vec![track.clone(), text.clone()], pivot, direction: eda_ops::FlipDirection::LeftRight }, false, "test").unwrap();
+        let (_, flipped, _) = load(&dir).unwrap();
+        assert_eq!(flipped.routing.as_ref().unwrap().tracks[0].layer, "B.Cu");
+        assert_eq!((flipped.drawings.as_ref().unwrap().texts[0].layer.as_str(), flipped.drawings.as_ref().unwrap().texts[0].mirror), ("B.SilkS", true));
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].layer, "F.Cu", "the flip is undone");
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].pts[0], Point { x: 12_000, y: 18_000 }, "and the turn before it is not");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts);
+    }
+
+    /// A track moved with `MoveItems` is where kicad-cli finds it: the move reaches the derived `.kicad_pcb`. Two tracks of
+    /// different nets 2 mm apart are clean; one moved onto the other shorts, and kicad-cli reports the moved track at its new
+    /// place; Undo takes the move back and the board is clean again.
+    #[test]
+    fn a_moved_track_is_where_kicad_cli_finds_it() {
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("move_items_drc");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 14_000 }, Point { x: 12_000, y: 14_000 }] }, false, "test").unwrap();
+        let counts = |dir: &Path| drc_counts(dir);
+        let clean = counts(&dir);
+        assert_eq!(clean.get("shorting_items").copied().unwrap_or(0) + clean.get("clearance").copied().unwrap_or(0), 0, "2 mm apart is fine: {clean:?}");
+
+        let mover = track_ids(&dir).into_iter().find(|(_, net, _)| net == "VCC").unwrap().0;
+        step(&dir, Cmd::MoveItems { ids: vec![mover.clone()], dx: 500, dy: -2_000 }, false, "test").unwrap();
+        let report = crate::kicad_engine::drc(&dir, false).unwrap();
+        let hits: Vec<(f64, f64)> = report["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|v| v["items"].as_array().cloned().unwrap_or_default())
+            .filter(|i| i["id"].as_str().is_some_and(|id| id.starts_with(&mover)))
+            .map(|i| (i["pos"][0].as_f64().unwrap(), i["pos"][1].as_f64().unwrap()))
+            .collect();
+        assert!(!hits.is_empty(), "kicad-cli must report the moved track now that it sits on the other net's copper: {report}");
+        assert!(hits.iter().all(|(_, y)| (y - 12_000.0).abs() <= 200.0), "reported at its new place (y 12000), not where it was (y 14000): {hits:?}");
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let after = counts(&dir);
+        assert_eq!(after.get("shorting_items").copied().unwrap_or(0) + after.get("clearance").copied().unwrap_or(0), 0, "Undo puts the track back: {after:?}");
+    }
+
+    /// A footprint Duplicate makes is a part like the intent's: `load` gives it back after every command, the gates and the writer
+    /// that kicad-cli reads see it, its pads are on the original's nets, and Undo takes the copy and its part away together.
+    #[test]
+    fn a_duplicated_footprint_is_a_part_of_the_board_until_undo() {
+        let dir = scratch("duplicate_footprint");
+        setup(&dir);
+        let msg = step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, true, "test").expect("a duplicate in place opens no in-process gate failure");
+        assert!(msg.contains("3/3 placed"), "the copy is a part the board counts: {msg}");
+
+        let (_, design, model) = load(&dir).unwrap();
+        let u3 = model.part("U3").expect("board::load folds the copy in as a part");
+        assert_eq!(u3.pins.len(), 2, "its pads are its pins");
+        let on = |net: &str| model.nets.iter().find(|n| n.name == net).unwrap().pins.clone();
+        assert!(on("GND").contains(&"U3.1".to_string()) && on("VCC").contains(&"U3.2".to_string()), "same nets as U1: {:?}", model.nets);
+        let u1 = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U1").unwrap().clone();
+        let copy = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U3").unwrap().clone();
+        assert_eq!((copy.at, copy.rot, copy.side), (u1.at, u1.rot, u1.side));
+
+        // The file kicad-cli reads has it.
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        assert!(pcb.contains("(property \"Reference\" \"U3\""), "{pcb}");
+
+        // Move the copy away and its pads become U3's: a real part, on a real net.
+        step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 6_000 }, false, "test").unwrap();
+        let (_, moved, _) = load(&dir).unwrap();
+        assert_eq!(moved.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "U3").unwrap().at, Point { x: 5_000, y: 11_000 });
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, model) = load(&dir).unwrap();
+        assert!(model.part("U3").is_none() && back.drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "Undo takes the copy and its part away together");
+        assert!(back.placement.as_ref().unwrap().footprints.iter().all(|f| f.id != "U3"));
+    }
+
+    /// Copy on one board, Paste on another, through the same text KiCad itself would put on the clipboard: the copper arrives where
+    /// the paste point is, on the nets of the same name, as one undo step.
+    #[test]
+    fn a_copy_pastes_on_another_board_through_kicads_text() {
+        let a = scratch("copy_from");
+        setup(&a);
+        step(&a, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&a, Cmd::AddVia { net: "VCC".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        let (track, via) = {
+            let (_, d, _) = load(&a).unwrap();
+            let rt = d.routing.unwrap();
+            (rt.tracks[0].id.clone(), rt.vias[0].id.clone())
+        };
+        let body = serde_json::json!({ "ids": [track, via, "U1"], "reference": { "x": 2_000, "y": 12_000 } }).to_string();
+        let reply = crate::clipboard_api::copy(&a, body.as_bytes());
+        assert_eq!(reply["ok"], true, "{reply}");
+        let text = reply["text"].as_str().unwrap().to_string();
+        assert!(text.starts_with("(kicad_pcb"), "{text}");
+
+        let b = scratch("paste_into");
+        setup(&b);
+        step(&b, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 8_000, y: 16_000 } }, false, "test").unwrap();
+        let (_, d, model) = load(&b).unwrap();
+        let rt = d.routing.as_ref().unwrap();
+        assert_eq!((rt.tracks.len(), rt.tracks[0].net.as_str(), rt.tracks[0].pts.clone()), (1, "GND", vec![Point { x: 8_000, y: 16_000 }, Point { x: 18_000, y: 16_000 }]));
+        assert_eq!((rt.vias[0].net.as_str(), rt.vias[0].at), ("VCC", Point { x: 18_000, y: 16_000 }));
+        // U1 was copied along with the copper, and U1 is already on this board: the paste made a part of its own.
+        assert!(model.part("U3").is_some(), "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
+        undo(&b, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, model) = load(&b).unwrap();
+        assert!(back.routing.is_none() && model.part("U3").is_none(), "one undo step takes the whole paste back");
+
+        // The other direction: text that is not KiCad's is refused, and the board is as it was.
+        assert!(step(&b, Cmd::PasteClipboard { text: "not kicad".into(), at: Point { x: 0, y: 0 } }, false, "test").is_err());
     }
 
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a
@@ -1972,6 +2354,9 @@ mod tests {
             description: String::new(),
             reference_prefix: "R".into(),
             unit_count: 1,
+            pin_names_hidden: false,
+            pin_numbers_hidden: false,
+            pin_name_offset_mm: 0.508,
         };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
@@ -1994,7 +2379,7 @@ mod tests {
                 texts: vec![],
                 power_symbols: vec![],
                 no_connects: vec![], bus_entries: vec![],
-                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true,
+                erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: true,
                 title_block: None,
                 sheets: vec![],
                 instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(),
@@ -2317,6 +2702,134 @@ mod tests {
         assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }]);
     }
 
+    /// A DRC exclusion from the report's own violation: what the studio sends when the user excludes it.
+    fn exclusion_of(v: &serde_json::Value, comment: &str) -> eda_model::ir::DrcExclusion {
+        let strings = |key: &str| -> Vec<String> { v["items"].as_array().unwrap().iter().map(|i| i[key].as_str().unwrap_or("").to_string()).collect() };
+        eda_model::ir::DrcExclusion {
+            check: v["type"].as_str().unwrap().to_string(),
+            items: strings("uuid"),
+            ids: strings("id"),
+            positions_nm: v["marker_nm"].as_array().unwrap().iter().map(|p| [p[0].as_i64().unwrap(), p[1].as_i64().unwrap()]).collect(),
+            comment: comment.to_string(),
+        }
+    }
+
+    /// `kicad-cli pcb drc` on the board the studio derived in `dir`, asked for `severities` and nothing else: the violations of `kind` it lists as
+    /// `(excluded, severity)`. The derived project is the one the studio's last run wrote.
+    fn kicad_cli_lists(dir: &Path, severities: &[&str], kind: &str) -> Vec<(bool, String)> {
+        let cli = eda_kicad_engine::find_cli().expect("checked by the caller");
+        let board = dir.join(".kicad").join("board.kicad_pcb");
+        let out = dir.join(".kicad").join("direct.json");
+        let ran = std::process::Command::new(cli).args(["pcb", "drc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&board).output().expect("kicad-cli runs");
+        assert!(out.exists(), "kicad-cli wrote no report: {}{}", String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
+        let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
+        report["violations"].as_array().unwrap().iter().filter(|v| v["type"] == kind).map(|v| (v["excluded"].as_bool().unwrap_or(false), v["severity"].as_str().unwrap().to_string())).collect()
+    }
+
+    /// A violation waived in the studio reaches kicad-cli through the derived `.kicad_pro` (slow tier: a dozen kicad-cli runs): it is
+    /// listed as excluded when asked for exclusions and left out of a report that is not, and Remove (or Undo) puts it back. That holds where the report
+    /// says enough to guess the marker's position (a via, the middle of a track); for a clearance, whose marker sits at the contact point of the two
+    /// items -- a position kicad-cli's report does not give -- the studio's own report holds the waiver and kicad-cli's does not.
+    #[test]
+    fn a_waived_violation_reaches_kicad_cli_through_the_derived_project_and_kicad_cli_stops_reporting_it() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("drc_exclusions");
+        setup(&dir);
+        // A via with a 25 um ring (minimum 100), a 100 um track (minimum 200), and a via 100 um from the side of a track (clearance 200):
+        // the marker of that one sits on the track beside the via, at a point no position in the report is.
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 10_000, y: 15_000, drill: 300, diameter: 350, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "VCC".into(), layer: "F.Cu".into(), width: 100, pts: vec![Point { x: 2_000, y: 8_000 }, Point { x: 6_001, y: 8_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "VCC".into(), x: 6_100, y: 12_500, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+
+        let find = |report: &serde_json::Value, kind: &str| -> serde_json::Value { report["violations"].as_array().unwrap().iter().find(|v| v["type"] == kind).cloned().unwrap_or_else(|| panic!("no {kind} in {report:#}")) };
+        let first = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        let (via, track, clearance) = (find(&first, "annular_width"), find(&first, "track_width"), find(&first, "clearance"));
+        assert!([&via, &track, &clearance].iter().all(|v| v["excluded"] == false), "nothing is waived yet");
+        let counts = |r: &serde_json::Value, kind: &str| r["counts"][kind].as_u64().unwrap_or(0);
+        assert_eq!((counts(&first, "annular_width"), counts(&first, "track_width"), counts(&first, "clearance")), (1, 1, 1));
+
+        // Exclude the three together, as "Exclude all of this type" would: one step.
+        step(&dir, Cmd::AddDrcExclusions { exclusions: vec![exclusion_of(&via, ""), exclusion_of(&track, "thin on purpose"), exclusion_of(&clearance, "")] }, false, "ui").unwrap();
+        let after = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        for (kind, matched) in [("annular_width", true), ("track_width", true), ("clearance", false)] {
+            let v = find(&after, kind);
+            assert_eq!(v["excluded"], true, "{kind} is waived in the studio's report");
+            assert_eq!(v["kicad_matched"], matched, "{kind}: kicad-cli matches the exclusion only when the marker sits where the report can tell");
+            assert_eq!(counts(&after, kind), 0, "a waived violation is not counted");
+        }
+        assert_eq!(find(&after, "track_width")["comment"], "thin on purpose", "the comment goes to kicad-cli and comes back");
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        assert!(project["board"]["design_settings"]["drc_exclusions"].as_array().is_some_and(|l| l.len() >= 2), "the derived project lists the waived violations: {project}");
+
+        // kicad-cli itself, on the derived files: a report that does not ask for exclusions no longer has them; one that does has them flagged.
+        let plain = ["--severity-error", "--severity-warning"];
+        assert!(kicad_cli_lists(&dir, &plain, "annular_width").is_empty(), "kicad-cli stops reporting the via");
+        assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "and the track");
+        assert_eq!(kicad_cli_lists(&dir, &plain, "clearance").len(), 1, "but the clearance, whose marker position the report cannot give, is still found by a plain run");
+        assert_eq!(kicad_cli_lists(&dir, &["--severity-exclusions"], "annular_width"), vec![(true, "error".to_string())], "asked for exclusions it lists the via, flagged");
+        assert_eq!(kicad_cli_lists(&dir, &["--severity-all"], "track_width"), vec![(true, "error".to_string())]);
+
+        // Remove one: back in the report, and kicad-cli finds it again.
+        step(&dir, Cmd::DeleteDrcExclusions { exclusions: vec![eda_model::ir::DrcExclusionKey { check: "annular_width".into(), items: exclusion_of(&via, "").items }] }, false, "ui").unwrap();
+        let removed = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        assert_eq!(find(&removed, "annular_width")["excluded"], false);
+        assert_eq!(counts(&removed, "annular_width"), 1);
+        assert_eq!(kicad_cli_lists(&dir, &plain, "annular_width").len(), 1, "kicad-cli reports it again");
+        assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "the others stay waived");
+
+        // Undo takes the removal back (the via is waived again), and another Undo the exclusions.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.drawings.unwrap().drc_exclusions.len(), 3);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!(load(&dir).unwrap().1.drawings.map_or(true, |d| d.drc_exclusions.is_empty()));
+    }
+
+    /// Schematic Setup > Violation Severity reaches kicad-cli's ERC through the derived project (slow tier): a check set to Error is
+    /// reported as one, one set to Ignore is not run and shows up in the report's ignored checks. Undo takes the table back.
+    #[test]
+    fn a_changed_erc_severity_changes_what_kicad_cli_reports_and_undo_takes_it_back() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("erc_severities");
+        setup(&dir);
+        // The derived schematic of this board has symbols with no footprint library: `footprint_link_issues`, a warning by default.
+        let check = "footprint_link_issues";
+        let of = |report: &serde_json::Value, severity: &str| report["violations"].as_array().unwrap().iter().filter(|v| v["check"] == check && v["severity"] == severity).count();
+        let ignored = |report: &serde_json::Value| report["ignored_checks"].as_array().unwrap().iter().any(|c| c["key"] == check);
+        let before = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        let n = of(&before, "warning");
+        assert!(n > 0 && of(&before, "error") == 0 && !ignored(&before), "{before:#}");
+
+        let table = |pairs: &[(&str, &str)]| -> std::collections::BTreeMap<String, String> { pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "error")]) }, false, "ui").unwrap();
+        let errors = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!((of(&errors, "error"), of(&errors, "warning")), (n, 0), "the check is reported as an error now");
+
+        step(&dir, Cmd::SetErcSeverities { severities: table(&[(check, "ignore")]) }, false, "ui").unwrap();
+        let off = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!(of(&off, "error") + of(&off, "warning"), 0, "an ignored check is not run");
+        assert!(ignored(&off), "and the report lists it as ignored: {:#}", off["ignored_checks"]);
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let back = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+        assert_eq!((of(&back, "warning"), ignored(&back)), (n, false), "Undo takes both back");
+    }
+
     /// `E`/`V`/`F`: each field is independently settable -- editing just
     /// the footprint must not reset a value set by an earlier, separate
     /// edit back to blank.
@@ -2575,6 +3088,169 @@ mod tests {
         assert_eq!(model.parts.iter().filter(|p| p.reference == "R3").count(), 1);
         // the schematic the engine exports now has a part for every symbol
         assert!(design.schematic.as_ref().unwrap().symbols.iter().all(|s| model.part(&s.id).is_some()));
+    }
+
+    /// The installed libraries in the Symbol Chooser: placing `Amplifier_Operational:LM358` keeps its definition with the schematic
+    /// (`Cmd::EmbedLibSymbol`, in the same command as the `AddSymbol`), the model draws it with its 8 pins, the part has the library's Value
+    /// and default Footprint, and one undo takes the instance AND the definition back (redo brings both). Needs KiCad.app's libraries.
+    #[test]
+    fn placing_an_installed_symbol_keeps_its_definition_and_undo_takes_it_back() {
+        if !eda_kicad::default_symbol_library_root().join("Amplifier_Operational.kicad_sym").is_file() {
+            eprintln!("no KiCad symbol libraries installed; skipping");
+            return;
+        }
+        let dir = scratch("sch_installed_symbol");
+        setup_mcu30_flat(&dir);
+        let before = load(&dir).unwrap().1;
+        assert!(before.symbol_library.is_none());
+        let place = |id: &str, x: Um| Cmd::AddSymbol { id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+
+        step(&dir, place("U90", 200_000), false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let kept = design.symbol_library.as_ref().and_then(|l| l.by_lib_id("Amplifier_Operational:LM358")).expect("the definition is kept with the schematic");
+        assert!(kept.published, "published: the model resolves the instance from it");
+        assert_eq!((kept.unit_count, kept.pins.len(), kept.keywords.as_str()), (3, 8, "dual opamp"), "units and the library's own fields come from the definition");
+        let lib = model.symbol_of("Amplifier_Operational:LM358").expect("the model draws it");
+        assert_eq!((lib.pins.len(), lib.unit_count), (8, 3));
+        let part = model.part("U90").expect("the placed symbol has a part");
+        // The library's LM358 has no default footprint (it has `ki_fp_filters` for the Footprint Chooser instead); its datasheet and value come across.
+        assert_eq!((part.value.as_deref(), part.footprint.as_deref(), part.pins.len()), (Some("LM358"), None, 8), "a new instance starts with its library symbol's Value");
+        assert!(part.datasheet.as_deref().is_some_and(|d| d.contains("lm2904")), "and its Datasheet: {:?}", part.datasheet);
+        // A symbol with a default footprint brings it: the part names it, and it resolves from the footprint library so the PCB can place the part.
+        if eda_kicad::default_symbol_library_root().join("Regulator_Linear.kicad_sym").is_file() && eda_kicad::default_footprint_library_root().join("Package_TO_SOT_SMD.pretty").is_dir() {
+            step(&dir, Cmd::AddSymbol { id: "U95".into(), lib_id: "Regulator_Linear:AMS1117-3.3".into(), at: Point { x: 240_000, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+            let (_, _, model) = load(&dir).unwrap();
+            let reg = model.part("U95").unwrap();
+            assert_eq!((reg.value.as_deref(), reg.footprint.as_deref(), reg.pins.len()), (Some("AMS1117-3.3"), Some("Package_TO_SOT_SMD:SOT-223-3_TabPin2"), 3));
+            assert!(model.footprint_of(reg).is_some_and(|f| f.pads.len() >= 3), "the default footprint resolves");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+            assert!(load(&dir).unwrap().2.part("U95").is_none());
+        }
+        // what the studio draws: the library symbol with its pins
+        let sheet = crate::studio::schematic_json_of(&design, &model, "");
+        assert_eq!(sheet["lib_symbols"]["Amplifier_Operational:LM358"]["pins"].as_array().map(|p| p.len()), Some(8), "{}", sheet["lib_symbols"]);
+
+        // a second one needs no second copy
+        step(&dir, place("U91", 220_000), false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.symbol_library.as_ref().unwrap().symbols.iter().filter(|s| s.lib_id == "Amplifier_Operational:LM358").count(), 1);
+        assert!(design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U91"));
+
+        // undo: the second instance goes, the definition stays for the first
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U91"));
+        assert!(design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U90"));
+        assert!(design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("Amplifier_Operational:LM358").is_some()), "U90 still draws from it");
+        // undo again: the first goes with its definition
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(!design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U90"));
+        assert!(design.symbol_library.is_none(), "one undo step takes the instance and its kept definition back: {:?}", design.symbol_library.as_ref().map(|l| l.symbols.iter().map(|s| s.lib_id.clone()).collect::<Vec<_>>()));
+        assert!(model.part("U90").is_none());
+        // redo puts both back
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U90"));
+        assert!(design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("Amplifier_Operational:LM358").is_some_and(|s| s.published)));
+        assert_eq!(model.symbol_of("Amplifier_Operational:LM358").map(|s| s.pins.len()), Some(8));
+    }
+
+    /// The same placement judged by kicad-cli (slow tier): the symbol's definition is in the exported schematic's `lib_symbols`, so ERC raises
+    /// nothing about the library, the footprint link, the annotation or the geometry of the new part -- only what a part with nothing wired to it
+    /// always raises (unconnected pins, units not placed).
+    #[test]
+    fn a_placed_installed_symbol_passes_kicad_clis_erc_without_library_findings() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() || !eda_kicad::default_symbol_library_root().join("Amplifier_Operational.kicad_sym").is_file() {
+            eprintln!("no kicad-cli or no KiCad symbol libraries; skipping");
+            return;
+        }
+        let dir = scratch("sch_installed_symbol_erc");
+        setup_mcu30_flat(&dir);
+        let counts = |dir: &Path| -> std::collections::BTreeMap<String, u64> {
+            let erc = crate::kicad_engine::erc(dir).expect("kicad-cli runs ERC");
+            erc["counts"].as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap_or(0))).collect()).unwrap_or_default()
+        };
+        let base = counts(&dir);
+        // On the schematic grid (50 mil, as the studio snaps a click): a pin off it is `endpoint_off_grid`, and rightly.
+        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: 157 * 1270, y: 16 * 1270 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        let after = counts(&dir);
+        let grew = |kind: &str| after.get(kind).copied().unwrap_or(0).saturating_sub(base.get(kind).copied().unwrap_or(0));
+        for kind in ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues", "unannotated", "endpoint_off_grid", "duplicate_reference", "unresolved_variable", "different_unit_footprint", "different_unit_net", "pin_to_pin", "bus_to_net_conflict"] {
+            assert_eq!(grew(kind), 0, "placing the symbol added {kind} findings: before {base:?}, after {after:?}");
+        }
+        // what an unwired part raises: its 8 pins, nothing else new
+        let new: Vec<(&String, u64)> = after.iter().map(|(k, v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0)))).filter(|(_, n)| *n > 0).collect();
+        for (kind, n) in &new {
+            assert!(["pin_not_connected", "power_pin_not_driven", "missing_unit", "pin_not_driven", "missing_input_pin", "missing_power_pin"].contains(&kind.as_str()), "unexpected new ERC finding {kind} x{n}: before {base:?}, after {after:?}");
+        }
+        eprintln!("ERC after placing LM358: new findings {new:?}");
+    }
+
+    /// Place Footprint: a footprint of the installed libraries (a mounting hole) becomes a part of its own on the board, with its pads; the
+    /// derived `.kicad_pcb` has it, and one undo takes it away. Needs KiCad.app's libraries.
+    #[test]
+    fn placing_an_installed_footprint_makes_a_board_part_that_undo_removes() {
+        let name = "MountingHole:MountingHole_3.2mm_M3";
+        if eda_kicad::find_footprint_file(&eda_kicad::default_footprint_library_root(), name).is_none() {
+            eprintln!("no KiCad footprint libraries installed; skipping");
+            return;
+        }
+        let dir = scratch("pcb_installed_footprint");
+        setup_mcu30_flat(&dir);
+        let place = |x: i64| Cmd::PlaceFootprint { footprint: name.into(), at: Point { x, y: 30_000 }, reference: String::new(), value: String::new(), definition: None };
+        step(&dir, place(40_000), false, "test").unwrap();
+        step(&dir, place(60_000), false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let parts: Vec<&str> = design.drawings.as_ref().unwrap().board_parts.iter().map(|p| p.reference.as_str()).collect();
+        assert_eq!(parts, ["H1", "H2"]);
+        let hole = model.part("H1").expect("the model has the placed footprint as a part");
+        let fp = model.footprint_of(hole).expect("with its pads");
+        assert_eq!(fp.pads.len(), 1, "a mounting hole is one pad");
+        assert_eq!(fp.pads[0].kind, PadKind::NonPlatedHole);
+        let pose = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "H2").unwrap();
+        assert_eq!((pose.at, pose.rot, pose.side), (Point { x: 60_000, y: 30_000 }, 0, Side::Top));
+        let pcb = kicad_pcb_text_of(&dir);
+        assert!(pcb.contains("MountingHole_3.2mm_M3") && pcb.contains("\"H1\"") && pcb.contains("\"H2\""), "the derived board has both holes");
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert_eq!(design.drawings.as_ref().unwrap().board_parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), ["H1"]);
+        assert!(model.part("H2").is_none());
+        // a name no library has is refused with a reason, and changes nothing
+        let e = step(&dir, Cmd::PlaceFootprint { footprint: "MountingHole:NoSuchHole".into(), at: Point { x: 0, y: 0 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap_err();
+        assert_eq!(e[0].check, "ops_unknown_footprint");
+    }
+
+    /// The same hole judged by kicad-cli (slow tier): placed inside a 20 mm board with two parts, it adds no violation of any kind -- no hole
+    /// clearance, no courtyard overlap, no copper to the edge -- so the pads the library gave it reach the derived `.kicad_pcb` as KiCad reads them.
+    #[test]
+    fn a_placed_installed_footprint_passes_kicad_clis_drc() {
+        let name = "MountingHole:MountingHole_3.2mm_M3";
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() || eda_kicad::find_footprint_file(&eda_kicad::default_footprint_library_root(), name).is_none() {
+            eprintln!("no kicad-cli or no KiCad footprint libraries; skipping");
+            return;
+        }
+        let dir = scratch("pcb_installed_footprint_drc");
+        setup(&dir);
+        let base = drc_counts(&dir);
+        step(&dir, Cmd::PlaceFootprint { footprint: name.into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
+        let after = drc_counts(&dir);
+        let new: Vec<(&String, u64)> = after.iter().map(|(k, v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0)))).filter(|(_, n)| *n > 0).collect();
+        assert!(new.is_empty(), "placing the hole added DRC findings {new:?}: before {base:?}, after {after:?}");
+    }
+
+    fn kicad_pcb_text_of(dir: &Path) -> String {
+        let (_, design, model) = load(dir).unwrap();
+        eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-08", title: "t" }).unwrap()
     }
 
     /// `dialog_annotate.cpp`'s "Selection" scope: only the named symbols
@@ -3203,6 +3879,23 @@ mod tests {
         assert_eq!(search("")["matches"].as_array().unwrap().len(), 0, "the root sheet has no R3");
         let hits = search(&channels);
         assert!(hits["matches"].as_array().unwrap().iter().any(|m| m["id"] == "R3"), "{hits}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The user's own board was drawn before generated symbols (its symbols name no library symbol, its fields sit at the page's corner): Tools >
+    /// Reorganize into Module Sheets draws the new sheets with generated symbols and fields where KiCad puts them, and nothing on any of them
+    /// overlaps anything else as KiCad draws it.
+    #[test]
+    fn reorganizing_the_users_board_gives_sheets_with_nothing_overlapping() {
+        let dir = scratch("legacy_overlap");
+        setup_mcu30_users_board(&dir);
+        step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(design.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.symbols.iter()).all(|s| !s.lib_id.starts_with("eda:")), "no legacy box survives on the new sheets");
+        let files = eda_kicad::export_kicad_sch_tree(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-08", title: "t" }, "root.kicad_sch").expect("the sheets export");
+        let reports = eda_kicad::sch_overlap::check_tree(&files).expect("the exported sheets read back");
+        let found: Vec<String> = reports.iter().filter(|r| r.count() > 0).map(|r| r.render()).collect();
+        assert!(found.is_empty(), "overlaps on the reorganized sheets:\n{}", found.join("\n"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

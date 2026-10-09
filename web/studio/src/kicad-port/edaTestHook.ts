@@ -8,7 +8,7 @@
 //                                    `revision` is the design revision after it, `dialog` the title of the dialog it opened, `toast` the last toast it showed,
 //                                    `pending` true when it stopped waiting for a request that is still running (a long kicad-cli run).
 //   window.__eda.state()             a small snapshot: { tab, revision, tool, picker, selection: [{ id, kind }], counts: { footprints, tracks, vias, zones,
-//                                    symbols, wires, labels }, grid: the editor's grid in um (null where it is not a choice), dialogs: [titles of the dialogs on
+//                                    symbols, wires, labels }, entered: the group worked in on the board (else null), grid: the editor's grid in um (null where it is not a choice), dialogs: [titles of the dialogs on
 //                                    screen], open: [names of the open dialog/panel flags] };
 //                                    `picker` is the prompt of the picker session running (the delete tool's), else null.
 //   window.__eda.errors(since?)      the errors since the page loaded as { time, message }: console.error, uncaught errors and rejected promises, the
@@ -18,6 +18,7 @@
 // studio does; with the page open `window.__eda` is just there. This file is the pure model (unit tested, no React and no DOM); the page glue is
 // actions/useEdaTestHook.ts.
 import { isActionEnabledForTab } from "./actionTabGate";
+import { padIds } from "./pcbItems";
 
 // ------------------------------------------------------------------------------------------------------------------------------------ errors
 
@@ -128,7 +129,7 @@ type IdItems = readonly { id?: string }[] | undefined;
 
 /** The board's state JSON as far as the hook reads it. */
 export interface BoardLike {
-  parts?: readonly { ref: string }[];
+  parts?: readonly { ref: string; pads?: readonly { num: string }[] }[];
   routing?: { tracks?: IdItems; vias?: IdItems; zones?: IdItems } | null;
   drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems } | null;
 }
@@ -153,6 +154,7 @@ const ids = (items: IdItems): string[] => (items ?? []).flatMap((i) => (i.id ? [
 export function boardLists(board: BoardLike | null | undefined): ItemLists {
   return {
     footprint: (board?.parts ?? []).map((p) => p.ref),
+    pad: (board?.parts ?? []).flatMap((p) => padIds(p)),
     track: ids(board?.routing?.tracks),
     via: ids(board?.routing?.vias),
     zone: ids(board?.routing?.zones),

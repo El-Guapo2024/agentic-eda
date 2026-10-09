@@ -21,6 +21,7 @@ import { Canvas } from "./components/canvas/Canvas";
 import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
 import { ErcDialog } from "./components/ErcDialog";
+import { ExclusionCommentDialog } from "./components/ExclusionCommentDialog";
 import { HotkeysDialog } from "./components/HotkeysDialog";
 import { PreferencesDialog } from "./components/PreferencesDialog";
 import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
@@ -59,6 +60,7 @@ import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
 import { SymbolFieldsTableDialog } from "./components/SymbolFieldsTableDialog";
 import { FindReplaceDialog } from "./components/FindReplaceDialog";
+import { PcbFindDialog } from "./components/PcbFindDialog";
 import { SchematicSetupDialog } from "./components/SchematicSetupDialog";
 import { PlotDialog } from "./components/PlotDialog";
 import { PlotSchematicDialog } from "./components/PlotSchematicDialog";
@@ -224,6 +226,7 @@ function StudioFrame() {
       </div>
       <DrcDialog />
       <ErcDialog />
+      <ExclusionCommentDialog />
       <HotkeysDialog />
       <PreferencesDialog />
       <ZoomAreaOverlay />
@@ -259,6 +262,7 @@ function StudioFrame() {
       <AnnotateDialog />
       <SymbolFieldsTableDialog />
       <FindReplaceDialog />
+      <PcbFindDialog />
       <SchematicSetupDialog />
       <PlotDialog />
       <PlotSchematicDialog />

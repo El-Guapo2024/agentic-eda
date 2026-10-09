@@ -6,6 +6,8 @@
 import type { Dispatch } from "react";
 import type { Action, StudioApi } from "../../state/store";
 import { openGroupDialog } from "../../state/commonDialogs";
+import { revealDockPane } from "../../state/dockLayoutStore";
+import { padById } from "../../kicad-port/pcbItems";
 
 export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch<Action>): void {
   if (api.textById(id)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id } });
@@ -19,6 +21,8 @@ export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch
   else if (api.dimensionById(id)) dispatch({ type: "SET_DIMENSION_EDIT_ID", id });
   else if (api.trackById(id) || api.viaById(id) || api.shapeById(id)) dispatch({ type: "SET_ITEM_PROPERTIES_ID", id });
   else if (api.partByRef(id)) dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: true });
+  // A pad's properties are the Properties pane's summary of it (pad edits are not part of the board editor here).
+  else if (api.getState().board && padById(api.getState().board!, id)) revealDockPane("properties");
   // `PCB_GROUP` properties are the group tool's (`ACTIONS::groupProperties`, common.Groups.groupProperties): the name and the member list.
   else {
     const group = api.groupById(id);
