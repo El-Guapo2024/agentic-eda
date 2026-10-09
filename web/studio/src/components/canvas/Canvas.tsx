@@ -20,6 +20,7 @@ import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
 import { carryStart } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
+import { fieldById } from "../../kicad-port/fpFields";
 import { isGroup, substituteSelection, topLevelGroup, withinScope } from "../../kicad-port/groupTree";
 import type { ToolId } from "../../state/store";
 import type { RuleAreaFields, Shape, Zone, ZoneSettingsFields } from "../../api/types";
@@ -84,7 +85,7 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
  * What a plain drag of a clicked item picks up. Every kind can be: the drop is one `move_items` (kicad-port/pcbTransform.ts `planCarry`), and a pad
  * stands for its footprint (`FilterCollectorForFreePads`) -- dragging a pad drags the footprint, as in pcbnew.
  */
-const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad"]);
+const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field"]);
 
 /** The tools whose clicks go through a grid helper: `BestSnapAnchor` on every event, or the router's `snapToItem`. */
 const PLACING_TOOLS = new Set<string>(["route", "diffpair", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "measure", "drill_origin", "local_ratsnest", "picker"]);
@@ -520,6 +521,10 @@ export function Canvas() {
         case "pad": {
           const hit = board ? padById(board, c.id) : null;
           return hit ? `Pad ${hit.pad.num} of ${hit.part.ref}${hit.pad.net ? ` (${hit.pad.net})` : ""}` : `Pad ${c.id}`;
+        }
+        case "field": {
+          const hit = board ? fieldById(board, c.id) : null;
+          return hit ? `${hit.field.name} field of ${hit.part.ref}${hit.field.name === "Reference" ? "" : ` (${hit.field.text})`}` : `Field ${c.id}`;
         }
       }
     },

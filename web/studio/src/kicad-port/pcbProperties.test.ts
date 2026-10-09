@@ -208,18 +208,21 @@ test("a footprint: position, side and orientation, then its fields, library link
   ]);
 });
 
-test("a pad: where it is, and what it is; the fields it cannot change are read-only", () => {
+test("a pad: where it is, and what it is; its number and net are read-only, its type, shape, size and hole are edited", () => {
   const b = board();
   assert.deepEqual(names(b, ["U1.1"]), [
     ["Basic Properties", ["Position X", "Position Y", "Net"]],
-    ["Pad Properties", ["Pad Type", "Pad Shape", "Pad Number", "Size X", "Size Y"]],
+    ["Pad Properties", ["Pad Type", "Pad Shape", "Pad Number", "Size X", "Size Y", "Hole Shape", "Hole Size X"]],
   ]);
   const writable = pcbGrid(b, ["U1.1"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
-  assert.deepEqual(writable, ["Position X", "Position Y"], "a pad moves its footprint; its net and shape have no verb");
-  assert.equal(rowOf(b, ["U1.2"], "Pad Type")!.value, "Through-hole");
-  assert.equal(rowOf(b, ["U1.2"], "Pad Shape")!.value, "Circle");
-  assert.equal(rowOf(b, ["U1.3"], "Pad Shape")!.value, "Oval");
-  assert.equal(rowOf(b, ["U1.1"], "Pad Shape")!.value, "Rectangle");
+  assert.deepEqual(writable, ["Position X", "Position Y", "Pad Type", "Pad Shape", "Size X", "Size Y"], "an SMD pad has no hole to edit; its net and number have no verb");
+  const th = pcbGrid(b, ["U1.2"], "mm").groups.flatMap((g) => g.rows).filter((r) => r.writable).map((r) => r.name);
+  assert.deepEqual(th, ["Position X", "Position Y", "Pad Type", "Pad Shape", "Size X", "Hole Shape", "Hole Size X"], "a through-hole pad can edit its hole");
+  // A pad that does not say its kind and shape (an older backend) is read from its flags.
+  assert.equal(rowOf(b, ["U1.2"], "Pad Type")!.value, "through_hole");
+  assert.equal(rowOf(b, ["U1.2"], "Pad Shape")!.value, "circle");
+  assert.equal(rowOf(b, ["U1.3"], "Pad Shape")!.value, "oval");
+  assert.equal(rowOf(b, ["U1.1"], "Pad Shape")!.value, "rect");
   assert.equal(rowOf(b, ["U1.2"], "Size Y"), undefined, "a circle has no height");
 });
 
@@ -564,4 +567,121 @@ test("the choices a row offers: copper layers for copper, every layer for graphi
 test("pcbRow reads one row of a selection", () => {
   assert.deepEqual(pcbRow(board(), ["trk_a", "trk_b"], "Width", "mm"), { value: null, writable: true, choices: null });
   assert.equal(pcbRow(board(), ["trk_a", "txt_a"], "Net", "mm"), null, "a text has no net");
+});
+
+// ------------------------------------------------------------------------------------------------- footprints as editable objects
+
+/** The board with what the backend sends of a footprint's fields, attributes and pads (crates/cli/src/fp_json.rs). */
+const edited = (): BoardState => {
+  const b = board();
+  const u1 = b.parts.find((p) => p.ref === "U1")!;
+  const field = (name: string, text: string, over: Record<string, unknown> = {}) => ({
+    id: `U1:${name}`, name, text, x: 30_000, y: 16_900, angle: 0, w: 1000, h: 1000, thickness: 150, layer: "F.SilkS", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: true, knockout: false,
+    lx: 0, ly: -3100, langle: 270_000, custom: false, ...over,
+  });
+  Object.assign(u1, {
+    fields: [field("Reference", "U1"), field("Value", "MCU", { layer: "F.Fab", y: 21_000, ly: 1000 }), field("Vendor", "ACME", { layer: "F.Fab", visible: false, custom: true })],
+    attrs: { kind: "smd", board_only: false, exclude_from_pos_files: false, exclude_from_bom: false, dnp: false, allow_missing_courtyard: false, custom: false },
+  });
+  const [p1, p2, p3] = u1.pads!;
+  Object.assign(p1!, { id: "U1.1", shape: "rect", kind: "smd", size: [600, 600], rot: 0, ratio: null, drill: null, slot: null, edit: null });
+  Object.assign(p2!, { id: "U1.2", shape: "circle", kind: "through_hole", size: [800, 800], rot: 0, ratio: null, drill: 400, slot: null, edit: null });
+  Object.assign(p3!, { id: "U1.3", shape: "round_rect", kind: "smd", size: [800, 400], rot: 0, ratio: 0.25, drill: null, slot: null, edit: { number: "3", nth: 1, size: [800, 400] } });
+  return b;
+};
+
+test("a field is an item of the board: REF:Name names it, and the caption says so", () => {
+  const b = edited();
+  assert.equal(pcbItemOf(b, "U1:Reference")?.type, "PCB_FIELD");
+  assert.equal(pcbItemOf(b, "U1:Vendor")?.field?.text, "ACME");
+  assert.equal(pcbItemOf(b, "U1:Nothing"), null);
+  assert.equal(pcbItemOf(b, "R1:Reference"), null, "a footprint with no fields has none");
+  assert.equal(pcbGrid(b, ["U1:Value"], "mm").caption, "Field");
+});
+
+test("a field: position, layer, orientation, then its text properties; a user field's text is its own", () => {
+  const b = edited();
+  assert.deepEqual(names(b, ["U1:Reference"]), [
+    ["Basic Properties", ["Position X", "Position Y", "Layer", "Orientation"]],
+    ["Text Properties", ["Text", "Thickness", "Italic", "Bold", "Mirrored", "Visible", "Width", "Height", "Horizontal Justification", "Vertical Justification", "Knockout", "Keep Upright"]],
+  ]);
+  assert.equal(rowOf(b, ["U1:Reference"], "Text")!.writable, false, "the reference comes from the schematic");
+  assert.equal(rowOf(b, ["U1:Value"], "Text")!.writable, false);
+  assert.equal(rowOf(b, ["U1:Vendor"], "Text")!.writable, true);
+  assert.equal(rowOf(b, ["U1:Vendor"], "Visible")!.value, false);
+  assert.equal(rowOf(b, ["U1:Reference"], "Width")!.value, 1000);
+});
+
+test("editing a field sends edit_board_field with its layout in the footprint's frame, and moves go through move_items", () => {
+  const b = edited();
+  const layout = {
+    at: { x: 0, y: -3100 }, angle: 270_000, size: [1000, 1000], thickness: 150, layer: "F.SilkS", visible: true, halign: 0, valign: 0, mirror: false, bold: false, italic: false, keep_upright: true, knockout: false,
+  };
+  assert.deepEqual(edit(b, ["U1:Reference"], "Height", 1200), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, size: [1000, 1200] } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Thickness", 200), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, thickness: 200 } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Layer", "F.Fab"), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, layer: "F.Fab" } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Horizontal Justification", "left"), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, halign: -1 } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Vertical Justification", "bottom"), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, valign: 1 } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Mirrored", true), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, mirror: true } }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Bold", true), [{ op: "edit_board_field", part: "U1", name: "Reference", layout: { ...layout, bold: true } }]);
+  assert.deepEqual(edit(b, ["U1:Vendor"], "Text", "Other"), [{ op: "edit_board_field", part: "U1", name: "Vendor", layout: { ...layout, layer: "F.Fab", visible: false }, text: "Other" }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Text", "R9"), [], "a reference is not edited here");
+  assert.deepEqual(edit(b, ["U1:Reference"], "Position X", 31_000), [{ op: "move_items", ids: ["U1:Reference"], dx: 1_000, dy: 0 }]);
+  assert.deepEqual(edit(b, ["U1:Reference"], "Position Y", 16_900), [], "already there");
+});
+
+test("a field's orientation is its absolute angle: the footprint's own turn is taken back out", () => {
+  const b = edited();
+  // U1 is turned 90 degrees clockwise (rot 90); the field reads at 0 on the board when its own angle is 270 - 0 turns... board angle = langle - rot = 270000 - 90000 = 180000?
+  // The fixture says the field's board angle is 0, so a new board angle of 45 degrees is langle = 45000 + 90000.
+  const [cmd] = edit(b, ["U1:Reference"], "Orientation", 45);
+  assert.equal(cmd!.op, "edit_board_field");
+  assert.equal((cmd as Extract<Cmd, { op: "edit_board_field" }>).layout!.angle, 135_000);
+  // A bottom-side footprint's frame is mirrored, and so is the sense of its angles.
+  const bottom = edited();
+  Object.assign(bottom.parts.find((p) => p.ref === "U1")!, { side: "bottom" });
+  const [cmd2] = edit(bottom, ["U1:Reference"], "Orientation", 45);
+  assert.equal((cmd2 as Extract<Cmd, { op: "edit_board_field" }>).layout!.angle, 360_000 - 135_000);
+});
+
+test("a footprint lists its attributes and each is an edit_board_footprint with the others as they were", () => {
+  const b = edited();
+  assert.deepEqual(names(b, ["U1"]).map(([g]) => g), ["Basic Properties", "Fields", "Footprint Properties", "Attributes", "Overrides", "Placement"]);
+  assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Attributes")![1], ["Component Type", "Not in Schematic", "Exclude From Position Files", "Exclude From Bill of Materials", "Do not Populate"]);
+  assert.deepEqual(names(b, ["U1"]).find(([g]) => g === "Overrides")![1], ["Exempt From Courtyard Requirement"]);
+  const all = { kind: "smd", board_only: false, exclude_from_pos_files: false, exclude_from_bom: false, dnp: false, allow_missing_courtyard: false };
+  assert.deepEqual(edit(b, ["U1"], "Do not Populate", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, dnp: true } }]);
+  assert.deepEqual(edit(b, ["U1"], "Exclude From Position Files", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, exclude_from_pos_files: true } }]);
+  assert.deepEqual(edit(b, ["U1"], "Exclude From Bill of Materials", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, exclude_from_bom: true } }]);
+  assert.deepEqual(edit(b, ["U1"], "Not in Schematic", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, board_only: true } }]);
+  assert.deepEqual(edit(b, ["U1"], "Exempt From Courtyard Requirement", true), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, allow_missing_courtyard: true } }]);
+  assert.deepEqual(edit(b, ["U1"], "Component Type", "through_hole"), [{ op: "edit_board_footprint", part: "U1", attrs: { ...all, kind: "through_hole" } }]);
+  assert.deepEqual(edit(b, ["U1"], "Do not Populate", false), [], "already so");
+  // Several footprints: one command each.
+  const two = edited();
+  Object.assign(two.parts.find((p) => p.ref === "R1")!, { attrs: { ...all, custom: false }, fields: [] });
+  assert.equal(edit(two, ["U1", "R1"], "Do not Populate", true).length, 2);
+});
+
+test("a pad: type, shape, size, corner radius and hole are edit_board_pad commands that keep the edit the pad has", () => {
+  const b = edited();
+  const pad = (patch: Record<string, unknown>, number = "1") => [{ op: "edit_board_pad", part: "U1", edit: { number, nth: 1, ...patch } }];
+  assert.deepEqual(edit(b, ["U1.1"], "Pad Shape", "oval"), pad({ shape: "oval" }));
+  assert.deepEqual(edit(b, ["U1.1"], "Size X", 700), pad({ size: [700, 600] }));
+  assert.deepEqual(edit(b, ["U1.1"], "Size Y", 650), pad({ size: [600, 650] }));
+  assert.deepEqual(edit(b, ["U1.2"], "Size X", 900), pad({ size: [900, 900] }, "2"), "a circle stays round");
+  // The edit that is already stored comes back with the new change laid over it.
+  assert.deepEqual(edit(b, ["U1.3"], "Corner Radius Ratio", 0.4), pad({ size: [800, 400], roundrect_ratio: 0.4 }, "3"));
+  assert.deepEqual(edit(b, ["U1.3"], "Corner Radius Size", 100), [], "100 um on a 400 um side is the 25% it already has");
+  assert.deepEqual(edit(b, ["U1.3"], "Corner Radius Size", 120), pad({ size: [800, 400], roundrect_ratio: 0.3 }, "3"));
+  assert.equal(rowOf(b, ["U1.3"], "Corner Radius Size")!.value, 100);
+  assert.equal(rowOf(b, ["U1.1"], "Corner Radius Ratio"), undefined, "only a rounded rectangle has a radius");
+  // The hole: size, and round or oblong.
+  assert.deepEqual(edit(b, ["U1.2"], "Hole Size X", 450), pad({ drill: 450 }, "2"));
+  assert.deepEqual(edit(b, ["U1.2"], "Hole Shape", "oblong"), pad({ drill_slot: [400, 600] }, "2"));
+  assert.deepEqual(edit(b, ["U1.1"], "Hole Size X", 300), [], "an SMD pad has no hole to edit");
+  // Making an SMD pad through-hole gives it a hole to start from: half its smaller side.
+  assert.deepEqual(edit(b, ["U1.1"], "Pad Type", "through_hole"), pad({ kind: "through_hole", drill: 300 }));
+  // Several pads: one command each.
+  assert.equal(edit(b, ["U1.1", "U1.3"], "Size X", 700).length, 2);
 });

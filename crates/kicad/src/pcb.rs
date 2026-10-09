@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
+use crate::fp_fields::{pad_text, write_attr, write_fields, FpExtra};
 use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{fmt_mm_f, mm, sexpr_str};
 
@@ -268,7 +269,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             continue;
         };
         let own_zones: String = zone_blocks.iter().filter(|(parent, _)| parent.as_deref() == Some(fp.id.as_str())).map(|(_, text)| text.as_str()).collect();
-        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, design, is_locked(&fp.id), &own_zones);
+        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, design, is_locked(&fp.id), &own_zones, &FpExtra::of(design, &fp.id, &footprint));
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     if !errors.is_empty() {
@@ -655,6 +656,7 @@ pub(crate) fn write_footprint(
     design: &Design,
     locked: bool,
     zones: &str,
+    extra: &FpExtra,
 ) -> String {
     let layer = if fp.side == Side::Bottom { "B.Cu" } else { "F.Cu" };
     let x = mm(fp.at.x);
@@ -679,40 +681,10 @@ pub(crate) fn write_footprint(
     writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
     writeln!(out, "\t\t(at {x} {y} {rot_deg})").unwrap();
 
-    let ref_layer = if fp.side == Side::Bottom { "B.SilkS" } else { "F.SilkS" };
-    // Text on a back layer is read from below, so it is written mirrored:
-    // KiCad's own writer puts `(justify mirror)` after the font for a
-    // flipped footprint's fields (EDA_TEXT::Format), and its DRC flags
-    // back-layer text without it (nonmirrored_text_on_back_layer).
-    let justify = if fp.side == Side::Bottom { " (justify mirror)" } else { "" };
-    let ref_uuid = crate::duid_for(&format!("footprint:{}:ref", fp.id), &fp.id);
-    // Label offset from the footprint origin, in the footprint's own frame:
-    // just outside the courtyard on the side the placer chose.
-    let (hw, hh) = footprint.courtyard_half();
-    let half_w = 300 * fp.id.chars().count() as eda_model::ir::Um;
-    let (ref_x, ref_y) = match fp.label {
-        eda_model::ir::LabelSide::Above => (0, -(hh + 700)),
-        eda_model::ir::LabelSide::Below => (0, hh + 700),
-        eda_model::ir::LabelSide::Left => (-(hw + 200 + half_w), 0),
-        eda_model::ir::LabelSide::Right => (hw + 200 + half_w, 0),
-    };
-    let (ref_x, ref_y) = (mm(ref_x), mm(ref_y));
-    writeln!(
-        out,
-        "\t\t(property \"Reference\" {} (at {ref_x} {ref_y} 0) (layer {})\n\t\t\t(uuid \"{ref_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)){justify})\n\t\t)",
-        sexpr_str(&fp.id),
-        sexpr_str(ref_layer)
-    )
-    .unwrap();
-    let val_uuid = crate::duid_for(&format!("footprint:{}:val", fp.id), &fp.id);
-    let fab_layer = if fp.side == Side::Bottom { "B.Fab" } else { "F.Fab" };
-    writeln!(
-        out,
-        "\t\t(property \"Value\" {} (at 0 1 0) (layer {})\n\t\t\t(uuid \"{val_uuid}\")\n\t\t\t(effects (font (size 1 1) (thickness 0.15)){justify})\n\t\t)",
-        sexpr_str(part.value.as_deref().unwrap_or(&fp.id)),
-        sexpr_str(fab_layer)
-    )
-    .unwrap();
+    // The Reference, the Value and the user fields (`format( PCB_FIELD )`), then the footprint's attributes. A footprint nothing was
+    // edited on gets the Reference beside its courtyard and the Value below its origin, as it always has (`eda_model::fp_edit`).
+    write_fields(out, fp, part, footprint, extra);
+    write_attr(out, &extra.attrs);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
     let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
@@ -736,7 +708,15 @@ pub(crate) fn write_footprint(
         model.nets.iter().find(|n| n.pins.iter().any(|p| p == &key)).map(|n| n.name.as_str())
     };
 
+    // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
+    let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
     for &(pad_idx, pad) in &pads {
+        let nth = {
+            let n = seen.entry(pad.number.as_str()).or_insert(0);
+            *n += 1;
+            *n
+        };
+        let pad_extra = pad_text(extra.edit.and_then(|e| e.pad(&pad.number, nth)), fp.side);
         // Our local frame is the part seen from the top; a bottom-side
         // part's x is mirrored before it is rotated (footprint::to_board,
         // which the placer, router and gates all go through). KiCad
@@ -781,14 +761,19 @@ pub(crate) fn write_footprint(
                 // pad declares a drill, round or slot; inventing one here
                 // shipped a different hole than the circuit-json writer
                 // invented.
+                // `(drill D)` / `(drill oval W H)`, with the copper shape's offset inside it (`format( PAD )`).
+                let offset = pad_extra.offset.map(|(ox, oy)| format!(" (offset {} {})", mm(ox), mm(oy))).unwrap_or_default();
                 match (pad.drill, pad.drill_slot) {
-                    (Some(d), _) => write!(out, " (drill {})", mm(d)).unwrap(),
-                    (None, Some((w, h))) => write!(out, " (drill oval {} {})", mm(w), mm(h)).unwrap(),
+                    (Some(d), _) => write!(out, " (drill {}{offset})", mm(d)).unwrap(),
+                    (None, Some((w, h))) => write!(out, " (drill oval {} {}{offset})", mm(w), mm(h)).unwrap(),
                     (None, None) => unreachable!("Footprint::validate requires a drill on a through-hole/non-plated pad"),
                 }
                 write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
             }
             PadKind::Smd => {
+                if let Some((ox, oy)) = pad_extra.offset {
+                    write!(out, " (drill (offset {} {}))", mm(ox), mm(oy)).unwrap();
+                }
                 let (cu, paste, mask) = if pad.on_back(fp.side) {
                     ("B.Cu", "B.Paste", "B.Mask")
                 } else {
@@ -805,6 +790,8 @@ pub(crate) fn write_footprint(
                 }
             }
         }
+        // The margins of a pad edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`), then the zone facts: KiCad's order.
+        out.push_str(&pad_extra.margins);
         // The pad's own clearance, zone connection and thermal relief (`PCB_IO_KICAD_SEXPR::format( const PAD* )`): the angle
         // only when it is not the shape's default, 45 degrees for a circle and 90 otherwise.
         let zf = design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number);
@@ -1100,6 +1087,84 @@ mod tests {
     }
 
     #[test]
+    fn a_footprint_nothing_was_edited_on_is_written_as_always_with_its_type_from_its_pads() {
+        let (design, model) = fixture();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        // Both parts have surface-mount pads: the type KiCad's libraries would give them, so `--smd-only` finds them.
+        assert_eq!(out.matches("(attr smd)").count(), 2, "{out}");
+        // The Reference above the courtyard, horizontal in the file whatever the footprint's angle; the Value 1 mm below the origin.
+        assert!(out.contains("(property \"Reference\" \"U1\" (at 0 -"), "{out}");
+        assert!(out.contains(" 0) (layer \"F.SilkS\")\n"), "{out}");
+        assert!(out.contains("(property \"Value\" \"U1_val\" (at 0 1 0) (layer \"F.Fab\")"), "{out}");
+        // The bottom-side part: back layers, mirrored text.
+        assert!(out.contains("(layer \"B.SilkS\")") && out.contains("(layer \"B.Fab\")") && out.contains("(justify mirror)"), "{out}");
+    }
+
+    #[test]
+    fn the_fields_attributes_and_pad_edits_of_a_footprint_are_written_and_read_back_by_the_importer() {
+        use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintEdit, FootprintKind, PadEdit, UserField};
+        let (mut design, model) = fixture();
+        let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
+        reference.size = (1_200, 900);
+        reference.thickness = 180;
+        reference.angle = 90_000;
+        reference.halign = -1;
+        reference.italic = true;
+        let mut value = FieldLayout::new(Point { x: -1_000, y: 3_000 }, "F.SilkS");
+        value.visible = false;
+        let mut vendor = FieldLayout::new(Point { x: 0, y: 4_000 }, "F.Fab");
+        vendor.visible = false;
+        let mut pad1 = PadEdit::none("1", 1);
+        pad1.offset = Some(Point { x: 200, y: 100 });
+        pad1.solder_mask_margin = Some(40);
+        let mut u1 = FootprintEdit::new("U1");
+        u1.reference = Some(reference.clone());
+        u1.value = Some(value.clone());
+        u1.fields = vec![UserField { name: "Vendor".into(), text: "ACME".into(), layout: vendor.clone() }];
+        u1.attrs = Some(FootprintAttrs { kind: FootprintKind::Unspecified, board_only: false, exclude_from_pos_files: true, exclude_from_bom: true, dnp: true, allow_missing_courtyard: true });
+        u1.set_pad(pad1.clone());
+        design.drawings = Some(eda_model::ir::DrawingsSection { footprint_edits: vec![u1], ..Default::default() });
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(property \"Reference\" \"U1\" (at 1.5 -2.5 90) (layer \"F.Fab\")"), "{out}");
+        assert!(out.contains("(effects (font (size 0.9 1.2) (thickness 0.18) italic) (justify left))"), "{out}");
+        assert!(out.contains("(property \"Value\" \"U1_val\" (at -1 3 0) (layer \"F.SilkS\") (hide yes)"), "{out}");
+        assert!(out.contains("(property \"Vendor\" \"ACME\" (at 0 4 0) (layer \"F.Fab\") (hide yes)"), "{out}");
+        assert!(out.contains("(attr exclude_from_pos_files exclude_from_bom allow_missing_courtyard dnp)"), "U1's own attributes: {out}");
+        assert!(out.contains("(drill (offset 0.2 0.1))") && out.contains("(solder_mask_margin 0.04)"), "{out}");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let edits = &back.drawings.as_ref().unwrap().footprint_edits;
+        let u1_back = edits.iter().find(|e| e.id == "U1").expect("U1's edit comes back");
+        assert_eq!(u1_back.reference.as_ref(), Some(&reference));
+        assert_eq!(u1_back.value.as_ref(), Some(&value));
+        assert_eq!(u1_back.fields.len(), 1);
+        assert_eq!((u1_back.fields[0].name.as_str(), u1_back.fields[0].text.as_str(), &u1_back.fields[0].layout), ("Vendor", "ACME", &vendor));
+        assert_eq!(u1_back.attrs, Some(FootprintAttrs { kind: FootprintKind::Unspecified, board_only: false, exclude_from_pos_files: true, exclude_from_bom: true, dnp: true, allow_missing_courtyard: true }));
+        assert_eq!(u1_back.pad("1", 1), Some(&pad1));
+        // C1 (bottom, turned): its Reference and Value come back too, unchanged from where the writer put them.
+        let c1_back = edits.iter().find(|e| e.id == "C1").expect("an imported footprint keeps the text the file has");
+        assert_eq!(c1_back.reference.as_ref().unwrap().layer, "B.SilkS");
+        assert!(c1_back.reference.as_ref().unwrap().mirror);
+    }
+
+    #[test]
+    fn a_bottom_side_footprint_edit_goes_across_and_back_with_the_footprints_turn() {
+        use eda_model::fp_edit::{FieldLayout, FootprintEdit};
+        let (mut design, model) = fixture();
+        // C1 sits on the bottom, turned 90: its field's angle and position cross the mirror and the turn and come back the same.
+        let mut l = FieldLayout::new(Point { x: 800, y: -1_900 }, "B.SilkS");
+        l.angle = 30_000;
+        let mut c1 = FootprintEdit::new("C1");
+        c1.reference = Some(l.clone());
+        design.drawings = Some(eda_model::ir::DrawingsSection { footprint_edits: vec![c1], ..Default::default() });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let got = back.drawings.unwrap().footprint_edits.into_iter().find(|e| e.id == "C1").unwrap().reference.unwrap();
+        assert_eq!(got, l);
+    }
+
+    #[test]
     fn deterministic_export() {
         let (design, model) = fixture();
         let a = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -1216,6 +1281,54 @@ mod tests {
         let p1 = &extra.pads[0];
         assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(45_000), Some(600)));
         assert_eq!(extra.pads[1].zone_connection, None, "the other pads inherit");
+    }
+
+    /// A pad that carries an edit of ours (the shape's offset, a solder mask margin) and the zone filler's overrides (clearance, zone
+    /// connection, thermal relief) is ONE `(pad ..)` form with both, in KiCad's order, and the importer reads each half back into its own
+    /// overlay: `footprint_edits` for the extras, `zone_overrides`' source (`footprint_extras`) for the zone facts. A footprint edit
+    /// (attributes, fields) and the footprint's own zone connection are written together too.
+    #[test]
+    fn one_pad_form_carries_the_pad_edit_and_the_zone_overrides_and_both_are_read_back() {
+        use eda_model::fp_edit::{FootprintAttrs, FootprintEdit, FootprintKind, PadEdit};
+        use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
+        let (mut design, model) = fixture();
+        let mut pad1 = PadEdit::none("1", 1);
+        pad1.offset = Some(Point { x: 200, y: 100 });
+        pad1.solder_mask_margin = Some(40);
+        pad1.solder_paste_margin_ratio = Some(-0.1);
+        let mut u1 = FootprintEdit::new("U1");
+        u1.attrs = Some(FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() });
+        u1.set_pad(pad1.clone());
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            footprint_edits: vec![u1],
+            zone_overrides: vec![FootprintZoneOverrides {
+                id: "U1".into(),
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(45_000) }],
+            }],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad_line = out.lines().find(|l| l.contains("(pad \"1\"") && l.contains("(thermal_gap")).unwrap_or_else(|| panic!("pad 1 of U1 with its zone facts:\n{out}")).to_string();
+        assert!(pad_line.contains("(drill (offset 0.2 0.1))"), "the shape offset of the pad edit: {pad_line}");
+        let at = |what: &str| pad_line.find(what).unwrap_or_else(|| panic!("{what} in {pad_line}"));
+        assert!(
+            at("(solder_mask_margin 0.04)") < at("(solder_paste_margin_ratio -0.1)") && at("(solder_paste_margin_ratio -0.1)") < at("(clearance 0.6)") && at("(clearance 0.6)") < at("(zone_connect 2)") && at("(zone_connect 2)") < at("(thermal_bridge_width 0.3)") && at("(thermal_bridge_width 0.3)") < at("(thermal_bridge_angle 45)") && at("(thermal_bridge_angle 45)") < at("(thermal_gap 0.4)"),
+            "the margins of the edit, then the zone facts, in KiCad's order: {pad_line}"
+        );
+        // The footprint's own: the attributes of the edit and the footprint-level clearance and zone connection.
+        assert!(out.contains("(attr smd dnp)"), "{out}");
+        assert!(out.contains("\t\t(clearance 0.8)") && out.contains("\t\t(zone_connect 0)"), "{out}");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let dr = back.drawings.as_ref().unwrap();
+        // Our half: the offset and the margins are the pad edit again, and the clearance is not (a pad has one clearance, the zone overlay's).
+        assert_eq!(dr.footprint_edits.iter().find(|e| e.id == "U1").and_then(|e| e.pad("1", 1)), Some(&pad1));
+        // The zone half: what the importer keeps of the zone facts.
+        let extra = dr.footprint_extras.iter().find(|e| e.id == "U1").expect("U1's imported facts");
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800)));
+        let p1 = &extra.pads[0];
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(45_000), Some(600)));
     }
 
     #[test]

@@ -25,6 +25,7 @@ mod bom_plugins;
 mod cleanup_api;
 mod convert_api;
 mod fab_api;
+mod fp_json;
 mod library_api;
 mod library_index;
 mod library_place;
@@ -958,7 +959,7 @@ fn export_fab(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
     let mut jobs: Vec<(&str, Vec<String>, std::path::PathBuf)> = vec![
         ("gerbers", [vec!["pcb".to_string(), "export".into(), "gerbers".into()], fab_api::gerber_args(&gerber_layers), vec!["-o".into(), dir_out.clone()]].concat(), pcb.clone()),
         ("drill", [vec!["pcb".to_string(), "export".into(), "drill".into()], fab_api::drill_args(false, false), vec!["-o".into(), dir_out]].concat(), pcb.clone()),
-        ("positions", [vec!["pcb".to_string(), "export".into(), "pos".into()], fab_api::pos_args("csv", "both", true, false, false), vec!["-o".into(), pos_out]].concat(), pcb.clone()),
+        ("positions", [vec!["pcb".to_string(), "export".into(), "pos".into()], fab_api::pos_args("csv", "both", true, false, false), vec!["--exclude-dnp".into(), "-o".into(), pos_out]].concat(), pcb.clone()),
     ];
     if sch.exists() {
         jobs.push(("bom", [vec!["sch".to_string(), "export".into(), "bom".into()], fab_api::bom_args(), vec!["-o".into(), bom_out]].concat(), sch));

@@ -8,7 +8,7 @@
 //! ```text
 //! eda fab gerbers <dir> [--layers F.Cu,B.Cu,...]
 //! eda fab drill   <dir> [--separate-th] [--generate-report]
-//! eda fab pos     <dir> [--format csv|ascii] [--side front|back|both] [--units mm|in] [--smd-only] [--exclude-fp-th]
+//! eda fab pos     <dir> [--format csv|ascii] [--side front|back|both] [--units mm|in] [--smd-only] [--exclude-fp-th] [--exclude-dnp]
 //! eda fab bom     <dir>
 //! ```
 //!
@@ -52,7 +52,10 @@ pub fn run(argv: &[String]) -> Result<(), Vec<CheckResult>> {
             if !matches!(side, "front" | "back" | "both") {
                 return Err(fail("fab", "--side", format!("unknown side {side:?}: expected front, back or both")));
             }
-            let args = fab_api::pos_args(format, side, flag_value(opts, "--units") != Some("in"), has_flag(opts, "--smd-only"), has_flag(opts, "--exclude-fp-th"));
+            let mut args = fab_api::pos_args(format, side, flag_value(opts, "--units") != Some("in"), has_flag(opts, "--smd-only"), has_flag(opts, "--exclude-fp-th"));
+            if has_flag(opts, "--exclude-dnp") {
+                args.push("--exclude-dnp".into());
+            }
             print_written(&dir, kicad_engine::export(&dir, "pos", &args)?)
         }
         "bom" => print_written(&dir, kicad_engine::export_sch(&dir, "bom", &fab_api::bom_args())?),

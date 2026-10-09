@@ -8,7 +8,7 @@
 //
 // Pure: no store, no DOM. Unit-tested in pcbCarry.test.ts.
 
-import type { BoardState } from "../api/types";
+import type { BoardState, FieldInfo, Part } from "../api/types";
 import { padParent } from "./pcbItems";
 import { groupAndDescendants, groupLeaves } from "./groupTree";
 
@@ -88,6 +88,8 @@ export interface Carried {
   moving: BoardState;
   /** The carried footprints' references, for the live airwires. */
   partRefs: string[];
+  /** Fields carried on their own (`REF:Reference` selected without its footprint): drawn through the transform, while their footprint stays. */
+  fields: FieldInfo[];
 }
 
 /** Split the board into what stays and what is carried. */
@@ -100,6 +102,14 @@ export function splitCarried(board: BoardState, refs: readonly string[]): Carrie
     return { in: picked, out: rest };
   };
   const parts = { in: board.parts.filter((p) => p.placed && ids.has(p.ref)), out: board.parts.filter((p) => !(p.placed && ids.has(p.ref))) };
+  // A field in the hand without its footprint leaves its footprint where it is and takes only itself.
+  const fields: FieldInfo[] = [];
+  const stay = (p: Part): Part => {
+    if (!p.fields?.some((f) => ids.has(f.id))) return p;
+    fields.push(...p.fields.filter((f) => ids.has(f.id)));
+    return { ...p, fields: p.fields.filter((f) => !ids.has(f.id)) };
+  };
+  parts.out = parts.out.map(stay);
   const tracks = take(board.routing?.tracks);
   const vias = take(board.routing?.vias);
   const zones = take(board.routing?.zones);
@@ -113,5 +123,6 @@ export function splitCarried(board: BoardState, refs: readonly string[]): Carrie
     still: { ...board, parts: parts.out, routing: routing("out"), drawings: drawings("out") },
     moving: { ...board, parts: parts.in, routing: routing("in"), drawings: drawings("in") },
     partRefs: parts.in.map((p) => p.ref),
+    fields,
   };
 }

@@ -13,9 +13,10 @@
 // `BOARD_COMMIT::Push( "Edit Properties" )`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, Group, Pad, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { toCmdDimension } from "./dimensionConvert";
+import { editAttrsCmd, editFieldCmd, editPadCmd, fieldById, localAngleOf } from "./fpFields";
 import { arcShapeCenter, padById } from "./pcbItems";
 import { shapeToCmd } from "./pcbPointEdit";
 import { circumcircle } from "./trackArc";
@@ -33,6 +34,7 @@ export type PcbType =
   | "PCB_VIA"
   | "ZONE"
   | "PCB_TEXT"
+  | "PCB_FIELD"
   | "PCB_SHAPE"
   | "PCB_DIM_ALIGNED"
   | "PCB_DIM_ORTHOGONAL"
@@ -47,6 +49,8 @@ export interface PcbItem {
   readonly id: string;
   readonly part?: Part;
   readonly pad?: Pad;
+  /** A footprint's field (`PCB_FIELD`); `part` is its footprint. */
+  readonly field?: FieldInfo;
   readonly track?: Track;
   readonly via?: Via;
   readonly zone?: Zone;
@@ -123,6 +127,8 @@ export function pcbItemOf(board: BoardState, id: string): PcbItem | null {
   if (group) return { type: "PCB_GROUP", id, group };
   const pad = id.includes(".") ? padById(board, id) : null;
   if (pad) return { type: "PAD", id, part: pad.part, pad: pad.pad };
+  const field = id.includes(":") ? fieldById(board, id) : null;
+  if (field) return { type: "PCB_FIELD", id, part: field.part, field: field.field };
   return null;
 }
 
@@ -133,6 +139,7 @@ function indexOf(board: BoardState): Map<string, PcbItem> {
   for (const part of board.parts) {
     if (!part.placed) continue;
     put({ type: "FOOTPRINT", id: part.ref, part });
+    for (const field of part.fields ?? []) put({ type: "PCB_FIELD", id: field.id, part, field });
   }
   const rt = board.routing;
   for (const track of rt?.tracks ?? []) put({ type: track.arc_mid ? "PCB_ARC" : "PCB_TRACK", id: track.id, track });
@@ -182,6 +189,8 @@ export function pcbFriendlyName(item: PcbItem): string {
     }
     case "PCB_TEXT":
       return "Text";
+    case "PCB_FIELD":
+      return "Field";
     case "PCB_SHAPE":
       return "Graphic";
     case "PCB_DIM_LEADER":
@@ -259,6 +268,7 @@ const moveCmd = (ids: string[], dx: number, dy: number): Cmd[] => (dx === 0 && d
  * centre and any other shape's start.
  */
 export function positionOf(i: PcbItem): [number, number] {
+  if (i.field) return [i.field.x, i.field.y];
   if (i.pad) return [i.pad.x, i.pad.y];
   if (i.part) return i.part.at ? [i.part.at[0], i.part.at[1]] : [0, 0];
   if (i.track) return i.track.pts[0] ?? [0, 0];
@@ -362,10 +372,28 @@ const replaceShapeCmd = (s: Shape): Cmd => ({ op: "replace_shape", id: s.id, sha
 // ----------------------------------------------------------------------------------------------------------------------- the registry
 
 /** `PCB_FOOTPRINT_T` ... the classes that are text, for `EDA_TEXT` properties. */
-const isTextItem = (i: PcbItem): boolean => i.type === "PCB_TEXT";
+/** A footprint's field (`PCB_FIELD`), a text with a name. */
+const isFieldItem = (i: PcbItem): boolean => i.type === "PCB_FIELD";
+/** Free text or a field: both are a `PCB_TEXT`. */
+const isTextOrField = (i: PcbItem): boolean => i.type === "PCB_TEXT" || i.type === "PCB_FIELD";
 
 const POSITION_X = "Position X";
 const POSITION_Y = "Position Y";
+
+/** A `PCB_TEXT` property of a footprint's field (`Knockout`, `Keep Upright`): a check box that sets one flag of the field's layout. */
+function fieldFlag2(_pm: PropertyManager<PcbItem, PcbCtx, Cmd>, add: (def: PropertyDef<PcbItem, PcbCtx, Cmd>, group?: string) => void, name: string, key: "knockout" | "keep_upright", read: (f: FieldInfo) => boolean): void {
+  add(
+    {
+      owner: "PCB_TEXT",
+      name,
+      kind: "bool",
+      get: (i) => read(i.field!),
+      available: (i) => i.type === "PCB_FIELD",
+      set: (i, v) => (read(i.field!) === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { [key]: Boolean(v) })]),
+    },
+    "Text Properties"
+  );
+}
 
 function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   const pm = new PropertyManager<PcbItem, PcbCtx, Cmd>();
@@ -398,11 +426,12 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     name: "Layer",
     kind: "enum",
     choices: (_i, c) => choicesOf(c.allLayers),
-    get: (i) => i.text?.layer ?? i.dim?.layer ?? "",
+    get: (i) => i.text?.layer ?? i.dim?.layer ?? i.field?.layer ?? "",
     set: (i, v) => {
       const layer = String(v);
       if (i.text) return i.text.layer === layer ? [] : [textCmd(i.text, { layer })];
       if (i.dim) return i.dim.layer === layer ? [] : [dimCmd(i.dim, { layer })];
+      if (i.field) return i.field.layer === layer ? [] : [editFieldCmd(i.part!, i.field, { layer })];
       return [];
     },
   });
@@ -472,11 +501,50 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       return Math.abs(delta) < 1e-9 ? [] : [{ op: "rotate_items", ids: [part.ref], pivot: xy(part.at), angle_millideg: Math.round(delta * 1000) }];
     },
   });
-  // The fields are read-only: a footprint's reference, value and library link come from the schematic and the intent (GAPS.md item 9).
-  add({ owner: "FOOTPRINT", name: "Reference", kind: "string", get: (i) => i.part!.ref }, "Fields");
+  // The texts are read-only: a footprint's reference, value and library link come from the schematic and the intent (the fields' own layout is the Reference and
+  // Value items' to edit, and a user field's text the field's).
+  add({ owner: "FOOTPRINT", name: "Reference", kind: "string", get: (i) => i.part!.fields?.[0]?.text ?? i.part!.ref }, "Fields");
   add({ owner: "FOOTPRINT", name: "Value", kind: "string", get: (i) => i.part!.value ?? "" }, "Fields");
   add({ owner: "FOOTPRINT", name: "MPN", kind: "string", get: (i) => i.part!.mpn ?? "", available: (i) => !!i.part!.mpn }, "Fields");
   add({ owner: "FOOTPRINT", name: "Library Link", kind: "string", get: (i) => i.part!.footprint ?? "" }, "Footprint Properties");
+  // `FOOTPRINT_DESC`'s "Attributes" and "Overrides": the type (the dialog's "Component Type"; KiCad's panel has no row for it), "Not in Schematic", "Exclude From
+  // Position Files", "Exclude From Bill of Materials", "Do not Populate" and "Exempt From Courtyard Requirement" are all written to the footprint's `(attr ..)`.
+  const ATTRIBUTES = "Attributes";
+  const hasAttrs = (i: PcbItem): boolean => !!i.part!.attrs;
+  add(
+    {
+      owner: "FOOTPRINT",
+      name: "Component Type",
+      kind: "enum",
+      choices: () => [
+        { label: "Through hole", value: "through_hole" },
+        { label: "SMD", value: "smd" },
+        { label: "Unspecified", value: "unspecified" },
+      ],
+      get: (i) => i.part!.attrs?.kind ?? "unspecified",
+      available: hasAttrs,
+      set: (i, v) => (i.part!.attrs!.kind === v ? [] : [editAttrsCmd(i.part!, { kind: String(v) as "smd" | "through_hole" | "unspecified" })]),
+    },
+    ATTRIBUTES
+  );
+  const attribute = (name: string, key: "board_only" | "exclude_from_pos_files" | "exclude_from_bom" | "dnp" | "allow_missing_courtyard", group: string): void => {
+    add(
+      {
+        owner: "FOOTPRINT",
+        name,
+        kind: "bool",
+        get: (i) => i.part!.attrs?.[key] ?? false,
+        available: hasAttrs,
+        set: (i, v) => ((i.part!.attrs![key] ?? false) === Boolean(v) ? [] : [editAttrsCmd(i.part!, { [key]: Boolean(v) })]),
+      },
+      group
+    );
+  };
+  attribute("Not in Schematic", "board_only", ATTRIBUTES);
+  attribute("Exclude From Position Files", "exclude_from_pos_files", ATTRIBUTES);
+  attribute("Exclude From Bill of Materials", "exclude_from_bom", ATTRIBUTES);
+  attribute("Do not Populate", "dnp", ATTRIBUTES);
+  attribute("Exempt From Courtyard Requirement", "allow_missing_courtyard", "Overrides");
   add({ owner: "FOOTPRINT", name: "Block", kind: "string", get: (i) => i.part!.block ?? "", available: (i) => !!i.part!.block }, "Placement");
   add(
     {
@@ -495,12 +563,154 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   pm.mask("PAD", "BOARD_ITEM", "Locked");
   // A pad's net is the schematic's: shown, not edited (no verb re-nets a pad).
   pm.overrideWriteability("PAD", "BOARD_CONNECTED_ITEM", "Net", () => false);
-  const padRoundish = (pad: Pad): boolean => pad.round && Math.abs(pad.w - pad.h) < 1;
-  add({ owner: "PAD", name: "Pad Type", kind: "string", get: (i) => (i.pad!.th ? "Through-hole" : "SMD") }, "Pad Properties");
-  add({ owner: "PAD", name: "Pad Shape", kind: "string", get: (i) => (i.pad!.round ? (padRoundish(i.pad!) ? "Circle" : "Oval") : "Rectangle") }, "Pad Properties");
-  add({ owner: "PAD", name: "Pad Number", kind: "string", get: (i) => i.pad!.num }, "Pad Properties");
-  add({ owner: "PAD", name: "Size X", kind: "int", display: "size", get: (i) => i.pad!.w }, "Pad Properties");
-  add({ owner: "PAD", name: "Size Y", kind: "int", display: "size", get: (i) => i.pad!.h, available: (i) => !padRoundish(i.pad!) }, "Pad Properties");
+  // `PAD_DESC` as far as this model has the data: the type, shape, size, corner radius and hole are edited through `edit_board_pad`; a pad's number, pin name and
+  // type, post-machining, backdrill, fabrication property, copper layers, pad-to-die, the zone connection overrides and thermal reliefs are not (the margins
+  // and clearance overrides are the Pad Properties dialog's).
+  const padKind = (p: Pad): string => p.kind ?? (p.th ? "through_hole" : "smd");
+  const padShape = (p: Pad): string => p.shape ?? (p.round ? (Math.abs(p.w - p.h) < 1 ? "circle" : "oval") : "rect");
+  const padSize = (p: Pad): [number, number] => p.size ?? [p.w, p.h];
+  const shortest = (p: Pad): number => Math.min(...padSize(p));
+  const canHaveHole = (i: PcbItem): boolean => padKind(i.pad!) !== "smd";
+  const edit = (i: PcbItem, patch: Parameters<typeof editPadCmd>[2]): Cmd[] => [editPadCmd(i.part!, i.pad!, patch)];
+  const PAD = "Pad Properties";
+  add(
+    {
+      owner: "PAD",
+      name: "Pad Type",
+      kind: "enum",
+      choices: () => [
+        { label: "Through-hole", value: "through_hole" },
+        { label: "SMD", value: "smd" },
+        { label: "NPTH, mechanical", value: "non_plated_hole" },
+      ],
+      get: (i) => padKind(i.pad!),
+      set: (i, v) => {
+        const pad = i.pad!;
+        if (padKind(pad) === v) return [];
+        // A pad that gets a hole needs one: half its smaller side, to the 0.05 mm, when it has none (`PAD::SetAttribute` alone would leave it with no hole at all).
+        const needsHole = v !== "smd" && !pad.drill && !pad.slot;
+        const drill = needsHole ? Math.max(100, Math.round((shortest(pad) * 0.5) / 50) * 50) : undefined;
+        return edit(i, { kind: String(v) as "smd" | "through_hole" | "non_plated_hole", ...(drill ? { drill } : {}) });
+      },
+    },
+    PAD
+  );
+  add(
+    {
+      owner: "PAD",
+      name: "Pad Shape",
+      kind: "enum",
+      choices: () => [
+        { label: "Circle", value: "circle" },
+        { label: "Rectangle", value: "rect" },
+        { label: "Oval", value: "oval" },
+        { label: "Rounded rectangle", value: "round_rect" },
+      ],
+      get: (i) => padShape(i.pad!),
+      set: (i, v) => (padShape(i.pad!) === v ? [] : edit(i, { shape: String(v) as "rect" | "round_rect" | "circle" | "oval" })),
+    },
+    PAD
+  );
+  add({ owner: "PAD", name: "Pad Number", kind: "string", get: (i) => i.pad!.num }, PAD);
+  const sizeRow = (name: "Size X" | "Size Y", axis: 0 | 1): void => {
+    add(
+      {
+        owner: "PAD",
+        name,
+        kind: "int",
+        display: "size",
+        get: (i) => padSize(i.pad!)[axis],
+        // "Circle pads have no usable y-size"
+        available: (i) => axis === 0 || padShape(i.pad!) !== "circle",
+        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+        set: (i, v) => {
+          const [w, h] = padSize(i.pad!);
+          const n = Math.round(num(v));
+          if ((axis === 0 ? w : h) === n) return [];
+          return edit(i, { size: axis === 0 ? [n, padShape(i.pad!) === "circle" ? n : h] : [w, n] });
+        },
+      },
+      PAD
+    );
+  };
+  sizeRow("Size X", 0);
+  sizeRow("Size Y", 1);
+  // `hasRoundRadius`: only a rounded rectangle has a radius that means anything.
+  const hasRadius = (i: PcbItem): boolean => padShape(i.pad!) === "round_rect";
+  const ratio = (p: Pad): number => p.ratio ?? 0.25;
+  add(
+    {
+      owner: "PAD",
+      name: "Corner Radius Ratio",
+      kind: "double",
+      display: "ratio",
+      get: (i) => ratio(i.pad!),
+      available: hasRadius,
+      validate: (v) => (num(v) < 0 ? "Value must be greater than or equal to 0" : num(v) > 0.5 ? "Value must be less than or equal to 0.5" : null),
+      set: (i, v) => (ratio(i.pad!) === num(v) ? [] : edit(i, { roundrect_ratio: num(v) })),
+    },
+    PAD
+  );
+  add(
+    {
+      owner: "PAD",
+      name: "Corner Radius Size",
+      kind: "int",
+      display: "size",
+      get: (i) => Math.round(ratio(i.pad!) * shortest(i.pad!)),
+      available: hasRadius,
+      validate: (v, i) => (num(v) < 0 ? "Value must be greater than or equal to 0" : num(v) > shortest(i.pad!) / 2 ? "Value must be less than or equal to half the pad's smaller side" : null),
+      set: (i, v) => {
+        const r = shortest(i.pad!) > 0 ? Math.round((num(v) / shortest(i.pad!)) * 10000) / 10000 : 0;
+        return ratio(i.pad!) === r ? [] : edit(i, { roundrect_ratio: r });
+      },
+    },
+    PAD
+  );
+  add(
+    {
+      owner: "PAD",
+      name: "Hole Shape",
+      kind: "enum",
+      choices: () => [
+        { label: "Round", value: "round" },
+        { label: "Oblong", value: "oblong" },
+      ],
+      get: (i) => (i.pad!.slot ? "oblong" : "round"),
+      writeable: canHaveHole,
+      set: (i, v) => {
+        const pad = i.pad!;
+        if ((pad.slot ? "oblong" : "round") === v) return [];
+        const d = pad.slot ? Math.min(...pad.slot) : (pad.drill ?? 800);
+        return v === "oblong" ? edit(i, { drill_slot: [d, d + Math.max(200, Math.round(d / 2))] }) : edit(i, { drill: d });
+      },
+    },
+    PAD
+  );
+  const hole = (name: "Hole Size X" | "Hole Size Y", axis: 0 | 1): void => {
+    add(
+      {
+        owner: "PAD",
+        name,
+        kind: "int",
+        display: "size",
+        get: (i) => (i.pad!.slot ? i.pad!.slot[axis] : axis === 0 ? (i.pad!.drill ?? 0) : 0),
+        // "Circle holes have no usable y-size"
+        available: (i) => axis === 0 || !!i.pad!.slot,
+        writeable: canHaveHole,
+        validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
+        set: (i, v) => {
+          const pad = i.pad!;
+          const n = Math.round(num(v));
+          if (pad.slot) return pad.slot[axis] === n ? [] : edit(i, { drill_slot: axis === 0 ? [n, pad.slot[1]] : [pad.slot[0], n] });
+          return (pad.drill ?? 0) === n ? [] : edit(i, { drill: n });
+        },
+      },
+      PAD
+    );
+  };
+  hole("Hole Size X", 0);
+  hole("Hole Size Y", 1);
 
   // ------------------------------------------------------------------------------------------------------------ PCB_TRACK, PCB_ARC
   pm.inheritsAfter("PCB_TRACK", "BOARD_CONNECTED_ITEM");
@@ -715,10 +925,10 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   add({ owner: "ZONE", name: "Thermal Relief Gap", kind: "int", display: "size", get: (i) => i.zone!.thermal_gap, available: isCopperZone, validate: (v) => positiveInt(v), set: zoneSet("thermal_gap", (v) => Math.round(num(v))) }, ELECTRICAL);
   add({ owner: "ZONE", name: "Thermal Relief Spoke Width", kind: "int", display: "size", get: (i) => i.zone!.thermal_spoke_width, available: isCopperZone, validate: atLeastMinWidth, set: zoneSet("thermal_spoke_width", (v) => Math.round(num(v))) }, ELECTRICAL);
 
-  // ------------------------------------------------------------------------------------------------------------- EDA_TEXT, PCB_TEXT
+  // ------------------------------------------------------------------------------------------------------------- EDA_TEXT, PCB_TEXT, PCB_FIELD
   pm.registerType("EDA_TEXT");
-  /** The angle of the text of a text item or a dimension, degrees (a text's is KiCad's counter-clockwise one). */
-  const textAngle = (i: PcbItem): number => (i.text ? i.text.angle : i.dim!.keep_text_aligned ? i.dim!.computed_text_angle : i.dim!.text_angle) / 1000;
+  /** The angle of the text of a text item, a field or a dimension, degrees (a text's and a field's is KiCad's counter-clockwise one). */
+  const textAngle = (i: PcbItem): number => (i.text ? i.text.angle : i.field ? i.field.angle : i.dim!.keep_text_aligned ? i.dim!.computed_text_angle : i.dim!.text_angle) / 1000;
   add({
     owner: "EDA_TEXT",
     name: "Orientation",
@@ -727,23 +937,30 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     get: textAngle,
     set: (i, v) => {
       const angle = Math.round(norm360(num(v)) * 1000);
+      if (i.field) return i.field.angle === angle ? [] : [editFieldCmd(i.part!, i.field, { angle: localAngleOf(i.part!, angle) })];
       return i.text && i.text.angle !== angle ? [textCmd(i.text, { angle })] : [];
     },
   });
   const TEXT = "Text Properties";
+  /** A field's Reference and Value come from the schematic and the intent; its user fields are the board's. */
+  const isUserField = (i: PcbItem): boolean => !!i.field && i.field.name !== "Reference" && i.field.name !== "Value";
   add(
     {
       owner: "EDA_TEXT",
       name: "Text",
       kind: "string",
-      get: (i) => i.text!.content,
-      available: isTextItem,
-      set: (i, v) => (i.text!.content === String(v) ? [] : [textCmd(i.text!, { content: String(v) })]),
+      get: (i) => (i.field ? i.field.text : i.text!.content),
+      available: isTextOrField,
+      writeable: (i) => !i.field || isUserField(i),
+      set: (i, v) => {
+        if (i.field) return i.field.text === String(v) || !isUserField(i) ? [] : [editFieldCmd(i.part!, i.field, {}, String(v))];
+        return i.text!.content === String(v) ? [] : [textCmd(i.text!, { content: String(v) })];
+      },
     },
     TEXT
   );
   /** `EDA_TEXT::GetTextThicknessProperty`: a text's pen; a dimension's label's, 15 % of its size unless it says otherwise. */
-  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.dim!.text_thickness_um ?? Math.round(i.dim!.text_size_um * 0.15));
+  const thickness = (i: PcbItem): number => (i.text ? i.text.stroke_width : i.field ? i.field.thickness : i.dim!.text_thickness_um ?? Math.round(i.dim!.text_size_um * 0.15));
   add(
     {
       owner: "EDA_TEXT",
@@ -755,28 +972,61 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       set: (i, v) => {
         const w = Math.round(num(v));
         if (thickness(i) === w) return [];
+        if (i.field) return [editFieldCmd(i.part!, i.field, { thickness: w })];
         return [i.text ? textCmd(i.text, { stroke_width: w }) : dimCmd(i.dim!, { text_thickness_um: w })];
       },
     },
     TEXT
   );
+  // Italic, Bold, Visible, Vertical Justification, Keep Upright and Knockout are a footprint field's: the free-standing text of this model has no place for them.
+  const fieldFlag = (name: string, key: "italic" | "bold" | "visible" | "knockout" | "keep_upright", read: (f: FieldInfo) => boolean): void => {
+    add(
+      {
+        owner: "EDA_TEXT",
+        name,
+        kind: "bool",
+        get: (i) => read(i.field!),
+        available: isFieldItem,
+        set: (i, v) => (read(i.field!) === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field!, { [key]: Boolean(v) })]),
+      },
+      TEXT
+    );
+  };
+  fieldFlag("Italic", "italic", (f) => f.italic);
+  fieldFlag("Bold", "bold", (f) => f.bold);
   add(
-    { owner: "EDA_TEXT", name: "Mirrored", kind: "bool", get: (i) => i.text!.mirror, available: isTextItem, set: (i, v) => (i.text!.mirror === Boolean(v) ? [] : [textCmd(i.text!, { mirror: Boolean(v) })]) },
+    {
+      owner: "EDA_TEXT",
+      name: "Mirrored",
+      kind: "bool",
+      get: (i) => (i.field ? i.field.mirror : i.text!.mirror),
+      available: isTextOrField,
+      set: (i, v) => {
+        if (i.field) return i.field.mirror === Boolean(v) ? [] : [editFieldCmd(i.part!, i.field, { mirror: Boolean(v) })];
+        return i.text!.mirror === Boolean(v) ? [] : [textCmd(i.text!, { mirror: Boolean(v) })];
+      },
+    },
     TEXT
   );
-  // This model's text is square (one size for width and height): both rows read and write it.
-  const size = (name: string): void => {
+  fieldFlag("Visible", "visible", (f) => f.visible);
+  // This model's free text is square (one size for width and height): both rows read and write it. A field has a width and a height of its own.
+  const size = (name: "Width" | "Height"): void => {
+    const own = (i: PcbItem): number => (i.text ? i.text.size : i.field ? (name === "Width" ? i.field.w : i.field.h) : i.dim!.text_size_um);
     add(
       {
         owner: "EDA_TEXT",
         name,
         kind: "int",
         display: "size",
-        get: (i) => (i.text ? i.text.size : i.dim!.text_size_um),
+        get: own,
         validate: (v, _i, c) => (num(v) <= 0 ? tooSmall(1, "size", c.units) : null),
         set: (i, v) => {
           const s = Math.round(num(v));
-          if ((i.text ? i.text.size : i.dim!.text_size_um) === s) return [];
+          if (own(i) === s) return [];
+          if (i.field) {
+            const f = i.field;
+            return [editFieldCmd(i.part!, f, { size: name === "Width" ? [s, f.h] : [f.w, s] })];
+          }
           return [i.text ? textCmd(i.text, { size_um: s }) : dimCmd(i.dim!, { text_size_um: s })];
         },
       },
@@ -795,15 +1045,49 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
         { label: "Center", value: "center" },
         { label: "Right", value: "right" },
       ],
-      get: (i) => i.text!.justify,
-      available: isTextItem,
-      set: (i, v) => (i.text!.justify === v ? [] : [textCmd(i.text!, { justify: String(v) as BoardText["justify"] })]),
+      get: (i) => (i.field ? (i.field.halign < 0 ? "left" : i.field.halign > 0 ? "right" : "center") : i.text!.justify),
+      available: isTextOrField,
+      set: (i, v) => {
+        if (i.field) {
+          const halign = v === "left" ? -1 : v === "right" ? 1 : 0;
+          return i.field.halign === halign ? [] : [editFieldCmd(i.part!, i.field, { halign })];
+        }
+        return i.text!.justify === v ? [] : [textCmd(i.text!, { justify: String(v) as BoardText["justify"] })];
+      },
+    },
+    TEXT
+  );
+  add(
+    {
+      owner: "EDA_TEXT",
+      name: "Vertical Justification",
+      kind: "enum",
+      choices: () => [
+        { label: "Top", value: "top" },
+        { label: "Center", value: "center" },
+        { label: "Bottom", value: "bottom" },
+      ],
+      get: (i) => (i.field!.valign < 0 ? "top" : i.field!.valign > 0 ? "bottom" : "center"),
+      available: isFieldItem,
+      set: (i, v) => {
+        const valign = v === "top" ? -1 : v === "bottom" ? 1 : 0;
+        return i.field!.valign === valign ? [] : [editFieldCmd(i.part!, i.field!, { valign })];
+      },
     },
     TEXT
   );
 
   pm.inheritsAfter("PCB_TEXT", "BOARD_ITEM");
   pm.inheritsAfter("PCB_TEXT", "EDA_TEXT");
+  // `PCB_TEXT_DESC`: Knockout and Keep Upright (a footprint's text only).
+  fieldFlag2(pm, add, "Knockout", "knockout", (f) => f.knockout);
+  fieldFlag2(pm, add, "Keep Upright", "keep_upright", (f) => f.upright);
+
+  // `PCB_FIELD_DESC`: a field is a PCB_TEXT with a name; its position and layer are the field's own, it has no lock of its own (its footprint's is).
+  pm.inheritsAfter("PCB_FIELD", "BOARD_ITEM");
+  pm.inheritsAfter("PCB_FIELD", "PCB_TEXT");
+  pm.inheritsAfter("PCB_FIELD", "EDA_TEXT");
+  pm.mask("PCB_FIELD", "BOARD_ITEM", "Locked");
 
   // ---------------------------------------------------------------------------------------------------------- EDA_SHAPE, PCB_SHAPE
   pm.registerType("EDA_SHAPE");
