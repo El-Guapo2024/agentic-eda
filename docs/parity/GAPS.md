@@ -202,10 +202,27 @@ New (the residual of old #11; blocks #26). **Open.** Hit: every board (silkscree
   `pcbnew/pcb_field.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
 
 ### 10. The Properties panel is a read-only summary
-New (old #11). **Partial.** Hit: constantly. Blocks: no, dialogs edit most things. WP3, size M.
-- Exists: a key/value summary of one footprint or symbol with Rotate and Delete buttons (`components/panels/PropertiesPanel.tsx`).
-- Missing: an editable property grid for every item kind (position, angle, layer, width, net, size, text) and for a multi-selection.
-- Port from: `common/widgets/properties_panel.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
+New (old #11). **Mostly done (2026-10-08).** Hit: constantly. Blocks: no longer; the dialogs and the pane edit the same things. WP3, size M (done).
+- Done (`kicad-port/{propertyManager,propertyGrid,pcbProperties,schItemProperties}.ts`, `components/panels/{PropertyGrid,PropertiesPanel}.tsx`; `PARITY-pcb.md` section 23, `PARITY-sch.md`
+  section 16): the pane is KiCad's property grid. `PROPERTY_MANAGER` is ported (the class registry, `InheritsAfter` / `Mask` / `ReplaceProperty` / `OverrideAvailability`, the walk that orders
+  a class's rows and groups), so each class lists what KiCad's registration lists, in KiCad's order: footprints, pads, tracks, arcs, vias, zones and rule areas, text, shapes of every
+  kind, the five dimensions and groups on the board; symbols, power symbols, wires, buses, graphic lines, junctions, bus entries, labels of the four kinds, text, text boxes, shapes, rule
+  areas, directive labels and sheets on the sheet. A selection shows the rows every item has (same name, available, same choices), the value they share or `<...>`, and a row is writeable
+  when it is for all of them. An edit sets the property on every item and goes out as ONE `batch`, so a multi-selection is one undo step; a refused value shows its message above the
+  grid (`valueChanging`), Enter commits and moves to the next row, Escape puts the value back. Every edit is an existing verb (`move_items`, `rotate_items`, `flip_items`,
+  `set_locked`, `set_track_width`, `edit_tracks_and_vias`, `edit_via`, `edit_zone`, `edit_shape`, `edit_text`, `edit_dimension`, `edit_group`; `sch_move`, `rotate_symbol`,
+  `mirror_symbol*`, `rename_symbol`, `edit_symbol_fields`, `set_symbol_attrs`, `sch_edit` `set_locked` / `edit_label` / `edit_text` / `edit_sheet` / `set_stroke` / `edit_graphic`) except four
+  small ones added where none fit (`crates/ops/src/pcb_props.rs`): `edit_track` (a track's or arc's end points), `set_item_net` (tracks, vias, zones), `set_zone_name`, `replace_shape`
+  (a shape's geometry, in place).
+- Measured: 87 `node --test` cases (the registry's order and masks, the grid merge, validators, every class's list and every setter's commands), 9 Rust tests for the four verbs and one
+  in `board.rs` (a panel edit of several items is one undo step); clicked through on a scratch board with one of every kind: each editable row of each kind was edited, its value read back and
+  the edit undone to the exact item, three tracks edited at once were one undo step, and so were items of different kinds locked together (`web/studio/e2e/properties-panel.check.js` repeats it).
+- Missing: what the IR has no place for is not registered: a pad's own shape, type, size and drill (read-only summary only), footprint attributes and overrides, a footprint's reference, value
+  and library link (read-only: they come from the schematic and the intent, item 9), via tenting and backdrill, text fonts, bold, italic, vertical justification and colour, a shape's line style
+  and colour, a sheet's border and fill, symbol pin names and numbers, extra fields; a wire's end points and length are read-only (they are dragged); the grid is not in the Footprint and
+  Symbol editors; a footprint's position lands on the placement grid like every pose; a pad's position moves its footprint (and twice for two pads of one).
+- Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp` and the
+  `PROPERTY_MANAGER` registrations of each item class.
 
 ### 11. The DRC and ERC dialogs lack the review workflow
 New (the UI half of old #19). **Partial.** Hit: every review pass. Blocks: partly. WP5, size M.

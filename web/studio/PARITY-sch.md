@@ -551,6 +551,32 @@ what real KiCad writes and reads was checked with kicad-cli instead of the KiCad
 Limits, recorded rather than hidden: hierarchical sheets are not copied or pasted; a field's position and size and a label's rotation, size and justification are not in the IR (`GAPS.md` item 12), so a copy carries none and
 a paste from KiCad drops them; a wire's stroke and a junction's size are the defaults; a symbol drawn with an alternate body style shows its normal one (the engine's library symbol has one); a pasted symbol is a new part, unplaced on the PCB.
 
+## 16. The Properties panel (`sch_properties_panel.cpp`, `properties_panel.cpp`, and the `PROPERTY_MANAGER` registrations of eeschema)
+
+The pane was a read-only summary of one symbol (reference, value, footprint, MPN, pins, nets). It is now the same property grid as the board's (`PARITY-pcb.md` section 23: the registry, the merge of a selection,
+`<...>`, one edit as one batch and so one undo step, Enter / Escape, validators), registered for the schematic's classes from `SCH_ITEM_DESC`, `SCH_SYMBOL_DESC`, `SCH_LABEL_DESC`, `SCH_DIRECTIVE_LABEL_DESC`,
+`SCH_TEXT_DESC`, `SCH_LINE_DESC`, `SCH_JUNCTION_DESC`, `SCH_BUS_ENTRY_DESC`, `SCH_SHEET_DESC`, `SCH_SHAPE_DESC`, `SCH_TEXTBOX_DESC`, `SCH_RULE_AREA_DESC` and the `EDA_TEXT` and `EDA_SHAPE` rows they inherit
+(`kicad-port/schItemProperties.ts`; `sch_properties_panel.cpp` supplies the symbol's and the sheet's fields as rows). Every setter is a verb the editor already had: no verb was added for the schematic.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Symbol (and a power symbol, which is a symbol in KiCad) | **done**: Locked, Position X/Y (`sch_move` `move`, by `U1#2` for one unit of several; a locked symbol is read-only, as `sch_move` leaves it), Orientation (`rotate_symbol`: the stored angle, the mirror stays, as `SetOrientationProp`), Mirror X and Mirror Y (`mirror_symbol_vertical`, `mirror_symbol`: KiCad's flag names), Reference (`rename_symbol`, one symbol at a time), Value, Datasheet, Footprint (`edit_symbol_fields`), Library Link and MPN read-only, the attributes Exclude From Simulation, Bill of Materials, Board and Do not Populate (`set_symbol_attrs`). A power symbol has Position, Orientation (`sch_move` `rotate`) and read-only reference, value (its net) and library link | `SCH_SYMBOL_DESC`, `SCH_SYMBOL_FIELD_PROPERTY` |
+| Wire, bus, graphic line | **done**: Locked and the stroke -- Wire Style (wires and buses) or Line Style (lines), Line Width, Color -- through `set_stroke`; Start X/Y, End X/Y and Length are read-only (an end point is dragged: what it joins follows) | `SCH_LINE_DESC` |
+| Junction, bus entry | **done**: Locked, Diameter and Color (`set_stroke`); Wire Style, Line Width, Color | `SCH_JUNCTION_DESC`, `SCH_BUS_ENTRY_DESC` |
+| No-connect flag | **as KiCad's**: nothing is registered, so the grid is empty | no `SCH_NO_CONNECT` registration |
+| Net, global and hierarchical labels | **done**: Locked, Text (`edit_label`; empty is refused: "Label can not be empty."), Shape of a global or hierarchical label | `SCH_LABEL_DESC` |
+| Free text | **done**: Locked, Text, Text Size (`edit_text`; 0.01 to 1000 mm) | `SCH_TEXT_DESC` |
+| Sheet | **done**: Locked, Sheet Name and the Sheetfile field (`edit_sheet`) | `SCH_SHEET_DESC`, `SCH_SHEET_FIELD_PROPERTY` |
+| Rectangle, circle, arc, Bezier, polygon, text box, rule area, directive label | **done** through `edit_graphic` (the graphic replaced in place, its id, order and lock kept): Locked; Start and End X/Y, Center X/Y, Radius, Width, Height, Corner Radius, Line Width, Line Style, Line Color, Fill and Fill Color (writeable for a colour fill) by kind; a text box's Text, Italic, Bold, justifications and Text Size; a rule area's four attributes; a directive label's Shape and Pin length | `SCH_SHAPE_DESC`, `SCH_TEXTBOX_DESC`, `SCH_RULE_AREA_DESC`, `SCH_DIRECTIVE_LABEL_DESC`, `EDA_SHAPE_DESC` |
+| A selection of several | **done**: the rows every item has; Locked for any mix; a lock, a value or an attribute set on several symbols is one batch, one Ctrl+Z; a reference is read-only for several | `PROPERTIES_PANEL::rebuildProperties` |
+
+**Approximations, and what is left.** What the IR has no place for is not registered: a label's font, bold, italic, size, justification and colour, a sheet's border and fill and its exclusion flags, a symbol's
+pin names and numbers shown and its description, extra fields and a field's own position (the overlap fix's), a text's orientation (KiCad masks it too; use `R`), a directive label's text, a text box's four margins,
+Unit and Body Style. Wire end points are read-only. A command made on this tab now refetches the sheet at once (`state/store.tsx:runCmd`), so a cell shows what the board answered without waiting for the poll.
+Tests: `kicad-port/schItemProperties.ts` (25 cases: every class's list in order, the setters, several items). Verified in the browser on the scratch board of `PARITY-pcb.md` section 23 with one of every item added:
+symbol, power symbol, wire, bus entry, junction, three labels, text, graphic line, sheet, rectangle, circle, arc, polygon, text box, rule area and directive label, every editable row edited and undone to the exact sheet; three symbols given a value and a
+do-not-populate were one Ctrl+Z each; a symbol, a label, a text and a junction locked together were one Ctrl+Z (`e2e/properties-panel.check.js` repeats all of it on the Schematic tab).
+
 ## Manual click-through needed
 
 The in-app browser pane could not be used this session (hidden pane, per
