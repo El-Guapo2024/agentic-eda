@@ -988,6 +988,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 // Task item 4: true for a generated teardrop, never a
                 // hand-drawn zone -- see `eda_model::ir::Zone::teardrop`.
                 "teardrop": z.teardrop,
+                // `ZONE::GetZoneName()`: the Properties panel's "Name" row (`Cmd::SetZoneName`).
+                "name": z.name,
             })).collect::<Vec<_>>(),
             // `BOARD_DESIGN_SETTINGS::m_TrackWidthList`/`m_ViaSizeList` --
             // the Board Setup "Track Widths & Vias" panel's editable

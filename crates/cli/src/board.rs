@@ -1078,6 +1078,13 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveItems { ids, dx, dy } => format!("move-items {} --by {},{}", ids.join(" "), mm(*dx), mm(*dy)),
         Cmd::RotateItems { ids, pivot, angle_millideg } => format!("rotate-items {} --by {:.3} --pivot {},{}", ids.join(" "), *angle_millideg as f64 / 1000.0, mm(pivot.x), mm(pivot.y)),
         Cmd::FlipItems { ids, pivot, direction } => format!("flip-items {} --{} --pivot {},{}", ids.join(" "), if *direction == eda_ops::FlipDirection::LeftRight { "left-right" } else { "top-bottom" }, mm(pivot.x), mm(pivot.y)),
+        Cmd::EditTrack { id, start, end } => {
+            let at = |p: &Option<Point>| p.map(|p| format!("{},{}", mm(p.x), mm(p.y)));
+            format!("track edit {id}{}{}", at(start).map(|s| format!(" --start {s}")).unwrap_or_default(), at(end).map(|e| format!(" --end {e}")).unwrap_or_default())
+        }
+        Cmd::SetItemNet { ids, net } => format!("net-set {} --net {net}", ids.join(" ")),
+        Cmd::SetZoneName { id, name } => format!("zone name {id} --name {name:?}"),
+        Cmd::ReplaceShape { id, .. } => format!("shape replace {id}"),
 
         // No real `eda board` CLI subcommand parses these yet (the studio
         // UI is their only caller so far) -- this text exists purely for
@@ -1303,6 +1310,10 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::MoveItems { .. } => "move-items",
         Cmd::RotateItems { .. } => "rotate-items",
         Cmd::FlipItems { .. } => "flip-items",
+        Cmd::EditTrack { .. } => "track",
+        Cmd::SetItemNet { .. } => "net-set",
+        Cmd::SetZoneName { .. } => "zone",
+        Cmd::ReplaceShape { .. } => "shape",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",
@@ -1941,6 +1952,52 @@ mod tests {
         assert!(msg.contains("routing cleared"), "{msg}");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 2, "Undo brings the routing back");
+    }
+
+    /// The Properties panel sends one edit of a row as one `Batch` (`PCB_PROPERTIES_PANEL::valueChanged` pushes one
+    /// `BOARD_COMMIT`): the net of a track, a via and a zone at once is one step, Undo puts all three back, and the end of a
+    /// track, a shape's geometry and a zone's name go through the same way.
+    #[test]
+    fn a_properties_panel_edit_of_several_items_is_one_undo_step() {
+        let dir = scratch("panel_edit_undo");
+        setup(&dir);
+        step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 12_000 }, Point { x: 12_000, y: 12_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddVia { net: "GND".into(), x: 12_000, y: 12_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 20_000 }, Point { x: 5_000, y: 20_000 }, Point { x: 5_000, y: 25_000 }] }, false, "test").unwrap();
+        step(&dir, Cmd::AddShape { shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 30_000 }, end: Point { x: 4_000, y: 30_000 } } }, false, "test").unwrap();
+        let (_, before, _) = load(&dir).unwrap();
+        let rt = before.routing.as_ref().unwrap();
+        let (track, via, zone) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.zones[0].id.clone());
+        let shape = before.drawings.as_ref().unwrap().shapes[0].id().to_string();
+
+        let net = Cmd::Batch { cmds: vec![Cmd::SetItemNet { ids: vec![track.clone()], net: "VCC".into() }, Cmd::SetItemNet { ids: vec![via.clone(), zone.clone()], net: "VCC".into() }] };
+        step(&dir, net, false, "test").unwrap();
+        let nets_of = |d: &eda_model::ir::Design| {
+            let rt = d.routing.as_ref().unwrap();
+            (rt.tracks[0].net.clone(), rt.vias[0].net.clone(), rt.zones[0].net.clone())
+        };
+        assert_eq!(nets_of(&load(&dir).unwrap().1), ("VCC".into(), "VCC".into(), "VCC".into()));
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(nets_of(&load(&dir).unwrap().1), ("GND".into(), "GND".into(), "GND".into()), "one Undo takes all three back");
+
+        let edits = Cmd::Batch {
+            cmds: vec![
+                Cmd::EditTrack { id: track.clone(), start: None, end: Some(Point { x: 14_000, y: 12_000 }) },
+                Cmd::SetZoneName { id: zone.clone(), name: "pour".into() },
+                Cmd::ReplaceShape { id: shape.clone(), shape: eda_model::ir::Shape::Segment { id: String::new(), layer: "F.SilkS".into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 30_000 }, end: Point { x: 9_000, y: 30_000 } } },
+            ],
+        };
+        step(&dir, edits, false, "test").unwrap();
+        let (_, after, _) = load(&dir).unwrap();
+        assert_eq!(after.routing.as_ref().unwrap().tracks[0].pts.last(), Some(&Point { x: 14_000, y: 12_000 }));
+        assert_eq!(after.routing.as_ref().unwrap().zones[0].name, "pour");
+        assert_eq!(after.drawings.as_ref().unwrap().shapes[0].points()[1], Point { x: 9_000, y: 30_000 });
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, _) = load(&dir).unwrap();
+        assert_eq!(back.routing.as_ref().unwrap().tracks[0].pts, before.routing.as_ref().unwrap().tracks[0].pts);
+        assert_eq!(back.routing.as_ref().unwrap().zones[0].name, "");
+        assert_eq!(back.drawings.as_ref().unwrap().shapes[0].points(), before.drawings.as_ref().unwrap().shapes[0].points());
+        assert_eq!(back.routing.as_ref().unwrap().vias.len(), 1, "no more than the one step went");
     }
 
     /// Duplicate a footprint on a routed board, place the copy and delete it again: the copy has nothing routed to it, so
