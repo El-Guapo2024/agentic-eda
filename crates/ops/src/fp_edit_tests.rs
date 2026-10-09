@@ -106,7 +106,6 @@ fn a_pad_edit_is_stored_by_number_and_cleared_by_an_empty_one() {
     e.shape = Some(PadShape::Oval);
     e.size = Some((900, 500));
     e.offset = Some(p(100, -50));
-    e.clearance = Some(220);
     e.solder_mask_margin = Some(30);
     b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: e.clone() }).unwrap();
     assert_eq!(edit_of(&b, "U1").unwrap().pad("2", 1), Some(&e));
@@ -243,10 +242,12 @@ fn a_field_of_a_footprint_that_is_not_on_the_board_is_unknown_and_a_deleted_foot
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = board(&m);
     b.apply(&set_fields("U2", Some(layout(0, -3_000, "F.SilkS")), None, None, None)).unwrap();
+    b.apply(&Cmd::SetFootprintZoneConnection { part: "U2".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: Some(300) }).unwrap();
     assert_eq!(b.apply(&Cmd::MoveItems { ids: ids(&["U9:Reference"]), dx: 1, dy: 0 }).unwrap_err()[0].check, "ops_unknown_item");
     assert_eq!(b.apply(&Cmd::MoveItems { ids: ids(&["U2:Nothing"]), dx: 1, dy: 0 }).unwrap_err()[0].check, "ops_unknown_item", "U2 has no such field");
     b.apply(&Cmd::Rip { part: "U2".into() }).unwrap();
     assert!(edit_of(&b, "U2").is_none(), "the edit goes with the footprint");
+    assert!(drawings(&b).zone_overrides.iter().all(|z| z.id != "U2"), "and so do its zone overrides: a footprint put there again, or a copy that takes the reference, starts from the library's own");
     let _ = (design, drawings);
 }
 

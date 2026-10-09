@@ -188,7 +188,7 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   m.set("common.Control.activatePointEditor", () => {});
   // ACTIONS::updateMenu -- `SELECTION_TOOL::UpdateMenu( menu )`: the selection tool re-evaluates a context menu's conditions for the current
   // selection (`CONDITIONAL_MENU::Evaluate`, `ACTION_MENU::UpdateAll`) just before it opens. The studio's menus are built from the selection each
-  // time they open (`pcbSweepMenuEntries`, `schContextMenu`) and the menu bar's entries read their state on every render, so no menu holds a stale
+  // time they open (`pcbSelectionMenu`, `schContextMenu`) and the menu bar's entries read their state on every render, so no menu holds a stale
   // condition to refresh -- satisfied by construction.
   m.set("common.Interactive.updateMenu", () => {});
 

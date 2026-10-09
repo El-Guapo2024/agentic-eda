@@ -1,5 +1,6 @@
 // Footprint editing check (GAPS.md items 9 and 22): a footprint's Reference, Value and user fields are items of the board, the Properties panel and the Footprint
-// Properties / Pad Properties dialogs edit them and the footprint's attributes and pads, and Create Array copies, arranges and numbers footprints and other items.
+// Properties / Pad Properties dialogs edit them and the footprint's attributes and pads (and show the zone filler's connection fields beside them), Copy and Paste keep a
+// footprint's pad edit and zone overrides, and Create Array copies, arranges and numbers footprints and other items.
 // Run it in the page of a served board that has footprints placed -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY
 // of a board (it edits and undoes, and it leaves Strict off while it runs). It makes nothing that stays: every edit is undone and the board compared with how it was.
 //
@@ -53,10 +54,10 @@
   const fieldOf = async (ref, name) => (await partOf(ref))?.fields?.find((f) => f.name === name);
   const padOf = async (id) => (await partOf(id.split(".")[0]))?.pads?.find((p) => p.id === id);
   const placedRefs = async () => (await state()).parts.filter((p) => p.placed).map((p) => p.ref).sort();
-  /** What the three edits touch, by footprint: fields, attributes, pads' extras, pose. A copy made by an array shows up as one more entry. */
+  /** What the edits touch, by footprint: fields, attributes, pads' extras, the zone connection facts, pose. A copy made by an array shows up as one more entry. */
   const snapshot = async () => {
     const m = {};
-    for (const p of (await state()).parts) if (p.placed) m[p.ref] = { at: p.at, rot: p.rot, side: p.side, fields: p.fields, attrs: p.attrs, pads: (p.pads ?? []).map((q) => [q.id, q.shape, q.size, q.offset, q.drill, q.slot, q.clearance, q.mask_margin, q.paste_margin, q.edit]) };
+    for (const p of (await state()).parts) if (p.placed) m[p.ref] = { at: p.at, rot: p.rot, side: p.side, fields: p.fields, attrs: p.attrs, zone: p.zone ?? null, pads: (p.pads ?? []).map((q) => [q.id, q.shape, q.size, q.offset, q.drill, q.slot, q.mask_margin, q.paste_margin, q.edit]) };
     return JSON.stringify(m);
   };
   const select = async (ids) => { await __eda.run("common.InteractiveSelection.clear"); await __eda.run("common.InteractiveSelection.selectItems", ids); await sleep(250); };
@@ -340,7 +341,7 @@
     });
 
     // ----- the Pad Properties dialog
-    await scenario("Pad Properties: shape, size, offset and clearance in one OK, one undo", async (t) => {
+    await scenario("Pad Properties: shape, size, offset, clearance and the zone connection in one OK, one undo", async (t) => {
       const padId = U.pads[0].id;
       const was = U.pads[0];
       await select([padId]);
@@ -352,13 +353,19 @@
       await type("pad-offset-x", 0.1);
       await click("pad-clearance-on");
       await type("pad-clearance", 0.15);
+      t(!!tid("pad-zone"), "the zone connection fields are in the dialog");
+      await type("pad-zone-connection", "Full");
+      await click("pad-zone-gap-on");
+      await type("pad-zone-gap", 0.4);
       await click("board-pad-properties-ok");
       await sleep(1000);
       const pad = await padOf(padId);
       t(pad.shape === "oval", `shape is ${pad.shape}`);
       t(pad.size?.join() === "2200,700", `size is ${pad.size}`);
       t(pad.offset?.[0] === 100, `offset is ${JSON.stringify(pad.offset)}`);
-      t(pad.clearance === 150, `clearance is ${pad.clearance}`);
+      const zonePad = (await partOf(U.ref)).zone?.pads.find((z) => z.num === U.pads[0].num);
+      t(zonePad?.clearance === 150, `clearance is ${zonePad?.clearance} (a pad has one, the zone overlay's)`);
+      t(zonePad?.connection === "Full" && zonePad?.gap === 400, `zone connection ${zonePad?.connection}, relief gap ${zonePad?.gap}`);
       t(pad.edited === true, "the pad is marked as edited");
       await undo();
       t((await snapshot()) === base, `one undo puts the pad back (was ${was.shape} ${was.size})`);
@@ -375,6 +382,70 @@
       await sleep(300);
       t(/positive size/i.test(tid("board-pad-properties-error")?.textContent ?? ""), `message: ${tid("board-pad-properties-error")?.textContent}`);
       t(JSON.stringify(await lastAct()) === JSON.stringify(before), "no command was sent");
+    });
+
+    // ----- the zone filler's fields are in the same dialogs
+    await scenario("Footprint Properties: the zone connection fields sit with the field grid and the attributes; one OK sends them together, one undo takes them all", async (t) => {
+      const num = A.pads[0].num;
+      await select([refA]);
+      await open("pcbnew.InteractiveEdit.properties");
+      t(!!tid("footprint-fields-grid") && !!tid("fp-zone"), "the field grid and the zone connection fields are in the dialog");
+      await click("add-field");
+      const rows = [...tid("footprint-fields-grid").querySelectorAll('[data-testid^="field-row-"]')];
+      const texts = [...rows.at(-1).querySelectorAll("input")].filter((i) => i.type === "text");
+      setValue(texts[0], "Zoned"); setValue(texts[1], "both");
+      [...document.querySelectorAll('[data-testid="footprint-properties"] label')].find((l) => /do not populate/i.test(l.textContent))?.querySelector("input")?.click();
+      await type("fp-zone-connection", "None");
+      await click("fp-zone-clearance-on");
+      await type("fp-zone-clearance", 0.3);
+      await type("fp-zone-pad-connection", "Full");
+      await click("fp-zone-pad-gap-on");
+      await type("fp-zone-pad-gap", 0.4);
+      await click("fp-zone-pad-clearance-on");
+      await type("fp-zone-pad-clearance", 0.25);
+      await click("footprint-properties-ok");
+      await sleep(1200);
+      const p = await partOf(refA);
+      const z = p.zone?.pads.find((x) => x.num === num);
+      t(p.zone?.connection === "None" && p.zone?.clearance === 300, `the footprint's zone connection ${p.zone?.connection} and clearance ${p.zone?.clearance}`);
+      t(z?.connection === "Full" && z?.gap === 400 && z?.clearance === 250, `pad ${num}'s zone fields ${JSON.stringify(z)}`);
+      t(!!p.fields.find((f) => f.name === "Zoned") && p.attrs.dnp === true, "the new field and Do not populate went in the same OK");
+      await undo();
+      t((await snapshot()) === base, "ONE undo takes the fields, the attribute and the zone fields all back");
+    });
+
+    // ----- copy and paste carry both
+    await scenario("Copy and Paste: a pasted footprint has the pad edit and the zone overrides of the one copied", async (t) => {
+      const num = A.pads[0].num;
+      const post = (cmd) => fetch("/api/cmd", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cmd, strict: false }) }).then((r) => r.json());
+      const r1 = await post({ op: "edit_board_pad", part: refA, edit: { number: num, nth: 1, offset: { x: 100, y: 0 }, solder_mask_margin: 50 } });
+      const r2 = await post({ op: "set_pad_zone_overrides", part: refA, pad: num, zone_connection: "Full", thermal_gap: 400, thermal_spoke_width: null, thermal_spoke_angle_mdeg: null, clearance: 250 });
+      t(r1.ok && r2.ok, `both overlays are set on ${refA} (${r1.message} / ${r2.message})`);
+      await sleep(400);
+      await select([refA]);
+      // A pane that will not hand the system clipboard over (no focus, no permission) makes a Paste take the copy this session made: say so, so that it does not wait.
+      const clip = navigator.clipboard;
+      const realRead = clip?.readText;
+      if (clip) clip.readText = () => Promise.reject(new Error("the system clipboard is not read here"));
+      await __eda.run("common.Interactive.copy");
+      await sleep(500);
+      await __eda.run("common.Interactive.paste");
+      await sleep(1500);
+      if (clip && realRead) clip.readText = realRead;
+      const added = (await placedRefs()).filter((r) => !baseRefs.includes(r));
+      t(added.length === 1, `one footprint was pasted: ${added.join(", ")}`);
+      if (added.length === 1) {
+        const q = await partOf(added[0]);
+        const pad = q.pads.find((x) => x.num === num);
+        t(pad.offset?.[0] === 100 && pad.mask_margin === 50, `the pasted pad has the edit's offset and margin (${JSON.stringify([pad.offset, pad.mask_margin])})`);
+        const zone = q.zone?.pads.find((x) => x.num === num);
+        t(zone?.connection === "Full" && zone?.gap === 400 && zone?.clearance === 250, `and the zone overrides (${JSON.stringify(zone)})`);
+      }
+      await __eda.run("common.Interactive.cancel"); // Escape takes a carried paste away again
+      await sleep(900);
+      for (let i = 0; i < 3 && (await placedRefs()).length > baseRefs.length; i++) await undo();
+      await undo(); await undo(); // the zone overrides, then the pad edit
+      t((await snapshot()) === base && (await placedRefs()).join() === baseRefs.join(), "the board is as it was after the paste and the two edits are undone");
     });
 
     // ----- Create Array: a grid of one footprint, in place; the refs are unique; one undo step

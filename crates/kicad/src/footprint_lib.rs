@@ -225,6 +225,9 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
     if !fp.keywords.is_empty() {
         writeln!(out, "\t(tags {})", crate::sexpr_str(&fp.keywords)).unwrap();
     }
+    if let Some(c) = fp.zone_connection {
+        writeln!(out, "\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+    }
     let mut attrs = Vec::new();
     if fp.attributes.smd {
         attrs.push("smd");
@@ -346,6 +349,23 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
         write!(out, ")").unwrap();
         if let Some(c) = pad.clearance_override {
             write!(out, " (clearance {})", crate::mm(c)).unwrap();
+        }
+        // `PCB_IO_KICAD_SEXPR::format( const PAD* )`: zone_connect, thermal_bridge_width, thermal_bridge_angle (only when it is
+        // not the shape's default: 45 for a circle, 90 otherwise), thermal_gap.
+        if let Some(c) = pad.zone_connection {
+            write!(out, " (zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+        }
+        if let Some(w) = pad.thermal_spoke_width_override {
+            write!(out, " (thermal_bridge_width {})", crate::mm(w)).unwrap();
+        }
+        if let Some(a) = pad.thermal_spoke_angle_mdeg {
+            let default_mdeg: eda_model::ir::Millideg = if pad.shape == LibraryPadShape::Circle { 45_000 } else { 90_000 };
+            if a != default_mdeg {
+                write!(out, " (thermal_bridge_angle {})", crate::fmt_mm_f(a as f64 / 1000.0)).unwrap();
+            }
+        }
+        if let Some(g) = pad.thermal_gap_override {
+            write!(out, " (thermal_gap {})", crate::mm(g)).unwrap();
         }
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
@@ -532,6 +552,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 
@@ -556,6 +578,7 @@ mod tests {
             model: Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step".into()),
             anchor: eda_model::ir::Point { x: 0, y: 0 },
             published: false,
+            zone_connection: None,
         };
 
         let text = export_kicad_mod(&fp);

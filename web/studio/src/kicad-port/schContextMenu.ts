@@ -27,6 +27,8 @@ export interface SchSelectionSummary {
   sheets: number;
   /** Rectangles, circles, arcs, beziers and polygons. */
   shapes: number;
+  /** Fields of a symbol, a power symbol or a sheet, picked on their own (`SCH_FIELD_T`). */
+  fields: number;
   ruleAreas: number;
   locked: number;
   unlocked: number;
@@ -34,6 +36,8 @@ export interface SchSelectionSummary {
   sheetHasUndefinedPins: boolean;
   /** The selection is symbol units of one multi-unit reference (`GetSameSymbolMultiUnitSelection`). */
   sameReferenceUnits: number;
+  /** The one selected symbol has more than one body style (`SCH_CONDITIONS::SingleMultiBodyStyleSymbol`). */
+  multiBodyStyle: boolean;
   /** Selected pins (pin selection is not part of this studio's schematic yet: always 0 there). */
   pins: number;
   /** The one selected polygon or rule area has its outline under the cursor (`SCH_POINT_EDITOR::addCornerCondition`). */
@@ -61,11 +65,13 @@ export function emptySummary(): SchSelectionSummary {
     noConnects: 0,
     sheets: 0,
     shapes: 0,
+    fields: 0,
     ruleAreas: 0,
     locked: 0,
     unlocked: 0,
     sheetHasUndefinedPins: false,
     sameReferenceUnits: 0,
+    multiBodyStyle: false,
     pins: 0,
     canAddCorner: false,
     canRemoveCorner: false,
@@ -104,9 +110,12 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const connected = connectedCount > 0 && connectedCount === s.total;
   const linesSelection = s.total > 0 && s.wires + s.buses + s.lines === s.total;
   const sheetSelection = single && s.sheets === 1;
-  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets > 0;
+  // `RotatableItems` holds the fields too (`SCH_FIELD_T`): a field turns its text, and a mirror flips its justification
+  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.fields > 0;
 
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
+  // `makeBodyStyleMenu` at `SingleMultiBodyStyleSymbol` (KiCad lists each body style; the studio has the one command that cycles through them)
+  add(single && s.symbols === 1 && s.multiBodyStyle && item("eeschema.InteractiveEdit.toggleDeMorgan"));
   if (orientable) {
     add({
       type: "submenu",
@@ -118,7 +127,9 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.junctions + s.noConnects;
   add(s.total > 1 && swappable === s.total && item("eeschema.InteractiveEdit.swap"));
   // `propertiesCondition`: one item of a type that has a properties dialog.
-  add(single && s.symbols + s.sheets + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas === 1 && item("eeschema.InteractiveEdit.properties"));
+  add(single && s.symbols + s.sheets + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
+  // `autoplaceCondition`: any selected item is one that has fields (a symbol, a sheet); the command also takes the item of a selected field
+  add(s.symbols + s.powerSymbols + s.sheets + s.fields > 0 && item("eeschema.InteractiveEdit.autoplaceFields"));
   if (single && s.symbols === 1) {
     add({ type: "submenu", label: "Edit Main Fields", items: [item("eeschema.InteractiveEdit.editReference"), item("eeschema.InteractiveEdit.editValue"), item("eeschema.InteractiveEdit.editFootprint")] });
   }

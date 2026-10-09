@@ -45,7 +45,6 @@ export interface Pad {
   px?: Um;
   py?: Um;
   offset?: [Um, Um] | null;
-  clearance?: Um | null;
   mask_margin?: Um | null;
   paste_margin?: Um | null;
   paste_ratio?: number | null;
@@ -140,6 +139,18 @@ export interface Part {
   fields?: FieldInfo[];
   /** The attributes in effect: the edit's, else derived from the pads and the schematic symbol. */
   attrs?: FootprintAttrsInfo;
+  /** The zone-connection facts this placed footprint and its pads carry (`crates/cli/src/studio.rs`); absent when there are none. */
+  zone?: PartZoneFacts;
+}
+
+/** `Part.zone`: what Footprint Properties and Pad Properties show in their zone fields. `null` is "inherited". */
+export interface PartZoneFacts {
+  /** `FOOTPRINT::GetLocalZoneConnection`. */
+  connection: PadConnection | null;
+  /** `FOOTPRINT::GetLocalClearance`. */
+  clearance: Um | null;
+  /** The pads that set something of their own. */
+  pads: { num: string; connection: PadConnection | null; gap: Um | null; spoke_width: Um | null; spoke_angle_mdeg: number | null; clearance: Um | null }[];
 }
 
 export interface Track {
@@ -170,6 +181,8 @@ export type PadConnection = "None" | "Thermal" | "Full" | "ThtThermal";
 export type IslandRemovalMode = "Always" | "Never" | "Area";
 /** `ZONE_FILL_MODE`. */
 export type FillMode = "Polygons" | "HatchPattern";
+/** `ZONE_SETTINGS::SMOOTHING_*` (`crates/model/src/ir.rs` `ZoneSmoothing`, snake_case on the wire): how the zone outline's corners are cut before the fill. */
+export type ZoneSmoothing = "none" | "chamfer" | "fillet";
 
 /** `crates/ops/src/lib.rs` `SizeSpec`/`ViaSizeSpec`, `#[serde(tag = "kind")]` -- `edit_tracks_and_vias`'s track-width/via-size fields: either resolve from the item's own net class (`BoardRules::width_of`/`via_diameter_of`/`via_drill_of`), or an explicit value. */
 export type SizeSpec = { kind: "net_class" } | { kind: "value"; um: Um };
@@ -214,6 +227,13 @@ export interface ZoneSettingsFields {
   hatch_smoothing_value: number;
   hatch_hole_min_area: number;
   hatch_border_algorithm: number;
+  /**
+   * "Corner smoothing": chamfer or fillet the outline's corners by `corner_radius` before filling (`ZONE::BuildSmoothedPoly`). Always in the
+   * backend's zone JSON; optional here so that an `edit_zone` built without it (it keeps the zone's) and a zone literal in a test still type.
+   */
+  smoothing?: ZoneSmoothing;
+  /** The chamfer distance or fillet radius, µm; only meaningful with `smoothing`. */
+  corner_radius?: Um;
 }
 
 /**
@@ -507,6 +527,10 @@ export interface LibraryPad {
   clearance_override: Um | null;
   thermal_gap_override: Um | null;
   thermal_spoke_width_override: Um | null;
+  /** The dialog's "Pad connection" (`PAD::GetLocalZoneConnection`); absent/`null` is "From parent footprint". */
+  zone_connection?: PadConnection | null;
+  /** The dialog's "Spoke angle" (`PAD::GetThermalSpokeAngle`), millidegrees as in the `.kicad_pcb`; absent/`null` is the shape's default (90 degrees, 45 for a circle). */
+  thermal_spoke_angle_mdeg?: number | null;
 }
 
 /** `crates/model/src/ir.rs` `FootprintAttributes` (`FOOTPRINT_ATTR_T` plus the dialog's two related non-attribute-bit checkboxes). */
@@ -536,6 +560,8 @@ export interface FootprintPropertiesFields {
   reference_visible: boolean;
   value_visible: boolean;
   model: string | null;
+  /** The Clearances tab's "Zone connection" (`FOOTPRINT::GetLocalZoneConnection`); absent/`null` is "inherited". */
+  zone_connection?: PadConnection | null;
 }
 
 /**
@@ -908,7 +934,6 @@ export interface PadEditCmd {
   offset?: PointXY;
   rot?: number;
   roundrect_ratio?: number;
-  clearance?: Um;
   solder_mask_margin?: Um;
   solder_paste_margin?: Um;
   solder_paste_margin_ratio?: number;
@@ -927,6 +952,10 @@ export type Cmd =
   | { op: "flip"; part: string }
   /** Footprint Properties' "Text Placement" field (the refdes label's side) -- does not move anything, so (unlike Flip/Rotate/MoveTo) it does not clear routing. */
   | ({ op: "set_label_side"; part: string } & { side: LabelSide })
+  /** Footprint Properties' "Zone connection" and "Clearance" on a placed footprint (`FOOTPRINT::SetLocalZoneConnection` / `SetLocalClearance`): a whole-panel commit, `null` inherits. */
+  | { op: "set_footprint_zone_connection"; part: string; zone_connection: PadConnection | null; clearance: Um | null }
+  /** Pad Properties' zone fields on the pads numbered `pad` of a placed footprint: "Pad connection", "Relief gap", "Spoke width", "Spoke angle" (millidegrees) and "Clearance". A whole-panel commit, `null` inherits. */
+  | { op: "set_pad_zone_overrides"; part: string; pad: string; zone_connection: PadConnection | null; thermal_gap: Um | null; thermal_spoke_width: Um | null; thermal_spoke_angle_mdeg: number | null; clearance: Um | null }
   | { op: "add_track"; net: string; layer: string; width: Um; pts: PointXY[] }
   | { op: "delete_track"; id: string }
   | { op: "set_track_width"; id: string; width: Um }
@@ -1065,6 +1094,8 @@ export type Cmd =
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
   | { op: "paste_clipboard"; text: string; at: PointXY }
+  /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
+  | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
@@ -1651,6 +1682,8 @@ export interface LibSymbol {
   pin_numbers_hidden?: boolean;
   /** `(pin_names (offset x))`, mm: names are written inside the body, from the pin's inner end on, when it is above zero; over the pin line when it is zero. KiCad's default is 0.508 mm (20 mils). */
   pin_name_offset?: Mm;
+  /** `LIB_SYMBOL::GetBodyStyleCount`: 2 for a symbol with an alternate ("De Morgan") body style, whose items are then of `body_style` 1 or 2 (or 0, drawn in both); 1 (or absent) for one with a single body. */
+  body_style_count?: number;
 }
 
 /** GET /api/schematic's `lib_symbols`: every distinct lib_id used on the sheet, keyed by that lib_id ("Device:R", "power:GND", ...). */
@@ -1669,7 +1702,22 @@ export interface SchField {
   h: "left" | "center" | "right";
   v: "top" | "center" | "bottom";
   visible: boolean;
+  /** The id the field is selected, moved and edited by (`fld:<owner>:<name>`, `eda_engine::fields_edit::field_id`); absent from a backend built before fields were items. */
+  id?: string;
+  /** The item that has the field: a symbol's reference (`#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. */
+  owner?: string;
+  /** The size of the text (its height and width), micrometres; absent is the default, 50 mil. */
+  size_um?: Um;
+  bold?: boolean;
+  italic?: boolean;
+  /** `SCH_FIELD::IsNameShown`: the field is drawn as `Name: value`. */
+  name_shown?: boolean;
+  /** `SCH_FIELD::CanAutoplace`: false leaves the field where it is when its item's fields are autoplaced. */
+  allow_autoplace?: boolean;
 }
+
+/** Whether Autoplace Fields put an item's fields where they are (`SCH_ITEM::GetFieldsAutoplaced`): null is not (or never did). */
+export type FieldsAutoplaced = "auto" | "manual" | null;
 
 export interface SchematicSymbol {
   /** Reference designator ("U1") -- the same id PCB parts use. */
@@ -1682,7 +1730,7 @@ export interface SchematicSymbol {
   mirror: "x" | "y" | null;
   /** 1-based unit (gate) of a multi-unit symbol -- e.g. a quad op-amp, or ecc83-pp's three-triode ECC83. */
   unit: number;
-  /** 0 = no DeMorgan alternate (every real-world symbol in this app so far); 1 = normal, 2 = alternate, when one exists. */
+  /** The body style the symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`): 1 the normal one, 2 the alternate ("De Morgan") one of a library symbol that has it. */
   body_style: number;
   value: string | null;
   mpn: string | null;
@@ -1698,6 +1746,7 @@ export interface SchematicSymbol {
   exclude_from_sim?: boolean;
   /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
   fields?: SchField[];
+  fields_autoplaced?: FieldsAutoplaced;
 }
 
 /**
@@ -1725,6 +1774,7 @@ export interface PowerSymbol {
   pin: SchematicPin;
   /** The Value (its net name) where KiCad draws it, and the hidden Reference. */
   fields?: SchField[];
+  fields_autoplaced?: FieldsAutoplaced;
 }
 
 export interface NoConnect {
@@ -1787,6 +1837,10 @@ export interface SchematicLabel {
   shape: LabelShape | null;
   /** Which way the text runs from the anchor once Rotate or Mirror has set it (`SCH_LABEL_BASE::GetSpinStyle`); absent or null reads off the wire that ends at the label. */
   spin?: "right" | "up" | "left" | "bottom" | null;
+  /** The text's size (height and width), micrometres, and whether it is bold or italic (`EDA_TEXT`); absent is the default, 50 mil, regular. */
+  size_um?: Um;
+  bold?: boolean;
+  italic?: boolean;
 }
 
 /** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */
@@ -1845,6 +1899,7 @@ export interface Sheet {
   pins: SheetPin[];
   /** The sheet's name and file where KiCad's Autoplace Fields puts them. */
   fields?: SchField[];
+  fields_autoplaced?: FieldsAutoplaced;
 }
 
 /** One step of the breadcrumb from the root down to the sheet `GET /api/schematic?sheet=...` actually returned -- empty for the root itself. */

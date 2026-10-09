@@ -3,6 +3,7 @@
 // undo step, like the single `SCH_COMMIT::Push`.
 import type { Cmd } from "../api/types";
 import { withoutLocked } from "./schLock";
+import { parseFieldId } from "./schFieldEdit";
 
 /** The id lists of a schematic sheet -- structural, so this module needs no React or store types. */
 export interface SchIds {
@@ -23,7 +24,17 @@ export interface SchIds {
 export function deleteCmds(sch: SchIds, ids: readonly string[], locked: ReadonlySet<string>): Cmd[] {
   const has = (list: ReadonlyArray<{ id: string }> | undefined, id: string) => (list ?? []).some((x) => x.id === id);
   const cmds: Cmd[] = [];
-  for (const id of withoutLocked(ids, locked)) {
+  const kept = withoutLocked(ids, locked);
+  // the reference an owner key names (`R1#2` is a unit of `R1`)
+  const refOf = (owner: string) => /^(.*)#(\d+)$/.exec(owner)?.[1] ?? owner;
+  for (const id of kept) {
+    // `DoDelete` on a field hides it (`SetVisible( false )`) -- unless the item that has it goes too
+    const field = parseFieldId(id);
+    if (field) {
+      const ownerGoes = kept.some((other) => other === refOf(field.owner) || other === field.owner);
+      if (!ownerGoes && !locked.has(refOf(field.owner))) cmds.push({ op: "sch_edit", verb: "edit_field", id, visible: false });
+      continue;
+    }
     if (has(sch.symbols, id)) cmds.push({ op: "delete_symbol", id });
     else if (has(sch.wires, id)) cmds.push({ op: "delete_wire", id });
     else if (has(sch.labels, id)) cmds.push({ op: "delete_label", id });

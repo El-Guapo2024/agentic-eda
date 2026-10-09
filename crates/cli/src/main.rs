@@ -28,6 +28,8 @@ mod fab_api;
 mod fp_json;
 mod library_api;
 mod library_index;
+mod library_place;
+mod library_search;
 mod page_json;
 mod sch_api;
 mod sch_clipboard_api;

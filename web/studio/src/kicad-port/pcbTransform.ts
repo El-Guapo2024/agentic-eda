@@ -18,6 +18,7 @@
 import type { BoardState, Cmd, PointXY } from "../api/types";
 import { parseFieldId } from "./fpFields";
 import { itemBounds, itemKind, itemPosition, padParent, unionBounds } from "./pcbItems";
+import { ancestors, groupAndDescendants, groupLeaves, isGroup, parentGroup } from "./groupTree";
 
 export type FlipDirection = "left_right" | "top_bottom";
 export type Pt = readonly [number, number];
@@ -31,12 +32,12 @@ const toXY = (p: Pt): PointXY => ({ x: Math.round(p[0]), y: Math.round(p[1]) });
 
 /** The group an id is a member of, or null. */
 export function groupOf(board: BoardState, id: string): string | null {
-  return board.drawings?.groups.find((g) => g.member_ids.includes(id))?.id ?? null;
+  return parentGroup(board.drawings?.groups ?? [], id)?.id ?? null;
 }
 
 /**
- * `BOARD_ITEM::IsLocked()` (an item's own lock, or its parent group's) joined with `FilterCollectorForLockedItems`' extra rule: a group
- * is as good as locked when any of its members is.
+ * `BOARD_ITEM::IsLocked()` (an item's own lock, or that of any group above it) joined with `FilterCollectorForLockedItems`' extra rule: an item
+ * is as good as locked when anything below it is -- a group with a locked member, however deep.
  */
 export function isLocked(board: BoardState, id: string): boolean {
   const locked = new Set(board.locked ?? []);
@@ -44,10 +45,10 @@ export function isLocked(board: BoardState, id: string): boolean {
   // A footprint's field is as locked as the footprint (`PCB_TEXT::IsLocked`: "|| GetParentFootprint()->IsLocked()").
   const field = parseFieldId(id);
   if (field && locked.has(field.ref)) return true;
-  const group = board.drawings?.groups.find((g) => g.id === id);
-  if (group) return group.member_ids.some((m) => locked.has(m));
-  const parent = groupOf(board, id);
-  return parent != null && locked.has(parent);
+  const groups = board.drawings?.groups ?? [];
+  if (groups.length === 0) return false;
+  if (isGroup(groups, id) && [...groupAndDescendants(groups, id), ...groupLeaves(groups, id)].some((m) => locked.has(m))) return true;
+  return ancestors(groups, id).some((g) => locked.has(g.id));
 }
 
 // ------------------------------------------------------- the working selection

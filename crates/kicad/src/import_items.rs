@@ -91,42 +91,84 @@ impl Refs {
             note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
         }
 
-        // A group may name another group: this IR has no nested groups, so the inner group's members are
-        // pulled into the outer one and the inner group is not kept (`Cmd::Group`'s own flattening rule).
-        let by_group_uuid: HashMap<&str, &RawGroup> = raw_groups.iter().filter_map(|g| g.uuid.as_deref().map(|u| (u, g))).collect();
-        fn expand<'a>(g: &'a RawGroup, by_group_uuid: &HashMap<&str, &'a RawGroup>, by_uuid: &HashMap<String, Vec<String>>, seen: &mut Vec<&'a str>, out: &mut Vec<String>) {
-            for m in &g.members {
-                if let Some(ids) = by_uuid.get(m.as_str()) {
-                    out.extend(ids.iter().cloned());
-                } else if let Some(inner) = by_group_uuid.get(m.as_str()) {
-                    if let Some(u) = inner.uuid.as_deref() {
-                        if seen.contains(&u) {
-                            continue;
-                        }
-                        seen.push(u);
+        // A group may name another group (`resolveGroups` adds every group first "so subsequent getItem() calls for nested groups work"):
+        // the inner group is kept as a member of the outer one. Inner groups are made first, so their ids are known when the group
+        // that holds them is named; a group of fewer than two items is nothing to keep, and the one item it holds goes to the group
+        // above it.
+        #[derive(Clone)]
+        enum Built {
+            Kept(String),
+            Dropped(Vec<String>),
+        }
+        struct Walk<'a> {
+            by_uuid: &'a HashMap<String, Vec<String>>,
+            by_group_uuid: HashMap<&'a str, &'a RawGroup>,
+            groups: Vec<Group>,
+            names: std::collections::BTreeSet<String>,
+            visiting: Vec<&'a str>,
+            done: HashMap<&'a str, Built>,
+        }
+        impl<'a> Walk<'a> {
+            fn build(&mut self, g: &'a RawGroup) -> Built {
+                let key = g.uuid.as_deref();
+                if let Some(k) = key {
+                    if let Some(built) = self.done.get(k) {
+                        return built.clone();
                     }
-                    expand(inner, by_group_uuid, by_uuid, seen, out);
+                    if self.visiting.contains(&k) {
+                        return Built::Dropped(vec![]);
+                    }
+                    self.visiting.push(k);
                 }
+                let mut members: Vec<String> = Vec::new();
+                for m in &g.members {
+                    if let Some(ids) = self.by_uuid.get(m.as_str()) {
+                        members.extend(ids.iter().cloned());
+                    } else if let Some(inner) = self.by_group_uuid.get(m.as_str()).copied() {
+                        match self.build(inner) {
+                            Built::Kept(id) => members.push(id),
+                            Built::Dropped(items) => members.extend(items),
+                        }
+                    }
+                }
+                members.sort();
+                members.dedup();
+                if key.is_some() {
+                    self.visiting.pop();
+                }
+                let built = if members.len() < 2 {
+                    Built::Dropped(members)
+                } else {
+                    let mut group = Group { id: String::new(), name: g.name.clone(), member_ids: members };
+                    group.id = eda_model::ir::next_item_id("grp", &group.id_seed(), &self.names);
+                    self.names.insert(group.id.clone());
+                    let id = group.id.clone();
+                    self.groups.push(group);
+                    Built::Kept(id)
+                };
+                if let Some(k) = key {
+                    self.done.insert(k, built.clone());
+                }
+                built
             }
         }
-        let nested: std::collections::HashSet<&str> = raw_groups.iter().flat_map(|g| g.members.iter().map(String::as_str)).filter(|m| by_group_uuid.contains_key(m)).collect();
-        let mut groups = Vec::new();
+        let nested: std::collections::HashSet<&str> = raw_groups.iter().flat_map(|g| g.members.iter().map(String::as_str)).filter(|m| raw_groups.iter().any(|g| g.uuid.as_deref() == Some(*m))).collect();
+        let mut walk = Walk {
+            by_uuid: &by_uuid,
+            by_group_uuid: raw_groups.iter().filter_map(|g| g.uuid.as_deref().map(|u| (u, g))).collect(),
+            groups: Vec::new(),
+            names: design.drawings.iter().flat_map(|d| d.groups.iter().map(|g| g.id.clone())).collect(),
+            visiting: Vec::new(),
+            done: HashMap::new(),
+        };
         for g in raw_groups {
-            // An inner group is part of its outer one, not a group of its own.
+            // An inner group is made by the group that holds it.
             if g.uuid.as_deref().is_some_and(|u| nested.contains(u)) {
                 continue;
             }
-            let mut members = Vec::new();
-            let mut seen = Vec::new();
-            expand(g, &by_group_uuid, &by_uuid, &mut seen, &mut members);
-            members.sort();
-            members.dedup();
-            // A group of one item (or none: its members are not on this board) is nothing to keep.
-            if members.len() < 2 {
-                continue;
-            }
-            groups.push(Group { id: String::new(), name: g.name.clone(), member_ids: members });
+            walk.build(g);
         }
+        let groups = walk.groups;
         locked.sort();
         locked.dedup();
         (groups, locked)

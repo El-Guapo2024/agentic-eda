@@ -10,6 +10,7 @@ import { fetchAnyFootprint, fetchAnySymbol } from "../../api/libraryClient";
 import type { Cmd } from "../../api/types";
 import { filterFootprints, toCandidate, uniquePadCount, uniquePinCount, type FootprintCandidate } from "../../kicad-port/footprintFilter";
 import { expandStackedPinNotation } from "../../kicad-port/stackedPins";
+import { FootprintChooserDialog } from "../FootprintChooserDialog";
 import { SchDialogFrame } from "./SchDialogFrame";
 
 interface Row {
@@ -45,6 +46,8 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
   const [text, setText] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [symInfo, setSymInfo] = useState<{ filters: string[]; pins: number } | null>(null);
+  // "From KiCad's libraries...": the Footprint Chooser over every installed library, narrowed by the first selected symbol like the list here.
+  const [choosing, setChoosing] = useState(false);
 
   const current = (r: Row) => staged[r.ref] ?? r.footprint;
 
@@ -209,6 +212,9 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
           <input type="checkbox" checked={byPins} onChange={(e) => setByPins(e.target.checked)} /> Filter by pin count{symInfo ? ` (${symInfo.pins})` : ""}
         </label>
         <input placeholder="Search footprints" value={text} onChange={(e) => setText(e.target.value)} style={{ flex: 1, minWidth: 140 }} />
+        <button disabled={selected.length === 0} onClick={() => setChoosing(true)} title="Choose a footprint from KiCad's installed libraries (the Footprint Chooser)" data-assign-from-libraries>
+          From KiCad's libraries…
+        </button>
         <button disabled={!picked || selected.length === 0} onClick={() => picked && assign(picked)}>
           Assign
         </button>
@@ -216,6 +222,18 @@ export function AssignFootprintsDialog({ onClose }: { onClose: () => void }) {
           Remove assignment
         </button>
       </div>
+      {choosing && (
+        <FootprintChooserDialog
+          preselect={firstRow && current(firstRow).includes(":") ? current(firstRow) : null}
+          pinCount={symInfo?.pins}
+          fpFilters={symInfo?.filters}
+          onCancel={() => setChoosing(false)}
+          onChoose={(pick) => {
+            setChoosing(false);
+            if (pick.kind === "footprint") assign(pick.name);
+          }}
+        />
+      )}
     </SchDialogFrame>
   );
 }

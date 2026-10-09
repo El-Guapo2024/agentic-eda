@@ -692,6 +692,26 @@ fn handle(
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
+        // The Symbol and Footprint Choosers (`crate::library_search`): one library's items with their descriptions, the search over every library's
+        // names, descriptions and keywords (best first, capped), and the drawing of the one item selected. The project's own symbols come apart.
+        ("GET", "/api/library/entries" | "/api/library/search" | "/api/library/details") => {
+            let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
+                None => json!({ "error": "kind is footprint or symbol" }),
+                Some(kind) => {
+                    let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power"));
+                    match path {
+                        "/api/library/entries" => crate::library_search::entries(kind, &query_value(target, "lib"), &filter),
+                        "/api/library/search" => {
+                            let limit = query_value(target, "limit").parse::<usize>().ok().filter(|&n| n > 0).map_or(crate::library_search::SEARCH_LIMIT, |n| n.min(2000));
+                            crate::library_search::search(kind, &query_value(target, "q"), &filter, limit)
+                        }
+                        _ => crate::library_search::details(kind, &query_value(target, "id")),
+                    }
+                }
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
@@ -948,6 +968,24 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
             p["body"] = json!(crate::body_api::placed_body(&design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             p["pads"] = json!(pads);
+            // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
+            // there are any: `Design::pad_zone_facts` resolves an edit made on the board over an import's and a published library's.
+            if let Some(footprint) = model.footprint_of(part) {
+                let n = footprint.pads.len();
+                let facts: Vec<_> = footprint.pads.iter().enumerate().map(|(i, pad)| (&pad.number, design.pad_zone_facts(&part.reference, &footprint.name, i, n, &pad.number))).collect();
+                let own = |f: &eda_model::ir::PadZoneFacts| f.connection.is_some() || f.thermal_gap.is_some() || f.thermal_spoke_width.is_some() || f.thermal_spoke_angle_mdeg.is_some() || f.pad_clearance.is_some();
+                let fp_level = facts.first().map(|(_, f)| (f.footprint_connection, f.footprint_clearance)).unwrap_or_default();
+                if fp_level.0.is_some() || fp_level.1.is_some() || facts.iter().any(|(_, f)| own(f)) {
+                    p["zone"] = json!({
+                        "connection": fp_level.0,
+                        "clearance": fp_level.1,
+                        "pads": facts.iter().filter(|(_, f)| own(f)).map(|(num, f)| json!({
+                            "num": num, "connection": f.connection, "gap": f.thermal_gap, "spoke_width": f.thermal_spoke_width,
+                            "spoke_angle_mdeg": f.thermal_spoke_angle_mdeg, "clearance": f.pad_clearance,
+                        })).collect::<Vec<_>>(),
+                    });
+                }
+            }
         }
         parts.push(p);
     }
@@ -1003,6 +1041,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 // Task item 4: true for a generated teardrop, never a
                 // hand-drawn zone -- see `eda_model::ir::Zone::teardrop`.
                 "teardrop": z.teardrop,
+                // `ZONE_SETTINGS::m_cornerSmoothingType` / `m_cornerRadius`: ZoneDialog's "Corner smoothing" and "Radius".
+                "smoothing": z.smoothing, "corner_radius": z.corner_radius,
                 // `ZONE::GetZoneName()`: the Properties panel's "Name" row (`Cmd::SetZoneName`).
                 "name": z.name,
             })).collect::<Vec<_>>(),
@@ -1356,7 +1396,7 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
             // part.pins entry) when no real library symbol resolves one of
             // them by number, same "can't tell, so don't filter" fallback
             // `eda_engine::geometry`'s own unit-aware functions use.
-            let resolved = part.and_then(|p| model.real_symbol_of(&s.lib_id, p));
+            let resolved = part.and_then(|p| model.real_symbol_of_instance(&sch, s, p));
             let pins: Vec<Value> = part
                 .map(|p| {
                     p.pins
@@ -1368,20 +1408,12 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                 .unwrap_or_default();
             // Where each field is drawn on the sheet (`eda_engine::fields`): the placements the section keeps, else Autoplace Fields'. Not for a
             // schematic read from a KiCad file, whose symbols are placed by their own origin rather than the engine's box corner.
-            let fields: Vec<Value> = match (part, sch.imported_from_kicad) {
-                (Some(p), false) => {
-                    let mut placed = s.clone();
-                    if placed.lib_id.is_empty() {
-                        placed.lib_id = format!("eda:{}", s.id);
-                    }
-                    let geom = eda_engine::symgeom::SymbolGeom::of(&placed, p, resolved.as_ref());
-                    eda_engine::fields::symbol_fields(&sch, &placed, Some(p), resolved.as_ref(), &geom).iter().map(page_field_json).collect()
-                }
-                _ => Vec::new(),
-            };
+            let owner = eda_model::ir::field_key(&s.id, s.unit);
+            let fields: Vec<Value> = owner_fields_json(&sch, model, &owner);
             json!({
                 "id": s.id,
                 "fields": fields,
+                "fields_autoplaced": fields_autoplaced_json(&sch, &owner),
                 "at": [s.at.x, s.at.y],
                 // Millideg -> plain degrees, same convention `state()` uses for a PCB part's `rot`.
                 "rot": s.rot as f64 / 1000.0,
@@ -1408,6 +1440,9 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                 // this field (`visibleFor`), so sending it is what actually
                 // turns that pre-existing renderer plumbing on.
                 "unit": s.unit,
+                // Which body style the symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`: 1 the normal one, 2 the alternate "De Morgan" one) -- the
+                // same filter `resolveLibSymbol` applies to the `body_style` of each item of `lib_symbols[lib_id]`.
+                "body_style": sch.body_style_of(s),
                 "value": if s.value.is_empty() { part.and_then(|p| p.value.clone()) } else { Some(s.value.clone()) },
                 "footprint": if s.footprint.is_empty() { None } else { Some(s.footprint.clone()) },
                 "datasheet": if s.datasheet.is_empty() { None } else { Some(s.datasheet.clone()) },
@@ -1456,7 +1491,9 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                 eda_model::ir::LabelKind::Global { shape } => ("global", Some(*shape)),
                 eda_model::ir::LabelKind::Hierarchical { shape } => ("hierarchical", Some(*shape)),
             };
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id) })
+            // The look Label Properties set (size, bold, italic); the defaults when it never did.
+            let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -1467,7 +1504,7 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
     let power_symbols: Vec<Value> = sch
         .power_symbols
         .iter()
-        .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(page_field_json).collect::<Vec<_>>() }))
+        .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json(&p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) }))
         .collect();
     let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
     let title_block = sch.title_block.as_ref().map(crate::page_json::title_block_json);
@@ -1515,7 +1552,8 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
         .map(|s| {
             json!({
                 "id": s.id, "name": s.name, "file": s.file, "page": s.page,
-                "fields": eda_engine::fields::sheet_fields(&sch, s).iter().map(page_field_json).collect::<Vec<_>>(),
+                "fields": eda_engine::fields::sheet_fields(&sch, s).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>(),
+                "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
             })
@@ -1670,6 +1708,7 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         pin_names_hidden: false,
         pin_numbers_hidden: false,
         pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
+        alternate: None,
     };
     let Some(part) = model.part(reference) else { return empty() };
     let wireable: Vec<&eda_model::Pin> = part.pins.iter().filter(|p| p.kind != eda_model::PinKind::Nc).collect();
@@ -1727,14 +1766,20 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         pin_names_hidden: false,
         pin_numbers_hidden: false,
         pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
+        alternate: None,
     }
 }
 
 /// A field on the sheet as the painter reads it: the text, its anchor in micrometres, whether it runs vertically, how it is justified
 /// against the anchor (in the text's own axes) and whether it is drawn.
-fn page_field_json(f: &eda_engine::fields::PageField) -> Value {
+/// One field as the studio draws and selects it: the text, its anchor on the sheet and which way it runs, how it is justified there, its size and look, and the
+/// id (`fld:<owner key>:<name>`) every move and edit verb takes it by. `owner` is the item's key in `field_layout` (a symbol's reference, `#<unit>` after it for a
+/// unit but the first, a power symbol's or a sheet's id).
+pub(crate) fn page_field_json(owner: &str, f: &eda_engine::fields::PageField) -> Value {
     use eda_model::kicad_font::{HJustify, VJustify};
     json!({
+        "id": eda_engine::fields_edit::field_id(owner, &f.name),
+        "owner": owner,
         "name": f.name,
         "text": f.text,
         "at": [f.at.0.round(), f.at.1.round()],
@@ -1742,7 +1787,26 @@ fn page_field_json(f: &eda_engine::fields::PageField) -> Value {
         "h": match f.h { HJustify::Left => "left", HJustify::Center => "center", HJustify::Right => "right" },
         "v": match f.v { VJustify::Top => "top", VJustify::Center => "center", VJustify::Bottom => "bottom" },
         "visible": f.visible,
+        "size_um": f.size_um,
+        "bold": f.bold,
+        "italic": f.italic,
+        "name_shown": f.name_shown,
+        "allow_autoplace": !f.no_autoplace,
     })
+}
+
+/// The fields of the symbol, power symbol or sheet whose key in `field_layout` is `owner`, where they are on the sheet; none for an item the editor cannot place
+/// fields of (a part the model does not know, a schematic read from a KiCad file).
+pub(crate) fn owner_fields_json(sch: &eda_model::ir::SchematicSection, model: &eda_model::ConstraintModel, owner: &str) -> Vec<Value> {
+    match eda_engine::fields_edit::OwnerCtx::new(sch, model, owner) {
+        Some(ctx) => ctx.page_fields(sch).iter().map(|f| page_field_json(owner, f)).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// `"auto"`, `"manual"` or null: whether Autoplace Fields put the fields of the item `key` where they are (`SCH_ITEM::GetFieldsAutoplaced`).
+pub(crate) fn fields_autoplaced_json(sch: &eda_model::ir::SchematicSection, key: &str) -> Value {
+    json!(sch.extras.fields_autoplaced.get(key))
 }
 
 /// One `LibSymbol` as JSON: graphics/pins in the symbol's own local frame,
@@ -1753,33 +1817,33 @@ fn page_field_json(f: &eda_engine::fields::PageField) -> Value {
 ///
 /// Each graphic and pin carries two spellings: the engine symbol's own (`stroke_mm`, `filled`, `radius_mm`, `text`) and the names the studio's painter and its
 /// `LibSymbol` type read (`stroke_width`, `fill`, `radius`, `content`, `body_style`, and a pin's `hidden`). Without the second a symbol from a library was
-/// drawn with no body and no pins: the painter keeps an item only when its `body_style` is 0 or the placed one's. The engine symbol has no body styles and
-/// no hidden pins, so every item is shared (`body_style` 0) and none is hidden, and it keeps only whether a shape is filled, not how: a filled rectangle is
-/// the body colour (what library ICs use), any other filled shape the outline colour.
+/// drawn with no body and no pins: the painter keeps an item only when its `body_style` is 0 or the placed one's. A symbol with one body style has every item
+/// shared (`body_style` 0); one with an alternate ("De Morgan") body style has the items both bodies draw alike shared and the others of body style 1 (the
+/// normal body) or 2 (the alternate one), which is what `resolveLibSymbol` picks from by the style a placed symbol is in. No pin is hidden, and the engine symbol
+/// keeps only whether a shape is filled, not how: a filled rectangle is the body colour (what library ICs use), any other filled shape the outline colour.
 fn lib_symbol_json(s: &eda_model::LibSymbol) -> Value {
     let pt = |p: eda_model::symbol::SPoint| json!([p.x, p.y]);
     let fill = |filled: bool, how: &str| if filled { how.to_string() } else { "none".to_string() };
-    let graphics: Vec<Value> = s
-        .graphics
-        .iter()
-        .map(|g| {
-            use eda_model::SymbolGraphic::*;
-            match g {
-                Rectangle { unit, start, end, stroke_mm, filled } => json!({ "kind": "rectangle", "unit": unit, "body_style": 0, "start": pt(*start), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "background") }),
-                Polyline { unit, pts, stroke_mm, filled } => json!({ "kind": "polyline", "unit": unit, "body_style": 0, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
-                Circle { unit, center, radius_mm, stroke_mm, filled } => json!({ "kind": "circle", "unit": unit, "body_style": 0, "center": pt(*center), "radius_mm": radius_mm, "radius": radius_mm, "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
-                Arc { unit, start, mid, end, stroke_mm, filled } => json!({ "kind": "arc", "unit": unit, "body_style": 0, "start": pt(*start), "mid": pt(*mid), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
-                Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": 0, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
-            }
-        })
-        .collect();
-    let pins: Vec<Value> = s
-        .pins
-        .iter()
-        .map(|p| json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": 0, "hidden": false }))
-        .collect();
+    let graphic = |g: &eda_model::SymbolGraphic, style: u32| -> Value {
+        use eda_model::SymbolGraphic::*;
+        match g {
+            Rectangle { unit, start, end, stroke_mm, filled } => json!({ "kind": "rectangle", "unit": unit, "body_style": style, "start": pt(*start), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "background") }),
+            Polyline { unit, pts, stroke_mm, filled } => json!({ "kind": "polyline", "unit": unit, "body_style": style, "pts": pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+            Circle { unit, center, radius_mm, stroke_mm, filled } => json!({ "kind": "circle", "unit": unit, "body_style": style, "center": pt(*center), "radius_mm": radius_mm, "radius": radius_mm, "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+            Arc { unit, start, mid, end, stroke_mm, filled } => json!({ "kind": "arc", "unit": unit, "body_style": style, "start": pt(*start), "mid": pt(*mid), "end": pt(*end), "stroke_mm": stroke_mm, "stroke_width": stroke_mm, "filled": filled, "fill": fill(*filled, "outline") }),
+            Text { unit, text, at, angle_deg, size_mm } => json!({ "kind": "text", "unit": unit, "body_style": style, "text": text, "content": text, "at": pt(*at), "angle_deg": angle_deg, "size_mm": size_mm }),
+        }
+    };
+    let pin = |p: &eda_model::LibPin, style: u32| json!({ "number": p.number, "name": eda_model::kicad_geom::shown_name(&p.name), "electrical_type": p.electrical_type, "shape": p.shape, "at": pt(p.at), "angle_deg": p.angle_deg, "length_mm": p.length_mm, "unit": p.unit, "body_style": style, "hidden": false });
+    let (normal, alt) = s.bodies();
+    let mut graphics: Vec<Value> = normal.0.iter().map(|g| graphic(g, if alt.is_none_or(|a| a.0.contains(g)) { 0 } else { 1 })).collect();
+    let mut pins: Vec<Value> = normal.1.iter().map(|p| pin(p, if alt.is_none_or(|a| a.1.contains(p)) { 0 } else { 1 })).collect();
+    if let Some(a) = alt {
+        graphics.extend(a.0.iter().filter(|g| !normal.0.contains(g)).map(|g| graphic(g, 2)));
+        pins.extend(a.1.iter().filter(|p| !normal.1.contains(p)).map(|p| pin(p, 2)));
+    }
     // how the symbol's pins show their texts (`(pin_names (hide yes) (offset x))`, `(pin_numbers (hide yes))`)
-    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm })
+    json!({ "power": s.power, "graphics": graphics, "pins": pins, "datasheet": s.datasheet, "description": s.description, "pin_names_hidden": s.pin_names_hidden, "pin_numbers_hidden": s.pin_numbers_hidden, "pin_name_offset": s.pin_name_offset_mm, "body_style_count": s.body_style_count() })
 }
 
 /// `GET /api/footprint?name=<name>` -- the Footprint Editor's own document
@@ -2096,6 +2160,7 @@ mod tests {
             pin_names_hidden: false,
             pin_numbers_hidden: false,
             pin_name_offset_mm: 0.508,
+            alternate: None,
         });
         let g = gnd["graphics"].as_array().unwrap();
         assert_eq!((g[0]["fill"].as_str(), g[1]["fill"].as_str(), g[1]["radius"].as_f64()), (Some("background"), Some("outline"), Some(0.5)));

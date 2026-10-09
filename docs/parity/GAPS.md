@@ -14,7 +14,7 @@ doc and the code disagree, the code wins and the doc is named.
   (eeschema 77, common 105) are being wired now by the schematic-control and common-actions agents. Single
   actions are tracked in `UI-ACTIONS.md` and not repeated here.
 - **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"):
-  **6 closed, 14 partial, 2 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports).
+  **8 closed, 13 partial, 1 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports; the counts are those of Appendix A).
 - **12 items are new**, found in `PARITY-*.md`, `CODE-COMPARE-*.md` and by reading the code. The ranked list marks them.
 - **Three findings change the picture.**
   1. *A wired action is not a working feature.* `UI-ACTIONS.md` counted schematic Move, Drag, Rotate, Mirror,
@@ -33,8 +33,11 @@ doc and the code disagree, the code wins and the doc is named.
      recorded as unwired for that reason. `design.json` already overrides the model in places (`design.nets`,
      the footprint and symbol libraries); extending that overlay unlocks items 3, 5 and 9. **The rules now have
      their overlay (`drawings.rules`, applied in `board::load`) and seven undoable verbs; every Board Setup page
-     edits through them (item 3). Item 9 (footprints on the board) has its overlay since 2026-10-09
-     (`drawings.footprint_edits`: fields, attributes and pad edits, three verbs); item 5 (parts) still waits for one.**
+     edits through them (item 3). Item 5 took the library half of it (2026-10-08: a placed installed symbol keeps its
+     definition in the project symbol library, a library footprint becomes a board part), but a part's footprint
+     still comes from the intent; item 9 (footprints on the board) has its overlay since 2026-10-09
+     (`drawings.footprint_edits`: fields, attributes and pad edits, three verbs), beside the zone filler's
+     (`drawings.zone_overrides`).**
 - **Docs.** Action level: `UI-ACTIONS.md`. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 200 added since have not been compared) and
   `CODE-COMPARE-router.md`, `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and
@@ -63,9 +66,9 @@ New (the residual of #1). **Mostly done (2026-10-08).** Hit: every schematic ses
   (each verb is one undo step; the nets are untouched), a stroke round trip through a `.kicad_sch`, and 19 `node --test` cases; clicked through on a copy of mcu30
   (wire segment drag with bends, held R during a move, rotate and mirror of five kinds together and Undo, Align Left, Align to Grid, each Properties dialog).
 - Missing: the net-collision overlay of a drag (`sch_drag_net_collision.cpp`); `AutoRotateItem` after a label lands; a text has no justification to flip
-  when it is mirrored; fonts, bold, italic and colours of text and labels, a sheet's border and fill, extra fields and a label's fields have no place in the
-  IR, so their dialog pages are absent; sheet pins cannot be selected one by one; a power symbol has no Properties dialog; the `.kicad_sch` writer still
-  writes every label at angle 0, so a label's spin is not in the file yet; symbols that this project drew (not imported) and are turned or mirrored place
+  when it is mirrored; fonts and colours of text and labels (a label's size, bold and italic are in: item 12), a sheet's border and fill, extra fields and a
+  label's fields have no place in the IR, so their dialog pages are absent; sheet pins cannot be selected one by one; a power symbol has no Properties dialog (its Value is edited in Field
+  Properties); symbols that this project drew (not imported) and are turned or mirrored place
   their pins by `eda_engine::placed`, which disagrees with the drawn symbol for 90-degree and mirrored ones (older; the move tools use what is drawn).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
@@ -120,20 +123,28 @@ Old #6. **Partial.** Hit: every multi-sheet design. Blocks: yes. WP2, size L.
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
 ### 5. No access to the installed libraries
-New (the old "library browsers" mention). **Open.** Hit: every session that adds a part. Blocks: yes, a part must come from a library the design already uses, or the built-in catalog. WP6, size L.
-- Exists: the Symbol Chooser with search and preview (`components/SymbolChooserDialog.tsx`); library trees for the
-  project library (`components/library/`); `.kicad_sym` and `.kicad_mod` reading from one root set by
-  `EDA_KICAD_SYMBOLS` and `EDA_KICAD_FOOTPRINTS`. The Footprint and Symbol editors' trees also list every installed
-  KiCad library (155 footprint, 223 symbol) beside the project's own: names one library at a time, cached
-  (`crates/cli/src/library_index.rs`, `GET /api/library/index|items|all`, `components/library/LibraryTree.tsx`); opening an
-  installed item copies it into the project library first. The two choosers do not use that index yet: placing an installed
-  symbol needs `add_symbol` to resolve its definition into the schematic's `lib_symbols`, search needs the symbols' descriptions
-  (names only are indexed), and KiCad's chooser is a tree rather than a flat list.
-- Missing: `GET /api/symbol_library` (`crates/cli/src/studio.rs::symbol_library_json`) lists only libraries the design
-  references plus the built-in catalog; footprints resolve by name and are never enumerated
-  (`crates/kicad/src/footprint_lib.rs`). No library tables (user and project libraries, Add and New Library, Configure
-  Paths), no symbol or footprint browser, a plain search list instead of the chooser's recently-used and filter tabs
-  (`PARITY-sch.md` section 3), and no footprint chooser: `placeFootprint` lists unplaced schematic parts only.
+New (the old "library browsers" mention). **Partly closed on 2026-10-08: the two choosers read KiCad's installed libraries; library tables are still open.** Hit: every session that adds a part. Blocks: no longer, a part can come from any installed library. WP6, size L.
+- Done: **the Symbol Chooser is KiCad's** (`components/SymbolChooserDialog.tsx`, `components/chooser/`, `kicad-port/libChooser.ts`): a tree of "-- Recently Used --"
+  (the last 8), "-- Already Placed --", the project's own libraries and all 222 installed ones (opened one at a time), a search over names, descriptions,
+  keywords, library names and default footprints scored as `EDA_COMBINED_MATCHER` does (an exact term 8 times its weight, a match at the start twice, anywhere once;
+  a word may carry `*` and `?`), a row per unit under a multi-unit symbol, the symbol's drawing one unit at a time, its default footprint and drawing, and the description pane.
+  **The Footprint Chooser** (`components/FootprintChooserDialog.tsx`): the 155 installed footprint libraries with the same search (name, description, tags),
+  the drawing, the description, and, when it is opened for a symbol, "Filter by pin count" and "Apply footprint filters" (`ki_fp_filters`). It serves **Place Footprint**
+  (a mounting hole, a fiducial: `Cmd::PlaceFootprint` makes a board part `H1`, `TP1`, ... with the library's pads), the Footprint field of Symbol Properties (Browse...)
+  and Assign Footprints (From KiCad's libraries...). **Placing an installed symbol** keeps its definition with the schematic in the same undoable command
+  (`Cmd::EmbedLibSymbol`, a published entry of the project symbol library; `crates/cli/src/library_place.rs` adds it to an `AddSymbol` on the server), with the library's
+  Value, Footprint and Datasheet, so it draws, exports and passes kicad-cli ERC (a slow-tier test); one undo takes the instance and its definition back, redo restores both.
+  **Speed**: a library is indexed on demand, once, by a single pass over its text that keeps a few fields and the byte span of each symbol (`crates/kicad/src/symbol_scan.rs`,
+  `footprint_scan.rs`; 230 MB of symbols in 2.5 s in a debug build), cached against the file's modification time; a thread indexes the rest on the first search, which says
+  `indexing` until it is done (`crates/cli/src/library_search.rs`, `GET /api/library/entries|search|details|project`). Only the best 400 matches leave the server, and one
+  symbol's drawing is cut out of its file and sent when it is selected, never a library.
+- Exists besides: library trees for the project library (`components/library/`); `.kicad_sym` and `.kicad_mod` reading from one root set by `EDA_KICAD_SYMBOLS` and
+  `EDA_KICAD_FOOTPRINTS`; the Footprint and Symbol editors' trees list every installed KiCad library (`crates/cli/src/library_index.rs`,
+  `GET /api/library/index|items|all`, `components/library/LibraryTree.tsx`) and opening an installed item copies it into the project library first.
+- Missing: library tables (user and project libraries, Add and New Library, Configure Paths); KiCad's regular-expression (`/re/`) and relational (`voltage>3.3`) search words
+  (a word is searched as text); the Footprint selector's list and the 3D preview of the Footprint Chooser; an alternate (DeMorgan) body style cannot be chosen when placing --
+  a placed instance has no body style in the IR, so it shows the standard one while the kept definition holds both; Change Symbols still lists only the libraries the
+  design references; power symbols are placed by `P`, not offered here.
 - Port from: `common/libraries/library_manager.cpp`, `library_table.cpp`, `common/lib_tree_model_adapter.cpp`,
   `common/footprint_info.cpp`, `eeschema/libraries/symbol_library_adapter.cpp`, `eeschema/symbol_chooser_frame.cpp`,
   `pcbnew/footprint_chooser_frame.cpp`, `pcbnew/footprint_library_adapter.cpp`.
@@ -204,15 +215,18 @@ New (the residual of old #11; blocked #26). **Mostly done (2026-10-09).** Hit: e
 - Done (`PARITY-pcb.md` section 24; `crates/model/src/fp_edit.rs`, `crates/ops/src/fp_edit.rs`, `crates/kicad/src/fp_fields.rs`, `kicad-port/fpFields.ts`,
   `components/{FootprintPropertiesDialog,BoardPadPropertiesDialog}.tsx`): a footprint's Reference and Value are fields with a position, size, thickness, layer, visibility, rotation, justification, mirror, bold, italic, keep upright and
   knockout; user fields can be added, renamed and deleted; the attributes (SMD, through hole or unspecified, not in schematic, exclude from position files, exclude from BOM, do not populate, exempt from the courtyard
-  requirement) are per instance, and do not populate and exclude from BOM stay in step with the schematic symbol; pads carry their own type, shape, size, offset, rotation, corner radius, hole (round or oblong), clearance and
+  requirement) are per instance, and do not populate and exclude from BOM stay in step with the schematic symbol; pads carry their own type, shape, size, offset, rotation, corner radius, hole (round or oblong) and
   mask and paste margins. It is all `DrawingsSection::footprint_edits` (additive, serde defaults), three undoable verbs (`edit_board_footprint`, `edit_board_field`, `edit_board_pad`), written to the `.kicad_pcb` as `property` /
   `attr` / pad extras that kicad-cli loads and whose position and BOM exports honour (slow test `kicad_cli_loads_the_edited_board_and_its_position_and_bom_exports_honour_the_attributes`), and read back by the importer. A field is an
   item of the board (`REF:Name`): selected, drawn, moved with M, dragged, moved with Move Exactly, turned, flipped. Editing is the Footprint Properties dialog (the field grid), the Pad Properties dialog and the Properties panel
-  (item 10). Duplicate, Paste and Create Array take the edits with a copy. Board-only footprints (mounting holes, fiducials) are the "not in schematic" attribute.
-- Measured: 65 new Rust tests and 38 new `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 16 scenarios through `window.__eda` on a served board (each undone, the board compared), and real kicad-cli
+  (item 10). Duplicate, Paste and Create Array take the edits with a copy. Board-only footprints (mounting holes, fiducials) are the "not in schematic" attribute, and a library footprint can be placed
+  as a part of its own (Place Footprint, item 5). A pad's and a footprint's zone connection, relief gap, spoke width and angle and clearance are the zone filler's overlay (`drawings.zone_overrides`,
+  `Cmd::SetFootprintZoneConnection` / `SetPadZoneOverrides`, item 13), and the same dialogs edit them: Footprint Properties and Pad Properties show the fields and the zone fields, one OK, one undo step;
+  a pad has one clearance (the zone overlay's), and one `(pad ..)` form in the file carries both overlays' fields.
+- Measured: 69 new Rust tests and 39 new `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 18 scenarios through `window.__eda` on a served board (each undone, the board compared), and real kicad-cli
   honoured do-not-populate and exclude-from-position-files in `/api/fab/pos` and do-not-populate in `/api/fab/bom` on an edited scratch board.
-- Missing: Change Footprint(s), Update Footprints from Library and geographical reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); per-footprint clearance and paste margin
-  overrides; a pad's zone connection and thermal relief overrides (the zone filler's, item 13); trapezoid, chamfered and custom pads, padstacks, fabrication property, pad number and pin function edits; Datasheet and
+- Missing: Change Footprint(s), Update Footprints from Library and geographical reannotate (recorded unwired: a part's footprint comes from the intent, which has no verb); per-footprint mask and paste
+  margin overrides; logos and the microwave tools (declined for the same reason as before); trapezoid, chamfered and custom pads, padstacks, fabrication property, pad number and pin function edits; Datasheet and
   Description fields and text variables in field text; our own placement and courtyard checks do not read a pad's offset or margins (kicad-cli does).
 - Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_pad_properties.cpp`, `dialog_exchange_footprints.cpp`, `dialog_update_pcb.cpp`,
   `pcbnew/pcb_field.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
@@ -261,30 +275,50 @@ New (the UI half of old #19). **Mostly closed on 2026-10-08.** Hit: every review
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `common/dialogs/panel_setup_severities.cpp`, `eeschema/dialogs/dialog_schematic_setup.cpp`, `common/rc_item.cpp`.
 
 ### 12. Schematic symbols, fields and labels carry no per-instance geometry
-New. **Partial** (fields done, labels not). Hit: every schematic cleanup. Blocks: no. WP1, size M.
+New. **Done (2026-10-09)**, limits below. Hit: every schematic cleanup. Blocks: no. WP1, size M.
 - Done (2026-10-08, `PARITY-sch.md` section 15): the Reference, Value, Footprint and Datasheet of every symbol, the Value of a power
   symbol and the name and file of a sheet each have a position, an orientation, a justification and a visibility of their own
   (`SchematicSection::field_layout`, keyed by the item, in the item's own frame so a move, a turn or a mirror carries them), placed
   by a port of Autoplace Fields (`eeschema/autoplace_fields.cpp`, `crates/engine/src/fields.rs`) and moved to another side or further
   out where they would run over what is drawn; the `.kicad_sch` writer writes them, `GET /api/schematic` sends them (`fields`) and the
   painter draws them there. Generated symbols (`gen:<ref>`) draw their pins and texts the way KiCad's own do.
-- Missing: no editing of a field's place (no Move Field, no Properties text-placement fields, no Autoplace Fields command in the editor: the engine has the port, the action `eeschema.InteractiveEdit.autoplaceFields` is not wired to it), size or bold/italic; none of the above for a label (`NetLabel` is net, point and kind; its spin is read off the
-  wire), so no label rotation, size, justification or shape; DNP and exclusion flags (the schematic-control agent is adding some, so
-  take its IR fields); an alternate body style cannot show on a placed symbol (`to_engine_symbol` drops style 2); pins cannot be
-  selected (Swap Pins, pin-level highlight).
+- Done (2026-10-09, `PARITY-sch.md` sections 1 and 15): fields are items of their own. Each is picked (a click, a box), moved (`M`, a drag),
+  turned and mirrored, hidden with Delete and edited in Field Properties (text, position, size, orientation, bold, italic, justification,
+  visible, shown name, allow autoplacement; one undo step), and moving one on its own takes its item out of the autoplaced ones
+  (`SchExtras::fields_autoplaced`, `(fields_autoplaced yes)` in the file); Symbol Properties has a Show check for each of the four fields and
+  Show Hidden Fields draws the hidden ones (neither is selectable, as in KiCad). `eeschema.InteractiveEdit.autoplaceFields` runs the manual
+  Autoplace Fields (`AUTOPLACE_MANUAL`: the colliding-side and fit-between-wires search, the 10 mm drawable area) on the selection, and a
+  turn of a symbol alone places its autoplaced fields again (`AUTOPLACE_AUTO`). A label's spin, size, bold and italic are stored
+  (`SchExtras::label_spins`, `label_looks`), edited in Label Properties, written the way KiCad writes them (angle and justification) and
+  read back from a `.kicad_sch`. A placed symbol in the alternate ("De Morgan") body style is drawn and written in it: the library symbol
+  keeps both bodies (`LibSymbol::alternate`, `Name_<unit>_2` sub-blocks), `SchExtras::body_styles` says which style a symbol is in,
+  Cycle Body Style (`eeschema.InteractiveEdit.toggleDeMorgan`, `SchCmd::SetBodyStyle`) changes it and kicad-cli reads the pins of that style
+  where the file puts them (`crates/kicad/tests/sch_body_style.rs`). Measured: 44 Rust tests (26 for the fields, 5 for the label geometry, one
+  of them through KiCad's own writer, 13 for the body styles, one of them through kicad-cli's netlist and one reading KiCad's own De Morgan QA file), 17 `node --test` cases, the overlap
+  sweep unchanged, and the studio's fields, labels, Cycle Body Style and the Symbol Properties dialog clicked through on a copy of mcu30.
+- Missing: a field's font face and colour, a free text's justification, a label's own fields (netclass, intersheet references) and a
+  user-defined field's place on the sheet have no place in the IR; the fields of a symbol read from a KiCad file are not items (the
+  importer keeps KiCad's origin, the fields keep theirs in the file); the fields' preference `m_AutoplaceFields.enable` is always on;
+  Reorganize into Module Sheets lays the sheets out again and loses the stored places of fields, label spins and looks, and body styles;
+  only the normal and the De Morgan body style are modelled (a symbol with named body styles draws its first two) and the symbol
+  chooser always places in the normal style; pins cannot be selected (Swap Pins, pin-level highlight).
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`,
   `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: fill fidelity and settings
-Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L.
-- Exists: the filler (`crates/zone-filler`, `crates/drc/src/fill.rs`, `GET /api/fill`) measured against kicad-cli at 6 of 8 fills
-  within 0.2% (`crates/zone-filler/PARITY.md`); the full settings dialog (`components/ZoneDialog.tsx`); keepout knockouts; island
-  removal; Fill and Unfill Selected, Merge, Duplicate onto Layer, the Priority actions and the Zone Manager (`PARITY-boardctl.md`);
-  the importer reads zones (`import.rs::import_zones`).
-- Missing: hatch fill falls back to solid (`zone-filler/src/lib.rs`); thermal spokes are four axis-aligned bars (`spokes.rs`);
-  no per-pad connection overrides, no `connect_nearby_polys`, no iterative refill; one layer per zone, no non-copper zones, no
-  corner smoothing, no zone name, lock or border style; no Auto-Assign Priorities; the Zone Manager has no preview; the
-  exporter ignores the settings (item 2). Appendix C has the function table.
+Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L. **Fill fidelity improved 2026-10-08: the filler follows `ZONE_FILLER::Fill`, and of 208 fills on 17 KiCad QA boards 190 are within 1% of kicad-cli's area (105 before), 182 within 0.5% (99 before); what is left is custom pads, Edge.Cuts arcs the importer turns into chords, and the hatch rings.**
+- Exists: the filler (`crates/zone-filler`, `crates/drc/src/fill.rs`, `GET /api/fill`): zones fill from the highest priority down and are knocked out by each other's fills, islands go by
+  connectivity and the zones below get the space back (iterative refill), thermal spokes are `buildThermalSpokes` (they turn with the pad, have its spoke angle, width and gap, and only the ones that
+  reach copper stay), hatch fill (`addHatchFillTypeOnZone`) with thermal rings, chamfer and fillet corner smoothing, the board-edge clearance, and pad and footprint clearance overrides.
+  Measured against kicad-cli, before and after, in `crates/zone-filler/PARITY.md`. A pad's or footprint's own connection (solid, thermal, PTH-only thermal, none), relief gap, spoke width, spoke angle and
+  clearance beat the zone's: set in Footprint Properties and Pad Properties for a footprint on the board (`Cmd::SetPadZoneOverrides`, `Cmd::SetFootprintZoneConnection`, sent in the dialog's one OK with its field, attribute and pad edits, item 9: one undo step) and in the footprint
+  editor's Pad Properties and Footprint Properties, read from and written to `.kicad_pcb` and `.kicad_mod`; Zone Properties edits the corner smoothing. Also: the full settings dialog
+  (`components/ZoneDialog.tsx`); keepout knockouts; Fill and Unfill Selected, Merge, Duplicate onto Layer, the Priority actions and the Zone Manager (`PARITY-boardctl.md`); the importer reads zones (`import.rs::import_zones`).
+- Missing: custom pad shapes (the importer keeps the anchor: the 16 custom pads of `issue5093` leave 766% on one of its zones and the ring pads of `stonehenge` 11%; the largest gap left); the thermal rings of a hatched zone (0.6 to 0.9% XOR); `connect_nearby_polys`;
+  Edge.Cuts arcs (the importer keeps their chord: one `tessellate_arc` call in `import.rs::import_outline` would fix it, outside this item; the notch of `issue11814` costs its zones 2 to 23%), Edge.Cuts
+  cutouts and open outlines, mask-only NPTH holes, courtyards and net ties as knockouts; one layer per zone, no non-copper zones, no zone lock or border style in Zone Properties (the name is edited in the Properties panel); no Auto-Assign
+  Priorities; the Zone Manager has no preview; no footprint-level clearance, mask or paste fields in the footprint editor; a hatched zone with a fine pitch over a whole board is slow (minutes in a debug
+  build on `issue5093`). Appendix C has the function table.
 - Port from: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `pcbnew/teardrop/`.
 
 ### 14. Snap, grid and the click-versus-drag rule
@@ -309,21 +343,29 @@ New (from `CODE-COMPARE-ui.md`). **Partial.** Hit: constantly, one detail at a t
   collapses to one flag; Add Corner inserts the cursor point instead of the nearest point on the edge.
 
 ### 16. The PCB context menu
-Old #30. **Partial.** Hit: constantly. Blocks: no. WP3, size S-M.
-- Exists: conditional entries for the edit tools (`actions/pcbSweepMenu.ts`) and zone and net-inspection groups (`Canvas.tsx`); the
-  schematic menu already follows KiCad's conditions (`kicad-port/schContextMenu.ts`).
-- Missing: the base block (Rotate, Flip, Move Exactly, Create Array, Copy, Cut, Duplicate, Delete, Align, Distribute) is always listed,
-  greyed out when it does not apply, where KiCad lists only what applies; no Properties, Lock, Group, Select Connection or router
-  entries; a flat list without submenus.
-- Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`.
+Old #30. **Mostly done (2026-10-08).** Hit: constantly. Blocks: no. WP3, size S-M (done).
+- Done (`PARITY-pcb.md` section 7): the menu is built the way KiCad builds it, from the entries every tool adds with its condition and order number
+  (`kicad-port/pcbContextMenu.ts`: `ConditionalMenu` and `buildSelectionMenu`, in `PCB_EDIT_FRAME::setupTools` order, so the order is KiCad's), and lists only what
+  applies: Select, Routing, Mirror / Rotate, Shape Modification, Position, Locking, Zones, Net Inspection Tools, Align/Distribute, Create from Selection and Grouping
+  as submenus, then Cut, Copy, Paste, Duplicate and Delete, Zoom and Grid, and Properties last. The router's menu opens while a route is drawn, the drawing tools' while one runs, and the picker
+  tools offer Cancel, Zoom and Grid. The entries run the existing actions (`components/canvas/pcbMenuBuilder.ts`, `actions/pcbMenuActions.ts`); `actions/pcbSweepMenu.ts`
+  and the flat list in `Canvas.tsx` are gone. A right click keeps a selection and selects the item under the pointer only when there is none, as KiCad does.
+- Missing: table cells, gate swap and generators have no IR, so no entries; the pad settings are listed dimmed (they belong to the Footprint Editor tab) and so are most
+  of the router's via, posture and corner-mode actions (Place Through Via works while routing; Track Corner Mode always shows 45); Zone Priority raise and lower go by
+  the zones' boxes overlapping, not their filled shapes.
+- Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`, `board_inspection_tool.cpp`, `router/router_tool.cpp`.
 
 ### 17. Groups
-Old #27. **Partial.** Hit: sometimes. Blocks: no. WP3, with WP1 for the schematic, size S-M.
-- Exists: Group, Ungroup, whole-group selection, enter and leave (`Cmd::Group`, `state/store.tsx` `withGroupSubstitution`).
-- Done since: Add Items, Remove Items and Group Properties on the board (`PARITY-common.md` section 4: one undo step, `Cmd::EditGroup`).
-- Missing: group-aware move, rotate, flip and delete; nested groups; the entered-group overlay; export (item 2); no groups in the
-  schematic or the footprint editor (their Group / Ungroup and the group dialogs are dimmed or do nothing there).
-- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
+Old #27. **Mostly done on the board (2026-10-08); the schematic and the footprint editor have none.** Hit: sometimes. Blocks: no. WP3, with WP1 for the schematic, size S-M.
+- Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`PARITY-common.md` section 4: one undo step, `Cmd::EditGroup`);
+  and, since 2026-10-08 (`PARITY-pcb.md` section 16): groups nest (`EDA_GROUP`: a group may hold groups; `crates/model/src/groups.rs`, `crates/ops/src/pcb_groups.rs`, a loop is
+  refused, a group under two members dissolves up the tree); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree, with a locked leaf locking its group
+  for the tools; a deleted member leaves its group; selecting a member picks the outermost group, a double click or Enter Group enters one (only its members can be picked),
+  and Escape, a click outside it, selecting something outside it or Leave Group leave it; the entered group is drawn with its box and name and everything outside it dimmed, a selected
+  group with its box and name; the `.kicad_pcb` file and the clipboard text hold the tree; the Grouping submenu of the right-click menu lists the four actions (item 16).
+- Missing: items drawn or pasted while a group is entered do not join it (`BOARD_COMMIT::Push`); Create Array skips groups (item 22); no groups in the schematic or the
+  footprint editor (their Group / Ungroup and the group dialogs are dimmed or do nothing there).
+- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
 
 ### 18. Appearance and display options
 New. **Partial.** Hit: every session. Blocks: no. WP3, size M.
@@ -350,9 +392,14 @@ Old #29. **Partial.** Hit: constantly. Blocks: no. WP1, size S.
 - Port from: `common/view/wx_view_controls.cpp`.
 
 ### 21. No Find on the PCB
-New. **Open.** Hit: often on big boards. Blocks: no. WP3, size S-M.
-- Find, Find and Replace and Find Next are registered on the Schematic tab only; `common.Interactive.search` jumps to the Activity
-  tab; Find by Properties is recorded unwired (`actions/useActionRunner.ts`, `ui-parity-missing.json`).
+New. **Mostly done (2026-10-08).** Hit: often on big boards. Blocks: no. WP3, size S-M (done).
+- Done (`PARITY-pcb.md` section 7a): Find (Ctrl+F), Find Next (F3) and Find Previous (Shift+F3) on the board, from `DIALOG_FIND`: the search text with its history, Match case,
+  Whole words only, Wildcards, Wrap, the footprint references, values, other texts, DRC markers and net names, Restart Search and the status line; the hit list in KiCad's
+  order (footprints, texts, markers, nets); the hit selected (a net: its tracks and vias) and the view brought to it as `PCB_SELECTION_TOOL::FindItem` does; the dialog opens
+  with the selected footprint's value or text (`kicad-port/pcbFind.ts`, `state/pcbFind.ts`, `actions/pcbFindActions.ts`, `components/PcbFindDialog.tsx`).
+- Missing: Find by Properties (`pcbnew.EditorControl.findByProperties` stays unwired: it needs the property manager and a PCBEXPR search over every item, the reason is in
+  `ui-parity-missing.json`); Include hidden fields does nothing (a footprint has no hidden field here) and a zone has no name, so none matches; the dialog's "Show search panel"
+  link (`common.Interactive.search` still jumps to the Activity tab). Find and Replace is the schematic's only, as in KiCad.
 - Port from: `pcbnew/dialogs/dialog_find.cpp`.
 
 ### 22. Arrays of footprints
@@ -436,7 +483,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
   `eeschema/dialogs/dialog_{schematic_setup,erc}.cpp`, `pcbnew/zone_filler.cpp`, `pcbnew/zone.cpp`, `pcbnew/teardrop/`.
 - Order: (1) writer: keepouts, per-zone settings, dimensions, groups, locks, arcs, teardrops, with a round-trip test and a fresh `scores.json` (**done 2026-10-08**);
   (2) the `design.json` overlay for `BoardRules` and the Board Setup pages (**done 2026-10-08**); (3) severities and the DRC and ERC review workflow (**done 2026-10-08**: Violation Severity in Board Setup and Schematic Setup, DRC exclusions, `--schematic-parity`, the
-  Ignored Tests and Schematic Parity pages, marker menus, Next / Previous / Exclude Marker; item 11 says what is left); (4) zone filler fidelity.
+  Ignored Tests and Schematic Parity pages, marker menus, Next / Previous / Exclude Marker; item 11 says what is left); (4) zone filler fidelity (**done 2026-10-08**; item 13 lists what is left).
 
 **WP6. Libraries, parts and footprints on the board** (items 5, 9, 19, 22). Size XL.
 - Files: `crates/kicad/src/{symbol_lib,footprint_lib}.rs`, `crates/cli/src/{studio,library_api}.rs`, `crates/model/src/{ir,footprint,symbol}.rs` (`FootprintInstance`,
@@ -445,7 +492,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 - KiCad: `common/libraries/{library_manager,library_table}.cpp`, `common/{lib_tree_model_adapter,footprint_info}.cpp`, `eeschema/libraries/symbol_library_adapter.cpp`,
   `eeschema/{symbol_chooser_frame,symbol_library_manager}.cpp`, `pcbnew/{footprint_chooser_frame,footprint_library_adapter,pcb_field}.cpp`,
   `pcbnew/dialogs/{dialog_footprint_properties,dialog_exchange_footprints,dialog_update_pcb}.cpp`, `pcbnew/tools/{board_editor_control,footprint_editor_control,pad_tool}.cpp`.
-- Order: library tables and the chooser (5); board footprint fields, attributes and pad edits (9, **done 2026-10-09**: `drawings.footprint_edits`; board-only footprints are the "not in schematic" attribute); Change and Update Footprints now that the overlay exists; editor leftovers (19); arrays (22, **done 2026-10-09** but for the footprint editor's pad numbering).
+- Order: library tables and the chooser (5; the choosers are done, 2026-10-08, the tables are not); board footprint fields, attributes and pad edits (9, **done 2026-10-09**: `drawings.footprint_edits`; board-only footprints are the "not in schematic" attribute); Change and Update Footprints now that the overlay exists; editor leftovers (19); arrays (22, **done 2026-10-09** but for the footprint editor's pad numbering).
 
 ## Appendix A. The original 30, one verdict each
 
@@ -473,10 +520,10 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | Partial | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`); schematic Align: item 1. |
 | 26 | Array tool | Partial | `Cmd::CreateArray` (`crates/ops/src/array.rs`), `CreateArrayDialog.tsx`: footprints and every other kind, since 2026-10-09; the footprint editor's pad numbering is left (item 22). |
-| 27 | Grouping | Partial | `Cmd::Group` family, `state/store.tsx::withGroupSubstitution`; item 17. |
+| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic and the footprint editor have no groups; item 17. |
 | 28 | Dimensions and measure | **Closed** | `crates/connectivity/src/dimension.rs`, `Cmd::AddDimension` family, `components/DimensionPropertiesDialog.tsx`, the measure tool. Left: the interactive height click, text border, manual text position, export (item 2). |
 | 29 | Pan | Partial | `kicad-port/viewControls.ts`, `Canvas.tsx` (PCB); item 20. |
-| 30 | Context menu | Partial | `actions/pcbSweepMenu.ts`, `Canvas.tsx`; item 16. |
+| 30 | Context menu | **Closed** | `kicad-port/pcbContextMenu.ts` (KiCad's `CONDITIONAL_MENU` and the entries of every tool's `Init()`), `pcbSelectionSummary.ts`, `components/canvas/pcbMenuBuilder.ts`, `Canvas.tsx`. Left: table cells, gate swap, generators, most of the router's via and posture entries (item 16, item 7). |
 
 ## Appendix B. Out of scope and deferred
 
@@ -490,16 +537,19 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 
 ## Appendix C. Zone filler against `pcbnew/zone_filler.cpp`
 
-Audited 2026-10-02 (`e45bf2a`) and re-checked 2026-10-07 for the rows marked *. The ported functions are not listed: `addHoleKnockout`,
+Audited 2026-10-02 (`e45bf2a`), re-audited 2026-10-08 after the fidelity work (item 13). The functions that were already ported are not listed: `addHoleKnockout`,
 `buildDifferentNetZoneClearances`, `subtractHigherPriorityZones`, `postKnockoutMinWidthPrune`, the rule-area knockouts (`FillKeepout`) and the `fillSingleZone` structure.
+Each row below is measured against kicad-cli in `crates/zone-filler/PARITY.md` (before and after).
 
 | KiCad function | `crates/zone-filler` |
 |---|---|
-| `Fill` | partial: no iterative refill; island removal is our own `apply_island_removal`, not `FillIsolatedIslandsMap` through connectivity |
+| `Fill` | ported (`orchestrate.rs::fill_board`): zones fill from the highest priority down (`ZONE::HigherPriority`: teardrop, priority, then the id where KiCad uses the UUID) and each is knocked out by the filled copper of the zones above it, not their outlines; the iterative refill. Not ported: the dependency waves run in parallel (one sorted pass here) and a zone on several layers (one layer per zone) |
+| `FillIsolatedIslandsMap` (`islands.rs`) | ported: an island is a fragment whose same-net copper cluster, through pads, tracks, vias and the zones of other layers, holds no pad; `ISLAND_REMOVAL_MODE` always / never / below area; islands mostly outside the board are dropped last |
+| `refillZoneFromCache` | ported (`lib.rs::refill_zone_from_cache`): the pre-knockout fill is cached, and a zone that a higher-priority zone gave space back to is refilled from the cache against the fills as they now are |
 | `addKnockout` | partial: no custom-pad convex-hull mode |
-| `knockoutThermalReliefs`, `buildThermalSpokes` * | simplified: four axis-aligned spokes from the pad's bounding box (`spokes.rs`); no per-pad overrides, spoke angle or circle and oval cases |
-| `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions, board outline only for edge clearance |
-| `connect_nearby_polys` * | missing |
+| `knockoutThermalReliefs`, `buildThermalSpokes` (`spokes.rs`) | ported: `DRC_ENGINE::EvalZoneConnection` (a pad's own connection over its footprint's over the zone's; "PTH only" thermal-relieves plated holes), the pad's relief gap and spoke width over the zone's (the width at least the zone's minimum and at most the pad's smaller side), the spoke angle (90 degrees for oval and rectangular pads, 45 otherwise, or the pad's own), spokes turned with the pad, circles built at 0 degrees and turned, the spoke ends, the test point and the mutual overlap, so only spokes that reach copper stay. Not ported: custom pads (their proxy spokes) |
+| `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions; **the board edge now** (`copper_edge_clearance` against the outer Edge.Cuts outline; no interior cutouts); a pad's or footprint's own clearance override replaces the net class's and zone's for that pad, floored at the board minimum (`DRC_ENGINE::EvalRules`) |
+| `ZONE::BuildSmoothedPoly` (`smoothed.rs`, `corner.rs`) | ported: same-net zones merged, the board outline, the minimum-width apron, and the chamfer and fillet corner smoothing |
+| `connect_nearby_polys` | missing |
 | `fillNonCopperZone` | missing |
-| `buildHatchZoneThermalRings`, `addHatchFillTypeOnZone` * | missing; hatch falls back to solid (`lib.rs`) |
-| `refillZoneFromCache` | missing |
+| `buildHatchZoneThermalRings`, `addHatchFillTypeOnZone` (`hatch.rs`) | ported: thickness, gap, orientation, smoothing level and amount, minimum hole area, and the thermal rings round pads and vias that are connected to a hatched zone |

@@ -8,7 +8,7 @@
 //                                    `revision` is the design revision after it, `dialog` the title of the dialog it opened, `toast` the last toast it showed,
 //                                    `pending` true when it stopped waiting for a request that is still running (a long kicad-cli run).
 //   window.__eda.state()             a small snapshot: { tab, revision, tool, picker, selection: [{ id, kind }], counts: { footprints, tracks, vias, zones,
-//                                    symbols, wires, labels }, grid: the editor's grid in um (null where it is not a choice), dialogs: [titles of the dialogs on
+//                                    symbols, wires, labels }, entered: the group worked in on the board (else null), grid: the editor's grid in um (null where it is not a choice), dialogs: [titles of the dialogs on
 //                                    screen], open: [names of the open dialog/panel flags] };
 //                                    `picker` is the prompt of the picker session running (the delete tool's), else null.
 //   window.__eda.errors(since?)      the errors since the page loaded as { time, message }: console.error, uncaught errors and rejected promises, the
@@ -136,15 +136,15 @@ export interface BoardLike {
 
 /** The schematic's state JSON as far as the hook reads it. */
 export interface SchematicLike {
-  symbols?: IdItems;
+  symbols?: readonly { id?: string; fields?: IdItems }[];
   wires?: IdItems;
   labels?: IdItems;
   texts?: IdItems;
-  power_symbols?: IdItems;
+  power_symbols?: readonly { id?: string; fields?: IdItems }[];
   no_connects?: IdItems;
   junctions?: IdItems;
   lines?: IdItems;
-  sheets?: IdItems;
+  sheets?: readonly { id?: string; fields?: IdItems }[];
   graphics?: IdItems;
   bus_entries?: IdItems;
 }
@@ -168,7 +168,16 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
 }
 
 export function schematicLists(sch: SchematicLike | null | undefined): ItemLists {
+  // a field is selected by the id `fld:<owner>:<name>` (kicad-port/schFieldEdit.ts)
+  const fieldIds: string[] = [];
+  const addFields = (items: readonly { fields?: IdItems }[] | undefined) => {
+    for (const it of items ?? []) for (const f of it.fields ?? []) if (f.id) fieldIds.push(f.id);
+  };
+  addFields(sch?.symbols);
+  addFields(sch?.power_symbols);
+  addFields(sch?.sheets);
   return {
+    field: fieldIds,
     symbol: ids(sch?.symbols),
     wire: ids(sch?.wires),
     label: ids(sch?.labels),

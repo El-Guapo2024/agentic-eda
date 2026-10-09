@@ -1,19 +1,25 @@
 // pcbnew/dialogs/dialog_pad_properties.cpp -- "Pad Properties" of a pad on the board (`pcbnew.InteractiveEdit.properties` on a selected pad, or a double-click):
 // the pad type, the shape, the size, the shape's offset from the pad's position, the pad's own rotation, the corner radius of a rounded rectangle, the hole
-// (round or oblong) and the local clearance, solder mask margin, solder paste margin and paste ratio (the "Clearance Overrides and Settings" panel).
+// (round or oblong), the solder mask margin, solder paste margin and paste ratio (the "Clearance Overrides and Settings" panel), and the zone filler's overrides
+// of the same panel: the pad's local clearance, "Pad connection", "Relief gap", "Spoke width" and "Spoke angle" (`kicad-port/padZone.ts`).
 //
-// OK sends one `edit_board_pad`: the pad's stored overrides with the ones that changed laid over them -- an override that is switched off is taken away, so the
-// library's value comes back -- and so is one undo step (`Edit Pad Properties`). The checks are `padValuesOK`'s (`PAD::CheckPad`), in its words.
+// OK sends ONE batch, so one undo step (`Edit Pad Properties`): an `edit_board_pad` -- the pad's stored overrides with the ones that changed laid over them; an
+// override that is switched off is taken away, so the library's value comes back -- and, if a zone field changed, a `set_pad_zone_overrides` (a pad has one
+// clearance, and it is the zone overlay's). The zone fields are those of every pad that carries this pad's number, as the zone overlay keeps them. The checks are
+// `padValuesOK`'s (`PAD::CheckPad`), in its words.
 //
 // Not ported: the trapezoid, chamfered and custom shapes, padstack modes (front/inner/back differing), the fabrication property, the pad number and pin
-// function, the pad-to-die length and the layer checkboxes (the type picks the layers), backdrill and post-machining, and the zone connection and thermal relief
-// overrides (the zone fill's). "Push Pad Properties to other pads" is the footprint editor's.
+// function, the pad-to-die length and the layer checkboxes (the type picks the layers), and backdrill and post-machining. "Push Pad Properties to other pads"
+// is the footprint editor's.
 import { useEffect, useState } from "react";
-import type { Cmd, PadEditCmd } from "../api/types";
+import type { Cmd, PadConnection, PadEditCmd } from "../api/types";
 import { checkPadValues, padEditWith } from "../kicad-port/fpFields";
+import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
+import { footprintZoneForm, padZoneForm, zoneCmds, type PadZoneForm } from "../kicad-port/padZone";
 import { padById } from "../kicad-port/pcbItems";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
+import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
 
 type Shape = "circle" | "rect" | "oval" | "round_rect";
 type Kind = "smd" | "through_hole" | "non_plated_hole";
@@ -31,7 +37,8 @@ interface Form {
   drill: number;
   slotW: number;
   slotH: number;
-  clearance: number | null;
+  /** The zone filler's overrides of this pad: its local clearance, zone connection, relief gap, spoke width and angle. */
+  zone: PadZoneForm;
   mask: number | null;
   paste: number | null;
   pasteRatio: number | null;
@@ -64,7 +71,7 @@ export function BoardPadPropertiesDialog() {
   // Fill the form when the dialog opens on a pad -- not on every poll.
   useEffect(() => {
     if (!hit) return;
-    const { pad } = hit;
+    const { pad, part } = hit;
     const size = pad.size ?? [pad.w, pad.h];
     setForm({
       kind: pad.kind ?? (pad.th ? "through_hole" : "smd"),
@@ -79,7 +86,7 @@ export function BoardPadPropertiesDialog() {
       drill: pad.drill ?? 800,
       slotW: pad.slot?.[0] ?? 600,
       slotH: pad.slot?.[1] ?? 1000,
-      clearance: pad.clearance ?? null,
+      zone: padZoneForm(part, pad.num),
       mask: pad.mask_margin ?? null,
       paste: pad.paste_margin ?? null,
       pasteRatio: pad.paste_ratio ?? null,
@@ -92,6 +99,7 @@ export function BoardPadPropertiesDialog() {
   const { part, pad } = hit;
   const close = () => dispatch({ type: "SET_BOARD_PAD_PROPERTIES_ID", id: null });
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  const setZone = (patch: Partial<PadZoneForm>) => setForm((f) => (f ? { ...f, zone: { ...f.zone, ...patch } } : f));
   const fmt = (um: number) => formatLength(um, units);
 
   const len = (um: number, onChange: (um: number) => void, width = 74, testid?: string) => (
@@ -106,6 +114,9 @@ export function BoardPadPropertiesDialog() {
   );
   const hasHole = form.kind !== "smd";
   const circle = form.shape === "circle";
+  // The zone overlay addresses a pad by its number: a pad with none (a mounting hole) has no zone fields, and a number several pads share is one set of fields.
+  const numbered = pad.num !== "";
+  const sharesNumber = numbered && (part.pads ?? []).filter((q) => q.num === pad.num).length > 1;
 
   const submit = async () => {
     setError(null);
@@ -138,18 +149,20 @@ export function BoardPadPropertiesDialog() {
       if (now === (before ?? null)) return;
       (patch as Record<string, unknown>)[key] = now === null ? undefined : now;
     };
-    override("clearance", form.clearance, pad.clearance);
     override("solder_mask_margin", form.mask, pad.mask_margin);
     override("solder_paste_margin", form.paste, pad.paste_margin);
     override("solder_paste_margin_ratio", form.pasteRatio, pad.paste_ratio);
     // An offset of nothing is no offset.
     if (patch.offset && patch.offset.x === 0 && patch.offset.y === 0) patch.offset = undefined;
 
-    const edit = padEditWith(part, pad, patch);
-    const cmd: Cmd = { op: "edit_board_pad", part: part.ref, edit };
+    const cmds: Cmd[] = [];
+    if (Object.keys(patch).length > 0) cmds.push({ op: "edit_board_pad", part: part.ref, edit: padEditWith(part, pad, patch) });
+    // The zone filler's overrides (a pad has one clearance, and it is the zone overlay's): those of every pad that carries this pad's number.
+    if (numbered) cmds.push(...zoneCmds(part, footprintZoneForm(part), { [pad.num]: form.zone }));
+    if (cmds.length === 0) return close();
     setBusy(true);
     try {
-      if (await api.cmd(cmd)) close();
+      if (await api.cmdBatch(cmds)) close();
     } finally {
       setBusy(false);
     }
@@ -264,11 +277,43 @@ export function BoardPadPropertiesDialog() {
           </div>
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and settings (blank = the board&apos;s)</p>
           <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr" }}>
-            {override("Pad clearance", form.clearance, (v) => set("clearance", v), "pad-clearance")}
+            {numbered && (
+              <>
+                <span>Pad clearance</span>
+                <OverrideInput testid="pad-clearance" valueUm={form.zone.clearance} units={units} onChange={(v) => setZone({ clearance: v })} />
+              </>
+            )}
             {override("Solder mask margin", form.mask, (v) => set("mask", v), "pad-mask")}
             {override("Solder paste margin", form.paste, (v) => set("paste", v), "pad-paste")}
             {override("Solder paste ratio", form.pasteRatio, (v) => set("pasteRatio", v), "pad-paste-ratio", true)}
           </div>
+          {numbered && (
+            <>
+              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Zone connection</p>
+              <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr" }} data-testid="pad-zone">
+                <span>Pad connection</span>
+                <select
+                  value={form.zone.connection ?? ""}
+                  onChange={(e) => setZone({ connection: e.target.value === "" ? null : (e.target.value as PadConnection) })}
+                  title="PAD::GetLocalZoneConnection: over the footprint's and the zone's own setting"
+                  data-testid="pad-zone-connection"
+                >
+                  {PAD_CONNECTION_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <span>Relief gap</span>
+                <OverrideInput testid="pad-zone-gap" valueUm={form.zone.gap} units={units} onChange={(v) => setZone({ gap: v })} />
+                <span>Spoke width</span>
+                <OverrideInput testid="pad-zone-spoke-width" valueUm={form.zone.spokeWidth} units={units} onChange={(v) => setZone({ spokeWidth: v })} />
+                <span>Spoke angle</span>
+                <AngleOverrideInput testid="pad-zone-spoke-angle" valueMdeg={form.zone.spokeAngleMdeg} defaultDeg={circle ? 45 : 90} onChange={(v) => setZone({ spokeAngleMdeg: v })} />
+              </div>
+              {sharesNumber && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "4px 0 0" }}>The clearance and the zone fields are those of every pad of this footprint numbered {pad.num}.</p>}
+            </>
+          )}
           {error && (
             <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "10px 0 0", fontSize: 12 }} data-testid="board-pad-properties-error">
               {error}

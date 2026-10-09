@@ -5,6 +5,7 @@
 // Left out: KiCad's "Pins" (a pin cannot be selected on its own here) and "Images" (the studio has no bitmap items) -- a switch
 // that gates nothing would only mislead. A locked item (kicad-port/schLock.ts) is selectable only with "Locked items" on.
 import type { Schematic } from "../api/types";
+import { fieldItems, parseFieldId } from "./schFieldEdit";
 
 export interface SchSelectionFilter {
   /** Allow selecting locked items. */
@@ -78,7 +79,17 @@ export function categoryById(sch: Schematic): Map<string, SchFilterCategory> {
     // SCH_TEXTBOX_T is text, SCH_RULE_AREA_T has its own switch, SCH_DIRECTIVE_LABEL_T has no case (other items), the rest are SCH_SHAPE_T.
     out.set(g.id, g.shape.type === "text_box" ? "text" : g.shape.type === "rule_area" ? "ruleAreas" : g.shape.type === "directive" ? "otherItems" : "graphics");
   }
+  // SCH_FIELD_T is text
+  for (const f of fieldItems(sch)) out.set(f.id, "text");
   return out;
+}
+
+/** The id a field is locked by: the item that has it (`SCH_FIELD::IsLocked` is its parent's), a symbol by its reference whatever its unit. */
+function lockKey(id: string): string {
+  const f = parseFieldId(id);
+  if (!f) return id;
+  const unit = /^(.*)#(\d+)$/.exec(f.owner);
+  return unit ? unit[1]! : f.owner;
 }
 
 /** `itemPassesFilter` for the sheet: may an item with this id be selected? An id the sheet does not know passes (it is not ours to filter). */
@@ -86,7 +97,7 @@ export function schSelectable(sch: Schematic, filter: SchSelectionFilter): (id: 
   const locked = new Set(sch.locked ?? []);
   const categories = categoryById(sch);
   return (id) => {
-    if (locked.has(id) && !filter.lockedItems) return false;
+    if (locked.has(lockKey(id)) && !filter.lockedItems) return false;
     const c = categories.get(id);
     return c === undefined || filter[c];
   };

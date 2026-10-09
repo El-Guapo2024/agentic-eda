@@ -132,12 +132,20 @@ export function sameColor(a: SchColor | null | undefined, b: SchColor | null | u
 // ---------------------------------------------------------------------------------------------------------------------------------- label, text, sheet
 
 /** Label Properties: only the fields that differ from the label as it is (`spin` is the label's current spin, stored or read off its wire). */
-export function labelEditCmd(label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape">, spin: LabelSpinName, next: { text: string; shape: LabelShape; spin: LabelSpinName }): Cmd | null {
-  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName } = {};
+export function labelEditCmd(
+  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic">>,
+  spin: LabelSpinName,
+  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean }
+): Cmd | null {
+  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean } = {};
   const text = next.text.trim();
   if (text !== label.net) edit.text = text;
   if (label.scope !== "local" && next.shape !== label.shape) edit.shape = next.shape;
   if (next.spin !== spin) edit.spin = next.spin;
+  // the size, bold and italic of the text (`SetTextSize`, `SetBold`, `SetItalic`); a label that was never edited has the default size, regular
+  if (next.sizeUm !== undefined && next.sizeUm !== null && next.sizeUm !== (label.size_um && label.size_um > 0 ? label.size_um : 1270)) edit.size_um = next.sizeUm;
+  if (next.bold !== undefined && next.bold !== !!label.bold) edit.bold = next.bold;
+  if (next.italic !== undefined && next.italic !== !!label.italic) edit.italic = next.italic;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_label", id: label.id, ...edit } : null;
 }
 

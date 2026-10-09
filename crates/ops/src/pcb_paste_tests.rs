@@ -90,6 +90,60 @@ fn duplicating_a_footprint_makes_a_new_part_under_the_next_free_reference_on_the
     assert_eq!(b.design().placement.as_ref().unwrap().footprints.len(), 4);
 }
 
+/// How zones connect to a footprint and its pads, set on the board (`Cmd::SetFootprintZoneConnection`, `Cmd::SetPadZoneOverrides`).
+fn set_zone_connections(b: &mut Board<'_>, part: &str) {
+    use eda_model::ir::PadConnection;
+    b.apply(&Cmd::SetPadZoneOverrides { part: part.into(), pad: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(30_000), clearance: Some(600) }).unwrap();
+    b.apply(&Cmd::SetFootprintZoneConnection { part: part.into(), zone_connection: Some(PadConnection::None), clearance: Some(900) }).unwrap();
+}
+
+/// What pad 2 of `part` (LOPSIDED: three pads) says about zones, and what its footprint says.
+fn zone_facts(b: &Board<'_>, part: &str, pad_idx: usize, number: &str) -> eda_model::ir::PadZoneFacts {
+    b.design().pad_zone_facts(part, "LOPSIDED", pad_idx, 3, number)
+}
+
+#[test]
+fn a_duplicate_keeps_how_zones_connect_to_the_footprint_and_its_pads() {
+    use eda_model::ir::PadConnection;
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    set_zone_connections(&mut b, "U1");
+    b.apply(&Cmd::Duplicate { ids: ids(&["U1"]) }).unwrap();
+
+    let (orig, copy) = (zone_facts(&b, "U1", 1, "2"), zone_facts(&b, "U3", 1, "2"));
+    assert_eq!(orig, copy, "the copy connects to zones as the original does");
+    assert_eq!((copy.connection, copy.thermal_gap, copy.thermal_spoke_width, copy.thermal_spoke_angle_mdeg, copy.pad_clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(30_000), Some(600)));
+    assert_eq!((copy.footprint_connection, copy.footprint_clearance), (Some(PadConnection::None), Some(900)));
+    // A pad that sets nothing inherits the footprint's, in the copy as in the original.
+    assert_eq!(zone_facts(&b, "U3", 0, "1").clearance(), Some(900));
+    // U2, which has none of it, is untouched.
+    assert_eq!(zone_facts(&b, "U2", 1, "2"), Default::default());
+}
+
+#[test]
+fn a_paste_keeps_how_zones_connect_to_the_footprint_and_its_pads_whether_it_is_placed_again_or_new() {
+    use eda_model::ir::PadConnection;
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut source = board(&m);
+    set_zone_connections(&mut source, "U1");
+    let text = eda_kicad::export_pcb_clipboard(source.design(), &m, &ids(&["U1"]), p(30_000, 20_000)).unwrap();
+    assert!(text.contains("(zone_connect 2)") && text.contains("(thermal_gap 0.4)") && text.contains("(thermal_bridge_angle 30)"), "the text carries the pad's facts: {text}");
+
+    // Onto a board where U1 is a part that is not placed: it is placed again, with its facts.
+    let mut again = target(&m);
+    again.apply(&Cmd::PasteClipboard { text: text.clone(), at: p(10_000, 10_000) }).unwrap();
+    let f = zone_facts(&again, "U1", 1, "2");
+    assert_eq!((f.connection, f.thermal_gap, f.thermal_spoke_width, f.thermal_spoke_angle_mdeg, f.pad_clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(30_000), Some(600)));
+    assert_eq!((f.footprint_connection, f.footprint_clearance), (Some(PadConnection::None), Some(900)));
+
+    // Onto the board the copy came from: a new part, U3, with its own entry.
+    let mut same = board(&m);
+    same.apply(&Cmd::PasteClipboard { text, at: p(10_000, 10_000) }).unwrap();
+    let f = zone_facts(&same, "U3", 1, "2");
+    assert_eq!((f.connection, f.thermal_gap, f.pad_clearance, f.footprint_connection, f.footprint_clearance), (Some(PadConnection::Full), Some(400), Some(600), Some(PadConnection::None), Some(900)));
+    assert_eq!(zone_facts(&same, "U1", 1, "2"), Default::default(), "and the board's own U1, which had none, is not given any");
+}
+
 #[test]
 fn deleting_a_copied_footprint_deletes_its_part_too_but_deleting_an_intent_part_keeps_it() {
     let m = model(&["F.Cu", "B.Cu"]);

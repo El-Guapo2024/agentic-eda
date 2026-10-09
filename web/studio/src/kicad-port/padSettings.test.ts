@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_PAD_MASTER, importPadSettings, newPadFromMaster, settingsOf } from "./padSettings";
+import { DEFAULT_PAD_MASTER, PAD_CONNECTION_OPTIONS, defaultSpokeAngleDeg, importPadSettings, newPadFromMaster, settingsOf } from "./padSettings";
 import type { LibraryPad } from "../api/types";
 
 function pad(number: string, over: Partial<LibraryPad> = {}): LibraryPad {
@@ -72,4 +72,28 @@ test("newPadFromMaster: the master's settings with the given number and position
   assert.equal(p.id, undefined, "ids are the backend's to assign");
   const npth = newPadFromMaster({ ...DEFAULT_PAD_MASTER, kind: "non_plated_hole" }, "9", { x: 0, y: 0 });
   assert.equal(npth.number, "", "a pad that cannot have a number gets none");
+});
+
+test("Copy / Paste / Push Pad Properties carry the pad connection and the spoke angle (PAD::ImportSettingsFrom)", () => {
+  const master = settingsOf(pad("M", { zone_connection: "Full", thermal_spoke_angle_mdeg: 30_000 }));
+  const out = importPadSettings(pad("7", { zone_connection: "None", thermal_spoke_angle_mdeg: null }), master);
+  assert.equal(out.zone_connection, "Full");
+  assert.equal(out.thermal_spoke_angle_mdeg, 30_000);
+  // a pad that sets nothing leaves the master's inherited
+  assert.equal(importPadSettings(pad("8", { zone_connection: "Full" }), settingsOf(pad("M"))).zone_connection, null);
+  assert.equal(DEFAULT_PAD_MASTER.zone_connection, null, "the default pad inherits its connection");
+  assert.equal(DEFAULT_PAD_MASTER.thermal_spoke_angle_mdeg, null);
+});
+
+test("the pad connection choices are KiCad's four, and the default spoke angle follows the shape", () => {
+  assert.deepEqual(
+    PAD_CONNECTION_OPTIONS.map((o) => o.label),
+    ["From parent footprint", "Solid", "Thermal relief", "None"],
+  );
+  assert.deepEqual(PAD_CONNECTION_OPTIONS.map((o) => o.value), ["", "Full", "Thermal", "None"]);
+  assert.equal(defaultSpokeAngleDeg("rect"), 90);
+  assert.equal(defaultSpokeAngleDeg("oval"), 90);
+  assert.equal(defaultSpokeAngleDeg("round_rect"), 90);
+  assert.equal(defaultSpokeAngleDeg("circle"), 45);
+  assert.equal(defaultSpokeAngleDeg("trapezoid"), 45);
 });

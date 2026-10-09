@@ -110,11 +110,11 @@ test("a pad's edit is the stored one with the change laid over it; a key set to 
   const p = part();
   const q = p.pads![0]!;
   assert.deepEqual(padEditOf(p, q), { number: "1", nth: 1 });
-  const stored = { ...q, edit: { number: "1", nth: 1, size: [700, 700] as [number, number], clearance: 250, drill: 300 } };
-  assert.deepEqual(padEditWith(p, stored, { solder_mask_margin: 40 }), { number: "1", nth: 1, size: [700, 700], clearance: 250, drill: 300, solder_mask_margin: 40 });
-  assert.deepEqual(padEditWith(p, stored, { clearance: undefined }), { number: "1", nth: 1, size: [700, 700], drill: 300 }, "the override goes: the library's value is back");
-  assert.deepEqual(padEditWith(p, stored, { drill_slot: [300, 600] }), { number: "1", nth: 1, size: [700, 700], clearance: 250, drill_slot: [300, 600] }, "an oblong hole replaces the round one");
-  assert.deepEqual(padEditWith(p, stored, { drill: 350 }), { number: "1", nth: 1, size: [700, 700], clearance: 250, drill: 350 });
+  const stored = { ...q, edit: { number: "1", nth: 1, size: [700, 700] as [number, number], solder_paste_margin: 250, drill: 300 } };
+  assert.deepEqual(padEditWith(p, stored, { solder_mask_margin: 40 }), { number: "1", nth: 1, size: [700, 700], solder_paste_margin: 250, drill: 300, solder_mask_margin: 40 });
+  assert.deepEqual(padEditWith(p, stored, { solder_paste_margin: undefined }), { number: "1", nth: 1, size: [700, 700], drill: 300 }, "the override goes: the library's value is back");
+  assert.deepEqual(padEditWith(p, stored, { drill_slot: [300, 600] }), { number: "1", nth: 1, size: [700, 700], solder_paste_margin: 250, drill_slot: [300, 600] }, "an oblong hole replaces the round one");
+  assert.deepEqual(padEditWith(p, stored, { drill: 350 }), { number: "1", nth: 1, size: [700, 700], solder_paste_margin: 250, drill: 350 });
   const second = p.pads![2]!;
   assert.deepEqual(editPadCmd(p, second, { shape: "oval" }), { op: "edit_board_pad", part: "U1", edit: { number: "2", nth: 2, shape: "oval" } });
 });

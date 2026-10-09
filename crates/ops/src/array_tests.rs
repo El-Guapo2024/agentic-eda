@@ -297,6 +297,8 @@ fn copies_take_the_rotation_side_and_edits_of_the_footprint_they_come_from() {
     let mut pad = PadEdit::none("1", 1);
     pad.size = Some((900, 900));
     b.apply(&Cmd::EditBoardPad { part: "U2".into(), edit: pad.clone() }).unwrap();
+    // and how zones connect to it (the zone filler's overlay, beside our edit)
+    b.apply(&Cmd::SetFootprintZoneConnection { part: "U2".into(), zone_connection: Some(eda_model::ir::PadConnection::None), clearance: Some(300) }).unwrap();
     b.apply(&array(&["U2"], grid(2, 1, 8_000, 0))).unwrap();
     let copy = pose(&b, "U3");
     assert_eq!((copy.rot, copy.side), (90_000, Side::Top));
@@ -304,6 +306,9 @@ fn copies_take_the_rotation_side_and_edits_of_the_footprint_they_come_from() {
     let edit = b.design().footprint_edit("U3").expect("the copy is edited the way its original is");
     assert_eq!((edit.reference.as_ref().map(|l| (l.at, l.size, l.text.clone())), edit.attrs, edit.pad("1", 1).cloned()), (Some((reference.at, reference.size, None)), Some(attrs), Some(pad)));
     assert_eq!(b.design().footprint_edit("U2").unwrap().reference, Some(reference), "and the original keeps its own");
+    let zone = |id: &str| drawings(&b).zone_overrides.iter().find(|z| z.id == id).and_then(|z| z.footprint).map(|f| (f.zone_connection, f.clearance));
+    assert_eq!(zone("U3"), Some((Some(eda_model::ir::PadConnection::None), Some(300))), "the copy has its original's zone overrides under its own reference");
+    assert_eq!(zone("U2"), zone("U3"), "and the original keeps its own");
 }
 
 #[test]
@@ -367,6 +372,30 @@ fn a_group_is_copied_with_copies_of_its_members_and_moves_as_one() {
     assert_eq!(moved_track.pts[0], p(16_000, 40_000));
     let moved_seg = dr.shapes.iter().find(|s| copy.member_ids.contains(&s.id().to_string())).unwrap();
     assert_eq!(moved_seg.points()[0], p(6_000, 80_000));
+}
+
+#[test]
+fn a_group_inside_a_group_is_copied_whole_and_everything_in_it_moves_as_one() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut d = design();
+    let dr = d.drawings.as_mut().unwrap();
+    dr.groups.push(Group { id: "grp_in".into(), name: "inner".into(), member_ids: ids(&["trk_a", "shp_seg"]) });
+    dr.groups.push(Group { id: "grp_out".into(), name: "outer".into(), member_ids: ids(&["grp_in", "txt_a"]) });
+    let mut b = Board::new(d, &m, 100, 300);
+    b.apply(&array(&["grp_out"], grid(2, 1, 6_000, 0))).unwrap();
+    let dr = drawings(&b);
+    assert_eq!(dr.groups.len(), 4, "a group of each kind for the copy");
+    let outer = dr.groups.iter().find(|g| g.name == "outer" && g.id != "grp_out").expect("the copy of the outer group");
+    let inner = dr.groups.iter().find(|g| g.name == "inner" && g.id != "grp_in").expect("the copy of the inner group");
+    assert!(outer.member_ids.contains(&inner.id) && outer.member_ids.len() == 2, "the outer copy holds the inner copy and a text: {outer:?}");
+    assert_eq!(inner.member_ids.len(), 2);
+    let track = routing(&b).tracks.iter().find(|t| inner.member_ids.contains(&t.id)).unwrap();
+    assert_eq!(track.pts[0], p(16_000, 40_000), "the track in the inner copy moved by the array's step");
+    let seg = dr.shapes.iter().find(|s| inner.member_ids.contains(&s.id().to_string())).unwrap();
+    assert_eq!(seg.points()[0], p(6_000, 80_000));
+    let text = dr.texts.iter().find(|t| outer.member_ids.contains(&t.id)).unwrap();
+    assert_eq!(text.at, p(76_000, 80_000), "the text the outer copy holds moved with it");
+    assert_eq!(routing(&b).tracks.iter().find(|t| t.id == "trk_a").unwrap().pts[0], p(10_000, 40_000), "the original tree stays where it was");
 }
 
 // -------------------------------------------------------------------------------------------------------- arrange

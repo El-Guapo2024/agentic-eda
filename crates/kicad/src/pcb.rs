@@ -12,7 +12,7 @@ use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, T
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
 use crate::fp_fields::{pad_text, write_attr, write_fields, FpExtra};
-use crate::pcb_items::{write_dimension, write_group, write_zone, DimensionArgs, ZoneArgs};
+use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{fmt_mm_f, mm, sexpr_str};
 
 /// [`export_kicad_pcb`], also returning every exported item's KiCad uuid
@@ -269,7 +269,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             continue;
         };
         let own_zones: String = zone_blocks.iter().filter(|(parent, _)| parent.as_deref() == Some(fp.id.as_str())).map(|(_, text)| text.as_str()).collect();
-        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, is_locked(&fp.id), &own_zones, &FpExtra::of(design, &fp.id, &footprint));
+        let uuid = write_footprint(&mut out, fp, part, &footprint, &net_num, model, design, is_locked(&fp.id), &own_zones, &FpExtra::of(design, &fp.id, &footprint));
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     if !errors.is_empty() {
@@ -396,13 +396,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // ---- groups ---- written last, as KiCad does: a group names its members by uuid, and the parser
     // resolves them once every item has been read.
     if let Some(drawings) = &design.drawings {
-        let mut groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
-        groups.sort_by(|a, b| a.id.cmp(&b.id));
-        for g in &groups {
-            let members: Vec<String> = g.member_ids.iter().filter_map(|m| written.get(m)).flatten().cloned().collect();
-            let uuid = crate::duid_for(&format!("group:{}", g.id), &g.id);
-            write_group(&mut out, g, &uuid, is_locked(&g.id), members);
-        }
+        let groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
+        write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
     }
 
     writeln!(out, ")").unwrap();
@@ -657,6 +652,7 @@ pub(crate) fn write_footprint(
     footprint: &eda_model::Footprint,
     net_num: &BTreeMap<&str, usize>,
     model: &ConstraintModel,
+    design: &Design,
     locked: bool,
     zones: &str,
     extra: &FpExtra,
@@ -689,8 +685,21 @@ pub(crate) fn write_footprint(
     write_fields(out, fp, part, footprint, extra);
     write_attr(out, &extra.attrs);
 
-    let mut pads: Vec<&Pad> = footprint.pads.iter().collect();
-    pads.sort_by(|a, b| a.number.cmp(&b.number));
+    // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
+    let mut pads: Vec<(usize, &Pad)> = footprint.pads.iter().enumerate().collect();
+    pads.sort_by(|a, b| a.1.number.cmp(&b.1.number));
+
+    // The footprint's own clearance and zone connection (`FOOTPRINT::SetLocalClearance`, `SetLocalZoneConnection`): the
+    // facts a pad inherits. Resolved like the filler resolves them, so kicad-cli's fill and DRC see what the studio's do.
+    if let Some(&(first, first_pad)) = pads.first() {
+        let facts = design.pad_zone_facts(&fp.id, &footprint.name, first, footprint.pads.len(), &first_pad.number);
+        if let Some(c) = facts.footprint_clearance {
+            writeln!(out, "\t\t(clearance {})", mm(c)).unwrap();
+        }
+        if let Some(c) = facts.footprint_connection {
+            writeln!(out, "\t\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+        }
+    }
 
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
     let pin_net = |number: &str| -> Option<&str> {
@@ -700,7 +709,7 @@ pub(crate) fn write_footprint(
 
     // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
-    for pad in &pads {
+    for &(pad_idx, pad) in &pads {
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -780,7 +789,29 @@ pub(crate) fn write_footprint(
                 }
             }
         }
+        // The margins of a pad edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`), then the zone facts: KiCad's order.
         out.push_str(&pad_extra.margins);
+        // The pad's own clearance, zone connection and thermal relief (`PCB_IO_KICAD_SEXPR::format( const PAD* )`): the angle
+        // only when it is not the shape's default, 45 degrees for a circle and 90 otherwise.
+        let zf = design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number);
+        if let Some(c) = zf.pad_clearance {
+            write!(out, " (clearance {})", mm(c)).unwrap();
+        }
+        if let Some(c) = zf.connection {
+            write!(out, " (zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
+        }
+        if let Some(w) = zf.thermal_spoke_width {
+            write!(out, " (thermal_bridge_width {})", mm(w)).unwrap();
+        }
+        if let Some(a) = zf.thermal_spoke_angle_mdeg {
+            let default_mdeg: eda_model::ir::Millideg = if pad.shape == PadShape::Circle { 45_000 } else { 90_000 };
+            if a != default_mdeg {
+                write!(out, " (thermal_bridge_angle {})", fmt_mm_f(a as f64 / 1000.0)).unwrap();
+            }
+        }
+        if let Some(g) = zf.thermal_gap {
+            write!(out, " (thermal_gap {})", mm(g)).unwrap();
+        }
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
@@ -1085,7 +1116,6 @@ mod tests {
         let mut pad1 = PadEdit::none("1", 1);
         pad1.offset = Some(Point { x: 200, y: 100 });
         pad1.solder_mask_margin = Some(40);
-        pad1.clearance = Some(300);
         let mut u1 = FootprintEdit::new("U1");
         u1.reference = Some(reference.clone());
         u1.value = Some(value.clone());
@@ -1100,7 +1130,7 @@ mod tests {
         assert!(out.contains("(property \"Value\" \"U1_val\" (at -1 3 0) (layer \"F.SilkS\") (hide yes)"), "{out}");
         assert!(out.contains("(property \"Vendor\" \"ACME\" (at 0 4 0) (layer \"F.Fab\") (hide yes)"), "{out}");
         assert!(out.contains("(attr exclude_from_pos_files exclude_from_bom allow_missing_courtyard dnp)"), "U1's own attributes: {out}");
-        assert!(out.contains("(drill (offset 0.2 0.1))") && out.contains("(solder_mask_margin 0.04)") && out.contains("(clearance 0.3)"), "{out}");
+        assert!(out.contains("(drill (offset 0.2 0.1))") && out.contains("(solder_mask_margin 0.04)"), "{out}");
 
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let edits = &back.drawings.as_ref().unwrap().footprint_edits;
@@ -1223,6 +1253,81 @@ mod tests {
         // GND < VIN alphabetically -> GND=1, VIN=2
         assert!(out.contains("(net 1 \"GND\")"));
         assert!(out.contains("(net 2 \"VIN\")"));
+    }
+
+    /// A pad's zone connection, relief gap, spoke width and angle and clearance, and its footprint's connection and clearance,
+    /// are written as KiCad writes them -- so kicad-cli's fill and DRC see the board's own edits -- and the importer reads
+    /// every one of them back.
+    #[test]
+    fn pad_and_footprint_zone_overrides_are_written_and_read_back() {
+        use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
+        let (mut design, model) = fixture();
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            zone_overrides: vec![FootprintZoneOverrides {
+                id: "U1".into(),
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(45_000) }],
+            }],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in ["(clearance 0.8)", "(zone_connect 0)", "(clearance 0.6)", "(zone_connect 2)", "(thermal_gap 0.4)", "(thermal_bridge_width 0.3)", "(thermal_bridge_angle 45)"] {
+            assert!(out.contains(want), "missing {want}");
+        }
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let extra = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "U1").unwrap();
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800)));
+        let p1 = &extra.pads[0];
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(45_000), Some(600)));
+        assert_eq!(extra.pads[1].zone_connection, None, "the other pads inherit");
+    }
+
+    /// A pad that carries an edit of ours (the shape's offset, a solder mask margin) and the zone filler's overrides (clearance, zone
+    /// connection, thermal relief) is ONE `(pad ..)` form with both, in KiCad's order, and the importer reads each half back into its own
+    /// overlay: `footprint_edits` for the extras, `zone_overrides`' source (`footprint_extras`) for the zone facts. A footprint edit
+    /// (attributes, fields) and the footprint's own zone connection are written together too.
+    #[test]
+    fn one_pad_form_carries_the_pad_edit_and_the_zone_overrides_and_both_are_read_back() {
+        use eda_model::fp_edit::{FootprintAttrs, FootprintEdit, FootprintKind, PadEdit};
+        use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
+        let (mut design, model) = fixture();
+        let mut pad1 = PadEdit::none("1", 1);
+        pad1.offset = Some(Point { x: 200, y: 100 });
+        pad1.solder_mask_margin = Some(40);
+        pad1.solder_paste_margin_ratio = Some(-0.1);
+        let mut u1 = FootprintEdit::new("U1");
+        u1.attrs = Some(FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() });
+        u1.set_pad(pad1.clone());
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            footprint_edits: vec![u1],
+            zone_overrides: vec![FootprintZoneOverrides {
+                id: "U1".into(),
+                footprint: Some(FootprintZoneFacts { zone_connection: Some(PadConnection::None), clearance: Some(800) }),
+                pads: vec![PadZoneOverride { number: "1".into(), clearance: Some(600), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: Some(300), thermal_spoke_angle_mdeg: Some(45_000) }],
+            }],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad_line = out.lines().find(|l| l.contains("(pad \"1\"") && l.contains("(thermal_gap")).unwrap_or_else(|| panic!("pad 1 of U1 with its zone facts:\n{out}")).to_string();
+        assert!(pad_line.contains("(drill (offset 0.2 0.1))"), "the shape offset of the pad edit: {pad_line}");
+        let at = |what: &str| pad_line.find(what).unwrap_or_else(|| panic!("{what} in {pad_line}"));
+        assert!(
+            at("(solder_mask_margin 0.04)") < at("(solder_paste_margin_ratio -0.1)") && at("(solder_paste_margin_ratio -0.1)") < at("(clearance 0.6)") && at("(clearance 0.6)") < at("(zone_connect 2)") && at("(zone_connect 2)") < at("(thermal_bridge_width 0.3)") && at("(thermal_bridge_width 0.3)") < at("(thermal_bridge_angle 45)") && at("(thermal_bridge_angle 45)") < at("(thermal_gap 0.4)"),
+            "the margins of the edit, then the zone facts, in KiCad's order: {pad_line}"
+        );
+        // The footprint's own: the attributes of the edit and the footprint-level clearance and zone connection.
+        assert!(out.contains("(attr smd dnp)"), "{out}");
+        assert!(out.contains("\t\t(clearance 0.8)") && out.contains("\t\t(zone_connect 0)"), "{out}");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let dr = back.drawings.as_ref().unwrap();
+        // Our half: the offset and the margins are the pad edit again, and the clearance is not (a pad has one clearance, the zone overlay's).
+        assert_eq!(dr.footprint_edits.iter().find(|e| e.id == "U1").and_then(|e| e.pad("1", 1)), Some(&pad1));
+        // The zone half: what the importer keeps of the zone facts.
+        let extra = dr.footprint_extras.iter().find(|e| e.id == "U1").expect("U1's imported facts");
+        assert_eq!((extra.zone_connection, extra.clearance), (Some(PadConnection::None), Some(800)));
+        let p1 = &extra.pads[0];
+        assert_eq!((p1.zone_connection, p1.thermal_gap, p1.thermal_spoke_width, p1.thermal_spoke_angle_mdeg, p1.clearance), (Some(PadConnection::Full), Some(400), Some(300), Some(45_000), Some(600)));
     }
 
     #[test]
@@ -1598,6 +1703,47 @@ mod tests {
         for t in brt.tracks.iter().filter(|t| t.net == "GND") {
             assert!(groups[0].member_ids.contains(&t.id), "both segments of the track are members");
         }
+    }
+
+    #[test]
+    fn a_group_inside_a_group_is_written_by_its_uuid_and_read_back_nested() {
+        use eda_model::ir::{DrawingsSection, Group, Point};
+        let (mut design, model) = fixture();
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "GND".into(), at: Point { x: 12_000, y: 12_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.assign_missing_ids();
+        let rt = design.routing.as_ref().unwrap();
+        let (track_id, via_a, via_b) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.vias[1].id.clone());
+        let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|m| m.to_string()).collect() };
+        design.drawings = Some(DrawingsSection {
+            groups: vec![
+                group("grp_a_outer", "outer", &["U1", "grp_b_middle"]),
+                group("grp_b_middle", "middle", &["C1", "grp_c_inner"]),
+                group("grp_c_inner", "inner", &[via_a.as_str(), track_id.as_str()]),
+                // nothing of it is on the board: not written, and not named by the group above it either
+                group("grp_d_ghost", "ghost", &["no such item", "nor this one"]),
+                group("grp_e_holder", "holder", &[via_b.as_str(), "grp_d_ghost"]),
+            ],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(group ").count(), 4, "outer, middle, inner and the holder; the ghost is not written:\n{out}");
+        let block = |name: &str| out.split("\t(group ").skip(1).find(|g| g.starts_with(&format!("\"{name}\""))).unwrap_or_else(|| panic!("no group {name}")).to_string();
+        let uuids_in = |block: &str| block.split("(members").nth(1).unwrap().matches('"').count() / 2;
+        assert_eq!(uuids_in(&block("outer")), 2, "U1 and the middle group: {}", block("outer"));
+        assert_eq!(uuids_in(&block("holder")), 1, "the via alone: {}", block("holder"));
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let dr = back.drawings.as_ref().unwrap();
+        let by_name = |n: &str| dr.groups.iter().find(|g| g.name == n).unwrap_or_else(|| panic!("no group {n} in {:?}", dr.groups));
+        let (outer, middle, inner) = (by_name("outer"), by_name("middle"), by_name("inner"));
+        let brt = back.routing.as_ref().unwrap();
+        assert!(outer.member_ids.contains(&"U1".to_string()) && outer.member_ids.contains(&middle.id), "{outer:?}");
+        assert!(middle.member_ids.contains(&"C1".to_string()) && middle.member_ids.contains(&inner.id), "{middle:?}");
+        assert!(inner.member_ids.contains(&brt.tracks[0].id) && inner.member_ids.iter().any(|m| brt.vias.iter().any(|v| &v.id == m)), "{inner:?}");
+        assert!(!dr.groups.iter().any(|g| g.name == "holder"), "a group of one item is dropped on the way in: {:?}", dr.groups);
+        assert_eq!(dr.group_leaves(&outer.id).len(), 4, "U1, C1, the track and a via: {:?}", dr.group_leaves(&outer.id));
     }
 
     #[test]

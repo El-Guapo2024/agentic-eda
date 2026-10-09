@@ -7,7 +7,7 @@
 
 import type { BoardState, Dimension, DrcViolation, FieldInfo, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
-import { boundsOfPoints, hairlineUm } from "./view";
+import { hairlineUm } from "./view";
 import { layerColor, layerKeyOf, copperColorKey, drawOrder } from "./layers";
 import { constrainByAngleMode } from "./routing";
 import type { AngleSnapMode } from "../../kicad-port/pcbParityState";
@@ -19,7 +19,8 @@ import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighl
 import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
 import { fieldAsText } from "../../kicad-port/fpFields";
-import { padIds } from "../../kicad-port/pcbItems";
+import { itemBounds, padIds } from "../../kicad-port/pcbItems";
+import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
 import { measureLabel } from "../../kicad-port/measureRuler";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
@@ -114,7 +115,12 @@ export interface PaintOptions {
   shapePointPreview: { id: string; shape: Shape } | null;
   /** Index into `drcViolations` the dialog's list currently has clicked/focused, drawn with LAYER_DRC_HIGHLIGHTED instead of its own severity color -- null when the dialog hasn't focused one (every marker then just shows its own error/warning color). */
   drcSelected: number | null;
+  /** The group being worked in (`PCB_SELECTION_TOOL::m_enteredGroup`): drawn in a frame with its name, and everything outside it dimmed. */
+  enteredGroup?: string | null;
 }
+
+/** How much of its colour an item outside the entered group keeps. */
+export const OUTSIDE_ENTERED_GROUP_ALPHA = 0.3;
 
 function layerAlpha(opts: PaintOptions, key: string): number {
   if (opts.activeLayer && opts.highContrast && opts.activeLayer !== key) return 0.25;
@@ -1121,6 +1127,10 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   const preview = opts.movePreview?.kind === "pcb" ? opts.movePreview : null;
   const carry = preview ? splitCarried(fullBoard, preview.refs) : null;
   const board = carry ? carry.still : fullBoard;
+  // The group being worked in: what is inside it is drawn as it is, everything else dimmed (`m_enteredGroupOverlay` puts the group in front; the dim is this
+  // port's own cue that nothing outside it can be picked). The split puts the group's items in `moving`, the rest in `still`.
+  const entered = opts.enteredGroup ? splitCarried(board, [opts.enteredGroup]) : null;
+  const passes: { b: BoardState; alpha: number }[] = entered ? [{ b: entered.still, alpha: OUTSIDE_ENTERED_GROUP_ALPHA }, { b: entered.moving, alpha: 1 }] : [{ b: board, alpha: 1 }];
   const copper = (b: BoardState): Record<string, () => void> => ({
     b_cu: () => {
       drawZones(ctx, view, b, opts, "b_cu");
@@ -1136,10 +1146,11 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
       drawTracksAndVias(ctx, view, b, opts, "f_cu");
     },
   });
+  const copperPasses = passes.map((pass) => ({ alpha: pass.alpha, layers: copper(pass.b) }));
   const byLayer: Record<string, () => void> = {
     grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]),
     background: () => drawOutline(ctx, view, board.outline),
-    ...copper(board),
+    ...Object.fromEntries(Object.keys(copper(board)).map((key) => [key, () => copperPasses.forEach((pass) => withAlpha(ctx, pass.alpha, () => pass.layers[key]?.()))])),
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw
     // the airwires live from a moving footprint's (previewed) position
     // rather than waiting for the move to commit and the backend's next
@@ -1151,13 +1162,18 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     },
   };
   for (const key of drawOrder()) byLayer[key]?.();
-  // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
-  for (const part of board.parts) drawFootprint(ctx, view, part, opts);
-  drawFields(ctx, view, board.parts.flatMap((p) => (p.placed ? (p.fields ?? []) : [])), opts);
-  // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
-  drawShapes(ctx, view, board, opts);
-  drawTexts(ctx, view, board, opts);
-  drawDimensions(ctx, view, board, opts);
+  for (const pass of passes) {
+    withAlpha(ctx, pass.alpha, () => {
+      // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
+      for (const part of pass.b.parts) drawFootprint(ctx, view, part, opts);
+      // Their fields (Reference, Value, user fields: `PCB_FIELD`), each on its own layer.
+      drawFields(ctx, view, pass.b.parts.flatMap((p) => (p.placed ? (p.fields ?? []) : [])), opts);
+      // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
+      drawShapes(ctx, view, pass.b, opts);
+      drawTexts(ctx, view, pass.b, opts);
+      drawDimensions(ctx, view, pass.b, opts);
+    });
+  }
   // The carried items, in the same order, through the transform the drop would apply.
   if (carry && preview) {
     const own = { ...opts, movePreview: null };
@@ -1214,77 +1230,47 @@ function drawAuxOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform, at: [
   ctx.restore();
 }
 
-/** The geometry points of a free-standing graphic, for bounding purposes only (not a faithful outline -- an arc's `mid` stands in for its sweep, a circle's `end` for its radius -- see `drawShapeGeometry` for the real rendering). */
-function shapePointsOf(s: Shape): Array<[number, number]> {
-  switch (s.kind) {
-    case "segment":
-    case "rect":
-      return [s.start, s.end];
-    case "arc":
-      return [s.start, s.mid, s.end];
-    case "circle":
-      return [s.center, s.end];
-    case "polygon":
-      return s.pts;
-    case "bezier":
-      return bezierPolyline(s.start, s.c1, s.c2, s.end, BEZIER_MAX_ERROR_UM);
-  }
-}
-
 /**
- * Task item 5: a selected group draws as a dashed box around the union of
- * its members' geometry -- this model's stand-in for `PCB_GROUP::
- * ViewBBox()` (also just the union of its members' own boxes upstream).
- * Member kinds this model doesn't have yet (schematic symbols/wires) are
- * simply never found by the lookups below and contribute nothing, rather
- * than erroring.
+ * `PCB_PAINTER::draw( const PCB_GROUP* )` on `LAYER_ANCHOR`: a group draws an enclosing box when it is selected on its own (its parent group is not)
+ * or entered, and then its name -- in a tab above the box, when it fits. The box is the union of its items' (`PCB_GROUP::ViewBBox`), the groups it
+ * holds opened. A selected group is the dashed selection box this port has always drawn; the entered one is solid, in the anchor colour, with
+ * everything outside it dimmed (see `paintBoard`).
  */
 function drawSelectedGroups(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
   const groups = board.drawings?.groups ?? [];
   for (const g of groups) {
-    if (!opts.selection.has(g.id)) continue;
-
-    const pts: Array<[number, number]> = [];
-    for (const id of g.member_ids) {
-      const part = board.parts.find((p) => p.ref === id);
-      if (part) {
-        if (part.courtyard) pts.push([part.courtyard[0], part.courtyard[1]], [part.courtyard[2], part.courtyard[3]]);
-        else if (part.at) pts.push(part.at);
-        continue;
-      }
-      const track = board.routing?.tracks.find((t) => t.id === id);
-      if (track) {
-        pts.push(...track.pts);
-        continue;
-      }
-      const via = board.routing?.vias.find((v) => v.id === id);
-      if (via) {
-        pts.push([via.x - via.d / 2, via.y - via.d / 2], [via.x + via.d / 2, via.y + via.d / 2]);
-        continue;
-      }
-      const zone = board.routing?.zones.find((z) => z.id === id);
-      if (zone) {
-        pts.push(...zone.outline);
-        continue;
-      }
-      const shape = board.drawings?.shapes.find((s) => s.id === id);
-      if (shape) {
-        pts.push(...shapePointsOf(shape));
-        continue;
-      }
-      const text = board.drawings?.texts.find((t) => t.id === id);
-      if (text) pts.push([text.x, text.y]);
-    }
-
-    const b = boundsOfPoints(pts);
-    if (!b) continue;
+    const entered = opts.enteredGroup === g.id;
+    const selectedOnItsOwn = opts.selection.has(g.id) && !ancestors(groups, g.id).some((a) => opts.selection.has(a.id));
+    if (!entered && !selectedOnItsOwn) continue;
+    const box = itemBounds(board, g.id);
+    if (!box) continue;
     const pad = hairlineUm(view, 12);
+    const [x0, y0, w, h] = [box[0] - pad, box[1] - pad, box[2] - box[0] + pad * 2, box[3] - box[1] + pad * 2];
     ctx.save();
-    ctx.strokeStyle = layerColor("selection");
-    ctx.lineWidth = hairlineUm(view, 2);
-    ctx.setLineDash([hairlineUm(view, 8), hairlineUm(view, 5)]);
-    ctx.strokeRect(b.minX - pad, b.minY - pad, b.maxX - b.minX + pad * 2, b.maxY - b.minY + pad * 2);
+    ctx.strokeStyle = entered ? layerColor("anchor") : layerColor("selection");
+    ctx.lineWidth = hairlineUm(view, entered ? 2.5 : 2);
+    if (!entered) ctx.setLineDash([hairlineUm(view, 8), hairlineUm(view, 5)]);
+    ctx.strokeRect(x0, y0, w, h);
     ctx.setLineDash([]);
+    // The name, in KiCad's tab: two lines up and across, the text between them and the box ("Scale by zoom a bit, but not too much").
+    const name = (g.name ?? "").trim();
+    if (name !== "") {
+      const textUm = (hairlineUm(view, 14) + 2 * 304.8) / 3;
+      if (name.length * textUm * 0.6 < w) {
+        const tab = textUm * 2;
+        ctx.beginPath();
+        ctx.moveTo(x0, y0);
+        ctx.lineTo(x0, y0 - tab);
+        ctx.lineTo(x0 + w, y0 - tab);
+        ctx.lineTo(x0 + w, y0);
+        ctx.stroke();
+        ctx.fillStyle = ctx.strokeStyle;
+        ctx.font = `italic ${textUm}px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "alphabetic";
+        ctx.fillText(name, x0 + w / 2, y0 - textUm * 0.5);
+      }
+    }
     ctx.restore();
   }
 }

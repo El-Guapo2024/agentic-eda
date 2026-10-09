@@ -128,7 +128,8 @@ pub(crate) fn write_attr(out: &mut String, a: &FootprintAttrs) {
 pub(crate) struct PadText {
     /// `(offset x y)` in the file's pad frame (x negated on the bottom side, where the whole frame is mirrored).
     pub offset: Option<(Um, Um)>,
-    /// ` (solder_mask_margin ..) (solder_paste_margin ..) (solder_paste_margin_ratio ..) (clearance ..)`, whichever are set.
+    /// ` (solder_mask_margin ..) (solder_paste_margin ..) (solder_paste_margin_ratio ..)`, whichever are set. The pad's `(clearance ..)`
+    /// and its zone connection are written by the caller from `Design::pad_zone_facts`.
     pub margins: String,
 }
 
@@ -144,9 +145,6 @@ pub(crate) fn pad_text(edit: Option<&PadEdit>, side: Side) -> PadText {
     }
     if let Some(r) = e.solder_paste_margin_ratio {
         write!(margins, " (solder_paste_margin_ratio {})", fmt_mm_f(r)).unwrap();
-    }
-    if let Some(c) = e.clearance {
-        write!(margins, " (clearance {})", mm(c)).unwrap();
     }
     PadText { offset, margins }
 }
@@ -274,7 +272,8 @@ fn with_text(mut l: FieldLayout, text: &str, own: &str) -> FieldLayout {
 
 /// A pad's offset and margins as an edit without identity (`number`/`nth` are the caller's): the shape offset inside `(drill ..)`
 /// (x un-mirrored for a bottom-side footprint), `(solder_mask_margin ..)`, `(solder_paste_margin ..)`,
-/// `(solder_paste_margin_ratio ..)` and `(clearance ..)`. Before file version 20240201 a margin of 0 meant "inherit".
+/// and `(solder_paste_margin_ratio ..)`. Before file version 20240201 a margin of 0 meant "inherit". The pad's `(clearance ..)` and
+/// zone connection are read by the importer into `FootprintExtra`, with the rest of the zone facts.
 pub(crate) fn parse_pad_extras(pad: &[Sexpr], side: Side, file_version: i64) -> PadEdit {
     let mut e = PadEdit::default();
     if let Some(d) = sexpr::find(pad, "drill") {
@@ -295,7 +294,6 @@ pub(crate) fn parse_pad_extras(pad: &[Sexpr], side: Side, file_version: i64) -> 
     };
     e.solder_mask_margin = margin("solder_mask_margin");
     e.solder_paste_margin = margin("solder_paste_margin");
-    e.clearance = margin("clearance");
     e.solder_paste_margin_ratio = sexpr::find(pad, "solder_paste_margin_ratio").and_then(|f| sexpr::num(f, 1)).filter(|r| *r != 0.0 || file_version > 20240201);
     e
 }
@@ -303,11 +301,6 @@ pub(crate) fn parse_pad_extras(pad: &[Sexpr], side: Side, file_version: i64) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eda_model::ir::LabelSide;
-
-    fn fp(side: Side, rot: Millideg) -> FootprintInstance {
-        FootprintInstance { id: "R1".into(), at: Point { x: 5_000, y: 5_000 }, rot, side, label: LabelSide::Above }
-    }
 
     fn parse(text: &str) -> Vec<Sexpr> {
         sexpr::parse(text).unwrap().as_list().unwrap().to_vec()
@@ -421,25 +414,24 @@ mod tests {
         e.solder_mask_margin = Some(50);
         e.solder_paste_margin = Some(-30);
         e.solder_paste_margin_ratio = Some(-0.1);
-        e.clearance = Some(250);
         for side in [Side::Top, Side::Bottom] {
             let t = pad_text(Some(&e), side);
             let (ox, oy) = t.offset.unwrap();
             assert_eq!((ox, oy), (if side == Side::Bottom { -300 } else { 300 }, -100));
-            assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1) (clearance 0.25)");
+            assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1)");
             let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(oy), t.margins));
             let back = parse_pad_extras(&node, side, 20241229);
-            assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio, back.clearance), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio, e.clearance), "{side:?}");
+            assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio), "{side:?}");
         }
         assert!(pad_text(None, Side::Top).margins.is_empty());
     }
 
     #[test]
     fn an_old_file_reads_a_zero_margin_as_unset() {
-        let node = parse("(pad \"1\" smd rect (at 0 0) (size 1 1) (solder_mask_margin 0) (clearance 0))");
+        let node = parse("(pad \"1\" smd rect (at 0 0) (size 1 1) (solder_mask_margin 0))");
         let old = parse_pad_extras(&node, Side::Top, 20231231);
-        assert_eq!((old.solder_mask_margin, old.clearance), (None, None));
+        assert_eq!(old.solder_mask_margin, None);
         let new = parse_pad_extras(&node, Side::Top, 20241229);
-        assert_eq!((new.solder_mask_margin, new.clearance), (Some(0), Some(0)));
+        assert_eq!(new.solder_mask_margin, Some(0));
     }
 }

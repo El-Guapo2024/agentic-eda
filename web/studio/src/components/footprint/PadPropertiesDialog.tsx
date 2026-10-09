@@ -6,11 +6,11 @@
 // metadata with no consumer anywhere in this app yet), and a true custom
 // (primitive-based) pad shape -- see `LibraryPadShape`'s own doc.
 import { useEffect, useState } from "react";
-import type { ChamferCorners, LibraryPad, LibraryPadShape, PadKind } from "../../api/types";
+import type { ChamferCorners, LibraryPad, LibraryPadShape, PadConnection, PadKind } from "../../api/types";
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
 import { formatLength, umFrom, umTo } from "../../state/units";
-import { importPadSettings, settingsOf } from "../../kicad-port/padSettings";
+import { PAD_CONNECTION_OPTIONS, defaultSpokeAngleDeg, importPadSettings, settingsOf } from "../../kicad-port/padSettings";
 
 const SHAPE_OPTIONS: { value: LibraryPadShape; label: string }[] = [
   { value: "circle", label: "Circle" },
@@ -257,14 +257,24 @@ export function PadPropertiesDialog() {
             )}
           </div>
 
-          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides (blank = board default)</p>
+          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and zone connection (blank = inherit)</p>
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
             <span>Clearance</span>
             <OverrideInput valueUm={form.clearance_override} units={units} onChange={(v) => set("clearance_override", v)} />
+            <span>Pad connection</span>
+            <select value={form.zone_connection ?? ""} onChange={(e) => set("zone_connection", e.target.value === "" ? null : (e.target.value as PadConnection))} title="PAD::GetLocalZoneConnection: how a copper zone connects to this pad, over its footprint's and the zone's own setting">
+              {PAD_CONNECTION_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
             <span>Thermal relief gap</span>
             <OverrideInput valueUm={form.thermal_gap_override} units={units} onChange={(v) => set("thermal_gap_override", v)} />
             <span>Thermal spoke width</span>
             <OverrideInput valueUm={form.thermal_spoke_width_override} units={units} onChange={(v) => set("thermal_spoke_width_override", v)} />
+            <span>Thermal spoke angle</span>
+            <AngleOverrideInput valueMdeg={form.thermal_spoke_angle_mdeg ?? null} defaultDeg={defaultSpokeAngleDeg(form.shape)} onChange={(v) => set("thermal_spoke_angle_mdeg", v)} />
           </div>
         </div>
         <div className="dialog-footer">
@@ -288,13 +298,32 @@ export function PadPropertiesDialog() {
   );
 }
 
+/** The spoke angle: "unset" is the shape's default (90 degrees for an oval or rectangle, 45 for a circle), set is an angle in degrees as the `.kicad_pcb` stores it. */
+export function AngleOverrideInput({ valueMdeg, defaultDeg, onChange, testid }: { valueMdeg: number | null; defaultDeg: number; onChange: (v: number | null) => void; testid?: string }) {
+  const on = valueMdeg != null;
+  return (
+    <span>
+      <label style={{ marginRight: 8 }}>
+        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked ? defaultDeg * 1000 : null)} data-testid={testid ? `${testid}-on` : undefined} /> override
+      </label>
+      {on ? (
+        <>
+          <input type="number" step="any" value={valueMdeg / 1000} onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange((((Math.round(Number(e.target.value) * 1000) % 360_000) + 360_000) % 360_000))} style={{ width: 80 }} data-testid={testid} />°
+        </>
+      ) : (
+        <span style={{ color: "var(--chrome-text-dim)" }}>{defaultDeg}° (shape default)</span>
+      )}
+    </span>
+  );
+}
+
 /** A length field that can also be "unset" (board default) -- the Pad Properties dialog's own clearance/thermal override convention (`None` = inherit). */
-function OverrideInput({ valueUm, units, onChange }: { valueUm: number | null; units: Parameters<typeof umTo>[1]; onChange: (v: number | null) => void }) {
+export function OverrideInput({ valueUm, units, onChange, testid }: { valueUm: number | null; units: Parameters<typeof umTo>[1]; onChange: (v: number | null) => void; testid?: string }) {
   const on = valueUm != null;
   return (
     <span>
       <label style={{ marginRight: 8 }}>
-        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked ? 0 : null)} /> override
+        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked ? 0 : null)} data-testid={testid ? `${testid}-on` : undefined} /> override
       </label>
       {on && (
         <input
@@ -303,6 +332,7 @@ function OverrideInput({ valueUm, units, onChange }: { valueUm: number | null; u
           value={umTo(valueUm, units)}
           onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(umFrom(Number(e.target.value), units)))}
           style={{ width: 80 }}
+          data-testid={testid}
         />
       )}
       {on && ` ${units}`}

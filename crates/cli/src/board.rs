@@ -143,7 +143,11 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     fold_unknown_symbols(&design, &mut model);
     // A footprint copied onto the board has no part in the intent either; `board_parts` is where it lives.
     fold_board_parts(&design, &mut model);
-    // The pads a footprint's Pad Properties edits changed: its own footprint, for every reader of `footprint_of`.
+    // A placed symbol's own Footprint field (its library's default, or the one the Footprint Chooser assigned) names a library footprint the same
+    // way an intent part does: resolve what the folded parts name, so it can be placed on the board.
+    crate::resolve_footprint_libraries(&mut model);
+    // The pads a footprint's Pad Properties edits changed: its own footprint, for every reader of `footprint_of` (after the libraries are resolved, so
+    // a part placed from an installed library has its footprint to lay the edits on).
     fold_footprint_edits(&design, &mut model);
     Ok((meta, design, model))
 }
@@ -295,7 +299,7 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
         for sym in &sch.symbols {
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
-                    let resolved = model.real_symbol_of(&sym.lib_id, part);
+                    let resolved = model.real_symbol_of_instance(sch, sym, part);
                     for (number, at) in eda_engine::placed::pin_points(sym, part, resolved.as_ref()) {
                         pin_world.insert(format!("{}.{number}", sym.id), at);
                     }
@@ -307,6 +311,7 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
             // Multi-unit: this placed instance only seeds `pin_world` for the pins that are actually drawn on its own unit
             // (plus any `unit == 0` pin, common to every unit) -- a pin of a *different* unit of the same reference is
             // positioned when *that* unit's own `SymbolInstance` is visited, not here.
+            let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
             for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
                 pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
@@ -716,10 +721,18 @@ fn clear_dir(stack_dir: &Path) {
     let _ = std::fs::remove_dir_all(stack_dir);
 }
 
-/// The Schematic scope's undo also follows `LibrarySymbol::published`: Update Symbol(s) (`SchCmd::UpdateLibrarySymbols`) is run from the
-/// schematic but flips that flag in the symbol library, which the Schematic scope does not otherwise restore -- so the edit could never be
-/// undone. Only the flags come from the snapshot (a symbol the snapshot does not have keeps its own), never the symbols' own edits.
-fn follow_published(mut library: Option<eda_model::ir::SymbolLibrarySection>, snapshot: Option<&eda_model::ir::SymbolLibrarySection>) -> Option<eda_model::ir::SymbolLibrarySection> {
+/// The Schematic scope's undo also follows the symbol library's published entries. Update Symbol(s) (`SchCmd::UpdateLibrarySymbols`) is run from the
+/// schematic but flips `LibrarySymbol::published` in the symbol library, which the Schematic scope does not otherwise restore -- so the edit could
+/// never be undone: the flags come from the snapshot (a symbol the snapshot does not have keeps its own), never the symbols' own edits.
+///
+/// A schematic command can also ADD published entries: a paste brings the symbols of its fragment, and placing a symbol of an installed library keeps
+/// its definition (`Cmd::EmbedLibSymbol`). Undo takes those back with the command: a published entry the snapshot lacks goes when nothing in the
+/// restored schematic (`used`: the `lib_id`s of its symbols, on every sheet) draws from it; and redo, whose snapshot has it, puts it back.
+fn follow_published(
+    mut library: Option<eda_model::ir::SymbolLibrarySection>,
+    snapshot: Option<&eda_model::ir::SymbolLibrarySection>,
+    used: &std::collections::BTreeSet<String>,
+) -> Option<eda_model::ir::SymbolLibrarySection> {
     if let (Some(lib), Some(snap)) = (library.as_mut(), snapshot) {
         for sym in lib.symbols.iter_mut() {
             if let Some(old) = snap.by_lib_id(&sym.lib_id) {
@@ -727,7 +740,28 @@ fn follow_published(mut library: Option<eda_model::ir::SymbolLibrarySection>, sn
             }
         }
     }
+    if let Some(lib) = library.as_mut() {
+        lib.symbols.retain(|s| !(s.published && !used.contains(&s.lib_id) && snapshot.is_none_or(|snap| snap.by_lib_id(&s.lib_id).is_none())));
+    }
+    if let Some(snap) = snapshot {
+        for sym in snap.symbols.iter().filter(|s| s.published && used.contains(&s.lib_id)) {
+            let lib = library.get_or_insert_with(Default::default);
+            if lib.by_lib_id(&sym.lib_id).is_none() {
+                lib.symbols.push(sym.clone());
+                lib.symbols.sort_by(|a, b| a.lib_id.cmp(&b.lib_id));
+            }
+        }
+    }
+    // A library the schematic command made out of nothing is none again.
+    if snapshot.is_none() && library.as_ref().is_some_and(|l| l.symbols.is_empty()) {
+        library = None;
+    }
     library
+}
+
+/// The `lib_id` of every symbol and power symbol on every sheet of the schematic.
+fn schematic_lib_ids(root: Option<&eda_model::ir::SchematicSection>, sheets: Option<&std::collections::BTreeMap<String, eda_model::ir::SchematicSection>>) -> std::collections::BTreeSet<String> {
+    root.into_iter().chain(sheets.into_iter().flat_map(|c| c.values())).flat_map(|sch| sch.symbols.iter().map(|s| s.lib_id.clone()).chain(sch.power_symbols.iter().map(|p| p.lib_id.clone()))).collect()
 }
 
 /// Overlay `scope`'s own half of `snapshot` onto `current`, leaving
@@ -743,7 +777,8 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
     match scope {
         None => snapshot,
         Some(Domain::Schematic) => {
-            let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref());
+            let used = schematic_lib_ids(snapshot.schematic.as_ref(), snapshot.sheet_contents.as_ref());
+            let symbol_library = follow_published(current.symbol_library, snapshot.symbol_library.as_ref(), &used);
             // The sheets' own content (`sheet_contents`) is schematic too: an edit inside a sheet is undone with the root.
             eda_model::ir::Design { schematic: snapshot.schematic, sheet_contents: snapshot.sheet_contents, nets: snapshot.nets, symbol_library, ..current }
         }
@@ -846,6 +881,9 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, Vec<CheckResult>> {
     let (meta, mut design, mut model) = load(dir)?;
+    // A symbol or footprint out of KiCad's installed libraries goes in with its definition (`crate::library_place`).
+    let with_definitions = crate::library_place::with_installed_definitions(cmd, &design, &model);
+    let cmd = with_definitions.as_ref().unwrap_or(cmd);
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
@@ -1016,6 +1054,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Rip { part } => format!("rip {part}"),
         Cmd::Flip { part } => format!("flip {part}"),
         Cmd::SetLabelSide { part, side } => format!("label-side {part} --side {side:?}"),
+        Cmd::SetFootprintZoneConnection { part, zone_connection, clearance } => format!("footprint-zone-connection {part} --connection {zone_connection:?} --clearance {clearance:?}"),
+        Cmd::SetPadZoneOverrides { part, pad, zone_connection, thermal_gap, thermal_spoke_width, thermal_spoke_angle_mdeg, clearance } => {
+            format!("pad-zone-overrides {part}.{pad} --connection {zone_connection:?} --gap {thermal_gap:?} --spoke-width {thermal_spoke_width:?} --spoke-angle {thermal_spoke_angle_mdeg:?} --clearance {clearance:?}")
+        }
 
         Cmd::AddTrack { net, layer, width, pts: p } => format!("track add --net {net} --layer {layer} --width {} --pts \"{}\"", mm(*width), pts(p)),
         Cmd::DeleteTrack { id } => format!("track delete {id}"),
@@ -1176,6 +1218,8 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
         Cmd::DeletePowerSymbol { id } => format!("schematic delete-power {id}"),
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::EmbedLibSymbol { symbol } => format!("schematic keep-symbol {:?}", symbol.lib_id),
+        Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x), mm(at.y)),
         Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
         Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
         Cmd::Annotate { reset_existing, order, ids } => format!(
@@ -1308,6 +1352,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Rip { .. } => "rip",
         Cmd::Flip { .. } => "flip",
         Cmd::SetLabelSide { .. } => "label-side",
+        Cmd::SetFootprintZoneConnection { .. } | Cmd::SetPadZoneOverrides { .. } => "pad-zone",
         Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
         Cmd::AddVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
         Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } => "board-setup",
@@ -1384,6 +1429,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
         Cmd::AddSymbol { .. } => "schematic-place",
+        Cmd::EmbedLibSymbol { .. } => "schematic-keep-symbol",
+        Cmd::PlaceFootprint { .. } => "place-footprint",
         Cmd::OnSheet { cmd, .. } => cmd_name(cmd),
         Cmd::ReorganizeSheets => "schematic-reorganize-sheets",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
@@ -2356,6 +2403,7 @@ mod tests {
             pin_names_hidden: false,
             pin_numbers_hidden: false,
             pin_name_offset_mm: 0.508,
+            alternate: None,
         };
         let model = ConstraintModel {
             parts: vec![part("R1"), part("R2")],
@@ -3089,6 +3137,169 @@ mod tests {
         assert!(design.schematic.as_ref().unwrap().symbols.iter().all(|s| model.part(&s.id).is_some()));
     }
 
+    /// The installed libraries in the Symbol Chooser: placing `Amplifier_Operational:LM358` keeps its definition with the schematic
+    /// (`Cmd::EmbedLibSymbol`, in the same command as the `AddSymbol`), the model draws it with its 8 pins, the part has the library's Value
+    /// and default Footprint, and one undo takes the instance AND the definition back (redo brings both). Needs KiCad.app's libraries.
+    #[test]
+    fn placing_an_installed_symbol_keeps_its_definition_and_undo_takes_it_back() {
+        if !eda_kicad::default_symbol_library_root().join("Amplifier_Operational.kicad_sym").is_file() {
+            eprintln!("no KiCad symbol libraries installed; skipping");
+            return;
+        }
+        let dir = scratch("sch_installed_symbol");
+        setup_mcu30_flat(&dir);
+        let before = load(&dir).unwrap().1;
+        assert!(before.symbol_library.is_none());
+        let place = |id: &str, x: Um| Cmd::AddSymbol { id: id.into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+
+        step(&dir, place("U90", 200_000), false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let kept = design.symbol_library.as_ref().and_then(|l| l.by_lib_id("Amplifier_Operational:LM358")).expect("the definition is kept with the schematic");
+        assert!(kept.published, "published: the model resolves the instance from it");
+        assert_eq!((kept.unit_count, kept.pins.len(), kept.keywords.as_str()), (3, 8, "dual opamp"), "units and the library's own fields come from the definition");
+        let lib = model.symbol_of("Amplifier_Operational:LM358").expect("the model draws it");
+        assert_eq!((lib.pins.len(), lib.unit_count), (8, 3));
+        let part = model.part("U90").expect("the placed symbol has a part");
+        // The library's LM358 has no default footprint (it has `ki_fp_filters` for the Footprint Chooser instead); its datasheet and value come across.
+        assert_eq!((part.value.as_deref(), part.footprint.as_deref(), part.pins.len()), (Some("LM358"), None, 8), "a new instance starts with its library symbol's Value");
+        assert!(part.datasheet.as_deref().is_some_and(|d| d.contains("lm2904")), "and its Datasheet: {:?}", part.datasheet);
+        // A symbol with a default footprint brings it: the part names it, and it resolves from the footprint library so the PCB can place the part.
+        if eda_kicad::default_symbol_library_root().join("Regulator_Linear.kicad_sym").is_file() && eda_kicad::default_footprint_library_root().join("Package_TO_SOT_SMD.pretty").is_dir() {
+            step(&dir, Cmd::AddSymbol { id: "U95".into(), lib_id: "Regulator_Linear:AMS1117-3.3".into(), at: Point { x: 240_000, y: 20_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+            let (_, _, model) = load(&dir).unwrap();
+            let reg = model.part("U95").unwrap();
+            assert_eq!((reg.value.as_deref(), reg.footprint.as_deref(), reg.pins.len()), (Some("AMS1117-3.3"), Some("Package_TO_SOT_SMD:SOT-223-3_TabPin2"), 3));
+            assert!(model.footprint_of(reg).is_some_and(|f| f.pads.len() >= 3), "the default footprint resolves");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+            assert!(load(&dir).unwrap().2.part("U95").is_none());
+        }
+        // what the studio draws: the library symbol with its pins
+        let sheet = crate::studio::schematic_json_of(&design, &model, "");
+        assert_eq!(sheet["lib_symbols"]["Amplifier_Operational:LM358"]["pins"].as_array().map(|p| p.len()), Some(8), "{}", sheet["lib_symbols"]);
+
+        // a second one needs no second copy
+        step(&dir, place("U91", 220_000), false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.symbol_library.as_ref().unwrap().symbols.iter().filter(|s| s.lib_id == "Amplifier_Operational:LM358").count(), 1);
+        assert!(design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U91"));
+
+        // undo: the second instance goes, the definition stays for the first
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(!design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U91"));
+        assert!(design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U90"));
+        assert!(design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("Amplifier_Operational:LM358").is_some()), "U90 still draws from it");
+        // undo again: the first goes with its definition
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(!design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U90"));
+        assert!(design.symbol_library.is_none(), "one undo step takes the instance and its kept definition back: {:?}", design.symbol_library.as_ref().map(|l| l.symbols.iter().map(|s| s.lib_id.clone()).collect::<Vec<_>>()));
+        assert!(model.part("U90").is_none());
+        // redo puts both back
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert!(design.schematic.as_ref().unwrap().symbols.iter().any(|s| s.id == "U90"));
+        assert!(design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("Amplifier_Operational:LM358").is_some_and(|s| s.published)));
+        assert_eq!(model.symbol_of("Amplifier_Operational:LM358").map(|s| s.pins.len()), Some(8));
+    }
+
+    /// The same placement judged by kicad-cli (slow tier): the symbol's definition is in the exported schematic's `lib_symbols`, so ERC raises
+    /// nothing about the library, the footprint link, the annotation or the geometry of the new part -- only what a part with nothing wired to it
+    /// always raises (unconnected pins, units not placed).
+    #[test]
+    fn a_placed_installed_symbol_passes_kicad_clis_erc_without_library_findings() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() || !eda_kicad::default_symbol_library_root().join("Amplifier_Operational.kicad_sym").is_file() {
+            eprintln!("no kicad-cli or no KiCad symbol libraries; skipping");
+            return;
+        }
+        let dir = scratch("sch_installed_symbol_erc");
+        setup_mcu30_flat(&dir);
+        let counts = |dir: &Path| -> std::collections::BTreeMap<String, u64> {
+            let erc = crate::kicad_engine::erc(dir).expect("kicad-cli runs ERC");
+            erc["counts"].as_object().map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap_or(0))).collect()).unwrap_or_default()
+        };
+        let base = counts(&dir);
+        // On the schematic grid (50 mil, as the studio snaps a click): a pin off it is `endpoint_off_grid`, and rightly.
+        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "Amplifier_Operational:LM358".into(), at: Point { x: 157 * 1270, y: 16 * 1270 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        let after = counts(&dir);
+        let grew = |kind: &str| after.get(kind).copied().unwrap_or(0).saturating_sub(base.get(kind).copied().unwrap_or(0));
+        for kind in ["lib_symbol_issues", "lib_symbol_mismatch", "footprint_link_issues", "unannotated", "endpoint_off_grid", "duplicate_reference", "unresolved_variable", "different_unit_footprint", "different_unit_net", "pin_to_pin", "bus_to_net_conflict"] {
+            assert_eq!(grew(kind), 0, "placing the symbol added {kind} findings: before {base:?}, after {after:?}");
+        }
+        // what an unwired part raises: its 8 pins, nothing else new
+        let new: Vec<(&String, u64)> = after.iter().map(|(k, v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0)))).filter(|(_, n)| *n > 0).collect();
+        for (kind, n) in &new {
+            assert!(["pin_not_connected", "power_pin_not_driven", "missing_unit", "pin_not_driven", "missing_input_pin", "missing_power_pin"].contains(&kind.as_str()), "unexpected new ERC finding {kind} x{n}: before {base:?}, after {after:?}");
+        }
+        eprintln!("ERC after placing LM358: new findings {new:?}");
+    }
+
+    /// Place Footprint: a footprint of the installed libraries (a mounting hole) becomes a part of its own on the board, with its pads; the
+    /// derived `.kicad_pcb` has it, and one undo takes it away. Needs KiCad.app's libraries.
+    #[test]
+    fn placing_an_installed_footprint_makes_a_board_part_that_undo_removes() {
+        let name = "MountingHole:MountingHole_3.2mm_M3";
+        if eda_kicad::find_footprint_file(&eda_kicad::default_footprint_library_root(), name).is_none() {
+            eprintln!("no KiCad footprint libraries installed; skipping");
+            return;
+        }
+        let dir = scratch("pcb_installed_footprint");
+        setup_mcu30_flat(&dir);
+        let place = |x: i64| Cmd::PlaceFootprint { footprint: name.into(), at: Point { x, y: 30_000 }, reference: String::new(), value: String::new(), definition: None };
+        step(&dir, place(40_000), false, "test").unwrap();
+        step(&dir, place(60_000), false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let parts: Vec<&str> = design.drawings.as_ref().unwrap().board_parts.iter().map(|p| p.reference.as_str()).collect();
+        assert_eq!(parts, ["H1", "H2"]);
+        let hole = model.part("H1").expect("the model has the placed footprint as a part");
+        let fp = model.footprint_of(hole).expect("with its pads");
+        assert_eq!(fp.pads.len(), 1, "a mounting hole is one pad");
+        assert_eq!(fp.pads[0].kind, PadKind::NonPlatedHole);
+        let pose = design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == "H2").unwrap();
+        assert_eq!((pose.at, pose.rot, pose.side), (Point { x: 60_000, y: 30_000 }, 0, Side::Top));
+        let pcb = kicad_pcb_text_of(&dir);
+        assert!(pcb.contains("MountingHole_3.2mm_M3") && pcb.contains("\"H1\"") && pcb.contains("\"H2\""), "the derived board has both holes");
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert_eq!(design.drawings.as_ref().unwrap().board_parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), ["H1"]);
+        assert!(model.part("H2").is_none());
+        // a name no library has is refused with a reason, and changes nothing
+        let e = step(&dir, Cmd::PlaceFootprint { footprint: "MountingHole:NoSuchHole".into(), at: Point { x: 0, y: 0 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap_err();
+        assert_eq!(e[0].check, "ops_unknown_footprint");
+    }
+
+    /// The same hole judged by kicad-cli (slow tier): placed inside a 20 mm board with two parts, it adds no violation of any kind -- no hole
+    /// clearance, no courtyard overlap, no copper to the edge -- so the pads the library gave it reach the derived `.kicad_pcb` as KiCad reads them.
+    #[test]
+    fn a_placed_installed_footprint_passes_kicad_clis_drc() {
+        let name = "MountingHole:MountingHole_3.2mm_M3";
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() || eda_kicad::find_footprint_file(&eda_kicad::default_footprint_library_root(), name).is_none() {
+            eprintln!("no kicad-cli or no KiCad footprint libraries; skipping");
+            return;
+        }
+        let dir = scratch("pcb_installed_footprint_drc");
+        setup(&dir);
+        let base = drc_counts(&dir);
+        step(&dir, Cmd::PlaceFootprint { footprint: name.into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
+        let after = drc_counts(&dir);
+        let new: Vec<(&String, u64)> = after.iter().map(|(k, v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0)))).filter(|(_, n)| *n > 0).collect();
+        assert!(new.is_empty(), "placing the hole added DRC findings {new:?}: before {base:?}, after {after:?}");
+    }
+
+    fn kicad_pcb_text_of(dir: &Path) -> String {
+        let (_, design, model) = load(dir).unwrap();
+        eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-08", title: "t" }).unwrap()
+    }
+
     /// `dialog_annotate.cpp`'s "Selection" scope: only the named symbols
     /// are reset/renumbered, everything else on the sheet is left alone
     /// even if `reset_existing` is set.
@@ -3240,6 +3451,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         };
         step(&dir, Cmd::AddPad { footprint: "2PAD".into(), pad }, false, "test").unwrap();
 
@@ -3580,8 +3793,8 @@ mod tests {
         let start = sheet_of(&load(&dir).unwrap().1);
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let commands = vec![
-            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up) },
-            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None },
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None },
             V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000) },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
             V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
@@ -3594,6 +3807,98 @@ mod tests {
             undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
             assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the design back exactly after {cmd:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The fields of a symbol as items (move, turn, mirror, Field Properties, Autoplace Fields) and a label's look: each is a single undo step that changes the
+    /// sheet, and one Undo brings back exactly what was there (the stored places of the fields and the autoplaced flags included), on the user's board.
+    #[test]
+    fn every_schematic_field_verb_is_one_undo_step() {
+        use eda_engine::fields_edit::field_id;
+        use eda_ops::sch_edit::SchCmd as E;
+        use eda_ops::sch_move::SchMoveCmd as V;
+        let dir = scratch("sch_field_undo");
+        setup_mcu30_users_board(&dir);
+        let (_, design, _) = load(&dir).unwrap();
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents)).unwrap();
+        let start = sheet_of(&design);
+        let label = design.schematic.as_ref().unwrap().labels.first().map(|l| l.id.clone()).expect("the board has a net label");
+        let commands = vec![
+            Cmd::SchMove(V::Move { ids: vec![field_id("R1", "Reference")], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(V::Rotate { ids: vec![field_id("R1", "Value")], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(V::Mirror { ids: vec![field_id("R1", "Value")], vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+            Cmd::SchMove(V::Rotate { ids: vec!["R1".into()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
+            Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true) }),
+        ];
+        for cmd in commands {
+            let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
+            step(&dir, wrapped, false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let after = sheet_of(&load(&dir).unwrap().1);
+            assert_ne!(after, start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symbol placed in the alternate ("De Morgan") body style of its library symbol: Change Symbol onto a library symbol that has one, then Cycle Body Style, are each a
+    /// single undo step on the user's board; the studio's `GET /api/schematic` sends the style of the symbol and both bodies of the library symbol (each item of
+    /// `body_style` 1 or 2, so the painter draws the one the symbol is in), and the file KiCad reads has the style on the instance and both bodies in the symbol.
+    #[test]
+    fn cycle_body_style_is_one_undo_step_and_the_studio_draws_the_style() {
+        use eda_model::ir::{LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, SymbolLibrarySection};
+        use eda_model::symbol::SPoint;
+        use eda_ops::sch_edit::SchCmd as E;
+        let dir = scratch("sch_body_style_undo");
+        setup_mcu30_users_board(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        // a published library symbol with the pins of the resistor R1 is, a rectangle in its normal body and a wider one in the alternate body
+        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None };
+        let rect = |half: f64, style: u32| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: SPoint::new(-half, 2.54), end: SPoint::new(half, -2.54), stroke_mm: 0.254, fill: LibraryFill::None };
+        let mut lib = LibrarySymbol::new_empty("Test:Gate2");
+        lib.reference_prefix = "R".into();
+        lib.has_alternate_body_style = true;
+        lib.published = true;
+        lib.pins = vec![pin("1", 3.81, 270.0, 0), pin("2", -3.81, 90.0, 0)];
+        lib.graphics = vec![rect(1.016, 1), rect(2.032, 2)];
+        lib.assign_missing_ids();
+        design.symbol_library = Some(SymbolLibrarySection { symbols: vec![lib] });
+        save(&dir, &design).unwrap();
+
+        let on_root = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let sheet_of = |d: &eda_model::ir::Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents)).unwrap();
+        step(&dir, on_root(Cmd::SchEdit(E::ChangeSymbol { id: "R1".into(), lib_id: "Test:Gate2".into() })), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, placed, model) = load(&dir).unwrap();
+        let before = sheet_of(&placed);
+        assert!(placed.schematic.as_ref().unwrap().extras.body_styles.is_empty(), "a symbol is placed in its normal body style");
+
+        step(&dir, on_root(Cmd::SchEdit(E::SetBodyStyle { ids: vec!["R1".into()], style: None })), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, alt, model_alt) = load(&dir).unwrap();
+        assert_eq!(alt.schematic.as_ref().unwrap().extras.body_styles.get("R1"), Some(&2));
+        assert_ne!(sheet_of(&alt), before);
+
+        // what the studio is sent
+        let json = crate::studio::schematic_json_of(&alt, &model_alt, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap();
+        assert_eq!(r1["body_style"], 2, "the symbol says which body style it is drawn in");
+        let lib_json = &json["lib_symbols"]["Test:Gate2"];
+        assert_eq!(lib_json["body_style_count"], 2);
+        let styles_of = |items: &serde_json::Value| -> Vec<u64> { items.as_array().unwrap().iter().filter(|g| g["kind"] == "rectangle").map(|g| g["body_style"].as_u64().unwrap()).collect() };
+        assert_eq!(styles_of(&lib_json["graphics"]), vec![1, 2], "the normal body is of style 1 and the alternate one of style 2: the painter keeps the items of the style the symbol is in");
+        assert!(lib_json["pins"].as_array().unwrap().iter().all(|p| p["body_style"] == 0), "pins both bodies share are drawn in either");
+        let normal_json = crate::studio::schematic_json_of(&placed, &model, "");
+        assert_eq!(normal_json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap()["body_style"], 1);
+
+        // the file KiCad reads
+        let text = eda_kicad::export_kicad_sch(&alt, &model_alt, &eda_kicad::ExportMeta { date: "2026-01-01", title: "body_style" }).unwrap();
+        assert!(text.contains("(unit 1) (convert 2)"), "the instance is in body style 2");
+        assert!(text.contains("\"Gate2_1_1\"") && text.contains("\"Gate2_1_2\""), "both bodies are in the symbol");
+
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), before, "one Undo puts the body style back");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3896,14 +4201,13 @@ mod tests {
         pad.shape = Some(PadShape::Oval);
         pad.size = Some((1_200, 500));
         pad.offset = Some(Point { x: 100, y: 0 });
-        pad.clearance = Some(250);
         step(&dir, Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }, false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
         let pads = |model: &ConstraintModel, r: &str| model.footprint_of(model.part(r).unwrap()).unwrap().pads;
         assert_eq!((pads(&model, "U1")[0].size, pads(&model, "U1")[0].shape), ((1_200, 500), PadShape::Oval), "the model answers with the pad as edited");
         assert_eq!(pads(&model, "U2")[0].size, (800, 800), "another instance of the same footprint keeps the library's pad");
         let text = pcb(&design, &model);
-        assert!(text.contains("(size 1.2 0.5)") && text.contains("(drill (offset 0.1 0))") && text.contains("(clearance 0.25)"), "{text}");
+        assert!(text.contains("(size 1.2 0.5)") && text.contains("(drill (offset 0.1 0))"), "{text}");
 
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         let (_, after_pad, model) = load(&dir).unwrap();
@@ -3913,27 +4217,85 @@ mod tests {
         assert!(load(&dir).unwrap().1.footprint_edit("U1").is_none(), "the next one takes the footprint edit back");
     }
 
-    /// A duplicate of an edited footprint is edited the same way: its fields, attributes and pad edits are its own copies.
-    #[test]
-    fn a_duplicate_of_an_edited_footprint_keeps_its_fields_attributes_and_pad_edits() {
+    /// A footprint carrying both overlays: our edit (fields, attributes, a pad's shape and offset) and the zone filler's (the footprint's zone
+    /// connection and clearance, a pad's connection, relief gap and clearance on the same pad).
+    fn edit_both_ways(dir: &Path) -> (eda_model::fp_edit::FieldLayout, eda_model::fp_edit::FootprintAttrs, eda_model::fp_edit::PadEdit) {
         use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintKind, PadEdit};
-        let dir = scratch("footprint_edit_duplicate");
-        setup(&dir);
+        use eda_model::ir::PadConnection;
         let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
         reference.size = (900, 900);
         let attrs = FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() };
-        step(&dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: Some(reference.clone()), value: None, fields: None, attrs: Some(attrs) }, false, "test").unwrap();
+        step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: Some(reference.clone()), value: None, fields: None, attrs: Some(attrs) }, false, "test").unwrap();
         let mut pad = PadEdit::none("2", 1);
         pad.size = Some((1_000, 1_000));
-        step(&dir, Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }, false, "test").unwrap();
+        pad.offset = Some(Point { x: 100, y: 0 });
+        pad.solder_mask_margin = Some(50);
+        step(dir, Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }, false, "test").unwrap();
+        step(dir, Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(250) }, false, "test").unwrap();
+        step(dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(PadConnection::None), clearance: Some(300) }, false, "test").unwrap();
+        (reference, attrs, pad)
+    }
+
+    /// What a footprint that went through [`edit_both_ways`] has, on `reference`: our edit and the zone overrides, and one `(pad ..)` form in the
+    /// file that carries the fields of both.
+    fn assert_has_both(design: &Design, model: &ConstraintModel, reference: &str, edited: &(eda_model::fp_edit::FieldLayout, eda_model::fp_edit::FootprintAttrs, eda_model::fp_edit::PadEdit)) {
+        use eda_model::ir::PadConnection;
+        let (layout, attrs, pad) = edited;
+        let ours = design.footprint_edit(reference).unwrap_or_else(|| panic!("{reference} has its own edit"));
+        assert_eq!((ours.reference.as_ref().map(|l| l.at), ours.attrs), (Some(layout.at), Some(*attrs)), "{reference}");
+        // The pad edit's extras are the edit's (a paste has the pad's shape and size in the footprint it brings: checked below).
+        let got = ours.pad("2", 1).unwrap_or_else(|| panic!("{reference}: the pad edit"));
+        assert_eq!((got.offset, got.solder_mask_margin), (pad.offset, pad.solder_mask_margin), "{reference}: the pad edit");
+        let zone = design.drawings.as_ref().unwrap().zone_overrides.iter().find(|z| z.id == reference).unwrap_or_else(|| panic!("{reference} has its own zone overrides"));
+        let p2 = zone.pads.iter().find(|p| p.number == "2").unwrap_or_else(|| panic!("{reference}: pad 2's zone overrides"));
+        assert_eq!((p2.zone_connection, p2.thermal_gap, p2.clearance), (Some(PadConnection::Full), Some(400), Some(250)), "{reference}");
+        assert_eq!(zone.footprint.map(|f| (f.zone_connection, f.clearance)), Some((Some(PadConnection::None), Some(300))), "{reference}: the footprint's own");
+        assert_eq!(model.footprint_of(model.part(reference).unwrap()).unwrap().pads[1].size, (1_000, 1_000), "{reference}: its pads are the edited ones");
+        // One pad form carries the pad edit's offset and margin and the zone facts, in KiCad's order.
+        let text = eda_kicad::export_kicad_pcb(design, model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        let line = text.lines().filter(|l| l.contains("(pad \"2\"") && l.contains("(size 1 1)")).find(|l| l.contains("(thermal_gap 0.4)")).unwrap_or_else(|| panic!("a pad 2 form with both overlays:\n{text}"));
+        assert!(line.contains("(drill (offset 0.1 0))") && line.find("(solder_mask_margin 0.05)") < line.find("(clearance 0.25)") && line.find("(clearance 0.25)") < line.find("(zone_connect 2)"), "{line}");
+    }
+
+    /// A duplicate of an edited footprint is edited the same way: its fields, attributes and pad edits, and the zone filler's overrides, are its own copies.
+    #[test]
+    fn a_duplicate_of_an_edited_footprint_keeps_its_fields_attributes_pad_edits_and_zone_overrides() {
+        let dir = scratch("footprint_edit_duplicate");
+        setup(&dir);
+        let edited = edit_both_ways(&dir);
         step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, false, "test").unwrap();
         let (_, design, model) = load(&dir).unwrap();
-        let copy = design.footprint_edit("U3").expect("the copy has its own edit");
-        assert_eq!((copy.reference.as_ref().map(|l| l.at), copy.attrs), (Some(reference.at), Some(attrs)));
-        assert_eq!(copy.pad("2", 1).and_then(|p| p.size), pad.size);
-        assert_eq!(model.footprint_of(model.part("U3").unwrap()).unwrap().pads[1].size, (1_000, 1_000), "and its pads are the edited ones");
+        assert_has_both(&design, &model, "U1", &edited);
+        assert_has_both(&design, &model, "U3", &edited);
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        assert!(load(&dir).unwrap().1.footprint_edit("U3").is_none(), "undo takes the copy's edit with it");
+        let (_, back, _) = load(&dir).unwrap();
+        assert!(back.footprint_edit("U3").is_none() && !back.drawings.as_ref().unwrap().zone_overrides.iter().any(|z| z.id == "U3"), "undo takes the copy's edit and its zone overrides with it");
+    }
+
+    /// Copy and Paste go through KiCad's clipboard text, whose one `(pad ..)` form carries both overlays: the paste, here and on another board,
+    /// has the pad edit, the fields, the attributes and the zone overrides.
+    #[test]
+    fn a_copy_and_paste_of_a_footprint_keeps_the_pad_edit_and_the_zone_overrides() {
+        let a = scratch("copy_both_from");
+        setup(&a);
+        let edited = edit_both_ways(&a);
+        let body = serde_json::json!({ "ids": ["U1"], "reference": { "x": 0, "y": 0 } }).to_string();
+        let reply = crate::clipboard_api::copy(&a, body.as_bytes());
+        assert_eq!(reply["ok"], true, "{reply}");
+        let text = reply["text"].as_str().unwrap().to_string();
+
+        // On the same board, where U1 exists: a part of its own.
+        step(&a, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 30_000, y: 30_000 } }, false, "test").unwrap();
+        let (_, design, model) = load(&a).unwrap();
+        assert_has_both(&design, &model, "U3", &edited);
+        undo(&a, "test", Some(Domain::Pcb)).unwrap();
+
+        // On another board.
+        let b = scratch("paste_both_into");
+        setup(&b);
+        step(&b, Cmd::PasteClipboard { text, at: Point { x: 30_000, y: 30_000 } }, false, "test").unwrap();
+        let (_, design, model) = load(&b).unwrap();
+        assert_has_both(&design, &model, "U3", &edited);
     }
 
     /// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): the file we write for an edited board is one kicad-cli loads, and it honours what
@@ -3982,14 +4344,22 @@ mod tests {
         let bom = read(crate::fab_api::bom(&dir));
         assert!(bom.contains("U1") && !bom.contains("U2") && !bom.contains("U3"), "the BOM has neither the DNP footprint nor the one excluded from it:\n{bom}");
 
-        // A pad's clearance override is the clearance kicad-cli enforces between pad 1 and pad 2 of U2 (1.2 mm apart).
+        // A pad's clearance override (the zone overlay's: a pad has one clearance) is the clearance kicad-cli enforces between pad 1 and pad 2 of
+        // U2 (1.2 mm apart); and a pad edit of ours beside it (a solder mask margin) is written with it, on the same pad line.
         let mut pad = PadEdit::none("1", 1);
-        pad.clearance = Some(3_000);
+        pad.solder_mask_margin = Some(50);
         step(&dir, Cmd::EditBoardPad { part: "U2".into(), edit: pad }, false, "test").unwrap();
+        step(&dir, Cmd::SetPadZoneOverrides { part: "U2".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(3_000) }, false, "test").unwrap();
+        {
+            let (_, design, model) = load(&dir).unwrap();
+            let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+            assert!(text.contains("(solder_mask_margin 0.05) (clearance 3)"), "one pad line carries the margin of the pad edit and the clearance of the zone overrides, in KiCad's order");
+        }
         let tight = drc_counts(&dir);
         assert!(tight.get("clearance").copied().unwrap_or(0) > 0, "a 3 mm override on a pad 1.2 mm from the next: {tight:?}");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(drc_counts(&dir).get("clearance").copied().unwrap_or(0), 0, "Undo takes the override back");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     }
 
     /// A grid array of a footprint is one command and so one undo step: the copies are parts of the board for the gates and the
@@ -4020,6 +4390,37 @@ mod tests {
         let (_, back, model) = load(&dir).unwrap();
         assert_eq!(back.placement.as_ref().unwrap().footprints.len(), 2);
         assert!(model.part("U3").is_none() && back.drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "one undo takes every copy away");
+    }
+
+    /// Pad Properties' and Footprint Properties' zone connection reach the fill the studio draws (and, through the derived
+    /// `.kicad_pcb`, the one kicad-cli makes), and Undo takes each edit back: a GND pour thermal-relieves U1's GND pad, a solid
+    /// connection floods it, "None" clears it, the pad's own choice beats its footprint's.
+    #[test]
+    fn a_pads_zone_connection_changes_the_fill_and_undo_takes_it_back() {
+        let dir = scratch("pad_zone_connection");
+        setup(&dir);
+        let outline = vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }];
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }, false, "test").unwrap();
+        let area = |dir: &Path| -> f64 {
+            let (_, design, model) = load(dir).unwrap();
+            let board = eda_drc::board::build(&design, &model);
+            let fills = eda_drc::fill::fill_all_zones(&board, &model.board);
+            fills.zones.values().map(|z| z.fill.area()).sum()
+        };
+        let relieved = area(&dir);
+        let set = |c: Option<eda_model::ir::PadConnection>| Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "1".into(), zone_connection: c, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
+
+        step(&dir, set(Some(eda_model::ir::PadConnection::Full)), false, "ui").unwrap();
+        let solid = area(&dir);
+        assert!(solid > relieved + 1_000_000.0, "a solid connection floods the pad's relief gap: {solid} against {relieved}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!((area(&dir) - relieved).abs() < 1.0, "Undo takes the edit back");
+
+        // the footprint says solid, the pad (its own choice) says thermal: the pad wins
+        step(&dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: None }, false, "ui").unwrap();
+        assert!(area(&dir) > relieved + 1_000_000.0, "the footprint's solid connection reaches its pad");
+        step(&dir, set(Some(eda_model::ir::PadConnection::Thermal)), false, "ui").unwrap();
+        assert!((area(&dir) - relieved).abs() < 1.0, "the pad's own thermal relief beats its footprint's solid one");
     }
 
     #[test]

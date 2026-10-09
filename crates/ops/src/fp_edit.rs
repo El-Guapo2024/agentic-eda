@@ -219,11 +219,6 @@ impl Board<'_> {
                 return Err(fail("ops_bad_pad", &pad_ref, "The solder paste margin ratio must be between -50% and 100%."));
             }
         }
-        if let Some(c) = edit.clearance {
-            if c < 0 {
-                return Err(fail("ops_bad_pad", &pad_ref, "The clearance override cannot be negative."));
-            }
-        }
 
         // What the pad becomes must be a pad the library's own rules accept: edit the footprint's edits in a trial and judge it.
         let mut edit = edit.clone();

@@ -353,9 +353,20 @@ fn move_by(o: Point) -> Xform {
     Xform::Move { dx: o.x, dy: o.y }
 }
 
+/// The items of group copy `gi` that are not groups: its members, and the members of the group copies it holds, all the way down.
+fn group_leaves(block: &Copies, gi: usize, out: &mut Vec<Member>) {
+    for m in &block.groups[gi].members {
+        match *m {
+            Member::Group(inner) => group_leaves(block, inner, out),
+            leaf => out.push(leaf),
+        }
+    }
+}
+
 /// `TransformItem` over a set of not-yet-placed copies: each one (a group's members as one) moves to point `index` and turns there.
 fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: usize, outer: &(Option<String>, Option<String>)) {
-    // Members of a copied group are transformed as the group is (`PCB_GROUP::Move`/`Rotate`), about the group's position.
+    // Members of a copied group are transformed as the group is (`PCB_GROUP::Move`/`Rotate`, which are deep: the groups it holds go with
+    // it), about the group's position.
     let mut in_group: BTreeSet<(u8, usize)> = BTreeSet::new();
     let key = |m: &Member| -> (u8, usize) {
         match *m {
@@ -366,6 +377,7 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             Member::Text(i) => (4, i),
             Member::Dimension(i) => (5, i),
             Member::Footprint(i) => (6, i),
+            Member::Group(i) => (7, i),
         }
     };
     let position = |block: &Copies, m: &Member| -> Option<Point> {
@@ -377,9 +389,12 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
             Member::Text(i) => Some(block.texts[i].at),
             Member::Dimension(i) => Some(block.dimensions[i].start),
             Member::Footprint(i) => Some(block.footprints[i].at),
+            // A group copy is moved through its leaves (below), never as a point of its own.
+            Member::Group(_) => None,
         }
     };
     let apply = |block: &mut Copies, m: &Member, x: Xform| match *m {
+        Member::Group(_) => {}
         Member::Track(i) => transform_track(&mut block.tracks[i], x, copper),
         Member::Via(i) => transform_via(&mut block.vias[i], x, copper, outer),
         Member::Zone(i) => transform_zone(&mut block.zones[i], x, copper),
@@ -397,8 +412,11 @@ fn transform_block(block: &mut Copies, g: &ArrayGeometry, index: i64, copper: us
         }
     };
 
-    for gi in 0..block.groups.len() {
-        let members = block.groups[gi].members.clone();
+    // Only the outermost group copies are items of the selection; one that another holds moves with that one.
+    let held: BTreeSet<usize> = block.groups.iter().flat_map(|gc| gc.members.iter()).filter_map(|m| if let Member::Group(inner) = *m { Some(inner) } else { None }).collect();
+    for gi in (0..block.groups.len()).filter(|gi| !held.contains(gi)) {
+        let mut members: Vec<Member> = Vec::new();
+        group_leaves(block, gi, &mut members);
         for m in &members {
             in_group.insert(key(m));
         }

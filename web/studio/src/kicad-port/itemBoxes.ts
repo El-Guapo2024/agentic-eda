@@ -13,6 +13,7 @@ import type { BoardState, CmdShape, LibraryFootprint, LibraryPad, LibrarySymbol,
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { padIds } from "./pcbItems";
+import { groupLeaves } from "./groupTree";
 
 /** `[minX, minY, maxX, maxY]`. */
 export type Box = readonly [number, number, number, number];
@@ -94,8 +95,10 @@ export function pcbItemBoxes(board: BoardState): ItemBoxes {
     const b = boxOfPoints(pts);
     if (b) out.set(d.id, b);
   }
-  for (const g of board.drawings?.groups ?? []) {
-    const b = boxOfIds(out, g.member_ids);
+  // A group's box is its items' (the groups it holds opened), so the order the groups are listed in does not matter.
+  const groups = board.drawings?.groups ?? [];
+  for (const g of groups) {
+    const b = boxOfIds(out, groupLeaves(groups, g.id));
     if (b) out.set(g.id, b);
   }
   return out;

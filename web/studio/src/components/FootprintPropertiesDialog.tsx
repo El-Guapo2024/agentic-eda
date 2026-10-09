@@ -2,20 +2,25 @@
 // footprint, a double-click, or on one of its fields). The field grid (`PCB_FIELDS_GRID_TABLE`: name, value, show, width, height, thickness, italic, layer,
 // orientation, keep upright, X and Y offset, knockout, mirrored, and the justification and bold the Properties panel has), Add and Delete for the user fields, the
 // general part (position, orientation, board side, locked), the component type and the attributes (board only, exclude from position files and from the BOM,
-// do not populate, exempt from the courtyard requirement).
+// do not populate, exempt from the courtyard requirement), and the zone fields of the Clearances tab and of Pad Properties: the footprint's "Zone connection"
+// and "Clearance", and, for each pad number, its "Pad connection", "Relief gap", "Spoke width", "Spoke angle" and "Clearance" -- the overrides the zone filler
+// reads (`kicad-port/padZone.ts`; `set_footprint_zone_connection` / `set_pad_zone_overrides`).
 //
 // OK sends ONE batch, which is `TransferDataFromWindow`'s one `BOARD_COMMIT`: the fields and the attributes first (`edit_board_footprint`), then the
 // position, the orientation, the side and the lock through the verbs the move, rotate, flip and lock tools use -- so a side change flips the layers and the
-// mirroring the grid just set, as `FOOTPRINT::Flip` does.
+// mirroring the grid just set, as `FOOTPRINT::Flip` does -- then the zone connection of the footprint and of each pad whose fields were changed.
 //
-// Not ported: the local clearance and mask/paste margins, the zone connection (the zone fill's), the 3D models and embedded files, jumper pad groups, Update
-// and Change Footprint (they need the footprint chooser). The Reference and Value texts come from the schematic and the intent: they are shown, not edited.
+// Not ported: the footprint's own mask/paste margins, the 3D models and embedded files, jumper pad groups, Update and Change Footprint (they need the
+// footprint chooser). The Reference and Value texts come from the schematic and the intent: they are shown, not edited.
 import { useEffect, useMemo, useState } from "react";
-import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Part } from "../api/types";
+import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
 import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, newFieldLayout, newFieldName, parseFieldId, attrsOf, REFERENCE, VALUE } from "../kicad-port/fpFields";
+import { footprintZoneForm, padNumbers, padZoneForm, zoneCmds, type FootprintZoneForm, type PadZoneForm } from "../kicad-port/padZone";
+import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { TECH_LAYERS } from "../kicad-port/pcbProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
+import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
 
 /** One row of the grid. `from` is the field it started as (null for a row added here). */
 interface Row {
@@ -52,6 +57,12 @@ export function FootprintPropertiesDialog() {
   const [more, setMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The zone fields, read from the part whenever the dialog opens on a (different) footprint -- never on every render, so a keystroke is not overwritten by
+  // the next poll of the board. Each pad number's form is kept once it was opened, so a pad left for another keeps what was typed; `padZones` holds the
+  // forms that were opened, and OK sends the ones that differ from what the part carries.
+  const [fpZone, setFpZone] = useState<FootprintZoneForm>({ connection: null, clearance: null });
+  const [padNum, setPadNum] = useState("");
+  const [padZones, setPadZones] = useState<Record<string, PadZoneForm>>({});
 
   // Fill the form when the dialog opens on a footprint -- not on every poll, or a keystroke would be lost to the next refresh.
   useEffect(() => {
@@ -67,6 +78,9 @@ export function FootprintPropertiesDialog() {
     // Asked for a field (a double click on it, or E), the dialog starts on that field's row.
     const asked = first ? parseFieldId(first) : null;
     setSelected(Math.max(0, asked ? fieldsOf(part).findIndex((f) => f.name === asked.name) : 0));
+    setFpZone(footprintZoneForm(part));
+    setPadNum(padNumbers(part)[0] ?? "");
+    setPadZones({});
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, part?.ref]);
@@ -78,6 +92,13 @@ export function FootprintPropertiesDialog() {
   const infos = new Map<string, FieldInfo>(fieldsOf(part).map((f) => [f.name, f]));
   const nets = [...new Set((part.pads ?? []).map((q) => q.net).filter((n): n is string => !!n))];
   const len = (um: number) => formatLength(um, units);
+
+  // The form of the pad number the zone fields show: what was typed there, else what the part carries.
+  const padZone: PadZoneForm = padZones[padNum] ?? padZoneForm(part, padNum);
+  const setPadZone = (patch: Partial<PadZoneForm>) => setPadZones((z) => ({ ...z, [padNum]: { ...(z[padNum] ?? padZoneForm(part, padNum)), ...patch } }));
+  // `PADSTACK::DefaultThermalSpokeAngleForShape`: an X for a circle, a + for everything else this view can tell apart.
+  const shownPad = part.pads?.find((q) => q.num === padNum);
+  const padIsCircle = !!shownPad && shownPad.round && shownPad.w === shownPad.h;
 
   const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const setLayout = (i: number, patch: Partial<FieldLayoutCmd>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, layout: { ...r.layout, ...patch } } : r)));
@@ -130,6 +151,9 @@ export function FootprintPropertiesDialog() {
     }
     if (bottom !== (part.side === "bottom")) cmds.push({ op: "flip_items", ids: [part.ref], pivot: { x: Math.round(x), y: Math.round(y) }, direction: "left_right" });
     if (locked !== (board?.locked ?? []).includes(part.ref)) cmds.push({ op: "set_locked", ids: [part.ref], locked });
+
+    // The zone connection of the footprint, and of every pad whose fields were changed: the overlay the zone filler reads.
+    cmds.push(...zoneCmds(part, fpZone, padZones));
     if (cmds.length === 0) return close();
     setBusy(true);
     try {
@@ -337,6 +361,66 @@ export function FootprintPropertiesDialog() {
               {check("Exempt from courtyard requirement", "allow_missing_courtyard")}
             </div>
           </div>
+          {part.placed && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginTop: 12 }} data-testid="fp-zone">
+              <div>
+                <p style={{ margin: "0 0 4px", fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)" }}>Zone connection (footprint)</p>
+                <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr" }}>
+                  <span>Pad connection</span>
+                  <select
+                    value={fpZone.connection ?? ""}
+                    onChange={(e) => setFpZone((f) => ({ ...f, connection: e.target.value === "" ? null : (e.target.value as PadConnection) }))}
+                    title="FOOTPRINT::GetLocalZoneConnection: how a zone connects to the pads of this footprint that do not set their own"
+                    data-testid="fp-zone-connection"
+                  >
+                    {PAD_CONNECTION_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.value === "" ? "Inherited" : o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span>Clearance</span>
+                  <OverrideInput testid="fp-zone-clearance" valueUm={fpZone.clearance} units={units} onChange={(v) => setFpZone((f) => ({ ...f, clearance: v }))} />
+                </div>
+              </div>
+              {padNumbers(part).length > 0 && (
+                <div>
+                  <p style={{ margin: "0 0 4px", fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)" }}>Zone connection (pad)</p>
+                  <div className="kv-grid" style={{ gridTemplateColumns: "110px 1fr" }}>
+                    <span>Pad</span>
+                    <select value={padNum} onChange={(e) => setPadNum(e.target.value)} data-testid="fp-zone-pad">
+                      {padNumbers(part).map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                    <span>Pad connection</span>
+                    <select
+                      value={padZone.connection ?? ""}
+                      onChange={(e) => setPadZone({ connection: e.target.value === "" ? null : (e.target.value as PadConnection) })}
+                      title="PAD::GetLocalZoneConnection: over the footprint's and the zone's own setting"
+                      data-testid="fp-zone-pad-connection"
+                    >
+                      {PAD_CONNECTION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span>Relief gap</span>
+                    <OverrideInput testid="fp-zone-pad-gap" valueUm={padZone.gap} units={units} onChange={(v) => setPadZone({ gap: v })} />
+                    <span>Spoke width</span>
+                    <OverrideInput testid="fp-zone-pad-spoke-width" valueUm={padZone.spokeWidth} units={units} onChange={(v) => setPadZone({ spokeWidth: v })} />
+                    <span>Spoke angle</span>
+                    <AngleOverrideInput testid="fp-zone-pad-spoke-angle" valueMdeg={padZone.spokeAngleMdeg} defaultDeg={padIsCircle ? 45 : 90} onChange={(v) => setPadZone({ spokeAngleMdeg: v })} />
+                    <span>Clearance</span>
+                    <OverrideInput testid="fp-zone-pad-clearance" valueUm={padZone.clearance} units={units} onChange={(v) => setPadZone({ clearance: v })} />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {error && (
             <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "10px 0 0", fontSize: 12, whiteSpace: "pre-line" }} data-testid="footprint-properties-error">
               {error}

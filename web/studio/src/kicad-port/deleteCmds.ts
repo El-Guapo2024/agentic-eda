@@ -5,21 +5,24 @@
 //   pcbnew/tools/pcb_control.cpp    PCB_CONTROL::InteractiveDelete
 //   pcbnew/tools/edit_tool.cpp      EDIT_TOOL::DeleteItems: a locked item is skipped; deleting a group deletes its members
 import type { BoardState, Cmd } from "../api/types";
+import { expandGroups } from "./groupTree";
+import { isLocked } from "./pcbTransform";
 
 /**
  * The verbs that delete `ids` from the board: tracks, vias, zones, graphics, text and dimensions by their verb, a placed footprint
- * by ripping it up (the board's footprints come from the schematic, so deleting one unplaces it), a group as all its members.
- * Locked items are skipped (`FilterCollectorForLockedItems`); `skippedLocked` says how many were.
+ * by ripping it up (the board's footprints come from the schematic, so deleting one unplaces it), a group as all its members -- the groups it holds opened.
+ * A locked item is skipped (`FilterCollectorForLockedItems`), and so is a group with a locked item anywhere below it or a locked group above it;
+ * `skippedLocked` says how many of `ids` were. The backend takes a deleted item out of its groups, and a group left without members goes too.
  */
 export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cmds: Cmd[]; skippedLocked: number } {
-  const locked = new Set(board.locked ?? []);
-  const groups = new Map((board.drawings?.groups ?? []).map((g) => [g.id, g.member_ids]));
-  const wanted = new Set<string>();
+  const groups = board.drawings?.groups ?? [];
+  let skippedLocked = 0;
+  const free: string[] = [];
   for (const id of ids) {
-    const members = groups.get(id);
-    if (members) for (const m of members) wanted.add(m);
-    else wanted.add(id);
+    if (isLocked(board, id)) skippedLocked++;
+    else free.push(id);
   }
+  const wanted = new Set<string>(expandGroups(groups, free));
   const tracks = new Set((board.routing?.tracks ?? []).map((t) => t.id));
   const vias = new Set((board.routing?.vias ?? []).map((v) => v.id));
   const zones = new Set((board.routing?.zones ?? []).map((z) => z.id));
@@ -28,14 +31,9 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
   const dimensions = new Set((board.drawings?.dimensions ?? []).map((d) => d.id));
   const placed = new Set(board.parts.filter((p) => p.placed).map((p) => p.ref));
   const cmds: Cmd[] = [];
-  let skippedLocked = 0;
   for (const id of wanted) {
     const known = tracks.has(id) || vias.has(id) || zones.has(id) || shapes.has(id) || texts.has(id) || dimensions.has(id) || placed.has(id);
     if (!known) continue;
-    if (locked.has(id)) {
-      skippedLocked++;
-      continue;
-    }
     if (tracks.has(id)) cmds.push({ op: "delete_track", id });
     else if (vias.has(id)) cmds.push({ op: "delete_via", id });
     else if (zones.has(id)) cmds.push({ op: "delete_zone", id });

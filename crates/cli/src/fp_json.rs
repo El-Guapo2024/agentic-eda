@@ -126,7 +126,6 @@ pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintI
         "px": placed.center.x,
         "py": placed.center.y,
         "offset": offset.map(|o| json!([o.x, o.y])),
-        "clearance": edit.and_then(|e| e.clearance),
         "mask_margin": edit.and_then(|e| e.solder_mask_margin),
         "paste_margin": edit.and_then(|e| e.solder_paste_margin),
         "paste_ratio": edit.and_then(|e| e.solder_paste_margin_ratio),

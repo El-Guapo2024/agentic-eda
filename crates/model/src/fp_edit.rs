@@ -20,7 +20,9 @@
 //! # Pad edits
 //!
 //! A [`PadEdit`] changes one pad of one footprint (the k-th pad that carries a number, as the studio names it `REF.NUM#k`):
-//! the shape, size, hole, offset, corner radius and the clearance and mask/paste margins of `dialog_pad_properties.cpp`.
+//! the shape, size, hole, offset, corner radius and the mask/paste margins of `dialog_pad_properties.cpp`. The pad's own clearance and
+//! its zone connection, thermal relief gap, spoke width and angle are the zone filler's overlay (`DrawingsSection::zone_overrides`,
+//! `Cmd::SetPadZoneOverrides`), not repeated here: a pad has one clearance.
 //! [`patched_footprint`] lays the edits on a library footprint; `ConstraintModel::instance_footprints` carries the result so
 //! every reader of `footprint_of` (the gates, the router, the exports) sees the pad as edited. What the engine's [`Pad`] has no
 //! field for (the offset, the margins) is read from the edit by the `.kicad_pcb` writer.
@@ -293,9 +295,6 @@ pub struct PadEdit {
     /// `PAD::SetRoundRectRadiusRatio`: the corner radius as a fraction of the shorter side, `0..=0.5`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub roundrect_ratio: Option<f64>,
-    /// `PAD::SetLocalClearance`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clearance: Option<Um>,
     /// `PAD::SetLocalSolderMaskMargin`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solder_mask_margin: Option<Um>,
@@ -323,7 +322,6 @@ impl PadEdit {
             && self.offset.is_none()
             && self.rot.is_none()
             && self.roundrect_ratio.is_none()
-            && self.clearance.is_none()
             && self.solder_mask_margin.is_none()
             && self.solder_paste_margin.is_none()
             && self.solder_paste_margin_ratio.is_none()
@@ -575,6 +573,49 @@ pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
     }
 }
 
+/// The pad edits that turn `base` into `edited`: for each pad of `edited` (the k-th that carries its number) that `base` has too, the type,
+/// shape, size, hole, rotation and corner ratio where they differ. What only one of the two has (a pad, a hole taken away) is left. The
+/// inverse of [`patched_footprint`] for those fields: a footprint that comes in from the clipboard with pads that are not the library's own
+/// (edited on the board it was copied from) keeps the difference as its own pad edits.
+pub fn pad_edits_between(base: &Footprint, edited: &Footprint) -> Vec<PadEdit> {
+    let mut seen: std::collections::BTreeMap<&str, u32> = std::collections::BTreeMap::new();
+    let mut out = Vec::new();
+    for pad in &edited.pads {
+        let nth = {
+            let n = seen.entry(pad.number.as_str()).or_insert(0);
+            *n += 1;
+            *n
+        };
+        let Some(i) = pad_index(base, &pad.number, nth) else { continue };
+        let was = &base.pads[i];
+        let mut e = PadEdit::none(&pad.number, nth);
+        if pad.kind != was.kind {
+            e.kind = Some(pad.kind);
+        }
+        if pad.shape != was.shape {
+            e.shape = Some(pad.shape);
+        }
+        if pad.size != was.size {
+            e.size = Some(pad.size);
+        }
+        // A hole is replaced whole (`apply_pad_edit`): given when the pad has one and it is not the library's.
+        if (pad.drill != was.drill || pad.drill_slot != was.drill_slot) && (pad.drill.is_some() || pad.drill_slot.is_some()) {
+            e.drill = pad.drill;
+            e.drill_slot = pad.drill_slot;
+        }
+        if pad.rot != was.rot {
+            e.rot = Some(pad.rot);
+        }
+        if pad.shape == PadShape::RoundRect && (pad.roundrect_ratio.unwrap_or(0.25) - was.roundrect_ratio.unwrap_or(0.25)).abs() > 1e-4 {
+            e.roundrect_ratio = pad.roundrect_ratio.or(Some(0.25));
+        }
+        if !e.is_empty() {
+            out.push(e);
+        }
+    }
+    out
+}
+
 /// `footprint` with the edits laid on its pads. An edit that names a pad the footprint does not have is skipped.
 pub fn patched_footprint(footprint: &Footprint, edits: &[PadEdit]) -> Footprint {
     let mut out = footprint.clone();
@@ -710,6 +751,28 @@ mod tests {
         assert_eq!(patched.pads[2].shape, PadShape::Oval);
         assert_eq!(patched.pads[1].size, (600, 600), "the other pad with that number is untouched");
         assert_eq!(footprint.pads[2].size, (600, 600), "the library footprint is not changed");
+    }
+
+    #[test]
+    fn the_edits_between_two_footprints_are_the_pads_that_differ_and_lay_back_on_the_first() {
+        let base = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000, 0)), pad("2", (2_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None };
+        let mut edited = base.clone();
+        edited.pads[1].shape = PadShape::Oval;
+        edited.pads[1].size = (900, 500);
+        edited.pads[2].kind = PadKind::ThroughHole;
+        edited.pads[2].drill_slot = Some((700, 1_200));
+        edited.pads[0].rot = 90_000;
+        let edits = pad_edits_between(&base, &edited);
+        assert_eq!(edits.iter().map(|e| (e.number.as_str(), e.nth)).collect::<Vec<_>>(), [("1", 1), ("2", 1), ("2", 2)], "the k-th pad with a number is told apart");
+        assert_eq!((edits[0].rot, edits[0].shape), (Some(90_000), None), "only what differs");
+        assert_eq!((edits[1].shape, edits[1].size), (Some(PadShape::Oval), Some((900, 500))));
+        assert_eq!((edits[2].kind, edits[2].drill, edits[2].drill_slot), (Some(PadKind::ThroughHole), None, Some((700, 1_200))));
+        assert_eq!(patched_footprint(&base, &edits).pads, edited.pads, "laid on the first footprint they make the second");
+        assert!(pad_edits_between(&base, &base).is_empty(), "the same footprint needs no edit");
+        // A pad the base lacks, or a hole taken away, is not an edit.
+        let mut other = base.clone();
+        other.pads.push(pad("3", (3_000, 0)));
+        assert!(pad_edits_between(&base, &other).is_empty());
     }
 
     #[test]
