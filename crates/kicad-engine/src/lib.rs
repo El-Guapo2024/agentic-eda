@@ -223,14 +223,24 @@ fn studio_appearance(work: &Path) -> Option<Value> {
 /// so kicad-cli judges against this design's own rules and not its
 /// hard-coded floors.
 fn write_project(work: &Path, stem: &str, design: &Design, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> {
+    write_project_with(work, stem, design, model, None)
+}
+
+/// [`write_project`], with the board's net classes in the project file when [`export_board`] moved them there (a class with a colour: see `eda_kicad::appearance`).
+fn write_project_with(work: &Path, stem: &str, design: &Design, model: &ConstraintModel, classes: Option<&eda_kicad::appearance::SplitClasses>) -> Result<(), Vec<CheckResult>> {
     let mut pro_text = export_kicad_pro_for(design, model);
     // What the person chose in the studio's Appearance panel (layers and objects shown, colours, presets, views) goes into the derived project as KiCad keeps it:
     // the net colours, layer presets and viewports in the project file, the rest in the project's local settings (`<stem>.kicad_prl`).
     let appearance = studio_appearance(work);
-    if let Some(a) = &appearance {
+    if appearance.is_some() || classes.is_some() {
         if let Ok(mut pro) = serde_json::from_str::<Value>(&pro_text) {
             let before = pro.clone();
-            eda_kicad::appearance::merge_into_project(&mut pro, a);
+            if let Some(a) = &appearance {
+                eda_kicad::appearance::merge_into_project(&mut pro, a);
+            }
+            if let Some(split) = classes {
+                eda_kicad::appearance::put_classes(&mut pro, split);
+            }
             if pro != before {
                 pro_text = format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default());
             }
@@ -268,9 +278,13 @@ fn export_board(design: &Design, model: &ConstraintModel, work: &Path, stem: &st
     work_dir(work)?;
     let date = today();
     let (pcb, map) = export_kicad_pcb_mapped(design, model, &ExportMeta { date: &date, title: stem })?;
+    // A net class with a colour (Appearance > Net Classes) can only reach KiCad in the project file, and KiCad reads the project's classes only when the board has
+    // none of its own: so then the classes move there whole, and kicad-cli judges the board by the same numbers (`eda_kicad::appearance::split_net_classes`).
+    let class_colors = studio_appearance(work).map(|a| eda_kicad::appearance::class_colors(&a)).unwrap_or_default();
+    let split = if class_colors.is_empty() { None } else { eda_kicad::appearance::split_net_classes(&pcb, &class_colors) };
     let path = work.join(format!("{stem}.kicad_pcb"));
-    write_file(&path, pcb)?;
-    write_project(work, stem, design, model)?;
+    write_file(&path, split.as_ref().map_or(pcb.as_str(), |s| s.pcb.as_str()))?;
+    write_project_with(work, stem, design, model, split.as_ref())?;
     Ok((path, map))
 }
 

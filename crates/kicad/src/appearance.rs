@@ -11,12 +11,15 @@
 //! kicad-cli does not read any of this for DRC or exports, so a missing or odd settings file cannot change a check: every function here ignores what it
 //! cannot read and returns what it can.
 //!
-//! Not written: the net classes' `pcb_color` (`net_settings.classes[].pcb_color`). A class defined in the project file as well as in the board's own
-//! `(net_class ...)` block is refused by KiCad when the board loads ("Duplicate NETCLASS name", `PCB_IO_KICAD_SEXPR_PARSER::parseNETCLASS`), and the board file
-//! has no place for a colour, so a class colour can only travel with the whole class definition -- see [`class_colors`] for how the engine uses them.
+//! The net classes' `pcb_color` (`net_settings.classes[].pcb_color`) needs more than a colour in the project file: when a board carries `(net_class ...)` blocks of its own
+//! KiCad takes its classes from them and throws the project's away (`BOARD::SetProject`: "If we loaded anything into [the board's netclasses] from a legacy board
+//! file then we want to transfer it over to the project netclasses list"), colours included. So when a class has a colour, the classes travel the way a current
+//! KiCad writes them -- the definitions and the net-to-class patterns in the project file, no `(net_class ...)` block in the board ([`split_net_classes`]) -- and
+//! kicad-cli judges the board by the same numbers either way (the engine's slow test compares the two).
 
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 /// `PCB_LAYER_ID_COUNT`: the width of a layer set.
 const LAYER_COUNT: usize = 128;
@@ -201,6 +204,195 @@ pub fn class_colors(appearance: &Value) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+// ------------------------------------------------------------------------------------------------------------------------------- net classes
+
+/// The board's `(net_class ...)` blocks, moved into the project file's format: `classes` for `net_settings.classes` (with each coloured class's `pcb_color`),
+/// `patterns` for `net_settings.netclass_patterns`, and `pcb` the board text without the blocks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitClasses {
+    pub pcb: String,
+    pub classes: Vec<Value>,
+    pub patterns: Vec<Value>,
+}
+
+/// One form of the board file's text, an atom or a list (strings are atoms with their quotes taken off).
+enum Sx {
+    Atom(String),
+    List(Vec<Sx>),
+}
+
+/// The byte ranges of the top-level forms inside the board's outer `(kicad_pcb ...)` that begin with `head`, each widened to take its whole lines.
+fn forms_named(text: &str, head: &str) -> Vec<Range<usize>> {
+    let b = text.as_bytes();
+    let (mut depth, mut i, mut in_str) = (0usize, 0usize, false);
+    let mut out = Vec::new();
+    let mut open: Option<usize> = None;
+    while i < b.len() {
+        let c = b[i];
+        if in_str {
+            match c {
+                b'\\' => i += 1,
+                b'"' => in_str = false,
+                _ => {}
+            }
+        } else {
+            match c {
+                b'"' => in_str = true,
+                b'(' => {
+                    depth += 1;
+                    if depth == 2 && text[i + 1..].starts_with(head) && text[i + 1 + head.len()..].starts_with(|ch: char| ch.is_whitespace()) {
+                        open = Some(i);
+                    }
+                }
+                b')' => {
+                    if depth == 2 {
+                        if let Some(start) = open.take() {
+                            let line_start = text[..start].rfind('\n').map_or(0, |n| n + 1);
+                            let end = i + 1 + usize::from(text[i + 1..].starts_with('\n'));
+                            // Only a form that has its line to itself leaves the file well-formed when it is cut out whole.
+                            if text[line_start..start].chars().all(char::is_whitespace) {
+                                out.push(line_start..end);
+                            }
+                        }
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+fn parse_sx(text: &str) -> Option<Sx> {
+    fn go(b: &[u8], i: &mut usize) -> Option<Sx> {
+        while *i < b.len() && b[*i].is_ascii_whitespace() {
+            *i += 1;
+        }
+        match *b.get(*i)? {
+            b'(' => {
+                *i += 1;
+                let mut items = Vec::new();
+                loop {
+                    while *i < b.len() && b[*i].is_ascii_whitespace() {
+                        *i += 1;
+                    }
+                    match *b.get(*i)? {
+                        b')' => {
+                            *i += 1;
+                            return Some(Sx::List(items));
+                        }
+                        _ => items.push(go(b, i)?),
+                    }
+                }
+            }
+            b'"' => {
+                *i += 1;
+                let mut s = Vec::new();
+                while *i < b.len() && b[*i] != b'"' {
+                    if b[*i] == b'\\' && *i + 1 < b.len() {
+                        *i += 1;
+                    }
+                    s.push(b[*i]);
+                    *i += 1;
+                }
+                *i += 1;
+                Some(Sx::Atom(String::from_utf8_lossy(&s).into_owned()))
+            }
+            _ => {
+                let start = *i;
+                while *i < b.len() && !b[*i].is_ascii_whitespace() && b[*i] != b')' && b[*i] != b'(' {
+                    *i += 1;
+                }
+                Some(Sx::Atom(String::from_utf8_lossy(&b[start..*i]).into_owned()))
+            }
+        }
+    }
+    let mut i = 0;
+    go(text.as_bytes(), &mut i)
+}
+
+/// Moves the board's net classes into the project file's form when one of them has a colour in `colors` (class name -> colour text); `None` when none does,
+/// and the board is left as it is. Each class keeps the numbers its block gave it (clearance, track width, via and micro via sizes, the pair sizes), the
+/// Default class goes last-precedence (`INT_MAX`), the others in the board's order; each `(add_net "N")` becomes a pattern `N` -> its class.
+pub fn split_net_classes(pcb: &str, colors: &BTreeMap<String, String>) -> Option<SplitClasses> {
+    let ranges = forms_named(pcb, "net_class");
+    let mut blocks: Vec<(Range<usize>, Vec<Sx>)> = Vec::new();
+    for r in ranges {
+        if let Some(Sx::List(items)) = parse_sx(pcb[r.clone()].trim()) {
+            blocks.push((r, items));
+        }
+    }
+    let name_of = |items: &[Sx]| -> Option<String> {
+        match items.get(1) {
+            Some(Sx::Atom(n)) => Some(n.clone()),
+            _ => None,
+        }
+    };
+    if !blocks.iter().any(|(_, items)| name_of(items).is_some_and(|n| colors.contains_key(&n))) {
+        return None;
+    }
+    let (mut classes, mut patterns) = (Vec::new(), Vec::new());
+    let mut priority = 0i64;
+    for (_, items) in &blocks {
+        let Some(name) = name_of(items) else { continue };
+        let default = name == "Default";
+        let mut class = Map::new();
+        class.insert("name".into(), json!(name));
+        class.insert("priority".into(), json!(if default { i64::from(i32::MAX) } else { priority }));
+        if !default {
+            priority += 1;
+        }
+        for item in items.iter().skip(3) {
+            let Sx::List(form) = item else { continue };
+            let (Some(Sx::Atom(key)), Some(Sx::Atom(value))) = (form.first(), form.get(1)) else { continue };
+            let json_key = match key.as_str() {
+                "clearance" => "clearance",
+                "trace_width" => "track_width",
+                "via_dia" => "via_diameter",
+                "via_drill" => "via_drill",
+                "uvia_dia" => "microvia_diameter",
+                "uvia_drill" => "microvia_drill",
+                "diff_pair_width" => "diff_pair_width",
+                "diff_pair_gap" => "diff_pair_gap",
+                "add_net" => {
+                    if !default {
+                        patterns.push(json!({ "pattern": value, "netclass": name }));
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            if let Ok(mm) = value.parse::<f64>() {
+                class.insert(json_key.into(), json!(mm));
+            }
+        }
+        if let Some(color) = colors.get(&name).filter(|_| !default) {
+            class.insert("pcb_color".into(), json!(color));
+        }
+        classes.push(Value::Object(class));
+    }
+    // Cut the blocks out back to front, so the ranges still hold.
+    let mut out = pcb.to_string();
+    for (r, _) in blocks.iter().rev() {
+        out.replace_range(r.clone(), "");
+    }
+    Some(SplitClasses { pcb: out, classes, patterns })
+}
+
+/// Puts a [`SplitClasses`] into a derived `.kicad_pro`: `net_settings.classes` and `net_settings.netclass_patterns`.
+pub fn put_classes(project: &mut Value, split: &SplitClasses) {
+    let Some(root) = project.as_object_mut() else { return };
+    let ns = root.entry("net_settings").or_insert_with(|| json!({}));
+    if !ns.is_object() {
+        *ns = json!({});
+    }
+    ns["meta"] = json!({ "version": 5 });
+    ns["classes"] = Value::Array(split.classes.clone());
+    ns["netclass_patterns"] = Value::Array(split.patterns.clone());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,5 +507,55 @@ mod tests {
     fn class_colors_are_read_by_name() {
         assert_eq!(class_colors(&sample()).get("usb").map(String::as_str), Some("rgb(9, 9, 9)"));
         assert!(class_colors(&json!({})).is_empty());
+    }
+
+    const BOARD: &str = "(kicad_pcb (version 20241229)\n\t(net 0 \"\")\n\t(net_class \"Default\" \"This is the default net class.\"\n\t\t(clearance 0.2)\n\t\t(trace_width 0.25)\n\t\t(via_dia 0.6)\n\t\t(via_drill 0.3)\n\t\t(uvia_dia 0.3)\n\t\t(uvia_drill 0.1)\n\t\t(add_net \"GND\")\n\t)\n\t(net_class \"usb\" \"\"\n\t\t(clearance 0.15)\n\t\t(trace_width 0.15)\n\t\t(via_dia 0.5)\n\t\t(via_drill 0.25)\n\t\t(uvia_dia 0.3)\n\t\t(uvia_drill 0.1)\n\t\t(diff_pair_width 0.12)\n\t\t(diff_pair_gap 0.18)\n\t\t(add_net \"USB_D+\")\n\t\t(add_net \"USB_D-\")\n\t)\n\t(footprint \"eda:0402\" (at 1 2 0))\n)\n";
+
+    fn colors(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    #[test]
+    fn a_board_with_no_coloured_class_is_left_alone() {
+        assert!(split_net_classes(BOARD, &colors(&[])).is_none());
+        assert!(split_net_classes(BOARD, &colors(&[("nope", "rgb(1, 2, 3)")])).is_none(), "a colour for a class the board does not have");
+        assert!(split_net_classes("(kicad_pcb (version 1))", &colors(&[("usb", "rgb(1, 2, 3)")])).is_none(), "a board with no classes at all");
+    }
+
+    #[test]
+    fn a_coloured_class_takes_the_classes_into_the_project_form() {
+        let s = split_net_classes(BOARD, &colors(&[("usb", "rgb(255, 160, 0)"), ("Default", "rgb(9, 9, 9)")])).unwrap();
+        assert!(!s.pcb.contains("net_class"), "{}", s.pcb);
+        assert_eq!(s.pcb, "(kicad_pcb (version 20241229)\n\t(net 0 \"\")\n\t(footprint \"eda:0402\" (at 1 2 0))\n)\n", "everything else is untouched");
+        assert_eq!(
+            s.classes,
+            vec![
+                json!({ "name": "Default", "priority": 2147483647, "clearance": 0.2, "track_width": 0.25, "via_diameter": 0.6, "via_drill": 0.3, "microvia_diameter": 0.3, "microvia_drill": 0.1 }),
+                json!({ "name": "usb", "priority": 0, "clearance": 0.15, "track_width": 0.15, "via_diameter": 0.5, "via_drill": 0.25, "microvia_diameter": 0.3, "microvia_drill": 0.1, "diff_pair_width": 0.12, "diff_pair_gap": 0.18, "pcb_color": "rgb(255, 160, 0)" }),
+            ],
+            "the Default class never takes a colour"
+        );
+        assert_eq!(s.patterns, vec![json!({ "pattern": "USB_D+", "netclass": "usb" }), json!({ "pattern": "USB_D-", "netclass": "usb" })], "the Default class's nets need no pattern");
+    }
+
+    #[test]
+    fn quoted_names_with_parentheses_and_escapes_do_not_confuse_the_scan() {
+        let board = "(kicad_pcb\n\t(net_class \"odd )(\\\" name\" \"\"\n\t\t(clearance 0.3)\n\t\t(add_net \"A(1)\")\n\t)\n\t(gr_text \"(net_class not a block\" (at 0 0))\n)\n";
+        let s = split_net_classes(board, &colors(&[("odd )(\" name", "rgb(1, 2, 3)")])).unwrap();
+        assert_eq!(s.classes[0]["name"], "odd )(\" name");
+        assert_eq!(s.patterns[0]["pattern"], "A(1)");
+        assert!(s.pcb.contains("(gr_text \"(net_class not a block\""), "text that merely says net_class stays: {}", s.pcb);
+        assert!(!s.pcb.contains("(clearance"));
+    }
+
+    #[test]
+    fn the_project_gets_the_classes_and_the_patterns() {
+        let s = split_net_classes(BOARD, &colors(&[("usb", "rgb(255, 160, 0)")])).unwrap();
+        let mut pro = json!({ "board": {}, "net_settings": { "net_colors": { "GND": "rgb(1, 2, 3)" } } });
+        put_classes(&mut pro, &s);
+        assert_eq!(pro["net_settings"]["classes"].as_array().unwrap().len(), 2);
+        assert_eq!(pro["net_settings"]["netclass_patterns"].as_array().unwrap().len(), 2);
+        assert_eq!(pro["net_settings"]["net_colors"]["GND"], "rgb(1, 2, 3)", "the net colours stay");
+        assert_eq!(pro["net_settings"]["meta"]["version"], 5);
     }
 }
