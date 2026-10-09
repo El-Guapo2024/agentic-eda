@@ -13,6 +13,7 @@
 //   viewports   a viewport saved, the view moved, the viewport recalled it (the status bar's zoom is the same again)
 //   nets        a net's eye hides its ratsnest set, a class's eye hides all its nets and the class is remembered, Show All brings them back
 //   file        the settings reach `appearance.json` (`local` and `project` sections), within a second or so
+//   end         the settings and the active layer are as they were (a preset moves the active layer), and no console error came up while it ran
 (async () => {
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const results = [];
@@ -56,6 +57,12 @@
   await tab("objects");
   check("the panel is on screen with its four tabs", document.querySelectorAll(".ap-root [data-tab]").length === 4);
   const startedWith = JSON.stringify(app());
+  // The active layer is not in the summary (a preset moves it: Back Layers makes B.Cu the active layer), so the Layers tab's marked row is read now and put back at the end.
+  const activeLayer = () => document.querySelector(".ap-root .ap-row.active[data-layer]")?.getAttribute("data-layer") ?? null;
+  await tab("layers");
+  const layerBefore = activeLayer();
+  await tab("objects");
+  const errorsBefore = __eda.errors().length;
 
   // ------------------------------------------------------------------------------------------------------------------------------ objects
   const eyes = [...document.querySelectorAll(".ap-row[data-object]")].map((r) => r.getAttribute("data-object"));
@@ -181,6 +188,14 @@
   await op({ op: "opacity", key: "zones", value: 0.6 });
   await sleep(1000);
   check("the settings are back as they were", JSON.stringify(app()) === startedWith, `${startedWith}\n${JSON.stringify(app())}`);
+  await tab("layers");
+  if (layerBefore && activeLayer() !== layerBefore) {
+    document.querySelector(`.ap-root .ap-row[data-layer="${layerBefore}"]`)?.click();
+    await sleep(250);
+  }
+  check("the active layer is the one it was", activeLayer() === layerBefore, `${layerBefore} -> ${activeLayer()}`);
+  await tab("objects");
+  check("no console errors while it ran", __eda.errors().length === errorsBefore, JSON.stringify(__eda.errors().slice(errorsBefore)));
 
   const failed = results.filter((r) => !r.ok);
   return { ok: failed.length === 0, failed: failed.map((r) => r.name), results };

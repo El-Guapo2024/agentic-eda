@@ -1076,5 +1076,6 @@ never touched): every tab and menu opened; a net colour and a class colour set t
 counted) and nowhere with None, and the three-state action and the contrast cycle went round; the eye of a net and of a class hid ratsnest lines and the class eye set its eight nets; opacity 0 on vias removed them, zones took 60 %; Back Layers flipped the board
 and left B.Cu only, Front Layers the other side, and a preset was saved, refused under a built-in name, asked before replacing, recalled with its objects and deleted; a viewport was saved, the view zoomed, the viewport recalled it; with
 the inactive layers hidden only the active layer drew; a footprint carried over two others showed the conflict shadow; after a reload every setting (colours, hidden nets and classes, presets, viewports, the active layer) came back from
-`appearance.json`, and the derived `.kicad/board.kicad_prl` and `.kicad_pro` held them. No console errors.
+`appearance.json`, and the derived `.kicad/board.kicad_prl` and `.kicad_pro` held them. No console errors. `e2e/appearance-panel.check.js` repeats the main steps (28 checks through the panel's own controls and
+`window.__eda`: objects, net colours, the two cycles, presets, viewports, net and class eyes, the file; paste it into the page of a scratch board).
 
