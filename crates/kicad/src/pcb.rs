@@ -343,10 +343,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     // ---- drawings: graphic shapes + free text ----
-    // Edge.Cuts stays `placement.outline`'s business, below, unchanged --
-    // a shape a caller adds on that layer is exported as-is (whatever its
-    // own layer says), never folded into the outline; see the report for
-    // how the two should relate once outline editing exists.
+    // A shape on Edge.Cuts is written like any other, as the line, arc, rectangle, circle, polygon or curve it is. Together with
+    // `placement.outline` (below) they are the board's Edge.Cuts items, the ones kicad-cli chains into its outline
+    // (`eda_model::outline::edge_cuts_shapes`).
     if let Some(drawings) = &design.drawings {
         let mut shapes: Vec<&Shape> = drawings.shapes.iter().collect();
         shapes.sort_by(|a, b| a.id().cmp(b.id()));
@@ -378,7 +377,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     // ---- board outline (Edge.Cuts) ----
-    if pl.outline.len() >= 2 {
+    // The polygon is a closed loop of straight sides, written as `gr_line`s. When the outline is the Edge.Cuts shapes (an imported board
+    // with arcs, circles, cutouts, ...), `placement.outline` is only their summary and is not written: they were, above.
+    if pl.outline.len() >= 2 && !eda_model::outline::outline_is_shapes(design) {
         let n = pl.outline.len();
         for i in 0..n {
             let a = pl.outline[i];
