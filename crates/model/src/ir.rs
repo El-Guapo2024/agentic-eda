@@ -2266,6 +2266,12 @@ pub struct DrawingsSection {
     /// absent in an older `design.json` reads as "nothing waived". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drc_exclusions: Vec<DrcExclusion>,
+    /// What was edited on the footprints of the board (the Footprint Properties and Pad Properties dialogs, the Properties panel): the
+    /// Reference and Value text, user fields, the attributes (DNP, BOM, position files ...) and per-pad overrides. One entry per footprint
+    /// that has any, sorted by id -- see [`crate::fp_edit`]. Additive: absent in an older `design.json` reads as "every footprint is as its
+    /// library has it". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_edits: Vec<crate::fp_edit::FootprintEdit>,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
