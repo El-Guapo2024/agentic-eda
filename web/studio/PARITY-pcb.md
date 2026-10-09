@@ -892,6 +892,7 @@ Before this section the pane was a read-only key/value summary of one footprint 
   are not modelled.
 - Text width and height are one size. A dimension's precision is a count of decimals (0 to 5), not KiCad's unit-dependent steps.
 - A group member selected by a click is the group (as KiCad's); enter the group to edit one member.
+- The old pane's Rotate and Delete buttons are gone (KiCad's pane has none): `R` and `Delete`, the context menu and the Edit menu do both, and Orientation is a row.
 - The coordinates are the page's: KiCad's "display origin" setting (page, auxiliary axis, grid origin) is not offered.
 - The grid is not in the Footprint Editor (it has no pane there yet, `PARITY-common.md`).
 
