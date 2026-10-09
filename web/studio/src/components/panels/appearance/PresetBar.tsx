@@ -8,8 +8,10 @@ import { MessageDialog, NameDialog, PickDialog } from "./shared";
 import { allPresets, currentViewport, presetList, savePresetOutcome, viewForViewport } from "../../../kicad-port/layerPresets";
 import { MAX_SCALE, MIN_SCALE } from "../../../kicad-port/view";
 
-const SAVE = "\u0000save";
-const DELETE = "\u0000delete";
+// The values of the two lists' options: a preset or viewport is `p:<name>` / `v:<name>` (a name is anything the person typed), the two commands are `cmd:save` and `cmd:delete`,
+// and the blank entry is "".
+const SAVE = "cmd:save";
+const DELETE = "cmd:delete";
 
 type Dlg = null | { kind: "save_preset" } | { kind: "overwrite"; name: string } | { kind: "refused"; message: string } | { kind: "delete_preset" } | { kind: "save_viewport" } | { kind: "delete_viewport" };
 
@@ -49,17 +51,17 @@ export function PresetBar() {
           id="ap-presets"
           className="ap-combo"
           title="Save and restore layer visibility combinations."
-          value={a.activePreset}
+          value={a.activePreset === "" ? "" : `p:${a.activePreset}`}
           onChange={(e) => {
             const v = e.target.value;
             if (v === SAVE) setDlg({ kind: "save_preset" });
             else if (v === DELETE) setDlg({ kind: "delete_preset" });
-            else op({ op: "select_preset", name: v });
+            else if (v.startsWith("p:")) op({ op: "select_preset", name: v.slice(2) });
           }}
         >
           {list.map((e, i) =>
             e.kind === "preset" ? (
-              <option key={e.preset.name} value={e.preset.name}>
+              <option key={e.preset.name} value={`p:${e.preset.name}`}>
                 {e.preset.name}
               </option>
             ) : e.kind === "separator" ? (
@@ -85,23 +87,24 @@ export function PresetBar() {
           id="ap-viewports"
           className="ap-combo"
           title="Save and restore view location and zoom."
-          value={viewport}
+          value={viewport === "" ? "" : `v:${viewport}`}
           onChange={(e) => {
             const v = e.target.value;
             if (v === SAVE) setDlg({ kind: "save_viewport" });
             else if (v === DELETE) setDlg({ kind: "delete_viewport" });
-            else {
-              const vp = a.viewports.find((x) => x.name === v);
+            else if (v.startsWith("v:")) {
+              const name = v.slice(2);
+              const vp = a.viewports.find((x) => x.name === name);
               const size = canvasSize();
               if (!vp || !size) return;
-              setViewport(v);
+              setViewport(name);
               const next = viewForViewport(vp, size.w, size.h);
               dispatch({ type: "SET_VIEW", view: { ...next, scale: Math.max(MIN_SCALE, Math.min(MAX_SCALE, next.scale)) } });
             }
           }}
         >
           {a.viewports.map((v) => (
-            <option key={v.name} value={v.name}>
+            <option key={v.name} value={`v:${v.name}`}>
               {v.name}
             </option>
           ))}

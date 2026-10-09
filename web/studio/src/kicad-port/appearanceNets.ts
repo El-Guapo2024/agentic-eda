@@ -33,8 +33,21 @@ export function listedNets(all: readonly string[]): string[] {
   return all.filter((n) => n !== "" && !n.startsWith("unconnected-(")).sort(byName);
 }
 
+const EMPTY: NetsContext = { copper: [], nets: [], defaultName: "Default", classes: [], classOf: () => "Default" };
+/** One context per board snapshot: the panel's tabs, the painter and the saver all ask for it. */
+const contexts = new WeakMap<BoardState, NetsContext>();
+
 export function netsContext(board: BoardState | null): NetsContext {
-  if (!board) return { copper: [], nets: [], defaultName: "Default", classes: [], classOf: () => "Default" };
+  if (!board) return EMPTY;
+  let hit = contexts.get(board);
+  if (!hit) {
+    hit = buildNetsContext(board);
+    contexts.set(board, hit);
+  }
+  return hit;
+}
+
+function buildNetsContext(board: BoardState): NetsContext {
   const rules = board.board_rules;
   const classes = rules?.net_classes ?? [];
   const defaultName = rules?.default_class?.name ?? "Default";
