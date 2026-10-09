@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-08T21:01:33.998681+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-09T22:44:53.309308+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -23,7 +23,7 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_qa_pcb_import_success_rate` | 99.5% | 99.5% |
 | `roundtrip_qa_sch_import_success_rate` | 100.0% | 100.0% |
-| `roundtrip_reexport_fidelity_rate` | 50.0% | 33.3% |
+| `roundtrip_reexport_fidelity_rate` | 50.0% | 50.0% |
 
 ## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
 
@@ -68,15 +68,16 @@ _Measured 2026-10-04._
 
 ### KiCad QA corpus: `import_kicad_pcb` on all 185 real boards
 
-_Measured 2026-10-08._
+_Measured 2026-10-09._
 
 - imported ok: 184/185
 - zones skipped (no polygon, or no copper layer): 12
 - track arcs kept as arcs: 10946
-- board-outline arcs approximated as straight segments: 122
+- Edge.Cuts items kept as shapes (arcs, circles, rectangles, curves, cutouts; none turned into chords): 513
 - non-rect pad shapes approximated as rect: 189
-- boards whose outline didn't close into a loop: 2
-- outline source breakdown: {'circle': 1, 'lines': 143, 'none': 37, 'poly': 3}
+- boards whose outline didn't close into a loop: 1
+- boards whose Edge.Cuts are malformed by KiCad's own test (`invalid_outline`): 2 ['pcbnew/issue18839.kicad_pcb', 'pcbnew/issue24078/issue24078.kicad_pcb']
+- outline source breakdown: {'lines': 36, 'none': 37, 'shapes': 111}
 
 Import failures (1):
 
@@ -133,7 +134,7 @@ Every KiCad action in `web/studio/src/kicad/actions.json` is classified against 
 |---|---:|---:|---:|---:|---:|---:|
 | pcbnew | 350 | 265 | 0 | 0 | 85 | 5 |
 | eeschema | 233 | 165 | 0 | 0 | 68 | 10 |
-| common | 183 | 143 | 0 | 0 | 40 | 4 |
+| common | 183 | 144 | 0 | 0 | 39 | 3 |
 
 Behavior (not just the presence of an action) is tracked per feature in `web/studio/PARITY-pcb.md` and the ranked, actionable gaps in `docs/parity/GAPS.md`.
 

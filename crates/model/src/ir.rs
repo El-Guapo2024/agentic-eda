@@ -2321,6 +2321,15 @@ pub struct DrawingsSection {
     /// library has it". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_edits: Vec<crate::fp_edit::FootprintEdit>,
+    /// `true` when the board's outline is made of the shapes on layer `Edge.Cuts` in [`Self::shapes`] and of nothing else: an
+    /// imported board whose Edge.Cuts have arcs, circles, rectangles, curves, cutouts or several loops, which a closed polygon of
+    /// straight edges cannot hold. `placement.outline` is then only their summary (the outer ring of the largest outline, curves
+    /// flattened -- `eda_drc::outline::refresh_outline_summary`), kept for the readers that want one polygon, and it is not written
+    /// to the `.kicad_pcb`. `false` (the default, and an intent's outline) leaves `placement.outline` itself an Edge.Cuts item and any
+    /// shape on Edge.Cuts one more of them, a cutout drawn on a board. See `eda_model::outline::edge_cuts_shapes`. Additive: absent in
+    /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outline_is_shapes: bool,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part

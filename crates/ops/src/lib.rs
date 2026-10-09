@@ -58,6 +58,7 @@ mod array;
 pub use array::ArrayGeometry;
 mod fp_edit;
 mod library_place;
+mod outline;
 mod pcb_groups;
 mod pcb_paste;
 mod pcb_props;
@@ -2050,8 +2051,10 @@ impl<'a> Board<'a> {
     /// Apply a command, or refuse it. A group keeps only the members that are still on the board afterwards (`pcb_groups.rs`).
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         let groups_before = self.group_universe();
+        let edge_before = outline::snapshot(&self.design);
         self.apply_cmd(cmd)?;
         self.tidy_groups(groups_before);
+        outline::refresh_if_changed(&mut self.design, edge_before);
         Ok(())
     }
 

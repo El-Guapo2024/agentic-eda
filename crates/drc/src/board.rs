@@ -338,7 +338,15 @@ pub struct DrcGraphicPad {
 
 pub struct DrcBoard {
     pub layers: Vec<String>,
+    /// `placement.outline`: the polygon a plain board's outline is, or the summary of the Edge.Cuts shapes that are it. Readers that
+    /// want the real outline -- arcs, cutouts, several outlines -- take [`Self::board_outline`] and [`Self::edge_cuts`].
     pub outline: Vec<Point>,
+    /// `BOARD::GetBoardPolygonOutlines( .., true )` of the Edge.Cuts: every outline with its holes, whether they are well-formed, and what
+    /// KiCad's outline handler would have been told (`crate::outline`).
+    pub board_outline: crate::outline::BoardOutline,
+    /// The board's Edge.Cuts items (`eda_model::outline::edge_cuts_shapes`): the items themselves, for what is measured to an edge -- the zone
+    /// fill's knockout, the router's obstacle -- as opposed to the polygon they chain into.
+    pub edge_cuts: Vec<IrShape>,
     pub pads: Vec<DrcPad>,
     pub tracks: Vec<DrcTrackSeg>,
     pub vias: Vec<DrcVia>,
@@ -560,6 +568,8 @@ fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
 
 pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let outline = design.placement.as_ref().map(|p| p.outline.clone()).unwrap_or_default();
+    let board_outline = crate::outline::board_outline(design, true);
+    let edge_cuts = eda_model::outline::edge_cuts_shapes(design);
     let layers = model.board.layers.clone();
 
     // "REF.PIN" -> net name, exactly `eda_kicad::pcb`'s own `pin_net` lookup.
@@ -837,7 +847,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         .enumerate()
         .filter_map(|(i, t)| footprint_text_shape(t).map(|shape| DrcCopperGraphic { id: format!("ctxt{i}"), desc: format!("Text '{}' on {}", t.text.replace('\n', " "), t.layer), layer: t.layer.clone(), pos: t.at, shape }))
         .collect();
-    DrcBoard { layers, outline, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
+    DrcBoard { layers, outline, board_outline, edge_cuts, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
 }
 
 impl DrcVia {

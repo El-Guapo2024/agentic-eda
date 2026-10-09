@@ -2309,6 +2309,50 @@ mod tests {
         assert_eq!(count(&dir, "clearance"), 0);
     }
 
+    /// A net class with a colour in the Appearance panel (`appearance.json`) reaches the derived project (slow tier): the classes move into the project file --
+    /// KiCad reads the project's classes only when the board has none of its own -- and kicad-cli judges the board by the same numbers as before.
+    #[test]
+    fn a_net_class_colour_moves_the_classes_into_the_project_and_kicad_cli_judges_the_board_the_same() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("class_colour");
+        setup(&dir);
+        two_close_tracks(&dir);
+        let count = |dir: &Path, kind: &str| drc_counts(dir).get(kind).copied().unwrap_or(0);
+        let (_, _, model) = load(&dir).unwrap();
+        let defaults = eda_model::rules::net_class_settings_of(&model.board);
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["V??".into()], track_width: Some(200), clearance: Some(400), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults.clone() } }, false, "ui").unwrap();
+        let plain = count(&dir, "clearance");
+        assert!(plain >= 1, "the class asks for 400 um, the tracks are closer");
+        let board_text = |dir: &Path| std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pcb")).unwrap();
+        assert!(board_text(&dir).contains("(net_class \"power\""), "without a colour the classes stay in the board file, as before");
+
+        // The class gets a colour: the board file has no classes of its own any more, the project has them -- and kicad-cli finds the same clearance violations.
+        std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":{},"project":{"netclass_colors":{"power":"rgb(255, 160, 0)"}}}"#).unwrap();
+        assert_eq!(count(&dir, "clearance"), plain, "the project's classes say what the board's did");
+        assert!(!board_text(&dir).contains("(net_class"), "KiCad would take the board's classes over the project's, colours and all");
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        let classes = project["net_settings"]["classes"].as_array().expect("the classes are in the project");
+        let power = classes.iter().find(|c| c["name"] == "power").expect("power");
+        assert_eq!(power["pcb_color"], "rgb(255, 160, 0)");
+        assert_eq!(power["clearance"], 0.4);
+        assert!(project["net_settings"]["netclass_patterns"].as_array().unwrap().iter().any(|p| p["pattern"] == "VCC" && p["netclass"] == "power"));
+
+        // The colour taken away: the classes are back in the board file.
+        std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":{},"project":{}}"#).unwrap();
+        assert_eq!(count(&dir, "clearance"), plain);
+        assert!(board_text(&dir).contains("(net_class \"power\""));
+        let project: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        assert!(project.get("net_settings").is_none());
+    }
+
     #[test]
     fn adding_copper_does_not_clear_existing_routing_but_moving_a_part_does() {
         let dir = scratch("copper_persists");

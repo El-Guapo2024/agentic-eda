@@ -10,6 +10,7 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BoardState, BoardText, Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, Pad, PadEditCmd, Part, Um, UserFieldCmd } from "../api/types";
+import { objectOn } from "./appearance";
 
 export const REFERENCE = "Reference";
 export const VALUE = "Value";
@@ -207,3 +208,20 @@ export function checkPadValues(pad: { kind: string; shape: string; size: [Um, Um
   if (pad.pasteRatio != null && (pad.pasteRatio < -0.5 || pad.pasteRatio > 1)) return "Solder paste ratio must be between -50% and 100%.";
   return null;
 }
+
+/**
+ * `PCB_FIELD::ViewGetLOD` and `PCB_SELECTION_TOOL::Selectable`: whether the Appearance panel's Objects rows let a footprint's field show -- the Reference needs
+ * References, the Value Values, every field Footprint Text, and the footprint's side must show (Footprints Front or Back). The field's own layer is the caller's.
+ * `forced` is the footprint being selected: its fields then show whatever the rows say (`m_ForceShowFieldsWhenFPSelected`, on by default) -- the painter's rule,
+ * not the selection tool's.
+ */
+export function fieldShownByObjects(layerVisible: Readonly<Record<string, boolean>>, part: Pick<Part, "side">, field: Pick<FieldInfo, "name">, forced = false): boolean {
+  if (forced) return true;
+  return (
+    objectOn(layerVisible, part.side === "bottom" ? "footprints_back" : "footprints_front") &&
+    objectOn(layerVisible, "footprint_text") &&
+    (field.name !== REFERENCE || objectOn(layerVisible, "footprint_references")) &&
+    (field.name !== VALUE || objectOn(layerVisible, "footprint_values"))
+  );
+}
+

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, FieldInfo, Pad, Part } from "../api/types";
-import { attrsOf, checkFieldRow, checkPadValues, drawAngle, editAttrsCmd, editFieldCmd, editPadCmd, fieldAsText, fieldById, fieldId, layoutOf, localAngleOf, newFieldLayout, newFieldName, nthOfPad, padEditOf, padEditWith, parseFieldId, userFieldsOf } from "./fpFields";
+import { attrsOf, checkFieldRow, checkPadValues, drawAngle, editAttrsCmd, editFieldCmd, editPadCmd, fieldAsText, fieldById, fieldId, layoutOf, localAngleOf, newFieldLayout, newFieldName, nthOfPad, padEditOf, padEditWith, parseFieldId, userFieldsOf, fieldShownByObjects } from "./fpFields";
 import { subItemIds } from "./pcbItems";
 
 const field = (over: Partial<FieldInfo> = {}): FieldInfo => ({
@@ -149,3 +149,21 @@ test("pad values: sizes, holes and ratios are refused with the dialog's words", 
   assert.equal(checkPadValues({ kind: "smd", shape: "round_rect", size: [600, 400], ratio: 0.7 }, fmt), "Corner radius ratio must be between 0 and 50%.");
   assert.equal(checkPadValues({ kind: "smd", shape: "rect", size: [600, 400], pasteRatio: -0.8 }, fmt), "Solder paste ratio must be between -50% and 100%.");
 });
+
+test("a field follows the Appearance panel's Objects rows: References for the Reference, Values for the Value, Footprint Text for all, the footprint's side for the lot", () => {
+  const ref = field();
+  const value = field({ id: "U1:Value", name: "Value" });
+  const vendor = field({ id: "U1:Vendor", name: "Vendor" });
+  const front = { side: "top" as const };
+  const back = { side: "bottom" as const };
+  const all = {};
+  assert.deepEqual([ref, value, vendor].map((f) => fieldShownByObjects(all, front, f)), [true, true, true], "a new board shows everything");
+  assert.deepEqual([ref, value, vendor].map((f) => fieldShownByObjects({ "obj:footprint_references": false }, front, f)), [false, true, true], "References hides the Reference alone");
+  assert.deepEqual([ref, value, vendor].map((f) => fieldShownByObjects({ "obj:footprint_values": false }, front, f)), [true, false, true], "Values hides the Value alone");
+  assert.deepEqual([ref, value, vendor].map((f) => fieldShownByObjects({ "obj:footprint_text": false }, front, f)), [false, false, false], "Footprint Text hides every field");
+  assert.equal(fieldShownByObjects({ "obj:footprints_back": false }, back, ref), false, "a footprint on a side that is off has no fields");
+  assert.equal(fieldShownByObjects({ "obj:footprints_back": false }, front, ref), true, "the other side is another row");
+  assert.equal(fieldShownByObjects({ "obj:footprints_front": false }, front, vendor), false);
+  assert.deepEqual([ref, value, vendor].map((f) => fieldShownByObjects({ "obj:footprint_text": false, "obj:footprints_front": false }, front, f, true)), [true, true, true], "the footprint selected shows its fields whatever the rows say");
+});
+

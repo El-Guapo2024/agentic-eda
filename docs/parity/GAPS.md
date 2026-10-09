@@ -38,6 +38,12 @@ doc and the code disagree, the code wins and the doc is named.
      still comes from the intent; item 9 (footprints on the board) has its overlay since 2026-10-09
      (`drawings.footprint_edits`: fields, attributes and pad edits, three verbs), beside the zone filler's
      (`drawings.zone_overrides`).**
+- **The board outline is KiCad's (2026-10-09; `PARITY-pcb.md` section 25).** Edge.Cuts are no longer one polygon. `eda_drc::outline` ports
+  `ConvertOutlineToPolygon` and `GetBoardPolygonOutlines` (chaining at 0.01 mm, curves at 0.005 mm, cutouts as holes, several outlines, malformed
+  ones reported); the importer keeps every arc, circle, rectangle, curve and cutout as a shape and the writer emits the same items, so the zone
+  filler, the router, the placement gates, the canvas, the 3D body and kicad-cli's edge clearance all work from the board's real edge. On 5
+  QA boards kicad-cli and the live check agree on which outlines are malformed. Measured in `crates/zone-filler/PARITY.md` (the `issue11814` notch row
+  23.4% to 0.2%, `issue5093`'s `/left/P14` 13.9% to 0.2%).
 - **Docs.** Action level: `UI-ACTIONS.md`. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 200 added since have not been compared) and
   `CODE-COMPARE-router.md`, `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and
@@ -83,6 +89,10 @@ New (the old "round trip" mention). **Mostly done (2026-10-08).** Hit: any board
 - Measured (`REPORT.md`, `scores.json`, 2026-10-08, kicad-cli 10.99 on `qa/data` of the KiCad sources): the re-export of a real board gives kicad-cli the same
   violation counts as the original on **6 of 12** boards (50.0%), up from 4 of 12 (33.3%) before the fixes; `bad_triangulation_case` (zones, isolated
   copper) and `fill_bad` now match. All 12 re-exports load.
+- Done (2026-10-09, the board outline): the Edge.Cuts of an imported board come back as the items they were (`gr_arc`, `gr_circle`, `gr_rect`,
+  `gr_poly`, `gr_curve` and `gr_line`), not as the closed polygon of straight sides the writer used to make of them, and a malformed outline stays
+  malformed in the export (a test asks kicad-cli before and after: `invalid_outline` is still reported; the plot of Edge.Cuts is the same).
+  A footprint's own Edge.Cuts become board-level shapes; KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))` and `(width W)` are read.
 - Missing: footprint-local graphics and texts (`fp_line`, `fp_circle`, `fp_text`) are imported into `drawings.footprint_extras`, which only the in-house DRC
   reads, and never written back (512 `fp_line`s on `complex_hierarchy`, hence its silkscreen and mask differences); a footprint that had no library is written
   as `eda:<name>`, so a project that turns `lib_footprint_issues` on gets a violation for a library that does not exist; barcodes, component classes and
@@ -183,7 +193,7 @@ Old #7. **Partial.** Hit: dragging, a route that starts or ends mid-segment, dif
   (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`): a shove toward the edge stops at it, and kicad-cli sees no `copper_edge_clearance`
   on eight shoves toward `mcu30`'s edge. Every `RoutingSettings` field is read (D16) and Interactive Router Settings has
   `dialog_pns_settings.cpp`'s rows. Dragging a via is a shove (D7), and a Walk around drag walks around. IR limits: a trapezoid or
-  custom pad reaches the IR as its rectangle, so the gate and the router measure that; an inner Edge.Cuts cutout is not an obstacle.
+  custom pad reaches the IR as its rectangle, so the gate and the router measure that. **The edge is every Edge.Cuts item (2026-10-09):** a cutout, a circle, a rectangle, an arc's chords and a curve's flattening are obstacles with the copper-to-edge clearance, as `syncGraphicalItem` makes them (`crates/pns/src/from_ir.rs`; test `an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge`).
 - Missing (`CODE-COMPARE-router.md`): a drag moves the nearer end instead of sliding the segment, and at any angle (D7: the segment
   slide, `dragCorner45`, the optimize-after-drag); a route cannot start or end mid-segment
   and Route From Other End works only before the first fix; a diff pair has no coupled shove or walkaround and no via; length tuning
@@ -212,13 +222,13 @@ Old #12, and the PCB parts of #14 and #25. **Mostly done (2026-10-08).** Hit: ev
 
 ### 9. Footprints on the board are not editable objects
 New (the residual of old #11; blocked #26). **Mostly done (2026-10-09).** Hit: every board (silkscreen cleanup, mounting holes). Blocks: no longer. WP6, size L (done except the last bullet).
-- Done (`PARITY-pcb.md` section 24; `crates/model/src/fp_edit.rs`, `crates/ops/src/fp_edit.rs`, `crates/kicad/src/fp_fields.rs`, `kicad-port/fpFields.ts`,
+- Done (`PARITY-pcb.md` section 26; `crates/model/src/fp_edit.rs`, `crates/ops/src/fp_edit.rs`, `crates/kicad/src/fp_fields.rs`, `kicad-port/fpFields.ts`,
   `components/{FootprintPropertiesDialog,BoardPadPropertiesDialog}.tsx`): a footprint's Reference and Value are fields with a position, size, thickness, layer, visibility, rotation, justification, mirror, bold, italic, keep upright and
   knockout; user fields can be added, renamed and deleted; the attributes (SMD, through hole or unspecified, not in schematic, exclude from position files, exclude from BOM, do not populate, exempt from the courtyard
   requirement) are per instance, and do not populate and exclude from BOM stay in step with the schematic symbol; pads carry their own type, shape, size, offset, rotation, corner radius, hole (round or oblong) and
   mask and paste margins. It is all `DrawingsSection::footprint_edits` (additive, serde defaults), three undoable verbs (`edit_board_footprint`, `edit_board_field`, `edit_board_pad`), written to the `.kicad_pcb` as `property` /
   `attr` / pad extras that kicad-cli loads and whose position and BOM exports honour (slow test `kicad_cli_loads_the_edited_board_and_its_position_and_bom_exports_honour_the_attributes`), and read back by the importer. A field is an
-  item of the board (`REF:Name`): selected, drawn, moved with M, dragged, moved with Move Exactly, turned, flipped. Editing is the Footprint Properties dialog (the field grid), the Pad Properties dialog and the Properties panel
+  item of the board (`REF:Name`): selected, drawn (following the Appearance panel's Footprint Text, References and Values rows), moved with M, dragged, moved with Move Exactly, turned, flipped. Editing is the Footprint Properties dialog (the field grid), the Pad Properties dialog and the Properties panel
   (item 10). Duplicate, Paste and Create Array take the edits with a copy. Board-only footprints (mounting holes, fiducials) are the "not in schematic" attribute, and a library footprint can be placed
   as a part of its own (Place Footprint, item 5). A pad's and a footprint's zone connection, relief gap, spoke width and angle and clearance are the zone filler's overlay (`drawings.zone_overrides`,
   `Cmd::SetFootprintZoneConnection` / `SetPadZoneOverrides`, item 13), and the same dialogs edit them: Footprint Properties and Pad Properties show the fields and the zone fields, one OK, one undo step;
@@ -306,7 +316,7 @@ New. **Done (2026-10-09)**, limits below. Hit: every schematic cleanup. Blocks: 
   `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: fill fidelity and settings
-Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L. **Fill fidelity improved 2026-10-08: the filler follows `ZONE_FILLER::Fill`, and of 208 fills on 17 KiCad QA boards 190 are within 1% of kicad-cli's area (105 before), 182 within 0.5% (99 before); what is left is custom pads, Edge.Cuts arcs the importer turns into chords, and the hatch rings.**
+Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L. **Fill fidelity improved 2026-10-08: the filler follows `ZONE_FILLER::Fill`, and of 208 fills on 17 KiCad QA boards 190 are within 1% of kicad-cli's area (105 before), 182 within 0.5% (99 before); what is left is custom pads and the hatch rings. The board outline (arcs, cutouts, open outlines) followed on 2026-10-09: the notch row of `issue11814` went from 23.4% to 0.2% and `issue5093`'s `/left/P14` from 13.9% to 0.2%.**
 - Exists: the filler (`crates/zone-filler`, `crates/drc/src/fill.rs`, `GET /api/fill`): zones fill from the highest priority down and are knocked out by each other's fills, islands go by
   connectivity and the zones below get the space back (iterative refill), thermal spokes are `buildThermalSpokes` (they turn with the pad, have its spoke angle, width and gap, and only the ones that
   reach copper stay), hatch fill (`addHatchFillTypeOnZone`) with thermal rings, chamfer and fillet corner smoothing, the board-edge clearance, and pad and footprint clearance overrides.
@@ -315,8 +325,7 @@ Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L. **Fill fidelity 
   editor's Pad Properties and Footprint Properties, read from and written to `.kicad_pcb` and `.kicad_mod`; Zone Properties edits the corner smoothing. Also: the full settings dialog
   (`components/ZoneDialog.tsx`); keepout knockouts; Fill and Unfill Selected, Merge, Duplicate onto Layer, the Priority actions and the Zone Manager (`PARITY-boardctl.md`); the importer reads zones (`import.rs::import_zones`).
 - Missing: custom pad shapes (the importer keeps the anchor: the 16 custom pads of `issue5093` leave 766% on one of its zones and the ring pads of `stonehenge` 11%; the largest gap left); the thermal rings of a hatched zone (0.6 to 0.9% XOR); `connect_nearby_polys`;
-  Edge.Cuts arcs (the importer keeps their chord: one `tessellate_arc` call in `import.rs::import_outline` would fix it, outside this item; the notch of `issue11814` costs its zones 2 to 23%), Edge.Cuts
-  cutouts and open outlines, mask-only NPTH holes, courtyards and net ties as knockouts; one layer per zone, no non-copper zones, no zone lock or border style in Zone Properties (the name is edited in the Properties panel); no Auto-Assign
+  mask-only NPTH holes (the relief hole at the end of a card-edge slot: `issue14559`'s plugs), courtyards and net ties as knockouts; one layer per zone, no non-copper zones, no zone lock or border style in Zone Properties (the name is edited in the Properties panel); no Auto-Assign
   Priorities; the Zone Manager has no preview; no footprint-level clearance, mask or paste fields in the footprint editor; a hatched zone with a fine pitch over a whole board is slow (minutes in a debug
   build on `issue5093`). Appendix C has the function table.
 - Port from: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `pcbnew/teardrop/`.
@@ -368,11 +377,15 @@ Old #27. **Mostly done on the board (2026-10-08); the schematic and the footprin
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
 
 ### 18. Appearance and display options
-New. **Partial.** Hit: every session. Blocks: no. WP3, size M.
-- Exists: layer visibility and opacity, high contrast, flip board; Objects tab with ratsnest, ratsnest mode, grid and pad numbers;
-  a net list with highlight (`components/panels/AppearancePanel.tsx`).
-- Missing: per-object visibility (tracks, vias, pads, zones, text and so on), net visibility and colours (net colours are recorded
-  unwired), a net classes tab, saved presets and viewports.
+New. **Mostly done (2026-10-09).** Hit: every session. Blocks: no. WP3, size M (done).
+- Done (`PARITY-pcb.md` section 24; `components/panels/AppearancePanel.tsx`, `components/panels/appearance/`, `kicad-port/appearance*.ts`, `layerPresets.ts`): KiCad's `APPEARANCE_CONTROLS`. The Objects tab lists 20 of
+  its 22 rows (tracks, vias, pads, zones, filled shapes, footprints front and back, values, references, footprint text, ratsnest, DRC warnings, errors and exclusions, anchors, locked item shadow, colliding
+  courtyards, board area shadow, drawing sheet, grid) with eyes and opacity sliders, and the painter and the pickers honour each (an object at opacity 0 is neither drawn nor picked); the Nets tab has per-net
+  ratsnest eyes, colours (on copper in the "All" mode, on the ratsnest, or nowhere: `pcbnew.Control.netColorMode`), KiCad's right-click menu and Net Display Options; the Net Classes tab has eyes, colours and its menu;
+  the Layers tab has the layer list's menu, "Inactive layers" Normal / Dim / Hide and the eight built-in layer presets plus saved ones; viewports save and recall. All of it is kept per project in `appearance.json`
+  (the `.kicad_prl` and `.kicad_pro` split, never `design.json`) and written into the derived KiCad project (`.kicad_prl`, net colours, presets, viewports, and a coloured net class's definition).
+- Missing: Images and Points rows (the board model has no reference images or snap points); Values shows nothing (no value text is drawn); the colour theme is not editable (swatches of layers and objects are read-only,
+  so "Use Color from Schematic" stays dimmed); the quick switchers on Ctrl+Tab and Alt+Tab; the selection filter is not in the saved settings; the drawing sheet starts off (KiCad: on) and has no zone letters.
 - Port from: `pcbnew/widgets/appearance_controls.cpp`.
 
 ### 19. Footprint and symbol editor leftovers
@@ -422,7 +435,7 @@ Old honorable mention. **Partial.** Backlog, size L.
   (`components/viewer3d/Viewer3D.tsx`, `GET /api/board.glb`). A footprint without a `(model ...)` gets KiCad's model for its package from an
   explicit table (`crates/model/src/footprint.rs::kicad_footprint_for`: 0402/0603/0805 passives and LEDs by reference prefix, SOT-23 and SOT-223, SOIC, TSSOP, MSOP, pin headers), and the export draws
   copper on a net the netlist lost instead of refusing the board. Missing: the Appearance manager's layer tree and stackup colours, models for
-  every other package, hover highlight, raytracing, camera animation, a zone toggle.
+  every other package, hover highlight, raytracing, camera animation, a zone toggle. The instant scene's board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts (2026-10-09: round corners, cutouts, several pieces; `kicad-port/pcbOutline.ts::boardOutlinePolygons`); NPTH holes are not cut out of it yet (`aIncludeNPTHAsOutlines`).
 
 ### 24. Item kinds the IR does not have
 New. **Open, deferred.** Backlog.
@@ -548,8 +561,8 @@ Each row below is measured against kicad-cli in `crates/zone-filler/PARITY.md` (
 | `refillZoneFromCache` | ported (`lib.rs::refill_zone_from_cache`): the pre-knockout fill is cached, and a zone that a higher-priority zone gave space back to is refilled from the cache against the fills as they now are |
 | `addKnockout` | partial: no custom-pad convex-hull mode |
 | `knockoutThermalReliefs`, `buildThermalSpokes` (`spokes.rs`) | ported: `DRC_ENGINE::EvalZoneConnection` (a pad's own connection over its footprint's over the zone's; "PTH only" thermal-relieves plated holes), the pad's relief gap and spoke width over the zone's (the width at least the zone's minimum and at most the pad's smaller side), the spoke angle (90 degrees for oval and rectangular pads, 45 otherwise, or the pad's own), spokes turned with the pad, circles built at 0 degrees and turned, the spoke ends, the test point and the mutual overlap, so only spokes that reach copper stay. Not ported: custom pads (their proxy spokes) |
-| `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions; **the board edge now** (`copper_edge_clearance` against the outer Edge.Cuts outline; no interior cutouts); a pad's or footprint's own clearance override replaces the net class's and zone's for that pad, floored at the board minimum (`DRC_ENGINE::EvalRules`) |
-| `ZONE::BuildSmoothedPoly` (`smoothed.rs`, `corner.rs`) | ported: same-net zones merged, the board outline, the minimum-width apron, and the chamfer and fillet corner smoothing |
+| `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions; **the board edge** (`copper_edge_clearance` from every Edge.Cuts item as `knockoutGraphicClearance` takes it: an arc's curve, a circle's ring, a cutout's rim, a solid shape's inside; `FillInput::edge_cuts`); a pad's or footprint's own clearance override replaces the net class's and zone's for that pad, floored at the board minimum (`DRC_ENGINE::EvalRules`) |
+| `ZONE::BuildSmoothedPoly` (`smoothed.rs`, `corner.rs`) | ported: same-net zones merged, the board outline (`GetBoardPolygonOutlines`: every outline with its cutouts, applied only when it is well-formed, `m_brdOutlinesValid`; `crates/drc/src/outline.rs`), the minimum-width apron, and the chamfer and fillet corner smoothing |
 | `connect_nearby_polys` | missing |
 | `fillNonCopperZone` | missing |
 | `buildHatchZoneThermalRings`, `addHatchFillTypeOnZone` (`hatch.rs`) | ported: thickness, gap, orientation, smoothing level and amount, minimum hole area, and the thermal rings round pads and vias that are connected to a hatched zone |

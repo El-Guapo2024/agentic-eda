@@ -43,7 +43,11 @@ fn gate_of(v: &Violation, check_name: &str) -> Option<CheckResult> {
         "warning" => CheckStatus::Warn,
         _ => return None,
     };
-    let mut ids: Vec<String> = v.items.iter().map(|it| it.id.clone().unwrap_or_else(|| it.description.clone())).collect();
+    // The board outline is dropped when another item is named: the polygon's sides (`outline`) and the Edge.Cuts shapes of an outline made of
+    // them (an arc, a circle, a rectangle: kicad-cli describes each "... on Edge.Cuts"), so a pad too close to the edge is located at the pad.
+    let on_edge = |it: &eda_kicad_engine::Item| it.description.contains("Edge.Cuts");
+    let has_copper = v.items.iter().any(|it| !on_edge(it));
+    let mut ids: Vec<String> = v.items.iter().filter(|it| !(has_copper && on_edge(it))).map(|it| it.id.clone().unwrap_or_else(|| it.description.clone())).collect();
     if ids.len() > 1 {
         ids.retain(|id| id != "outline");
     }
@@ -175,6 +179,17 @@ mod tests {
         let mut at: Vec<_> = route.iter().filter(|c| c.status == CheckStatus::Fail).map(|c| c.location.clone().unwrap_or_default()).collect();
         at.sort();
         assert_eq!(at, vec!["t1#0", "v1"], "{route:?}");
+    }
+
+    #[test]
+    fn an_edge_shape_that_is_not_the_polygon_outline_is_dropped_from_the_location_too() {
+        // An arc or a circle of the outline has a shape id of its own, not "outline"; the pad is still where the finding is.
+        let mut v = edge_violation("Pad 1 [GND] of R1 on F.Cu", "R1.1", true);
+        v.items[0] = Item { description: "Arc on Edge.Cuts".into(), pos: (0, 0), id: Some("shp_3f9a".into()), uuid: "e".into() };
+        let r = placement_from(&report(vec![v]));
+        let pad: Vec<_> = r.iter().filter(|c| c.check == "placement_pad_edge_clearance").collect();
+        assert_eq!(pad.len(), 1);
+        assert_eq!(pad[0].location.as_deref(), Some("R1.1"), "{pad:?}");
     }
 
     #[test]

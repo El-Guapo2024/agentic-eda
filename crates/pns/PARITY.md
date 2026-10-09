@@ -584,8 +584,15 @@ axis-aligned run** (one 2-point track each) side by side on one layer.
   (`Node::clearance_to`), as `syncGraphicalItem` and `Clearance( .., CT_EDGE_CLEARANCE )`
   do. A shove toward the edge stops at the clearance
   (`tests/board_edge.rs`; eight shoves toward `mcu30`'s top edge leave kicad-cli no
-  `copper_edge_clearance`). The IR keeps one closed outline: an inner cutout and a
-  footprint's own Edge.Cuts graphic are not obstacles. A walk around an edge in a
+  `copper_edge_clearance`). **Every Edge.Cuts item is an obstacle (2026-10-09):**
+  `from_ir::add_board_outline` takes the board's Edge.Cuts items (`eda_model::outline::edge_cuts_shapes`:
+  the polygon's sides and every shape on Edge.Cuts, a footprint's own graphic included, which the
+  importer makes a board-level shape) and puts a zero-width `Solid` on every side of each one's
+  effective shape (an arc's chords at KiCad's 0.005 mm, a circle's or a rectangle's ring, a curve's
+  flattening), as `syncGraphicalItem` does with `MakeEffectiveShapes()`; a cutout's rim keeps the
+  clearance like the outer edge (`tests/board_edge.rs`,
+  `an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge`). Not modelled: castellated pads'
+  edge exclusions. A walk around an edge in a
   shove may not grow past 2 x `WalkaroundHugLengthThreshold` of the line's own
   length (KiCad has no bound; with no room left the shortest clear walk is the long
   way round the whole outline).

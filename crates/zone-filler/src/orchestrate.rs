@@ -162,8 +162,7 @@ where
     }
 
     // Islands that lie mostly outside the board edge (`island_area >= 3 x min_thickness^2` and less than half inside).
-    if let Some(outline) = input.board_outline.as_ref().filter(|o| o.len() >= 3) {
-        let board = ShapePolySet::from_outline(outline.clone());
+    if let Some(board) = input.board_outline.as_ref().filter(|o| !o.is_empty()) {
         for (zi, fill) in fills.iter_mut().enumerate() {
             let min_area = 3.0 * (zones[zi].min_thickness as f64) * (zones[zi].min_thickness as f64);
             let mut j = fill.polys.len();
@@ -174,7 +173,7 @@ where
                     continue;
                 }
                 let mut island = ShapePolySet::from_outline(fill.polys[j][0].clone());
-                island.boolean_intersection(&board);
+                island.boolean_intersection(board);
                 if island.area() < area / 2.0 {
                     fill.polys.remove(j);
                 }

@@ -97,11 +97,14 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
         notes.outline_source,
         if notes.outline_open { ", did not close into a loop" } else { "" }
     );
+    if notes.outline_shapes > 0 {
+        eprintln!("  {} Edge.Cuts item(s) kept as shapes (arcs, circles, rectangles, curves and cutouts stay what they are)", notes.outline_shapes);
+    }
+    for e in &notes.outline_errors {
+        eprintln!("  board outline is malformed: {e}");
+    }
     if notes.zones_skipped > 0 {
         eprintln!("  {} zone(s)/pour(s) skipped -- not imported (see report for a proposed model shape)", notes.zones_skipped);
-    }
-    if notes.track_arcs_approximated > 0 {
-        eprintln!("  {} board-outline arc(s) approximated as short straight segments (the outline is a polyline)", notes.track_arcs_approximated);
     }
     if notes.non_rect_pad_shapes_approximated > 0 {
         eprintln!("  {} pad(s) with an unsupported shape (trapezoid/custom) approximated as rect", notes.non_rect_pad_shapes_approximated);

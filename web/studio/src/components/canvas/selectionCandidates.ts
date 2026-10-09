@@ -14,10 +14,11 @@
 // user clicked on a small item within a much larger one...").
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
 import { padIds } from "../../kicad-port/pcbItems";
-import { fieldAsText } from "../../kicad-port/fpFields";
-import { layerKeyOf } from "../../kicad-port/layerKey";
+import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
+import { objectOn } from "../../kicad-port/appearance";
+import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field";
 
@@ -123,10 +124,32 @@ export function padHitDistance(pad: Pad, x: number, y: number): number {
  */
 function layerSelectable(layer: string | null, layerVisible: Record<string, boolean>, activeLayer: string | null, highContrast: boolean): boolean {
   if (layer == null) return true;
-  if (layerVisible[layer] === false) return false;
-  if (highContrast && activeLayer != null && layer !== activeLayer) return false;
+  if (!layerIsVisible(layerVisible, layer)) return false;
+  // `activeLayer` is a state key ("f_silks"), an item's layer a KiCad name ("F.SilkS"): compare as keys.
+  if (highContrast && activeLayer != null && layerStateKey(layer) !== activeLayer) return false;
   return true;
 }
+
+/**
+ * `PCB_SELECTION_TOOL::Selectable`'s object tests: tracks, vias, pads and zones that the Objects tab has switched off, or turned to an opacity of 0,
+ * cannot be picked (kicad-port/appearance.ts carries that in `layerVisible`'s `obj:` keys). A footprint on a hidden side is out as well, with its pads.
+ */
+function objectSelectable(kind: SelectableKind, layerVisible: Record<string, boolean>): boolean {
+  switch (kind) {
+    case "track":
+      return objectOn(layerVisible, "tracks");
+    case "via":
+      return objectOn(layerVisible, "vias");
+    case "pad":
+      return objectOn(layerVisible, "pads");
+    case "zone":
+      return objectOn(layerVisible, "zones");
+    default:
+      return true;
+  }
+}
+
+const sideShown = (layerVisible: Record<string, boolean>, p: Pick<Part, "side">): boolean => objectOn(layerVisible, p.side === "bottom" ? "footprints_back" : "footprints_front");
 
 /**
  * Every selectable item whose hit-test is within `toleranceUm` of
@@ -152,7 +175,7 @@ export function collectSelectionCandidates(
   const locked = new Set(board.locked ?? []);
   const consider = (kind: SelectableKind, id: string, slopUm: number, areaUm2: number, layer: string | null, lockedId: string = id) => {
     if (slopUm > toleranceUm) return;
-    if (!filterAllows(filter, kind)) return;
+    if (!filterAllows(filter, kind) || !objectSelectable(kind, layerVisible)) return;
     // pcb_selection_tool.cpp itemPassesFilter: `!m_filter.lockedItems && aItem->IsLocked()` -> rejected.
     if (!filter.lockedItems && locked.has(lockedId)) return;
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
@@ -167,7 +190,7 @@ export function collectSelectionCandidates(
   // footprint spans many layers at once), matching GuessCandidate's
   // documented `layer: null` convention.
   for (const p of board.parts as Part[]) {
-    if (!p.placed || !p.courtyard) continue;
+    if (!p.placed || !p.courtyard || !sideShown(layerVisible, p)) continue;
     const [x0, y0, x1, y1] = p.courtyard;
     if (xUm < x0 || xUm > x1 || yUm < y0 || yUm > y1) continue;
     consider("part", p.ref, 0, Math.max((x1 - x0) * (y1 - y0), 1), null);
@@ -176,7 +199,7 @@ export function collectSelectionCandidates(
   // Pads: `PAD::IsLocked()` is the footprint's. A pad is a copper item on its footprint's side (a through-hole one is on every layer); its area is the
   // pad's own, so a click on it picks it over the footprint it sits in -- "if the user clicked on a small item within a much larger one, they want the small item".
   for (const p of board.parts as Part[]) {
-    if (!p.placed || !p.pads?.length) continue;
+    if (!p.placed || !p.pads?.length || !sideShown(layerVisible, p)) continue;
     const ids = padIds(p);
     p.pads.forEach((pad, i) => {
       consider("pad", ids[i]!, padHitDistance(pad, xUm, yUm), Math.max(pad.w * pad.h, 1), pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref);
@@ -187,11 +210,11 @@ export function collectSelectionCandidates(
   for (const p of board.parts as Part[]) {
     if (!p.placed || !p.fields?.length) continue;
     for (const f of p.fields) {
-      if (!f.visible || !f.text) continue;
+      if (!f.visible || !f.text || !fieldShownByObjects(layerVisible, p, f)) continue;
       const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
       const inside = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1;
       const d = inside ? 0 : Math.hypot(xUm - (x0 + x1) / 2, yUm - (y0 + y1) / 2) - Math.min(x1 - x0, y1 - y0) / 2;
-      consider("field", f.id, d, Math.max((x1 - x0) * (y1 - y0), 1), layerKeyOf(f.layer), p.ref);
+      consider("field", f.id, d, Math.max((x1 - x0) * (y1 - y0), 1), f.layer, p.ref);
     }
   }
   for (const t of board.routing?.tracks ?? []) {
@@ -220,6 +243,8 @@ export function collectSelectionCandidates(
     consider("zone", z.id, d, area, z.layer);
   }
   for (const s of board.drawings?.shapes ?? []) {
+    // A filled shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
+    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled && !objectOn(layerVisible, "shapes")) continue;
     consider("shape", s.id, shapeHitDistance(s, xUm, yUm), shapeArea(s), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
@@ -305,7 +330,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   const padHits: BoxSelectHit[] = [];
   const locked = new Set(board.locked ?? []);
   const consider = (kind: SelectableKind, id: string, itemBox: Box, layer: string | null, lockedId: string = id) => {
-    if (!filterAllows(filter, kind)) return;
+    if (!filterAllows(filter, kind) || !objectSelectable(kind, layerVisible)) return;
     if (!filter.lockedItems && locked.has(lockedId)) return; // itemPassesFilter, as above
 
     if (!layerSelectable(layer, layerVisible, activeLayer, highContrast)) return;
@@ -313,7 +338,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   };
 
   for (const p of board.parts as Part[]) {
-    if (!p.placed || !p.courtyard) continue;
+    if (!p.placed || !p.courtyard || !sideShown(layerVisible, p)) continue;
     consider("part", p.ref, p.courtyard, null);
   }
   for (const t of board.routing?.tracks ?? []) {
@@ -330,6 +355,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("zone", z.id, boxOf(z.outline), z.layer);
   }
   for (const s of board.drawings?.shapes ?? []) {
+    if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled && !objectOn(layerVisible, "shapes")) continue;
     consider("shape", s.id, shapeBoundingBox(s), s.layer);
   }
   for (const t of board.drawings?.texts ?? []) {
@@ -340,7 +366,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
     consider("dimension", dim.id, dimensionHit(dim, dim.text_at[0], dim.text_at[1]).box, dim.layer);
   }
   for (const p of board.parts as Part[]) {
-    if (!p.placed || !p.pads?.length) continue;
+    if (!p.placed || !p.pads?.length || !sideShown(layerVisible, p)) continue;
     const ids = padIds(p);
     p.pads.forEach((pad, i) => consider("pad", ids[i]!, [pad.x - pad.w / 2, pad.y - pad.h / 2, pad.x + pad.w / 2, pad.y + pad.h / 2], pad.th ? null : p.side === "bottom" ? "B.Cu" : "F.Cu", p.ref));
   }
@@ -349,9 +375,9 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   for (const p of board.parts as Part[]) {
     if (!p.placed || !p.fields?.length) continue;
     for (const f of p.fields) {
-      if (!f.visible || !f.text) continue;
+      if (!f.visible || !f.text || !fieldShownByObjects(layerVisible, p, f)) continue;
       if (!filterAllows(filter, "field") || (!filter.lockedItems && locked.has(p.ref))) continue;
-      if (!layerSelectable(layerKeyOf(f.layer), layerVisible, activeLayer, highContrast)) continue;
+      if (!layerSelectable(f.layer, layerVisible, activeLayer, highContrast)) continue;
       const { x0, y0, x1, y1 } = textBoundingBoxRotated(f);
       if (boxMatches([x0, y0, x1, y1], selBox, crossing)) fieldHits.push({ kind: "field", id: f.id });
     }

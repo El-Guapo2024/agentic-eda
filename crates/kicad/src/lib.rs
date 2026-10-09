@@ -68,6 +68,8 @@ pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, pin_kind_from_elec
 // The review workflow's share of the derived project: the waived DRC violations as KiCad's marker texts, and the per-check ERC severities.
 pub mod drc_exclusions;
 pub use pcb::effective_erc_severities;
+// The Appearance panel's share: the layers, objects, colours, presets and views the person chose, in the derived `.kicad_prl` and `.kicad_pro`.
+pub mod appearance;
 
 const STUB_MM: f64 = 1.27;
 

@@ -658,3 +658,23 @@ fn kicad_cli_zone_fill_feature_parity() {
         );
     }
 }
+
+/// The board outline in the fill: `issue11814`'s edge has a 3.2 mm semicircular notch (an Edge.Cuts arc), so a fill that takes the arc for its chord leaves
+/// copper kicad does not. Before the importer kept the arc this board's fills were 2 to 23% off on four zones; now every fill but the 0.005 mm^2 sliver zone
+/// and the two hatched ones (the hatch bars are a known gap, `PARITY.md`) is within 1.2% of kicad's area. Slow tier: kicad-cli fills the board too.
+#[test]
+fn kicad_cli_zone_fill_keeps_the_edge_clearance_from_an_arc() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let rows = check_board_imported(&cli, "issue11814.kicad_pcb");
+    println!("\n{}", parity_table(&rows));
+    assert!(rows.len() >= 15, "the board's fills were not compared: {} rows", rows.len());
+    let off: Vec<ParityRow> = rows.iter().filter(|r| r.kicad_area_mm2 > 0.1 && !r.net.contains("hatch") && r.area_pct_diff > 1.2).cloned().collect();
+    assert!(off.is_empty(), "a fill follows the notch's chord, not its arc, or drops a cutout:\n{}", parity_table(&off));
+}

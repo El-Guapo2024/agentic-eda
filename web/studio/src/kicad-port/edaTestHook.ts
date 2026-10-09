@@ -19,6 +19,7 @@
 // actions/useEdaTestHook.ts.
 import { isActionEnabledForTab } from "./actionTabGate";
 import { padIds } from "./pcbItems";
+import { DEFAULT_OPACITY, type Opacity } from "./appearance";
 
 // ------------------------------------------------------------------------------------------------------------------------------------ errors
 
@@ -316,6 +317,73 @@ export async function settle(deps: SettleDeps): Promise<"settled" | "timeout"> {
     }
   }
   return "timeout";
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------ appearance
+
+/** What the Appearance panel has set, as `__eda.state().appearance` reports it: only what differs from a new project, so a check reads what it changed. */
+export interface AppearanceSummary {
+  /** The objects switched off (the `VISIBILITY_LAYER` names) and the layers switched off (their state keys). */
+  hiddenObjects: string[];
+  hiddenLayers: string[];
+  opacity: Record<string, number>;
+  /** Inactive layers: normal, dimmed or hidden. */
+  contrast: "normal" | "dimmed" | "hidden";
+  /** Where net colours show: all, ratsnest (the default) or off; and which ratsnest lines: all, visible or none. */
+  netColorMode: string;
+  ratsnest: "all" | "visible" | "none";
+  netColors: Record<string, string>;
+  netclassColors: Record<string, string>;
+  hiddenNets: string[];
+  hiddenNetclasses: string[];
+  /** The preset the list shows ("" = the blank entry), the user's own, and the saved viewports. */
+  preset: string;
+  presets: string[];
+  viewports: string[];
+  flipped: boolean;
+}
+
+/** The studio fields `appearanceSummary` reads (structural, so this file keeps no React or store import). */
+export interface AppearanceSource {
+  appearance: {
+    visible: Record<string, boolean>;
+    opacity: Opacity;
+    contrastHidden: boolean;
+    netColorMode: string;
+    netColors: Record<string, string>;
+    netclassColors: Record<string, string>;
+    hiddenNetclasses: string[];
+    presets: { name: string }[];
+    activePreset: string;
+    viewports: { name: string }[];
+  };
+  layerVisible: Record<string, boolean>;
+  highContrast: boolean;
+  showRatsnest: boolean;
+  gridVisible: boolean;
+  bcx: { ratsnestMode: string; hiddenRatsnestNets: string[]; boardFlipped: boolean };
+}
+
+export function appearanceSummary(s: AppearanceSource): AppearanceSummary {
+  const objects = { ...s.appearance.visible, ratsnest: s.showRatsnest, grid: s.gridVisible };
+  const opacity: Record<string, number> = {};
+  for (const [k, v] of Object.entries(s.appearance.opacity)) if (v !== (DEFAULT_OPACITY as Record<string, number>)[k]) opacity[k] = v;
+  return {
+    hiddenObjects: Object.entries(objects).filter(([, on]) => !on).map(([k]) => k).sort(),
+    hiddenLayers: Object.entries(s.layerVisible).filter(([k, on]) => !on && !k.startsWith("obj:")).map(([k]) => k).sort(),
+    opacity,
+    contrast: !s.highContrast ? "normal" : s.appearance.contrastHidden ? "hidden" : "dimmed",
+    netColorMode: s.appearance.netColorMode,
+    ratsnest: !s.showRatsnest ? "none" : s.bcx.ratsnestMode === "visible" ? "visible" : "all",
+    netColors: { ...s.appearance.netColors },
+    netclassColors: { ...s.appearance.netclassColors },
+    hiddenNets: [...s.bcx.hiddenRatsnestNets].sort(),
+    hiddenNetclasses: [...s.appearance.hiddenNetclasses].sort(),
+    preset: s.appearance.activePreset,
+    presets: s.appearance.presets.map((p) => p.name),
+    viewports: s.appearance.viewports.map((v) => v.name),
+    flipped: s.bcx.boardFlipped,
+  };
 }
 
 /** The requests the hook waits for: the studio's own API calls, not its two polls (`/api/version`, `/api/view`), which never stop. */

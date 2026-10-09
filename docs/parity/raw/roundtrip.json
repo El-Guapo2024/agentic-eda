@@ -1,6 +1,6 @@
 {
   "measured_at": {
-    "corpus": "2026-10-08",
+    "corpus": "2026-10-09",
     "own": "2026-10-04",
     "reexport": "2026-10-08"
   },
@@ -302,15 +302,20 @@
     "import_failed": 1,
     "imported_ok": 184,
     "non_rect_pad_shapes_approximated": 189,
-    "outline_open": 2,
+    "outline_malformed": 2,
+    "outline_malformed_boards": [
+      "pcbnew/issue18839.kicad_pcb",
+      "pcbnew/issue24078/issue24078.kicad_pcb"
+    ],
+    "outline_open": 1,
+    "outline_shapes": 513,
     "outline_source_counts": {
-      "circle": 1,
-      "lines": 143,
+      "lines": 36,
       "none": 37,
-      "poly": 3
+      "shapes": 111
     },
     "total": 185,
-    "track_arcs_approximated": 122,
+    "track_arcs_approximated": 0,
     "track_arcs_kept": 10946,
     "zones_skipped": 12
   },
