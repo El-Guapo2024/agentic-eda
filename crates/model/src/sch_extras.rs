@@ -41,8 +41,16 @@ pub struct SchExtras {
 }
 
 impl SchExtras {
+    /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty) and no table of ERC severities. The
+    /// severities are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
+    pub fn writes_nothing(&self) -> bool {
+        self.is_empty() && self.erc_severities.is_empty()
+    }
+}
+
+impl SchExtras {
     pub fn is_empty(&self) -> bool {
-        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none() && self.erc_severities.is_empty()
+        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none()
     }
 
     /// True when `id` is locked.

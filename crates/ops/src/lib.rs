@@ -50,11 +50,11 @@ use std::sync::Arc;
 pub use pcb_edit::BooleanOp;
 
 pub mod board_setup;
+mod review;
 pub mod library_editors;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
-mod review;
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
 /// (`PushPinLength`/`PushPinNameSize`/`PushPinNumberSize`), folded into one

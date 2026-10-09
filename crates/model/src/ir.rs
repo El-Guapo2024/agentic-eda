@@ -215,7 +215,7 @@ pub struct SchematicSection {
     /// Drawn shapes, text boxes, rule areas, directive labels, locks and body styles -- see
     /// [`crate::sch_extras::SchExtras`]. Additive; empty (and not written) for every design that
     /// never used those tools.
-    #[serde(default, skip_serializing_if = "crate::sch_extras::SchExtras::is_empty")]
+    #[serde(default, skip_serializing_if = "crate::sch_extras::SchExtras::writes_nothing")]
     pub extras: crate::sch_extras::SchExtras,
     /// Accepted ("excluded") ERC findings -- `dialog_erc.cpp`'s own
     /// per-sheet `SCHEMATIC::RecordERCExclusions`. Sorted by (check,
