@@ -220,15 +220,19 @@ New. **Open.** Hit: every schematic cleanup. Blocks: no. WP1, size L.
   `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: fill fidelity and settings
-Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L.
-- Exists: the filler (`crates/zone-filler`, `crates/drc/src/fill.rs`, `GET /api/fill`) measured against kicad-cli at 6 of 8 fills
-  within 0.2% (`crates/zone-filler/PARITY.md`); the full settings dialog (`components/ZoneDialog.tsx`); keepout knockouts; island
-  removal; Fill and Unfill Selected, Merge, Duplicate onto Layer, the Priority actions and the Zone Manager (`PARITY-boardctl.md`);
-  the importer reads zones (`import.rs::import_zones`).
-- Missing: hatch fill falls back to solid (`zone-filler/src/lib.rs`); thermal spokes are four axis-aligned bars (`spokes.rs`);
-  no per-pad connection overrides, no `connect_nearby_polys`, no iterative refill; one layer per zone, no non-copper zones, no
-  corner smoothing, no zone name, lock or border style; no Auto-Assign Priorities; the Zone Manager has no preview; the
-  exporter ignores the settings (item 2). Appendix C has the function table.
+Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L. **Fill fidelity improved 2026-10-08: the filler follows `ZONE_FILLER::Fill`, and of 208 fills on 17 KiCad QA boards 190 are within 1% of kicad-cli's area (105 before), 182 within 0.5% (99 before); what is left is custom pads, Edge.Cuts arcs the importer turns into chords, and the hatch rings.**
+- Exists: the filler (`crates/zone-filler`, `crates/drc/src/fill.rs`, `GET /api/fill`): zones fill from the highest priority down and are knocked out by each other's fills, islands go by
+  connectivity and the zones below get the space back (iterative refill), thermal spokes are `buildThermalSpokes` (they turn with the pad, have its spoke angle, width and gap, and only the ones that
+  reach copper stay), hatch fill (`addHatchFillTypeOnZone`) with thermal rings, chamfer and fillet corner smoothing, the board-edge clearance, and pad and footprint clearance overrides.
+  Measured against kicad-cli, before and after, in `crates/zone-filler/PARITY.md`. A pad's or footprint's own connection (solid, thermal, PTH-only thermal, none), relief gap, spoke width, spoke angle and
+  clearance beat the zone's: set in Footprint Properties for a footprint on the board (`Cmd::SetPadZoneOverrides`, `Cmd::SetFootprintZoneConnection`, one undo step each) and in the footprint
+  editor's Pad Properties and Footprint Properties, read from and written to `.kicad_pcb` and `.kicad_mod`; Zone Properties edits the corner smoothing. Also: the full settings dialog
+  (`components/ZoneDialog.tsx`); keepout knockouts; Fill and Unfill Selected, Merge, Duplicate onto Layer, the Priority actions and the Zone Manager (`PARITY-boardctl.md`); the importer reads zones (`import.rs::import_zones`).
+- Missing: custom pad shapes (the importer keeps the anchor: the 16 custom pads of `issue5093` leave 766% on one of its zones and the ring pads of `stonehenge` 11%; the largest gap left); the thermal rings of a hatched zone (0.6 to 0.9% XOR); `connect_nearby_polys`;
+  Edge.Cuts arcs (the importer keeps their chord: one `tessellate_arc` call in `import.rs::import_outline` would fix it, outside this item; the notch of `issue11814` costs its zones 2 to 23%), Edge.Cuts
+  cutouts and open outlines, mask-only NPTH holes, courtyards and net ties as knockouts; one layer per zone, no non-copper zones, no zone name, lock or border style; no Auto-Assign
+  Priorities; the Zone Manager has no preview; no footprint-level clearance, mask or paste fields in the footprint editor; a hatched zone with a fine pitch over a whole board is slow (minutes in a debug
+  build on `issue5093`). Appendix C has the function table.
 - Port from: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `pcbnew/teardrop/`.
 
 ### 14. Snap, grid and the click-versus-drag rule
@@ -373,7 +377,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
   `eeschema/dialogs/dialog_{schematic_setup,erc}.cpp`, `pcbnew/zone_filler.cpp`, `pcbnew/zone.cpp`, `pcbnew/teardrop/`.
 - Order: (1) writer: keepouts, per-zone settings, dimensions, groups, locks, arcs, teardrops, with a round-trip test and a fresh `scores.json` (**done 2026-10-08**);
   (2) the `design.json` overlay for `BoardRules` and the Board Setup pages (**done 2026-10-08**); (3) severities and the DRC and ERC review workflow (Violation Severity is a
-  Board Setup page now; the DRC exclusions, per-check severities in the DRC and ERC dialogs, `--schematic-parity` and the empty DRC tabs are open); (4) zone filler fidelity.
+  Board Setup page now; the DRC exclusions, per-check severities in the DRC and ERC dialogs, `--schematic-parity` and the empty DRC tabs are open); (4) zone filler fidelity (**done 2026-10-08**; item 13 lists what is left).
 
 **WP6. Libraries, parts and footprints on the board** (items 5, 9, 19, 22). Size XL.
 - Files: `crates/kicad/src/{symbol_lib,footprint_lib}.rs`, `crates/cli/src/{studio,library_api}.rs`, `crates/model/src/{ir,footprint,symbol}.rs` (`FootprintInstance`,
@@ -427,16 +431,19 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 
 ## Appendix C. Zone filler against `pcbnew/zone_filler.cpp`
 
-Audited 2026-10-02 (`e45bf2a`) and re-checked 2026-10-07 for the rows marked *. The ported functions are not listed: `addHoleKnockout`,
+Audited 2026-10-02 (`e45bf2a`), re-audited 2026-10-08 after the fidelity work (item 13). The functions that were already ported are not listed: `addHoleKnockout`,
 `buildDifferentNetZoneClearances`, `subtractHigherPriorityZones`, `postKnockoutMinWidthPrune`, the rule-area knockouts (`FillKeepout`) and the `fillSingleZone` structure.
+Each row below is measured against kicad-cli in `crates/zone-filler/PARITY.md` (before and after).
 
 | KiCad function | `crates/zone-filler` |
 |---|---|
-| `Fill` | partial: no iterative refill; island removal is our own `apply_island_removal`, not `FillIsolatedIslandsMap` through connectivity |
+| `Fill` | ported (`orchestrate.rs::fill_board`): zones fill from the highest priority down (`ZONE::HigherPriority`: teardrop, priority, then the id where KiCad uses the UUID) and each is knocked out by the filled copper of the zones above it, not their outlines; the iterative refill. Not ported: the dependency waves run in parallel (one sorted pass here) and a zone on several layers (one layer per zone) |
+| `FillIsolatedIslandsMap` (`islands.rs`) | ported: an island is a fragment whose same-net copper cluster, through pads, tracks, vias and the zones of other layers, holds no pad; `ISLAND_REMOVAL_MODE` always / never / below area; islands mostly outside the board are dropped last |
+| `refillZoneFromCache` | ported (`lib.rs::refill_zone_from_cache`): the pre-knockout fill is cached, and a zone that a higher-priority zone gave space back to is refilled from the cache against the fills as they now are |
 | `addKnockout` | partial: no custom-pad convex-hull mode |
-| `knockoutThermalReliefs`, `buildThermalSpokes` * | simplified: four axis-aligned spokes from the pad's bounding box (`spokes.rs`); no per-pad overrides, spoke angle or circle and oval cases |
-| `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions, board outline only for edge clearance |
-| `connect_nearby_polys` * | missing |
+| `knockoutThermalReliefs`, `buildThermalSpokes` (`spokes.rs`) | ported: `DRC_ENGINE::EvalZoneConnection` (a pad's own connection over its footprint's over the zone's; "PTH only" thermal-relieves plated holes), the pad's relief gap and spoke width over the zone's (the width at least the zone's minimum and at most the pad's smaller side), the spoke angle (90 degrees for oval and rectangular pads, 45 otherwise, or the pad's own), spokes turned with the pad, circles built at 0 degrees and turned, the spoke ends, the test point and the mutual overlap, so only spokes that reach copper stay. Not ported: custom pads (their proxy spokes) |
+| `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions; **the board edge now** (`copper_edge_clearance` against the outer Edge.Cuts outline; no interior cutouts); a pad's or footprint's own clearance override replaces the net class's and zone's for that pad, floored at the board minimum (`DRC_ENGINE::EvalRules`) |
+| `ZONE::BuildSmoothedPoly` (`smoothed.rs`, `corner.rs`) | ported: same-net zones merged, the board outline, the minimum-width apron, and the chamfer and fillet corner smoothing |
+| `connect_nearby_polys` | missing |
 | `fillNonCopperZone` | missing |
-| `buildHatchZoneThermalRings`, `addHatchFillTypeOnZone` * | missing; hatch falls back to solid (`lib.rs`) |
-| `refillZoneFromCache` | missing |
+| `buildHatchZoneThermalRings`, `addHatchFillTypeOnZone` (`hatch.rs`) | ported: thickness, gap, orientation, smoothing level and amount, minimum hole area, and the thermal rings round pads and vias that are connected to a hatched zone |
