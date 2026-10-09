@@ -14,6 +14,8 @@ export interface ModelCounts {
 export interface Viewer3dSnapshot {
   /** The 3D tab is open. */
   open: boolean;
+  /** Milliseconds from the 3D tab opening to the first model asked for (the board's parts were there: the tab can open before the board's state arrives), or null while none is. */
+  requestedMs: number | null;
   /** Milliseconds from the 3D tab opening to the first part drawn with a real model, or null while none is. */
   firstModelMs: number | null;
   /** ... to the moment every model the board asked for was settled (ready, missing or failed). */
@@ -35,6 +37,7 @@ export interface Viewer3dSnapshot {
 
 const empty = (): Viewer3dSnapshot => ({
   open: false,
+  requestedMs: null,
   firstModelMs: null,
   allModelsMs: null,
   models: { requested: 0, loading: 0, ready: 0, missing: 0, failed: 0, triangles: 0 },
@@ -68,10 +71,11 @@ export const viewer3dProbe = {
     openedAt = null;
     changed();
   },
-  /** What the viewer shows right now; stamps the two times the first time each is true. */
-  update(patch: Partial<Omit<Viewer3dSnapshot, "firstModelMs" | "allModelsMs">>, now: number = performance.now()): void {
+  /** What the viewer shows right now; stamps the three times (first request, first model, every model) the first time each is true. */
+  update(patch: Partial<Omit<Viewer3dSnapshot, "requestedMs" | "firstModelMs" | "allModelsMs">>, now: number = performance.now()): void {
     state = { ...state, ...patch };
     if (openedAt !== null) {
+      if (state.requestedMs === null && state.models.requested > 0) state = { ...state, requestedMs: Math.round(now - openedAt) };
       if (state.firstModelMs === null && state.parts.asModels > 0) state = { ...state, firstModelMs: Math.round(now - openedAt) };
       const m = state.models;
       if (state.allModelsMs === null && m.requested > 0 && m.loading === 0) state = { ...state, allModelsMs: Math.round(now - openedAt) };

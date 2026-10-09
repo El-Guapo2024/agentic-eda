@@ -11,7 +11,7 @@
 // of every material of its models swapped for the selection colour (`OglSetMaterial`'s `aUseSelectedMaterial`); `pick` finds the part for a ray.
 import * as THREE from "three";
 import type { BoardState, Part } from "../../api/types";
-import { DEFAULT_STACK, inferKind, kindShown, modelWorldMatrix, type Model3dEntry, type ModelKind, type Stack } from "../../kicad-port/model3d";
+import { DEFAULT_STACK, inferKind, kindShown, modelsByUse, modelWorldMatrix, type Model3dEntry, type ModelKind, type Stack } from "../../kicad-port/model3d";
 import type { ModelCache, ModelRecord } from "./modelCache";
 import { buildPartPlaceholder, placeholderMaterials } from "./scene";
 
@@ -76,6 +76,8 @@ export class PartModels {
     this.last = { board, opts, stack };
     const seen = new Set<string>();
     const stats: PartStats = { total: 0, asModels: 0, asBoxes: 0, shown: 0 };
+    // The models the board uses are asked for most-used first: the server's first conversion run is small, so the packages most of the board is made of come in first.
+    for (const name of modelsByUse(board?.parts ?? [])) this.cache.request(name);
     for (const part of board?.parts ?? []) {
       if (!part.placed || !part.side || !part.at) continue;
       seen.add(part.ref);

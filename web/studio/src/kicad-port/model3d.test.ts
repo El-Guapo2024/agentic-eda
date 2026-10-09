@@ -16,6 +16,7 @@ import {
   mat4Translation,
   modelPlacementMatrix,
   modelUrl,
+  modelsByUse,
   modelWorldMatrix,
   modelWorldMatrixKicadFile,
   plainModel,
@@ -169,4 +170,20 @@ test("two model lists are the same when every model places and shows alike", () 
   assert.equal(sameModels(a, [{ ...plainModel("x.step"), rotate: [0, 0, 90] }]), false);
   assert.equal(sameModels(a, [{ ...plainModel("x.step"), opacity: 0.5 }]), false);
   assert.equal(sameModels(a, [plainModel("x.step"), plainModel("y.step")]), false);
+});
+
+test("the models are asked for most-used first, ties in first-use order, hidden models and unplaced parts left out", () => {
+  const m = (name: string, show = true) => ({ name, show });
+  const parts = [
+    { placed: true, models: [m("C")] },
+    { placed: true, models: [m("A"), m("hidden", false)] },
+    { placed: false, models: [m("U"), m("U")] },
+    { placed: true, models: [m("A")] },
+    { placed: true, models: [m("B")] },
+    { placed: true, models: [m("A"), m("B")] },
+    { placed: true },
+  ];
+  assert.deepEqual(modelsByUse(parts), ["A", "B", "C"], "A is used 3 times, B twice, C once");
+  assert.deepEqual(modelsByUse([{ placed: true, models: [m("X")] }, { placed: true, models: [m("Y")] }]), ["X", "Y"], "equal counts keep the order of first use");
+  assert.deepEqual(modelsByUse([]), []);
 });

@@ -197,6 +197,20 @@ export function modelUrl(name: string): string {
   return `/api/3dmodel?name=${encodeURIComponent(name)}`;
 }
 
+/**
+ * The models the placed parts show, the one most parts use first (ties in the order the parts first use them). The server converts what it is asked for in runs of
+ * kicad-cli and the first run is small (crates/cli/src/model3d_api.rs `FIRST_BATCH`), so the packages most of the board is made of are the first on screen.
+ */
+export function modelsByUse(parts: ReadonlyArray<{ placed?: boolean; models?: ReadonlyArray<Pick<Model3dEntry, "name" | "show">> }>): string[] {
+  const uses = new Map<string, number>();
+  for (const part of parts) {
+    if (!part.placed) continue;
+    for (const m of part.models ?? []) if (m.show) uses.set(m.name, (uses.get(m.name) ?? 0) + 1);
+  }
+  // Array.prototype.sort is stable: equal counts stay in first-use order.
+  return [...uses.keys()].sort((a, b) => uses.get(b)! - uses.get(a)!);
+}
+
 /** Whether two model lists place and show the same models (the viewer rebuilds a part's models only when they differ). */
 export function sameModels(a: readonly Model3dEntry[] | undefined, b: readonly Model3dEntry[] | undefined): boolean {
   if (a === b) return true;
