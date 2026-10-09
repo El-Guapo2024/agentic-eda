@@ -54,6 +54,9 @@ pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 mod symbol_lib;
 pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
 
+// KiCad's library tables (`sym-lib-table`, `fp-lib-table`): the file format, the path variables, how global and project tables are put together.
+pub mod library_table;
+
 mod bus;
 pub use bus::expand_bus_members;
 
