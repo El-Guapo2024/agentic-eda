@@ -54,8 +54,8 @@ export function useGlobalHotkeys() {
     // (F1, which off macOS is zoomIn's); Insert is the real non-Mac default (macOS keeps F1 from the table).
     add("Insert", "eeschema.InteractiveEdit.repeatDrawItem");
     add("Ctrl+G", "common.Interactive.group");
-    // (Ctrl+Shift+G is `ACTIONS::toggleGridOverrides` in KiCad's table and, wired now, in this one; KiCad leaves Ungroup without a key -- it stays in the Edit menu
-    // and the context menu.)
+    // (Ctrl+Shift+G is `ACTIONS::toggleGridOverrides` in KiCad's table and, wired now, in this one; KiCad leaves Ungroup without a key -- it stays on the toolbar
+    // and in the context menu.)
     return idx;
   }, []);
 

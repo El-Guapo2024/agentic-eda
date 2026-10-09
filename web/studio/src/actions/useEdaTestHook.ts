@@ -3,7 +3,7 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, dialogs, open }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], entered, counts, grid, gridOverrides, snap, dialogs, open, sheetPath, view }
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
 // This file is the page glue: the capture that has to start at load (console.error, window errors, the fetch wrapper that counts the studio's requests and reads the
@@ -65,6 +65,8 @@ export interface HookState {
   snap: SnapReport | null;
   dialogs: string[];
   open: string[];
+  /** The sheets the schematic is in, root first (`state.currentSheetPath`: the ids `GET /api/schematic?sheet=a/b` takes); empty at the root and on the other tabs. */
+  sheetPath: string[];
   /** The view of the canvas on screen (the schematic's or the board's): a point `(x, y)` of the sheet is at `(view.x + x * view.scale, view.y + y * view.scale)` pixels from the canvas's top-left corner; null on the other tabs. */
   view: { x: number; y: number; scale: number } | null;
 }
@@ -226,6 +228,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         snap: lastSnapReport(),
         dialogs: dialogTitles(),
         open: openNames(L),
+        sheetPath: studio.tab === "schematic" ? [...studio.currentSheetPath] : [],
         view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : null,
       };
     },

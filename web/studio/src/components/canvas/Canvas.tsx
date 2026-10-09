@@ -93,7 +93,7 @@ const PAN_BUTTONS = new Set([1, 2]);
 // kicad-port/dragThreshold.ts, tool_dispatcher.cpp -- more than 8 px of travel along an axis, or on macOS a motion after 300 ms held.)
 
 const LONG_PRESS_MS = 500;
-/** A click within this many board um of a pad/via/track-end counts as landing on it -- generous enough to be usable at a typical zoom without needing pixel-perfect precision, same idea as pcb_grid_helper's own anchor snapping (not ported here, see gridHelper.ts). */
+/** A click within this many board um of a pad/via/track-end counts as landing on it (which net a route click joins) -- generous enough to be usable at a typical zoom without needing pixel-perfect precision. Where the click goes is the snapping's (`PcbSnap.routePoint`, components/canvas/pcbSnap.ts). */
 const ANCHOR_SNAP_UM = 500;
 /** No per-board "default graphic line width" setting exists (board_rules only covers track/via) -- a plain 0.15mm default, same order of magnitude as KiCad's own out-of-the-box default (0.15-0.2mm silkscreen line width, by version/theme). */
 // (DEFAULT_STROKE_WIDTH_UM now lives in kicad-port/pcbParityState.ts -- incWidth/decWidth step state.pcbx.drawStrokeWidthUm from it.)

@@ -102,16 +102,9 @@ const LABEL_TOOL_SCOPE: Partial<Record<ToolId, LabelScope>> = {
 };
 
 /**
- * Every pin's resolved world-space tip, for the wire tool's "snap to a
- * pin when close" (sch_line_wire_bus_tool.cpp's own grid.BestSnapAnchor
- * on the GRID_CONNECTABLE grid, simplified here to a flat radius check,
- * same scope reduction as `SchematicView.tsx`'s header comment notes for
- * the move tool's own grid-only snap). Only symbols with real resolved
- * `lib_symbols` graphics contribute a pin -- a symbol still drawn as the
- * generic box (no `lib_id` resolved) has no world-space pin geometry
- * computed on this side yet (`layout.ts`'s box layout is local-space
- * only); a wire can still be drawn to one, it just won't snap-assist.
- * See PARITY-sch.md.
+ * Every pin's resolved world-space tip, for the junction analysis (`JUNCTION_HELPERS::AnalyzePoint`) and the wire tool's auto-finish on a pin. Only symbols with real
+ * resolved `lib_symbols` graphics contribute a pin -- a symbol still drawn as the generic box (no `lib_id` resolved) has no world-space pin geometry computed on this side
+ * yet (`layout.ts`'s box layout is local-space only). Where a click goes is the grid helper's (components/schematic/schSnap.ts), which has the same pins as anchors.
  */
 function pinSnapPoints(sch: Schematic): Array<[number, number]> {
   const pts: Array<[number, number]> = [];
@@ -408,12 +401,10 @@ export function SchematicView() {
   };
 
   /**
-   * The point a shape tool takes for the cursor: the grid (`GRID_GRAPHICS`) and the anchors of the grid helper, or for a rule area also a pin it is near (`GRID_CONNECTABLE`).
+   * The point a shape tool takes for the cursor: the grid of its category (`GRID_GRAPHICS`, `GRID_CONNECTABLE` for a rule area) and the anchors of the grid helper.
    * `live` is the render path: the point the last pointer event put the cursor at, without running the helper again.
    */
   const shapeSnap = (xUm: number, yUm: number, live = false): [number, number] => {
-    const pin = state.activeTool === "sch_rule_area" && sch ? nearestSnapPoint(pinSnapPoints(sch), xUm, yUm, 400 / state.schematicView.scale) : null;
-    if (pin) return pin;
     if (live) {
       const last = snap.lastPoint();
       if (last) return [last[0], last[1]];
@@ -530,8 +521,8 @@ export function SchematicView() {
         // (`GRID_GRAPHICS` instead of `GRID_WIRES` in `SCH_LINE_WIRE_BUS_TOOL::DrawSegments`).
         if (state.activeTool === "wire" || state.activeTool === "bus" || state.activeTool === "sch_line") {
           const isLine = state.activeTool === "sch_line";
-          const thresholdUm = 400 / state.schematicView.scale;
-          const snapped = (isLine ? null : nearestSnapPoint(pinSnapPoints(sch), wx, wy, thresholdUm)) ?? snapToGrid(wx, wy);
+          // `BestSnapAnchor` on the tool's grid (wires: `GRID_WIRES`, lines: `GRID_GRAPHICS`): a pin is reached through the grid it sits on, or as an anchor with the grid off.
+          const snapped = snapToGrid(wx, wy);
           const draw = state.drawState;
           if (draw?.kind !== "wire") {
             dispatch({ type: "SET_DRAW_STATE", draw: { kind: "wire", pts: [snapped] } });
@@ -593,19 +584,16 @@ export function SchematicView() {
         // TwoClickPlace): every one of these tools stays armed after a
         // click (same as the wire tool above) for chained placement --
         // real eeschema does too (Escape, or the hotkey again, is how you
-        // leave the tool). `L`/`P` pin-snap the same way the wire tool
-        // does (a label commonly tags a wire/pin; a power symbol's own
-        // `pin` field needs to land on a real pin to resolve at all, see
-        // `Cmd::AddPowerSymbol`'s doc) -- `T` is free text, plain grid
-        // snap only.
+        // leave the tool). Every one clicks where `BestSnapAnchor` puts the cursor, on the grid of its category (labels, power symbols and no-connects on the
+        // connectable grid, text on the text grid): a label or power symbol on a pin's end connects to it by position, as in KiCad.
         const labelScope = LABEL_TOOL_SCOPE[state.activeTool];
         if (labelScope) {
-          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          const snapped = snapToGrid(wx, wy);
           dispatch({ type: "SET_SCH_LABEL_PENDING", pending: { at: snapped, scope: labelScope } });
           return;
         }
         if (state.activeTool === "sch_power") {
-          const snapped = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          const snapped = snapToGrid(wx, wy);
           dispatch({ type: "SET_SCH_POWER_PENDING", pending: { at: snapped } });
           return;
         }
@@ -614,7 +602,7 @@ export function SchematicView() {
           return;
         }
         if (state.activeTool === "sch_no_connect") {
-          const [sx, sy] = nearestSnapPoint(pinSnapPoints(sch), wx, wy, 400 / state.schematicView.scale) ?? snapToGrid(wx, wy);
+          const [sx, sy] = snapToGrid(wx, wy);
           api.cmd({ op: "add_no_connect", at: { x: sx, y: sy } });
           return;
         }

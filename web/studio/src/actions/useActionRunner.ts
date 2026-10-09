@@ -1536,7 +1536,7 @@ export function useActionRunner() {
       // pcb_control.cpp PCB_CONTROL::SnapMode (magneticSnapToggle, Shift+S):
       // `settings.allLayers = !settings.allLayers`; SnapModeFeedback pops up
       // "Object Snapping: Active Layer / All Layers". The setting feeds
-      // collectAnchors' layer filter (kicad-port/gridSnap.ts).
+      // the board's snapping (`toPcbMagnetic( prefs, allLayers )`, components/canvas/Canvas.tsx -> pcbSnap.ts).
       m.set("common.Control.magneticSnapToggle", () => {
         const next = !state.magneticAllLayers;
         dispatch({ type: "SET_MAGNETIC_ALL_LAYERS", value: next });
