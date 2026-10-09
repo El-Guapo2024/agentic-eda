@@ -9,6 +9,7 @@
 //! the whole export for having no net), every zone got the board's clearance and width instead of
 //! its own, and dimensions and groups were not written at all.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_model::ir::{ArrowDirection, Dimension, DimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, Group, IslandRemovalMode, PadConnection, Zone, ZoneBorderStyle, ZoneSmoothing};
@@ -287,6 +288,43 @@ pub(crate) fn write_dimension(out: &mut String, d: &Dimension, a: &DimensionArgs
         .unwrap();
     }
     writeln!(out, "\t)").unwrap();
+}
+
+/// Every group of `groups`, one `(group ..)` each (see [`write_group`]), the group a member is written by that group's uuid:
+/// groups nest, and `written` says which uuids an item was written as. A group none of whose members is on the board is not
+/// written, and so is not named as a member of the group above it either.
+pub(crate) fn write_groups(out: &mut String, groups: &[&Group], written: &BTreeMap<String, Vec<String>>, uuid_of: &dyn Fn(&Group) -> String, locked: &dyn Fn(&str) -> bool) {
+    type Memo<'a> = BTreeMap<&'a str, Vec<String>>;
+    fn members_of<'a>(g: &'a Group, by_id: &BTreeMap<&'a str, &'a Group>, written: &BTreeMap<String, Vec<String>>, uuid_of: &dyn Fn(&Group) -> String, memo: &mut Memo<'a>, visiting: &mut Vec<&'a str>) -> Vec<String> {
+        if let Some(done) = memo.get(g.id.as_str()) {
+            return done.clone();
+        }
+        if visiting.contains(&g.id.as_str()) {
+            return Vec::new(); // a loop made by hand ends here
+        }
+        visiting.push(g.id.as_str());
+        let mut out = Vec::new();
+        for m in &g.member_ids {
+            if let Some(uuids) = written.get(m) {
+                out.extend(uuids.iter().cloned());
+            } else if let Some(inner) = by_id.get(m.as_str()).copied() {
+                if !members_of(inner, by_id, written, uuid_of, memo, visiting).is_empty() {
+                    out.push(uuid_of(inner));
+                }
+            }
+        }
+        visiting.pop();
+        memo.insert(g.id.as_str(), out.clone());
+        out
+    }
+    let by_id: BTreeMap<&str, &Group> = groups.iter().map(|g| (g.id.as_str(), *g)).collect();
+    let mut sorted: Vec<&Group> = groups.to_vec();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    let (mut memo, mut visiting) = (Memo::new(), Vec::new());
+    for g in sorted {
+        let members = members_of(g, &by_id, written, uuid_of, &mut memo, &mut visiting);
+        write_group(out, g, &uuid_of(g), locked(&g.id), members);
+    }
 }
 
 /// `PCB_IO_KICAD_SEXPR::format( const PCB_GROUP* )`: a name, a uuid and the sorted uuids of the

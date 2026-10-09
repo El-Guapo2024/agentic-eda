@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
 
-use crate::pcb_items::{write_dimension, write_group, write_zone, DimensionArgs, ZoneArgs};
+use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{fmt_mm_f, mm, sexpr_str};
 
 /// [`export_kicad_pcb`], also returning every exported item's KiCad uuid
@@ -395,13 +395,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // ---- groups ---- written last, as KiCad does: a group names its members by uuid, and the parser
     // resolves them once every item has been read.
     if let Some(drawings) = &design.drawings {
-        let mut groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
-        groups.sort_by(|a, b| a.id.cmp(&b.id));
-        for g in &groups {
-            let members: Vec<String> = g.member_ids.iter().filter_map(|m| written.get(m)).flatten().cloned().collect();
-            let uuid = crate::duid_for(&format!("group:{}", g.id), &g.id);
-            write_group(&mut out, g, &uuid, is_locked(&g.id), members);
-        }
+        let groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
+        write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
     }
 
     writeln!(out, ")").unwrap();
@@ -1533,6 +1528,47 @@ mod tests {
         for t in brt.tracks.iter().filter(|t| t.net == "GND") {
             assert!(groups[0].member_ids.contains(&t.id), "both segments of the track are members");
         }
+    }
+
+    #[test]
+    fn a_group_inside_a_group_is_written_by_its_uuid_and_read_back_nested() {
+        use eda_model::ir::{DrawingsSection, Group, Point};
+        let (mut design, model) = fixture();
+        let rt = design.routing.as_mut().unwrap();
+        rt.vias.push(Via { id: String::new(), net: "VIN".into(), at: Point { x: 8_000, y: 8_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        rt.vias.push(Via { id: String::new(), net: "GND".into(), at: Point { x: 12_000, y: 12_000 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        design.assign_missing_ids();
+        let rt = design.routing.as_ref().unwrap();
+        let (track_id, via_a, via_b) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.vias[1].id.clone());
+        let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|m| m.to_string()).collect() };
+        design.drawings = Some(DrawingsSection {
+            groups: vec![
+                group("grp_a_outer", "outer", &["U1", "grp_b_middle"]),
+                group("grp_b_middle", "middle", &["C1", "grp_c_inner"]),
+                group("grp_c_inner", "inner", &[via_a.as_str(), track_id.as_str()]),
+                // nothing of it is on the board: not written, and not named by the group above it either
+                group("grp_d_ghost", "ghost", &["no such item", "nor this one"]),
+                group("grp_e_holder", "holder", &[via_b.as_str(), "grp_d_ghost"]),
+            ],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(group ").count(), 4, "outer, middle, inner and the holder; the ghost is not written:\n{out}");
+        let block = |name: &str| out.split("\t(group ").skip(1).find(|g| g.starts_with(&format!("\"{name}\""))).unwrap_or_else(|| panic!("no group {name}")).to_string();
+        let uuids_in = |block: &str| block.split("(members").nth(1).unwrap().matches('"').count() / 2;
+        assert_eq!(uuids_in(&block("outer")), 2, "U1 and the middle group: {}", block("outer"));
+        assert_eq!(uuids_in(&block("holder")), 1, "the via alone: {}", block("holder"));
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let dr = back.drawings.as_ref().unwrap();
+        let by_name = |n: &str| dr.groups.iter().find(|g| g.name == n).unwrap_or_else(|| panic!("no group {n} in {:?}", dr.groups));
+        let (outer, middle, inner) = (by_name("outer"), by_name("middle"), by_name("inner"));
+        let brt = back.routing.as_ref().unwrap();
+        assert!(outer.member_ids.contains(&"U1".to_string()) && outer.member_ids.contains(&middle.id), "{outer:?}");
+        assert!(middle.member_ids.contains(&"C1".to_string()) && middle.member_ids.contains(&inner.id), "{middle:?}");
+        assert!(inner.member_ids.contains(&brt.tracks[0].id) && inner.member_ids.iter().any(|m| brt.vias.iter().any(|v| &v.id == m)), "{inner:?}");
+        assert!(!dr.groups.iter().any(|g| g.name == "holder"), "a group of one item is dropped on the way in: {:?}", dr.groups);
+        assert_eq!(dr.group_leaves(&outer.id).len(), 4, "U1, C1, the track and a via: {:?}", dr.group_leaves(&outer.id));
     }
 
     #[test]

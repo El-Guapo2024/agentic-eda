@@ -23,7 +23,7 @@ use eda_model::ir::{Design, Dimension, FootprintInstance, Group, LabelSide, Mill
 use eda_model::{CheckResult, ConstraintModel, Footprint};
 
 use crate::pcb::{write_footprint, write_layers, write_shape, write_text};
-use crate::pcb_items::{write_dimension, write_group, write_zone, DimensionArgs, ZoneArgs};
+use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{duid, mm, sexpr_str};
 
 /// What a clipboard holds, in the clipboard's own coordinates (the copy's reference point is the origin) and with ids of
@@ -84,6 +84,9 @@ pub enum ClipRef {
     Text(usize),
     Dimension(usize),
     Footprint(usize),
+    /// A group inside the group (`PCB_GROUP` is an item like any other): the position in [`Clipboard::groups`]. Inner groups are
+    /// listed before the groups that hold them.
+    Group(usize),
 }
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
@@ -136,17 +139,28 @@ impl<'a> Picked<'a> {
         true
     }
 
+    /// A group and everything below it: its items, and the groups it holds with theirs.
+    fn add_group(&mut self, design: &'a Design, g: &'a Group, seen: &mut BTreeSet<String>) {
+        if !seen.insert(g.id.clone()) {
+            return;
+        }
+        self.groups.push(g);
+        for m in &g.member_ids {
+            match design.drawings.as_ref().and_then(|d| d.group(m)) {
+                Some(inner) => self.add_group(design, inner, seen),
+                None => {
+                    self.add_item(design, m, seen);
+                }
+            }
+        }
+    }
+
     fn resolve(design: &'a Design, ids: &[String]) -> Result<Picked<'a>, Vec<CheckResult>> {
         let mut out = Picked::default();
         let mut seen = BTreeSet::new();
         for id in ids {
-            if let Some(g) = design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| &g.id == id)) {
-                if seen.insert(g.id.clone()) {
-                    out.groups.push(g);
-                    for m in &g.member_ids {
-                        out.add_item(design, m, &mut seen);
-                    }
-                }
+            if let Some(g) = design.drawings.as_ref().and_then(|d| d.group(id)) {
+                out.add_group(design, g, &mut seen);
             } else if !out.add_item(design, id, &mut seen) {
                 return Err(fail("clipboard.unknown_item", id, "no placed part, track, via, zone, shape, text, dimension or group with this id"));
             }
@@ -273,10 +287,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
         written.entry(d.id.clone()).or_default().push(uuid);
     }
     // Groups last, as KiCad writes them: a group names its members by uuid, and the parser resolves them once every item is read.
-    for g in &picked.groups {
-        let members: Vec<String> = g.member_ids.iter().filter_map(|m| written.get(m)).flatten().cloned().collect();
-        write_group(&mut out, g, &duid(&format!("clip:group:{}", g.id)), false, members);
-    }
+    write_groups(&mut out, &picked.groups, &written, &|g| duid(&format!("clip:group:{}", g.id)), &|_| false);
     writeln!(out, ")").unwrap();
     Ok(out)
 }
@@ -334,12 +345,14 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
         });
     }
     if let Some(dr) = &design.drawings {
+        // The importer lists an inner group before the group that holds it, so a group's position is known by then.
+        let mut group_index: BTreeMap<&str, usize> = BTreeMap::new();
         for g in &dr.groups {
             let members: Vec<ClipRef> = g
                 .member_ids
                 .iter()
                 .filter_map(|m| {
-                    clip.tracks
+                    group_index.get(m.as_str()).copied().map(ClipRef::Group).or_else(|| clip.tracks
                         .iter()
                         .position(|t| &t.id == m)
                         .map(ClipRef::Track)
@@ -348,9 +361,10 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
                         .or_else(|| clip.shapes.iter().position(|s| s.id() == m).map(ClipRef::Shape))
                         .or_else(|| clip.texts.iter().position(|t| &t.id == m).map(ClipRef::Text))
                         .or_else(|| clip.dimensions.iter().position(|d| &d.id == m).map(ClipRef::Dimension))
-                        .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint))
+                        .or_else(|| fp_index.get(m).copied().map(ClipRef::Footprint)))
                 })
                 .collect();
+            group_index.insert(g.id.as_str(), clip.groups.len());
             clip.groups.push(ClipGroup { name: g.name.clone(), members });
         }
     }
@@ -501,6 +515,28 @@ mod tests {
         let kinds: Vec<&str> = clip.groups[0].members.iter().map(|m| match m { ClipRef::Shape(_) => "shape", ClipRef::Text(_) => "text", ClipRef::Zone(_) => "zone", _ => "other" }).collect();
         assert_eq!(kinds.len(), 3);
         assert!(kinds.contains(&"shape") && kinds.contains(&"text") && kinds.contains(&"zone"), "{kinds:?}");
+    }
+
+    #[test]
+    fn a_group_that_holds_a_group_copies_and_pastes_back_nested() {
+        let (mut design, model) = fixture();
+        let dr = design.drawings.as_mut().unwrap();
+        dr.groups = vec![
+            Group { id: "grp_outer".into(), name: "outer".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()] },
+            Group { id: "grp_inner".into(), name: "inner".into(), member_ids: vec!["shp_a".into(), "zone_a".into()] },
+        ];
+        // Copying the outer group takes the inner group and what is in it along (`PCB_GROUP::DeepClone`).
+        let text = export_pcb_clipboard(&design, &model, &ids(&["grp_outer"]), p(100_000, 100_000)).unwrap();
+        assert_eq!(text.matches("\t(group ").count(), 2, "{text}");
+        let clip = parse_pcb_clipboard(&text).unwrap();
+        assert_eq!((clip.shapes.len(), clip.texts.len(), clip.zones.len()), (1, 1, 1), "the inner group's items travel too");
+        assert_eq!(clip.groups.len(), 2);
+        let inner = clip.groups.iter().position(|g| g.name == "inner").unwrap();
+        let outer = clip.groups.iter().position(|g| g.name == "outer").unwrap();
+        assert!(inner < outer, "an inner group is listed before the group that holds it");
+        assert!(clip.groups[outer].members.contains(&ClipRef::Group(inner)), "{:?}", clip.groups[outer].members);
+        assert_eq!(clip.groups[outer].members.len(), 2);
+        assert_eq!(clip.groups[inner].members.len(), 2);
     }
 
     #[test]

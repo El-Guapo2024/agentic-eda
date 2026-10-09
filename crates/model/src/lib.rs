@@ -9,6 +9,7 @@ pub mod erc_checks;
 pub mod floorplan;
 pub mod footprint;
 pub mod gensym;
+mod groups;
 pub mod ir;
 pub mod kicad_font;
 pub mod kicad_geom;

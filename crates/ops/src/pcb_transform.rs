@@ -125,18 +125,14 @@ impl Targets {
     }
 }
 
-/// The placed footprints `ids` name, directly or as members of a group they name.
+/// The placed footprints `ids` name, directly or as members of a group they name (nested groups opened).
 fn named_footprints<'d>(design: &'d Design, ids: &[String]) -> Vec<&'d FootprintInstance> {
     let Some(placement) = design.placement.as_ref() else { return vec![] };
-    let mut named: BTreeSet<&str> = BTreeSet::new();
-    for id in ids {
-        match design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| &g.id == id)) {
-            Some(g) => named.extend(g.member_ids.iter().map(String::as_str)),
-            None => {
-                named.insert(id.as_str());
-            }
-        }
-    }
+    let expanded: Vec<String> = match design.drawings.as_ref() {
+        Some(d) => d.expand_groups(ids),
+        None => ids.to_vec(),
+    };
+    let named: BTreeSet<&str> = expanded.iter().map(String::as_str).collect();
     placement.footprints.iter().filter(|f| named.contains(f.id.as_str())).collect()
 }
 
@@ -243,19 +239,19 @@ impl Board<'_> {
         true
     }
 
-    /// Every item `ids` names. A group stands for its members (`PCB_GROUP::Move`/`Rotate`/`Flip` act on each); an id
-    /// that is not on the board refuses the whole command, so nothing is half applied.
+    /// Every item `ids` names. A group stands for the items below it, nested groups opened (`PCB_GROUP::Move`/`Rotate`/`Flip`
+    /// act on each child, `RECURSE`); an id that is not on the board refuses the whole command, so nothing is half applied.
     fn resolve_targets(&self, verb: &str, ids: &[String]) -> Result<Targets, Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_transform", verb, "no items given")]);
         }
         let mut out = Targets::default();
         for id in ids {
-            let group = self.design.drawings.as_ref().and_then(|d| d.groups.iter().find(|g| &g.id == id));
-            if let Some(g) = group {
+            let group = self.design.drawings.as_ref().filter(|d| d.is_group(id));
+            if let Some(d) = group {
                 // A member the board no longer has (a stale group) is skipped, as everywhere else groups are read.
-                for m in &g.member_ids {
-                    self.file_item(m, &mut out);
+                for m in d.group_leaves(id) {
+                    self.file_item(&m, &mut out);
                 }
             } else if !self.file_item(id, &mut out) {
                 return Err(vec![CheckResult::fail("ops_unknown_item", id, "no placed part, track, via, zone, shape, text, dimension or group with this id")]);
