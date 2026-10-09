@@ -428,7 +428,7 @@ export function useActionRunner() {
         dispatch({ type: "TOAST", message: "Nothing to drag there -- hover a track or via first.", kind: "error" });
         return;
       }
-      void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings.mode, dispatch, freeAngle);
+      void startInlineDrag(state.cursorUm.x, state.cursorUm.y, hit, state.board, state.routerSettings, dispatch, freeAngle);
     };
     m.set("pcbnew.InteractiveRouter.Drag45Degree", pcbOnly(startDragAtCursor(false)));
     // `routerInlineDrag` (EDIT_TOOL::invokeInlineRouter -> `RunAction( PCB_ACTIONS::routerInlineDrag, DM_ANY )`): the router's own drag entry point, the one `D` above ends in.
@@ -439,10 +439,8 @@ export function useActionRunner() {
     // a free-angle drag ("Footprints cannot be dragged freely"), and `findDraggableAt` only ever finds a
     // track or via. A selection hover is the same RequestSelection fallback `D` uses.
     m.set("pcbnew.InteractiveRouter.DragFreeAngle", pcbOnly(startDragAtCursor(true)));
-    // `Ctrl+<` (dialog_pns_settings.cpp): mode/remove-redundant-tracks,
-    // read fresh by the next `X`/`D` session start -- see
-    // `state.routerSettings`'s own doc comment on why this isn't live
-    // mid-route the way upstream's dialog is.
+    // `Ctrl+<` (dialog_pns_settings.cpp): the router's settings, sent with the next `X`/`D` session start and, on OK, to the one
+    // running -- see `state.routerSettings`'s own doc comment.
     m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
     // `7` (gap #7 task item 4): length tuning -- see
     // components/LengthTuningDialog.tsx's own header comment on why this
@@ -1996,7 +1994,7 @@ export function useActionRunner() {
           const runAnchor = (a: (typeof anchors)[number]) => async (): Promise<QueueOutcome> => {
             const layer = routeStartLayer(a, copperLayers, state.activeLayer);
             if (variant !== "auto") return handOver(variant === "fromEnd" ? a.target : a.at, layer);
-            const started = await routeStart(a.at[0], a.at[1], layer, width, settings.mode, settings.removeLoops);
+            const started = await routeStart(a.at[0], a.at[1], layer, width, settings);
             if (!started.ok) return "done";
             const head = await routeMove(a.target[0], a.target[1]);
             // AttemptFinish: only a head that reaches the far end without colliding completes by itself.

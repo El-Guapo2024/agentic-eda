@@ -4,6 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
+import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
 import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
@@ -461,12 +462,16 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return (await r.json()) as T;
 }
 
-/** `removeLoops` (`RoutingSettings::RemoveLoops`, default `true`, see
- * `components/RouterSettingsDialog.tsx`): delete a pre-existing, now-
- * redundant same-net path once this route finishes by joining the same two
- * points another way. Omit to keep the backend's own default. */
-export function routeStart(x: Um, y: Um, layer: string, width: Um, mode: RouteMode, removeLoops?: boolean): Promise<RoutePreview> {
-  return postJson("/api/route/start", { x, y, layer, width, mode, remove_loops: removeLoops });
+/** `settings`: the Interactive Router Settings (`components/RouterSettingsDialog.tsx`, `kicad-port/routerSettings.ts`) --
+ * the mode, shove vias, jump over obstacles, remove redundant tracks, optimize pad connections, allow DRC violations,
+ * free angle mode, fix all segments and the optimizer effort, sent as the backend's `ROUTING_SETTINGS` for this session. */
+export function routeStart(x: Um, y: Um, layer: string, width: Um, settings: RouterSettings): Promise<RoutePreview> {
+  return postJson("/api/route/start", { x, y, layer, width, settings: routerSettingsToWire(settings) });
+}
+
+/** `OK` in Interactive Router Settings while a route, drag or diff pair is running: the new `ROUTING_SETTINGS` apply from the next move (`ok: false` when none is: the studio keeps them for the next one). */
+export function routeSetSettings(settings: RouterSettings): Promise<{ ok: boolean }> {
+  return postJson("/api/route/settings", { settings: routerSettingsToWire(settings) });
 }
 
 /** `flipPosture`/`width` fold in the `/` and `W` hotkeys -- see
@@ -519,16 +524,13 @@ export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
 // drag session too (it's the same backend session as a route, see
 // `RoutePreview`'s own doc comment).
 
-/** `mode` (`RoutingSettings::Mode`, see `components/RouterSettingsDialog.tsx`):
- * `eda_pns::dragger::Dragger` reuses the exact same walkaround/shove/
- * mark-obstacles modes a route session does. Omit to keep the backend's
- * own default (`Mode::Walkaround`). No `removeLoops` here -- upstream's own
- * `DRAGGER` never calls `removeLoops` either, a route-only concept.
- * `freeAngle` is `PNS::DM_FREE_ANGLE` (`G`, `pcbnew.InteractiveRouter.DragFreeAngle`):
- * the drag then only marks obstacles whatever `mode` is (`DRAGGER::Drag`). */
-export function routeDragStart(x: Um, y: Um, layer: string, mode?: RouteMode, freeAngle?: boolean): Promise<DragPreview> {
+/** `settings` (`components/RouterSettingsDialog.tsx`): `eda_pns::dragger::Dragger` reuses the exact same `ROUTING_SETTINGS` a
+ * route session does (the walkaround/shove/mark-obstacles mode, Shove vias, the optimizer effort, ...). Omit to keep the
+ * backend's own defaults. `freeAngle` is `PNS::DM_FREE_ANGLE` (`G`, `pcbnew.InteractiveRouter.DragFreeAngle`):
+ * the drag then only marks obstacles whatever the mode is (`DRAGGER::Drag`). */
+export function routeDragStart(x: Um, y: Um, layer: string, settings?: RouterSettings, freeAngle?: boolean): Promise<DragPreview> {
   // The backend reads whole micrometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, mode, free_angle: freeAngle ? true : undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined });
 }
 
 export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {

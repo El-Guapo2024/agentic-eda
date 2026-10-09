@@ -303,7 +303,9 @@ fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
             if let Some(id) = d.via_id {
                 w.remove(id);
             }
-            w.add(Item::Via(eda_pns::item::Via { net: d.net.clone(), layers: eda_pns::layer::LayerRange::new(0, 1), pos: to, diameter: d.via_diameter, drill: d.via_drill, source_via: d.source_via.clone(), locked: false }));
+            // where the drag left the via: the cursor, or further, if a shove or a pushout moved it on
+            let end = pv.pts.first().copied().unwrap_or(to);
+            w.add(Item::Via(eda_pns::item::Via { net: d.net.clone(), layers: d.via_layers, pos: end, diameter: d.via_diameter, drill: d.via_drill, source_via: d.source_via.clone(), locked: false }));
             for l in &pv.fanout {
                 w.remove_line_segments(l);
                 w.add_line(l, None, false);
@@ -466,5 +468,41 @@ fn random_corner_drags_never_leave_a_new_violation() {
             assert!(new_ones.is_empty(), "{board} #{k}: dragging {at:?} to {to:?} leaves {} new violations, e.g. {:?}", new_ones.len(), &new_ones[..new_ones.len().min(2)]);
         }
         eprintln!("{board}: {accepted} of 50 drags accepted, {shoved} of them shoved something");
+    }
+}
+
+/// D7: dragging a via. Before it, the dragged via was never a pusher, so a via dropped onto a track left a violation (6 of 200
+/// random drags on `simple`); now it is shoved, or pushed off what it lands on, or the drag says it collides. Whichever mode,
+/// a drag the router accepts leaves no new violation, the board outline included.
+#[test]
+fn random_via_drags_never_leave_a_new_violation() {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    for board in ["simple", "pic_programmer"] {
+        let (design, model) = load(&root, board, "simple-shove-1");
+        let (node, _) = build_node(&design, &model);
+        let mut vias: Vec<(eda_pns::item::ItemId, Point)> = node.iter().filter_map(|(id, it)| if let Item::Via(v) = it { Some((id, v.pos)) } else { None }).collect();
+        vias.sort();
+        for mode in [Mode::Shove, Mode::Walkaround] {
+            let settings = RoutingSettings { mode, ..RoutingSettings::default() };
+            let mut rng = Rng(0xD1B54A32D192ED03);
+            let (mut accepted, mut moved) = (0, 0);
+            for k in 0..60 {
+                let (id, at) = vias[rng.below(vias.len() as i64) as usize];
+                let Some(d) = Dragger::start_with(&node, at, id, false) else { continue };
+                let to = Point { x: at.x + rng.below(4_000) - 2_000, y: at.y + rng.below(4_000) - 2_000 };
+                let pv = d.preview(&node, &model.board, &settings, to);
+                if pv.colliding {
+                    continue;
+                }
+                accepted += 1;
+                moved += usize::from(!pv.displaced_lines.is_empty() || !pv.displaced_vias.is_empty() || pv.pts[0] != to);
+                let new_ones = new_item_violations(&node, &dragged(&node, &d, &pv, to), &model.board);
+                assert!(new_ones.is_empty(), "{board} {mode:?} #{k}: dragging the via at {at:?} to {to:?} leaves {} new violations, e.g. {:?}", new_ones.len(), &new_ones[..new_ones.len().min(2)]);
+            }
+            eprintln!("{board} {mode:?}: {accepted} of 60 via drags accepted, {moved} of them shoved or pushed something");
+        }
     }
 }

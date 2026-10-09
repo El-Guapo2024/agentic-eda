@@ -34,6 +34,8 @@ mod sch_control_api;
 mod sch_export_api;
 mod sch_move_api;
 mod fab_cmd;
+#[cfg(test)]
+mod gate_vs_kicad;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;

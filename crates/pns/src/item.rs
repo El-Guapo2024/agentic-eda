@@ -45,9 +45,9 @@ pub fn same_net(a: &Net, b: &Net) -> bool {
 
 pub type ItemId = u64;
 
-/// `PNS::SOLID` -- a footprint pad (or, in KiCad, a graphic keepout; not
-/// modeled here). Immovable (`m_movable = false` in KiCad's constructor):
-/// the router never relocates a pad.
+/// `PNS::SOLID` -- a footprint pad, or a segment of the board outline (a
+/// graphic on Edge.Cuts, see [`Solid::edge`]). Immovable (`m_movable = false`
+/// in KiCad's constructor): the router never relocates a pad or the edge.
 #[derive(Debug, Clone)]
 pub struct Solid {
     pub net: Net,
@@ -55,8 +55,18 @@ pub struct Solid {
     pub pos: Point,
     pub shape: Shape,
     /// `"U1.3"` -- which footprint pad this came from, for mapping a
-    /// collision/obstacle back to something the UI can name.
+    /// collision/obstacle back to something the UI can name. `"edge:3"`
+    /// for the outline's fourth segment.
     pub source: String,
+    /// `isEdge( item )` (`pns_kicad_iface.cpp`): a graphic on Edge.Cuts,
+    /// which `PNS_KICAD_IFACE_BASE::syncGraphicalItem` adds to the world as a
+    /// `SOLID` on every copper layer, not routable, with no net and a
+    /// zero-width shape. It is not copper (`isCopper`), so the only clearance
+    /// it asks for is the board's copper-to-edge clearance
+    /// (`CT_EDGE_CLEARANCE`, [`crate::node::Node::clearance_to`]), whatever
+    /// net class the other item is in. It has no anchor: nothing joins to it,
+    /// nothing starts a route on it.
+    pub edge: bool,
 }
 
 /// `PNS::SEGMENT` -- one straight copper segment of a track. A multi-point
@@ -181,6 +191,7 @@ impl Item {
     /// ends).
     pub fn anchors(&self) -> Vec<Point> {
         match self {
+            Item::Solid(s) if s.edge => Vec::new(),
             Item::Solid(s) => vec![s.pos],
             Item::Segment(s) => vec![s.a, s.b],
             Item::Via(v) => vec![v.pos],

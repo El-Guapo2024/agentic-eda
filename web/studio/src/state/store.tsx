@@ -7,7 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RouteMode, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
@@ -33,6 +33,7 @@ import { repeatSource } from "../kicad-port/schRepeat";
 import { onCurrentSheet } from "../kicad-port/schSheetCmd";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
+import { DEFAULT_ROUTER_SETTINGS, type RouterSettings } from "../kicad-port/routerSettings";
 import { keepOnSheet } from "../kicad-port/schSelectionPrune";
 import { DEFAULT_SCH_SELECTION_FILTER, type SchSelectionFilter } from "../kicad-port/schSelectionFilter";
 import type { SchToolDialog, SchTurn } from "../api/schEditTypes";
@@ -807,20 +808,13 @@ export interface StudioState {
   /** `pcbnew.Array.createArray` (Ctrl+T, task item 6) -- components/CreateArrayDialog.tsx. */
   createArrayDialogOpen: boolean;
   /**
-   * `eda_pns::RoutingSettings`, the subset this app's router actually
-   * implements (see `crates/pns/PARITY.md`'s settings-struct doc comment:
-   * most of upstream's own `DIALOG_PNS_SETTINGS` fields -- shove vias,
-   * jump-over-obstacles/back-pressure, smart pads, smooth dragged
-   * segments, auto posture, suggest ending -- exist on the Rust struct
-   * (or don't exist at all) but are never actually read by any routing
-   * code, so there is nothing real for a toggle to do yet; only `mode`
-   * and `removeLoops` have a genuine effect). Read fresh by `X`/`D`'s own
-   * session start (`routeStart`/`routeDragStart`) -- this app's "start a
-   * fresh session every time" architecture (PARITY.md's own doc on why)
-   * means a setting changed here takes effect on the *next* route/drag,
-   * not one already in progress, unlike upstream's live mid-route dialog.
+   * `eda_pns::RoutingSettings`, the subset of `PNS::ROUTING_SETTINGS` this app's router implements
+   * (kicad-port/routerSettings.ts; `Ctrl+<` edits them, components/RouterSettingsDialog.tsx). Every field is read by the
+   * router. Sent with `X`/`D`'s own session start (`routeStart`/`routeDragStart`) -- this app starts a fresh backend session
+   * for every route or drag -- and, when the dialog is closed with OK while one is running, to that session
+   * (`routeSetSettings`), so a change applies from the next move as upstream's does.
    */
-  routerSettings: { mode: RouteMode; removeLoops: boolean };
+  routerSettings: RouterSettings;
 }
 
 /** The browser's local storage, or null where it is absent or reading it throws (private windows, blocked site data, node tests). */
@@ -955,7 +949,7 @@ const initialState: StudioState = {
   editTextAndGraphicsDialogOpen: false,
   createArrayDialogOpen: false,
   // `RoutingSettings::default()`'s own real defaults (crates/pns/src/settings.rs) -- Walkaround, RemoveLoops on, matching KiCad's own out-of-the-box router.
-  routerSettings: { mode: "walkaround", removeLoops: true },
+  routerSettings: DEFAULT_ROUTER_SETTINGS,
 };
 
 export type Action =
