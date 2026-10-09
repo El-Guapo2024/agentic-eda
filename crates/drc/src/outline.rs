@@ -1458,4 +1458,59 @@ mod tests {
         let summary = &d.placement.as_ref().expect("placement").outline;
         assert!(summary.len() > 60 && summary.iter().all(|q| (0..=40_000).contains(&q.x) && (0..=30_000).contains(&q.y)), "{} points", summary.len());
     }
+
+    /// The same cases on every run.
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+
+        fn range(&mut self, lo: i64, hi: i64) -> i64 {
+            lo + (self.next() % ((hi - lo + 1) as u64)) as i64
+        }
+
+        fn point(&mut self, span: i64, grid: i64) -> Point {
+            Point { x: self.range(0, span / grid) * grid, y: self.range(0, span / grid) * grid }
+        }
+    }
+
+    #[test]
+    fn random_edge_cuts_never_panic_and_always_give_an_answer() {
+        // Zero-length lines, arcs through three collinear or equal points, circles with no radius, items that touch,
+        // cross or lie on one another: on grids from 1 um to 0.1 mm over boards from 0.2 to 50 mm. 3000 of these ran
+        // clean when the port was finished; this keeps a tenth of them in the fast tier.
+        let mut r = Lcg(12345);
+        for case in 0..300 {
+            let span = [200i64, 5_000, 50_000][case % 3];
+            let grid = [1i64, 10, 100][(case / 3) % 3];
+            let mut shapes = Vec::new();
+            for i in 0..r.range(1, 14) as usize {
+                let (id, layer) = (format!("s{i}"), EDGE_CUTS.to_string());
+                let (a, b, c) = (r.point(span, grid), r.point(span, grid), r.point(span, grid));
+                shapes.push(match r.range(0, 6) {
+                    0 | 1 => Shape::Segment { id, layer, stroke_width: 50, filled: false, start: a, end: b },
+                    2 => Shape::Arc { id, layer, stroke_width: 50, filled: false, start: a, mid: b, end: c },
+                    3 => Shape::Circle { id, layer, stroke_width: 50, filled: r.range(0, 1) == 1, center: a, end: b },
+                    4 => Shape::Rect { id, layer, stroke_width: 50, filled: false, start: a, end: b },
+                    5 => Shape::Polygon { id, layer, stroke_width: 50, filled: false, pts: vec![a, b, c] },
+                    _ => Shape::Bezier { id, layer, stroke_width: 50, filled: false, start: a, c1: b, c2: c, end: r.point(span, grid) },
+                });
+            }
+            if case % 5 == 0 {
+                // A closed ring on top of the noise: the chain that closes has to be found among the rest.
+                let ring: Vec<Point> = (0..r.range(3, 8)).map(|_| r.point(span, grid)).collect();
+                for (i, &a) in ring.iter().enumerate() {
+                    let b = ring[(i + 1) % ring.len()];
+                    shapes.push(Shape::Segment { id: format!("ring{i}"), layer: EDGE_CUTS.into(), stroke_width: 0, filled: false, start: a, end: b });
+                }
+            }
+            let out = board_outline_of(&shapes, true);
+            let ring = out.main_ring();
+            assert!(ring.is_empty() || ring.len() >= 3, "case {case}: a ring of {} points", ring.len());
+            let _ = (out.contains(p(1, 1)), out.contains_strictly(p(2, 3)), check_edge_cuts(&shapes));
+        }
+    }
 }
