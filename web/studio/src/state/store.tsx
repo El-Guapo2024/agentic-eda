@@ -371,7 +371,7 @@ export interface Viewer3DOptions {
   flipped: boolean;
   /** True = a real orthographic projection (kicad-port/camera3d.ts's TrackballCamera, a faithful CAMERA::ToggleProjection port -- see that file). */
   orthographic: boolean;
-  /** True = show GET /api/board.glb's real KiCad-rendered board (real 3D models, kicad-cli's own colors/materials) in place of this app's own procedural scene. Viewer3D falls back to the procedural scene regardless of this flag when the GLB hasn't loaded (still fetching, or the board/kicad-cli export failed) -- there's nothing to show otherwise. Defaults on; the user can still turn it off to see the lighter procedural scene. */
+  /** True = "exact export": show GET /api/board.glb's whole board as kicad-cli renders it (every model through OpenCascade, seconds to minutes) in place of the live scene. The live scene is the default: it loads each part's KiCad 3D model by itself (components/viewer3d/modelCache.ts, GET /api/3dmodel) and has them in seconds. Viewer3D falls back to the live scene when the GLB hasn't loaded (still being built, or failed). */
   kicadModels: boolean;
 }
 
@@ -395,7 +395,7 @@ export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
   showBoundingBoxes: false,
   flipped: false,
   orthographic: false,
-  kicadModels: true,
+  kicadModels: false,
 };
 
 /**

@@ -3,7 +3,8 @@
 //
 //   __eda.actions({ all? })    -> [{ id, label, enabled, reason? }]   the actions the runner handles on this tab (all: plus the KiCad actions with no handler)
 //   await __eda.run(id, args?) -> { ok, error?, revision, dialog?, toast? }   runs the action as a menu click does and waits for its /api/ round trips
-//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], counts, grid, dialogs, open }
+//   __eda.state()              -> { tab, revision, tool, picker, selection: [{ id, kind }], counts, grid, dialogs, open, viewer3d }
+//   __eda.viewer3dScreen(ref)  -> { x, y } | null   where a part is on the 3D canvas (CSS px from its top-left), for hovering it without guessing pixels
 //   __eda.errors(since?)       -> [{ time, message }]   console.error, uncaught errors, rejected promises, 5xx replies and the error toasts since the page loaded
 //
 // This file is the page glue: the capture that has to start at load (console.error, window errors, the fetch wrapper that counts the studio's requests and reads the
@@ -18,6 +19,7 @@ import { useSymState } from "../state/symbolEditorStore";
 import { useCommonDialogs } from "../state/commonDialogs";
 import { useActionRunner } from "./useActionRunner";
 import { picker } from "./pcbPicker";
+import { viewer3dProbe, type Viewer3dSnapshot } from "../components/viewer3d/viewer3dProbe";
 import {
   ErrorLog,
   boardLists,
@@ -56,6 +58,8 @@ export interface HookState {
   grid: number | null;
   dialogs: string[];
   open: string[];
+  /** The 3D viewer's own readout (components/viewer3d/viewer3dProbe.ts): the time to the first real model, the models in, the part under the pointer, whether the camera is moving; null off the 3D tab. */
+  viewer3d: Viewer3dSnapshot | null;
 }
 
 export interface EdaTestHook {
@@ -63,6 +67,8 @@ export interface EdaTestHook {
   run(id: string, args?: unknown): Promise<RunResult>;
   state(): HookState;
   errors(since?: number): ErrorEntry[];
+  /** Where a part is on the 3D canvas, CSS pixels from the canvas's top-left (null when the 3D tab is not open or the part is not placed). */
+  viewer3dScreen(ref: string): { x: number; y: number } | null;
 }
 
 declare global {
@@ -211,7 +217,12 @@ function build(latest: { current: Latest }): EdaTestHook {
         grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : null,
         dialogs: dialogTitles(),
         open: openNames(L),
+        viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
       };
+    },
+
+    viewer3dScreen(ref) {
+      return viewer3dProbe.screenOf(ref);
     },
 
     errors(since) {

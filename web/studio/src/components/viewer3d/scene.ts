@@ -520,7 +520,7 @@ function addZoneFill(group: THREE.Group, outlineMm: ReadonlyArray<[number, numbe
  * body still reads as a raised part against the board, not a flat patch
  * -- see PART_EDGE_MATERIAL's own comment.
  */
-function addPartBody(group: THREE.Group, bodyMm: readonly [number, number, number, number], side: Side, material: THREE.Material): void {
+function partBodyMesh(bodyMm: readonly [number, number, number, number], side: Side, material: THREE.Material): THREE.Mesh {
   const [minX, minY, maxX, maxY] = bodyMm;
   const width = Math.max(maxX - minX, 0.01);
   const depth = Math.max(maxY - minY, 0.01);
@@ -531,7 +531,32 @@ function addPartBody(group: THREE.Group, bodyMm: readonly [number, number, numbe
   mesh.name = "part-body";
   const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), PART_EDGE_MATERIAL);
   mesh.add(edges);
-  group.add(mesh);
+  return mesh;
+}
+
+function addPartBody(group: THREE.Group, bodyMm: readonly [number, number, number, number], side: Side, material: THREE.Material): void {
+  group.add(partBodyMesh(bodyMm, side, material));
+}
+
+/** The two body materials of the placeholder boxes: one set is shared by every box a `PartModels` (partModels.ts) draws, and disposed with it. */
+export interface PlaceholderMaterials {
+  ic: THREE.Material;
+  passive: THREE.Material;
+}
+
+export function placeholderMaterials(): PlaceholderMaterials {
+  return { ic: icBodyMaterial(), passive: passiveBodyMaterial() };
+}
+
+/**
+ * The box a part is drawn as until its 3D models are in (or when it has none): its footprint's body (F.Fab), a plausible height, on the board surface of its own
+ * side. `null` when the part has no placed body or courtyard to size it from. The mesh sits in world coordinates (no transform of its own).
+ */
+export function buildPartPlaceholder(part: Part, materials: PlaceholderMaterials): THREE.Mesh | null {
+  const side = part.side;
+  const body = partBodyBoxUm(part);
+  if (!part.placed || !side || !body) return null;
+  return partBodyMesh([mm(body[0]), mm(body[1]), mm(body[2]), mm(body[3])], side, isPassivePart(part) ? materials.passive : materials.ic);
 }
 
 // ---------------------------------------------------------------------
@@ -819,6 +844,8 @@ export interface BuildBoardOptions {
   showBoardBody?: boolean;
   /** render.opengl_show_model_bbox, default false (matches source). */
   showBoundingBoxes?: boolean;
+  /** Draw each part's placeholder box (and its bounding box) here. Default true. The 3D view draws the parts itself (partModels.ts: the real models, a box until they are in) and passes false. */
+  partBodies?: boolean;
 }
 
 /** A part counts as through-hole if it places at least one `th` pad -- matches real KiCad's own per-footprint "attribute" (Through hole / SMD / Virtual), which this data model doesn't carry directly, so it's inferred from pad data instead. */
@@ -851,6 +878,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   const showSolderPaste = opts.showSolderPaste ?? true;
   const showBoardBody = opts.showBoardBody ?? true;
   const showBoundingBoxes = opts.showBoundingBoxes ?? false;
+  const partBodies = opts.partBodies ?? true;
 
   const group = new THREE.Group();
   group.name = "viewer3d-board";
@@ -934,7 +962,7 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       const refMesh = buildRefDesignatorMesh(part);
       if (refMesh) group.add(refMesh);
     }
-    if (showComponents) {
+    if (showComponents && partBodies) {
       // The box is the part's body (its footprint's F.Fab), the courtyard only for a footprint with none: the courtyard is the body plus its clearance and
       // the pads' reach, which made every placeholder an oversized block.
       const body = partBodyBoxUm(part);

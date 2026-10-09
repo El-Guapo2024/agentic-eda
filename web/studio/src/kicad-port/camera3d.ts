@@ -117,6 +117,57 @@ const WHEEL_PAN_SPEED = 0.01;
 /** camera.cpp: "180 - epsilon" literal, everywhere source wants a half-turn without risking a full 360-degree spin if the previous angle was already exactly the opposite extreme. */
 const FLIP_EPSILON_DEG = 179.999;
 
+/** 3d_math.h `BezierBlend`: the easing of a camera move, `t^2 (3 - 2t)` (smoothstep). */
+export function bezierBlend(t: number): number {
+  return t * t * (3 - 2 * t);
+}
+
+/** 3d_math.h `QuadricEasingInOut`. KiCad's `CAMERA_INTERPOLATION::EASING_IN_OUT`; no 3D viewer action uses it, it is the third arm of the same switch. */
+export function quadricEasingInOut(t: number): number {
+  if (t <= 0.5) return t * t * 2;
+  const u = t - 1;
+  return -2 * (u * u) + 1;
+}
+
+/** How a camera move is eased (`CAMERA_INTERPOLATION`): the views and zoom steps are `bezier`, the arrow-key pan is `linear` (`EDA_3D_CANVAS::SetView3D`). */
+export type Interpolation = "bezier" | "linear" | "easing";
+
+/**
+ * `camera.moving_speed_multiplier`'s default (eda_3d_viewer_settings.cpp), the setting's 3 of 1..5: `request_start_moving_camera` scales every move's speed by
+ * `(1 << multiplier) / 8` (0.25, 0.5, 1, 2, 4), so the default is 1 and a view takes one second.
+ */
+export const DEFAULT_MOVING_SPEED_MULTIPLIER = 3;
+
+/** `EDA_3D_CANVAS::SetView3D`'s own speeds: the arrow-key pan (`arrow_moving_time_speed`) and the zoom steps. */
+const PAN_MOVE_SPEED = 8;
+const ZOOM_MOVE_SPEED = 3;
+/** The move of `VIEW3D_FIT_SCREEN` and of the TOP and BOTTOM views are slower when zoomed out (speed = zoom, bounded). */
+const FIT_SPEED_RANGE: readonly [number, number] = [1 / 1.26, 1.26];
+const TOP_BOTTOM_SPEED_RANGE: readonly [number, number] = [0.5, 1.125];
+
+/** One end of a camera move (`m_camera_pos`, `m_lookat_pos`, `m_rotate_aux`, `m_zoom` and the trackball's quaternion, at T0 or T1). */
+interface CameraState {
+  pos: Vec3;
+  lookAt: Vec3;
+  auxDeg: Vec3;
+  zoom: number;
+  quat: Quat;
+}
+
+function lerpVec(a: Vec3, b: Vec3, t: number): Vec3 {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+}
+
+/**
+ * The trackball's quaternion between two ends of a move: `TRACK_BALL::Interpolate` mixes the components linearly and builds the rotation from the result; this
+ * does the same and normalises (so the rotation matrix stays a rotation) and takes the short way round when the two are on opposite sides of the sphere (q and -q
+ * are one rotation; the plain mix between them passes through zero).
+ */
+export function mixQuat(a: Quat, b: Quat, t: number): Quat {
+  const flip = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w < 0 ? -1 : 1;
+  return normalizeQuat({ x: a.x * (1 - t) + b.x * flip * t, y: a.y * (1 - t) + b.y * flip * t, z: a.z * (1 - t) + b.z * flip * t, w: a.w * (1 - t) + b.w * flip * t });
+}
+
 export type Projection = "perspective" | "ortho";
 
 export type ViewPreset = "top" | "bottom" | "front" | "back" | "left" | "right";
@@ -189,6 +240,16 @@ export class TrackballCamera {
   private windowWidth = 1;
   private windowHeight = 1;
   private lastMouse: { x: number; y: number } | null = null;
+
+  // The move in flight (`EDA_3D_CANVAS::m_camera_is_moving`, CAMERA's T0/T1 pair): see "animation" below.
+  private animationEnabled = true;
+  private speedMultiplier = DEFAULT_MOVING_SPEED_MULTIPLIER;
+  private t0: CameraState | null = null;
+  private t1: CameraState | null = null;
+  private interpolation: Interpolation = "bezier";
+  private moveStartMs = 0;
+  private moveSpeed = 1;
+  private moving = false;
 
   constructor(
     initialDistanceMm: number,
@@ -401,8 +462,8 @@ export class TrackballCamera {
    * eda_3d_canvas.cpp SetView3D's TOP/BOTTOM/LEFT/RIGHT/FRONT/BACK cases:
    * `Reset_T1()` (zeroes aux, resets pos/lookat/zoom, resets the trackball
    * quaternion to identity) then the preset's own Rotate*_T1 calls --
-   * applied here immediately rather than as an animated T1 target (no
-   * camera-move animation is ported; see PARITY-3d.md).
+   * applied here immediately. The move KiCad animates to the same pose
+   * is `animateViewPreset` below (the view buttons and hotkeys use that).
    */
   applyViewPreset(preset: ViewPreset): void {
     this.trackballQuat = { ...QUAT_IDENTITY };
@@ -446,6 +507,146 @@ export class TrackballCamera {
    */
   pivotAt(worldPoint: Vec3): void {
     this.lookAt = { ...worldPoint };
+  }
+
+  // ----------------------------------------------------------------------------------------------------------------------- animation
+  //
+  // KiCad does not jump to a view: `EDA_3D_CANVAS::SetView3D` sets T0 to where the camera is (`SetT0_and_T1_current_T`), builds T1 as the wanted state
+  // (`Reset_T1`, `ViewCommand_T1`, `Zoom_T1`, `Pan_T1`, `SetLookAtPos_T1`) and `request_start_moving_camera` starts a clock; every repaint then
+  // `Interpolate(elapsed seconds * speed)`s between the two -- position, look-at point, auxiliary rotation and zoom mixed linearly, the trackball's
+  // quaternion too -- through `BezierBlend` (or linearly for the arrow-key pan) until the time passes 1. While it runs the canvas ignores the mouse and other
+  // view commands (`m_camera_is_moving`). The setting `camera.animation_enabled` (default on) turns it off: the move is made at once.
+
+  /** `EDA_3D_VIEWER_SETTINGS`'s `camera.animation_enabled` and `camera.moving_speed_multiplier` (1..5). */
+  setAnimation(enabled: boolean, speedMultiplier: number = DEFAULT_MOVING_SPEED_MULTIPLIER): void {
+    this.animationEnabled = enabled;
+    this.speedMultiplier = Math.min(5, Math.max(1, Math.round(speedMultiplier)));
+  }
+
+  /** `m_camera_is_moving`. */
+  isMoving(): boolean {
+    return this.moving;
+  }
+
+  private snapshot(): CameraState {
+    return { pos: { ...this.cameraPosLocal }, lookAt: { ...this.lookAt }, auxDeg: { ...this.auxDeg }, zoom: this.zoomValue, quat: { ...this.trackballQuat } };
+  }
+
+  /** `SetT0_and_T1_current_T`: both ends at the camera as it is now, the easing chosen. */
+  private beginMove(interpolation: Interpolation): CameraState {
+    this.t0 = this.snapshot();
+    this.t1 = this.snapshot();
+    this.interpolation = interpolation;
+    return this.t1;
+  }
+
+  /** `CAMERA::Reset_T1` and `TRACK_BALL::Reset_T1`: the home pose. An auxiliary angle already past a half turn is reset to a full one, the nearest equivalent, so the move turns the short way. */
+  private resetT1(): void {
+    const t0 = this.t0!;
+    const t1 = this.t1!;
+    t1.pos = vec3(0, 0, -this.initialDistanceMm);
+    t1.zoom = 1;
+    t1.auxDeg = vec3(t0.auxDeg.x > 180 ? 360 : 0, t0.auxDeg.y > 180 ? 360 : 0, t0.auxDeg.z > 180 ? 360 : 0);
+    t1.lookAt = { ...this.lookAtInit };
+    t1.quat = { ...QUAT_IDENTITY };
+  }
+
+  /** `request_start_moving_camera`: the clock starts, at `speed` times the setting's own multiplier; with animation off the move is made at once. */
+  private startMove(nowMs: number, speed = 1): void {
+    if (!this.animationEnabled) {
+      this.interpolateTo(1);
+      this.moving = false;
+      return;
+    }
+    this.moveSpeed = speed * (2 ** this.speedMultiplier / 8);
+    this.moveStartMs = nowMs;
+    this.moving = true;
+  }
+
+  /** `CAMERA::Interpolate` / `TRACK_BALL::Interpolate`: the camera at `t` (0..1, clamped) of the way from T0 to T1, eased. */
+  private interpolateTo(t: number): void {
+    const t0 = this.t0;
+    const t1 = this.t1;
+    if (!t0 || !t1) return;
+    const clamped = Math.min(Math.max(t, 0), 1);
+    const e = this.interpolation === "bezier" ? bezierBlend(clamped) : this.interpolation === "easing" ? quadricEasingInOut(clamped) : clamped;
+    this.cameraPosLocal = lerpVec(t0.pos, t1.pos, e);
+    this.lookAt = lerpVec(t0.lookAt, t1.lookAt, e);
+    this.auxDeg = lerpVec(t0.auxDeg, t1.auxDeg, e);
+    this.zoomValue = t0.zoom + (t1.zoom - t0.zoom) * e;
+    this.trackballQuat = mixQuat(t0.quat, t1.quat, e);
+  }
+
+  /** One repaint of a move in flight (`EDA_3D_CANVAS::OnPaint`): the camera at the time `nowMs` (any clock that does not run backwards). True while the move goes on. */
+  tick(nowMs: number): boolean {
+    if (!this.moving) return false;
+    const t = ((nowMs - this.moveStartMs) / 1000) * this.moveSpeed;
+    this.interpolateTo(t);
+    if (t > 1) this.moving = false;
+    return this.moving;
+  }
+
+  /** The six face views (`SetView3D` VIEW3D_TOP ... VIEW3D_RIGHT): `Reset_T1` then the preset's own rotations. False (nothing done) while a move is going. TOP and BOTTOM are slower when zoomed out. */
+  animateViewPreset(preset: ViewPreset, nowMs: number): boolean {
+    if (this.moving) return false;
+    this.beginMove("bezier");
+    this.resetT1();
+    const aux = PRESET_AUX_DEG[preset];
+    const t1 = this.t1!;
+    t1.auxDeg = addV(t1.auxDeg, aux);
+    const speed = preset === "top" || preset === "bottom" ? Math.min(Math.max(this.zoomValue, TOP_BOTTOM_SPEED_RANGE[0]), TOP_BOTTOM_SPEED_RANGE[1]) : 1;
+    this.startMove(nowMs, speed);
+    return true;
+  }
+
+  /** `VIEW3D_FIT_SCREEN` (Home, Zoom to Fit): the home pose, at a speed that follows the zoom. */
+  animateReset(nowMs: number): boolean {
+    if (this.moving) return false;
+    this.beginMove("bezier");
+    this.resetT1();
+    this.startMove(nowMs, Math.min(Math.max(this.zoomValue, FIT_SPEED_RANGE[0]), FIT_SPEED_RANGE[1]));
+    return true;
+  }
+
+  /** `VIEW3D_FLIP`: a half turn about y added to wherever the view is (no reset). */
+  animateFlip(nowMs: number): boolean {
+    if (this.moving) return false;
+    const t1 = this.beginMove("bezier");
+    t1.auxDeg = vec3(t1.auxDeg.x, t1.auxDeg.y + FLIP_EPSILON_DEG, t1.auxDeg.z);
+    this.startMove(nowMs);
+    return true;
+  }
+
+  /** `VIEW3D_ZOOM_IN` / `VIEW3D_ZOOM_OUT` (`Zoom_T1`): a step of `factor` (KEY_ZOOM_FACTOR in, its inverse out), at speed 3. False at a zoom limit or while a move is going. */
+  animateZoom(factor: number, nowMs: number): boolean {
+    if (this.moving) return false;
+    if ((this.zoomValue <= this.minZoom && factor > 1) || (this.zoomValue >= this.maxZoom && factor < 1) || factor === 1) return false;
+    const t1 = this.beginMove("bezier");
+    t1.zoom = Math.min(Math.max(this.zoomValue / factor, this.minZoom), this.maxZoom);
+    t1.pos = { ...t1.pos, z: -this.initialDistanceMm * t1.zoom };
+    this.startMove(nowMs, ZOOM_MOVE_SPEED);
+    return true;
+  }
+
+  /** `VIEW3D_PAN_LEFT/RIGHT/UP/DOWN` (`Pan_T1`): the arrow keys, a linear move of `0.7 * zoom` at speed 8. */
+  animatePan(direction: "left" | "right" | "up" | "down", nowMs: number): boolean {
+    if (this.moving) return false;
+    const delta = PAN_STEP_FACTOR * this.zoomValue;
+    const t1 = this.beginMove("linear");
+    const [dx, dy] = direction === "left" ? [-delta, 0] : direction === "right" ? [delta, 0] : direction === "up" ? [0, delta] : [0, -delta];
+    t1.pos = { x: t1.pos.x + dx, y: t1.pos.y + dy, z: t1.pos.z };
+    this.startMove(nowMs, PAN_MOVE_SPEED);
+    return true;
+  }
+
+  /** `move_pivot_based_on_cur_mouse_position`: the look-at point moves to `worldPoint` and the pan offset is cleared (`SetLookAtPos_T1`, `ResetXYpos_T1`). */
+  animatePivot(worldPoint: Vec3, nowMs: number): boolean {
+    if (this.moving) return false;
+    const t1 = this.beginMove("bezier");
+    t1.lookAt = { ...worldPoint };
+    t1.pos = { x: 0, y: 0, z: t1.pos.z };
+    this.startMove(nowMs);
+    return true;
   }
 
   private orthoFullExtent(): { nw: number; nh: number } {

@@ -63,6 +63,13 @@ export interface Part {
    * (kicad-port/partBody.ts) -- the courtyard is the body plus a clearance margin plus the pads' reach. `null` when no `F.Fab` is known for the footprint.
    */
   body?: CourtyardBox | null;
+  /**
+   * The part's 3D models, each with the placement its footprint gives it (crates/cli/src/model3d_api.rs `part_json`; the same shape as kicad-port/model3d.ts's
+   * `Model3dEntry`): the 3D tab loads each from `GET /api/3dmodel` and places it the way KiCad does. Absent when the footprint names no model: the tab draws the body box.
+   */
+  models?: Array<{ name: string; offset: [number, number, number]; scale: [number, number, number]; rotate: [number, number, number]; opacity: number; show: boolean }>;
+  /** How KiCad's 3D viewer sorts the part's models: a through-hole model (`tht`), an SMD one or a virtual one (`BOARD_ADAPTER::IsFootprintShown`). */
+  kind3d?: "smd" | "tht" | "virtual";
   pads?: Pad[];
 }
 
