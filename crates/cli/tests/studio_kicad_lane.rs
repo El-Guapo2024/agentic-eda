@@ -414,3 +414,28 @@ fn the_3d_model_route_converts_in_the_lane_without_holding_the_loop_and_reads_no
         assert!(!body.contains("SECRET") && !body.contains("root:") && !body.contains("\"schema\""), "{target} leaked a file: {body}");
     }
 }
+
+/// A browser opens connections ahead of the requests it will send on them (Chrome's preconnect). The serve loop reads one request at a time, and used to
+/// block on a connection that had said nothing, so every request behind it -- the page's polls, the 3D models of a board -- waited until the browser closed
+/// that socket (16 s, measured on a board with 16 models). A silent connection is waited on by its own thread now.
+#[test]
+fn a_connection_that_has_sent_nothing_does_not_hold_up_the_requests_behind_it() {
+    let studio = Studio::start("idle_connection", 0);
+    let silent: Vec<TcpStream> = (0..3).map(|_| TcpStream::connect(("127.0.0.1", studio.port)).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(150));
+    // On its own thread: a server that blocks on the silent connections never answers, and the test should say so rather than hang.
+    let (port, (tx, rx)) = (studio.port, std::sync::mpsc::channel());
+    std::thread::spawn(move || {
+        let tries: Vec<Duration> = (0..3).map(|_| request(port, "GET", "/api/version", "").2).collect();
+        let _ = tx.send(tries);
+    });
+    let tries = rx.recv_timeout(Duration::from_secs(30)).expect("a request made behind three silent connections was never answered");
+    let fastest = tries.iter().min().unwrap();
+    assert!(*fastest < Duration::from_secs(1), "a request made behind three silent connections took {tries:?}");
+    // A silent connection is not dropped: when its request comes, it is answered.
+    let mut late = silent.into_iter().next().unwrap();
+    write!(late, "GET /api/version HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").unwrap();
+    let mut raw = String::new();
+    late.read_to_string(&mut raw).unwrap();
+    assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+}

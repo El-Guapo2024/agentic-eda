@@ -109,8 +109,25 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     let route_session: crate::route_api::RouteCell = Mutex::new(None);
     // Where DRC, ERC, statistics and the exports run -- see `offload`.
     let lane = Arc::new(Lane::default());
-    for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
+    // A browser opens connections ahead of the requests it will send on them (Chrome's preconnect) and this loop reads one request at a time: a connection that has
+    // said nothing yet held every request behind it until the browser closed it -- 16 s, measured, with the 3D models of a board waiting. Each connection is
+    // waited on by a thread of its own and joins the loop when the first bytes of its request are there.
+    let (ready, requests) = std::sync::mpsc::channel::<TcpStream>();
+    std::thread::Builder::new()
+        .name("accept".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let ready = ready.clone();
+                std::thread::spawn(move || {
+                    if stream.peek(&mut [0u8; 1]).is_ok_and(|n| n > 0) {
+                        let _ = ready.send(stream);
+                    }
+                });
+            }
+        })
+        .map_err(|e| vec![CheckResult::fail("serve_thread", "accept", e.to_string())])?;
+    for mut stream in requests {
         if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, &route_session, ui_root.as_deref(), &lane) {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
