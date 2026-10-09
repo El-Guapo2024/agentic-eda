@@ -208,12 +208,52 @@ pub fn today() -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// The studio's Appearance settings for the board whose derived files are written into `work`: `appearance.json` beside `design.json`, found only when `work` is that
+/// board's `.kicad` folder (the scratch folders of the gates and of the tests belong to no board and get none).
+fn studio_appearance(work: &Path) -> Option<Value> {
+    if work.file_name().and_then(|n| n.to_str()) != Some(".kicad") {
+        return None;
+    }
+    let text = std::fs::read_to_string(work.parent()?.join("appearance.json")).ok()?;
+    serde_json::from_str(&text).ok().filter(Value::is_object)
+}
+
 /// The project file next to the derived board/schematic: our design rules
 /// and ERC pin map, plus the custom-rule file an imported project carried,
 /// so kicad-cli judges against this design's own rules and not its
 /// hard-coded floors.
 fn write_project(work: &Path, stem: &str, design: &Design, model: &ConstraintModel) -> Result<(), Vec<CheckResult>> {
-    write_file(&work.join(format!("{stem}.kicad_pro")), export_kicad_pro_for(design, model))?;
+    write_project_with(work, stem, design, model, None)
+}
+
+/// [`write_project`], with the board's net classes in the project file when [`export_board`] moved them there (a class with a colour: see `eda_kicad::appearance`).
+fn write_project_with(work: &Path, stem: &str, design: &Design, model: &ConstraintModel, classes: Option<&eda_kicad::appearance::SplitClasses>) -> Result<(), Vec<CheckResult>> {
+    let mut pro_text = export_kicad_pro_for(design, model);
+    // What the person chose in the studio's Appearance panel (layers and objects shown, colours, presets, views) goes into the derived project as KiCad keeps it:
+    // the net colours, layer presets and viewports in the project file, the rest in the project's local settings (`<stem>.kicad_prl`).
+    let appearance = studio_appearance(work);
+    if appearance.is_some() || classes.is_some() {
+        if let Ok(mut pro) = serde_json::from_str::<Value>(&pro_text) {
+            let before = pro.clone();
+            if let Some(a) = &appearance {
+                eda_kicad::appearance::merge_into_project(&mut pro, a);
+            }
+            if let Some(split) = classes {
+                eda_kicad::appearance::put_classes(&mut pro, split);
+            }
+            if pro != before {
+                pro_text = format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default());
+            }
+        }
+    }
+    write_file(&work.join(format!("{stem}.kicad_pro")), pro_text)?;
+    let prl = work.join(format!("{stem}.kicad_prl"));
+    match appearance.as_ref().and_then(|a| eda_kicad::appearance::local_settings(a, stem)) {
+        Some(local) => write_file(&prl, format!("{}\n", serde_json::to_string_pretty(&local).unwrap_or_default()))?,
+        None => {
+            let _ = std::fs::remove_file(&prl);
+        }
+    }
     let dru = work.join(format!("{stem}.kicad_dru"));
     match model.board.custom_rules_text.as_deref() {
         Some(text) => write_file(&dru, text)?,
@@ -238,9 +278,13 @@ fn export_board(design: &Design, model: &ConstraintModel, work: &Path, stem: &st
     work_dir(work)?;
     let date = today();
     let (pcb, map) = export_kicad_pcb_mapped(design, model, &ExportMeta { date: &date, title: stem })?;
+    // A net class with a colour (Appearance > Net Classes) can only reach KiCad in the project file, and KiCad reads the project's classes only when the board has
+    // none of its own: so then the classes move there whole, and kicad-cli judges the board by the same numbers (`eda_kicad::appearance::split_net_classes`).
+    let class_colors = studio_appearance(work).map(|a| eda_kicad::appearance::class_colors(&a)).unwrap_or_default();
+    let split = if class_colors.is_empty() { None } else { eda_kicad::appearance::split_net_classes(&pcb, &class_colors) };
     let path = work.join(format!("{stem}.kicad_pcb"));
-    write_file(&path, pcb)?;
-    write_project(work, stem, design, model)?;
+    write_file(&path, split.as_ref().map_or(pcb.as_str(), |s| s.pcb.as_str()))?;
+    write_project_with(work, stem, design, model, split.as_ref())?;
     Ok((path, map))
 }
 
@@ -1367,6 +1411,72 @@ mod tests {
     fn the_limits_are_two_minutes_for_a_report_and_five_for_an_export() {
         assert_eq!(REPORT_TIMEOUT, Duration::from_secs(120));
         assert_eq!(EXPORT_TIMEOUT, Duration::from_secs(300));
+    }
+
+    fn board_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("eda-engine-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".kicad")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn what_the_studios_appearance_panel_chose_reaches_the_derived_project() {
+        let (design, model) = empty_design();
+        let dir = board_dir("appearance");
+        std::fs::write(
+            dir.join("appearance.json"),
+            json!({
+                "version": 1,
+                "local": { "hidden_layers": ["B.Cu"], "visible_items": ["tracks"], "net_color_mode": 2, "hidden_nets": ["GND"] },
+                "project": {
+                    "net_colors": { "GND": "rgb(1, 2, 3)" },
+                    "layer_presets": [{ "name": "Mine", "activeLayer": null, "flipBoard": true, "layers": ["B.Cu"], "renderLayers": ["tracks"] }],
+                    "viewports": [{ "name": "Home", "x": 1, "y": 2, "w": 3, "h": 4 }]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let work = dir.join(".kicad");
+        write_project(&work, "b", &design, &model).unwrap();
+        let pro: Value = serde_json::from_str(&std::fs::read_to_string(work.join("b.kicad_pro")).unwrap()).unwrap();
+        assert_eq!(pro["net_settings"]["net_colors"]["GND"], "rgb(1, 2, 3)");
+        assert_eq!(pro["board"]["layer_presets"][0]["name"], "Mine");
+        assert_eq!(pro["board"]["layer_presets"][0]["layers"], json!([2]));
+        assert_eq!(pro["board"]["viewports"][0]["w"], 3000.0, "micrometres become nanometres");
+        assert!(pro["board"]["design_settings"]["rules"].is_object(), "the design rules are still there");
+        let prl: Value = serde_json::from_str(&std::fs::read_to_string(work.join("b.kicad_prl")).unwrap()).unwrap();
+        assert_eq!(prl["board"]["visible_items"], json!(["tracks"]));
+        assert_eq!(prl["board"]["visible_layers"], "ffffffff_ffffffff_ffffffff_fffffffb");
+        assert_eq!(prl["board"]["net_color_mode"], 2);
+        assert_eq!(prl["board"]["hidden_nets"], json!(["GND"]));
+        // The studio clears everything: the next export leaves no local settings file behind.
+        std::fs::write(dir.join("appearance.json"), r#"{"version":1,"local":{},"project":{}}"#).unwrap();
+        write_project(&work, "b", &design, &model).unwrap();
+        assert!(!work.join("b.kicad_prl").exists());
+        let pro: Value = serde_json::from_str(&std::fs::read_to_string(work.join("b.kicad_pro")).unwrap()).unwrap();
+        assert!(pro.get("net_settings").is_none() && pro["board"].get("layer_presets").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_project_with_no_appearance_file_or_a_scratch_folder_gets_the_plain_project() {
+        let (design, model) = empty_design();
+        // No appearance.json beside the board.
+        let dir = board_dir("no-appearance");
+        write_project(&dir.join(".kicad"), "b", &design, &model).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(".kicad").join("b.kicad_pro")).unwrap(), export_kicad_pro_for(&design, &model));
+        assert!(!dir.join(".kicad").join("b.kicad_prl").exists());
+        // A scratch folder is no board's `.kicad`: whatever lies beside it is not that board's.
+        let loose = board_dir("loose");
+        std::fs::write(loose.join("appearance.json"), r#"{"local":{"visible_items":["tracks"]},"project":{}}"#).unwrap();
+        let scratch = loose.join("scratch");
+        std::fs::create_dir_all(&scratch).unwrap();
+        write_project(&scratch, "b", &design, &model).unwrap();
+        assert!(!scratch.join("b.kicad_prl").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&loose);
     }
 
     /// An empty design with a placement and a schematic: enough for every run to get as far as kicad-cli.

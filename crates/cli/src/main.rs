@@ -43,6 +43,7 @@ mod route_api;
 mod sch_output_api;
 mod studio;
 mod view_api;
+mod appearance_api;
 mod kicad_engine;
 mod kicad_lane;
 mod tune_api;

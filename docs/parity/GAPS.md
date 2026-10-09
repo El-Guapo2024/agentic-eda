@@ -353,11 +353,15 @@ Old #27. **Mostly done on the board (2026-10-08); the schematic and the footprin
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
 
 ### 18. Appearance and display options
-New. **Partial.** Hit: every session. Blocks: no. WP3, size M.
-- Exists: layer visibility and opacity, high contrast, flip board; Objects tab with ratsnest, ratsnest mode, grid and pad numbers;
-  a net list with highlight (`components/panels/AppearancePanel.tsx`).
-- Missing: per-object visibility (tracks, vias, pads, zones, text and so on), net visibility and colours (net colours are recorded
-  unwired), a net classes tab, saved presets and viewports.
+New. **Mostly done (2026-10-09).** Hit: every session. Blocks: no. WP3, size M (done).
+- Done (`PARITY-pcb.md` section 24; `components/panels/AppearancePanel.tsx`, `components/panels/appearance/`, `kicad-port/appearance*.ts`, `layerPresets.ts`): KiCad's `APPEARANCE_CONTROLS`. The Objects tab lists 20 of
+  its 22 rows (tracks, vias, pads, zones, filled shapes, footprints front and back, values, references, footprint text, ratsnest, DRC warnings, errors and exclusions, anchors, locked item shadow, colliding
+  courtyards, board area shadow, drawing sheet, grid) with eyes and opacity sliders, and the painter and the pickers honour each (an object at opacity 0 is neither drawn nor picked); the Nets tab has per-net
+  ratsnest eyes, colours (on copper in the "All" mode, on the ratsnest, or nowhere: `pcbnew.Control.netColorMode`), KiCad's right-click menu and Net Display Options; the Net Classes tab has eyes, colours and its menu;
+  the Layers tab has the layer list's menu, "Inactive layers" Normal / Dim / Hide and the eight built-in layer presets plus saved ones; viewports save and recall. All of it is kept per project in `appearance.json`
+  (the `.kicad_prl` and `.kicad_pro` split, never `design.json`) and written into the derived KiCad project (`.kicad_prl`, net colours, presets, viewports, and a coloured net class's definition).
+- Missing: Images and Points rows (the board model has no reference images or snap points); Values shows nothing (no value text is drawn); the colour theme is not editable (swatches of layers and objects are read-only,
+  so "Use Color from Schematic" stays dimmed); the quick switchers on Ctrl+Tab and Alt+Tab; the selection filter is not in the saved settings; the drawing sheet starts off (KiCad: on) and has no zone letters.
 - Port from: `pcbnew/widgets/appearance_controls.cpp`.
 
 ### 19. Footprint and symbol editor leftovers

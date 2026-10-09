@@ -91,6 +91,8 @@ import { registerBoardControlActions } from "./boardControlActions";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
 import { registerPcbMenuActions } from "./pcbMenuActions";
+import { registerAppearanceActions } from "./appearanceActions";
+import { nextContrastMode } from "../kicad-port/appearance";
 import { registerPcbFindActions } from "./pcbFindActions";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
@@ -191,6 +193,7 @@ export function useActionRunner() {
     };
     // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
     registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
+    registerAppearanceActions(m, { state, dispatch });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
@@ -864,10 +867,10 @@ export function useActionRunner() {
     m.set("common.Control.toggleGrid", () => dispatch({ type: "TOGGLE_GRID_VISIBLE" }));
     m.set("pcbnew.Control.showRatsnest", () => dispatch({ type: "TOGGLE_RATSNEST" }));
     m.set("pcbnew.Control.ratsnestLineMode", () => dispatch({ type: "TOGGLE_RATSNEST_CURVED" }));
-    // The real action is a 3-state cycle (Normal/Dimmed/Off); this app's
-    // high-contrast is a plain on/off, so this simplifies to a toggle
-    // rather than inventing a third state painter.ts doesn't implement.
-    m.set("common.Control.highContrastModeCycle", () => dispatch({ type: "TOGGLE_HIGH_CONTRAST" }));
+    // PCB_CONTROL::HighContrastModeCycle: normal -> dimmed -> hidden -> normal (the Appearance panel's "Inactive layers": Normal, Dim, Hide).
+    m.set("common.Control.highContrastModeCycle", () =>
+      dispatch({ type: "APPEARANCE", op: { op: "contrast", mode: nextContrastMode(!state.highContrast ? "normal" : state.appearance.contrastHidden ? "hidden" : "dimmed") } })
+    );
     m.set("common.Control.togglePolarCoords", () => dispatch({ type: "TOGGLE_POLAR" }));
     // cursorSmallCrosshairs / cursorFullCrosshairs / cursor45Crosshairs: actions/commonActions.ts (one setting, all four canvases).
 
