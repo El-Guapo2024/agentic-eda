@@ -1242,6 +1242,30 @@ pub(crate) fn pad_rot_from_file(fp_side: eda_model::ir::Side, fp_rot: eda_model:
     (if fp_side == eda_model::ir::Side::Bottom { -delta } else { delta }).rem_euclid(360_000) as eda_model::ir::Millideg
 }
 
+/// `(zone_connect N)` on a pad or a footprint: `ZONE_CONNECTION` written as its integer (`INHERITED` -1 is never written;
+/// `NONE` 0, `THERMAL` 1, `FULL` 2, `THT_THERMAL` 3). `None` for a value this reader does not know, so the pad inherits.
+pub(crate) fn zone_connection_from_file(v: i64) -> Option<eda_model::ir::PadConnection> {
+    use eda_model::ir::PadConnection;
+    match v {
+        0 => Some(PadConnection::None),
+        1 => Some(PadConnection::Thermal),
+        2 => Some(PadConnection::Full),
+        3 => Some(PadConnection::ThtThermal),
+        _ => None,
+    }
+}
+
+/// Inverse of [`zone_connection_from_file`].
+pub(crate) fn zone_connection_to_file(c: eda_model::ir::PadConnection) -> i64 {
+    use eda_model::ir::PadConnection;
+    match c {
+        PadConnection::None => 0,
+        PadConnection::Thermal => 1,
+        PadConnection::Full => 2,
+        PadConnection::ThtThermal => 3,
+    }
+}
+
 /// Deterministic UUID-shaped id derived from a stable string (blake3, not a
 /// true RFC 4122 v5, but stable/collision-resistant and structurally valid
 /// so KiCad accepts it as a UUID field).

@@ -45,7 +45,7 @@ fn empty_zone_fills_almost_its_full_area() {
 fn full_connection_pad_is_not_knocked_out() {
     let zone = Zone { pad_connection: PadConnection::Full, ..test_zone("GND", rect_outline(0, 0, 1000, 1000)) };
     let input = FillInput {
-        pads: vec![FillPad { net: Some("GND".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 400, y0: 400, x1: 600, y1: 600 }, hole: None }],
+        pads: vec![FillPad { net: Some("GND".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 400, y0: 400, x1: 600, y1: 600 }, hole: None, ..Default::default() }],
         ..Default::default()
     };
     let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
@@ -55,30 +55,121 @@ fn full_connection_pad_is_not_knocked_out() {
     assert!(poly_set_contains_pt(&fill, Point64::new(500, 500)), "pad center should be flooded with copper");
 }
 
+/// A thermal-relief fixture: a 2 x 2 mm zone with a 0.4 mm square GND pad in the middle, 0.2 mm gap, 0.3 mm spokes.
+fn relief_zone() -> Zone {
+    Zone { pad_connection: PadConnection::Thermal, ..test_zone("GND", rect_outline(0, 0, 2000, 2000)) }
+}
+
+fn gnd_pad() -> FillPad {
+    FillPad { net: Some("GND".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 800, y0: 800, x1: 1200, y1: 1200 }, hole: None, ..Default::default() }
+}
+
+fn fill_with(zone: &Zone, pad: FillPad) -> eda_shape_poly_set::ShapePolySet {
+    fill_zone(zone, "F.Cu", &FillInput { pads: vec![pad], ..Default::default() }, no_clearance, MAX_ERROR)
+}
+
+fn copper(fill: &eda_shape_poly_set::ShapePolySet, x: i64, y: i64) -> bool {
+    poly_set_contains_pt(fill, Point64::new(x, y))
+}
+
 #[test]
 fn thermal_pad_is_knocked_out_but_spoked() {
-    let zone = Zone { pad_connection: PadConnection::Thermal, ..test_zone("GND", rect_outline(0, 0, 1000, 1000)) };
-    let input = FillInput {
-        pads: vec![FillPad { net: Some("GND".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 400, y0: 400, x1: 600, y1: 600 }, hole: None }],
-        ..Default::default()
-    };
-    let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
+    let fill = fill_with(&relief_zone(), gnd_pad());
 
     let area = fill.area();
     assert!(area > 0.0, "fill should not be empty");
-    assert!(area < 950_000.0, "thermal relief should remove a meaningful chunk of area, got {area}");
+    assert!(area < 3_950_000.0, "thermal relief should remove a meaningful chunk of area, got {area}");
 
-    // the pad center itself is knocked out...
-    assert!(!poly_set_contains_pt(&fill, Point64::new(500, 500)), "pad center should be knocked out, not flooded");
-    // ...but a point just past the gap, where the spoke lands, should be copper.
-    assert!(poly_set_contains_pt(&fill, Point64::new(500, 150)), "a spoke should reach up to the zone body below the pad");
+    // the pad's corner and the diagonal of the gap are knocked out...
+    assert!(!copper(&fill, 820, 820), "pad corner should be knocked out, not flooded");
+    assert!(!copper(&fill, 700, 700), "the gap's diagonal is open");
+    // ...but each spoke bridges the gap on its axis.
+    for (x, y) in [(1000, 650), (1000, 1350), (650, 1000), (1350, 1000)] {
+        assert!(copper(&fill, x, y), "a spoke should cross the gap at {x},{y}");
+    }
+    assert!(copper(&fill, 100, 100), "the zone body is copper");
+}
+
+#[test]
+fn a_pad_turned_forty_five_degrees_turns_its_spokes_with_it() {
+    use eda_zone_filler::PadGeometry;
+    // The same relief, but the pad is turned 45 degrees: its spokes run along the diagonals, so the gap is bridged
+    // on the diagonal and open on the axes.
+    let pad = FillPad {
+        geometry: Some(PadGeometry { center: Point64::new(1000, 1000), size: (400, 400), circular: false, default_spoke_angle_mdeg: 90_000, orientation_mdeg: 45_000 }),
+        ..gnd_pad()
+    };
+    let fill = fill_with(&relief_zone(), pad);
+    assert!(copper(&fill, 1000 + 450, 1000 + 450) || copper(&fill, 1000 - 450, 1000 - 450), "a spoke on the diagonal");
+    assert!(!copper(&fill, 1000, 650), "the axes are open now");
+}
+
+#[test]
+fn a_pads_own_spoke_angle_overrides_the_default() {
+    let pad = FillPad { spoke_angle_mdeg: Some(45_000), ..gnd_pad() };
+    let fill = fill_with(&relief_zone(), pad);
+    assert!(!copper(&fill, 1000, 650), "no spoke on the axis at a 45 degree spoke angle");
+    assert!(copper(&fill, 1000 + 450, 1000 + 450) || copper(&fill, 1000 - 450, 1000 - 450) || copper(&fill, 1000 + 450, 1000 - 450) || copper(&fill, 1000 - 450, 1000 + 450), "a diagonal spoke");
+}
+
+#[test]
+fn a_pad_set_to_solid_is_not_relieved_in_a_thermal_zone() {
+    let fill = fill_with(&relief_zone(), FillPad { zone_connection: Some(PadConnection::Full), ..gnd_pad() });
+    assert!(copper(&fill, 820, 820), "a solid connection floods the pad");
+    assert!(copper(&fill, 700, 700), "and leaves no gap");
+}
+
+#[test]
+fn a_pad_set_to_none_gets_a_clearance_hole_and_no_spokes_in_a_solid_zone() {
+    let zone = Zone { pad_connection: PadConnection::Full, ..relief_zone() };
+    let fill = fill_with(&zone, FillPad { zone_connection: Some(PadConnection::None), ..gnd_pad() });
+    assert!(!copper(&fill, 1000, 1000), "the pad is cleared");
+    // only the zone's 20 um clearance is cleared: the diagonal of a thermal gap (open in a relief) is copper here
+    assert!(!copper(&fill, 790, 1000), "the clearance hole hugs the pad");
+    assert!(copper(&fill, 700, 700), "there is no relief gap round a pad set to none");
+    assert!(copper(&fill, 100, 100));
+}
+
+#[test]
+fn a_footprints_connection_applies_unless_the_pad_sets_its_own() {
+    let zone = relief_zone();
+    // the footprint says solid, the pad inherits: solid
+    let solid = fill_with(&zone, FillPad { footprint_zone_connection: Some(PadConnection::Full), ..gnd_pad() });
+    assert!(copper(&solid, 820, 820), "the footprint's solid connection reaches the pad");
+    // the pad says thermal, the footprint says solid: the pad wins
+    let relieved = fill_with(&zone, FillPad { footprint_zone_connection: Some(PadConnection::Full), zone_connection: Some(PadConnection::Thermal), ..gnd_pad() });
+    assert!(!copper(&relieved, 820, 820), "the pad's own thermal relief beats its footprint's");
+}
+
+#[test]
+fn thru_hole_only_relieves_a_plated_through_hole_pad_and_floods_an_smd_one() {
+    let zone = Zone { pad_connection: PadConnection::ThtThermal, ..relief_zone() };
+    let tht = fill_with(&zone, FillPad { plated_through_hole: true, ..gnd_pad() });
+    assert!(!copper(&tht, 820, 820), "a plated through-hole pad gets a relief");
+    let smd = fill_with(&zone, FillPad { plated_through_hole: false, ..gnd_pad() });
+    assert!(copper(&smd, 820, 820), "an SMD pad is connected solidly");
+}
+
+#[test]
+fn a_pads_own_gap_and_spoke_width_override_the_zones() {
+    let wide_gap = fill_with(&relief_zone(), FillPad { thermal_gap: Some(400), ..gnd_pad() });
+    let normal = fill_with(&relief_zone(), gnd_pad());
+    assert!(wide_gap.area() < normal.area() - 100_000.0, "a bigger gap takes more copper: {} vs {}", wide_gap.area(), normal.area());
+    assert!(!copper(&wide_gap, 550, 550), "400 um gap: the knockout reaches the diagonal at 550,550");
+    assert!(copper(&normal, 550, 550), "a 200 um gap does not");
+    assert!(copper(&wide_gap, 1000, 450), "and the spoke still bridges the gap on its axis");
+    // A 0.3 mm spoke is 300 wide at x = 1000 +- 150; a 0.2 mm override is 200 wide: 1000 + 120 is copper only on the wide one.
+    assert!(copper(&normal, 1130, 650), "a 300 um spoke covers x = 1130");
+    let narrow = fill_with(&relief_zone(), FillPad { spoke_width: Some(200), ..gnd_pad() });
+    assert!(!copper(&narrow, 1130, 650), "a 200 um spoke does not");
+    assert!(copper(&narrow, 1000, 650));
 }
 
 #[test]
 fn different_net_pad_gets_a_clearance_hole() {
     let zone = test_zone("GND", rect_outline(0, 0, 1000, 1000));
     let input = FillInput {
-        pads: vec![FillPad { net: Some("VCC".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 400, y0: 400, x1: 600, y1: 600 }, hole: None }],
+        pads: vec![FillPad { net: Some("VCC".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 400, y0: 400, x1: 600, y1: 600 }, hole: None, ..Default::default() }],
         ..Default::default()
     };
     let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
@@ -97,8 +188,8 @@ fn island_removal_always_drops_the_disconnected_half() {
     // FULL pad (kept), the left half touches nothing of this net (dropped
     // under ALWAYS, kept under NEVER).
     let zone = Zone { pad_connection: PadConnection::Full, min_thickness: 20, ..test_zone("GND", rect_outline(0, 0, 400, 100)) };
-    let blocker = FillPad { net: Some("OTHER".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 190, y0: -50, x1: 210, y1: 150 }, hole: None };
-    let keeper = FillPad { net: Some("GND".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 300, y0: 40, x1: 320, y1: 60 }, hole: None };
+    let blocker = FillPad { net: Some("OTHER".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 190, y0: -50, x1: 210, y1: 150 }, hole: None, ..Default::default() };
+    let keeper = FillPad { net: Some("GND".into()), layers: vec!["F.Cu".into()], copper: Shape::Rect { x0: 300, y0: 40, x1: 320, y1: 60 }, hole: None, ..Default::default() };
 
     let input_always = FillInput { pads: vec![blocker.clone(), keeper.clone()], ..Default::default() };
     let fill_always = fill_zone(&zone, "F.Cu", &input_always, no_clearance, MAX_ERROR);
@@ -117,7 +208,7 @@ fn island_removal_always_drops_the_disconnected_half() {
 #[test]
 fn higher_priority_same_net_zone_takes_its_area() {
     let zone = Zone { priority: 0, ..test_zone("GND", rect_outline(0, 0, 1000, 1000)) };
-    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("GND".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1, teardrop: false }], ..Default::default() };
+    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("GND".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1, teardrop: false, ..Default::default() }], ..Default::default() };
 
     let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
     assert!(!poly_set_contains_pt(&fill, Point64::new(500, 500)), "higher-priority same-net zone should own its area");
@@ -131,7 +222,7 @@ fn different_net_zone_gets_a_clearance_gap_not_an_exact_cut() {
     // `aKnockout->HigherPriority(aZone)` gate) -- equal priority (the
     // default for both zones here otherwise) knocks out neither.
     let zone = Zone { priority: 0, ..test_zone("GND", rect_outline(0, 0, 1000, 1000)) };
-    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("VCC".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1, teardrop: false }], ..Default::default() };
+    let input = FillInput { other_zones: vec![FillZoneRef { net: Some("VCC".into()), layer: "F.Cu".into(), outline: eda_zone_filler::chain_from_ir(&rect_outline(400, 400, 600, 600)), priority: 1, teardrop: false, ..Default::default() }], ..Default::default() };
 
     let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
     assert!(!poly_set_contains_pt(&fill, Point64::new(500, 500)));

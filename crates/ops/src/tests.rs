@@ -646,7 +646,38 @@ fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cm
         keepout_pads: z.keepout_pads,
         keepout_copper_pour: z.keepout_copper_pour,
         keepout_footprints: z.keepout_footprints,
+        smoothing: Some(z.smoothing),
+        corner_radius: Some(z.corner_radius),
     }
+}
+
+#[test]
+fn edit_zone_sets_the_outline_smoothing_and_a_missing_one_leaves_it() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| {
+        z.smoothing = eda_model::ir::ZoneSmoothing::Fillet;
+        z.corner_radius = 1_500;
+    }))
+    .unwrap();
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!((z.smoothing, z.corner_radius), (eda_model::ir::ZoneSmoothing::Fillet, 1_500));
+
+    // a client that does not know about smoothing (the field absent) leaves it as it is
+    let mut cmd = edit_zone_cmd(id.clone(), "GND", |z| z.clearance = 300);
+    if let Cmd::EditZone { smoothing, corner_radius, .. } = &mut cmd {
+        *smoothing = None;
+        *corner_radius = None;
+    }
+    b.apply(&cmd).unwrap();
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!((z.clearance, z.smoothing, z.corner_radius), (300, eda_model::ir::ZoneSmoothing::Fillet, 1_500));
+
+    let e = b.apply(&edit_zone_cmd(id, "GND", |z| z.corner_radius = -1)).unwrap_err();
+    assert_eq!(e[0].check, "ops_bad_zone");
 }
 
 #[test]
@@ -1390,6 +1421,8 @@ fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
         clearance_override: None,
         thermal_gap_override: None,
         thermal_spoke_width_override: None,
+        zone_connection: None,
+        thermal_spoke_angle_mdeg: None,
     }
 }
 
@@ -1648,9 +1681,11 @@ fn edit_footprint_properties_replaces_the_whole_panel() {
         reference_visible: false,
         value_visible: true,
         model: Some("${KICAD10_3DMODEL_DIR}/x.step".into()),
+        zone_connection: Some(PadConnection::Full),
     })
     .unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
+    assert_eq!(fp.zone_connection, Some(PadConnection::Full), "the Clearances tab's zone connection is part of the panel");
     assert_eq!(fp.description, "A test footprint");
     assert!(fp.attributes.smd);
     assert!(!fp.reference_visible);

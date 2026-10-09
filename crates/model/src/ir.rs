@@ -2205,6 +2205,12 @@ pub struct DrawingsSection {
     /// that did not come from a `.kicad_pcb`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_extras: Vec<FootprintExtra>,
+    /// Zone-connection edits made on the board to placed footprints and their pads (Footprint Properties and Pad Properties:
+    /// Zone connection, relief gap, spoke width and angle, clearance). They sit over what a `.kicad_pcb` import left in
+    /// [`FootprintExtra`], and over a published library footprint's own: see [`Design::pad_zone_facts`]. Additive: absent in an
+    /// older `design.json` reads as "no edits".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_overrides: Vec<FootprintZoneOverrides>,
     /// Explicit per-via tenting overrides (`(via ... (tenting ..))`), looked
     /// up by position+net; a via with no entry follows the board setting.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2314,6 +2320,180 @@ pub struct PadMaskInfo {
     /// `(pintype "..")`, e.g. `"free"` (see `PAD::IsFreePad`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_type: String,
+    /// `(clearance C)` (`PAD::GetLocalClearance`): the pad's own copper clearance, which replaces the net class's and the
+    /// zone's for this pad (`DRC_ENGINE::EvalRules`: a local override wins over everything but the board minimum). `None`
+    /// inherits the footprint's, then the rules'. Pre-9.0 files: 0 meant "inherit".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+    /// `(zone_connect N)` (`PAD::GetLocalZoneConnection`): how a zone connects to this pad, overriding the footprint's
+    /// and then the zone's own `pad_connection`. `None` is `INHERITED`. Read by the zone filler
+    /// (`ZONE_FILLER::knockoutThermalReliefs` -> `DRC_ENGINE::EvalZoneConnection`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    /// `(thermal_gap g)` (`PAD::GetLocalThermalGapOverride`): the pad's own thermal relief gap; `None` inherits the zone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_gap: Option<Um>,
+    /// `(thermal_bridge_width w)` (`PAD::GetLocalThermalSpokeWidthOverride`): the pad's own spoke width; `None` inherits the zone's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_width: Option<Um>,
+    /// `(thermal_bridge_angle a)` (`PAD::GetThermalSpokeAngle`), millidegrees in KiCad's own sign convention (as in the
+    /// file). `None` is the shape's default: 90 degrees for an oval or (rounded) rectangle, 45 for a circle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// One placed pad's zone-connection facts, resolved: its own override over its footprint's, then the zone's own
+/// `pad_connection` (applied by the filler, `DRC_ENGINE::EvalZoneConnection`). See [`Design::pad_zone_facts`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct PadZoneFacts {
+    /// The pad's own `(clearance ..)`; `None` inherits the footprint's. See [`PadZoneFacts::clearance`].
+    pub pad_clearance: Option<Um>,
+    /// The footprint's `(clearance ..)`.
+    pub footprint_clearance: Option<Um>,
+    /// The pad's own `(zone_connect ..)`; `None` inherits.
+    pub connection: Option<PadConnection>,
+    /// The footprint's `(zone_connect ..)`; `None` inherits (consulted when the pad inherits).
+    pub footprint_connection: Option<PadConnection>,
+    pub thermal_gap: Option<Um>,
+    pub thermal_spoke_width: Option<Um>,
+    /// Millidegrees, KiCad's sign convention; `None` is the shape's default.
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// An edit, made on the board, of the zone-connection facts of the pads that carry one pad number in one footprint (a number
+/// can be shared by several pads, all of which go on the same pin): every field is the pad's own and `None` inherits.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadZoneOverride {
+    pub number: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_gap: Option<Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_width: Option<Um>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
+}
+
+/// The footprint-level facts of a [`FootprintZoneOverrides`]: `FOOTPRINT::SetLocalZoneConnection` and `SetLocalClearance`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintZoneFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+}
+
+/// Board-level zone-connection edits of one placed footprint (`Cmd::SetFootprintZoneConnection`, `Cmd::SetPadZoneOverrides`).
+/// A footprint with `footprint` set has its footprint-level facts taken from here whole (`None` fields inherit); a pad number
+/// listed in `pads` has its facts taken from here whole. Whatever is not listed keeps the imported or published facts.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintZoneOverrides {
+    /// The footprint instance's reference designator.
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footprint: Option<FootprintZoneFacts>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pads: Vec<PadZoneOverride>,
+}
+
+impl Design {
+    /// The zone-connection facts of pad number `pad_number` (index `pad_idx` of `pad_count`) of placed footprint `fp_id`
+    /// whose definition is `footprint_name`, from the first source that has them for that pad: an edit made on the board
+    /// ([`DrawingsSection::zone_overrides`]); else the facts the footprint instance carries from a `.kicad_pcb` import
+    /// ([`FootprintExtra`], where each board pad holds its own copy, exactly KiCad); else a *published* library footprint of
+    /// that name (`Cmd::UpdateFootprintOnBoard`), since the board's pads then come from it.
+    pub fn pad_zone_facts(&self, fp_id: &str, footprint_name: &str, pad_idx: usize, pad_count: usize, pad_number: &str) -> PadZoneFacts {
+        let dr = self.drawings.as_ref();
+        // The pad's own clearance and its footprint's are kept apart until the end (the pad's wins).
+        let (mut pad_clearance, mut fp_clearance, mut facts) = (None, None, PadZoneFacts::default());
+        if let Some(extra) = dr.and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp_id)) {
+            let pad = if extra.pads.len() == pad_count { extra.pads.get(pad_idx) } else { None };
+            pad_clearance = pad.and_then(|p| p.clearance);
+            fp_clearance = extra.clearance;
+            facts = PadZoneFacts {
+                pad_clearance: None,
+                footprint_clearance: None,
+                connection: pad.and_then(|p| p.zone_connection),
+                footprint_connection: extra.zone_connection,
+                thermal_gap: pad.and_then(|p| p.thermal_gap),
+                thermal_spoke_width: pad.and_then(|p| p.thermal_spoke_width),
+                thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
+            };
+        } else if let Some(lib) = self.footprint_library.as_ref().and_then(|l| l.by_name(footprint_name)).filter(|f| f.published) {
+            let pad = if lib.pads.len() == pad_count { lib.pads.get(pad_idx) } else { None };
+            pad_clearance = pad.and_then(|p| p.clearance_override);
+            facts = PadZoneFacts {
+                pad_clearance: None,
+                footprint_clearance: None,
+                connection: pad.and_then(|p| p.zone_connection),
+                footprint_connection: lib.zone_connection,
+                thermal_gap: pad.and_then(|p| p.thermal_gap_override),
+                thermal_spoke_width: pad.and_then(|p| p.thermal_spoke_width_override),
+                thermal_spoke_angle_mdeg: pad.and_then(|p| p.thermal_spoke_angle_mdeg),
+            };
+        }
+        // Edits made on the board replace what they list, whole.
+        if let Some(edit) = dr.and_then(|d| d.zone_overrides.iter().find(|e| e.id == fp_id)) {
+            if let Some(f) = edit.footprint {
+                facts.footprint_connection = f.zone_connection;
+                fp_clearance = f.clearance;
+            }
+            if let Some(p) = edit.pads.iter().find(|p| p.number == pad_number) {
+                facts.connection = p.zone_connection;
+                facts.thermal_gap = p.thermal_gap;
+                facts.thermal_spoke_width = p.thermal_spoke_width;
+                facts.thermal_spoke_angle_mdeg = p.thermal_spoke_angle_mdeg;
+                pad_clearance = p.clearance;
+            }
+        }
+        facts.pad_clearance = pad_clearance;
+        facts.footprint_clearance = fp_clearance;
+        facts
+    }
+}
+
+impl Design {
+    /// The zone-connection facts of placed footprint `fp_id` and its pads (`pad_numbers`, in pad order; `footprint_name` is its
+    /// definition's name) as the board edit that gives another footprint the same ones, filed under `fp_id`: what a Copy, a Paste
+    /// and a Duplicate hand on, since a copy is a new footprint that has no import behind it. `None` when neither the footprint nor
+    /// any pad sets anything. See [`Design::pad_zone_facts`].
+    pub fn zone_overrides_of(&self, fp_id: &str, footprint_name: &str, pad_numbers: &[&str]) -> Option<FootprintZoneOverrides> {
+        let mut edit = FootprintZoneOverrides { id: fp_id.to_string(), ..Default::default() };
+        for (i, number) in pad_numbers.iter().enumerate() {
+            let f = self.pad_zone_facts(fp_id, footprint_name, i, pad_numbers.len(), number);
+            if edit.footprint.is_none() && (f.footprint_clearance.is_some() || f.footprint_connection.is_some()) {
+                edit.footprint = Some(FootprintZoneFacts { zone_connection: f.footprint_connection, clearance: f.footprint_clearance });
+            }
+            let own = PadZoneOverride {
+                number: (*number).to_string(),
+                clearance: f.pad_clearance,
+                zone_connection: f.connection,
+                thermal_gap: f.thermal_gap,
+                thermal_spoke_width: f.thermal_spoke_width,
+                thermal_spoke_angle_mdeg: f.thermal_spoke_angle_mdeg,
+            };
+            let is_set = own.clearance.is_some() || own.zone_connection.is_some() || own.thermal_gap.is_some() || own.thermal_spoke_width.is_some() || own.thermal_spoke_angle_mdeg.is_some();
+            // Pads that share a number share their facts (an edit names the number).
+            if is_set && !edit.pads.iter().any(|p| p.number == *number) {
+                edit.pads.push(own);
+            }
+        }
+        edit.pads.sort_by(|a, b| a.number.cmp(&b.number));
+        (edit.footprint.is_some() || !edit.pads.is_empty()).then_some(edit)
+    }
+}
+
+impl PadZoneFacts {
+    /// `PAD::GetClearanceOverrides`: the pad's own clearance, else its footprint's; `None` when neither sets one.
+    pub fn clearance(&self) -> Option<Um> {
+        self.pad_clearance.or(self.footprint_clearance)
+    }
 }
 
 /// A footprint-owned graphic (or mask-only pad) in board space.
@@ -2351,6 +2531,14 @@ pub struct FootprintExtra {
     /// `(net_tie_pad_groups "1,2" "3")`, verbatim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub net_tie_pad_groups: Vec<String>,
+    /// `(clearance C)` on the footprint (`FOOTPRINT::GetLocalClearance`): the copper clearance of every pad that does not
+    /// set its own. `None` inherits the rules'.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+    /// `(zone_connect N)` on the footprint (`FOOTPRINT::GetLocalZoneConnection`): how zones connect to every pad that
+    /// does not set its own. `None` is `INHERITED` (the zone's `pad_connection` applies).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
     /// Footprint graphics on silk/mask layers, board space.
@@ -2610,6 +2798,14 @@ pub struct LibraryPad {
     /// `PAD::GetLocalThermalSpokeWidthOverride()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thermal_spoke_width_override: Option<Um>,
+    /// `PAD::GetLocalZoneConnection()` -- the Pad Properties dialog's "Pad connection" choice; `None` is `INHERITED`
+    /// ("From parent footprint").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
+    /// `PAD::GetThermalSpokeAngle()` -- the dialog's "Spoke angle", millidegrees as in the file; `None` is the shape's
+    /// default (90 degrees for an oval or (rounded) rectangle, 45 for a circle).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thermal_spoke_angle_mdeg: Option<Millideg>,
 }
 
 /// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
@@ -2718,6 +2914,8 @@ impl LibraryPad {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 }
@@ -2798,6 +2996,10 @@ pub struct LibraryFootprint {
     /// change what's already placed without that separate, explicit step.
     #[serde(default)]
     pub published: bool,
+    /// `FOOTPRINT::GetLocalZoneConnection()` -- the Footprint Properties dialog's "Zone connection": how a zone connects to
+    /// every pad of this footprint that does not set its own. `None` is `INHERITED`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_connection: Option<PadConnection>,
 }
 
 impl Default for LibraryFootprint {
@@ -2817,6 +3019,7 @@ impl Default for LibraryFootprint {
             model: None,
             anchor: Point { x: 0, y: 0 },
             published: false,
+            zone_connection: None,
         }
     }
 }
@@ -3869,6 +4072,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 

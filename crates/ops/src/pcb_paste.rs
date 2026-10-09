@@ -17,7 +17,7 @@
 
 use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
-use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintInstance, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
+use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::{CheckResult, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -49,6 +49,9 @@ struct FootprintCopy {
     side: Side,
     label: LabelSide,
     pad_nets: Vec<(String, String)>,
+    /// How zones connect to the footprint and to its pads, as the original had it (`PAD::GetLocalZoneConnection`, the thermal
+    /// relief and the clearance overrides): the copy is filed under its own reference in `DrawingsSection::zone_overrides`.
+    zone_overrides: Option<FootprintZoneOverrides>,
     /// A paste puts a part of this board that is not placed back, rather than making a second one.
     reuse_unplaced: bool,
 }
@@ -225,6 +228,10 @@ impl Board<'_> {
             let nets = self.pad_nets_of(id);
             // A part with no footprint at all has nothing to copy.
             let name = part.footprint.clone().or_else(|| part.package.clone())?;
+            let zone_overrides = self.model.footprint_of(part).and_then(|d| {
+                let numbers: Vec<&str> = d.pads.iter().map(|p| p.number.as_str()).collect();
+                self.design.zone_overrides_of(id, &d.name, &numbers)
+            });
             copies.footprints.push(FootprintCopy {
                 reference: part.reference.clone(),
                 value: part.value.clone(),
@@ -235,6 +242,7 @@ impl Board<'_> {
                 side: fp.side,
                 label: fp.label,
                 pad_nets: nets,
+                zone_overrides,
                 reuse_unplaced: false,
             });
             return Some(Member::Footprint(copies.footprints.len() - 1));
@@ -378,6 +386,7 @@ impl Board<'_> {
                 label: f.label,
                 // KiCad's single-footprint clipboard has no nets: its pads stay on none.
                 pad_nets: f.pad_nets.clone(),
+                zone_overrides: f.zone_overrides.clone(),
                 reuse_unplaced: true,
             });
         }
@@ -454,15 +463,19 @@ impl Board<'_> {
         let mut fp_refs: Vec<String> = Vec::new();
         let mut new_parts: Vec<(BoardPart, FootprintInstance)> = Vec::new();
         let mut replaced: Vec<FootprintInstance> = Vec::new();
+        // The zone-connection edits of the copies, each under the reference its footprint ends up with.
+        let mut zone_edits: Vec<FootprintZoneOverrides> = Vec::new();
         for f in &copies.footprints {
             let at = self.snap_point(f.at.x, f.at.y);
             if f.reuse_unplaced && self.model.part(&f.reference).is_some() && self.pose_of(&f.reference).is_none() && !replaced.iter().any(|r| r.id == f.reference) {
                 replaced.push(FootprintInstance { id: f.reference.clone(), at, rot: f.rot, side: f.side, label: f.label });
+                zone_edits.extend(f.zone_overrides.iter().map(|z| FootprintZoneOverrides { id: f.reference.clone(), ..z.clone() }));
                 fp_refs.push(f.reference.clone());
                 continue;
             }
             let reference = unique_reference(&f.reference, &references);
             references.insert(reference.clone());
+            zone_edits.extend(f.zone_overrides.iter().map(|z| FootprintZoneOverrides { id: reference.clone(), ..z.clone() }));
             // Keep the pads and courtyard with the copy unless the model already knows the footprint by that name.
             let probe = Part { reference: reference.clone(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.footprint.clone()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
             let definition = match (&f.definition, self.model.footprint_of(&probe)) {
@@ -531,6 +544,14 @@ impl Board<'_> {
                 dr.board_parts.push(bp.clone());
             }
             dr.board_parts.sort_by(|a, b| a.reference.cmp(&b.reference));
+        }
+        if !zone_edits.is_empty() {
+            let dr = self.drawings_mut();
+            for e in zone_edits {
+                dr.zone_overrides.retain(|x| x.id != e.id);
+                dr.zone_overrides.push(e);
+            }
+            dr.zone_overrides.sort_by(|a, b| a.id.cmp(&b.id));
         }
         if !new_parts.is_empty() || !replaced.is_empty() {
             let fps = &mut self.design.placement.as_mut().expect("a Board always carries a placement section").footprints;

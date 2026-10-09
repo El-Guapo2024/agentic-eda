@@ -1029,6 +1029,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Rip { part } => format!("rip {part}"),
         Cmd::Flip { part } => format!("flip {part}"),
         Cmd::SetLabelSide { part, side } => format!("label-side {part} --side {side:?}"),
+        Cmd::SetFootprintZoneConnection { part, zone_connection, clearance } => format!("footprint-zone-connection {part} --connection {zone_connection:?} --clearance {clearance:?}"),
+        Cmd::SetPadZoneOverrides { part, pad, zone_connection, thermal_gap, thermal_spoke_width, thermal_spoke_angle_mdeg, clearance } => {
+            format!("pad-zone-overrides {part}.{pad} --connection {zone_connection:?} --gap {thermal_gap:?} --spoke-width {thermal_spoke_width:?} --spoke-angle {thermal_spoke_angle_mdeg:?} --clearance {clearance:?}")
+        }
 
         Cmd::AddTrack { net, layer, width, pts: p } => format!("track add --net {net} --layer {layer} --width {} --pts \"{}\"", mm(*width), pts(p)),
         Cmd::DeleteTrack { id } => format!("track delete {id}"),
@@ -1305,6 +1309,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::Rip { .. } => "rip",
         Cmd::Flip { .. } => "flip",
         Cmd::SetLabelSide { .. } => "label-side",
+        Cmd::SetFootprintZoneConnection { .. } | Cmd::SetPadZoneOverrides { .. } => "pad-zone",
         Cmd::AddTrack { .. } | Cmd::DeleteTrack { .. } | Cmd::SetTrackWidth { .. } => "track",
         Cmd::AddVia { .. } | Cmd::DeleteVia { .. } | Cmd::MoveVia { .. } | Cmd::EditVia { .. } => "via",
         Cmd::SetTrackWidthPresets { .. } | Cmd::SetViaPresets { .. } => "board-setup",
@@ -3399,6 +3404,8 @@ mod tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         };
         step(&dir, Cmd::AddPad { footprint: "2PAD".into(), pad }, false, "test").unwrap();
 
@@ -4026,6 +4033,37 @@ mod tests {
         step(&dir, Cmd::UpdateSymbolOnBoard { lib_id: "TEST:R".into() }, false, "test").unwrap();
         let (_, _, model) = load(&dir).unwrap();
         assert_eq!(model.symbol_of("TEST:R").unwrap().pins.len(), 2, "an explicit Update Symbol on Board must republish the edited definition");
+    }
+
+    /// Pad Properties' and Footprint Properties' zone connection reach the fill the studio draws (and, through the derived
+    /// `.kicad_pcb`, the one kicad-cli makes), and Undo takes each edit back: a GND pour thermal-relieves U1's GND pad, a solid
+    /// connection floods it, "None" clears it, the pad's own choice beats its footprint's.
+    #[test]
+    fn a_pads_zone_connection_changes_the_fill_and_undo_takes_it_back() {
+        let dir = scratch("pad_zone_connection");
+        setup(&dir);
+        let outline = vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }];
+        step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }, false, "test").unwrap();
+        let area = |dir: &Path| -> f64 {
+            let (_, design, model) = load(dir).unwrap();
+            let board = eda_drc::board::build(&design, &model);
+            let fills = eda_drc::fill::fill_all_zones(&board, &model.board);
+            fills.zones.values().map(|z| z.fill.area()).sum()
+        };
+        let relieved = area(&dir);
+        let set = |c: Option<eda_model::ir::PadConnection>| Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "1".into(), zone_connection: c, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
+
+        step(&dir, set(Some(eda_model::ir::PadConnection::Full)), false, "ui").unwrap();
+        let solid = area(&dir);
+        assert!(solid > relieved + 1_000_000.0, "a solid connection floods the pad's relief gap: {solid} against {relieved}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!((area(&dir) - relieved).abs() < 1.0, "Undo takes the edit back");
+
+        // the footprint says solid, the pad (its own choice) says thermal: the pad wins
+        step(&dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: None }, false, "ui").unwrap();
+        assert!(area(&dir) > relieved + 1_000_000.0, "the footprint's solid connection reaches its pad");
+        step(&dir, set(Some(eda_model::ir::PadConnection::Thermal)), false, "ui").unwrap();
+        assert!((area(&dir) - relieved).abs() < 1.0, "the pad's own thermal relief beats its footprint's solid one");
     }
 
     #[test]

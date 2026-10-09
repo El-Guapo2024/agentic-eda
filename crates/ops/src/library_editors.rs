@@ -92,6 +92,8 @@ pub fn import_pad_settings(dst: &mut LibraryPad, master: &LibraryPad) {
     dst.clearance_override = master.clearance_override;
     dst.thermal_gap_override = master.thermal_gap_override;
     dst.thermal_spoke_width_override = master.thermal_spoke_width_override;
+    dst.zone_connection = master.zone_connection;
+    dst.thermal_spoke_angle_mdeg = master.thermal_spoke_angle_mdeg;
 
     if master.shape == eda_model::ir::LibraryPadShape::Circle {
         dst.size = (dst.size.0, dst.size.0);
@@ -383,6 +385,8 @@ mod verb_tests {
             clearance_override: None,
             thermal_gap_override: None,
             thermal_spoke_width_override: None,
+            zone_connection: None,
+            thermal_spoke_angle_mdeg: None,
         }
     }
 
