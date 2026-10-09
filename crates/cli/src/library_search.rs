@@ -533,7 +533,8 @@ pub(crate) fn search_in(kind: Kind, root: &Path, query: &str, filter: &Filter, l
     let finished = ensure_background_index(kind, root);
     let libs = libraries_in(kind, root);
     let matchers = parse_query(query);
-    let done = finished.load(AtomicOrdering::Acquire);
+    // Nothing installed is nothing to wait for.
+    let done = finished.load(AtomicOrdering::Acquire) || libs.is_empty();
 
     let mut hits: Vec<Hit> = Vec::new();
     let mut indexed_count = 0usize;
@@ -921,6 +922,18 @@ mod tests {
         assert_eq!(warm["libraries"].as_array().unwrap().len(), 0);
         assert_eq!(warm["matches"], 0);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn without_kicad_installed_there_is_nothing_to_search_and_nothing_goes_wrong() {
+        let nowhere = std::env::temp_dir().join("eda-library-search-does-not-exist");
+        for kind in [Kind::Symbol, Kind::Footprint] {
+            let r = search_in(kind, &nowhere, "lm358", &Filter::default(), 50);
+            assert_eq!((r["status"].clone(), r["total"].clone(), r["matches"].clone()), (json!("ready"), json!(0), json!(0)), "{r}");
+            assert!(entries_in(kind, &nowhere, "Device", &Filter::default())["error"].is_string());
+            assert!(details_in(kind, &nowhere, "Device:R")["error"].is_string());
+        }
+        assert!(library_descriptions(Kind::Symbol, &nowhere).is_empty());
     }
 
     #[test]

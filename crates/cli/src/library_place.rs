@@ -9,6 +9,7 @@
 //!     (`Cmd::EmbedLibSymbol`, KiCad's `SCH_SCREEN::AddLibSymbol`), then adds the instance with the library's own Value and Footprint where the
 //!     command left them empty (a new `SCH_SYMBOL` copies its fields from the `LIB_SYMBOL`), then the library's Datasheet. One undo step takes
 //!     all of it back.
+//!   * `SetSymbolLibIds { changes }` (Edit Symbol Library Links) keeps the definition of every installed symbol it links to first, the same way.
 //!   * `PlaceFootprint { footprint }` carries the footprint's pads, graphics and courtyard as `definition`.
 //!
 //! A symbol the model already resolves (the intent's own, one it already uses, one the design keeps) is left alone: the design's copy wins.
@@ -23,6 +24,15 @@ pub(crate) fn with_installed_definitions(cmd: &Cmd, design: &Design, model: &Con
     rewrite(cmd, design, model, &eda_kicad::default_symbol_library_root(), &eda_kicad::default_footprint_library_root())
 }
 
+/// A library symbol the design has no definition of: a `Lib:Name` the model's explicit symbols (the intent's, a library's it resolved, a published one) and the project
+/// symbol library do not hold.
+fn lacks_definition(lib_id: &str, design: &Design, model: &ConstraintModel) -> bool {
+    lib_id.split_once(':').is_some_and(|(l, n)| !l.is_empty() && !n.is_empty())
+        && !eda_model::is_synthetic_lib_id(lib_id)
+        && !model.symbols.iter().any(|s| s.lib_id == lib_id)
+        && !design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id(lib_id).is_some())
+}
+
 fn rewrite(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &Path, footprints: &Path) -> Option<Cmd> {
     match cmd {
         Cmd::Batch { cmds } => {
@@ -31,11 +41,8 @@ fn rewrite(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &Path, 
         }
         Cmd::OnSheet { sheet, cmd } => rewrite(cmd, design, model, symbols, footprints).map(|inner| Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(inner) }),
         Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => {
-            if lib_id.split_once(':').is_none_or(|(l, n)| l.is_empty() || n.is_empty()) {
-                return None;
-            }
             // The design's own definition (the intent's, a published one, one a placed symbol already needed) stands.
-            if eda_model::is_synthetic_lib_id(lib_id) || model.symbols.iter().any(|s| &s.lib_id == lib_id) || design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id(lib_id).is_some()) {
+            if !lacks_definition(lib_id, design, model) {
                 return None;
             }
             let (definition, summary) = crate::library_search::installed_symbol(symbols, lib_id)?;
@@ -55,6 +62,20 @@ fn rewrite(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &Path, 
                 cmds.push(Cmd::EditSymbolFields { id: id.clone(), value: None, footprint: None, datasheet: Some(datasheet.to_string()) });
             }
             Some(Cmd::Batch { cmds })
+        }
+        Cmd::SetSymbolLibIds { changes, .. } => {
+            let mut embeds: Vec<Cmd> = Vec::new();
+            for (_, to) in changes {
+                if lacks_definition(to, design, model) && !embeds.iter().any(|e| matches!(e, Cmd::EmbedLibSymbol { symbol } if &symbol.lib_id == to)) {
+                    if let Some((definition, _)) = crate::library_search::installed_symbol(symbols, to) {
+                        embeds.push(Cmd::EmbedLibSymbol { symbol: definition });
+                    }
+                }
+            }
+            (!embeds.is_empty()).then(|| {
+                embeds.push(cmd.clone());
+                Cmd::Batch { cmds: embeds }
+            })
         }
         Cmd::PlaceFootprint { footprint, at, reference, value, definition: None } => {
             // The model knows it already (the intent's, a library's it resolved, the built-in table): nothing to bring.
@@ -159,6 +180,25 @@ mod tests {
         let Some(Cmd::Batch { cmds }) = rewrite(&batch, &design(), &model, &root, &root) else { panic!() };
         assert!(matches!(cmds[0], Cmd::DeleteWire { .. }) && matches!(cmds[1], Cmd::Batch { .. }));
         assert!(rewrite(&Cmd::Batch { cmds: vec![Cmd::DeleteWire { id: "w".into() }] }, &design(), &model, &root, &root).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn linking_a_symbol_to_an_installed_one_keeps_its_definition_first() {
+        let root = root_with_lm358("links");
+        let model = ConstraintModel::default();
+        let link = Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "Amplifier_Operational:LM358".into()), ("Device:C".into(), "Amplifier_Operational:LM358".into())], update_fields: true };
+        let Some(Cmd::Batch { cmds }) = rewrite(&link, &design(), &model, &root, &root) else { panic!("not rewritten") };
+        assert_eq!(cmds.len(), 2, "one copy of the definition for both links, then the command");
+        assert!(matches!(&cmds[0], Cmd::EmbedLibSymbol { symbol } if symbol.lib_id == "Amplifier_Operational:LM358"));
+        assert_eq!(cmds[1], link);
+        // a target the design resolves, or no library has, is left alone
+        let known = Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "Device:C".into())], update_fields: false };
+        let mut with_c = ConstraintModel::default();
+        with_c.symbols.push(eda_model::LibSymbol { lib_id: "Device:C".into(), graphics: vec![], pins: vec![], power: false, in_bom: true, on_board: true, datasheet: String::new(), description: String::new(), reference_prefix: "C".into(), unit_count: 1, pin_names_hidden: false, pin_numbers_hidden: false, pin_name_offset_mm: 0.0 });
+        assert!(rewrite(&known, &design(), &with_c, &root, &root).is_none());
+        let nowhere = Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "Nope:Nothing".into())], update_fields: false };
+        assert!(rewrite(&nowhere, &design(), &model, &root, &root).is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 
