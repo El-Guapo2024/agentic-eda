@@ -1137,6 +1137,7 @@ mod tests {
             user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![],
             extras: eda_model::sch_extras::SchExtras { erc_severities: [("pin_not_connected".to_string(), "warning".to_string()), ("lib_symbol_mismatch".to_string(), "warning".to_string())].into(), ..Default::default() },
             imported_from_kicad: false,
+            field_layout: Default::default(),
         });
         let json: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         let entries = json["board"]["design_settings"]["drc_exclusions"].as_array().expect("a list");
