@@ -112,17 +112,29 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     // A browser opens connections ahead of the requests it will send on them (Chrome's preconnect) and this loop reads one request at a time: a connection that has
     // said nothing yet held every request behind it until the browser closed it -- 16 s, measured, with the 3D models of a board waiting. Each connection is
     // waited on by a thread of its own and joins the loop when the first bytes of its request are there.
+    // The 3D model routes need nothing of the loop, so the connection's own thread answers them too: a model is not made to wait behind a slow `/api/state`.
     let (ready, requests) = std::sync::mpsc::channel::<TcpStream>();
+    let (model_dir, model_lane) = (dir.to_path_buf(), lane.clone());
     std::thread::Builder::new()
         .name("accept".into())
         .spawn(move || {
             for stream in listener.incoming() {
-                let Ok(stream) = stream else { continue };
-                let ready = ready.clone();
+                let Ok(mut stream) = stream else { continue };
+                let (ready, dir, lane) = (ready.clone(), model_dir.clone(), model_lane.clone());
                 std::thread::spawn(move || {
-                    if stream.peek(&mut [0u8; 1]).is_ok_and(|n| n > 0) {
-                        let _ = ready.send(stream);
+                    let mut head = [0u8; 32];
+                    let n = stream.peek(&mut head).unwrap_or(0);
+                    if n == 0 {
+                        return;
                     }
+                    if head[..n].starts_with(b"GET /api/3dmodel") || head[..n].starts_with(b"POST /api/3dmodel/") {
+                        let done = read_request(&stream).and_then(|(method, target, body)| model_routes(&mut stream, &method, &target, &body, &dir, &lane, true).unwrap_or(Err("not a model route".into())));
+                        if let Err(e) = done {
+                            let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
+                        }
+                        return;
+                    }
+                    let _ = ready.send(stream);
                 });
             }
         })
@@ -480,22 +492,13 @@ fn offload(stream: &TcpStream, lane: &Arc<Lane>, dir: &Path, job: &Job, route: &
         .map_err(|e| e.to_string())
 }
 
-#[allow(clippy::too_many_arguments)] // mirrors the existing job/schematic/glb_job cells this one more (route_session) joins.
-fn handle(
-    stream: &mut TcpStream,
-    dir: &Path,
-    job: &Job,
-    schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
-    glb_job: &GlbJob,
-    route_session: &crate::route_api::RouteCell,
-    ui_root: Option<&Path>,
-    lane: &Arc<Lane>,
-) -> Result<(), String> {
+/// One request off a connection: its method, its target (path and query) and its body.
+fn read_request(stream: &TcpStream) -> Result<(String, String, Vec<u8>), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).map_err(|e| e.to_string())?;
     let mut parts = request_line.split_whitespace();
-    let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
+    let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("/").to_string());
     let mut length = 0usize;
     loop {
         let mut header = String::new();
@@ -510,7 +513,61 @@ fn handle(
     }
     let mut body = vec![0u8; length.min(1 << 20)];
     reader.read_exact(&mut body).map_err(|e| e.to_string())?;
+    Ok((method, target, body))
+}
+
+/// The 3D model routes (crates/cli/src/model3d_api.rs), or `None` for any other request. They need nothing of the request loop, so a connection's own thread answers
+/// them (`on_own_thread`, see `serve`): a model never waits behind a slow `/api/state`.
+///
+///   - `GET /api/3dmodel?name=..`: one footprint 3D model, read-only, for the 3D view's VRMLLoader: resolved like KiCad does and held to an allow-list; a STEP model is
+///     converted to VRML by kicad-cli in the background and cached. `&wait=1` holds the request until the model is in.
+///   - `POST /api/3dmodel/prepare`: every model of the board at once, queued for one conversion run.
+fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8], dir: &Path, lane: &Arc<Lane>, on_own_thread: bool) -> Option<Result<(), String>> {
+    match (method, target.split('?').next().unwrap_or("/")) {
+        ("GET", "/api/3dmodel") => Some((|| {
+            let store = crate::model3d_api::store(lane);
+            if !crate::model3d_api::wants_wait(target) {
+                let r = crate::model3d_api::reply(dir, target, &store);
+                return respond(stream, r.status, r.kind, &r.body);
+            }
+            if on_own_thread {
+                let r = crate::model3d_api::reply_waiting(dir, target, &store);
+                return respond(stream, r.status, r.kind, &r.body);
+            }
+            // Held until the model is converted, on a thread of its own so the loop goes on (the same hand-off `offload` makes).
+            let mut out = stream.try_clone().map_err(|e| e.to_string())?;
+            let (dir, target) = (dir.to_path_buf(), target.to_string());
+            std::thread::Builder::new()
+                .name("3dmodel-wait".into())
+                .spawn(move || {
+                    let r = crate::model3d_api::reply_waiting(&dir, &target, &store);
+                    let _ = respond(&mut out, r.status, r.kind, &r.body);
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })()),
+        ("POST", "/api/3dmodel/prepare") => Some(respond(stream, "200 OK", "application/json", crate::model3d_api::prepare(dir, body, &crate::model3d_api::store(lane)).to_string().as_bytes())),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors the existing job/schematic/glb_job cells this one more (route_session) joins.
+fn handle(
+    stream: &mut TcpStream,
+    dir: &Path,
+    job: &Job,
+    schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
+    glb_job: &GlbJob,
+    route_session: &crate::route_api::RouteCell,
+    ui_root: Option<&Path>,
+    lane: &Arc<Lane>,
+) -> Result<(), String> {
+    let (method, target, body) = read_request(stream)?;
+    let (method, target) = (method.as_str(), target.as_str());
     let path = target.split('?').next().unwrap_or("/");
+    if let Some(done) = model_routes(stream, method, target, &body, dir, lane, false) {
+        return done;
+    }
 
     match (method, path) {
         ("GET", "/") => match ui_root {
@@ -526,29 +583,6 @@ fn handle(
             Ok(svg) => respond(stream, "200 OK", "image/svg+xml", svg.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
-        // One footprint 3D model, read-only, for the 3D view's VRMLLoader: resolved like KiCad does and held to an allow-list; a STEP model is converted to
-        // VRML by kicad-cli in the background and cached (crates/cli/src/model3d_api.rs).
-        ("GET", "/api/3dmodel") => {
-            let store = crate::model3d_api::store(lane);
-            if crate::model3d_api::wants_wait(target) {
-                // `&wait=1`: held until the model is converted, on a thread of its own so the loop goes on (the same hand-off `offload` makes).
-                let mut out = stream.try_clone().map_err(|e| e.to_string())?;
-                let (dir, target) = (dir.to_path_buf(), target.to_string());
-                std::thread::Builder::new()
-                    .name("3dmodel-wait".into())
-                    .spawn(move || {
-                        let r = crate::model3d_api::reply_waiting(&dir, &target, &store);
-                        let _ = respond(&mut out, r.status, r.kind, &r.body);
-                    })
-                    .map(|_| ())
-                    .map_err(|e| e.to_string())
-            } else {
-                let r = crate::model3d_api::reply(dir, target, &store);
-                respond(stream, r.status, r.kind, &r.body)
-            }
-        }
-        // Every model of the board at once, queued for one conversion run (crates/cli/src/model3d_api.rs `prepare`).
-        ("POST", "/api/3dmodel/prepare") => respond(stream, "200 OK", "application/json", crate::model3d_api::prepare(dir, &body, &crate::model3d_api::store(lane)).to_string().as_bytes()),
         ("GET", "/api/schematic") => {
             // `?sheet=<id>/<id>/...`: a `/`-joined path of `SheetInstance::id`s
             // from the root down to whichever sheet the Hierarchy panel has

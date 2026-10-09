@@ -439,3 +439,27 @@ fn a_connection_that_has_sent_nothing_does_not_hold_up_the_requests_behind_it() 
     late.read_to_string(&mut raw).unwrap();
     assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
 }
+
+/// The 3D model routes are answered on the connection's own thread, not by the request loop: a model does not wait behind whatever the loop is busy with (a
+/// `/api/state` of two seconds on the QA board in a debug build, with the page's models queued behind it). A request that has not finished arriving keeps the loop
+/// busy, which is the stand-in for it here.
+#[test]
+fn a_3d_model_request_is_answered_while_the_request_loop_is_busy() {
+    let studio = Studio::start("model_beside_loop", 0);
+    let mut busy = TcpStream::connect(("127.0.0.1", studio.port)).unwrap();
+    write!(busy, "POST /api/cmd HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\nabc").unwrap(); // the loop now waits for the other 97 bytes
+    std::thread::sleep(Duration::from_millis(200));
+    let (port, (tx, rx)) = (studio.port, std::sync::mpsc::channel());
+    std::thread::spawn(move || {
+        let model = request(port, "GET", "/api/3dmodel?name=nothing.step", "");
+        let prepare = request(port, "POST", "/api/3dmodel/prepare", r#"{"names":["nothing.step"]}"#);
+        let _ = tx.send((model, prepare));
+    });
+    let ((m_status, m_body, _), (p_status, p_body, _)) = rx.recv_timeout(Duration::from_secs(20)).expect("a 3D model request waited for the busy request loop");
+    assert_eq!(m_status, 404, "{m_body}");
+    assert_eq!(p_status, 200, "{p_body}");
+    assert_eq!(serde_json::from_str::<Value>(&p_body).unwrap()["missing"], 1, "{p_body}");
+    drop(busy);
+    // The loop goes on once the busy request is gone.
+    assert_eq!(studio.request("GET", "/api/version", "").0, 200);
+}
