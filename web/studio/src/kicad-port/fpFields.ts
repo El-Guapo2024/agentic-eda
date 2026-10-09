@@ -191,16 +191,17 @@ export function newFieldLayout(part: Part): FieldLayoutCmd {
  * made. `pad` is what the dialog holds.
  */
 export function checkPadValues(pad: { kind: string; shape: string; size: [Um, Um]; drill?: Um | null; slot?: [Um, Um] | null; ratio?: number | null; pasteRatio?: number | null }, fmt: (um: Um) => string): string | null {
-  if (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.size[1] <= 0)) return "Pad size must be greater than zero.";
+  // `PAD::doCheckPad`: "(Pad must have a positive size)"; `CheckPad`: a through-hole pad with no hole, "(PTH pad hole leaves no copper)".
+  if (pad.size[0] <= 0 || (pad.shape !== "circle" && pad.size[1] <= 0)) return "Error: (Pad must have a positive size)";
   const hole = pad.kind !== "smd";
   if (hole) {
     const round = pad.slot == null;
-    if (round && (pad.drill ?? 0) <= 0) return "Hole size must be greater than zero.";
-    if (!round && ((pad.slot?.[0] ?? 0) <= 0 || (pad.slot?.[1] ?? 0) <= 0)) return "Hole size must be greater than zero.";
+    if (round && (pad.drill ?? 0) <= 0) return "Error: Through hole pad has no hole.";
+    if (!round && ((pad.slot?.[0] ?? 0) <= 0 || (pad.slot?.[1] ?? 0) <= 0)) return "Error: Through hole pad has no hole.";
     const [hw, hh] = round ? [pad.drill ?? 0, pad.drill ?? 0] : (pad.slot as [Um, Um]);
     const [pw, ph] = pad.shape === "circle" ? [pad.size[0], pad.size[0]] : pad.size;
     // A plated hole needs copper around it; a non-plated one may be as big as its pad.
-    if (pad.kind === "through_hole" && (hw >= pw || hh >= ph)) return `Hole is too large for the pad: leave a ring of copper around the ${fmt(Math.max(hw, hh))} hole.`;
+    if (pad.kind === "through_hole" && (hw >= pw || hh >= ph)) return `Error: (PTH pad hole leaves no copper): the ${fmt(Math.max(hw, hh))} hole is as big as the pad.`;
   }
   if (pad.shape === "round_rect" && pad.ratio != null && (pad.ratio < 0 || pad.ratio > 0.5)) return "Corner radius ratio must be between 0 and 50%.";
   if (pad.pasteRatio != null && (pad.pasteRatio < -0.5 || pad.pasteRatio > 1)) return "Solder paste ratio must be between -50% and 100%.";

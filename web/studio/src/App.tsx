@@ -28,6 +28,7 @@ import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
 import { CommonOverlay } from "./components/CommonOverlay";
 import { CommonToolHost } from "./components/CommonToolHost";
 import { CommonDialogs } from "./components/CommonDialogs";
+import { BoardPadPropertiesDialog } from "./components/BoardPadPropertiesDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
@@ -230,6 +231,7 @@ function StudioFrame() {
       <PreferencesDialog />
       <ZoomAreaOverlay />
       <FootprintPropertiesDialog />
+      <BoardPadPropertiesDialog />
       <NetInspectorDialog />
       <ZoneDialog />
       <TextDialog />

@@ -682,6 +682,8 @@ export interface StudioState {
   footprintPropertiesOpen: boolean;
   /** E on a selected track/via/zone/shape: which one's read-only properties dialog is open (null = closed). Text has its own full-edit dialog (textDialog); a part has footprintPropertiesOpen. */
   itemPropertiesId: string | null;
+  /** E / a double-click on a pad of the board: the id (`REF.NUM[#k]`) of the pad whose Pad Properties dialog is open (null = closed) -- components/BoardPadPropertiesDialog.tsx. */
+  boardPadPropertiesId: string | null;
   /** pcbnew.Control.showNetInspector ("Net Inspector") -- a basic net/pad-count list, not KiCad's full dockable inspector. */
   netInspectorOpen: boolean;
   toast: { message: string; kind: "error" | "info" } | null;
@@ -907,6 +909,7 @@ const initialState: StudioState = {
   hotkeysDialogOpen: false,
   footprintPropertiesOpen: false,
   itemPropertiesId: null,
+  boardPadPropertiesId: null,
   netInspectorOpen: false,
   toast: null,
   cursorUm: null,
@@ -1000,6 +1003,7 @@ export type Action =
   | { type: "SET_HOTKEYS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_FOOTPRINT_PROPERTIES_OPEN"; open: boolean }
   | { type: "SET_ITEM_PROPERTIES_ID"; id: string | null }
+  | { type: "SET_BOARD_PAD_PROPERTIES_ID"; id: string | null }
   | { type: "SET_NET_INSPECTOR_OPEN"; open: boolean }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" }
@@ -1176,6 +1180,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         dimensionEditId: null,
         textDialog: null,
         itemPropertiesId: null,
+        boardPadPropertiesId: null,
         schLabelPending: null,
         schSheetPending: null,
         busUnfold: null,
@@ -1301,6 +1306,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, footprintPropertiesOpen: action.open };
     case "SET_ITEM_PROPERTIES_ID":
       return { ...state, itemPropertiesId: action.id };
+    case "SET_BOARD_PAD_PROPERTIES_ID":
+      return { ...state, boardPadPropertiesId: action.id };
     case "SET_NET_INSPECTOR_OPEN":
       return { ...state, netInspectorOpen: action.open };
     case "TOAST":

@@ -1,88 +1,118 @@
-// Port of pcbnew/dialogs/dialog_create_array{,_base}.cpp -- "Create
-// Array..." (pcbnew.Array.createArray, Ctrl+T, task item 6). Scoped to
-// the board editor half of source's dialog: `ARRAY_TOOL::CreateArray`'s
-// own `enableArrayNumbering = m_isFootprintEditor` means the footprint-
-// editor pad-numbering panel (`ARRAY_PAD_NUMBER_PROVIDER`, the
-// `ARRAY_AXIS` numeric/hex/alphabetic schemes) never shows in the board
-// editor either -- this app's footprint editor has no multi-pad array
-// tooling of its own to hang that half on yet, see PARITY-pcb.md section
-// 17. Footprint reannotation (`m_radioBtnKeepRefs`/`m_radioBtnUniqueRefs`)
-// is not ported either -- a placed part's id *is* its schematic symbol's
-// id, so there is no "assign a fresh unique reference" this app's ops
-// layer could do without breaking that link.
+// Port of pcbnew/dialogs/dialog_create_array{,_base}.cpp -- "Create Array" (pcbnew.Array.createArray, Ctrl+T) for the board editor: a grid or a circular array of the
+// selection, as copies ("Duplicate selection", the default) or as a new arrangement of the selected items ("Arrange selection"), with the dialog's own entries:
+//   Grid Array      Grid Array Size, Items Spacing (spacing and offset), Stagger Settings (Rows / Columns), Grid Position (Source items remain in place / Centre on
+//                   source items);
+//   Circular Array  Center position (typed, or "Select Point..." / "Select Item..." on the board), Duplication Settings (Full circle, Direction, Angle between items,
+//                   Item count, First item angle, Rotate items);
+//   below the tabs  Item Source (Duplicate / Arrange selection) and, for copies, Footprint Annotation (Keep existing reference designators / Assign unique reference
+//                   designators: `ReannotateDuplicates`).
+// The entries are text, read when OK is pressed (`TransferDataFromWindow`): a bad one is named, with what was typed, and the dialog stays. The last values that went
+// through are kept for the next time (`s_arrayOptions`). The circular centre starts at `ARRAY_TOOL::CreateArray`'s `origin` -- the item, or the middle of the selection --
+// which the dialog of this KiCad version is handed and never uses; here it is the default.
 //
-// "Duplicate" (default) vs "Arrange selection" mirrors source's own
-// `m_radioBtnDuplicateSelection`/`m_radioBtnArrangeSelection`. Angles are
-// plain typed magnitudes plus a Clockwise/Counterclockwise direction
-// radio, same as source's `m_rbCircDirection` -- unlike MoveExactDialog's
-// single signed rotation field, this needs no CCW-positive-then-negate
-// bridge (see `ArrayGeometry`'s own doc in api/types.ts).
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { umFrom, umTo, type LengthUnit } from "../state/units";
-import type { ArrayGeometry } from "../api/types";
+// Not KiCad's: a small picture of where the items go, drawn from the entries as they are typed. Not ported: the footprint editor's half of the dialog (pad numbering with
+// `ARRAY_AXIS`), which has no multi-pad selection to work on here, and which the board editor never shows either (`enableArrayNumbering = m_isFootprintEditor`).
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
+import {
+  DEFAULT_ARRAY_OPTIONS,
+  arrayCmd,
+  arrayOrigin,
+  entriesOf,
+  lengthEntry,
+  optionsFromEntries,
+  previewPoints,
+  rememberedOptions,
+  type ArrayEntries,
+  type ArrayOptions,
+} from "../kicad-port/arrayOptions";
+import { itemBounds, itemPosition } from "../kicad-port/pcbItems";
+import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import type { LengthUnit } from "../state/units";
 
-type Tab = "grid" | "circular";
-
-/** This item's own reference point, in whichever of this model's five
- * arrayable kinds (plus a placed part, arrange-mode only) it names -- the
- * same per-kind anchor `array_offset`/`ArrayGeometry::transform` use on
- * the backend. `null` for a group or an unknown id (skipped there too). */
-function referencePointUm(api: ReturnType<typeof useStudioApi>, id: string): [number, number] | null {
-  const part = api.partByRef(id);
-  if (part?.placed && part.at) return part.at;
-  const via = api.viaById(id);
-  if (via) return [via.x, via.y];
-  const text = api.textById(id);
-  if (text) return [text.x, text.y];
-  const track = api.trackById(id);
-  if (track?.pts[0]) return track.pts[0];
-  const zone = api.zoneById(id);
-  if (zone?.outline[0]) return zone.outline[0];
-  const shape = api.shapeById(id);
-  if (shape) {
-    const pt = "start" in shape ? shape.start : "center" in shape ? shape.center : shape.pts[0];
-    if (pt) return pt;
-  }
-  return null;
-}
+/** `s_arrayOptions`: what the last Create Array that went through held. */
+let remembered: ArrayOptions = DEFAULT_ARRAY_OPTIONS;
 
 export function CreateArrayDialog() {
+  return useStudioState().createArrayDialogOpen ? <ArrayForm /> : null;
+}
+
+const MAX_DRAWN = 400;
+
+/** The picture: the positions the first item goes to, the centre and the circle for a circular array. */
+function Preview({ points, circle }: { points: Array<[number, number]>; circle: { centre: [number, number]; through: [number, number] } | null }) {
+  const W = 436;
+  const H = 110;
+  const edge = 10;
+  const drawn = points.slice(0, MAX_DRAWN);
+  const all: Array<[number, number]> = circle ? [...drawn, circle.centre] : drawn;
+  if (all.length === 0) {
+    return (
+      <div data-testid="array-preview" style={{ height: H, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--chrome-text-dim)", fontSize: 11 }}>
+        Nothing to show until the entries make an array.
+      </div>
+    );
+  }
+  const xs = all.map((p) => p[0]);
+  const ys = all.map((p) => p[1]);
+  let radius = 0;
+  if (circle) radius = Math.hypot(circle.through[0] - circle.centre[0], circle.through[1] - circle.centre[1]);
+  const x0 = Math.min(...xs, ...(circle ? [circle.centre[0] - radius] : []));
+  const x1 = Math.max(...xs, ...(circle ? [circle.centre[0] + radius] : []));
+  const y0 = Math.min(...ys, ...(circle ? [circle.centre[1] - radius] : []));
+  const y1 = Math.max(...ys, ...(circle ? [circle.centre[1] + radius] : []));
+  const scale = Math.min((W - 2 * edge) / Math.max(x1 - x0, 1), (H - 2 * edge) / Math.max(y1 - y0, 1));
+  const px = (x: number) => edge + (W - 2 * edge - (x1 - x0) * scale) / 2 + (x - x0) * scale;
+  const py = (y: number) => edge + (H - 2 * edge - (y1 - y0) * scale) / 2 + (y - y0) * scale;
+  return (
+    <svg data-testid="array-preview" width="100%" viewBox={`0 0 ${W} ${H}`} style={{ display: "block", maxHeight: H }} role="img" aria-label={`${points.length} positions`}>
+      {circle && (
+        <>
+          <circle cx={px(circle.centre[0])} cy={py(circle.centre[1])} r={radius * scale} fill="none" stroke="var(--chrome-border)" strokeDasharray="3 3" />
+          <path d={`M${px(circle.centre[0]) - 4} ${py(circle.centre[1])}h8M${px(circle.centre[0])} ${py(circle.centre[1]) - 4}v8`} stroke="var(--chrome-text-dim)" />
+        </>
+      )}
+      {drawn.map((p, i) => (
+        <circle key={i} cx={px(p[0])} cy={py(p[1])} r={i === 0 ? 4 : 2.5} fill={i === 0 ? "none" : "var(--chrome-accent)"} stroke="var(--chrome-accent)" strokeWidth={i === 0 ? 1.5 : 0} />
+      ))}
+    </svg>
+  );
+}
+
+/** One labelled entry of the dialog, with the unit after it. */
+function Entry({ label, tip, value, onChange, unit, disabled, testid }: { label: string; tip?: string; value: string; onChange: (v: string) => void; unit?: string; disabled?: boolean; testid: string }) {
+  return (
+    <label title={tip} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, opacity: disabled ? 0.5 : 1 }}>
+      <span style={{ width: 128, flexShrink: 0 }}>{label}</span>
+      <input value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} aria-label={label.replace(/:$/, "")} data-testid={testid} style={{ flex: 1, minWidth: 0 }} />
+      <span style={{ width: 26, flexShrink: 0, color: "var(--chrome-text-dim)" }}>{unit ?? ""}</span>
+    </label>
+  );
+}
+
+function Radio({ checked, onChange, children, tip, testid }: { checked: boolean; onChange: () => void; children: ReactNode; tip?: string; testid: string }) {
+  return (
+    <label title={tip} style={{ display: "block", marginBottom: 2 }}>
+      <input type="radio" checked={checked} onChange={onChange} data-testid={testid} /> {children}
+    </label>
+  );
+}
+
+function ArrayForm() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  const open = state.createArrayDialogOpen;
-  const unit: LengthUnit = state.units;
+  const units: LengthUnit = state.units;
+  const board = state.board;
+  const ids = useMemo(() => [...state.selection], [state.selection]);
+  const origin = useMemo(() => (board ? arrayOrigin(ids, (id) => itemPosition(board, id), (id) => itemBounds(board, id)) : null), [board, ids]);
 
-  const [tab, setTab] = useState<Tab>("grid");
-  const [arrange, setArrange] = useState(false);
-
-  // Grid, source's own CREATE_ARRAY_DIALOG_ENTRIES defaults (5x5, 2.54mm pitch).
-  const [nx, setNx] = useState(5);
-  const [ny, setNy] = useState(5);
-  const [dx, setDx] = useState(2.54);
-  const [dy, setDy] = useState(2.54);
-  const [offsetX, setOffsetX] = useState(0);
-  const [offsetY, setOffsetY] = useState(0);
-  const [stagger, setStagger] = useState(0);
-  const [staggerRows, setStaggerRows] = useState(true);
-  const [centred, setCentred] = useState(false);
-
-  // Circular, source's own defaults (4 points, 90 degrees apart, clockwise).
-  const [centerX, setCenterX] = useState(0);
-  const [centerY, setCenterY] = useState(0);
-  const [centerInit, setCenterInit] = useState(false);
-  const [count, setCount] = useState(4);
-  const [divideEvenly, setDivideEvenly] = useState(false);
-  const [angleDeg, setAngleDeg] = useState(90);
-  const [angleOffsetDeg, setAngleOffsetDeg] = useState(0);
-  const [clockwise, setClockwise] = useState(true);
-  const [rotateItems, setRotateItems] = useState(false);
-
+  const [flags, setFlags] = useState<ArrayOptions>(() => remembered);
+  const [entries, setEntries] = useState<ArrayEntries>(() => entriesOf({ ...remembered, centerX: origin?.[0] ?? remembered.centerX, centerY: origin?.[1] ?? remembered.centerY }, units));
+  const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // `OnSelectCenterButton`: the centre can be picked on the board ("Select center item..." / "Select center point...") while the dialog waits.
+  // `OnSelectCenterButton`: the centre can be picked on the board while the dialog waits (it steps aside, keeping what was typed).
   const [picking, setPicking] = useState(false);
   const pickingRef = useRef(false);
   useEffect(
@@ -91,6 +121,20 @@ export function CreateArrayDialog() {
     },
     []
   );
+  useEffect(() => {
+    if (picking) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false });
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [picking, dispatch]);
+
+  const set = (key: keyof ArrayEntries, value: string) => setEntries((e) => ({ ...e, [key]: value }));
+  const flag = <K extends keyof ArrayOptions>(key: K, value: ArrayOptions[K]) => setFlags((f) => ({ ...f, [key]: value }));
   const runPick = async <T,>(pick: () => Promise<T | null>): Promise<T | null> => {
     pickingRef.current = true;
     setPicking(true);
@@ -99,227 +143,223 @@ export function CreateArrayDialog() {
     setPicking(false);
     return result;
   };
-  const setCenterUm = (x: number, y: number) => {
-    setCenterX(Math.round(umTo(x, unit) * 1000) / 1000);
-    setCenterY(Math.round(umTo(y, unit) * 1000) / 1000);
-  };
+  const setCentre = (x: number, y: number) => setEntries((e) => ({ ...e, centerX: lengthEntry(Math.round(x), units), centerY: lengthEntry(Math.round(y), units) }));
   /** `UpdatePickedItem`: the centre becomes the item's position. */
-  const selectCenterItem = async () => {
+  const selectCentreItem = async () => {
     const id = await runPick(() => pickItem("Select center item..."));
-    const at = id ? referencePointUm(api, id) : null;
-    if (at) setCenterUm(at[0], at[1]);
+    const at = id && board ? itemPosition(board, id) : null;
+    if (at) setCentre(at[0], at[1]);
   };
   /** `UpdatePickedPoint`: the centre becomes the point. */
-  const selectCenterPoint = async () => {
+  const selectCentrePoint = async () => {
     const p = await runPick(() => pickPoint("Select center point..."));
-    if (p) setCenterUm(p.x, p.y);
+    if (p) setCentre(p.x, p.y);
   };
 
-  const ids = useMemo(() => [...state.selection], [state.selection]);
+  if (picking) return null;
 
-  // One-time default for the circular center: the average reference
-  // point of whatever is selected -- `ARRAY_TOOL::CreateArray`'s own
-  // `origin` (a single item's own position, or the selection's center).
-  if (open && !centerInit && ids.length > 0) {
-    const pts = ids.map((id) => referencePointUm(api, id)).filter((p): p is [number, number] => p != null);
-    if (pts.length > 0) {
-      const avgX = pts.reduce((s, p) => s + p[0], 0) / pts.length;
-      const avgY = pts.reduce((s, p) => s + p[1], 0) / pts.length;
-      setCenterX(Math.round(umTo(avgX, unit) * 1000) / 1000);
-      setCenterY(Math.round(umTo(avgY, unit) * 1000) / 1000);
-    }
-    setCenterInit(true);
-  }
+  const close = () => dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false });
+  const parsed = optionsFromEntries(flags, entries, units);
+  const points = parsed.ok && origin ? previewPoints(parsed.options, origin) : [];
+  const circular = flags.tab === "circular";
+  // With "Full circle" the angle entry is disabled and shows the division (`calculateCircularArrayProperties`).
+  const count = Number(entries.count);
+  const angleShown = flags.fullCircle && Number.isInteger(count) && count > 0 ? String(Number((360 / count).toFixed(4))) : entries.angle;
 
-  if (!open || picking) return null;
-
-  const close = () => {
-    dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false });
-    // Reset to source's own defaults for next time, same as every other
-    // one-shot dialog in this app (CleanupTracksDialog.tsx etc).
-    setTab("grid");
-    setArrange(false);
-    setCentred(false);
-    setStagger(0);
-    setCenterInit(false);
-    setDivideEvenly(false);
-  };
-
-  const effectiveAngleDeg = divideEvenly && count > 0 ? 360 / count : angleDeg;
-
-  const geometry: ArrayGeometry =
-    tab === "grid"
-      ? {
-          kind: "grid",
-          nx,
-          ny,
-          dx: Math.round(umFrom(dx, unit)),
-          dy: Math.round(umFrom(dy, unit)),
-          offset_x: Math.round(umFrom(offsetX, unit)),
-          offset_y: Math.round(umFrom(offsetY, unit)),
-          centred,
-          stagger,
-          stagger_rows: staggerRows,
-          horizontal_then_vertical: true,
-        }
-      : {
-          kind: "circular",
-          center: { x: Math.round(umFrom(centerX, unit)), y: Math.round(umFrom(centerY, unit)) },
-          count,
-          angle_millideg: Math.round(effectiveAngleDeg * 1000),
-          angle_offset_millideg: Math.round(angleOffsetDeg * 1000),
-          clockwise,
-          rotate_items: rotateItems,
-        };
-
-  const valid = tab === "grid" ? nx >= 1 && ny >= 1 && (nx === 1 || dx !== 0) && (ny === 1 || dy !== 0) : count >= 1 && (count === 1 || effectiveAngleDeg !== 0);
-
-  const create = async () => {
-    if (ids.length === 0 || !valid) return;
+  const submit = async () => {
+    const r = optionsFromEntries(flags, entries, units);
+    if (!r.ok) return setError(r.error);
+    if (ids.length === 0) return setError("Select at least one item first.");
+    setError(null);
     setBusy(true);
     try {
-      const ok = await api.cmd({ op: "create_array", ids, geometry, arrange });
-      if (ok) close();
+      if (await api.cmd(arrayCmd(r.options, ids))) {
+        remembered = rememberedOptions(r.options);
+        close();
+      }
     } finally {
       setBusy(false);
     }
   };
 
+  const group = (legend: string, children: ReactNode) => (
+    <fieldset style={{ marginBottom: 8 }}>
+      <legend>{legend}</legend>
+      {children}
+    </fieldset>
+  );
+
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 500 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Create Array</span>
+          <span>
+            {ids.length} item{ids.length === 1 ? "" : "s"}
+          </span>
         </div>
-        <div className="dialog-body">
+        <div
+          className="dialog-body"
+          style={{ maxHeight: "76vh", overflowY: "auto" }}
+          data-testid="create-array"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && e.target instanceof HTMLInputElement && e.target.type === "text") void submit();
+          }}
+        >
           <div style={{ display: "flex", gap: 4, marginBottom: 10 }}>
-            <button className={tab === "grid" ? "primary" : undefined} onClick={() => setTab("grid")} style={{ flex: 1 }}>
-              Grid
+            <button className={!circular ? "primary" : undefined} onClick={() => flag("tab", "grid")} style={{ flex: 1 }} data-testid="array-tab-grid">
+              Grid Array
             </button>
-            <button className={tab === "circular" ? "primary" : undefined} onClick={() => setTab("circular")} style={{ flex: 1 }}>
-              Circular
+            <button className={circular ? "primary" : undefined} onClick={() => flag("tab", "circular")} style={{ flex: 1 }} data-testid="array-tab-circular">
+              Circular Array
             </button>
           </div>
 
-          {tab === "grid" && (
-            <div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <label style={{ flex: 1 }}>
-                  Horizontal count
-                  <input type="number" min={1} step={1} value={nx} onChange={(e) => setNx(Math.max(1, Math.round(Number(e.target.value))))} style={{ width: "100%" }} />
-                </label>
-                <label style={{ flex: 1 }}>
-                  Vertical count
-                  <input type="number" min={1} step={1} value={ny} onChange={(e) => setNy(Math.max(1, Math.round(Number(e.target.value))))} style={{ width: "100%" }} />
-                </label>
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                <label style={{ flex: 1 }}>
-                  Spacing X ({unit})
-                  <input type="number" step="any" value={dx} onChange={(e) => setDx(Number(e.target.value))} style={{ width: "100%" }} />
-                </label>
-                <label style={{ flex: 1 }}>
-                  Spacing Y ({unit})
-                  <input type="number" step="any" value={dy} onChange={(e) => setDy(Number(e.target.value))} style={{ width: "100%" }} />
-                </label>
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                <label style={{ flex: 1 }}>
-                  Offset X ({unit})
-                  <input type="number" step="any" value={offsetX} onChange={(e) => setOffsetX(Number(e.target.value))} style={{ width: "100%" }} />
-                </label>
-                <label style={{ flex: 1 }}>
-                  Offset Y ({unit})
-                  <input type="number" step="any" value={offsetY} onChange={(e) => setOffsetY(Number(e.target.value))} style={{ width: "100%" }} />
-                </label>
-              </div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-                <label style={{ flex: 1 }} title="A brick/honeycomb offset every Nth row or column; 0 or 1 disables it.">
-                  Stagger
-                  <input type="number" step={1} value={stagger} onChange={(e) => setStagger(Math.round(Number(e.target.value)))} style={{ width: "100%" }} />
-                </label>
-                <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 14 }}>
-                  <input type="radio" checked={staggerRows} onChange={() => setStaggerRows(true)} /> Rows
-                </label>
-                <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 14 }}>
-                  <input type="radio" checked={!staggerRows} onChange={() => setStaggerRows(false)} /> Columns
-                </label>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <label className="filter-row" style={{ display: "block" }}>
-                  <input type="radio" checked={!centred} onChange={() => setCentred(false)} /> Keep the original position at one corner
-                </label>
-                <label className="filter-row" style={{ display: "block" }}>
-                  <input type="radio" checked={centred} onChange={() => setCentred(true)} /> Centre the array on the original position
-                </label>
-              </div>
-            </div>
+          {!circular && (
+            <>
+              {group(
+                "Grid Array Size",
+                <>
+                  <Entry label="Horizontal count:" tip="Number of columns" value={entries.nx} onChange={(v) => set("nx", v)} testid="array-nx" />
+                  <Entry label="Vertical count:" tip="Number of rows" value={entries.ny} onChange={(v) => set("ny", v)} testid="array-ny" />
+                </>
+              )}
+              {group(
+                "Items Spacing",
+                <>
+                  <Entry label="Horizontal spacing:" tip="Distance between columns" value={entries.dx} onChange={(v) => set("dx", v)} unit={units} testid="array-dx" />
+                  <Entry label="Vertical spacing:" tip="Distance between rows" value={entries.dy} onChange={(v) => set("dy", v)} unit={units} testid="array-dy" />
+                  <Entry label="Horizontal offset:" tip="Offset added to the next row position." value={entries.offsetX} onChange={(v) => set("offsetX", v)} unit={units} testid="array-offset-x" />
+                  <Entry label="Vertical offset:" tip="Offset added to the next column position" value={entries.offsetY} onChange={(v) => set("offsetY", v)} unit={units} testid="array-offset-y" />
+                </>
+              )}
+              {group(
+                "Stagger Settings",
+                <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                  <div style={{ flex: 1 }}>
+                    <Entry label="Stagger:" tip="Value -1, 0 or 1 disable this option." value={entries.stagger} onChange={(v) => set("stagger", v)} testid="array-stagger" />
+                  </div>
+                  <Radio checked={flags.staggerRows} onChange={() => flag("staggerRows", true)} testid="array-stagger-rows">
+                    Rows
+                  </Radio>
+                  <Radio checked={!flags.staggerRows} onChange={() => flag("staggerRows", false)} testid="array-stagger-columns">
+                    Columns
+                  </Radio>
+                </div>
+              )}
+              {group(
+                "Grid Position",
+                <>
+                  <Radio checked={!flags.centred} onChange={() => flag("centred", false)} testid="array-in-place">
+                    Source items remain in place
+                  </Radio>
+                  <Radio checked={flags.centred} onChange={() => flag("centred", true)} testid="array-centred">
+                    Centre on source items
+                  </Radio>
+                </>
+              )}
+            </>
           )}
 
-          {tab === "circular" && (
-            <div>
-              <div style={{ display: "flex", gap: 8 }}>
-                <label style={{ flex: 1 }}>
-                  Centre X ({unit})
-                  <input type="number" step="any" value={centerX} onChange={(e) => setCenterX(Number(e.target.value))} style={{ width: "100%" }} />
-                </label>
-                <label style={{ flex: 1 }}>
-                  Centre Y ({unit})
-                  <input type="number" step="any" value={centerY} onChange={(e) => setCenterY(Number(e.target.value))} style={{ width: "100%" }} />
-                </label>
-              </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                <button type="button" style={{ flex: 1 }} onClick={() => void selectCenterPoint()}>
-                  Select Point...
-                </button>
-                <button type="button" style={{ flex: 1 }} onClick={() => void selectCenterItem()}>
-                  Select Item...
-                </button>
-              </div>
-              <label style={{ display: "block", marginTop: 6 }}>
-                Point count
-                <input type="number" min={1} step={1} value={count} onChange={(e) => setCount(Math.max(1, Math.round(Number(e.target.value))))} style={{ width: "100%" }} />
-              </label>
-              <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
-                <input type="checkbox" checked={divideEvenly} onChange={(e) => setDivideEvenly(e.target.checked)} /> Divide evenly (360&deg; / count)
-              </label>
-              <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-                <label style={{ flex: 1 }}>
-                  Angle between points (&deg;)
-                  <input type="number" step="any" value={divideEvenly ? Math.round(effectiveAngleDeg * 1000) / 1000 : angleDeg} onChange={(e) => setAngleDeg(Number(e.target.value))} disabled={divideEvenly} style={{ width: "100%" }} />
-                </label>
-                <label style={{ flex: 1 }}>
-                  Angle offset (&deg;)
-                  <input type="number" step="any" value={angleOffsetDeg} onChange={(e) => setAngleOffsetDeg(Number(e.target.value))} style={{ width: "100%" }} />
-                </label>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                <label className="filter-row" style={{ display: "block" }}>
-                  <input type="radio" checked={clockwise} onChange={() => setClockwise(true)} /> Clockwise
-                </label>
-                <label className="filter-row" style={{ display: "block" }}>
-                  <input type="radio" checked={!clockwise} onChange={() => setClockwise(false)} /> Counterclockwise
-                </label>
-              </div>
-              <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }} title="Also spin each item in place by the same angle -- only a footprint or text actually turns; a track/via/zone/shape only ever moves along the circle (see PARITY-pcb.md section 17).">
-                <input type="checkbox" checked={rotateItems} onChange={(e) => setRotateItems(e.target.checked)} /> Rotate items as they are placed
-              </label>
-            </div>
+          {circular && (
+            <>
+              {group(
+                "Center position",
+                <>
+                  <Entry label="Center pos X:" value={entries.centerX} onChange={(v) => set("centerX", v)} unit={units} testid="array-center-x" />
+                  <Entry label="Center pos Y:" value={entries.centerY} onChange={(v) => set("centerY", v)} unit={units} testid="array-center-y" />
+                  <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                    <button type="button" style={{ flex: 1 }} onClick={() => void selectCentrePoint()} data-testid="array-select-point">
+                      Select Point...
+                    </button>
+                    <button type="button" style={{ flex: 1 }} onClick={() => void selectCentreItem()} data-testid="array-select-item">
+                      Select Item...
+                    </button>
+                  </div>
+                </>
+              )}
+              {group(
+                "Duplication Settings",
+                <>
+                  <label style={{ display: "block", marginBottom: 4 }}>
+                    <input type="checkbox" checked={flags.fullCircle} onChange={(e) => flag("fullCircle", e.target.checked)} data-testid="array-full-circle" /> Full circle
+                  </label>
+                  <div style={{ marginBottom: 4 }}>
+                    <span style={{ color: "var(--chrome-text-dim)" }}>Direction</span>
+                    <div style={{ display: "flex", gap: 16 }}>
+                      <Radio checked={flags.clockwise} onChange={() => flag("clockwise", true)} testid="array-clockwise">
+                        Clockwise
+                      </Radio>
+                      <Radio checked={!flags.clockwise} onChange={() => flag("clockwise", false)} testid="array-anticlockwise">
+                        Anti-clockwise
+                      </Radio>
+                    </div>
+                  </div>
+                  <Entry
+                    label="Angle between items:"
+                    tip={'Positive angles represent an anti-clockwise rotation. An angle of 0 will produce a full circle divided evenly into "Count" portions.'}
+                    value={angleShown}
+                    onChange={(v) => set("angle", v)}
+                    unit="deg"
+                    disabled={flags.fullCircle}
+                    testid="array-angle"
+                  />
+                  <Entry label="Item count:" tip="How many items in the array." value={entries.count} onChange={(v) => set("count", v)} testid="array-count" />
+                  <Entry label="First item angle:" tip="Angle offset of the first item in the array" value={entries.offsetAngle} onChange={(v) => set("offsetAngle", v)} unit="deg" testid="array-offset-angle" />
+                  <label title="Rotate the item as well as move it - multi-selections will be rotated together" style={{ display: "block", marginTop: 4 }}>
+                    <input type="checkbox" checked={flags.rotateItems} onChange={(e) => flag("rotateItems", e.target.checked)} data-testid="array-rotate-items" /> Rotate items
+                  </label>
+                </>
+              )}
+            </>
           )}
 
-          <label className="filter-row" style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 12, paddingTop: 8, borderTop: "1px solid var(--chrome-border, #333)" }}>
-            <input type="checkbox" checked={arrange} onChange={(e) => setArrange(e.target.checked)} /> Arrange selection (reposition the {ids.length} selected item{ids.length === 1 ? "" : "s"} instead of duplicating)
-          </label>
+          {group(
+            "Item Source",
+            <>
+              <Radio checked={!flags.arrange} onChange={() => flag("arrange", false)} testid="array-duplicate">
+                Duplicate selection
+              </Radio>
+              <Radio checked={flags.arrange} onChange={() => flag("arrange", true)} tip="This can conflict with reference designators in the schematic that have not yet been synchronized with the board." testid="array-arrange">
+                Arrange selection
+              </Radio>
+            </>
+          )}
+          {!flags.arrange &&
+            group(
+              "Footprint Annotation",
+              <>
+                <Radio checked={!flags.reannotate} onChange={() => flag("reannotate", false)} testid="array-keep-refs">
+                  Keep existing reference designators
+                </Radio>
+                <Radio checked={flags.reannotate} onChange={() => flag("reannotate", true)} tip="This can conflict with reference designators in the schematic that have not yet been synchronized with the board." testid="array-unique-refs">
+                  Assign unique reference designators
+                </Radio>
+              </>
+            )}
+
+          <div style={{ marginTop: 4 }}>
+            <Preview points={points} circle={circular && parsed.ok && origin ? { centre: [parsed.options.centerX, parsed.options.centerY], through: origin } : null} />
+            <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", textAlign: "right" }} data-testid="array-count-note">
+              {points.length > 0 ? `${points.length} position${points.length === 1 ? "" : "s"}${ids.length > 1 && !flags.arrange ? `, ${points.length * ids.length} items` : ""}` : ""}
+            </div>
+          </div>
           {ids.length === 0 && <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>Select at least one item first.</div>}
+          {error && (
+            <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "8px 0 0", fontSize: 12, whiteSpace: "pre-line" }} data-testid="array-error">
+              {error}
+            </p>
+          )}
         </div>
         <div className="dialog-footer">
-          <button onClick={close}>Cancel</button>
-          <button className="primary" onClick={create} disabled={busy || ids.length === 0 || !valid}>
-            Create Array
+          <button onClick={close} data-testid="array-cancel">
+            Cancel
+          </button>
+          <button className="primary" onClick={() => void submit()} disabled={busy || ids.length === 0} data-testid="array-ok">
+            OK
           </button>
         </div>
       </div>
     </div>
   );
 }
-

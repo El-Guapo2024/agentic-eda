@@ -133,12 +133,12 @@ test("pad values: sizes, holes and ratios are refused with the dialog's words", 
   const fmt = (um: number) => `${um / 1000} mm`;
   const ok = { kind: "through_hole", shape: "circle", size: [1600, 1600] as [number, number], drill: 800 };
   assert.equal(checkPadValues(ok, fmt), null);
-  assert.equal(checkPadValues({ ...ok, size: [0, 0] }, fmt), "Pad size must be greater than zero.");
-  assert.equal(checkPadValues({ ...ok, drill: 0 }, fmt), "Hole size must be greater than zero.");
-  assert.match(checkPadValues({ ...ok, drill: 1600 }, fmt)!, /Hole is too large for the pad/);
+  assert.equal(checkPadValues({ ...ok, size: [0, 0] }, fmt), "Error: (Pad must have a positive size)");
+  assert.equal(checkPadValues({ ...ok, drill: 0 }, fmt), "Error: Through hole pad has no hole.");
+  assert.match(checkPadValues({ ...ok, drill: 1600 }, fmt)!, /PTH pad hole leaves no copper/);
   assert.equal(checkPadValues({ ...ok, kind: "non_plated_hole", drill: 1600 }, fmt), null, "a non-plated hole may be as big as its pad");
   assert.equal(checkPadValues({ kind: "smd", shape: "rect", size: [600, 400], drill: null }, fmt), null, "an SMD pad has no hole");
-  assert.match(checkPadValues({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [900, 1000] }, fmt)!, /too large/);
+  assert.match(checkPadValues({ kind: "through_hole", shape: "oval", size: [1500, 900], slot: [900, 1000] }, fmt)!, /leaves no copper/);
   assert.equal(checkPadValues({ kind: "smd", shape: "round_rect", size: [600, 400], ratio: 0.7 }, fmt), "Corner radius ratio must be between 0 and 50%.");
   assert.equal(checkPadValues({ kind: "smd", shape: "rect", size: [600, 400], pasteRatio: -0.8 }, fmt), "Solder paste ratio must be between -50% and 100%.");
 });
