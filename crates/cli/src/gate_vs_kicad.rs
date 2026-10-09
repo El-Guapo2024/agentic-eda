@@ -14,6 +14,10 @@
 //!
 //! kicad-cli runs with `--all-track-errors`: by default it reports only the first violation of each track
 //! (`DRC_ENGINE::GetReportAllTrackErrors`), so a pair it does not list may still be one it stopped looking for.
+//!
+//! The third test is the board outline's: shoves toward the top edge of `mcu30` -- committed with the strict gates off, since
+//! `routing_pass_through_pad` refuses some of them for a reason that is not the edge's -- leave kicad-cli no
+//! `copper_edge_clearance` violation. Before the outline was a router obstacle they did (a shoved track ended 300 um from it).
 
 #[cfg(test)]
 mod tests {
@@ -189,5 +193,57 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
         }
         assert!(bad.is_empty(), "the gate fails pairs kicad-cli reports clean: {bad:?}");
+    }
+
+    /// `copper_edge_clearance` violations and the other copper kinds in kicad-cli's report for the board in `dir`.
+    fn edge_and_copper_counts(dir: &Path) -> (u64, u64) {
+        let report = crate::kicad_engine::drc(dir, false).expect("kicad-cli ran");
+        let count = |kind: &str| report["counts"][kind].as_u64().unwrap_or(0);
+        (count("copper_edge_clearance"), count("clearance") + count("shorting_items") + count("tracks_crossing") + count("hole_clearance"))
+    }
+
+    #[test]
+    fn a_shove_toward_the_board_edge_leaves_kicad_cli_no_copper_edge_clearance_violation_on_mcu30() {
+        if !kicad_available() {
+            return;
+        }
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let candidates = [std::env::var_os("EDA_MCU30_DIR").map(PathBuf::from), Some(manifest.join("../../work/mcu30")), Some(manifest.join("../../../../../work/mcu30"))];
+        let Some(src) = candidates.into_iter().flatten().find(|p| p.join("design.json").exists()) else {
+            eprintln!("work/mcu30 not found (EDA_MCU30_DIR); skipping");
+            return;
+        };
+        let dir = scratch("mcu30_shove");
+        copy_dir(&src, &dir);
+        let (_, design, _) = board::load(&dir).unwrap();
+        if design.nets.as_ref().is_some_and(|n| n.iter().any(|n| n.name.starts_with("NET_"))) {
+            board::undo(&dir, "test", None).expect("one undo");
+        }
+        let baseline = edge_and_copper_counts(&dir);
+        eprintln!("mcu30: {} copper_edge_clearance, {} copper clearance violations before", baseline.0, baseline.1);
+
+        // LED8 leaves D8.1 at (9875, 7200) straight toward the top edge (y = 4544), pushing the GND track along y = 5619 ahead of it.
+        let mut pushed = 0;
+        for tip_y in [6_300, 5_900, 5_700, 5_600, 5_500, 5_400, 5_000, 4_700] {
+            let (_, design, model) = board::load(&dir).unwrap();
+            let mut router = eda_pns::router::Router::new(&design, &model);
+            router.settings.mode = eda_pns::settings::Mode::Shove;
+            router.start(eda_model::ir::Point { x: 9_875, y: 7_200 }, "F.Cu", 200).expect("D8.1 starts a route");
+            let at = eda_model::ir::Point { x: 9_875, y: tip_y };
+            let Some(commit) = router.finish(at) else {
+                eprintln!("tip {tip_y}: the router refuses it");
+                continue;
+            };
+            pushed += commit.remove_track_ids.len().min(1);
+            let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
+            board::step(&dir, cmd, false, "test").expect("the commit applies");
+            let after = edge_and_copper_counts(&dir);
+            eprintln!("tip {tip_y}: {} copper_edge_clearance, {} copper clearance violations after", after.0, after.1);
+            assert!(after.0 <= baseline.0, "a shove to y = {tip_y} leaves {} copper_edge_clearance violation(s) (there were {})", after.0, baseline.0);
+            assert!(after.1 <= baseline.1, "a shove to y = {tip_y} leaves {} copper clearance violation(s) (there were {})", after.1, baseline.1);
+            board::undo(&dir, "test", None).expect("undo the commit");
+        }
+        assert!(pushed > 0, "none of the routes pushed a track: the test is not testing a shove");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
