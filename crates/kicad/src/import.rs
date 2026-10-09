@@ -1681,9 +1681,21 @@ fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
     (shapes, texts)
 }
 
-/// An item's `(stroke (width ..))`, micrometres.
+/// An item's `(stroke (width ..))`, or the `(width ..)` of the files before it (KiCad 6 and older), micrometres.
 fn stroke_width_of(item: &[Sexpr]) -> i64 {
-    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
+    sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).or_else(|| sexpr::find(item, "width")).and_then(|w| sexpr::num(w, 1)).map(mm_to_um).unwrap_or(0)
+}
+
+/// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
+/// three points of the arc (`parsePCB_SHAPE`: `SetCenter`, `SetStart`, `SetArcAngleAndEnd( A )` -- the end is the start turned by A, the
+/// middle by half of it, the same way, in the file's own axes). Returns (start, mid, end).
+fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
+    let turn = |deg: f64| -> Point {
+        let (s, c) = deg.to_radians().sin_cos();
+        let (dx, dy) = ((start.x - center.x) as f64, (start.y - center.y) as f64);
+        Point { x: center.x + (dx * c - dy * s).round() as i64, y: center.y + (dx * s + dy * c).round() as i64 }
+    };
+    (start, turn(angle_deg / 2.0), turn(angle_deg))
 }
 
 /// An item's `(layer ..)`.
@@ -1704,7 +1716,14 @@ fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Point) -> Opti
     let (layer, stroke_width, filled) = (layer_of(item), stroke_width_of(item), filled_of(item));
     Some(match tag {
         "gr_line" => Shape::Segment { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
-        "gr_arc" => Shape::Arc { id: String::new(), layer, stroke_width, filled, start: pt("start")?, mid: pt("mid")?, end: pt("end")? },
+        "gr_arc" => match sexpr::find(item, "angle").and_then(|a| sexpr::num(a, 1)).filter(|_| sexpr::find(item, "mid").is_none()) {
+            // The legacy grammar: `start` is the centre and `end` the start of the arc.
+            Some(angle) => {
+                let (start, mid, end) = legacy_arc(pt("start")?, pt("end")?, angle);
+                Shape::Arc { id: String::new(), layer, stroke_width, filled, start, mid, end }
+            }
+            None => Shape::Arc { id: String::new(), layer, stroke_width, filled, start: pt("start")?, mid: pt("mid")?, end: pt("end")? },
+        },
         "gr_rect" => Shape::Rect { id: String::new(), layer, stroke_width, filled, start: pt("start")?, end: pt("end")? },
         "gr_circle" => Shape::Circle { id: String::new(), layer, stroke_width, filled, center: pt("center")?, end: pt("end")? },
         "gr_poly" => Shape::Polygon { id: String::new(), layer, stroke_width, filled, pts: poly_points(item)?.into_iter().map(&at).collect() },

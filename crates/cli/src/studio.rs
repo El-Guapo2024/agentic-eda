@@ -1081,6 +1081,12 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "name": Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board"),
         "dir": dir.display().to_string(),
         "outline": pl.map(|pl| pl.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()),
+        // The outline the way KiCad builds it from Edge.Cuts (`eda_drc::outline::board_outline`): every outline with its cutouts, where `outline`
+        // is one polygon. `outline_is_shapes`: the canvas draws the Edge.Cuts shapes themselves and not the polygon. `outline_errors`: what
+        // kicad-cli reports as `invalid_outline`.
+        "outline_polys": outline_polys_json(&design),
+        "outline_is_shapes": eda_model::outline::outline_is_shapes(&design),
+        "outline_errors": outline_errors_json(&design),
         "layers": model.board.layers,
         "snap": meta.snap_um,
         "parts": parts,
@@ -1180,6 +1186,35 @@ fn shape_json(s: &Shape) -> Value {
             json!({ "id": id, "kind": "bezier", "layer": layer, "stroke_width": stroke_width, "filled": filled, "start": pt(*start), "c1": pt(*c1), "c2": pt(*c2), "end": pt(*end) })
         }
     }
+}
+
+/// `BOARD::GetBoardPolygonOutlines`: `[{ "outer": [[x, y], ..], "holes": [[[x, y], ..], ..] }, ..]`, micrometres. A board with no outline is `[]`; one
+/// whose Edge.Cuts do not close is KiCad's guess, the rectangle round the edges (`outline_errors` says so).
+fn outline_polys_json(design: &eda_model::ir::Design) -> Value {
+    let outline = eda_drc::outline::board_outline(design, true);
+    let ring = |c: &eda_shape_poly_set::LineChain| c.iter().map(|p| json!([p.x, p.y])).collect::<Vec<_>>();
+    Value::Array(
+        (0..outline.polys.outline_count())
+            .map(|i| json!({ "outer": ring(outline.polys.outline(i)), "holes": (0..outline.polys.hole_count(i)).map(|h| ring(outline.polys.hole(i, h))).collect::<Vec<_>>() }))
+            .collect(),
+    )
+}
+
+/// What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board, from the live port of the same check:
+/// `[{ "message", "at": [x, y], "items": [id, ..] }, ..]`. Only a board with Edge.Cuts beyond its polygon is checked.
+fn outline_errors_json(design: &eda_model::ir::Design) -> Value {
+    if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design)) {
+        return json!([]);
+    }
+    Value::Array(
+        eda_drc::outline::check_board_outline(design)
+            .iter()
+            .map(|e| {
+                let items: Vec<String> = e.item_a.iter().chain(e.item_b.iter()).cloned().collect();
+                json!({ "message": e.describe(), "at": [e.at.x, e.at.y], "items": items })
+            })
+            .collect(),
+    )
 }
 
 /// Task item 7. `kind`/`units`/`units_format`/`text_position`/

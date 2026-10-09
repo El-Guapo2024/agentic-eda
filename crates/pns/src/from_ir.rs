@@ -60,32 +60,34 @@ pub fn build_node(design: &Design, model: &ConstraintModel) -> (Node, LayerMap) 
         node.add(Item::Via(Via { net: v.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: v.at, diameter: v.diameter, drill: v.drill, source_via: Some(v.id.clone()), locked: false }));
     }
 
-    add_board_outline(&mut node, design, &layers);
+    add_board_outline(&mut node, &drc_board, &layers);
 
     (node, layers)
 }
 
 /// The board outline as router obstacles: `PNS_KICAD_IFACE_BASE::syncGraphicalItem` for each graphic on Edge.Cuts. Every
-/// segment of the outline becomes a `SOLID` on every copper layer, with no net (it collides with everything, whatever the
-/// net), not routable, and a zero-width shape (`SetWidth( 0 )` for an Edge.Cuts `SH_SEGMENT`), so a track or via keeps the
-/// board's copper-to-edge clearance from it (`Node::clearance_to`) and a shove cannot push copper past it. The outline is the
-/// design's one closed polygon, last point joined to the first; an inner cutout is not in the IR and so not an obstacle.
-fn add_board_outline(node: &mut Node, design: &Design, layers: &LayerMap) {
-    let Some(placement) = &design.placement else { return };
-    let outline = &placement.outline;
-    let n = outline.len();
-    if n < 2 {
-        return;
-    }
-    // Two points are one segment, not the same one twice.
-    let segments = if n == 2 { 1 } else { n };
-    for i in 0..segments {
-        let (a, b) = (outline[i], outline[(i + 1) % n]);
-        if a == b {
-            continue;
+/// side of every Edge.Cuts item -- the outline polygon's, an arc's chords, a circle's or a rectangle's ring, a curve's flattening
+/// (`MakeEffectiveShapes`) -- becomes a `SOLID` on every copper layer, with no net (it collides with everything, whatever the
+/// net), not routable, and a zero-width shape (`SetWidth( 0 )` for an Edge.Cuts `SH_SEGMENT`/`SH_ARC`), so a track or via keeps the
+/// board's copper-to-edge clearance from it (`Node::clearance_to`) and a shove cannot push copper past it. A cutout is an obstacle
+/// like the outer edge: copper keeps the clearance from the hole's rim too.
+fn add_board_outline(node: &mut Node, board: &eda_drc::board::DrcBoard, layers: &LayerMap) {
+    let mut i = 0usize;
+    for shape in &board.edge_cuts {
+        for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_UM as f64) {
+            let n = chain.pts.len();
+            let sides = if chain.closed { n } else { n.saturating_sub(1) };
+            for k in 0..sides {
+                let (a, b) = (chain.pts[k], chain.pts[(k + 1) % n]);
+                let index = i;
+                i += 1;
+                if a == b {
+                    continue;
+                }
+                let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+                node.add(Item::Solid(Solid { net: None, layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: 0 }, source: format!("edge:{index}"), edge: true }));
+            }
         }
-        let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-        node.add(Item::Solid(Solid { net: None, layers: layers.all(), pos: mid, shape: Shape::Stadium { a, b, r: 0 }, source: format!("edge:{i}"), edge: true }));
     }
 }
 

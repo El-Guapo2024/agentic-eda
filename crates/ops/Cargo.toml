@@ -7,6 +7,8 @@ edition = "2021"
 eda-model = { path = "../model" }
 eda-gates = { path = "../gates" }
 eda-connectivity = { path = "../connectivity" }
+# The board outline from Edge.Cuts (`eda_drc::outline`): the summary polygon is kept in step with the shapes.
+eda-drc = { path = "../drc" }
 # KiCad's PCB clipboard text (`Cmd::PasteClipboard`): the reader that turns it into items.
 eda-kicad = { path = "../kicad" }
 eda-engine = { path = "../engine" }

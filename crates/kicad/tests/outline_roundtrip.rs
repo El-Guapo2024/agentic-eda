@@ -199,6 +199,28 @@ fn a_footprints_edge_cuts_are_board_shapes_in_board_space() {
 }
 
 #[test]
+fn a_board_from_before_kicad_7_closes_its_outline_through_its_centre_start_angle_arcs() {
+    // `(gr_arc (start CENTER) (end ARC_START) (angle A))` and `(width W)` on the item: the grammar of files up to KiCad 6 (issue8909 is one).
+    // The corner arc goes from (20, 5) a quarter turn about (15, 5) to (15, 10).
+    let items = r#"	(gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts") (width 0.1) (tstamp 55555555-0000-0000-0000-000000000001))
+	(gr_line (start 20 0) (end 20 5) (layer "Edge.Cuts") (width 0.1) (tstamp 55555555-0000-0000-0000-000000000002))
+	(gr_arc (start 15 5) (end 20 5) (angle 90) (layer "Edge.Cuts") (width 0.1) (tstamp 55555555-0000-0000-0000-000000000003))
+	(gr_line (start 15 10) (end 0 10) (layer "Edge.Cuts") (width 0.1) (tstamp 55555555-0000-0000-0000-000000000004))
+	(gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts") (width 0.1) (tstamp 55555555-0000-0000-0000-000000000005))
+"#;
+    let (design, model, notes) = import_kicad_pcb(&board(items)).expect("imports");
+    assert_eq!(notes.outline_source, "shapes", "{notes:?}");
+    assert!(!notes.outline_open && notes.outline_errors.is_empty(), "{:?}", notes.outline_errors);
+    assert_eq!(model.board.outline_closed, Some(true));
+    let arc = edge_shapes(&design).into_iter().find(|s| matches!(s, Shape::Arc { .. })).expect("the arc");
+    assert_eq!(arc.points(), vec![p(20_000, 5_000), p(18_536, 8_536), p(15_000, 10_000)]);
+    assert_eq!(arc.stroke_width(), 100, "the legacy (width ..) is the stroke width");
+    // The exported file writes it in today's grammar and it reads back as the same arc.
+    let text = export(&design, &model);
+    assert!(text.contains("(gr_arc (start 20 5) (mid 18.536 8.536) (end 15 10)"), "{text}");
+}
+
+#[test]
 fn a_tilted_footprint_rectangle_becomes_a_polygon() {
     let text = board(
         r#"	(gr_rect (start 0 0) (end 40 30) (stroke (width 0.1) (type default)) (fill no) (layer "Edge.Cuts") (uuid "44444444-0000-0000-0000-000000000001"))

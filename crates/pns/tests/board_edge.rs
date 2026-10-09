@@ -3,8 +3,8 @@
 //! from it, whatever net class it is in, and a shove cannot push a track past it. Before this, a shove toward the edge ended
 //! inside the clearance and kicad-cli reported `copper_edge_clearance` on a shoved track (seen on `mcu30`).
 
-use eda_drc::kimath::Shape;
-use eda_model::ir::{Design, PlacementSection, Point, Provenance, RoutingSection, Track, Um};
+use eda_drc::kimath::Shape as Shape2;
+use eda_model::ir::{Design, DrawingsSection, PlacementSection, Point, Provenance, RoutingSection, Shape, Track, Um};
 use eda_model::{ConstraintModel, NetClass};
 use eda_pns::from_ir::build_node;
 use eda_pns::item::{net_of, Item};
@@ -47,7 +47,7 @@ fn edges(node: &Node) -> Vec<(Point, Point)> {
         .iter()
         .filter_map(|(_, it)| match it {
             Item::Solid(s) if s.edge => match &s.shape {
-                Shape::Stadium { a, b, r: 0 } => Some((*a, *b)),
+                Shape2::Stadium { a, b, r: 0 } => Some((*a, *b)),
                 other => panic!("an edge is a zero-width segment, not {other:?}"),
             },
             _ => None,
@@ -62,9 +62,9 @@ fn gap_to_outline(pts: &[Point], width: Um) -> f64 {
     let outline = [p(0, 0), p(20_000, 0), p(20_000, 20_000), p(0, 20_000)];
     let mut best = f64::MAX;
     for w in pts.windows(2) {
-        let seg = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
+        let seg = Shape2::Stadium { a: w[0], b: w[1], r: width / 2 };
         for i in 0..4 {
-            best = best.min(seg.gap_to(&Shape::Stadium { a: outline[i], b: outline[(i + 1) % 4], r: 0 }));
+            best = best.min(seg.gap_to(&Shape2::Stadium { a: outline[i], b: outline[(i + 1) % 4], r: 0 }));
         }
     }
     best
@@ -92,7 +92,7 @@ fn copper_keeps_the_boards_edge_clearance_from_the_outline_not_its_net_classs() 
     let near = |gap: Um, model: &ConstraintModel| {
         let (design, _) = board(true, vec![]);
         let (node, layers) = build_node(&design, model);
-        let shape = Shape::Stadium { a: p(5_000, gap + 100), b: p(15_000, gap + 100), r: 100 };
+        let shape = Shape2::Stadium { a: p(5_000, gap + 100), b: p(15_000, gap + 100), r: 100 };
         // the router's own layer index of F.Cu and B.Cu: an edge is in the way on both
         let hit = |layer: &str| !node.all_colliding(&shape, &net_of("SIG"), LayerRange::single(layers.index_of(layer).unwrap()), &model.board, &[]).is_empty();
         (hit("F.Cu"), hit("B.Cu"))
@@ -190,4 +190,57 @@ fn a_head_that_would_end_inside_the_clearance_is_marked_and_a_pad_free_one_is_no
     router.start(p(10_000, 8_000), "F.Cu", 200).unwrap();
     assert!(!router.preview(p(10_000, 700)).unwrap().colliding, "600 um of copper from the edge is clear");
     assert!(router.preview(p(10_000, 500)).unwrap().colliding, "400 um is inside the clearance");
+}
+
+/// A 20 mm square whose top-right corner is a 5 mm arc, with a 6 mm round hole in it: all Edge.Cuts shapes, the outline polygon only their summary.
+fn board_with_an_arc_and_a_hole() -> (Design, ConstraintModel) {
+    let edge = |s: Shape| s;
+    let line = |a: Point, b: Point| edge(Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: a, end: b });
+    let (mid_x, mid_y) = (15_000 + (5_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Um, 15_000 + (5_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as Um);
+    let shapes = vec![
+        line(p(0, 0), p(20_000, 0)),
+        line(p(20_000, 0), p(20_000, 15_000)),
+        Shape::Arc { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: p(20_000, 15_000), mid: p(mid_x, mid_y), end: p(15_000, 20_000) },
+        line(p(15_000, 20_000), p(0, 20_000)),
+        line(p(0, 20_000), p(0, 0)),
+        Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: p(8_000, 10_000), end: p(11_000, 10_000) },
+    ];
+    let (mut design, model) = board(false, vec![]);
+    let mut drawings = DrawingsSection { shapes, outline_is_shapes: true, ..Default::default() };
+    drawings.assign_missing_ids();
+    design.drawings = Some(drawings);
+    (design, model)
+}
+
+#[test]
+fn an_arc_edge_and_a_cutout_are_obstacles_like_the_outer_edge() {
+    let (design, model) = board_with_an_arc_and_a_hole();
+    let (node, layers) = build_node(&design, &model);
+    let sides = edges(&node);
+    // The arc is chords of its curve, every one of them on the 5 mm circle round (15, 15).
+    let on_arc: Vec<_> = sides.iter().filter(|(a, b)| [a, b].iter().all(|q| ((q.x - 15_000) as f64).hypot((q.y - 15_000) as f64) > 4_990.0 && q.x >= 15_000 && q.y >= 15_000)).collect();
+    assert!(on_arc.len() >= 10, "{} chords of the corner arc in {} edges", on_arc.len(), sides.len());
+    // The hole is a ring round (8, 10) of radius 3 mm.
+    let on_ring = sides.iter().filter(|(a, b)| [a, b].iter().all(|q| (((q.x - 8_000) as f64).hypot((q.y - 10_000) as f64) - 3_000.0).abs() < 10.0)).count();
+    assert!(on_ring >= 30, "{on_ring} sides of the hole's ring");
+    assert_eq!(sides.len(), 4 + on_arc.len() + on_ring, "and the four straight sides, nothing else: {sides:?}");
+
+    // Copper keeps the board's 0.5 mm from the hole's rim, as it does from the outer edge: a 200 um track 400 um from the ring is in the
+    // way, one 520 um from it is not.
+    let near_hole = |gap: Um| {
+        let shape = Shape2::Stadium { a: p(11_000 + gap + 100, 9_000), b: p(11_000 + gap + 100, 11_000), r: 100 };
+        ["F.Cu", "B.Cu"].map(|l| !node.all_colliding(&shape, &net_of("SIG"), LayerRange::single(layers.index_of(l).unwrap()), &model.board, &[]).is_empty())
+    };
+    assert_eq!(near_hole(400), [true, true]);
+    assert_eq!(near_hole(520), [false, false]);
+    // ... and from the corner's arc.
+    let near_corner = |gap: Um| {
+        // On the diagonal, `gap` inside the arc's 5 mm radius round (15, 15).
+        let r = 5_000.0 - gap as f64 - 100.0;
+        let c = p(15_000 + (r * std::f64::consts::FRAC_1_SQRT_2) as Um, 15_000 + (r * std::f64::consts::FRAC_1_SQRT_2) as Um);
+        let shape = Shape2::Stadium { a: c, b: c, r: 100 };
+        !node.all_colliding(&shape, &net_of("SIG"), LayerRange::single(layers.index_of("F.Cu").unwrap()), &model.board, &[]).is_empty()
+    };
+    assert!(near_corner(300), "300 um from the corner arc is inside the 500");
+    assert!(!near_corner(560), "560 um is outside it");
 }

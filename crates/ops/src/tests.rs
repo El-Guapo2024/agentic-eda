@@ -850,6 +850,52 @@ fn add_shape_move_and_delete() {
 }
 
 #[test]
+fn the_outline_summary_follows_the_edge_cuts_shapes_when_they_are_the_outline() {
+    let m = net_model();
+    let mut b = board(&m);
+    let edge = |a: Point, c: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: a, end: c };
+    let p = |x, y| Point { x, y };
+    // An imported board whose outline is its shapes: a 10 x 10 mm square, `placement.outline` the ring that stands for it.
+    let mut d = b.design().clone();
+    d.drawings = Some(eda_model::ir::DrawingsSection {
+        shapes: vec![edge(p(0, 0), p(10_000, 0)), edge(p(10_000, 0), p(10_000, 10_000)), edge(p(10_000, 10_000), p(0, 10_000)), edge(p(0, 10_000), p(0, 0))],
+        outline_is_shapes: true,
+        ..Default::default()
+    });
+    d.drawings.as_mut().unwrap().assign_missing_ids();
+    eda_drc::outline::refresh_outline_summary(&mut d);
+    let mut b = Board::new(d, &m, 100, 300);
+    let area = |b: &Board| {
+        let o = &b.design().placement.as_ref().unwrap().outline;
+        (0..o.len()).map(|i| o[i].x * o[(i + 1) % o.len()].y - o[(i + 1) % o.len()].x * o[i].y).sum::<i64>().abs() / 2
+    };
+    assert_eq!(area(&b), 100_000_000);
+
+    // A circular cutout drawn on Edge.Cuts is a hole: the summary ring is the outer ring still, but the shape is in the outline.
+    let hole = Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: p(5_000, 5_000), end: p(7_000, 5_000) };
+    b.apply(&Cmd::AddShape { shape: hole }).unwrap();
+    assert_eq!(area(&b), 100_000_000, "a cutout does not change the outer ring");
+    let outline = eda_drc::outline::board_outline(b.design(), false);
+    assert_eq!((outline.polys.outline_count(), outline.polys.hole_count(0)), (1, 1));
+
+    // Taking the right side 2 mm in changes the outline, and the summary follows (the cutout stays well inside).
+    let right = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.x == 10_000 && end.x == 10_000)).unwrap().id().to_string();
+    let top = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.y == 10_000 && end.y == 10_000)).unwrap().id().to_string();
+    let bottom = b.design().drawings.as_ref().unwrap().shapes.iter().find(|s| matches!(s, Shape::Segment { start, end, .. } if start.y == 0 && end.y == 0)).unwrap().id().to_string();
+    for id in [&right, &top, &bottom] {
+        b.apply(&Cmd::DeleteShape { id: id.clone() }).unwrap();
+    }
+    b.apply(&Cmd::AddShape { shape: edge(p(0, 0), p(8_000, 0)) }).unwrap();
+    b.apply(&Cmd::AddShape { shape: edge(p(8_000, 0), p(8_000, 10_000)) }).unwrap();
+    b.apply(&Cmd::AddShape { shape: edge(p(8_000, 10_000), p(0, 10_000)) }).unwrap();
+    assert_eq!(area(&b), 80_000_000, "the summary is the new 8 x 10 mm outline");
+    // A cutout that crosses the outline is malformed, as in KiCad; the summary is then the rectangle round the edges.
+    assert_eq!(eda_drc::outline::check_board_outline(b.design()).len(), 0);
+    b.apply(&Cmd::AddShape { shape: Shape::Circle { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: p(8_000, 5_000), end: p(9_500, 5_000) } }).unwrap();
+    assert!(!eda_drc::outline::check_board_outline(b.design()).is_empty());
+}
+
+#[test]
 fn add_shape_accepts_a_bezier_and_moving_it_shifts_all_four_control_points() {
     // `pcbnew.InteractiveDrawing.bezier` commits one `PCB_SHAPE` of type BEZIER: start, C1, C2, end.
     let m = net_model();

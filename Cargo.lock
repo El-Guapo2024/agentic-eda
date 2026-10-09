@@ -712,6 +712,7 @@ version = "0.1.0"
 dependencies = [
  "eda-clipper2",
  "eda-connectivity",
+ "eda-drc",
  "eda-engine",
  "eda-gates",
  "eda-kicad",

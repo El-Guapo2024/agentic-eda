@@ -1085,7 +1085,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   const copperPasses = passes.map((pass) => ({ alpha: pass.alpha, layers: copper(pass.b) }));
   const byLayer: Record<string, () => void> = {
     grid: () => opts.gridVisible && drawGrid(ctx, view, widthPx, heightPx, opts.gridUm, opts.gridOrigin ?? [0, 0]),
-    background: () => drawOutline(ctx, view, board.outline),
+    // When the Edge.Cuts shapes are the outline (arcs, circles, cutouts), they are drawn as the shapes they are, below; the polygon is only their summary.
+    background: () => drawOutline(ctx, view, board.outline_is_shapes ? null : board.outline),
     ...Object.fromEntries(Object.keys(copper(board)).map((key) => [key, () => copperPasses.forEach((pass) => withAlpha(ctx, pass.alpha, () => pass.layers[key]?.()))])),
     // pcb_actions.cpp updateLocalRatsnest's non-router equivalent: redraw
     // the airwires live from a moving footprint's (previewed) position

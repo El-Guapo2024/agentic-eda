@@ -210,13 +210,32 @@ pub struct FillKeepout {
     pub outline: LineChain,
 }
 
+/// One graphic on Edge.Cuts as a polyline -- `BOARD_ITEM::TransformShapeToPolygon` is called on each of the board's Edge.Cuts items for the
+/// copper-to-edge knockout (`knockoutGraphicClearance`), so an arc is knocked out round its curve, a circle round its ring and a rectangle round
+/// its four sides, whatever the polygon `ConvertOutlineToPolygon` makes of them.
+#[derive(Debug, Clone)]
+pub struct FillEdge {
+    pub pts: Vec<Point64>,
+    /// The last point joins back to the first (a circle, a rectangle, a polygon).
+    pub closed: bool,
+    /// A solid shape (`IsSolidFill`): its inside is knocked out too, not only its outline.
+    pub filled: bool,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FillInput {
     pub pads: Vec<FillPad>,
     pub tracks: Vec<FillTrack>,
     pub vias: Vec<FillVia>,
     pub other_zones: Vec<FillZoneRef>,
-    pub board_outline: Option<LineChain>,
+    /// `BOARD::GetBoardPolygonOutlines( m_boardOutline, true )`: every outline of the board with its cutouts. The fill is clipped to it
+    /// (`BuildSmoothedPoly`) when it is well-formed ([`Self::board_outline_invalid`] false), and an island that lies mostly outside it is removed.
+    pub board_outline: Option<ShapePolySet>,
+    /// `!m_brdOutlinesValid`: the Edge.Cuts do not make a well-formed outline, so `board_outline` is KiCad's guess (the rectangle round
+    /// the edges) and the fill is not clipped to it.
+    pub board_outline_invalid: bool,
+    /// The board's Edge.Cuts items, for the knockout at [`Self::edge_clearance`].
+    pub edge_cuts: Vec<FillEdge>,
     /// Copper-pour keepouts on this layer. Unconditional knockout, no net/
     /// priority test (`other_zones`' own gate) -- a rule area wins against
     /// every zone regardless of net or priority, matching
@@ -228,8 +247,8 @@ pub struct FillInput {
     pub hole_clearance: i64,
     /// `BOARD::GetMaxClearanceValue`: how far outside a zone's bounding box an item can still reach into it.
     pub worst_clearance: i64,
-    /// `EDGE_CLEARANCE_CONSTRAINT` (the board's copper-to-edge clearance): the fill stays this far from every segment of
-    /// `board_outline` (`knockoutGraphicClearance` on the Edge.Cuts items, line widths ignored). 0 = no edge knockout.
+    /// `EDGE_CLEARANCE_CONSTRAINT` (the board's copper-to-edge clearance): the fill stays this far from every one of `edge_cuts`
+    /// (`knockoutGraphicClearance` on the Edge.Cuts items, line widths ignored). 0 = no edge knockout.
     pub edge_clearance: i64,
     /// `BOARD_DESIGN_SETTINGS::m_MinClearance`: the floor a pad's own clearance override cannot go below.
     pub min_clearance: i64,
@@ -516,15 +535,24 @@ where
         clearance_holes.add_outline(keepout.outline.clone());
     }
 
-    // Board edge: `knockoutGraphicClearance` of the Edge.Cuts items at the board's copper-to-edge clearance, the line's
-    // own width ignored (a zero-width stadium round each outline segment).
-    if let (Some(outline), true) = (&input.board_outline, input.edge_clearance > 0) {
-        let n = outline.len();
-        for i in 0..n {
-            let (a, b) = (outline[i], outline[(i + 1) % n]);
-            let seg = Shape::Stadium { a, b, r: 0 };
-            if bboxes_intersect(bbox_of(&seg), inflate_bbox(zone_bbox, input.edge_clearance + EXTRA_MARGIN + max_error)) {
-                add_knockout(&mut clearance_holes, &seg, input.edge_clearance, max_error);
+    // Board edge: `knockoutGraphicClearance` of the Edge.Cuts items at the board's copper-to-edge clearance, the line's own width ignored (a
+    // zero-width stadium round each side of an item's polyline, and the inside of a solid one).
+    if input.edge_clearance > 0 {
+        let reach = inflate_bbox(zone_bbox, input.edge_clearance + EXTRA_MARGIN + max_error);
+        for edge in &input.edge_cuts {
+            let n = edge.pts.len();
+            let sides = if edge.closed { n } else { n.saturating_sub(1) };
+            for i in 0..sides {
+                let seg = Shape::Stadium { a: edge.pts[i], b: edge.pts[(i + 1) % n], r: 0 };
+                if bboxes_intersect(bbox_of(&seg), reach) {
+                    add_knockout(&mut clearance_holes, &seg, input.edge_clearance, max_error);
+                }
+            }
+            if edge.filled && edge.closed && n >= 3 {
+                let solid = Shape::Polygon { pts: edge.pts.clone() };
+                if bboxes_intersect(bbox_of(&solid), reach) {
+                    add_knockout(&mut clearance_holes, &solid, input.edge_clearance, max_error);
+                }
             }
         }
     }

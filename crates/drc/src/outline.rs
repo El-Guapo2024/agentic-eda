@@ -76,6 +76,15 @@ impl BoardOutline {
         })
     }
 
+    /// Is `p` strictly on the board: inside an outline and in none of its holes, not on any edge? (What a courtyard corner must be: a corner
+    /// on the edge of the board, or on the rim of a cutout, is not inside it.)
+    pub fn contains_strictly(&self, p: Point) -> bool {
+        (0..self.polys.outline_count()).any(|i| {
+            let outer = self.polys.outline(i);
+            point_inside(outer, p) && !point_on_ring(outer, p) && (0..self.polys.hole_count(i)).all(|h| !point_inside(self.polys.hole(i, h), p) && !point_on_ring(self.polys.hole(i, h), p))
+        })
+    }
+
     /// `true` when the outline has any hole or more than one outline: a board more than one polygon, which `placement.outline` cannot hold.
     pub fn is_complex(&self) -> bool {
         self.polys.outline_count() > 1 || self.polys.has_holes()

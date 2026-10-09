@@ -34,6 +34,42 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     inside
 }
 
+/// Where the board's parts and copper must lie: `placement.outline` as the plain polygon it is for a board that has nothing else on Edge.Cuts, or,
+/// when Edge.Cuts has cutouts, arcs or several outlines, the outline KiCad builds from them (`eda_drc::outline`) -- a courtyard in a cutout is not
+/// on the board. A malformed outline (it does not chain) falls back to the polygon, which is then the rectangle round the edges.
+enum Region<'a> {
+    Plain(&'a [Point]),
+    Complex(eda_drc::outline::BoardOutline),
+}
+
+impl<'a> Region<'a> {
+    fn of(design: &Design, polygon: &'a [Point]) -> Region<'a> {
+        if eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design) {
+            let outline = eda_drc::outline::board_outline(design, false);
+            if outline.valid && !outline.polys.is_empty() {
+                return Region::Complex(outline);
+            }
+        }
+        Region::Plain(polygon)
+    }
+
+    /// Strictly inside the board: a point on the edge is not (for the polygon, the long-standing half-open test of `point_in_polygon`).
+    fn inside(&self, p: Point) -> bool {
+        match self {
+            Region::Plain(poly) => point_in_polygon(p, poly),
+            Region::Complex(outline) => outline.contains_strictly(p),
+        }
+    }
+
+    /// Inside the board or on its edge.
+    fn inside_or_on(&self, p: Point) -> bool {
+        match self {
+            Region::Plain(poly) => point_in_polygon(p, poly) || on_boundary(p, poly),
+            Region::Complex(outline) => outline.contains(p),
+        }
+    }
+}
+
 fn seg_point_dist(a: Point, b: Point, p: Point) -> f64 {
     let (ax, ay, bx, by, px, py) = (a.x as f64, a.y as f64, b.x as f64, b.y as f64, p.x as f64, p.y as f64);
     let (dx, dy) = (bx - ax, by - ay);
@@ -209,8 +245,9 @@ pub fn check_placement(design: &Design, model: &ConstraintModel) -> Vec<CheckRes
     }
 
     let mut inside_ok = true;
+    let region = Region::of(design, &pl.outline);
     for (id, (r, _)) in &courtyards {
-        if !r.corners().iter().all(|c| point_in_polygon(*c, &pl.outline)) {
+        if !r.corners().iter().all(|c| region.inside(*c)) {
             inside_ok = false;
             out.push(CheckResult::fail("placement_within_outline", id, "courtyard extends outside the board outline"));
         }
@@ -566,16 +603,17 @@ pub fn check_routing(design: &Design, model: &ConstraintModel) -> Vec<CheckResul
     // Track width against the net class is `eda-lint`'s (below); outline
     // containment has no KiCad equivalent and stays exactly as it was.
     let mut outline_ok = true;
+    let region = Region::of(design, &pl.outline);
     for (i, t) in rt.tracks.iter().enumerate() {
         for p in &t.pts {
-            if !point_in_polygon(*p, &pl.outline) && !on_boundary(*p, &pl.outline) {
+            if !region.inside_or_on(*p) {
                 outline_ok = false;
                 out.push(CheckResult::fail("routing_within_outline", format!("{}#{i}", t.net), format!("track point ({},{}) outside outline", p.x, p.y)));
             }
         }
     }
     for v in &rt.vias {
-        if !point_in_polygon(v.at, &pl.outline) {
+        if !region.inside(v.at) {
             outline_ok = false;
             out.push(CheckResult::fail("routing_within_outline", &v.net, format!("via ({},{}) outside outline", v.at.x, v.at.y)));
         }
@@ -1575,6 +1613,42 @@ mod tests {
         finger.opposite_side = true;
         let (d, m) = pad_fixture(vec![finger], 0, Side::Top, routing_of(vec![a_track("F.Cu", &[(8000, 10000), (12000, 10000)])], vec![]));
         assert_eq!(clearance_fails(&d, &m), 0, "and not on F.Cu");
+    }
+
+    // ---------------------------------------------- the outline with cutouts
+
+    /// The workmanship fixture's board with a round cutout drawn on Edge.Cuts round C1 (2.5 mm radius at (10, 5) mm), whose 0603 courtyard lies inside it.
+    fn with_a_cutout_round_c1(rt: RoutingSection) -> (Design, ConstraintModel) {
+        let (mut d, m) = wfixture(rt);
+        d.drawings = Some(eda_model::ir::DrawingsSection {
+            shapes: vec![eda_model::ir::Shape::Circle { id: "hole".into(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, center: Point { x: 10_000, y: 5_000 }, end: Point { x: 12_500, y: 5_000 } }],
+            ..Default::default()
+        });
+        (d, m)
+    }
+
+    #[test]
+    fn a_courtyard_in_a_cutout_is_not_within_the_outline_and_one_beside_it_is() {
+        let (d, m) = with_a_cutout_round_c1(clean_routing());
+        let out: Vec<_> = check_placement(&d, &m).into_iter().filter(|c| c.check == "placement_within_outline").collect();
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!((out[0].status, out[0].location.as_deref()), (CheckStatus::Fail, Some("C1")), "{out:?}");
+        // Without the cutout both are inside.
+        let (d, m) = wfixture(clean_routing());
+        let out: Vec<_> = check_placement(&d, &m).into_iter().filter(|c| c.check == "placement_within_outline").collect();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].status, CheckStatus::Pass, "{out:?}");
+    }
+
+    #[test]
+    fn a_via_or_a_track_end_in_a_cutout_is_outside_the_outline() {
+        let mut rt = clean_routing();
+        rt.vias.push(Via { id: String::new(), net: "A".into(), at: Point { x: 10_000, y: 6_500 }, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
+        let (d, m) = with_a_cutout_round_c1(rt.clone());
+        let f = fails(&d, &m, "routing_within_outline");
+        assert!(f.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("via (10000,6500)"))), "{f:?}");
+        let (d, m) = wfixture(rt);
+        assert!(fails(&d, &m, "routing_within_outline").is_empty());
     }
 
     #[test]

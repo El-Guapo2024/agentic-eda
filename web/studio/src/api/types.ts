@@ -542,6 +542,12 @@ export interface BoardState {
   name: string;
   dir: string;
   outline: [Um, Um][] | null;
+  /** The outline the way KiCad builds it from Edge.Cuts (`BOARD::GetBoardPolygonOutlines`): every outline with its cutouts, where `outline` is one polygon. Absent from an older backend. See `kicad-port/pcbOutline.ts` `boardOutlinePolygons`. */
+  outline_polys?: { outer: [Um, Um][]; holes: [Um, Um][][] }[];
+  /** The Edge.Cuts shapes in `drawings` are the whole outline (arcs, circles, cutouts, an open chain...) and `outline` is only their summary: the canvas draws the shapes, not the polygon. */
+  outline_is_shapes?: boolean;
+  /** What `kicad-cli pcb drc` reports as `invalid_outline` ("Board has malformed outline") for this board. */
+  outline_errors?: { message: string; at: [Um, Um]; items: string[] }[];
   /** Copper stackup layer names, e.g. ["F.Cu", "B.Cu"]. */
   layers: string[];
   /** Placement grid pitch, µm. */
