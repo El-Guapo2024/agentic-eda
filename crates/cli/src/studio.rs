@@ -1200,6 +1200,8 @@ fn dimension_json(d: &eda_model::ir::Dimension) -> Value {
         "keep_text_aligned": d.keep_text_aligned,
         "text_angle": d.text_angle,
         "text_size_um": d.text_size_um,
+        // `EDA_TEXT::GetTextThickness()` of the label; null = 15 % of the size (the Properties panel's "Thickness").
+        "text_thickness_um": d.text_thickness_um,
         "stroke_width": d.stroke_width,
         "arrow_length": d.arrow_length,
         "extension_offset": d.extension_offset,

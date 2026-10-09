@@ -88,6 +88,8 @@ export function toCmdDimension(dim: Dimension): CmdDimension {
     keep_text_aligned: dim.keep_text_aligned,
     text_angle: dim.text_angle,
     text_size_um: dim.text_size_um,
+    // The label's pen survives an edit that does not mention it (`edit_dimension` replaces the whole dimension).
+    ...(dim.text_thickness_um != null ? { text_thickness_um: dim.text_thickness_um } : {}),
     stroke_width: dim.stroke_width,
     arrow_length: dim.arrow_length,
     extension_offset: dim.extension_offset,
