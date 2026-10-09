@@ -45,7 +45,8 @@ import { unitLetter } from "../../kicad-port/unitLetter";
 import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from "./displayOptions";
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
-import { drawSelectionBox, paintGraphics } from "./schGraphicsPainter";
+import { dashPattern, drawSelectionBox, paintGraphics, rgba } from "./schGraphicsPainter";
+import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
 import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
 
@@ -687,7 +688,7 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   const hair = 1 / view.scale;
 
   if (l.scope === "local" || !l.shape) {
-    const spin = inferSpin(wires, l.at);
+    const spin = l.spin ?? inferSpin(wires, l.at);
     const { pos, justify } = localLabelTextPlacement(spin, l.at);
     const sizeUm = LABEL_TEXT_SIZE_UM;
     // V BOTTOM: stroke text has no native top/bottom baseline (see this
@@ -699,7 +700,7 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
     return;
   }
 
-  const spin = inferSpin(wires, l.at);
+  const spin = l.spin ?? inferSpin(wires, l.at);
   const shape: LabelShape = l.shape;
   ctx.strokeStyle = color;
   ctx.lineWidth = Math.max(l.scope === "global" ? 159 : 159, hair);
@@ -801,13 +802,21 @@ function drawBusEntry(ctx: CanvasRenderingContext2D, view: ViewTransform, be: Bu
   const [x, y] = be.at;
   const [dx, dy] = be.size;
   ctx.save();
-  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_BUS");
-  ctx.lineWidth = Math.max(150, hair);
+  const look = strokeLook(be.stroke, 150);
+  ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor("LAYER_BUS"));
+  ctx.lineWidth = Math.max(look.width, hair);
+  ctx.setLineDash(look.dash);
   ctx.beginPath();
   ctx.moveTo(x, y);
   ctx.lineTo(x + dx, y + dy);
   ctx.stroke();
   ctx.restore();
+}
+
+/** The stroke Wire/Bus Properties set over the layer's defaults: the line width (`fallbackUm` when none), its dash pattern and its own colour (null: the layer's). */
+function strokeLook(st: SchStroke | null | undefined, fallbackUm: number): { width: number; dash: number[]; color: string | null } {
+  const width = st?.width_um ? st.width_um : fallbackUm;
+  return { width, dash: dashPattern(st?.style, width), color: st?.color && (st.color.r || st.color.g || st.color.b || st.color.a) ? rgba(st.color) : null };
 }
 
 /**
@@ -897,11 +906,14 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     // wire, just `LAYER_BUS` instead of `LAYER_WIRE` -- same convention
     // real eeschema uses (a visibly different, blue by default, color; not
     // a different line width).
-    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE");
-    ctx.lineWidth = Math.max(on ? 300 : 150, hair * (on ? 2.5 : 1));
+    const look = strokeLook(w.stroke, 150);
+    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor(w.bus ? "LAYER_BUS" : "LAYER_WIRE"));
+    ctx.lineWidth = Math.max(on ? Math.max(300, look.width * 2) : look.width, hair * (on ? 2.5 : 1));
+    ctx.setLineDash(look.dash);
     ctx.beginPath();
     w.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Bus entries (GAPS.md #20) -- a short diagonal stub from `at` to
@@ -921,9 +933,11 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // Explicit junctions (`J`, `SCH_JUNCTION`): the same dot, drawn wherever one was placed -- on a crossing it is what joins the two
   // wires. A selected one is drawn in the selection color.
   for (const j of sch.junctions ?? []) {
-    ctx.fillStyle = layerColor(opts.selection.has(j.id) ? "LAYER_SELECTION_SHADOWS" : "LAYER_JUNCTION");
+    // The diameter and colour Junction Properties set (`SCH_JUNCTION::GetDiameter` / `GetColor`).
+    const own = j.look?.color && (j.look.color.r || j.look.color.g || j.look.color.b || j.look.color.a) ? rgba(j.look.color) : null;
+    ctx.fillStyle = opts.selection.has(j.id) ? layerColor("LAYER_SELECTION_SHADOWS") : (own ?? layerColor("LAYER_JUNCTION"));
     ctx.beginPath();
-    ctx.arc(j.at[0], j.at[1], Math.max(JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
+    ctx.arc(j.at[0], j.at[1], Math.max(j.look?.diameter_um ? j.look.diameter_um / 2 : JUNCTION_RADIUS_UM, hair * 2), 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -931,11 +945,14 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // thickness (`default_line_thickness`, 6 mil) when none was set.
   for (const l of sch.lines ?? []) {
     const on = opts.selection.has(l.id);
-    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES");
-    ctx.lineWidth = Math.max(l.width_um > 0 ? l.width_um : NOTES_LINE_UM, hair * (on ? 2.5 : 1));
+    const look = strokeLook(l.stroke, l.width_um > 0 ? l.width_um : NOTES_LINE_UM);
+    ctx.strokeStyle = on ? layerColor("LAYER_SELECTION_SHADOWS") : (look.color ?? layerColor("LAYER_NOTES"));
+    ctx.lineWidth = Math.max(look.width, hair * (on ? 2.5 : 1));
+    ctx.setLineDash(look.dash);
     ctx.beginPath();
     l.pts.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`).

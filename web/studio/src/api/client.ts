@@ -6,6 +6,7 @@
 
 import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
+import type { SchMovePatch } from "./schEditTypes";
 
 import type { SchNetlistRequest, SchPlotRequest } from "../kicad-port/schOutputs";
 import { fileStem, schematicSaveNames } from "../kicad-port/saveAs";
@@ -213,6 +214,20 @@ export async function postClipboardCopy(ids: readonly string[], reference: { x: 
     body: JSON.stringify({ ids, reference }),
   });
   return (await r.json()) as { ok: true; text: string } | { ok: false; message: string };
+}
+
+/**
+ * What a held schematic selection would look like after the drop: the commands applied in memory on the server, the moved items' geometry back
+ * (`POST /api/sch/move_preview`, crates/cli/src/sch_move_api.rs). Null when the server refuses the commands or is not reachable.
+ */
+export async function postMovePreview(body: { sheet: string; cmds: Cmd[] }): Promise<SchMovePatch | null> {
+  try {
+    const r = await fetch("/api/sch/move_preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const j = (await r.json()) as (SchMovePatch & { ok: boolean }) | { ok: false };
+    return j.ok ? (j as SchMovePatch) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Kick off `eda board route` in the background; poll /api/state's `job` field for progress. */

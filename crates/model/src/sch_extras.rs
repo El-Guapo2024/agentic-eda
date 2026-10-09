@@ -12,10 +12,13 @@
 //!   (`SCH_TEXTBOX`), rule areas (`SCH_RULE_AREA`) and directive labels (`SCH_DIRECTIVE_LABEL`, the
 //!   "netclass flag"). Decoration or annotation: none of them is part of any net.
 //! - `locked`: the ids of locked items (`SCH_ITEM::IsLocked`, set by Lock / Unlock / Toggle Lock).
+//! - `label_spins`: which way a label's text runs from its anchor (`SCH_LABEL_BASE::GetSpinStyle`), once Rotate or Mirror has set it.
+//! - `strokes`, `junction_looks`: the width, line style and colour of a wire, bus, bus entry or graphic line and the diameter and colour
+//!   of an explicit junction (`STROKE_PARAMS`, `SCH_JUNCTION::m_diameter`), once Wire/Bus Properties has set them.
 
 use crate::ir::{Millideg, Point, Um};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Items and annotations beyond the core schematic content -- see the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,11 +35,103 @@ pub struct SchExtras {
     /// `None` is KiCad's default, A4 landscape.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page: Option<crate::page::PageSettings>,
+    /// A label's spin (`SCH_LABEL_BASE::GetSpinStyle`: which side of its anchor the text runs to), by label id. A label with no entry
+    /// has its spin read off the wire that ends at it (`labelShape.ts::inferSpin`), as every label did before Rotate and Mirror could
+    /// set one; an entry is written only when a turn or a mirror set it, so a design that never turned a label serializes as before.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub label_spins: BTreeMap<String, LabelSpin>,
+    /// A wire's, bus's, bus entry's or graphic line's stroke (`SCH_LINE::GetStroke`, `SCH_BUS_ENTRY_BASE::GetStroke`), by item id, once
+    /// Wire/Bus Properties (`DIALOG_WIRE_BUS_PROPERTIES`) or Line Properties set one. An item with no entry has the default stroke (the
+    /// sheet's default width, a solid line, the layer's colour); an entry equal to the default is never stored. A graphic line's width
+    /// lives in `SchLine::width_um`, as it always has: its entry here carries only the style and the colour.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub strokes: BTreeMap<String, SchStroke>,
+    /// An explicit junction's dot (`SCH_JUNCTION::GetDiameter` / `GetColor`), by junction id, once Junction Properties set one.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub junction_looks: BTreeMap<String, JunctionLook>,
+}
+
+/// How a wire, bus, bus entry or graphic line is stroked (`STROKE_PARAMS`): the part of `DIALOG_WIRE_BUS_PROPERTIES` and
+/// `DIALOG_LINE_PROPERTIES` that is not the item's place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchStroke {
+    /// The line width; 0 is the default (`default_line_thickness`, 6 mil for a wire).
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub width_um: Um,
+    #[serde(default, skip_serializing_if = "SchLineStyle::is_default")]
+    pub style: SchLineStyle,
+    /// `None` is `COLOR4D::UNSPECIFIED`: the colour of the item's layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<SchColor>,
+}
+
+impl SchStroke {
+    /// The stroke every item has until a dialog sets one.
+    pub fn is_default(&self) -> bool {
+        *self == SchStroke::default()
+    }
+}
+
+/// How an explicit junction is drawn (`SCH_JUNCTION::m_diameter` and `m_color`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JunctionLook {
+    /// The dot's diameter; 0 is the default (`DEFAULT_JUNCTION_DIAM`, 36 mil).
+    #[serde(default, skip_serializing_if = "is_zero_um")]
+    pub diameter_um: Um,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<SchColor>,
+}
+
+impl JunctionLook {
+    pub fn is_default(&self) -> bool {
+        *self == JunctionLook::default()
+    }
+}
+
+/// `SPIN_STYLE`: which side of its anchor a label's text sits on and runs to. `Right` is the usual label (text to the right of a wire that
+/// comes from the left); `Up` reads upward from the anchor, `Left` ends at it, `Bottom` hangs below it reading upward.
+/// Turning a label counter-clockwise goes `Right`, `Up`, `Left`, `Bottom` (`SCH_TEXT::Rotate90`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LabelSpin {
+    Right,
+    Up,
+    Left,
+    Bottom,
+}
+
+impl LabelSpin {
+    /// One quarter turn: counter-clockwise when `ccw` (`SCH_TEXT::Rotate90( !ccw )`: the horizontal/vertical angle toggles and the
+    /// justification flips in two of the four cases, which is this cycle).
+    pub fn rotated(self, ccw: bool) -> LabelSpin {
+        use LabelSpin::*;
+        match (self, ccw) {
+            (Right, true) | (Left, false) => Up,
+            (Up, true) | (Bottom, false) => Left,
+            (Left, true) | (Right, false) => Bottom,
+            (Bottom, true) | (Up, false) => Right,
+        }
+    }
+
+    /// `SCH_LABEL_BASE::MirrorSpinStyle( aLeftRight )`: a left-right mirror swaps `Right` and `Left`, a top-bottom one `Up` and `Bottom`;
+    /// the other axis leaves the spin as it is.
+    pub fn mirrored(self, left_right: bool) -> LabelSpin {
+        use LabelSpin::*;
+        match (self, left_right) {
+            (Right, true) => Left,
+            (Left, true) => Right,
+            (Up, false) => Bottom,
+            (Bottom, false) => Up,
+            (s, _) => s,
+        }
+    }
 }
 
 impl SchExtras {
     pub fn is_empty(&self) -> bool {
-        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none()
+        self.graphics.is_empty() && self.locked.is_empty() && self.page.is_none() && self.label_spins.is_empty() && self.strokes.is_empty() && self.junction_looks.is_empty()
     }
 
     /// True when `id` is locked.

@@ -2,7 +2,7 @@
 //!
 //! A Copy changes nothing on the board (so it is no `/api/cmd` verb and has no undo step): it reads the named items from the
 //! design as it stands and writes them the way KiCad's clipboard does (`CLIPBOARD_IO::SaveSelection`,
-//! [`eda_kicad::export_clipboard`]). The Paste is the other half, `Cmd::PasteClipboard`, which takes that text back.
+//! [`eda_kicad::export_pcb_clipboard`]). The Paste is the other half, `Cmd::PasteClipboard`, which takes that text back.
 //!
 //! Request: `{ "ids": [...], "reference": { "x": µm, "y": µm } }` -- the ids of the items to copy (placed parts' references and
 //! track, via, zone, shape, text, dimension and group ids) and the point the copy is measured from (the cursor's grid point for a
@@ -27,7 +27,7 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
         Ok(t) => t,
         Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
     };
-    match eda_kicad::export_clipboard(&design, &model, &ids, reference) {
+    match eda_kicad::export_pcb_clipboard(&design, &model, &ids, reference) {
         Ok(text) => json!({ "ok": true, "text": text }),
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
     }

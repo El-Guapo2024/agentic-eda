@@ -227,35 +227,52 @@ impl Dragger {
         // sequentially against the same (unbranched, read-only) `node`
         // and merging their displaced sets is a reasonable approximation
         // at this project's board sizes -- each leg almost always touches
-        // disjoint obstacles.
-        let mut displaced_lines = std::collections::HashMap::new();
-        let mut displaced_vias = std::collections::HashMap::new();
+        // disjoint obstacles. A pusher the shove had to walk around a pad
+        // (`onCollidingSolid`) comes back with its walked shape, which is the
+        // shape the drag then has.
+        let mut displaced_lines: std::collections::BTreeMap<String, Vec<DisplacedLine>> = std::collections::BTreeMap::new();
+        let mut displaced_vias = std::collections::BTreeMap::new();
         let mut colliding = false;
 
-        let mut push = |pts: &[Point], net: &Net, layer: i32, width: Um| {
+        let mut push = |pts: &[Point], net: &Net, layer: i32, width: Um| -> Option<Vec<Point>> {
             match shove::shove_line(node, pts, net, layer, width, rules, settings) {
                 Some(outcome) => {
+                    // the latest shove's lines for a track replace an earlier one's
+                    let mut fresh: std::collections::BTreeMap<String, Vec<DisplacedLine>> = std::collections::BTreeMap::new();
                     for d in outcome.displaced_lines {
-                        if let Some(id) = &d.source_track {
-                            displaced_lines.insert(id.clone(), d.line);
+                        if let Some(id) = d.source_track.clone() {
+                            fresh.entry(id).or_default().push(d);
                         }
                     }
+                    displaced_lines.extend(fresh);
                     for d in outcome.displaced_vias {
                         displaced_vias.insert(d.source_via.clone(), d.pos);
                     }
+                    Some(outcome.head)
                 }
-                None => colliding = true,
+                None => {
+                    colliding = true;
+                    None
+                }
             }
         };
-        push(&main_pts, &self.net, self.layer, self.width.max(1));
-        for l in &fanout {
-            push(&l.pts, &l.net, l.layer, l.width.max(1));
+        let mut main_pts = main_pts;
+        if let Some(head) = push(&main_pts, &self.net, self.layer, self.width.max(1)) {
+            if self.kind == DragKind::Corner {
+                main_pts = head;
+            }
+        }
+        let mut fanout = fanout;
+        for l in fanout.iter_mut() {
+            if let Some(head) = push(&l.pts, &l.net, l.layer, l.width.max(1)) {
+                l.pts = head;
+            }
         }
 
         DragPreview {
             pts: main_pts,
             colliding,
-            displaced_lines: displaced_lines.into_iter().map(|(source_track, line)| DisplacedLine { source_track: Some(source_track), line }).collect(),
+            displaced_lines: displaced_lines.into_values().flatten().collect(),
             displaced_vias: displaced_vias.into_iter().map(|(source_via, pos)| DisplacedVia { source_via, pos }).collect(),
             fanout,
         }
@@ -299,7 +316,10 @@ impl Dragger {
 
         for d in &preview.displaced_lines {
             if let Some(id) = &d.source_track {
-                commit.remove_track_ids.push(id.clone());
+                // a track can be named once per line that stood on it
+                if !commit.remove_track_ids.contains(id) {
+                    commit.remove_track_ids.push(id.clone());
+                }
                 commit.tracks.push(d.line.clone());
             }
         }
@@ -376,6 +396,33 @@ mod tests {
         assert!(!preview.colliding, "shove must clear the crossing track rather than reporting a collision");
         assert_eq!(preview.displaced_lines.len(), 1);
         assert_eq!(preview.displaced_lines[0].source_track.as_deref(), Some("trkB"));
+    }
+
+    /// A Shove-mode drag into a pad no longer gives up: the dragged line is walked around the pad
+    /// (`onCollidingSolid`), and the walked shape is the one the drag has -- committing the straight
+    /// line through the pad would be a violation.
+    #[test]
+    fn shove_mode_drag_into_a_pad_walks_the_dragged_line_around_it() {
+        use crate::item::Solid;
+        use crate::layer::LayerRange;
+        let mut node = Node::new();
+        let seg_id = node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: Point { x: 0, y: 0 }, b: Point { x: 1000, y: 0 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 3000, y: 0 }, shape: Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        let rules = rules();
+        let settings = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        let dragger = Dragger::start(&node, Point { x: 1000, y: 0 }, seg_id).unwrap();
+        let preview = dragger.preview(&node, &rules, &settings, Point { x: 6000, y: 0 });
+        assert!(!preview.colliding);
+        assert!(preview.pts.len() > 2, "walked around the pad: {:?}", preview.pts);
+        assert_eq!(preview.pts.first(), Some(&Point { x: 0, y: 0 }));
+        assert_eq!(preview.pts.last(), Some(&Point { x: 6000, y: 0 }));
+        for w in preview.pts.windows(2) {
+            let leg = Shape::Stadium { a: w[0], b: w[1], r: 100 };
+            assert!(leg.collides(&Shape::Circle { c: Point { x: 3000, y: 0 }, r: 400 }, 199).is_none(), "{:?} touches the pad", w);
+        }
+        // and what finish() commits is that shape
+        let commit = dragger.finish(&node, &rules, &settings, Point { x: 6000, y: 0 }).expect("the walked drag is accepted");
+        assert_eq!(commit.tracks[0].pts, preview.pts);
     }
 
     #[test]

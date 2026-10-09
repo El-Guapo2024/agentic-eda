@@ -17,7 +17,7 @@ fn blank_design() -> Design {
 /// The KiCad clipboard text of a Copy of `names` on the fixture board, measured from `reference`.
 fn copy(names: &[&str], reference: Point) -> String {
     let m = model(&["F.Cu", "B.Cu"]);
-    eda_kicad::export_clipboard(&design(), &m, &ids(names), reference).unwrap()
+    eda_kicad::export_pcb_clipboard(&design(), &m, &ids(names), reference).unwrap()
 }
 
 fn group_of(b: &Board<'_>, member: &str) -> Option<Group> {
@@ -158,7 +158,7 @@ fn copper_on_a_layer_the_board_lacks_is_dropped() {
     let src_model = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
     let mut d = design();
     d.routing.as_mut().unwrap().tracks.push(super::pcb_transform_tests::track("trk_in", "In1.Cu", &[(0, 0), (1_000, 0)]));
-    let text = eda_kicad::export_clipboard(&d, &src_model, &ids(&["trk_a", "trk_in"]), p(0, 0)).unwrap();
+    let text = eda_kicad::export_pcb_clipboard(&d, &src_model, &ids(&["trk_a", "trk_in"]), p(0, 0)).unwrap();
     let m = model(&["F.Cu", "B.Cu"]);
     let mut b = target(&m);
     b.apply(&Cmd::PasteClipboard { text, at: p(0, 0) }).unwrap();
@@ -166,7 +166,7 @@ fn copper_on_a_layer_the_board_lacks_is_dropped() {
     assert!(routing(&b).tracks.iter().all(|t| t.layer == "F.Cu"));
 
     // A clipboard with nothing that fits is refused.
-    let only_inner = eda_kicad::export_clipboard(&d, &src_model, &ids(&["trk_in"]), p(0, 0)).unwrap();
+    let only_inner = eda_kicad::export_pcb_clipboard(&d, &src_model, &ids(&["trk_in"]), p(0, 0)).unwrap();
     let e = target(&m).apply(&Cmd::PasteClipboard { text: only_inner, at: p(0, 0) }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_clipboard");
 }
@@ -176,7 +176,7 @@ fn a_pasted_group_is_a_group_again_over_the_new_ids() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["shp_seg", "txt_a", "dim_a"]) });
-    let text = eda_kicad::export_clipboard(&d, &model(&["F.Cu", "B.Cu"]), &ids(&["grp_a"]), p(0, 0)).unwrap();
+    let text = eda_kicad::export_pcb_clipboard(&d, &model(&["F.Cu", "B.Cu"]), &ids(&["grp_a"]), p(0, 0)).unwrap();
     let mut b = target(&m);
     b.apply(&Cmd::PasteClipboard { text, at: p(1_000, 1_000) }).unwrap();
     let g = &drawings(&b).groups[0];

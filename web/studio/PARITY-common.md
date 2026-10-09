@@ -123,7 +123,7 @@ All in `tools/ui-parity-missing.json`; each is a subsystem the studio does not h
 | Undo / Redo Zoom, Zoom In / Out Horizontally / Vertically | the simulator plot's zoom history and axes; there is no simulator (`GAPS.md`: Simulator, last) |
 | Select Rows / Columns / Table, the Table Editor (add / delete rows and columns, merge, unmerge, export CSV) | the design IR has no table type |
 | Embed File, Extract File, Remove File | the IR has no embedded-file list (KiCad stores them zstd-compressed, base64-encoded and checksummed) |
-| Paste Special | nothing to special-case yet: the clipboard holds no footprints or symbols and the copper it holds must name a net |
+| Paste Special | **Schematic tab: identical** (`DIALOG_PASTE_SPECIAL`'s reference-designator choices; `PARITY-sch.md` section 15). PCB tab: nothing to special-case yet (the copper it holds must name a net; the studio says so) |
 | Toggle Grid Overrides | the five category grids (connected items, wires, vias, text, graphics) and the category-aware snapping that reads them |
 
 ## 12. Offered by KiCad in an editor, not by the studio there

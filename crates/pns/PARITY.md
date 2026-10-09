@@ -68,6 +68,15 @@ exists rather than letting you rediscover it.
 | `pns_walkaround.{h,cpp}` | `src/walkaround.rs` | Core `Route()` loop (hug nearest obstacle, re-detect, chain) ported. Simplified: hugs one obstacle item per iteration rather than a whole `TOPOLOGY::AssembleCluster` blob (still converges to the same place over a few more iterations); no `RestrictToCluster` scoping; CW/CCW reported as two plain candidates (`WalkResult::best()` picks the shorter), no live-cursor-proximity fallback (no continuous mouse-tick stream to fall back from in this architecture) or length-expansion telemetry. |
 | `pns_line_placer.{h,cpp}`, `pns_mouse_trail_tracer.{h,cpp}` | `src/line_placer.rs` | See that file's own doc comment for the detailed list; headline simplification is posture: this port keeps the explicit direction state and the `/` toggle (`Direction45::right()`) and continues from the last fixed segment's direction, but does not implement `MOUSE_TRAIL_TRACER`'s continuous mouse-trail-area heuristic (automatic posture guessing from how the cursor swept toward the target) -- not meaningful without a continuous mouse-move stream to measure. |
 
+**Status (2026-10-08):** `walkaround::Walker` is the faithful `WALKAROUND`
+(`pns_walkaround.cpp`): policies `WP_CW`/`WP_CCW`/`WP_SHORTEST` (with the
+check-back against clusters already hugged), a whole `AssembleCluster` per
+step, `SetItemMask` (solids-only), `RestrictToCluster`, the 10x length
+cut-off and the iteration limit per cluster. The shove (`onCollidingSolid`)
+and the solids-only pre-pass of `rhShoveOnly` use it. Plain Walkaround mode
+still uses the per-obstacle `walkaround::route` described above (D15 is
+therefore still open for that mode).
+
 Two real bugs surfaced while getting the stage 2 tests to pass on a
 realistic multi-footprint board, both fixed rather than worked around:
 
@@ -89,31 +98,76 @@ realistic multi-footprint board, both fixed rather than worked around:
 
 ## Stage 3 -- SHOVE
 
-`pns_shove.{h,cpp}` -> `src/shove.rs`. See that file's doc comment. Headline
-simplifications: no springback stack (always branch fresh -- a batch/
-per-request architecture doesn't need cross-call incremental reuse); single
-hull-expansion attempt per obstacle, not KiCad's 3-retry-with-growing-
-clearance x 4-winding-order search; via push is the direct one-shot
-MTV-displacement KiCad itself uses (not `VIA::PushoutForce`'s iterative
-search, which KiCad reserves for lead-in/drag, not SHOVE's own via push);
-no forward/reverse rank bookkeeping (KiCad's anti-ping-pong mechanism for
-"don't shove something back into what already shoved you this run") --
-instead the propagation stack has a hard iteration cap and simply fails
-(falls back to walkaround) rather than looping, which is the same outcome
-KiCad's own iteration-limit path produces.
+**Status (2026-10-08): `shove.rs` is a port of `pns_shove.cpp`'s control flow.**
+The first version of this stage was a flat worklist that gave up at the
+first pad, over- and under-shot a pushed via, never optimized what it
+shoved, and normalised widths (`CODE-COMPARE-router.md` D5, D6, D10, D12).
+It was replaced; the rest of this section describes what is there now. Read
+`shove.rs`'s module doc comment for the same list next to the code.
+
+What is ported, function for function (`pns_shove.cpp`):
+
+| KiCad | Here |
+|---|---|
+| `SHOVE::Run`, `shoveMainLoop`, `shoveIteration` | `Shove::run`, `shove_main_loop`, `shove_iteration`: a stack of lines, the head at the bottom with rank 100000, every line it pushes rank - 1; each iteration takes the line on top and resolves its nearest obstacle, searching **pads, then vias, then tracks** (D12). Ends when the stack is empty, a push fails, or `ShoveIterationLimit` (250) is reached -- including KiCad's off-by-one (`m_iter >= limit` after the iteration). |
+| `NODE::NearestObstacle` | `Node::nearest_obstacle`: the obstacle whose clearance hull the line enters first, by **path length along the line** (`HullIntersection` + `PathLength`), not by smallest gap. Kind mask and filter as `COLLISION_SEARCH_OPTIONS`. |
+| `SHOVE::onCollidingSegment`, `ShoveObstacleLine`, `shoveLineToHullSet`, `checkShoveDirection` | unchanged algorithm (one hull per pusher segment, 3 hull sizes x 4 traversal/winding attempts), now also with the pusher's **end via** hull. |
+| `SHOVE::onCollidingSolid` | `on_colliding_solid`: a pad cannot move, so the *current line* is walked around the cluster of items that touch it (`TOPOLOGY::AssembleCluster` with the 10x area limit, `WALKAROUND` restricted to that cluster with `WP_SHORTEST`), keeps its place on the stack with rank + 10000, and replaces itself in the node. Also the fallback for a locked track (`SH_TRY_WALK`) and for a via that may not move. A line whose end via collides with the pad pushes the via instead. |
+| `SHOVE::onCollidingVia`, `pushOrShoveVia` | `on_colliding_via`, `push_or_shove_via`: the via moves by the **minimum translation vector** of its shape against the pusher (`pushoutForce`, epsilon-free), "do not land on an existing joint" included; the tracks attached to it are re-shaped with `LINE::DragCorner` at 45 degrees (`Line::drag_corner45`, `dragCornerInternal`), a via with no track becomes a lone-via line on the stack. `ShoveVias() == false` or a locked via is `SH_TRY_WALK`. (D6) |
+| `onCollidingLine`, `onReverseCollidingVia`, `patchTadpoleVia`, `fixupViaCollisions`, `shoveLineFromLoneVia`, `unwindLineStack`, `replaceLine` | ported: the **rank** system (a line that runs into something already shoved with a higher rank does not shove it back -- it is pushed itself), tadpole vias, fan-out width fix-up, the root-line history. |
+| `SHOVE::runOptimizer` | `run_optimizer`: every shoved line is optimized in the shoved world after the loop (`OE_MEDIUM`/`OE_FULL`: `MERGE_SEGMENTS` x 2 passes, `OE_LOW`: `MERGE_OBTUSE` x 1, plus `SMART_PADS`), restricted to the area the shove changed inflated by the widest line (`AREA_CONSTRAINT`, `optimizer::optimize_in_area`). The head is not optimized here; `LinePlacer` optimizes it afterwards against the world the shove left (`ShoveOutcome::world`), like `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`. (D10/D11) |
+| `LINE_PLACER::rhShoveOnly` | `LinePlacer::build_head`: the head is first walked around the **pads only** (`walkaround::walk_masked`, `rhWalkBase( .., ITEM::SOLID_T, RM_Shove )`: both windings, each merged with `MERGE_SEGMENTS`, the shorter taken), then shoved. A pad it cannot be walked around, or a failed shove, falls back to the full walkaround. (D5) |
+
+Where it differs, on purpose:
+
+- **No springback, no time limit.** Every call branches fresh from the
+  committed world (decision 1, and the HTTP-per-sample driver); the 250
+  iterations are the only bound.
+- **Widths survive (D10).** `SHOVE::assembleLine` passes the default
+  `aAllowSegmentSizeMismatch = true`, so KiCad assembles *through* a change of
+  width and writes the whole chain back at the width of the segment it hit.
+  Here `Node::assemble_line_with` stops at the width change: each width is
+  its own line, pinned at the joint they share.
+- **The commit names every IR track a line stood on.** An imported board has
+  one IR track per segment; a line over five of them used to replace the first
+  and leave the other four behind. `DisplacedLine` is now one per (track,
+  line): the first track gets the new polyline, the others an empty line
+  ("remove, nothing replaces it"), and the part of a track no shoved line
+  covered (a junction cut it) is handed back as it was.
+  `LinePlacer::displaced_tracks` keeps a list of lines per track.
+- **A via exactly on the pusher's centreline.** KiCad's MTV is zero there,
+  the via is not moved, and the loop runs into its iteration limit. Here it is
+  pushed along the normal of the nearest pusher segment.
+- Not modelled: `SHP_REVERSED` (drag by the first vertex), `SHP_IGNORE`,
+  `LockJoint`, arcs, holes, a head that ends in a via (`placing_via` places
+  the via after the shove, with `place_via`).
+
+Verified against KiCad's own router regressions
+(`qa/data/pcbnew/pns_regressions`, replayed in `tests/qa_regressions.rs`,
+skipped when the corpus is absent):
+
+| Case | KiCad recorded | This port |
+|---|---|---|
+| `simple-shove-1` (a free-hand head through `simple.kicad_pcb`, Shove) | 13 tracks pushed, 28 segments | the same **13** tracks; 12 of the 28 segments within 3 um (the others differ where the optimizer cuts a corner; head width 250 as the replay used), 0 new violations |
+| `backspace1` (9 fixes undone by Backspace, one redone) | one run, 2 segments | the same 2 segments (needed the posture to return to the initial one after the last undo) |
+| `issue22749-shove-weird-drag-track-end` (a route from a track end, Shove) | 5 tracks pushed, 11 segments | the same **5** tracks; 4 of 11 within 3 um (the wrap around the head's diagonal is ~70 um further out in KiCad's), 0 new violations, also through the `RouteCommit` |
+| `issue23449` (lone via drag), `walk_drag_seg_against_board_edge`, `simple-drag-shove-singlelayer` (drags) | no violation recorded | replayed with this port's corner drag (KiCad slides the segment; D7): no panic, 0 new violations on every accepted preview. `video-v10` is a slow-tier test (about a minute in a debug build). |
+| a scratch copy of `work/mcu30` (133 tracks, 12 vias) driven through the studio's own `POST /api/route/{start,move,finish}` in Shove mode | -- | 60 random routes from track ends; 12 of them push something (up to 7 IR tracks and a via). The studio's `--strict` gates accepted 2 of the 12 and refused 10 (`routing_clearance` measures a pad by its bounding rectangle, so a track hugging a round pad's real outline at the clearance is "too close"; also `routing_pass_through_pad`, `routing_over_refdes`, `routing_via_in_pad`). The same gates refuse the Walkaround route for one of the two moves compared, and a refused LED5 shove committed with `strict: false` has no clearance violation in **kicad-cli's** DRC. The 2 accepted commits were one undo step each (a line on 3 IR tracks became 1 track + 2 removals, no duplicated segment), `Undo` restored the board exactly, and kicad-cli reported no copper clearance violation; what it did report is `track_dangling` (the free-hand end I chose) and `copper_edge_clearance` on a shoved track pushed toward the board edge (see the gap below). |
+| random routes from random pads (`simple`, `pic_programmer`, `backspace1`, `dp_test`) and random corner drags in Shove mode | -- | 0 new violations: 250 routes per board while writing it, 50 per board in the committed test; Shove never failed where Walkaround succeeded. Dragging a *via* is the exception and is not new: the dragged via itself is never shoved against (`DRAGGER::dragViaWalkaround`/`propagateViaForces`, D7), so a via dropped onto a track leaves a violation (6 of 200 random via drags on `simple`). |
+
+Fixtures that do not need the corpus: `tests/shove_scenarios.rs` (a track
+pushed past a pad row, a via pushed just far enough and between two tracks,
+widths kept, a line on two IR tracks, the iteration limit, `ShoveVias` off),
+`tests/shove_footprint.rs` (a track beside a real SOIC-8's pads) and the unit
+tests next to each module.
 
 `shove.rs` operates on its own scratch branch internally (it must -- shoving
-genuinely mutates the board) and returns only the diff (`ShoveOutcome`'s
-`displaced_lines`/`displaced_vias`); `LinePlacer` stays stateless for
-`preview()` the same way it already was for walkaround (every call re-runs
-shove fresh from the real world), and only `fix()`/`finish()` absorb an
+genuinely mutates the board) and returns the diff (`ShoveOutcome`'s
+`displaced_lines`/`displaced_vias`, plus the head as it ended up and the world
+left behind); `LinePlacer` stays stateless for `preview()` (every call re-runs
+the shove fresh from the real world), and only `fix()`/`finish()` absorb an
 accepted call's displacement into the session's running
-`displaced_tracks()`/`displaced_vias()` for the eventual commit. One real
-bug surfaced here too: pushing a via whose centre sits exactly on the
-pusher's own centreline (common -- a straight route running directly
-through a stitching via) produced a zero-length, direction-less push
-vector that never actually moved it; fixed by falling back to a direction
-perpendicular to the pusher's own heading in that degenerate case.
+`displaced_tracks()`/`displaced_vias()` for the eventual commit.
 
 ## Stage 4 -- API + frontend
 
@@ -502,12 +556,21 @@ axis-aligned run** (one 2-point track each) side by side on one layer.
   `line_placer.rs`. The placer never passes the `FANOUT_CLEANUP` flag
   (`docs/parity/CODE-COMPARE-router.md` section D). The other settings
   fields named below are still never read.
-  `RoutingSettings::smart_pads` exists as a field but, like
-  `shove_vias`/`jump_over_obstacles`/`optimizer_effort`/
-  `fix_all_segments`/`walkaround_hug_length_threshold`, is never read by
-  any routing code in this crate -- struct-shape parity only, not
-  implemented behavior (confirmed by grepping for each field's use
-  outside `settings.rs` itself: none).
+  **Status (2026-10-08):** `shove_vias`, `jump_over_obstacles`,
+  `optimizer_effort`, `smart_pads`, `shove_iteration_limit` and
+  `walkaround_iteration_limit` are now read by the shove and the placer
+  (`shove_vias` off makes a via `SH_TRY_WALK`; `OE_LOW` merges nothing in
+  the head). `fix_all_segments`, `walkaround_hug_length_threshold` and
+  `via_force_prop_iteration_limit` are still never read, and the settings
+  dialog still exposes only `mode` and `remove_loops`.
+- **The board outline is not an obstacle.** KiCad adds `Edge.Cuts` (and `Margin`)
+  graphics to the router's world as items on every copper layer
+  (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`); `from_ir::build_node` adds
+  none, and `Node::clearance` only knows net classes, not the copper-to-edge
+  rule. A route or a shoved track can therefore end closer to the board edge
+  than `min_copper_edge_clearance` (found driving a shove on `mcu30`: kicad-cli
+  `copper_edge_clearance` on a pushed track). Shove makes it easier to hit than
+  Walkaround because it moves tracks that were already near the edge.
 - `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints
   (every candidate is still collision-checked, which is the one
   constraint that must never be skipped; the others are refinements).

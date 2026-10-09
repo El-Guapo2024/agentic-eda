@@ -11,6 +11,6 @@ work/
 tools/kicad-view/build/
 
 # eda studio (web/studio): the React frontend
-web/studio/node_modules/
+web/studio/node_modules
 web/studio/dist/
 .kicad/

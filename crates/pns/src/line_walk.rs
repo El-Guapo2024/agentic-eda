@@ -85,8 +85,10 @@ fn intersect(hull: &[Point], line: &[Point]) -> Vec<Isect> {
 
 /// `HullIntersection`: keep the crossings that really pass through the
 /// hull (a corner touch counts only if some neighbouring line point lies on
-/// the hull's inner side).
-fn hull_intersection(hull: &[Point], line: &[Point]) -> Vec<Point> {
+/// the hull's inner side). Each crossing comes with `index_their`, the
+/// line's own segment (or, at a corner touch, vertex) index, which is what
+/// `NODE::NearestObstacle`'s `PathLength( ip.p, ip.index_their )` needs.
+pub(crate) fn hull_intersection(hull: &[Point], line: &[Point]) -> Vec<(Point, usize)> {
     if line.len() < 2 {
         return Vec::new();
     }
@@ -95,7 +97,7 @@ fn hull_intersection(hull: &[Point], line: &[Point]) -> Vec<Point> {
     let mut ips = Vec::new();
     for mut p in intersect(hull, line) {
         if !p.corner_our && !p.corner_their {
-            ips.push(p.p);
+            ips.push((p.p, p.index_their));
             continue;
         }
         if p.index_our >= nh {
@@ -118,7 +120,7 @@ fn hull_intersection(hull: &[Point], line: &[Point]) -> Vec<Point> {
             d2.push(line[p.index_their + 1]);
         }
         if d1.iter().any(|&(a, b)| d2.iter().any(|&q| side(a, b, q) > 0)) {
-            ips.push(p.p);
+            ips.push((p.p, p.index_their));
         }
     }
     ips
@@ -213,7 +215,7 @@ pub fn walkaround(line: &[Point], obstacle: &[Point], cw: bool) -> Option<Vec<Po
         return None;
     }
 
-    let ips = hull_intersection(obstacle, line);
+    let ips: Vec<Point> = hull_intersection(obstacle, line).into_iter().map(|(p, _)| p).collect();
     let mut pnew = line.to_vec();
     let mut hnew = obstacle.to_vec();
 

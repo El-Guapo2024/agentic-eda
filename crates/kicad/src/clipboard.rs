@@ -167,7 +167,7 @@ fn fp_pieces<'m>(model: &'m ConstraintModel, fp: &FootprintInstance, at: Point) 
 /// `CLIPBOARD_IO::SaveSelection`: the text of a Copy of `ids` (placed parts' references and track, via, zone, shape, text,
 /// dimension and group ids), with `reference` as the point the copy is measured from -- the point a Paste will put back on
 /// the cursor.
-pub fn export_clipboard(design: &Design, model: &ConstraintModel, ids: &[String], reference: Point) -> Result<String, Vec<CheckResult>> {
+pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[String], reference: Point) -> Result<String, Vec<CheckResult>> {
     let picked = Picked::resolve(design, ids)?;
     if picked.total() == 0 {
         return Err(fail("clipboard.empty", "copy", "nothing to copy: none of the items is a footprint, track, via, zone, graphic, text or dimension"));
@@ -284,7 +284,7 @@ pub fn export_clipboard(design: &Design, model: &ConstraintModel, ids: &[String]
 // -------------------------------------------------------------------- parse
 
 /// `CLIPBOARD_IO::Parse`: the items of a clipboard text -- a whole `(kicad_pcb ..)`, or one `(footprint ..)`.
-pub fn parse_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
+pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
     let body = text.trim_start_matches('\u{feff}').trim();
     let bare = body.starts_with("(footprint") || body.starts_with("(module");
     let wrapped = if bare {
@@ -460,7 +460,7 @@ mod tests {
     fn a_copy_is_a_board_fragment_measured_from_the_reference_point() {
         let (design, model) = fixture();
         let arc = arc_track_id(&design);
-        let text = export_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a"]), p(100_000, 100_000)).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a"]), p(100_000, 100_000)).unwrap();
         assert!(text.starts_with("(kicad_pcb"), "{text}");
         assert!(text.contains("(segment (start 0 0) (end 10 0) (width 0.25) (layer \"F.Cu\") (net 2)"), "{text}");
         assert!(text.contains("(arc (start 0 10) (mid 5 5) (end 10 10) (width 0.3) (layer \"B.Cu\") (net 1)"), "{text}");
@@ -474,8 +474,8 @@ mod tests {
     fn what_a_copy_wrote_pastes_back_as_the_same_items_at_the_origin() {
         let (design, model) = fixture();
         let arc = arc_track_id(&design);
-        let text = export_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a", "C1", "C2", "grp_a"]), p(100_000, 100_000)).unwrap();
-        let clip = parse_clipboard(&text).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["trk_a", arc.as_str(), "via_a", "zone_a", "shp_a", "txt_a", "dim_a", "C1", "C2", "grp_a"]), p(100_000, 100_000)).unwrap();
+        let clip = parse_pcb_clipboard(&text).unwrap();
 
         // The polyline track came back as its two segments, the arc as an arc.
         assert_eq!(clip.tracks.iter().filter(|t| t.net == "VIN").map(|t| t.pts.clone()).collect::<Vec<_>>().len(), 2);
@@ -506,11 +506,11 @@ mod tests {
     #[test]
     fn a_footprint_copied_alone_is_bare_and_has_its_pads_on_no_net() {
         let (design, model) = fixture();
-        let text = export_clipboard(&design, &model, &ids(&["C1"]), p(110_000, 120_000)).unwrap();
+        let text = export_pcb_clipboard(&design, &model, &ids(&["C1"]), p(110_000, 120_000)).unwrap();
         assert!(text.trim_start().starts_with("(footprint"), "{text}");
         assert!(!text.contains("(net "), "a lone footprint travels without its nets: {text}");
         assert!(text.contains("(at 0 0 -90)"), "moved so its anchor is the origin: {text}");
-        let clip = parse_clipboard(&text).unwrap();
+        let clip = parse_pcb_clipboard(&text).unwrap();
         assert!(clip.bare_footprint);
         assert_eq!(clip.footprints.len(), 1);
         assert_eq!((clip.footprints[0].reference.as_str(), clip.footprints[0].at, clip.footprints[0].rot), ("C1", p(0, 0), 90_000));
@@ -526,7 +526,7 @@ mod tests {
             (via (at 6 2) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "Net-(R1-Pad1)") (uuid "22222222-2222-4222-8222-222222222222"))
             (gr_text "note" (at 3 4 0) (layer "F.SilkS") (uuid "33333333-3333-4333-8333-333333333333") (effects (font (size 1 1) (thickness 0.15))))
         )"#;
-        let clip = parse_clipboard(text).unwrap();
+        let clip = parse_pcb_clipboard(text).unwrap();
         assert_eq!((clip.tracks.len(), clip.tracks[0].net.as_str(), clip.tracks[0].pts.clone()), (1, "Net-(R1-Pad1)", vec![p(1_000, 2_000), p(6_000, 2_000)]));
         assert_eq!((clip.vias.len(), clip.vias[0].net.as_str()), (1, "Net-(R1-Pad1)"));
         assert_eq!(clip.texts[0].content, "note");
@@ -534,9 +534,9 @@ mod tests {
 
     #[test]
     fn text_that_is_not_kicad_items_is_refused() {
-        assert_eq!(parse_clipboard("hello world").unwrap_err()[0].check, "clipboard.not_kicad");
-        assert_eq!(parse_clipboard("(kicad_sch (version 1))").unwrap_err()[0].check, "clipboard.not_kicad");
-        assert_eq!(parse_clipboard("(kicad_pcb (version 20241229) (layers (0 \"F.Cu\" signal)))").unwrap_err()[0].check, "clipboard.empty", "a board with nothing in it has nothing to paste");
-        assert_eq!(export_clipboard(&fixture().0, &fixture().1, &ids(&["nope"]), p(0, 0)).unwrap_err()[0].check, "clipboard.unknown_item");
+        assert_eq!(parse_pcb_clipboard("hello world").unwrap_err()[0].check, "clipboard.not_kicad");
+        assert_eq!(parse_pcb_clipboard("(kicad_sch (version 1))").unwrap_err()[0].check, "clipboard.not_kicad");
+        assert_eq!(parse_pcb_clipboard("(kicad_pcb (version 20241229) (layers (0 \"F.Cu\" signal)))").unwrap_err()[0].check, "clipboard.empty", "a board with nothing in it has nothing to paste");
+        assert_eq!(export_pcb_clipboard(&fixture().0, &fixture().1, &ids(&["nope"]), p(0, 0)).unwrap_err()[0].check, "clipboard.unknown_item");
     }
 }

@@ -4,8 +4,7 @@ import { ercMarkerPosition } from "./ercMarkerPosition";
 import { resolveLibSymbol } from "./libSymbol";
 import type { LibSymbols, PowerSymbol, Schematic, SchematicLabel, SchematicSymbol, SchematicWire } from "../../api/types";
 
-// Same minimal two-pin "Device:R"-shaped library symbol wireAttachment's
-// own test fixture uses -- real pin geometry, not a generic-box fallback,
+// A minimal two-pin "Device:R"-shaped library symbol -- real pin geometry, not a generic-box fallback,
 // so a "REF.PIN" location resolves to a real tip rather than an
 // approximate box center.
 const R_LIB: LibSymbols = {

@@ -18,13 +18,21 @@
 //!   already knows the target point) pick.
 //! - No `RestrictToCluster` scoping (no diff-pair/shove-internal caller
 //!   needs it yet).
+//!
+//! The per-obstacle [`route`] below is what plain Walkaround mode still uses.
+//! [`Walker`] is the faithful `WALKAROUND` -- policies, cluster hugging,
+//! item masks, `RestrictToCluster`, the `WP_SHORTEST` check-back -- which
+//! the shove needs (`onCollidingSolid` walks a line around the cluster of a
+//! pad) and which the solids-only pre-pass of `rhShoveOnly` runs.
 
 use crate::item::{ItemId, Net};
 use crate::layer::LayerRange;
-use crate::node::Node;
+use crate::line::Line;
+use crate::node::{kind_mask, Node, QueryOpts};
 use eda_drc::kimath::{Seg, Shape};
 use eda_model::ir::{Point, Um};
 use eda_model::BoardRules;
+use std::collections::HashSet;
 
 fn dist_f(a: Point, b: Point) -> f64 {
     (((b.x - a.x) as f64).powi(2) + ((b.y - a.y) as f64).powi(2)).sqrt()
@@ -226,6 +234,293 @@ pub fn route(path: &[Point], node: &Node, net: &Net, layer: i32, width: Um, rule
     }
 }
 
+/// `WALKAROUND::STATUS`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkStatus {
+    InProgress,
+    AlmostDone,
+    Done,
+    Stuck,
+    None,
+}
+
+/// `WALKAROUND::WALK_POLICY`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WalkPolicy {
+    Cw = 0,
+    Ccw = 1,
+    Shortest = 2,
+}
+
+/// `WALKAROUND::RESULT`: one status and one path per policy.
+#[derive(Debug, Clone)]
+pub struct WalkOutcome {
+    pub status: [WalkStatus; 3],
+    pub lines: [Vec<Point>; 3],
+}
+
+impl WalkOutcome {
+    pub fn status_of(&self, p: WalkPolicy) -> WalkStatus {
+        self.status[p as usize]
+    }
+    pub fn line_of(&self, p: WalkPolicy) -> &[Point] {
+        &self.lines[p as usize]
+    }
+}
+
+/// `SHAPE_LINE_CHAIN::Length()`: the sum of the segments' rounded lengths.
+pub(crate) fn chain_length(pts: &[Point]) -> i64 {
+    pts.windows(2).map(|w| dist_f(w[0], w[1]).round() as i64).sum()
+}
+
+/// The faithful `PNS::WALKAROUND` (`pns_walkaround.cpp`): hug the nearest
+/// obstacle's whole *cluster* per step, one path per allowed policy
+/// (clockwise, counter-clockwise, and `WP_SHORTEST`, which tries both and
+/// keeps the better one after a check-back against the clusters already
+/// processed), until nothing is in the way, the path is stuck, grows past
+/// `lengthExpansionFactor` times the initial length, or the iteration limit
+/// is spent. The path's net, layer and width come from the line given to
+/// [`Walker::route`].
+pub struct Walker<'a> {
+    node: &'a Node,
+    rules: &'a BoardRules,
+    /// `SetItemMask` / `SetSolidsOnly`: `kind_mask::*` bits an obstacle may have.
+    pub item_mask: u8,
+    /// `SetIterationLimit` (`ROUTING_SETTINGS::WalkaroundIterationLimit`).
+    pub iteration_limit: u32,
+    /// `SetLengthLimit( on, factor )`.
+    pub length_limit_on: bool,
+    pub length_expansion_factor: f64,
+    policies: [bool; 3],
+    /// `RestrictToCluster`: when non-empty, only these items are obstacles.
+    restricted: HashSet<ItemId>,
+    /// Items that never join a cluster (`MK_HEAD`), see [`Node::assemble_cluster`].
+    skip: HashSet<ItemId>,
+    /// Items that are never obstacles (the walking line's own segments in the node).
+    exclude: Vec<ItemId>,
+    // per-route state
+    iteration: u32,
+    initial_length: f64,
+    processed: HashSet<ItemId>,
+}
+
+impl<'a> Walker<'a> {
+    pub fn new(node: &'a Node, rules: &'a BoardRules) -> Self {
+        Walker { node, rules, item_mask: kind_mask::ANY, iteration_limit: 40, length_limit_on: true, length_expansion_factor: 10.0, policies: [false; 3], restricted: HashSet::new(), skip: HashSet::new(), exclude: Vec::new(), iteration: 0, initial_length: 0.0, processed: HashSet::new() }
+    }
+
+    /// `SetAllowedPolicies`.
+    pub fn set_allowed_policies(&mut self, policies: &[WalkPolicy]) {
+        self.policies = [false; 3];
+        for p in policies {
+            self.policies[*p as usize] = true;
+        }
+    }
+
+    /// `RestrictToCluster( true, cluster )`.
+    pub fn restrict_to_cluster(&mut self, cluster: &[ItemId]) {
+        self.restricted = cluster.iter().copied().collect();
+    }
+
+    /// Items that must not join the clusters the walk hugs.
+    pub fn skip_items(&mut self, items: impl IntoIterator<Item = ItemId>) {
+        self.skip = items.into_iter().collect();
+    }
+
+    /// Items that are never obstacles at all (a line already in the node must
+    /// not be walked around by itself, which only matters for an unconnected net).
+    pub fn exclude_items(&mut self, items: impl IntoIterator<Item = ItemId>) {
+        self.exclude = items.into_iter().collect();
+    }
+
+    fn nearest_obstacle(&self, pts: &[Point], net: &Net, layer: i32, width: Um) -> Option<crate::node::NearestHit> {
+        let line = Line::from_points(net.clone(), layer, width, pts.to_vec());
+        let restricted = &self.restricted;
+        let filter = |id: ItemId| restricted.contains(&id);
+        let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true };
+        self.node.nearest_obstacle(&line, None, self.rules, &self.exclude, opts)
+    }
+
+    /// `CheckColliding( &line )`: any leg touches anything in the world.
+    fn world_collides(&self, pts: &[Point], net: &Net, layer: i32, width: Um) -> bool {
+        pts.windows(2).any(|w| {
+            let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
+            self.node.first_colliding(&shape, net, LayerRange::single(layer), self.rules, &self.exclude).is_some()
+        })
+    }
+
+    /// `shortest->Collide( item, .. )`: does the path collide with this one item.
+    fn collides_item(&self, pts: &[Point], net: &Net, layer: i32, width: Um, id: ItemId) -> bool {
+        let Some(item) = self.node.get(id) else { return false };
+        if !item.layers().overlaps_layer(layer) || crate::item::same_net(item.net(), net) {
+            return false;
+        }
+        let clearance = Node::clearance(self.rules, net, item.net());
+        let clearance = if clearance > 0 { (clearance - crate::node::CLEARANCE_EPSILON).max(0) } else { clearance };
+        let item_shape = item.shape(item.layers().start());
+        pts.windows(2).any(|w| Shape::Stadium { a: w[0], b: w[1], r: width / 2 }.collides(&item_shape, clearance).is_some())
+    }
+
+    /// `processCluster`: walk `pts` around every item of the cluster in turn.
+    fn process_cluster(&self, cluster: &[ItemId], pts: &mut Vec<Point>, net: &Net, layer: i32, width: Um, cw: bool) -> bool {
+        for &id in cluster {
+            let Some(item) = self.node.get(id) else { continue };
+            let clearance = Node::clearance(self.rules, net, item.net());
+            let hull = item.hull(clearance, width, layer);
+            let mut simplified = Line::from_points(net.clone(), layer, width, std::mem::take(pts));
+            simplified.simplify();
+            match walk_around_hull(&simplified.pts, &hull, cw) {
+                Some(p) => *pts = p,
+                None => {
+                    *pts = simplified.pts;
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    fn single_step(&mut self, out: &mut WalkOutcome, net: &Net, layer: i32, width: Um) {
+        let mut pending: [Vec<ItemId>; 3] = [Vec::new(), Vec::new(), Vec::new()];
+        for (i, cluster) in pending.iter_mut().enumerate() {
+            if !self.policies[i] || out.status[i] != WalkStatus::InProgress {
+                continue;
+            }
+            match self.nearest_obstacle(&out.lines[i], net, layer, width) {
+                None => out.status[i] = WalkStatus::Done,
+                Some(hit) => {
+                    let skip = &self.skip;
+                    *cluster = self.node.assemble_cluster(hit.id, layer, 0.0, Some(net), &|id| skip.contains(&id));
+                }
+            }
+        }
+        if self.policies[WalkPolicy::Cw as usize] {
+            let mut pts = std::mem::take(&mut out.lines[0]);
+            if !self.process_cluster(&pending[0], &mut pts, net, layer, width, true) {
+                out.status[0] = WalkStatus::Stuck;
+            }
+            out.lines[0] = pts;
+        }
+        if self.policies[WalkPolicy::Ccw as usize] {
+            let mut pts = std::mem::take(&mut out.lines[1]);
+            if !self.process_cluster(&pending[1], &mut pts, net, layer, width, false) {
+                out.status[1] = WalkStatus::Stuck;
+            }
+            out.lines[1] = pts;
+        }
+        if self.policies[WalkPolicy::Shortest as usize] {
+            let line = out.lines[2].clone();
+            let (mut path_cw, mut path_ccw) = (line.clone(), line);
+            let st_cw = self.process_cluster(&pending[2], &mut path_cw, net, layer, width, true);
+            let st_ccw = self.process_cluster(&pending[2], &mut path_ccw, net, layer, width, false);
+            let cw_coll = st_cw && self.world_collides(&path_cw, net, layer, width);
+            let ccw_coll = st_ccw && self.world_collides(&path_ccw, net, layer, width);
+            let mut shortest: Option<Vec<Point>> = None;
+            let mut shortest_alt: Option<Vec<Point>> = None;
+            if st_cw && st_ccw {
+                if (!cw_coll && !ccw_coll) || (cw_coll && ccw_coll) {
+                    if chain_length(&path_cw) > chain_length(&path_ccw) {
+                        shortest = Some(path_ccw);
+                        shortest_alt = Some(path_cw);
+                    } else {
+                        shortest = Some(path_cw);
+                        shortest_alt = Some(path_ccw);
+                    }
+                } else if !cw_coll {
+                    shortest = Some(path_cw);
+                } else if !ccw_coll {
+                    shortest = Some(path_ccw);
+                }
+            } else if st_ccw {
+                shortest = Some(path_ccw);
+            } else if st_cw {
+                shortest = Some(path_cw);
+            }
+            // check-back: the pick must not run into a cluster already hugged
+            if let Some(sh) = &shortest {
+                if self.processed.iter().any(|&id| self.collides_item(sh, net, layer, width, id)) {
+                    shortest = shortest_alt;
+                }
+            }
+            match shortest {
+                None => out.status[2] = WalkStatus::Stuck,
+                Some(sh) => out.lines[2] = sh,
+            }
+            self.processed.extend(pending[2].iter().copied());
+        }
+    }
+
+    /// `WALKAROUND::Route( aInitialPath )`.
+    pub fn route(&mut self, net: &Net, layer: i32, width: Um, initial: &[Point]) -> WalkOutcome {
+        self.initial_length = chain_length(initial) as f64;
+        self.iteration = 0;
+        self.processed.clear();
+        let mut out = WalkOutcome { status: [WalkStatus::InProgress; 3], lines: [initial.to_vec(), initial.to_vec(), initial.to_vec()] };
+        while self.iteration < self.iteration_limit {
+            self.single_step(&mut out, net, layer, width);
+            let mut still_in_progress = false;
+            for pol in 0..3 {
+                if !self.policies[pol] {
+                    continue;
+                }
+                let length_factor = if self.initial_length > 0.0 { chain_length(&out.lines[pol]) as f64 / self.initial_length } else { 0.0 };
+                if self.length_limit_on && out.status[pol] != WalkStatus::Done && length_factor > self.length_expansion_factor {
+                    out.status[pol] = WalkStatus::AlmostDone;
+                }
+                if out.status[pol] == WalkStatus::InProgress {
+                    still_in_progress = true;
+                }
+            }
+            if !still_in_progress {
+                break;
+            }
+            self.iteration += 1;
+        }
+        for pol in 0..3 {
+            if out.status[pol] == WalkStatus::InProgress {
+                out.status[pol] = WalkStatus::AlmostDone;
+            }
+            let ln = &out.lines[pol];
+            if ln.len() < 2 || ln[0] != initial[0] {
+                out.status[pol] = WalkStatus::Stuck;
+            }
+            if !ln.is_empty() && ln.last() != initial.last() {
+                out.status[pol] = WalkStatus::AlmostDone;
+            }
+        }
+        out
+    }
+}
+
+/// `rhWalkBase`'s walk of a head for a given item mask, for a head that has
+/// no tail in this port: both windings (`{ WP_CCW, WP_CW }`), each finished
+/// walk merged by the optimizer's `MERGE_SEGMENTS` against the *whole* world
+/// (`OPTIMIZER::Optimize( &line, MERGE_SEGMENTS, node )`, whose collision
+/// test ignores the kind mask), and the shorter of the two returned.
+/// `None` when neither winding got through (`rhWalkBase` returns false).
+#[allow(clippy::too_many_arguments)] // the node/rules/net/layer/width query context, plus the head, the kind mask and the iteration limit this is specific to.
+pub fn walk_masked(node: &Node, rules: &BoardRules, net: &Net, layer: i32, width: Um, head: &[Point], mask: u8, iteration_limit: u32) -> Option<Vec<Point>> {
+    let mut w = Walker::new(node, rules);
+    w.item_mask = mask;
+    w.iteration_limit = iteration_limit;
+    w.set_allowed_policies(&[WalkPolicy::Ccw, WalkPolicy::Cw]);
+    let wr = w.route(net, layer, width, head);
+    let mut best: Option<(i64, Vec<Point>)> = None;
+    for pol in [WalkPolicy::Cw, WalkPolicy::Ccw] {
+        if wr.status_of(pol) != WalkStatus::Done {
+            continue;
+        }
+        let line = Line::from_points(net.clone(), layer, width, wr.line_of(pol).to_vec());
+        let merged = crate::optimizer::optimize_with(&line, node, rules, &[], crate::optimizer::effort::MERGE_SEGMENTS);
+        let len = chain_length(&merged.pts);
+        // `if( len_ccw < len_cw ) bestLine = ccw` -- CW wins ties
+        if best.as_ref().is_none_or(|(bl, _)| len < *bl || (pol == WalkPolicy::Cw && len == *bl)) {
+            best = Some((len, merged.pts));
+        }
+    }
+    best.map(|(_, pts)| pts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +588,129 @@ mod tests {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: 100 };
             assert!(node.first_colliding(&shape, &net_of("SIG"), LayerRange::single(0), &rules, &[]).is_none(), "leg {:?}-{:?} still collides with the pad", w[0], w[1]);
         }
+    }
+
+    fn walker_pad(node: &mut Node, net: &str, c: Point, r: Um) -> ItemId {
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: c, shape: Shape::Circle { c, r }, source: "P".into() }))
+    }
+
+    fn walker_track(node: &mut Node, net: &str, a: Point, b: Point, width: Um) -> ItemId {
+        node.add(Item::Segment(crate::item::Segment { net: net_of(net), layer: 0, a, b, width, source_track: None, locked: false }))
+    }
+
+    fn all_clear(node: &Node, pts: &[Point], width: Um, rules: &BoardRules) -> bool {
+        pts.windows(2).all(|w| node.first_colliding(&Shape::Stadium { a: w[0], b: w[1], r: width / 2 }, &net_of("SIG"), LayerRange::single(0), rules, &[]).is_none())
+    }
+
+    /// `WALKAROUND` with `{ WP_CCW, WP_CW }`: each winding gets its own path, on opposite sides.
+    #[test]
+    fn both_windings_get_their_own_path_around_a_pad() {
+        let mut node = Node::new();
+        walker_pad(&mut node, "GND", Point { x: 2500, y: 0 }, 500);
+        let rules = rules();
+        let mut w = Walker::new(&node, &rules);
+        w.set_allowed_policies(&[WalkPolicy::Ccw, WalkPolicy::Cw]);
+        let out = w.route(&net_of("SIG"), 0, 200, &[Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }]);
+        assert_eq!(out.status_of(WalkPolicy::Cw), WalkStatus::Done);
+        assert_eq!(out.status_of(WalkPolicy::Ccw), WalkStatus::Done);
+        let (cw, ccw) = (out.line_of(WalkPolicy::Cw), out.line_of(WalkPolicy::Ccw));
+        assert!(cw.iter().any(|p| p.y < -500) && ccw.iter().any(|p| p.y > 500) || cw.iter().any(|p| p.y > 500) && ccw.iter().any(|p| p.y < -500), "one each way: {cw:?} / {ccw:?}");
+        assert!(all_clear(&node, cw, 200, &rules) && all_clear(&node, ccw, 200, &rules));
+    }
+
+    /// `SetItemMask( SOLID_T )`: tracks are not obstacles for the solids-only walk.
+    #[test]
+    fn the_solids_only_walk_goes_through_a_track() {
+        let mut node = Node::new();
+        walker_track(&mut node, "GND", Point { x: 2500, y: -2000 }, Point { x: 2500, y: 2000 }, 200);
+        let rules = rules();
+        let path = [Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
+        let mut solids = Walker::new(&node, &rules);
+        solids.item_mask = kind_mask::SOLID;
+        solids.set_allowed_policies(&[WalkPolicy::Cw]);
+        assert_eq!(solids.route(&net_of("SIG"), 0, 200, &path).line_of(WalkPolicy::Cw), &path, "nothing to walk around");
+        let mut any = Walker::new(&node, &rules);
+        any.set_allowed_policies(&[WalkPolicy::Cw]);
+        assert_ne!(any.route(&net_of("SIG"), 0, 200, &path).line_of(WalkPolicy::Cw), &path);
+    }
+
+    /// `AssembleCluster`: a pad and the track attached to it are one obstacle -- the path goes around the
+    /// track's far end, not between the two.
+    #[test]
+    fn a_pad_and_its_attached_track_are_walked_around_together() {
+        let mut node = Node::new();
+        let pad = walker_pad(&mut node, "GND", Point { x: 2500, y: 0 }, 400);
+        walker_track(&mut node, "GND", Point { x: 2500, y: 0 }, Point { x: 2500, y: 2500 }, 200);
+        let rules = rules();
+        let mut w = Walker::new(&node, &rules);
+        w.item_mask = kind_mask::SOLID; // only the pad is "in the way" ...
+        w.set_allowed_policies(&[WalkPolicy::Shortest]);
+        let out = w.route(&net_of("SIG"), 0, 200, &[Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }]);
+        assert_eq!(out.status_of(WalkPolicy::Shortest), WalkStatus::Done);
+        let path = out.line_of(WalkPolicy::Shortest);
+        // ... but the walk hugs the whole blob: it takes the short way, under the pad, away from the track
+        assert!(path.iter().all(|p| p.y <= 0 || p.y < 300), "{path:?}");
+        assert!(path.iter().any(|p| p.y < -400), "{path:?}");
+        assert!(all_clear(&node, path, 200, &rules));
+        let _ = pad;
+    }
+
+    /// `RestrictToCluster`: only the cluster's items are obstacles.
+    #[test]
+    fn a_restricted_walk_ignores_everything_outside_the_cluster() {
+        let mut node = Node::new();
+        let near = walker_pad(&mut node, "GND", Point { x: 1500, y: 0 }, 300);
+        walker_pad(&mut node, "VCC", Point { x: 3500, y: 0 }, 300);
+        let rules = rules();
+        let mut w = Walker::new(&node, &rules);
+        w.restrict_to_cluster(&[near]);
+        w.set_allowed_policies(&[WalkPolicy::Cw]);
+        let out = w.route(&net_of("SIG"), 0, 200, &[Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }]);
+        let path = out.line_of(WalkPolicy::Cw);
+        assert!(path.iter().any(|p| p.y.abs() > 300), "went around the first pad: {path:?}");
+        assert!(!all_clear(&node, path, 200, &rules), "the second pad was not looked at, so the path may touch it");
+    }
+
+    /// `WP_SHORTEST` picks the shorter way round an off-centre pad.
+    #[test]
+    fn shortest_takes_the_shorter_side() {
+        let mut node = Node::new();
+        walker_pad(&mut node, "GND", Point { x: 2500, y: 150 }, 400); // the pad sits a little below the path (y grows downward)
+        let rules = rules();
+        let mut w = Walker::new(&node, &rules);
+        w.set_allowed_policies(&[WalkPolicy::Shortest, WalkPolicy::Cw, WalkPolicy::Ccw]);
+        let out = w.route(&net_of("SIG"), 0, 200, &[Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }]);
+        assert_eq!(out.status_of(WalkPolicy::Shortest), WalkStatus::Done);
+        let shortest = chain_length(out.line_of(WalkPolicy::Shortest));
+        assert_eq!(shortest, chain_length(out.line_of(WalkPolicy::Cw)).min(chain_length(out.line_of(WalkPolicy::Ccw))));
+        assert!(out.line_of(WalkPolicy::Shortest).iter().any(|p| p.y < -400), "passes on the side away from the pad's centre");
+    }
+
+    /// `m_lengthExpansionFactor`: a walk that grows past ten times the direct length is abandoned.
+    #[test]
+    fn a_walk_that_runs_away_is_cut_off() {
+        let mut node = Node::new();
+        walker_pad(&mut node, "GND", Point { x: 2000, y: 0 }, 300);
+        let rules = rules();
+        let mut w = Walker::new(&node, &rules);
+        w.length_expansion_factor = 1.01;
+        w.set_allowed_policies(&[WalkPolicy::Cw]);
+        let out = w.route(&net_of("SIG"), 0, 200, &[Point { x: 0, y: 0 }, Point { x: 4000, y: 0 }]);
+        assert_eq!(out.status_of(WalkPolicy::Cw), WalkStatus::AlmostDone);
+    }
+
+    /// `rhWalkBase` with the solids mask: a head with a pad on it gets walked, one without is returned as it is.
+    #[test]
+    fn walk_masked_returns_the_head_untouched_when_no_pad_is_in_the_way() {
+        let mut node = Node::new();
+        walker_pad(&mut node, "GND", Point { x: 2500, y: 5000 }, 400);
+        let rules = rules();
+        let head = [Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
+        assert_eq!(walk_masked(&node, &rules, &net_of("SIG"), 0, 200, &head, kind_mask::SOLID, 40).unwrap(), head);
+        let mut blocked = Node::new();
+        walker_pad(&mut blocked, "GND", Point { x: 2500, y: 0 }, 400);
+        let walked = walk_masked(&blocked, &rules, &net_of("SIG"), 0, 200, &head, kind_mask::SOLID, 40).unwrap();
+        assert!(walked.len() > 2 && all_clear(&blocked, &walked, 200, &rules));
     }
 
     #[test]

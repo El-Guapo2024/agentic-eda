@@ -1,12 +1,14 @@
 // The small dialogs the schematic edit and drawing tools open (`StudioState.schToolDialog`): a drawn text box's text and look
 // (`DIALOG_TEXT_PROPERTIES` as `DrawShape` opens it), a directive label's fields (`DIALOG_LABEL_PROPERTIES` as `createNewLabel` opens it).
 import { useState, type ReactNode } from "react";
-import type { DirectiveShape, SchFill, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
+import type { DirectiveShape, SchFill, SchGraphic, SchHAlign, SchLineStyle, SchToolDialog, SchVAlign } from "../api/schEditTypes";
+import { graphicsEqual } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { ChangeSymbolsDialog } from "./SchChangeSymbolsDialog";
 import { GlobalEditDialog } from "./SchGlobalEditDialog";
 import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
+import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, StrokePropertiesDialog, TextPropertiesDialog } from "./SchPropertiesDialogs";
 import { commitGraphic } from "./schematic/schShapeTools";
 
 const DEFAULT_TEXT_SIZE_UM = 1270; // SCHEMATIC_SETTINGS::m_DefaultTextSize, 50 mil
@@ -30,6 +32,22 @@ export function SchToolDialogs() {
       return <ChangeSymbolsDialog key={`cs:${dialog.mode}:${dialog.selected.join(",")}`} dialog={dialog} />;
     case "edit_text_graphics":
       return <GlobalEditDialog key={`ge:${dialog.selected.join(",")}`} dialog={dialog} />;
+    // Properties (`E`, a double-click): SchPropertiesDialogs.tsx; a text box and a directive label reopen the dialogs that drew them.
+    case "props_label":
+      return <LabelPropertiesDialog key={`pl:${dialog.id}`} id={dialog.id} />;
+    case "props_text":
+      return <TextPropertiesDialog key={`pt:${dialog.id}`} id={dialog.id} />;
+    case "props_sheet":
+      return <SheetPropertiesDialog key={`ps:${dialog.id}`} id={dialog.id} />;
+    case "props_stroke":
+      return <StrokePropertiesDialog key={`pk:${dialog.ids.join(",")}`} ids={dialog.ids} />;
+    case "props_graphic": {
+      const g = state.schematic.graphics?.find((x) => x.id === dialog.id);
+      if (!g) return null;
+      if (g.shape.type === "text_box") return <TextBoxDialog key={`pg:${g.id}`} dialog={{ kind: "text_box", start: g.shape.start, end: g.shape.end }} edit={g} />;
+      if (g.shape.type === "directive") return <DirectiveDialog key={`pg:${g.id}`} dialog={{ kind: "directive", at: g.shape.at }} edit={g} />;
+      return <ShapePropertiesDialog key={`pg:${g.id}`} id={g.id} />;
+    }
   }
 }
 
@@ -44,31 +62,40 @@ function Shell({ title, onCancel, onOk, okLabel, canOk, children }: { title: str
   );
 }
 
-function TextBoxDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "text_box" }> }) {
+/**
+ * A drawn text box's text and look (`DrawShape` -> `DIALOG_TEXT_PROPERTIES`); with `edit` it is that text box's Properties instead (`SCH_EDIT_TOOL::Properties`):
+ * the same fields start from the box's own, and OK replaces the box in place (its corners, id, lock and place in the drawing order stay).
+ */
+function TextBoxDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind: "text_box" }>; edit?: SchGraphic }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  const [text, setText] = useState("");
-  const [size, setSize] = useState(DEFAULT_TEXT_SIZE_UM);
-  const [bold, setBold] = useState(false);
-  const [italic, setItalic] = useState(false);
-  const [h, setH] = useState<SchHAlign>("left");
-  const [v, setV] = useState<SchVAlign>("top");
-  const [vertical, setVertical] = useState(false);
-  const [width, setWidth] = useState(0);
-  const [style, setStyle] = useState<SchLineStyle>("default");
-  const [fill, setFill] = useState<SchFill>("none");
+  const box = edit?.shape.type === "text_box" ? edit.shape : null;
+  const [text, setText] = useState(box?.text ?? "");
+  const [size, setSize] = useState(box?.size_um ?? DEFAULT_TEXT_SIZE_UM);
+  const [bold, setBold] = useState(box?.bold ?? false);
+  const [italic, setItalic] = useState(box?.italic ?? false);
+  const [h, setH] = useState<SchHAlign>(box?.h_align ?? "left");
+  const [v, setV] = useState<SchVAlign>(box?.v_align ?? "top");
+  const [vertical, setVertical] = useState((box?.angle ?? 0) === 90_000);
+  const [width, setWidth] = useState(edit?.width_um ?? 0);
+  const [style, setStyle] = useState<SchLineStyle>(edit?.line_style ?? "default");
+  const [fill, setFill] = useState<SchFill>(edit?.fill ?? "none");
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   const submit = () => {
     if (!text.trim() || !state.schematic) return;
-    commitGraphic(
-      { sch: state.schematic, dispatch, api },
-      { shape: { type: "text_box", start: dialog.start, end: dialog.end, text, angle: vertical ? 90_000 : 0, size_um: size, bold, italic, h_align: h, v_align: v }, width_um: width, line_style: style, fill }
-    );
+    const shape = { type: "text_box" as const, start: dialog.start, end: dialog.end, text, angle: vertical ? 90_000 : 0, size_um: size, bold, italic, h_align: h, v_align: v, margin_um: box?.margin_um };
+    if (edit) {
+      const next: SchGraphic = { ...edit, shape, width_um: width, line_style: style, fill };
+      if (graphicsEqual(next, edit)) return close();
+      void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: edit.id, graphic: next }).then((ok) => ok && close());
+      return;
+    }
+    commitGraphic({ sch: state.schematic, dispatch, api }, { shape, width_um: width, line_style: style, fill });
     close();
   };
   return (
-    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0}>
+    <Shell title="Text Box Properties" onCancel={close} onOk={submit} okLabel="OK" canOk={text.trim().length > 0 && size >= 10 && size <= 1_000_000}>
       <span>Text</span>
       <textarea autoFocus rows={4} value={text} onChange={(e) => setText(e.target.value)} />
       <span>Text size (um)</span>
@@ -127,17 +154,25 @@ const ORIENTATIONS: Array<{ label: string; millideg: number }> = [
   { label: "Down", millideg: 270_000 },
 ];
 
-function DirectiveDialog({ dialog }: { dialog: Extract<SchToolDialog, { kind: "directive" }> }) {
+/** A new directive label's fields (`createNewLabel` -> `DIALOG_LABEL_PROPERTIES`); with `edit`, that directive label's Properties: its fields start from the label's own and OK replaces it in place. */
+function DirectiveDialog({ dialog, edit }: { dialog: Extract<SchToolDialog, { kind: "directive" }>; edit?: SchGraphic }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
-  const [netclass, setNetclass] = useState("");
-  const [componentClass, setComponentClass] = useState("");
-  const [shape, setShape] = useState<DirectiveShape>("round"); // m_lastNetClassFlagShape starts as F_ROUND
-  const [orientation, setOrientation] = useState(0); // m_lastTextOrientation starts as SPIN_STYLE::RIGHT
+  const flag = edit?.shape.type === "directive" ? edit.shape : null;
+  const [netclass, setNetclass] = useState(flag?.netclass ?? "");
+  const [componentClass, setComponentClass] = useState(flag?.component_class ?? "");
+  const [shape, setShape] = useState<DirectiveShape>(flag?.shape ?? "round"); // m_lastNetClassFlagShape starts as F_ROUND
+  const [orientation, setOrientation] = useState(flag?.orientation ?? 0); // m_lastTextOrientation starts as SPIN_STYLE::RIGHT
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
   const submit = () => {
     if (!state.schematic) return;
+    if (edit && flag) {
+      const next: SchGraphic = { ...edit, shape: { ...flag, orientation, shape, netclass, component_class: componentClass } };
+      if (graphicsEqual(next, edit)) return close();
+      void api.cmd({ op: "sch_edit", verb: "edit_graphic", id: edit.id, graphic: next }).then((ok) => ok && close());
+      return;
+    }
     commitGraphic({ sch: state.schematic, dispatch, api }, { shape: { type: "directive", at: dialog.at, orientation, shape, pin_length_um: DIRECTIVE_POLE_UM, netclass, component_class: componentClass } });
     close();
   };

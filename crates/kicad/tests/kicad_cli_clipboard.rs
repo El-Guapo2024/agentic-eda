@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use eda_kicad::{export_clipboard, parse_clipboard};
+use eda_kicad::{export_pcb_clipboard, parse_pcb_clipboard};
 use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Via};
 use eda_model::{ConstraintModel, Net, Part, Pin, PinKind};
 
@@ -80,7 +80,7 @@ fn kicad_cli_reads_a_copy_as_a_board_and_finds_the_items_where_the_copy_put_them
     design.assign_missing_ids();
 
     // Copied from a reference point at (100, 100) mm: everything moves by (-100, -100) mm.
-    let text = export_clipboard(&design, &model, &["trk_h".into(), "trk_v".into(), "via_a".into(), "C1".into()], p(100_000, 100_000)).unwrap();
+    let text = export_pcb_clipboard(&design, &model, &["trk_h".into(), "trk_v".into(), "via_a".into(), "C1".into()], p(100_000, 100_000)).unwrap();
     let dir = scratch("board");
     let pcb = dir.join("clip.kicad_pcb");
     std::fs::write(&pcb, &text).unwrap();
@@ -104,7 +104,7 @@ fn kicad_cli_reads_a_copy_as_a_board_and_finds_the_items_where_the_copy_put_them
     assert!(at("Pad 1 [VIN] of C1", 49.175, 40.0), "the footprint's pads kept their nets: {seen:?}");
 
     // The same text is what our own reader takes back.
-    let clip = parse_clipboard(&text).unwrap();
+    let clip = parse_pcb_clipboard(&text).unwrap();
     assert_eq!((clip.tracks.len(), clip.vias.len(), clip.footprints.len()), (2, 1, 1));
     assert_eq!(clip.footprints[0].at, p(50_000, 40_000));
     assert_eq!(clip.vias[0].at, p(40_000, 20_000));
@@ -150,7 +150,7 @@ fn what_kicad_itself_writes_for_those_items_reads_back_the_same() {
     };
     design.assign_missing_ids();
     let arc_id = design.routing.as_ref().unwrap().tracks.iter().find(|t| t.arc().is_some()).unwrap().id.clone();
-    let text = export_clipboard(&design, &model, &["trk_h".into(), arc_id, "via_a".into(), "C1".into()], p(100_000, 100_000)).unwrap();
+    let text = export_pcb_clipboard(&design, &model, &["trk_h".into(), arc_id, "via_a".into(), "C1".into()], p(100_000, 100_000)).unwrap();
 
     let dir = scratch("upgrade");
     let pcb = dir.join("clip.kicad_pcb");
@@ -160,7 +160,7 @@ fn what_kicad_itself_writes_for_those_items_reads_back_the_same() {
     let written_by_kicad = std::fs::read_to_string(&pcb).unwrap();
     assert!(written_by_kicad.contains("(net \"VIN\")"), "KiCad 10 names the net on each item: {}", &written_by_kicad[..written_by_kicad.len().min(1500)]);
 
-    let clip = parse_clipboard(&written_by_kicad).unwrap();
+    let clip = parse_pcb_clipboard(&written_by_kicad).unwrap();
     assert_eq!(clip.tracks.len(), 2);
     let straight = clip.tracks.iter().find(|t| t.arc().is_none()).unwrap();
     assert_eq!((straight.net.as_str(), straight.layer.as_str(), straight.width, straight.pts.clone()), ("VIN", "F.Cu", 250, vec![p(20_000, 20_000), p(40_000, 20_000)]));

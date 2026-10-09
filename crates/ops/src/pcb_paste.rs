@@ -5,7 +5,7 @@
 //! `PCB_CONTROL::Paste` (`pcbnew/tools/pcb_control.cpp`) with `PCB_CONTROL::placeBoardItems`: nets are mapped by name onto the
 //! board's own (`BOARD::MapNets`), copper on a layer the board does not have is dropped (`pruneItemLayers`), pasted items
 //! are never locked, and a footprint whose reference is taken gets the next free number
-//! (`BOARD_REANNOTATE_TOOL::ReannotateDuplicates`). What is pasted is [`eda_kicad::parse_clipboard`]'s reading of KiCad's
+//! (`BOARD_REANNOTATE_TOOL::ReannotateDuplicates`). What is pasted is [`eda_kicad::parse_pcb_clipboard`]'s reading of KiCad's
 //! clipboard text.
 //!
 //! # Footprints
@@ -276,7 +276,7 @@ impl Board<'_> {
     /// `Cmd::PasteClipboard`: the KiCad clipboard `text`, put on the board with the clipboard's origin (the copy's reference
     /// point) at `at`.
     pub(crate) fn paste_clipboard(&mut self, text: &str, at: Point) -> Result<(), Vec<CheckResult>> {
-        let clip = eda_kicad::parse_clipboard(text).map_err(|e| vec![CheckResult::fail("ops_bad_clipboard", "paste", e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))])?;
+        let clip = eda_kicad::parse_pcb_clipboard(text).map_err(|e| vec![CheckResult::fail("ops_bad_clipboard", "paste", e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))])?;
         let copies = self.copies_from_clipboard(&clip, at);
         if copies.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_clipboard", "paste", "nothing on the clipboard fits this board: its copper is on layers the board does not have")]);

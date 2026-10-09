@@ -32,6 +32,7 @@ use crate::kicad_lane::Lane;
 use crate::route_api;
 use crate::sch_api;
 use crate::sch_export_api;
+use crate::sch_move_api;
 use crate::sch_output_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
@@ -620,9 +621,14 @@ fn handle(
         }
         // Symbol Fields Table / Find / ERC pin map backends: `crate::sch_api`.
         ("POST", "/api/sch/fields_table") => respond(stream, "200 OK", "application/json", sch_api::fields_table(dir, &body).to_string().as_bytes()),
+        // Move, Drag, Rotate and Mirror previews: the commands applied in memory, the moved geometry back (`crate::sch_move_api`).
+        ("POST", "/api/sch/move_preview") => respond(stream, "200 OK", "application/json", sch_move_api::move_preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/bom_export") => respond(stream, "200 OK", "application/json", sch_api::bom_export(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/find") => respond(stream, "200 OK", "application/json", sch_api::find(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
+        // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
+        ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
         // The sheet tree (Next / Previous Sheet, Edit Sheet Page Number): `crate::sch_control_api`.
         ("GET", "/api/sch/hierarchy") => respond(stream, "200 OK", "application/json", crate::sch_control_api::hierarchy(dir).to_string().as_bytes()),
         // Export Symbols...: the library symbols the schematic uses as one `.kicad_sym` (a read; the browser saves it).
@@ -1313,7 +1319,12 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         design.schematic = derived.schematic;
         design.sheet_contents = derived.sheet_contents;
     }
-    let (sch, breadcrumb) = resolve_sheet(&design, sheet_path);
+    Ok(schematic_json_of(&design, &model, sheet_path))
+}
+
+/// [`schematic_json`] of a design that is already loaded (the schematic clipboard asks it of a design a paste has just been tried on).
+pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str) -> Value {
+    let (sch, breadcrumb) = resolve_sheet(design, sheet_path);
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
@@ -1383,6 +1394,10 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         .iter()
         .map(|w| {
             let mut v = json!({ "id": w.id, "net": w.net, "pins": w.pins, "pts": w.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "bus": w.bus });
+            // The stroke Wire/Bus Properties set (width, style, colour), when one was.
+            if let Some(stroke) = sch.extras.strokes.get(&w.id) {
+                v["stroke"] = json!(stroke);
+            }
             // A bus's member nets (`BUS_UNFOLD_MENU` lists them): the vector/group/alias name expansion (`eda_kicad::expand_bus_members`).
             if w.bus {
                 v["members"] = json!(eda_kicad::expand_bus_members(&w.net, &design.bus_aliases).unwrap_or_default());
@@ -1391,14 +1406,14 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         })
         .collect();
     // Explicit junctions (`J`) and graphic lines on the notes layer (`I`) -- see `eda_model::ir::Junction`/`SchLine`.
-    let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y] })).collect();
-    let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um })).collect();
+    let junctions: Vec<Value> = sch.junctions.iter().map(|j| json!({ "id": j.id, "at": [j.at.x, j.at.y], "look": sch.extras.junction_looks.get(&j.id) })).collect();
+    let lines: Vec<Value> = sch.lines.iter().map(|l| json!({ "id": l.id, "pts": l.pts.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(), "width_um": l.width_um, "stroke": sch.extras.strokes.get(&l.id) })).collect();
     // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
     let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
-    let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y] })).collect();
+    let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
     let labels: Vec<Value> = sch
         .labels
         .iter()
@@ -1408,7 +1423,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 eda_model::ir::LabelKind::Global { shape } => ("global", Some(*shape)),
                 eda_model::ir::LabelKind::Hierarchical { shape } => ("hierarchical", Some(*shape)),
             };
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str) })
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id) })
         })
         .collect();
     let texts: Vec<Value> = sch
@@ -1449,7 +1464,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
                 }
             }
             let resolved = if eda_model::is_synthetic_lib_id(lib_id) { None } else { model.symbol_of(lib_id) };
-            let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, &model));
+            let value = resolved.unwrap_or_else(|| synthesize_generic_symbol(lib_id, model));
             (lib_id.clone(), lib_symbol_json(&value))
         })
         .collect::<serde_json::Map<_, _>>()
@@ -1477,9 +1492,9 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
     // (the layout engine writes it per sheet); A4 landscape when neither.
     let page = eda_model::page::PageSettings::of_sheet(sch.extras.page.as_ref(), sch.title_block.as_ref().map(|t| t.paper.as_str()).unwrap_or(""));
     let (paper_w, paper_h) = page.size_um().unwrap_or((297_000, 210_000));
-    let file = viewed_file(&design, &breadcrumb);
+    let file = viewed_file(design, &breadcrumb);
 
-    Ok(json!({
+    json!({
         "paper": { "name": page.paper, "width_um": paper_w, "height_um": paper_h },
         "file": file,
         "symbols": symbols,
@@ -1498,7 +1513,7 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
         "lib_symbols": lib_symbols,
         "sheets": sheets,
         "sheet_path": sheet_path,
-    }))
+    })
 }
 
 /// The file of the screen the breadcrumb ends on (`""` for the root): the title block of the sheet in view names it. The sheets

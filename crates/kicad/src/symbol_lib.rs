@@ -396,13 +396,21 @@ pub fn export_kicad_sym_library(syms: &[&eda_model::ir::LibrarySymbol]) -> Strin
 }
 
 fn write_symbol(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
+    let bare_name = sym.lib_id.rsplit(':').next().unwrap_or(sym.lib_id.as_str());
+    write_symbol_named(out, sym, bare_name);
+}
+
+/// One symbol block as [`export_kicad_sym`] writes it, under the name `outer_name`: the bare name in a library file, the full
+/// `Library:Name` in a schematic's `(lib_symbols ...)` cache (`SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol( aSymbol, aFormatter, aName )`),
+/// whose `<bare>_<unit>_<style>` sub-blocks keep the bare name.
+pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibrarySymbol, outer_name: &str) {
     use std::fmt::Write as _;
 
     let bare_name = sym.lib_id.rsplit(':').next().unwrap_or(sym.lib_id.as_str());
     let yn = |b: bool| if b { "yes" } else { "no" };
     let max_style: u32 = if sym.has_alternate_body_style { 2 } else { 1 };
 
-    writeln!(out, "\t(symbol {}", crate::sexpr_str(bare_name)).unwrap();
+    writeln!(out, "\t(symbol {}", crate::sexpr_str(outer_name)).unwrap();
     writeln!(out, "\t\t(pin_numbers (hide {}))", yn(sym.pin_numbers_hidden)).unwrap();
     writeln!(out, "\t\t(pin_names (offset {}) (hide {}))", crate::fmt_mm_f(sym.pin_name_offset_mm), yn(sym.pin_names_hidden)).unwrap();
     writeln!(out, "\t\t(in_bom {}) (on_board {})", yn(sym.in_bom), yn(sym.on_board)).unwrap();

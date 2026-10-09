@@ -43,11 +43,16 @@
 //! interactive phase entirely: only `finish()`'s output ever needs to be
 //! committed anywhere.
 
-/// `LINE_PLACER::rhWalkOnly`/`rhShoveOnly`'s head effort: merge segments,
-/// plus smart pads when enabled (KiCad also requires 45-degree corner mode,
-/// the only mode this router places in).
+/// `LINE_PLACER::rhWalkOnly`/`rhShoveOnly`'s head effort: `OE_LOW` merges
+/// nothing, `OE_MEDIUM`/`OE_FULL` merge segments; smart pads on top when
+/// enabled (KiCad also requires 45-degree corner mode, the only mode this
+/// router places in).
 fn head_effort(settings: &RoutingSettings) -> u32 {
-    optimizer::effort::MERGE_SEGMENTS | if settings.smart_pads { optimizer::effort::SMART_PADS } else { 0 }
+    let merge = match settings.optimizer_effort {
+        crate::settings::OptEffort::Low => 0,
+        crate::settings::OptEffort::Medium | crate::settings::OptEffort::Full => optimizer::effort::MERGE_SEGMENTS,
+    };
+    merge | if settings.smart_pads { optimizer::effort::SMART_PADS } else { 0 }
 }
 
 use crate::direction45::{CornerMode, Direction45};
@@ -61,7 +66,7 @@ use crate::{optimizer, walkaround};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Um};
 use eda_model::BoardRules;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// `ANCHOR_SNAP_UM`-equivalent: how close the cursor must be to a same-net
 /// pad/via/track-end to snap onto it and offer to finish the route there.
@@ -120,6 +125,9 @@ pub struct LinePlacer {
     pub width: Um,
     pub origin: Point,
     pub direction: Direction45,
+    /// The posture the session started with (`m_initial_direction`): what
+    /// Backspace goes back to once every run has been undone.
+    initial_direction: Direction45,
     pub manually_forced: bool,
     pub placing_via: bool,
     pub via_diameter: Um,
@@ -130,8 +138,9 @@ pub struct LinePlacer {
     pub placement_correct: bool,
     /// Accumulated across every accepted (`fix`/`finish`-absorbed) shove
     /// this session, keyed by source id -- see [`Self::displaced_tracks`].
-    displaced_tracks: HashMap<String, Line>,
-    displaced_vias: HashMap<String, Point>,
+    // ordered, so the commit a session produces does not depend on hash order
+    displaced_tracks: BTreeMap<String, Vec<Line>>,
+    displaced_vias: BTreeMap<String, Point>,
 }
 
 impl LinePlacer {
@@ -146,7 +155,7 @@ impl LinePlacer {
             Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
             _ => Direction45::N,
         };
-        LinePlacer { net, width, origin: p, direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: HashMap::new(), displaced_vias: HashMap::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new() }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -179,22 +188,21 @@ impl LinePlacer {
         let exclude = self.exclude();
 
         if settings.mode == Mode::Shove {
-            // `rhShoveOnly`: try shove first; a failed shove (locked item,
-            // a pad in the way, iteration limit) falls back to walkaround
-            // for this call, exactly like upstream.
-            if let Some(outcome) = crate::shove::shove_line(node, &raw, &self.net, self.current_layer, self.width, rules, settings) {
-                let line = Line::from_points(self.net.clone(), self.current_layer, self.width, outcome.head);
-                // Optimizing against the *original* node is deliberately
-                // conservative: it doesn't know about this call's own
-                // displaced items, so it will never propose a shortcut that
-                // only looks clear because something was just pushed out of
-                // its way (that would re-introduce the very collision shove
-                // just resolved, since nothing here tracks the displaced
-                // items' NEW positions as obstacles the optimizer must also
-                // avoid). Safe, at the cost of occasionally leaving a
-                // slightly less-optimized head than upstream would.
-                let optimized = optimizer::optimize_with(&line, node, rules, &exclude, head_effort(settings));
-                return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias };
+            // `rhShoveOnly`: first walk the head around the pads alone
+            // (`rhWalkBase( aP, walkSolids, ITEM::SOLID_T, RM_Shove )`), then
+            // shove tracks and vias out of its way. A pad the head cannot be
+            // walked around, a locked item, or the iteration limit falls back
+            // to a full walkaround for this call, exactly like upstream.
+            let iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
+            if let Some(walked) = walkaround::walk_masked(node, rules, &self.net, self.current_layer, self.width, &raw, crate::node::kind_mask::SOLID, iteration_limit) {
+                if let Some(outcome) = crate::shove::shove_line(node, &walked, &self.net, self.current_layer, self.width, rules, settings) {
+                    let line = Line::from_points(self.net.clone(), self.current_layer, self.width, outcome.head.clone());
+                    // Like `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`
+                    // after the shove: against the world the shove left, so a
+                    // shortcut is only taken where the pushed items now allow it.
+                    let optimized = optimizer::optimize_with(&line, &outcome.world, rules, &exclude, head_effort(settings));
+                    return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias };
+                }
             }
         }
 
@@ -286,12 +294,27 @@ impl LinePlacer {
     /// re-shoves (or un-shoves, by no longer touching) the same track only
     /// ever contributes its most recent position to the final commit.
     fn absorb_displacement(&mut self, preview: &Preview) {
-        for d in &preview.displaced_lines {
+        self.absorb(&preview.displaced_lines, &preview.displaced_vias);
+    }
+
+    /// The replacement of a track is whatever the latest shove that touched it
+    /// left: all of that shove's lines for the track (a track cut by a junction
+    /// has several, a line on several imported tracks leaves the others with
+    /// none) take the place of what an earlier one said.
+    fn absorb(&mut self, lines: &[DisplacedLine], vias: &[DisplacedVia]) {
+        let mut fresh: HashMap<&str, Vec<Line>> = HashMap::new();
+        for d in lines {
             if let Some(id) = &d.source_track {
-                self.displaced_tracks.insert(id.clone(), d.line.clone());
+                let e = fresh.entry(id.as_str()).or_default();
+                if d.line.point_count() >= 2 {
+                    e.push(d.line.clone());
+                }
             }
         }
-        for d in &preview.displaced_vias {
+        for (id, ls) in fresh {
+            self.displaced_tracks.insert(id.to_string(), ls);
+        }
+        for d in vias {
             self.displaced_vias.insert(d.source_via.clone(), d.pos);
         }
     }
@@ -327,14 +350,7 @@ impl LinePlacer {
         let head_result = self.build_head(node, rules, settings, p);
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
         head.simplify();
-        for d in &head_result.displaced_lines {
-            if let Some(id) = &d.source_track {
-                self.displaced_tracks.insert(id.clone(), d.line.clone());
-            }
-        }
-        for d in &head_result.displaced_vias {
-            self.displaced_vias.insert(d.source_via.clone(), d.pos);
-        }
+        self.absorb(&head_result.displaced_lines, &head_result.displaced_vias);
         let via_pos = self.place_via(node, rules, head.last().unwrap_or(p), new_layer);
         if head.point_count() >= 2 {
             self.runs.push(head);
@@ -359,7 +375,7 @@ impl LinePlacer {
             .last()
             .and_then(|r| r.pts.windows(2).rev().find(|w| w[0] != w[1]))
             .map(|w| Direction45::from_seg(w[0], w[1]))
-            .unwrap_or(self.direction);
+            .unwrap_or(self.initial_direction);
         let _ = popped;
         true
     }
@@ -450,7 +466,7 @@ impl LinePlacer {
                 // eventual caller (`crate::router::Router::build_commit`)
                 // "remove this track, nothing replaces it" -- the same
                 // convention a fully-retracted shove already relies on.
-                self.displaced_tracks.insert(track_id, Line::new(self.net.clone(), self.current_layer, 0));
+                self.displaced_tracks.insert(track_id, Vec::new());
             }
         }
     }
@@ -461,8 +477,8 @@ impl LinePlacer {
     /// caller's final commit must remove and re-add each of these
     /// alongside this session's own new runs, in the same undo step
     /// (`crate::router`/`Cmd::CommitRoute`).
-    pub fn displaced_tracks(&self) -> impl Iterator<Item = (&str, &Line)> {
-        self.displaced_tracks.iter().map(|(k, v)| (k.as_str(), v))
+    pub fn displaced_tracks(&self) -> impl Iterator<Item = (&str, &[Line])> {
+        self.displaced_tracks.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
     }
 
     /// Every via this session's shove moved, by source `Via::id`.
@@ -593,6 +609,39 @@ mod tests {
         assert_eq!(displaced[0].0, "trkA");
     }
 
+    /// `rhShoveOnly`: with a pad on the straight line AND a track to push, Shove mode walks the head around the
+    /// pad first and then pushes the track -- it used to give up at the pad and fall back to Walkaround, which
+    /// leaves the track where it is and routes around that too.
+    #[test]
+    fn shove_mode_walks_around_a_pad_and_still_pushes_a_track() {
+        use crate::item::{Segment, Solid};
+        use crate::layer::LayerRange;
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 2000, y: 0 }, shape: Shape::Circle { c: Point { x: 2000, y: 0 }, r: 400 }, source: "U1.1".into() }));
+        node.add(Item::Segment(Segment { net: net_of("PWR"), layer: 0, a: Point { x: 4300, y: -2500 }, b: Point { x: 4300, y: -300 }, width: 200, source_track: Some(("trkP".into(), 0)), locked: false }));
+        let rules = rules();
+        let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        let shove = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() }, Point { x: 8000, y: 0 });
+        assert!(!shove.colliding);
+        assert!(shove.head.point_count() > 2, "the head had to go around the pad: {:?}", shove.head.pts);
+        assert!(shove.head.pts.iter().any(|p| p.y.abs() > 500), "{:?}", shove.head.pts);
+        assert_eq!(shove.head.last(), Some(Point { x: 8000, y: 0 }));
+        // contrast: Walkaround routes around both and moves neither
+        let walk = placer.preview(&node, &rules, &RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() }, Point { x: 8000, y: 0 });
+        assert!(walk.displaced_lines.is_empty());
+        assert!(walk.head.length() >= shove.head.length() - 1.0, "pushing the track needs no more detour than walking around it");
+    }
+
+    /// `OE_LOW` merges nothing in the head; the default merges segments.
+    #[test]
+    fn head_effort_follows_the_optimizer_setting() {
+        use crate::settings::OptEffort;
+        let low = RoutingSettings { optimizer_effort: OptEffort::Low, smart_pads: false, ..RoutingSettings::default() };
+        assert_eq!(head_effort(&low), 0);
+        let medium = RoutingSettings { optimizer_effort: OptEffort::Medium, smart_pads: true, ..RoutingSettings::default() };
+        assert_eq!(head_effort(&medium), optimizer::effort::MERGE_SEGMENTS | optimizer::effort::SMART_PADS);
+    }
+
     #[test]
     fn finishing_a_route_onto_an_already_connected_same_net_anchor_removes_the_redundant_old_path() {
         use crate::item::Segment;
@@ -614,7 +663,7 @@ mod tests {
         let displaced: Vec<_> = placer.displaced_tracks().collect();
         assert_eq!(displaced.len(), 1);
         assert_eq!(displaced[0].0, "trkOld");
-        assert!(displaced[0].1.point_count() < 2, "no replacement geometry -- the old track is simply removed, not moved");
+        assert!(displaced[0].1.iter().all(|l| l.point_count() < 2), "no replacement geometry -- the old track is simply removed, not moved");
     }
 
     #[test]

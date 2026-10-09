@@ -17,10 +17,11 @@ doc and the code disagree, the code wins and the doc is named.
   **6 closed, 14 partial, 2 open, 8 out of scope** (kicad-cli covers DRC, ERC and the exports).
 - **12 items are new**, found in `PARITY-*.md`, `CODE-COMPARE-*.md` and by reading the code. The ranked list marks them.
 - **Three findings change the picture.**
-  1. *A wired action is not a working feature.* `UI-ACTIONS.md` counts schematic Move, Drag, Rotate, Mirror,
-     Properties and Align as wired, but they act on symbols only: a label, wire, text, power symbol or sheet
-     cannot be moved or rotated. On the PCB, Move skips tracks and zones, Rotate and Flip take footprints and
-     vias only, and Duplicate and Copy skip footprints (**the PCB half is fixed, 2026-10-08, item 8**).
+  1. *A wired action is not a working feature.* `UI-ACTIONS.md` counted schematic Move, Drag, Rotate, Mirror,
+     Properties and Align as wired, but they acted on symbols only. **Fixed on 2026-10-08 for the schematic (item 1):
+     they act on every item kind, wires stretch, and Properties opens the dialog of the kind.** On the PCB, Move
+     skips tracks and zones, Rotate and Flip take footprints and vias only, and Duplicate and Copy skip footprints
+     (**the PCB half is fixed too, 2026-10-08, item 8**).
   2. *The KiCad files we write drop design data, and kicad-cli judges those files.* The PCB writer
      (`crates/kicad/src/pcb.rs`) gave every zone the board's default clearance and width instead of its own
      settings, wrote no keepout, no dimensions, no groups, no locks, and turned arc tracks into 32 segments; a
@@ -45,16 +46,27 @@ doc and the code disagree, the code wins and the doc is named.
 "Port from" paths are under the KiCad source root.
 
 ### 1. Schematic edit tools act on symbols only
-New (the residual of #1). **Partial.** Hit: every schematic session. Blocks: yes, moving a label or wire means delete and redraw. WP1, size L.
-- Exists: select, box-select, Select All, Delete, Lock, Change To and the context menu cover every item kind
-  (`kicad-port/schItemGeom.ts`, `schDelete.ts`, `schContextMenu.ts`, `components/schematic/SchContextMenu.tsx`).
-- Missing: Move and Drag (`M`, `G`, click-drag), Rotate, Mirror, Properties (`E`) and Align act on placed symbols
-  only. The handlers in `actions/useActionRunner.ts` (`eeschema.InteractiveMove.move/drag`, `InteractiveEdit.rotateCCW`,
-  `mirrorH`, `properties`) return unless the item is a symbol; `components/SchematicView.tsx` starts a drag only on
-  a symbol; `crates/ops` has `MoveSymbol` and `DragSymbol` and no verb that moves a wire, label, power symbol, text,
-  junction, no-connect, bus entry or sheet. A plain click on a wire toggles net highlight instead of selecting it.
-  No drag of a wire segment (`G` on a wire stretches its neighbours). Align and Align to Grid move symbols without
-  their wires, so pins leave the connection grid and stop connecting (`CODE-COMPARE-ui.md` item 9).
+New (the residual of #1). **Mostly done (2026-10-08).** Hit: every schematic session. Blocks: no longer; Move, Drag, Rotate, Mirror, Properties and Align work on every item kind. WP1, size L (step 1 done).
+- Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
+  one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
+  free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one undo
+  step on the sheet in view. Move leaves the wires where they are; Drag stretches the attached wires and adds the segments KiCad adds (right-angle bends,
+  the stub at an unselected junction, label and sheet-pin special cases), then does KiCad's finishing (junctions, trimming, merging, dangling segments);
+  dragging a wire segment drags its neighbours. Rotate and Mirror use KiCad's turn point (own anchor, or the half-grid-snapped centre of the selection) and
+  turn a label's spin (`SchExtras::label_spins`, drawn). R, Shift+R, X and Y work while items are held, and the view shows what the server computes for the
+  same command (`POST /api/sch/move_preview`). A plain click on a wire selects it, a click-drag works on any item, and Align and Align to Grid move each
+  item's wires with it so pins stay on the connection grid. Properties (`E`, a double-click) opens the dialog for the kind: label, text, sheet, wires /
+  buses / bus entries / graphic lines / junctions (width, style, colour, junction size), shapes, rule areas, text boxes and directive labels; strokes and
+  junction looks are drawn and written to the `.kicad_sch` as KiCad writes them, and read back.
+- Measured: 49 Rust tests for the move family (every kind moved, dragged with stretch, turned, mirrored and undone; the net list unchanged when items move with
+  their wires; every symbol of the user's board and of mcu30 as module sheets dragged keeps its wires on its pins), 17 for Properties, 4 in `board.rs`
+  (each verb is one undo step; the nets are untouched), a stroke round trip through a `.kicad_sch`, and 19 `node --test` cases; clicked through on a copy of mcu30
+  (wire segment drag with bends, held R during a move, rotate and mirror of five kinds together and Undo, Align Left, Align to Grid, each Properties dialog).
+- Missing: the net-collision overlay of a drag (`sch_drag_net_collision.cpp`); `AutoRotateItem` after a label lands; a text has no justification to flip
+  when it is mirrored; fonts, bold, italic and colours of text and labels, a sheet's border and fill, extra fields and a label's fields have no place in the
+  IR, so their dialog pages are absent; sheet pins cannot be selected one by one; a power symbol has no Properties dialog; the `.kicad_sch` writer still
+  writes every label at angle 0, so a label's spin is not in the file yet; symbols that this project drew (not imported) and are turned or mirrored place
+  their pins by `eda_engine::placed`, which disagrees with the drawn symbol for 90-degree and mirrored ones (older; the move tools use what is drawn).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
@@ -127,25 +139,37 @@ New (the old "library browsers" mention). **Open.** Hit: every session that adds
   `pcbnew/footprint_chooser_frame.cpp`, `pcbnew/footprint_library_adapter.cpp`.
 
 ### 6. The schematic has no clipboard
-New (the schematic half of old #14). **Open.** Hit: every session. Blocks: partly; Repeat Last Item (`kicad-port/schRepeat.ts`) is the only workaround. WP1, size M.
-- Missing: cut, copy, paste, duplicate and Paste Special do nothing on the Schematic tab (`common.Interactive.copy/paste` are
-  `pcbOnly`; `duplicate` serves the PCB and footprint tabs, `actions/useActionRunner.ts`). Needed: selected items with their
-  wires and labels, paste carried by the cursor, annotation of pasted symbols, paste across sheets, and KiCad's clipboard
-  format so copy and paste work with real KiCad.
+New (the schematic half of old #14). **Closed on 2026-10-08.** Hit: every session. Blocks: no longer. WP1, size M.
+- Done: Cut, Copy, Paste, Paste Special and Duplicate on the Schematic tab, in KiCad's own clipboard format (`(lib_symbols ...)` and the selected items, no
+  `(kicad_sch ...)` around them). Copy puts it on the system clipboard (`crates/kicad/src/sch_clipboard.rs::write_clipboard`, `POST /api/sch/clipboard/copy`); Paste reads
+  KiCad's (`parse_clipboard`) and shows what it would add following the cursor until a click places it (`kicad-port/schClipboard.ts`, `components/SchematicView.tsx`); one verb
+  adds the batch to the sheet in view, one undo step (`Cmd::PasteSch`, `crates/ops/src/sch_clipboard.rs`). Pasted symbols are numbered unique across every sheet
+  (`eda_model::sch_clipboard::annotate_paste`, a port of `ReannotateDuplicates`), Paste Special offers KiCad's three reference-designator options
+  (`components/SchPasteSpecialDialog.tsx`), Duplicate copies into a buffer of its own and carries the copy by the connection point nearest the cursor. Proven against real KiCad both ways:
+  kicad-cli reads what a copy writes and finds the same nets (`crates/kicad/tests/sch_clipboard.rs`, `EDA_SLOW_TESTS=1`), and forms taken out of KiCad's QA schematics read as the files do.
+- Left: hierarchical sheets are not copied or pasted (KiCad keeps their screens in a side buffer); a field's position and a label's rotation are not in the IR, so a copy carries
+  neither (the fields are marked `fields_autoplaced`, so KiCad lays them out when the pasted symbol moves); Keep annotations cannot make a duplicate reference (a design here names a part
+  by its reference), so a taken one is numbered anew; Clear annotations numbers at once instead of leaving `R?`; Copy as Text; tables, images and groups; a part's MPN and LCSC from the intent.
 - Port from: `eeschema/tools/sch_editor_control.cpp` (`doCopy`, `Paste`), `common/clipboard.cpp`, `eeschema/sch_io/kicad_sexpr/`.
 
 ### 7. The router: shove and drag are not KiCad's
-Old #7. **Partial.** Hit: every routing session in Shove mode (Walkaround, the default, works). Blocks: shove, the router's headline feature. WP4, size XL.
+Old #7. **Partial.** Hit: dragging, a route that starts or ends mid-segment, differential pairs with obstacles (Shove, the headline feature, now works near pads, vias and tracks; see the status below). Blocks: partly. WP4, size XL.
 - Exists: `crates/pns` ports hulls, `LINE::Walkaround`, shove of tracks and vias, the optimizer with smart pads, loop removal,
   diff-pair routing, single-track and diff-pair length and skew tuning (dialog-driven), and `D`/`G` drag of a corner or via
   (`crates/pns/PARITY.md`; `CODE-COMPARE-router.md` D1-D4 and D8 are fixed).
-- Missing (`CODE-COMPARE-router.md`): shove gives up at the first pad (`crates/pns/src/shove.rs`, `Item::Solid(_) => return None`)
-  and has no solids-only pre-pass or `onCollidingSolid`, so near pads Shove degenerates to Walkaround (D5); via push over- and
-  under-shoots (D6); a drag moves the nearer end instead of sliding the segment, at any angle, and is refused onto obstacles in
-  the default mode (D7); shoved lines get no optimizer pass and widths are normalised (D10); a route cannot start or end mid-segment
+- **Status (2026-10-08): shove near pads is ported** (`CODE-COMPARE-router.md` D5, D6, D10, D12 closed). `crates/pns/src/shove.rs` now
+  follows `pns_shove.cpp`: a stack of lines with ranks, the nearest obstacle by path length (pads, then vias, then tracks),
+  `onCollidingSolid` walking the current line around the cluster of a pad, `pushOrShoveVia` with the minimum translation vector and a
+  45-degree re-shape of the via's tracks, `runOptimizer` over every shoved line, widths kept, and the head walked around pads first
+  (`rhShoveOnly`). KiCad's own `simple-shove-1` and `issue22749` pushes are replayed (`crates/pns/tests/qa_regressions.rs`): the same
+  13 and 5 tracks move, no new violation. Still open in Shove: a head that ends in a via is not shoved with its via, no springback or
+  time limit, the settings dialog exposes only mode and remove-loops (`shove_vias`, `jump_over_obstacles`, `optimizer_effort` are read
+  now but have no control).
+- Missing (`CODE-COMPARE-router.md`): a drag moves the nearer end instead of sliding the segment, at any angle, and is refused onto
+  obstacles in the default mode (D7), and a dragged via is never shoved against (`dragViaWalkaround`/`propagateViaForces`); a route cannot start or end mid-segment
   and Route From Other End works only before the first fix; a diff pair has no coupled shove or walkaround and no via; length tuning
   is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs
-  (`ARC_T`), mouse-trail posture or springback; six `RoutingSettings` fields are never read (D16).
+  (`ARC_T`), mouse-trail posture or springback; three `RoutingSettings` fields are never read (`fix_all_segments`, `walkaround_hug_length_threshold`, `via_force_prop_iteration_limit`; D16).
 - Port from: `pcbnew/router/` (`pns_shove.cpp`, `pns_walkaround.cpp`, `pns_dragger.cpp`, `pns_line_placer.cpp`,
   `pns_diff_pair_placer.cpp`, `pns_meander*.cpp`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`.
 
@@ -320,7 +344,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 - KiCad: `eeschema/tools/` (`sch_move_tool`, `sch_edit_tool`, `sch_selection_tool`, `sch_editor_control`, `sch_align_tool`,
   `sch_drag_net_collision`, `sch_group_tool`, `ee_grid_helper`), `eeschema/{sch_field,sch_label,sch_symbol,sch_line}.cpp`,
   `eeschema/autoplace_fields.cpp`, `eeschema/dialogs/dialog_{label,field,symbol,wire_bus}_properties.cpp`, `common/view/wx_view_controls.cpp`.
-- Order: move, drag, rotate and mirror for every item kind with wire stretch (1); clipboard (6); fields and labels (12); view controls and snap.
+- Order: move, drag, rotate and mirror for every item kind with wire stretch (1); clipboard (6, done 2026-10-08); fields and labels (12); view controls and snap.
 
 **WP2. Schematic hierarchy and connectivity** (item 4). Size L. Go first.
 - Files: `crates/ops/src/lib.rs` (add a sheet path to the schematic verbs and `schematic_mut`), `crates/cli/src/board.rs` (`reconcile_schematic`,
@@ -344,7 +368,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
   `kicad-port/{routeTool,dpTool,dragTool}.ts`, `components/{RouterSettingsDialog,LengthTuningDialog}.tsx`, `actions/pcbRouterSweep.ts`.
 - KiCad: `pcbnew/router/` (`pns_shove`, `pns_walkaround`, `pns_dragger`, `pns_line_placer`, `pns_diff_pair_placer`, `pns_meander*`, `pns_optimizer`,
   `pns_router`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`.
-- Order: D5 solids pre-pass and `onCollidingSolid`; optimizer over shoved lines (D6, D10, D12); dragger segment slide and 45-degree corners (D7);
+- Order: ~~D5 solids pre-pass and `onCollidingSolid`; optimizer over shoved lines (D6, D10, D12)~~ (done 2026-10-08); dragger segment slide and 45-degree corners (D7);
   start and end mid-segment, Route From Other End; diff-pair coupling and vias; interactive tuning; arcs; the dead settings (D16).
 
 **WP5. Rules, zones and KiCad file fidelity** (items 2, 3, 11, 13). Size XL; split after step 2 if two agents are free.
@@ -384,7 +408,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 11 | Property dialogs | Partial | via, shape, zone, text, dimension and track width edit (`Cmd::EditVia`, `EditShape`, `EditZone`, `EditText`); footprint, pads, panel: items 9, 10. |
 | 12 | Move excludes tracks and zones | **Closed** | `Cmd::MoveItems`, `RotateItems`, `FlipItems` (`crates/ops/src/pcb_transform.rs`), `kicad-port/pcbTransform.ts`, `pcbEditActions.ts::movableItem` for every kind; item 8. |
 | 13 | Selection modifiers and box select | **Closed** | `kicad-port/selection.ts`, `components/canvas/selectionCandidates.ts::collectBoxSelection`, `Canvas.tsx`; `PARITY-pcb.md` section 3. |
-| 14 | Clipboard | Partial | PCB: every item kind, footprints included, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `Cmd::Duplicate`, `components/canvas/clipboard.ts`); schematic: item 6. |
+| 14 | Clipboard | Partial | PCB: every item kind, footprints included, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `Cmd::Duplicate`, `components/canvas/clipboard.ts`); schematic: done in KiCad's format (`Cmd::PasteSch`, item 6). Left: Paste Special on the PCB (item 8). |
 | 15 | Cross-tab undo | **Closed** | `crates/ops` `Domain`, `crates/cli/src/board.rs::restore_domain` (test `undo_redo_are_scoped_to_the_tab_that_asked`); the Footprint and Symbol tabs undo in their own scopes. |
 | 16 | Hotkey extraction | **Closed** | `web/studio/tools/lib/actionsParser.js::extractPlatformRaw` (with test), `src/kicad/actions.json` (`common.Interactive.redo` is Ctrl+Y), `actions/hotkeys.ts::effectiveHotkey`. |
 | 17 | Click-versus-drag threshold | **Open** | `Canvas.tsx` sets `drag.moved` on a non-zero snapped delta; item 14. |
