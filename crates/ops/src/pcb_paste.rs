@@ -17,6 +17,7 @@
 
 use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
+use eda_model::fp_edit::FootprintEdit;
 use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintInstance, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::{CheckResult, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,6 +48,8 @@ struct FootprintCopy {
     side: Side,
     label: LabelSide,
     pad_nets: Vec<(String, String)>,
+    /// What was edited on the footprint (its fields, attributes and pad overrides): a copy has them too, under its own reference.
+    edit: Option<FootprintEdit>,
     /// A paste puts a part of this board that is not placed back, rather than making a second one.
     reuse_unplaced: bool,
 }
@@ -222,6 +225,7 @@ impl Board<'_> {
                 side: fp.side,
                 label: fp.label,
                 pad_nets: nets,
+                edit: self.design.footprint_edit(id).cloned(),
                 reuse_unplaced: false,
             });
             return Some(Member::Footprint(copies.footprints.len() - 1));
@@ -365,6 +369,7 @@ impl Board<'_> {
                 label: f.label,
                 // KiCad's single-footprint clipboard has no nets: its pads stay on none.
                 pad_nets: f.pad_nets.clone(),
+                edit: f.edit.clone(),
                 reuse_unplaced: true,
             });
         }
@@ -439,10 +444,21 @@ impl Board<'_> {
         let mut fp_refs: Vec<String> = Vec::new();
         let mut new_parts: Vec<(BoardPart, FootprintInstance)> = Vec::new();
         let mut replaced: Vec<FootprintInstance> = Vec::new();
+        let mut new_edits: Vec<FootprintEdit> = Vec::new();
+        // The copy's edit under its own reference, showing that reference (the text of a field follows the footprint it is on).
+        let own_edit = |f: &FootprintCopy, reference: &str| -> Option<FootprintEdit> {
+            let mut e = f.edit.clone()?;
+            e.id = reference.to_string();
+            if let Some(l) = e.reference.as_mut() {
+                l.text = None;
+            }
+            (!e.is_empty()).then_some(e)
+        };
         for f in &copies.footprints {
             let at = self.snap_point(f.at.x, f.at.y);
             if f.reuse_unplaced && self.model.part(&f.reference).is_some() && self.pose_of(&f.reference).is_none() && !replaced.iter().any(|r| r.id == f.reference) {
                 replaced.push(FootprintInstance { id: f.reference.clone(), at, rot: f.rot, side: f.side, label: f.label });
+                new_edits.extend(own_edit(f, &f.reference));
                 fp_refs.push(f.reference.clone());
                 continue;
             }
@@ -460,6 +476,7 @@ impl Board<'_> {
                 BoardPart { reference: reference.clone(), value: f.value.clone(), footprint: f.footprint.clone(), definition, pad_nets },
                 FootprintInstance { id: reference.clone(), at, rot: f.rot, side: f.side, label: f.label },
             ));
+            new_edits.extend(own_edit(f, &reference));
             fp_refs.push(reference);
         }
 
@@ -495,7 +512,7 @@ impl Board<'_> {
             rt.zones.append(&mut copies.zones);
             self.sort_routing();
         }
-        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() {
+        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() {
             let dr = self.drawings_mut();
             dr.shapes.append(&mut copies.shapes);
             dr.texts.append(&mut copies.texts);
@@ -512,6 +529,11 @@ impl Board<'_> {
                 dr.board_parts.push(bp.clone());
             }
             dr.board_parts.sort_by(|a, b| a.reference.cmp(&b.reference));
+            if !new_edits.is_empty() {
+                dr.footprint_edits.retain(|e| !new_edits.iter().any(|n| n.id == e.id));
+                dr.footprint_edits.append(&mut new_edits);
+                dr.footprint_edits.sort_by(|a, b| a.id.cmp(&b.id));
+            }
         }
         if !new_parts.is_empty() || !replaced.is_empty() {
             let fps = &mut self.design.placement.as_mut().expect("a Board always carries a placement section").footprints;

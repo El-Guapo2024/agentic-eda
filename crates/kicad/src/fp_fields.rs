@@ -21,11 +21,6 @@ pub(crate) struct FpExtra<'a> {
 }
 
 impl<'a> FpExtra<'a> {
-    /// A footprint nothing was edited on: derived attributes, default fields.
-    pub fn plain(footprint: &Footprint) -> Self {
-        FpExtra { edit: None, attrs: FootprintAttrs::derived(footprint, false, false) }
-    }
-
     /// The edit and attributes the design holds for `id`.
     pub fn of(design: &'a eda_model::ir::Design, id: &str, footprint: &Footprint) -> Self {
         FpExtra { edit: design.footprint_edit(id), attrs: design.effective_attrs(id, footprint) }

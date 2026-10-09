@@ -52,6 +52,7 @@ pub use pcb_edit::BooleanOp;
 pub mod board_setup;
 mod review;
 pub mod library_editors;
+mod fp_edit;
 mod pcb_paste;
 mod pcb_props;
 mod pcb_transform;
@@ -844,6 +845,27 @@ pub enum Cmd {
     /// A shape's new geometry (and whatever else of it changed), in place: the id and the lock stay. The panel's "Start X", "Radius",
     /// "Width" and the like (`EDA_SHAPE` setters) send the whole shape.
     ReplaceShape { id: String, shape: Shape },
+
+    // ------------------------------------------- footprints as editable objects (see [`fp_edit`])
+    /// `DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow`: what is given replaces what the footprint `part` has -- the Reference
+    /// field's layout, the Value field's, the user fields (the whole list), the attributes (type, board only, exclude from position files
+    /// and BOM, DNP, exempt from the courtyard requirement). What is left out stays. DNP and Exclude from BOM also reach the schematic
+    /// symbol, so the BOM kicad-cli writes from it agrees with the board. One undo step.
+    EditBoardFootprint {
+        part: String,
+        #[serde(default)]
+        reference: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        value: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        fields: Option<Vec<eda_model::fp_edit::UserField>>,
+        #[serde(default)]
+        attrs: Option<eda_model::fp_edit::FootprintAttrs>,
+    },
+    /// `DIALOG_PAD_PROPERTIES::TransferDataFromWindow` for a pad on the board (the footprint editor's own is `EditPad`): the pad of `part` that `edit` names (its number, and which of the pads that
+    /// share it) gets `edit` as its changes -- shape, size, hole, offset, corner radius, clearance and solder mask and paste margins. An
+    /// edit that changes nothing puts the pad back as the library has it.
+    EditBoardPad { part: String, edit: eda_model::fp_edit::PadEdit },
 
     /// Apply `cmds` in order as ONE command: one undo step, one activity
     /// entry, all-or-nothing (the first refused sub-command restores the
@@ -1681,6 +1703,7 @@ impl Cmd {
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
+            Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2224,6 +2247,8 @@ impl<'a> Board<'a> {
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
             Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
             Cmd::FlipItems { ids, pivot, direction } => self.flip_items(ids, *pivot, *direction),
+            Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
+            Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
             Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
@@ -2747,6 +2772,8 @@ impl<'a> Board<'a> {
         // A footprint that exists only on the board (a copy) has no intent to go back to: deleting it deletes the part too.
         if let Some(dr) = self.design.drawings.as_mut() {
             dr.board_parts.retain(|b| b.reference != part);
+            // What was edited on the footprint (its fields, attributes, pads) goes with it.
+            dr.footprint_edits.retain(|e| e.id != part);
         }
         Ok(())
     }
@@ -2776,6 +2803,8 @@ impl<'a> Board<'a> {
         let fps = &mut self.design.placement.as_mut().unwrap().footprints;
         let i = fps.iter().position(|f| f.id == part).expect("caller checked the part is placed");
         fps[i].side = if fps[i].side == Side::Top { Side::Bottom } else { Side::Top };
+        let copper = self.model.board.layers.len();
+        self.flip_footprint_fields(part, copper);
         Ok(())
     }
 
@@ -5437,6 +5466,8 @@ mod sch_control_tests;
 mod board_setup_tests;
 #[cfg(test)]
 mod pcb_transform_tests;
+#[cfg(test)]
+mod fp_edit_tests;
 #[cfg(test)]
 mod pcb_props_tests;
 #[cfg(test)]

@@ -341,6 +341,18 @@ impl PadEdit {
     }
 }
 
+/// The id of a footprint's field: `REF:Reference`, `REF:Value`, `REF:<user field name>`. A reference holds no `:`, so the first one
+/// splits the id.
+pub fn field_id(reference: &str, name: &str) -> String {
+    format!("{reference}:{name}")
+}
+
+/// Split a field id into the footprint's reference and the field's name.
+pub fn parse_field_id(id: &str) -> Option<(&str, &str)> {
+    let (reference, name) = id.split_once(':')?;
+    (!reference.is_empty() && !name.is_empty()).then_some((reference, name))
+}
+
 /// The id the studio gives the `nth` pad numbered `number` of footprint `reference`: `REF.NUM`, `REF.NUM#2` ...
 pub fn pad_id(reference: &str, number: &str, nth: u32) -> String {
     if nth <= 1 {
@@ -444,6 +456,27 @@ impl Design {
         }
         let (dnp, no_bom) = self.symbol_bom_flags(id);
         FootprintAttrs::derived(footprint, dnp, no_bom)
+    }
+}
+
+impl Design {
+    /// Put the `DNP` and `Exclude from BOM` flags the footprint edits state on the schematic symbols of the same references, on every
+    /// screen. The board's footprint and the schematic's symbol are two copies of one fact (KiCad keeps them in step with "Update PCB
+    /// from Schematic"); an edit on the footprint reaches the schematic here, so the BOM kicad-cli writes from the schematic honours it.
+    pub fn sync_symbol_bom_flags(&mut self, edits: &[FootprintEdit]) {
+        let flags: Vec<(&str, FootprintAttrs)> = edits.iter().filter_map(|e| e.attrs.map(|a| (e.id.as_str(), a))).collect();
+        if flags.is_empty() {
+            return;
+        }
+        let screens = self.schematic.iter_mut().chain(self.sheet_contents.iter_mut().flat_map(|c| c.values_mut()));
+        for screen in screens {
+            for sym in screen.symbols.iter_mut() {
+                if let Some((_, a)) = flags.iter().find(|(id, _)| *id == sym.id) {
+                    sym.dnp = a.dnp;
+                    sym.exclude_from_bom = a.exclude_from_bom;
+                }
+            }
+        }
     }
 }
 
@@ -583,6 +616,16 @@ mod tests {
         let l = FieldLayout::new(Point { x: 1_500, y: -2_000 }, "F.SilkS");
         assert_eq!(l.file_position(Side::Top), (1_500, -2_000));
         assert_eq!(l.file_position(Side::Bottom), (-1_500, -2_000));
+    }
+
+    #[test]
+    fn field_ids_split_at_the_first_colon() {
+        assert_eq!(field_id("R1", "Reference"), "R1:Reference");
+        assert_eq!(parse_field_id("R1:Reference"), Some(("R1", "Reference")));
+        assert_eq!(parse_field_id("R1#2:Vendor:code"), Some(("R1#2", "Vendor:code")));
+        assert_eq!(parse_field_id("R1"), None);
+        assert_eq!(parse_field_id(":x"), None);
+        assert_eq!(parse_field_id("R1:"), None);
     }
 
     #[test]
