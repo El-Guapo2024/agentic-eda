@@ -1,0 +1,176 @@
+/* The Symbol Chooser and the Footprint Chooser (components/SymbolChooserDialog.tsx, components/FootprintChooserDialog.tsx, components/chooser/*):
+   KiCad's LIB_TREE on the left (search box over a tree with Item and Description columns) and the preview of the selected item on the right. */
+.dialog.chooser-dialog {
+  width: min(1040px, 96vw);
+  height: min(700px, 90vh);
+  max-height: 90vh;
+}
+.chooser-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.chooser-left {
+  flex: 1 1 58%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--chrome-border);
+}
+.chooser-search {
+  padding: 8px 10px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.chooser-search input {
+  width: 100%;
+  box-sizing: border-box;
+}
+.chooser-hint {
+  font-size: 11px;
+  color: var(--chrome-text-dim);
+  min-height: 14px;
+}
+.chooser-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  font-size: 12px;
+  outline: none;
+  border-top: 1px solid var(--chrome-border);
+}
+.chooser-header,
+.chooser-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 38%) 1fr;
+  align-items: center;
+}
+.chooser-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--chrome-bg);
+  color: var(--chrome-text-dim);
+  font-weight: 600;
+  border-bottom: 1px solid var(--chrome-border);
+}
+.chooser-header > div,
+.chooser-row > div {
+  padding: 2px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chooser-row {
+  cursor: default;
+  user-select: none;
+}
+.chooser-row:hover {
+  background: var(--chrome-hover);
+}
+.chooser-row.selected {
+  background: var(--chrome-selected-bg);
+  color: var(--chrome-selected-text);
+}
+.chooser-row.group > div:first-child {
+  font-weight: 600;
+}
+.chooser-row.item > div:first-child {
+  padding-left: 24px;
+}
+.chooser-row.unit > div:first-child {
+  padding-left: 44px;
+}
+.chooser-row .twisty {
+  display: inline-block;
+  width: 12px;
+  color: inherit;
+  opacity: 0.8;
+}
+.chooser-row .dim {
+  color: var(--chrome-text-dim);
+  font-weight: 400;
+}
+.chooser-row.selected .dim {
+  color: inherit;
+  opacity: 0.85;
+}
+.chooser-right {
+  flex: 1 1 42%;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  overflow-y: auto;
+}
+.chooser-preview {
+  position: relative;
+  border: 1px solid var(--chrome-border);
+  border-radius: 4px;
+  overflow: hidden;
+  flex: 0 0 auto;
+}
+.chooser-preview canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.chooser-preview .status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  color: var(--chrome-text-dim);
+  background: transparent;
+  pointer-events: none;
+  text-align: center;
+  padding: 0 12px;
+}
+.chooser-details {
+  font-size: 12px;
+  line-height: 1.45;
+}
+.chooser-details .name {
+  font-weight: 700;
+}
+.chooser-details table {
+  border-collapse: collapse;
+  margin-top: 4px;
+}
+.chooser-details td {
+  padding: 1px 10px 1px 0;
+  vertical-align: top;
+}
+.chooser-details td:first-child {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.chooser-footprint-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  padding: 0 10px 6px;
+}
+.chooser-footprint-filters label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.chooser-units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  font-size: 12px;
+}
+.chooser-units button {
+  min-width: 28px;
+  padding: 2px 6px;
+}

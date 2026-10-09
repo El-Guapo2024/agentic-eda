@@ -9,8 +9,12 @@
 // form and just autofocuses the one field the hotkey named, a deliberate
 // simplification (one component to maintain, same backend Cmds either
 // way) rather than building two dialogs with identical plumbing.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchAnySymbol } from "../api/libraryClient";
+import { uniquePinCount } from "../kicad-port/footprintFilter";
+import { expandStackedPinNotation } from "../kicad-port/stackedPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { FootprintChooserDialog } from "./FootprintChooserDialog";
 
 export function SymbolPropertiesDialog() {
   const state = useStudioState();
@@ -24,6 +28,25 @@ export function SymbolPropertiesDialog() {
   const [footprint, setFootprint] = useState("");
   const [datasheet, setDatasheet] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // The Footprint field's browse button: the Footprint Chooser, narrowed by this symbol's pin count and its library symbol's footprint filters.
+  const [choosingFootprint, setChoosingFootprint] = useState(false);
+  const [libInfo, setLibInfo] = useState<{ filters: string[]; pins: number } | null>(null);
+  const libId = symbol?.lib_id ?? null;
+  useEffect(() => {
+    setLibInfo(null);
+    if (!libId) return;
+    let cancelled = false;
+    // The pins of the whole library symbol, every unit (`GetGraphicalPins( 0, 1 )`): the placed instance lists the pins of its own unit only.
+    fetchAnySymbol(libId)
+      .then((r) => !cancelled && setLibInfo({ filters: r.symbol.footprint_filters ?? [], pins: uniquePinCount(r.symbol.pins, (n) => expandStackedPinNotation(n).numbers) }))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [libId]);
+  const instancePins = useMemo(() => new Set((symbol?.pins ?? []).map((p) => p.number)).size, [symbol]);
+  const pinCount = libInfo?.pins ?? instancePins;
+  const fpFilters = libInfo?.filters ?? [];
 
   const refInput = useRef<HTMLInputElement>(null);
   const valueInput = useRef<HTMLInputElement>(null);
@@ -65,66 +88,86 @@ export function SymbolPropertiesDialog() {
   };
 
   return (
-    <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
-        <div className="dialog-header">
-          <span>Symbol Properties</span>
-        </div>
-        <div className="dialog-body">
-          <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr" }}>
-            <span>Reference</span>
-            <input
-              ref={refInput}
-              value={reference}
-              onChange={(e) => setReference(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-            />
-            <span>Value</span>
-            <input
-              ref={valueInput}
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-            />
-            <span>Footprint</span>
-            <input
-              ref={footprintInput}
-              value={footprint}
-              onChange={(e) => setFootprint(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-            />
-            <span>Datasheet</span>
-            <input
-              ref={datasheetInput}
-              value={datasheet}
-              onChange={(e) => setDatasheet(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-            />
-            <span>Library</span>
-            <span style={{ opacity: 0.7 }}>{symbol.lib_id ?? "(generic)"}</span>
+    <>
+      <div className="dialog-backdrop" onClick={close}>
+        <div className="dialog" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
+          <div className="dialog-header">
+            <span>Symbol Properties</span>
           </div>
-          {error && (
-            <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }}>{error}</p>
-          )}
-          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>
-            Renaming only relabels this schematic symbol and the wires/power-symbols/no-connects already on this sheet that name it -- it does not retarget anything already placed on the PCB tab under the old reference.
-          </p>
-        </div>
-        <div className="dialog-footer">
-          <button onClick={close}>Cancel</button>
-          <button className="primary" onClick={submit}>
-            OK
-          </button>
+          <div className="dialog-body">
+            <div className="kv-grid" style={{ gridTemplateColumns: "90px 1fr" }}>
+              <span>Reference</span>
+              <input
+                ref={refInput}
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+              />
+              <span>Value</span>
+              <input
+                ref={valueInput}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+              />
+              <span>Footprint</span>
+              <div style={{ display: "flex", gap: 4 }}>
+                <input
+                  ref={footprintInput}
+                  style={{ flex: 1, minWidth: 0 }}
+                  value={footprint}
+                  onChange={(e) => setFootprint(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submit();
+                  }}
+                />
+                <button onClick={() => setChoosingFootprint(true)} title="Choose a footprint from KiCad's libraries (Footprint Chooser)" data-browse-footprint>
+                  Browse…
+                </button>
+              </div>
+              <span>Datasheet</span>
+              <input
+                ref={datasheetInput}
+                value={datasheet}
+                onChange={(e) => setDatasheet(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+              />
+              <span>Library</span>
+              <span style={{ opacity: 0.7 }}>{symbol.lib_id ?? "(generic)"}</span>
+            </div>
+            {error && (
+              <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }}>{error}</p>
+            )}
+            <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>
+              Renaming only relabels this schematic symbol and the wires/power-symbols/no-connects already on this sheet that name it -- it does not retarget anything already placed on the PCB tab under the old reference.
+            </p>
+          </div>
+          <div className="dialog-footer">
+            <button onClick={close}>Cancel</button>
+            <button className="primary" onClick={submit}>
+              OK
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      {choosingFootprint && (
+        <FootprintChooserDialog
+          preselect={footprint.includes(":") ? footprint : null}
+          pinCount={pinCount}
+          fpFilters={fpFilters}
+          onCancel={() => setChoosingFootprint(false)}
+          onChoose={(pick) => {
+            setChoosingFootprint(false);
+            if (pick.kind === "footprint") setFootprint(pick.name);
+          }}
+        />
+      )}
+    </>
   );
 }

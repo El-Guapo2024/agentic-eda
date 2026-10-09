@@ -1,172 +1,276 @@
-// `A` (sch_drawing_tools.cpp PlaceSymbol -> DIALOG_SYMBOL_CHOOSER): a
-// search list + live preview over GET /api/symbol_library's catalog
-// ("the libraries we already load" -- see that endpoint's own doc for
-// what that means and what it deliberately excludes), plus a unit picker
-// for a multi-unit symbol (`SymbolLibraryEntry.unit_count > 1`) -- real
-// KiCad's chooser also has recently-used/already-placed pseudo-library
-// tabs, not replicated; this is a search-and-preview-and-place MVP, not a
-// full port. Picking a unit here only decides which unit a *freshly
-// chosen* part starts as -- adding one more unit to an already-placed,
-// already-annotated reference has no UI entry point yet (a documented
-// gap, not an oversight: that flow needs a different starting point than
-// "choose a library symbol", since the part already exists).
+// `A` (sch_drawing_tools.cpp PlaceSymbol -> `SelectSymbolFromLibrary` -> SYMBOL_CHOOSER_FRAME over PANEL_SYMBOL_CHOOSER, eeschema/symbol_chooser_frame.cpp,
+// eeschema/widgets/panel_symbol_chooser.cpp): KiCad's Symbol Chooser. A tree -- "-- Recently Used --", "-- Already Placed --", the project's own libraries
+// and every library KiCad has installed (223 of them, 220 MB: opened one at a time, searched on the server) -- with a search over names, descriptions and
+// keywords; beside it the selected symbol's drawing (one unit at a time), its default footprint and its description.
 //
-// Confirming here doesn't place anything itself -- it arms
-// `state.armedSymbol` and the `sch_place_symbol` tool, same two-step
-// ("choose, then click to place") flow every other eeschema placement
-// tool in this app uses, and SchematicView.tsx's onPointerDown is what
-// actually calls `add_symbol` once the user clicks the sheet.
-import { useEffect, useRef, useState } from "react";
-import { useStudioDispatch, useStudioState } from "../state/store";
-import { fetchSymbolLibrary } from "../api/client";
-import type { Schematic, SchematicSymbol, SymbolLibrary, SymbolLibraryEntry } from "../api/types";
-import { symbolBounds, paintSchematic } from "./schematic/painter";
-import { fitTransform } from "./canvas/view";
-import { layerColor } from "./canvas/layers";
+// Confirming does not place anything itself: it arms `state.armedSymbol` and the `sch_place_symbol` tool, the same two-step ("choose, then click to place")
+// every other eeschema placement tool in this app uses, and SchematicView.tsx's onPointerDown is what sends `add_symbol` when the sheet is clicked. The server
+// keeps the definition of an installed symbol with the schematic in that same command (crates/cli/src/library_place.rs), so it draws, exports and passes ERC.
+//
+// Not ported: the regular-expression and relational search words (a word is searched as text, with `*` and `?`), the Footprint selector's list of footprints
+// (the Choose button opens the Footprint Chooser instead), and power symbols, which `P` places.
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchProjectFootprintDrawing, fetchFootprintDetails, fetchProjectSymbolDrawing, fetchProjectSymbols, fetchSymbolDetails, type ProjectSymbol, type SymbolDetails } from "../api/libraryChooserClient";
+import { fetchInstalledLibraries } from "../api/libraryIndexClient";
+import type { LibraryFootprint, LibrarySymbol } from "../api/types";
+import { chosenOf, type ChooserItem, type ChooserRow } from "../kicad-port/libChooser";
 import { unitLetter } from "../kicad-port/unitLetter";
+import { recentItems, rememberChosen } from "../state/chooserRecent";
+import { useStudioDispatch, useStudioState } from "../state/store";
+import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
+import { FootprintPreview, SymbolPreview } from "./chooser/ChooserPreview";
+import { LibChooserTree } from "./chooser/LibChooserTree";
+import { useChooser } from "./chooser/useChooser";
+import { FootprintChooserDialog } from "./FootprintChooserDialog";
+import "../styles/chooser.css";
 
-const PREVIEW_W = 220;
-const PREVIEW_H = 160;
+const SYMBOL_FILTER = { excludePower: true } as const;
+const notPower = (item: ChooserItem) => !item.power;
 
-function SymbolPreview({ entry, library, unit }: { entry: SymbolLibraryEntry | null; library: SymbolLibrary | null; unit: number }) {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, PREVIEW_W, PREVIEW_H);
-    ctx.fillStyle = layerColor("LAYER_SCHEMATIC_BACKGROUND");
-    ctx.fillRect(0, 0, PREVIEW_W, PREVIEW_H);
-    const resolved = entry && library?.lib_symbols[entry.lib_id];
-    if (!resolved) return;
-    const fakeSymbol: SchematicSymbol = { id: "?", lib_id: entry.lib_id, at: [0, 0], rot: 0, mirror: null, unit, body_style: 1, value: null, mpn: null, package: null, footprint: null, datasheet: null, pins: [] };
-    const fakeSch: Schematic = { lib_symbols: { [entry.lib_id]: resolved }, symbols: [fakeSymbol], power_symbols: [], wires: [], no_connects: [], labels: [], texts: [], title_block: null, bus_entries: [], sheets: [], sheet_path: [] };
-    const bounds = symbolBounds(fakeSymbol, fakeSch.lib_symbols);
-    const view = fitTransform(bounds, PREVIEW_W, PREVIEW_H, 14);
-    ctx.save();
-    ctx.translate(view.x, view.y);
-    ctx.scale(view.scale || 1, view.scale || 1);
-    paintSchematic(ctx, view, fakeSch, { selection: new Set(), netHighlight: null });
-    ctx.restore();
-  }, [entry, library, unit]);
-
-  return <canvas ref={canvasRef} width={PREVIEW_W} height={PREVIEW_H} style={{ border: "1px solid var(--chrome-border)", borderRadius: 4 }} />;
+interface Loaded {
+  id: string;
+  info: SymbolDetails | null;
+  symbol: LibrarySymbol | null;
+  error: string | null;
 }
 
 export function SymbolChooserDialog() {
-  const state = useStudioState();
+  const open = useStudioState().symbolChooserOpen;
+  return open ? <SymbolChooser /> : null;
+}
+
+function SymbolChooser() {
   const dispatch = useStudioDispatch();
-  const open = state.symbolChooserOpen;
+  const close = () => dispatch({ type: "SET_SYMBOL_CHOOSER_OPEN", open: false });
 
-  const [library, setLibrary] = useState<SymbolLibrary | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [unit, setUnit] = useState(1);
-
+  // The project's own symbols and the ones the design uses, and the names of the installed libraries (a symbol of those is read from the library file).
+  const [project, setProject] = useState<ProjectSymbol[]>([]);
+  const [installedNames, setInstalledNames] = useState<ReadonlySet<string>>(new Set());
+  const [loadError, setLoadError] = useState<string | null>(null);
   useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setSelectedId(null);
-    setUnit(1);
-    setError(null);
     let cancelled = false;
-    fetchSymbolLibrary()
-      .then((lib) => {
-        if (cancelled) return;
-        setLibrary(lib);
-        setSelectedId(lib.entries[0]?.lib_id ?? null);
-      })
-      .catch((e) => !cancelled && setError(e instanceof Error ? e.message : String(e)));
+    fetchProjectSymbols()
+      .then((p) => !cancelled && setProject(p))
+      .catch((e) => !cancelled && setLoadError(e instanceof Error ? e.message : String(e)));
+    fetchInstalledLibraries("symbol")
+      .then((libs) => !cancelled && setInstalledNames(new Set(libs.map((l) => l.name))))
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, []);
 
-  if (!open) return null;
-  const close = () => dispatch({ type: "SET_SYMBOL_CHOOSER_OPEN", open: false });
+  const recent = recentItems("symbol");
+  const placed = useMemo(() => project.filter((p) => p.placed && !p.power), [project]);
+  // The project's libraries are the ones KiCad does not have; the stand-in table only where KiCad's libraries are not installed.
+  const own = useMemo(() => project.filter((p) => !p.power && !installedNames.has(p.lib) && (p.source !== "builtin" || installedNames.size === 0)), [project, installedNames]);
+  const chooser = useChooser({ kind: "symbol", active: true, recent, placed, project: own, filter: SYMBOL_FILTER, keep: notPower, preselect: recent[0]?.id ?? null });
 
-  const q = query.trim().toLowerCase();
-  const matches = (library?.entries ?? []).filter((e) => !q || e.lib_id.toLowerCase().includes(q) || e.description.toLowerCase().includes(q));
-  const selected = matches.find((e) => e.lib_id === selectedId) ?? matches[0] ?? null;
+  const chosen = chosenOf(chooser.selectedRow);
+  const id = chosen?.item.id ?? null;
+  const [loaded, setLoaded] = useState<Loaded | null>(null);
+  useEffect(() => {
+    if (!id) {
+      setLoaded(null);
+      return;
+    }
+    let cancelled = false;
+    const lib = id.slice(0, Math.max(0, id.indexOf(":")));
+    const fallback = () =>
+      fetchProjectSymbolDrawing(id)
+        .then((symbol) => !cancelled && setLoaded({ id, info: null, symbol, error: null }))
+        .catch((e) => !cancelled && setLoaded({ id, info: null, symbol: null, error: e instanceof Error ? e.message : String(e) }));
+    if (installedNames.has(lib)) {
+      fetchSymbolDetails(id)
+        .then((info) => !cancelled && setLoaded({ id, info, symbol: info.symbol, error: null }))
+        .catch(() => void fallback());
+    } else void fallback();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, installedNames]);
+  const shown = loaded && loaded.id === id ? loaded : null;
+  const info = shown?.info ?? null;
+  const units = Math.max(1, info?.units ?? shown?.symbol?.unit_count ?? chosen?.item.units ?? 1);
 
-  const effectiveUnit = selected ? Math.min(Math.max(unit, 1), Math.max(selected.unit_count, 1)) : 1;
+  // Which unit the symbol is placed as: the unit row chosen, else the letter picked beside the preview.
+  const [unitPick, setUnitPick] = useState(1);
+  const [footprintOverride, setFootprintOverride] = useState<string | null>(null);
+  const [pickingFootprint, setPickingFootprint] = useState(false);
+  useEffect(() => {
+    setUnitPick(1);
+    setFootprintOverride(null);
+  }, [id]);
+  const unit = Math.min(Math.max(chosen && chosen.unit > 0 ? chosen.unit : unitPick, 1), units);
 
-  const place = () => {
-    if (!selected) return;
-    dispatch({ type: "SET_ARMED_SYMBOL", symbol: { libId: selected.lib_id, referencePrefix: selected.reference_prefix, unit: effectiveUnit } });
-    dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_place_symbol" });
-    close();
+  // The default footprint, and its drawing (`PANEL_SYMBOL_CHOOSER::showFootprintFor`).
+  const footprintName = footprintOverride ?? info?.footprint ?? chosen?.item.footprint ?? "";
+  const [footprint, setFootprint] = useState<{ name: string; drawing: LibraryFootprint | null; error: string | null } | null>(null);
+  useEffect(() => {
+    if (!footprintName) {
+      setFootprint(null);
+      return;
+    }
+    let cancelled = false;
+    fetchFootprintDetails(footprintName)
+      .then((d) => !cancelled && setFootprint({ name: footprintName, drawing: d.footprint, error: null }))
+      .catch(() =>
+        fetchProjectFootprintDrawing(footprintName)
+          .then((drawing) => !cancelled && setFootprint({ name: footprintName, drawing, error: null }))
+          .catch(() => !cancelled && setFootprint({ name: footprintName, drawing: null, error: "Invalid footprint specified" }))
+      );
+    return () => {
+      cancelled = true;
+    };
+  }, [footprintName]);
+  const fpShown = footprint && footprint.name === footprintName ? footprint : null;
+
+  const place = useCallback(
+    async (row: ChooserRow | undefined) => {
+      const c = chosenOf(row);
+      if (!c) {
+        if (row?.kind === "group") chooser.toggleGroup(row.group.lib);
+        return;
+      }
+      const lib = c.item.id.slice(0, Math.max(0, c.item.id.indexOf(":")));
+      const details = shown && shown.id === c.item.id ? shown.info : installedNames.has(lib) ? await fetchSymbolDetails(c.item.id).catch(() => null) : null;
+      const reference = details?.reference || c.item.reference || "";
+      rememberChosen("symbol", { ...c.item, reference, value: details?.value ?? c.item.value, footprint: details?.footprint ?? c.item.footprint, units: details?.units ?? c.item.units, pins: details?.pins ?? c.item.pins, description: details?.description ?? c.item.description });
+      dispatch({
+        type: "SET_ARMED_SYMBOL",
+        symbol: {
+          libId: c.item.id,
+          referencePrefix: reference,
+          unit: Math.min(Math.max(c.unit > 0 ? c.unit : unitPick, 1), units),
+          // An installed symbol starts with its library's Value and default Footprint (a new `SCH_SYMBOL` copies the fields of its `LIB_SYMBOL`).
+          value: details?.value || undefined,
+          footprint: footprintOverride ?? details?.footprint ?? "",
+        },
+      });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "sch_place_symbol" });
+      close();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [chooser, shown, installedNames, unitPick, units, footprintOverride, dispatch]
+  );
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      chooser.move(e.key === "ArrowDown" ? 1 : -1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      void place(chooser.selectedRow);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      // First Escape clears the search, the second closes (`PANEL_SYMBOL_CHOOSER::OnChar`).
+      if (chooser.query !== "") chooser.setQuery("");
+      else close();
+    }
   };
 
+  const s = chooser.status;
+  const hint = loadError ?? s.error ?? (s.searching ? (s.indexing ? `Searching… ${s.indexed} of ${s.total || "…"} libraries read` : `${s.matches} match${s.matches === 1 ? "" : "es"}${s.truncated ? " (showing the best)" : ""}`) : "");
+  const sym = shown?.symbol ?? null;
+  const pinCount = info?.pins ?? chosen?.item.pins ?? 0;
+
   return (
-    <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 520 }} onClick={(e) => e.stopPropagation()}>
-        <div className="dialog-header">
-          <span>Place Symbol</span>
-        </div>
-        <div className="dialog-body">
-          <input
-            id="library-tree-search"
-            autoFocus
-            placeholder="Search symbols (e.g. R, Device:C, diode)…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") place();
-            }}
-            style={{ width: "100%", boxSizing: "border-box", marginBottom: 8 }}
-          />
-          {error && <div className="field" style={{ color: "var(--chrome-danger)" }}>{error}</div>}
-          <div style={{ display: "flex", gap: 10 }}>
-            <div style={{ flex: 1, height: 220, overflowY: "auto", border: "1px solid var(--chrome-border)", borderRadius: 4 }}>
-              {matches.map((e) => (
-                <div
-                  key={e.lib_id}
-                  onClick={() => {
-                    setSelectedId(e.lib_id);
-                    setUnit(1);
-                  }}
-                  onDoubleClick={place}
-                  style={{
-                    padding: "4px 8px",
-                    cursor: "pointer",
-                    background: e.lib_id === selected?.lib_id ? "var(--chrome-selected-bg)" : "transparent",
-                    color: e.lib_id === selected?.lib_id ? "var(--chrome-selected-text)" : undefined,
-                  }}
-                >
-                  <div>{e.lib_id}</div>
-                  {e.description && <div style={{ fontSize: "0.85em", opacity: 0.7 }}>{e.description}</div>}
+    <>
+      <div className="dialog-backdrop" data-symbol-chooser>
+        <div className="dialog chooser-dialog" onKeyDown={onKeyDown} role="dialog" aria-label="Symbol Chooser">
+          <div className="dialog-header">
+            <span>
+              Symbol Chooser
+              {chooser.libraries > 0 ? ` (${chooser.libraries} libraries)` : ""}
+            </span>
+          </div>
+          <div className="dialog-body chooser-body">
+            <div className="chooser-left">
+              <div className="chooser-search">
+                <input id="library-tree-search" data-chooser-search autoFocus placeholder="Search symbols (name, description, keywords)" value={chooser.query} onChange={(e) => chooser.setQuery(e.target.value)} />
+                <div className="chooser-hint" data-chooser-status>
+                  {hint}
                 </div>
-              ))}
-              {matches.length === 0 && !error && <div className="field" style={{ padding: 8, opacity: 0.7 }}>No symbols match.</div>}
+              </div>
+              <LibChooserTree
+                kind="symbol"
+                rows={chooser.rows}
+                selectedKey={chooser.selectedKey}
+                loading={chooser.loading}
+                onSelect={chooser.select}
+                onChoose={(row) => void place(row)}
+                onToggleGroup={chooser.toggleGroup}
+                onToggleItem={chooser.toggleItem}
+                emptyText={s.searching ? (s.indexing ? "Searching…" : "No symbol matches.") : "Nothing to show."}
+              />
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <SymbolPreview entry={selected} library={library} unit={effectiveUnit} />
-              {selected && selected.unit_count > 1 && (
-                <div className="field">
-                  <label style={{ fontSize: "0.85em", opacity: 0.8 }}>Unit</label>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 2 }}>
-                    {Array.from({ length: selected.unit_count }, (_, i) => i + 1).map((u) => (
-                      <button key={u} className={u === effectiveUnit ? "primary" : undefined} style={{ minWidth: 28, padding: "2px 6px" }} onClick={() => setUnit(u)}>
-                        {unitLetter(u)}
-                      </button>
-                    ))}
-                  </div>
+            <div className="chooser-right">
+              <SymbolPreview symbol={sym} unit={unit} bodyStyle={1} status={!id ? "No symbol selected" : shown?.error ? shown.error : shown ? "" : "Loading…"} />
+              {units > 1 && (
+                <div className="chooser-units">
+                  <span style={{ opacity: 0.8 }}>Unit</span>
+                  {Array.from({ length: units }, (_, i) => i + 1).map((u) => (
+                    <button key={u} className={u === unit ? "primary" : undefined} onClick={() => setUnitPick(u)} data-unit={u}>
+                      {unitLetter(u)}
+                    </button>
+                  ))}
                 </div>
+              )}
+              {id && (
+                <>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12 }}>
+                    <span style={{ fontWeight: 600 }}>Footprint</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={footprintName} data-default-footprint>
+                      {footprintName || "No footprint specified"}
+                    </span>
+                    <button onClick={() => setPickingFootprint(true)} title="Choose another footprint for this symbol" data-choose-footprint>
+                      Choose…
+                    </button>
+                  </div>
+                  <FootprintPreview footprint={fpShown?.drawing ?? null} height={150} status={!footprintName ? "No footprint specified" : fpShown?.error ? fpShown.error : fpShown ? "" : "Loading…"} />
+                </>
+              )}
+              {chosen && (
+                <ChooserDetails
+                  name={chosen.item.name}
+                  derivedFrom={info?.extends ?? null}
+                  description={info?.description ?? chosen.item.description}
+                  rows={[
+                    ...(info?.keywords ? [{ name: "Keywords", value: info.keywords }] : []),
+                    ...(info?.reference || chosen.item.reference ? [{ name: "Reference", value: info?.reference || chosen.item.reference || "" }] : []),
+                    ...(footprintName ? [{ name: "Footprint", value: footprintName }] : []),
+                    ...(info?.datasheet && info.datasheet !== "~" ? [{ name: "Datasheet", value: <Linkified text={info.datasheet} max={75} /> }] : []),
+                    { name: "Units", value: String(units) },
+                    ...(pinCount > 0 ? [{ name: "Pins", value: String(pinCount) }] : []),
+                  ]}
+                />
               )}
             </div>
           </div>
-        </div>
-        <div className="dialog-footer">
-          <button onClick={close}>Cancel</button>
-          <button className="primary" disabled={!selected} onClick={place}>
-            Place
-          </button>
+          <div className="dialog-footer">
+            <button onClick={close} data-chooser-cancel>
+              Cancel
+            </button>
+            <button className="primary" disabled={!chosen} onClick={() => void place(chooser.selectedRow)} data-chooser-ok>
+              OK
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+      {pickingFootprint && (
+        <FootprintChooserDialog
+          title="Footprint Chooser"
+          preselect={footprintName || null}
+          pinCount={pinCount}
+          fpFilters={info?.fp_filters ? info.fp_filters.split(/\s+/) : shown?.symbol?.footprint_filters}
+          onCancel={() => setPickingFootprint(false)}
+          onChoose={(pick) => {
+            setPickingFootprint(false);
+            if (pick.kind === "footprint") setFootprintOverride(pick.name);
+          }}
+        />
+      )}
+    </>
   );
 }

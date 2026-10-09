@@ -525,6 +525,8 @@ export interface StudioState {
   schNav: NavHistory;
   /** An unplaced part ref chosen from the panel, waiting for a canvas click to place it. */
   armed: string | null;
+  /** A footprint of a library (`Lib:Name`) chosen in the Footprint Chooser (Place Footprint), waiting for a canvas click: it becomes a part of its own on the board (`place_footprint`). */
+  armedFootprint: string | null;
   movePreview: MovePreview | null;
   activeTool: ToolId;
   drawState: DrawState | null;
@@ -847,6 +849,7 @@ const initialState: StudioState = {
   schPosture: false,
   schNav: initialNavHistory(),
   armed: null,
+  armedFootprint: null,
   movePreview: null,
   activeTool: "select",
   drawState: null,
@@ -974,6 +977,7 @@ export type Action =
   | { type: "SET_HOT"; refs: string[] }
   | { type: "SET_NET_HIGHLIGHT"; net: string | null }
   | { type: "SET_ARMED"; ref: string | null }
+  | { type: "SET_ARMED_FOOTPRINT"; name: string | null }
   | { type: "SET_MOVE_PREVIEW"; preview: MovePreview | null }
   | { type: "SET_ACTIVE_TOOL"; tool: ToolId }
   | { type: "SET_VIEW"; view: ViewTransform }
@@ -1144,7 +1148,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION":
-      return { ...state, selection: new Set(withGroupSubstitution(action.refs, state.board?.drawings?.groups, state.enteredGroupId)), armed: null };
+      return { ...state, selection: new Set(withGroupSubstitution(action.refs, state.board?.drawings?.groups, state.enteredGroupId)), armed: null, armedFootprint: null };
     case "SET_ENTERED_GROUP":
       return { ...state, enteredGroupId: action.id };
     case "TOGGLE_SELECTION": {
@@ -1163,6 +1167,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         ...state,
         selection: new Set(),
         armed: null,
+        armedFootprint: null,
         movePreview: null,
         activeTool: "select",
         drawState: null,
@@ -1191,11 +1196,12 @@ function reducer(state: StudioState, action: Action): StudioState {
       // replaced also wiped the selection on every Escape, even mid-move
       // -- wrong: EDIT_TOOL::doMoveSelection's own cancel just reverts
       // the move and leaves the pre-move selection exactly as it was.
-      const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.movePreview != null;
+      const inProgress = state.activeTool !== "select" || state.drawState != null || state.armed != null || state.armedFootprint != null || state.movePreview != null;
       if (inProgress) {
         return {
           ...state,
           armed: null,
+          armedFootprint: null,
           movePreview: null,
           activeTool: "select",
           drawState: null,
@@ -1238,7 +1244,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_NET_HIGHLIGHT_SET":
       return { ...state, netHighlight: action.nets[0] ?? null, bcx: withHighlight(state.bcx, state.netHighlight, action.nets) };
     case "SET_ARMED":
-      return { ...state, armed: action.ref, selection: new Set() };
+      return { ...state, armed: action.ref, armedFootprint: null, selection: new Set() };
+    case "SET_ARMED_FOOTPRINT":
+      return { ...state, armedFootprint: action.name, armed: null, selection: new Set() };
     case "SET_MOVE_PREVIEW":
       return { ...state, movePreview: action.preview };
     case "SET_ACTIVE_TOOL":
@@ -1492,6 +1500,8 @@ export interface StudioApi {
   /** Commit a completed drag: each ref moves by (dxUm, dyUm) from its current position, then (parts only) applies any rotate/flip accumulated during the move (MovePreview.rotateQuarterTurns/flipped -- edit_tool.cpp composes Move+Rotate+Flip as one undo step; this app commits them as sequential Cmds since each is independent of the others' position/orientation fields). `kind` picks which Cmd the move itself becomes (default "part"). */
   commitMove: (refs: string[], dxUm: number, dyUm: number, kind?: MovePreview["kind"], rotateQuarterTurns?: number, flipped?: boolean, perRefOffsetUm?: MovePreview["perRefOffsetUm"]) => Promise<void>;
   placeArmedAt: (xUm: number, yUm: number) => Promise<void>;
+  /** Place Footprint's click: the footprint of a library armed in the Footprint Chooser becomes a part of its own at this point (`place_footprint`, one undo step). */
+  placeLibraryFootprintAt: (xUm: number, yUm: number) => Promise<void>;
   /** GAPS.md #6: the Hierarchy panel's own "enter sheet"/"leave sheet"/jump-to-breadcrumb -- sets `state.currentSheetPath` and immediately refetches the schematic for it (the version-gated poll loop alone wouldn't notice a pure navigation with no backend mutation behind it). `[]` is the root. */
   navigateToSheet: (path: string[], record?: boolean) => Promise<void>;
   route: () => Promise<void>;
@@ -2019,6 +2029,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // One undo step for the whole drop (BOARD_COMMIT::Push once).
       await runBatch(cmds);
       advanceMoveQueue();
+    },
+    placeLibraryFootprintAt: async (xUm, yUm) => {
+      const name = stateRef.current.armedFootprint;
+      if (!name) return;
+      // `BOARD_EDITOR_CONTROL::PlaceFootprint` commits on the click and goes back to asking for the next footprint; here the tool is done after one.
+      dispatch({ type: "SET_ARMED_FOOTPRINT", name: null });
+      await runCmd({ op: "place_footprint", footprint: name, at: { x: xUm, y: yUm } });
     },
     placeArmedAt: async (xUm, yUm) => {
       const ref = stateRef.current.armed;

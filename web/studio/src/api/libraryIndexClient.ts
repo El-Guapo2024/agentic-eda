@@ -10,6 +10,8 @@ export interface InstalledLibrary {
   name: string;
   /** How many items it holds, when the server knew without opening it (footprint libraries: a directory listing). */
   count?: number;
+  /** What KiCad's library table says it is (the choosers' Description column of a library row). */
+  description?: string;
 }
 
 async function get<T extends { error?: string }>(url: string): Promise<T> {

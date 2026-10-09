@@ -772,6 +772,11 @@ export function Canvas() {
       api.placeArmedAt(sx, sy);
       return;
     }
+    if (state.armedFootprint) {
+      const [sx, sy] = snapPoint(wx, wy, board?.snap ?? state.gridUm);
+      void api.placeLibraryFootprintAt(sx, sy);
+      return;
+    }
     if (PAN_BUTTONS.has(e.button)) {
       // wx_view_controls.cpp onButton: MiddleDown/RightDown both start
       // DRAG_PANNING by default. A right-button press might still turn
@@ -1349,7 +1354,7 @@ export function Canvas() {
       onDoubleClick={onDoubleClick}
       onKeyDown={onCanvasKeyDown}
       onContextMenu={onContextMenu}
-      data-armed={state.armed ? "true" : "false"}
+      data-armed={state.armed || state.armedFootprint ? "true" : "false"}
     >
       <canvas ref={canvasRef} />
       {!board && <div className="pcb-canvas-empty">{state.boardError ?? "Loading board…"}</div>}
