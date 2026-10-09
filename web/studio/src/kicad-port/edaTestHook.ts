@@ -8,7 +8,8 @@
 //                                    `revision` is the design revision after it, `dialog` the title of the dialog it opened, `toast` the last toast it showed,
 //                                    `pending` true when it stopped waiting for a request that is still running (a long kicad-cli run).
 //   window.__eda.state()             a small snapshot: { tab, revision, tool, picker, selection: [{ id, kind }], counts: { footprints, tracks, vias, zones,
-//                                    symbols, wires, labels }, entered: the group worked in on the board (else null), grid: the editor's grid in um (null where it is not a choice), dialogs: [titles of the dialogs on
+//                                    symbols, wires, labels }, entered: the group worked in on the board (else null), grid: the editor's grid in um (null on the 3D tab), gridOverrides: its Grid Overrides
+//                                    switch, snap: what the last snap of a placing or moving tool did ({ tool, input, output, types, anchored }, else null), dialogs: [titles of the dialogs on
 //                                    screen], open: [names of the open dialog/panel flags] };
 //                                    `picker` is the prompt of the picker session running (the delete tool's), else null.
 //   window.__eda.errors(since?)      the errors since the page loaded as { time, message }: console.error, uncaught errors and rejected promises, the

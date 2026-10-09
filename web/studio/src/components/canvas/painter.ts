@@ -68,6 +68,8 @@ export interface PaintOptions {
   /** The route/zone/drawing tool currently in progress (Canvas.tsx), and the cursor to rubber-band its next point toward -- null cursor (pointer left the canvas, or hasn't moved yet) just skips the rubber-band, still showing the fixed points so far. */
   drawState: DrawState | null;
   cursorUm: { x: number; y: number } | null;
+  /** Where the tool in force has put the cursor (the grid helper's last answer: anchor, snap line or grid); the rubber band and the via ghost follow it. Null: the raw cursor is snapped to the grid. */
+  snappedCursor?: readonly [number, number] | null;
   activeTool: ToolId;
   /** `pcbnew.EditorControl.lineModeNext`'s current mode -- constrains the segment/rect tools' rubber-band, same as their click does (Canvas.tsx). Absent = the pre-existing 45-degree behavior. */
   angleSnapMode?: AngleSnapMode;
@@ -942,8 +944,10 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   if (cursor && !frozen) {
     const last = pts[pts.length - 1]!;
     const usePosture = draw.kind === "shape" && (draw.shapeKind === "segment" || draw.shapeKind === "rect");
-    const raw: [number, number] = usePosture ? constrainByAngleMode(opts.angleSnapMode ?? "45", last, [cursor.x, cursor.y]) : [cursor.x, cursor.y];
-    rubberEnd = snapPoint(raw[0], raw[1], opts.gridUm);
+    const target: [number, number] = opts.snappedCursor ? [opts.snappedCursor[0], opts.snappedCursor[1]] : [cursor.x, cursor.y];
+    const raw: [number, number] = usePosture ? constrainByAngleMode(opts.angleSnapMode ?? "45", last, target) : target;
+    // An anchor or snap line point (the helper's) stays where it is; a point the line mode moved, or a raw cursor, goes to the grid.
+    rubberEnd = opts.snappedCursor && raw[0] === target[0] && raw[1] === target[1] ? raw : snapPoint(raw[0], raw[1], opts.gridUm);
   }
   const color = layerColor("selection");
   const shown: [number, number][] = rubberEnd ? [...pts, rubberEnd] : pts;
@@ -967,7 +971,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
 /** A ghost circle at the snapped cursor for the standalone via tool -- via.ts's placement is a single click, so there's no multi-point drawState to show, just "a via would land here". */
 function drawViaGhost(ctx: CanvasRenderingContext2D, board: BoardState, opts: PaintOptions) {
   if (!opts.cursorUm) return;
-  const [x, y] = snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
+  const [x, y] = opts.snappedCursor ?? snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
   const d = opts.currentViaPreset?.diameter ?? board.board_rules?.via_diameter ?? 600;
   ctx.save();
   ctx.globalAlpha = 0.6;

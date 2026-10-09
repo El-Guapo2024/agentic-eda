@@ -5,6 +5,7 @@ import { actionChecked, type CheckedContext } from "../kicad-port/actionChecked"
 import { useCommonTool } from "../state/commonTool";
 import { useDockLayout } from "../state/dockLayoutStore";
 import { useFpState } from "../state/footprintEditorStore";
+import { useGridOverrides } from "../state/gridOverrides";
 import { useStudioState } from "../state/store";
 import { useSymState } from "../state/symbolEditorStore";
 
@@ -13,6 +14,8 @@ export function useActionChecked(): (name: string) => boolean | undefined {
   const fp = useFpState();
   const sym = useSymState();
   const dock = useDockLayout();
+  const overrides = { pcb: useGridOverrides("pcb"), footprint: useGridOverrides("footprint"), symbol: useGridOverrides("symbol"), schematic: useGridOverrides("schematic") };
+  const gridOverrides = state.tab === "pcb" || state.tab === "footprint" || state.tab === "symbol" || state.tab === "schematic" ? overrides[state.tab].enabled : false;
   const gridVisible = state.tab === "footprint" ? fp.gridVisible : state.tab === "symbol" ? sym.gridVisible : state.gridVisible;
   const highContrast = state.tab === "footprint" ? fp.highContrast : state.highContrast;
   // The zoom tool: the board's and the schematic's is the studio's active tool, the library editors' is the shared tool store's.
@@ -24,6 +27,7 @@ export function useActionChecked(): (name: string) => boolean | undefined {
     tab: state.tab,
     units: state.units,
     gridVisible,
+    gridOverrides,
     fpTool: fp.activeTool,
     symTool: sym.activeTool,
     sym: { showElectricalTypes: sym.showElectricalTypes, showHiddenPins: sym.showHiddenPins, syncPins: sym.syncPins },
@@ -36,5 +40,5 @@ export function useActionChecked(): (name: string) => boolean | undefined {
   };
   // The context is rebuilt every render; the callback only changes when a fact it reads does.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, dock, state.rightDockTab, highContrast, zoomArmed, state.polar, measureArmed]);
+  return useCallback((name: string) => actionChecked(name, ctx), [state.tab, state.units, gridVisible, gridOverrides, fp.activeTool, sym.activeTool, sym.showElectricalTypes, sym.showHiddenPins, sym.syncPins, dock, state.rightDockTab, highContrast, zoomArmed, state.polar, measureArmed]);
 }

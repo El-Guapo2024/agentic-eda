@@ -36,12 +36,19 @@ test("the board and footprint editors start with KiCad's PCB list and fast grids
   assert.deepEqual([sym.grids[sym.fast1], sym.grids[sym.fast2]], [1270, 635], "the default grid (50 mil) and the one after it");
 });
 
-test("only the board, footprint and symbol editors have a grid list", () => {
+test("the board, schematic, footprint and symbol editors have a grid list", () => {
   assert.equal(gridEditorOfTab("pcb"), "pcb");
   assert.equal(gridEditorOfTab("footprint"), "footprint");
   assert.equal(gridEditorOfTab("symbol"), "symbol");
-  assert.equal(gridEditorOfTab("schematic"), null);
+  assert.equal(gridEditorOfTab("schematic"), "schematic");
   assert.equal(gridEditorOfTab("viewer3d"), null);
+});
+
+test("the schematic starts with eeschema's list and fast grids 50 and 25 mil, like the symbol editor", () => {
+  const sch = defaultGridSettings("schematic");
+  assert.deepEqual(sch, defaultGridSettings("symbol"));
+  assert.deepEqual(sch.grids, EESCHEMA_GRIDS_UM);
+  assert.deepEqual([sch.grids[sch.fast1], sch.grids[sch.fast2]], [1270, 635]);
 });
 
 test("a fast grid outside the list is the first grid, and the list is never empty", () => {
@@ -155,11 +162,12 @@ test("saved settings are read back when sound and the defaults used when not", (
   assert.deepEqual(parseGridSettings({ grids: [1000, 500], fast1: 7, fast2: 8 }, "pcb"), { grids: [1000, 500], fast1: 0, fast2: 0 }, "fast grids out of range are the first grid");
 });
 
-test("the settings of the three editors come from one saved text", () => {
+test("the settings of the four editors come from one saved text", () => {
   const all = parseStoredGridSettings(JSON.stringify({ footprint: { grids: [250, 100], fast1: 0, fast2: 1 } }));
   assert.deepEqual(all.footprint, { grids: [250, 100], fast1: 0, fast2: 1 });
   assert.deepEqual(all.pcb, defaultGridSettings("pcb"));
   assert.deepEqual(all.symbol, defaultGridSettings("symbol"));
+  assert.deepEqual(all.schematic, defaultGridSettings("schematic"));
   assert.deepEqual(parseStoredGridSettings("{not json").pcb, defaultGridSettings("pcb"));
   assert.deepEqual(parseStoredGridSettings(null).symbol, defaultGridSettings("symbol"));
 });

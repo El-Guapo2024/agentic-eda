@@ -1,5 +1,6 @@
 // Port of PANEL_MOUSE_SETTINGS, the "Mouse and Touchpad" page of KiCad's Preferences dialog
-// (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,).
+// (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Magnetic Points" of
+// PANEL_PCBNEW_EDIT_OPTIONS (pcbnew/dialogs/panel_edit_options.cpp: Snap to Pads, Snap to Tracks and Vias, Snap to Graphics) below it.
 // Edits `state.prefs` (kicad-port/preferences.ts), which every canvas's wheel handler and the PCB canvas's
 // auto-pan loop read -- see that file's header for exactly which settings are offered and which are not.
 //
@@ -94,6 +95,27 @@ export function PreferencesDialog() {
             <input type="range" min={1} max={10} step={1} aria-label="Auto pan speed" value={draft.autoPanAcceleration} onChange={(e) => set({ autoPanAcceleration: Number(e.target.value) })} />
             <span style={{ width: 20, textAlign: "right" }}>{draft.autoPanAcceleration}</span>
           </div>
+
+          {heading("Magnetic Points (PCB Editor)")}
+          {(
+            [
+              ["Snap to Pads:", "magneticPads", "The pads the drawing and move tools snap to: never, only while a track is being routed (KiCad's default), or always."],
+              ["Snap to Tracks and Vias:", "magneticTracks", "The tracks and vias the drawing and move tools snap to: never, only while a track is being routed (KiCad's default), or always."],
+            ] as const
+          ).map(([label, key, tip]) => (
+            <div className="filter-row" key={key} title={tip}>
+              <span style={{ width: 170 }}>{label}</span>
+              <select aria-label={label} value={draft[key]} onChange={(e) => set({ [key]: e.target.value as Preferences[typeof key] })}>
+                <option value="never">Never</option>
+                <option value="track-tool">In Track Tool</option>
+                <option value="always">Always</option>
+              </select>
+            </div>
+          ))}
+          <label className="filter-row" title="Snap the drawing and move tools to the ends, middles, centres and corners of graphic shapes">
+            <input type="checkbox" checked={draft.magneticGraphics} onChange={(e) => set({ magneticGraphics: e.target.checked })} />
+            Snap to Graphics
+          </label>
 
           {heading("Scroll Gestures")}
           <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 4 }}>Vertical touchpad or scroll wheel movement:</div>
