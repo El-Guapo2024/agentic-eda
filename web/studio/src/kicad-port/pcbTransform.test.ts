@@ -52,6 +52,39 @@ test("editableSelection: locked items stay out -- the item, a member of a locked
   assert.deepEqual(editableSelection(b, ["U1"], { respectLocks: false }), { ids: ["U1"], lockedOut: false });
 });
 
+test("groups nest: a lock anywhere in the tree locks the groups above it, and a locked group locks everything below it", () => {
+  const b = board({
+    parts: [part("U1", [0, 0]), part("U2", [9000, 0]), part("U3", [18000, 0]), part("U4", [27000, 0])],
+    drawings: drawings({
+      groups: [
+        { id: "outer", name: "", member_ids: ["inner", "U3"] },
+        { id: "inner", name: "", member_ids: ["U1", "U2"] },
+        { id: "lone", name: "", member_ids: ["U4", "x"] },
+      ],
+    }),
+    locked: ["U2"],
+  });
+  assert.ok(isLocked(b, "inner"), "U2 is locked");
+  assert.ok(isLocked(b, "outer"), "two levels up from the locked item");
+  assert.ok(!isLocked(b, "lone"));
+  assert.ok(!isLocked(b, "U3"), "a sibling of the inner group is not locked by it");
+  const c = board({ ...b, locked: ["outer"] } as Partial<BoardState>);
+  assert.ok(isLocked(c, "U1") && isLocked(c, "inner"), "everything below a locked group is locked");
+  assert.deepEqual(editableSelection(c, ["outer", "lone"]), { ids: ["lone"], lockedOut: true });
+});
+
+test("a move of a group of groups is one move_items naming the group", () => {
+  const b = board({
+    parts: [part("U1", [0, 0]), part("U2", [9000, 0]), part("U3", [18000, 0])],
+    drawings: drawings({ groups: [{ id: "outer", name: "", member_ids: ["inner", "U3"] }, { id: "inner", name: "", member_ids: ["U1", "U2"] }] }),
+  });
+  const plan = planMove(b, ["outer"], 500, -200);
+  assert.deepEqual(plan.cmds, [{ op: "move_items", ids: ["outer"], dx: 500, dy: -200 }]);
+  assert.deepEqual(modificationPoint(b, ["outer"]), itemPosition(b, "outer"), "a lone group turns about the centre of its box");
+  const box = itemBounds(b, "outer")!;
+  assert.ok(box[0] <= -1000 && box[2] >= 19_000, "the box covers the inner group's footprints too");
+});
+
 // --------------------------------------------------------------- reference points
 
 test("modificationPoint: one item is its own position, several are the centre of their box snapped to the grid", () => {

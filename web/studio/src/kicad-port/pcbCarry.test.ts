@@ -105,3 +105,12 @@ test("splitCarried: a board with no routing or drawings splits cleanly", () => {
   assert.equal(moving.drawings, null);
   assert.deepEqual(moving.parts.map((p) => p.ref), ["U2"]);
 });
+
+test("carriedIds: a group of groups carries every item below it and the groups themselves", () => {
+  const b = board({
+    parts: [part("U1", [0, 0]), part("U2", [9000, 0]), part("U3", [18000, 0])],
+    drawings: drawings({ groups: [{ id: "outer", name: "", member_ids: ["inner", "U3"] }, { id: "inner", name: "", member_ids: ["U1", "U2"] }] }),
+  });
+  assert.deepEqual([...carriedIds(b, ["outer"])].sort(), ["U1", "U2", "U3", "inner", "outer"]);
+  assert.deepEqual([...carriedIds(b, ["inner"])].sort(), ["U1", "U2", "inner"]);
+});

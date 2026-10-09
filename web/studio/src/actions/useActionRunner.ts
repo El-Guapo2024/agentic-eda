@@ -88,6 +88,7 @@ import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../
 import { registerBoardControlActions } from "./boardControlActions";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
+import { registerPcbMenuActions } from "./pcbMenuActions";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
@@ -2208,6 +2209,7 @@ export function useActionRunner() {
     registerSchClipboardActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
     // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
     registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
+    registerPcbMenuActions(m, { state, dispatch, api, requestSelection });
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });
