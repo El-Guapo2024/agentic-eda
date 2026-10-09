@@ -175,14 +175,19 @@ New (the UI half of old #19). **Partial.** Hit: every review pass. Blocks: partl
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `common/dialogs/panel_setup_severities.cpp`, `eeschema/dialogs/dialog_schematic_setup.cpp`.
 
 ### 12. Schematic symbols, fields and labels carry no per-instance geometry
-New. **Open.** Hit: every schematic cleanup. Blocks: no. WP1, size L.
-- Missing: the IR stores no position, size, visibility or orientation for a symbol's Reference, Value and other fields
-  (`SymbolInstance` in `ir.rs`; Autoplace Fields is recorded unwired for this reason) and none for a label (`NetLabel` is net,
-  point and kind; its spin is read off the wire), so no label rotation, size, justification or shape; DNP and exclusion flags
-  (the schematic-control agent is adding some, so take its IR fields); an alternate body style cannot show on a placed symbol
-  (`to_engine_symbol` drops style 2); pins cannot be selected (Swap Pins, pin-level highlight).
-- Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `autoplace_fields.cpp`, `dialogs/dialog_field_properties.cpp`,
-  `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
+New. **Partial** (fields done, labels not). Hit: every schematic cleanup. Blocks: no. WP1, size M.
+- Done (2026-10-08, `PARITY-sch.md` section 15): the Reference, Value, Footprint and Datasheet of every symbol, the Value of a power
+  symbol and the name and file of a sheet each have a position, an orientation, a justification and a visibility of their own
+  (`SchematicSection::field_layout`, keyed by the item, in the item's own frame so a move, a turn or a mirror carries them), placed
+  by a port of Autoplace Fields (`eeschema/autoplace_fields.cpp`, `crates/engine/src/fields.rs`) and moved to another side or further
+  out where they would run over what is drawn; the `.kicad_sch` writer writes them, `GET /api/schematic` sends them (`fields`) and the
+  painter draws them there. Generated symbols (`gen:<ref>`) draw their pins and texts the way KiCad's own do.
+- Missing: no editing of a field's place (no Move Field, no Properties text-placement fields, no Autoplace Fields command in the editor: the engine has the port, the action `eeschema.InteractiveEdit.autoplaceFields` is not wired to it), size or bold/italic; none of the above for a label (`NetLabel` is net, point and kind; its spin is read off the
+  wire), so no label rotation, size, justification or shape; DNP and exclusion flags (the schematic-control agent is adding some, so
+  take its IR fields); an alternate body style cannot show on a placed symbol (`to_engine_symbol` drops style 2); pins cannot be
+  selected (Swap Pins, pin-level highlight).
+- Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`,
+  `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: fill fidelity and settings
 Old #5. **Partial.** Hit: most boards. Blocks: no. WP5, size L.
