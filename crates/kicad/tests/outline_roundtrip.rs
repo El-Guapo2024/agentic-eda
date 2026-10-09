@@ -374,3 +374,49 @@ fn kicad_cli_still_reports_the_open_outline_after_the_round_trip() {
     assert!(after.contains(&"invalid_outline".to_string()), "and after the round trip, not a loop closed behind the user's back: {after:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// KiCad's own QA boards: `<KICAD_QA_DATA>/pcbnew`, `KICAD_QA_DATA` naming `qa/data` of the KiCad sources (commit 8303b2ad); the default is the copy kept beside them.
+fn qa_boards_dir() -> PathBuf {
+    let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
+    root.join("pcbnew")
+}
+
+/// The live check (`ImportNotes::outline_errors`, `eda_drc::outline::check_edge_cuts`) and kicad-cli's DRC say the same of real boards: whether the
+/// outline is malformed. The five are the two QA boards kicad-cli flags (`issue18839`: an arc that does not close; `issue24078`: a rectangle crossing
+/// the outline) and three it does not that stress the chaining -- `issue8909` is KiCad 5's `(start CENTRE) (end START) (angle A)` arcs and circles,
+/// `issue12609` fifty Edge.Cuts items, `issue11814` a semicircular notch. The two malformed ones are still malformed after our export.
+#[test]
+fn kicad_cli_and_the_live_outline_check_agree_on_real_qa_boards() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let qa = qa_boards_dir();
+    if !qa.exists() {
+        eprintln!("skipped: no QA boards at {}", qa.display());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("eda_outline_qa_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch dir");
+    let boards = [("issue18839.kicad_pcb", true), ("issue24078/issue24078.kicad_pcb", true), ("issue8909.kicad_pcb", false), ("issue12609.kicad_pcb", false), ("issue11814.kicad_pcb", false)];
+    for (rel, malformed) in boards {
+        let name = Path::new(rel).file_stem().and_then(|s| s.to_str()).expect("a name").to_string();
+        let text = std::fs::read_to_string(qa.join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"));
+        let original = dir.join(format!("{name}.kicad_pcb"));
+        std::fs::write(&original, &text).expect("write");
+        let (design, model, notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import {rel}: {e:?}"));
+        let ours = !notes.outline_errors.is_empty();
+        let kicad = drc_types(&cli, &original, &dir, &name).contains(&"invalid_outline".to_string());
+        assert_eq!(ours, kicad, "{rel}: our check says malformed={ours} ({:?}), kicad-cli says {kicad}", notes.outline_errors);
+        assert_eq!(kicad, malformed, "{rel}: the expected verdict has changed under us");
+        if malformed {
+            let exported = dir.join(format!("{name}_exported.kicad_pcb"));
+            std::fs::write(&exported, export(&design, &model)).expect("write");
+            assert!(drc_types(&cli, &exported, &dir, &format!("{name}_exported")).contains(&"invalid_outline".to_string()), "{rel}: the malformed outline did not survive our export");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

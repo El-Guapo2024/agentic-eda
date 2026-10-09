@@ -1186,6 +1186,38 @@ mod tests {
     }
 
     #[test]
+    fn an_outline_of_arcs_only_is_one_contour() {
+        // A 20 mm circle drawn as two half arcs: nothing but arcs, closing on their own ends.
+        let circle = vec![arc("upper", p(-10_000, 0), p(0, -10_000), p(10_000, 0)), arc("lower", p(10_000, 0), p(0, 10_000), p(-10_000, 0))];
+        let out = board_outline_of(&circle, false);
+        assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
+        assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 0));
+        let want = std::f64::consts::PI * 10_000.0 * 10_000.0;
+        assert!((out.polys.area() - want).abs() / want < 1e-3, "area {} against {want}", out.polys.area());
+        assert!(out.contains(p(0, 0)) && !out.contains(p(10_500, 0)));
+
+        // Given the other way round, one of them reversed, it is the same outline.
+        let mut turned = circle.clone();
+        turned.reverse();
+        if let Shape::Arc { start, end, .. } = &mut turned[0] {
+            std::mem::swap(start, end);
+        }
+        let again = board_outline_of(&turned, false);
+        assert!(again.valid && again.errors.is_empty(), "{:?}", again.errors);
+        assert!((again.polys.area() - out.polys.area()).abs() < 1.0);
+
+        // A lens: two arcs over the same chord, bulging opposite ways, and a lens of a different size inside it as a cutout.
+        let lens = |tag: &str, half: i64, bulge: i64| {
+            vec![arc(&format!("{tag}_up"), p(-half, 0), p(0, -bulge), p(half, 0)), arc(&format!("{tag}_down"), p(half, 0), p(0, bulge), p(-half, 0))]
+        };
+        let mut both = lens("outer", 12_000, 6_000);
+        both.extend(lens("inner", 5_000, 2_000));
+        let out = board_outline_of(&both, false);
+        assert!(out.valid && out.errors.is_empty(), "{:?}", out.errors);
+        assert_eq!((out.polys.outline_count(), out.polys.hole_count(0)), (1, 1), "the inner lens is a cutout of the outer one");
+    }
+
+    #[test]
     fn the_order_and_direction_of_the_items_do_not_matter() {
         let mut shuffled = rounded_rectangle();
         shuffled.reverse();
