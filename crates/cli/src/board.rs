@@ -3030,6 +3030,28 @@ mod tests {
         assert_eq!(e[0].check, "ops_unknown_footprint");
     }
 
+    /// The same hole judged by kicad-cli (slow tier): placed inside a 20 mm board with two parts, it adds no violation of any kind -- no hole
+    /// clearance, no courtyard overlap, no copper to the edge -- so the pads the library gave it reach the derived `.kicad_pcb` as KiCad reads them.
+    #[test]
+    fn a_placed_installed_footprint_passes_kicad_clis_drc() {
+        let name = "MountingHole:MountingHole_3.2mm_M3";
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() || eda_kicad::find_footprint_file(&eda_kicad::default_footprint_library_root(), name).is_none() {
+            eprintln!("no kicad-cli or no KiCad footprint libraries; skipping");
+            return;
+        }
+        let dir = scratch("pcb_installed_footprint_drc");
+        setup(&dir);
+        let base = drc_counts(&dir);
+        step(&dir, Cmd::PlaceFootprint { footprint: name.into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
+        let after = drc_counts(&dir);
+        let new: Vec<(&String, u64)> = after.iter().map(|(k, v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0)))).filter(|(_, n)| *n > 0).collect();
+        assert!(new.is_empty(), "placing the hole added DRC findings {new:?}: before {base:?}, after {after:?}");
+    }
+
     fn kicad_pcb_text_of(dir: &Path) -> String {
         let (_, design, model) = load(dir).unwrap();
         eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-08", title: "t" }).unwrap()
