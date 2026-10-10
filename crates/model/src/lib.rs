@@ -8,6 +8,7 @@ mod drc_checks;
 pub mod erc_checks;
 pub mod floorplan;
 pub mod footprint;
+pub mod fp_edit;
 pub mod gensym;
 mod groups;
 pub mod ir;
@@ -47,6 +48,11 @@ pub struct ConstraintModel {
     /// the built-in package library (`footprint::builtin`).
     #[serde(default)]
     pub footprints: Vec<Footprint>,
+    /// A placed footprint's own pads, when the board edited them (Pad Properties): reference -> the footprint as that instance has it
+    /// ([`fp_edit::patched_footprint`]). Filled by the board's loader from `DrawingsSection::footprint_edits`; [`ConstraintModel::footprint_of`]
+    /// answers with it first, so the gates, the router and the exports all see the edited pad. Never part of an intent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub instance_footprints: BTreeMap<String, Footprint>,
     /// Resolved library symbols, keyed by their own `lib_id`: filled in by
     /// `eda-kicad`'s symbol-library loader (real installed `.kicad_sym`
     /// files, falling back to `symbol::builtin`) before the schematic is
@@ -1102,6 +1108,13 @@ impl ConstraintModel {
     /// then the built-in library. `None` means the part is not physically
     /// realisable and every physical stage must fail on it.
     pub fn footprint_of(&self, part: &Part) -> Option<Footprint> {
+        if let Some(own) = self.instance_footprints.get(&part.reference) {
+            return Some(own.clone());
+        }
+        self.library_footprint_of(part)
+    }
+    /// [`ConstraintModel::footprint_of`] without the instance's own edits: the footprint as the library (or the intent) defines it.
+    pub fn library_footprint_of(&self, part: &Part) -> Option<Footprint> {
         for key in [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten() {
             if let Some(fp) = self.footprints.iter().find(|f| f.name == key) {
                 return Some(fp.clone());

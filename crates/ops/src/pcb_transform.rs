@@ -22,6 +22,7 @@
 
 use super::{rotate_point_about, Board};
 use eda_model::footprint::PlacedPad;
+use eda_model::fp_edit::parse_field_id;
 use eda_model::ir::{tessellate_arc, Design, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, RoutingSection, Shape, Side, Text, Track, Um, Via, Zone, TRACK_ARC_SEGMENTS};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ pub enum FlipDirection {
 
 /// One rigid transform of the board plane, applied to the points, the vectors and the orientations of an item.
 #[derive(Debug, Clone, Copy)]
-enum Xform {
+pub(crate) enum Xform {
     Move { dx: Um, dy: Um },
     /// Clockwise-positive millidegrees about `pivot`.
     Rotate { pivot: Point, angle: i64 },
@@ -48,7 +49,7 @@ enum Xform {
 }
 
 impl Xform {
-    fn point(self, p: Point) -> Point {
+    pub(crate) fn point(self, p: Point) -> Point {
         match self {
             Xform::Move { dx, dy } => Point { x: p.x + dx, y: p.y + dy },
             Xform::Rotate { pivot, angle } => rotate_point_about(p, pivot, angle),
@@ -68,7 +69,7 @@ impl Xform {
         }
     }
 
-    fn is_flip(self) -> bool {
+    pub(crate) fn is_flip(self) -> bool {
         matches!(self, Xform::Flip { .. })
     }
 }
@@ -99,7 +100,7 @@ pub fn flip_layer(layer: &str, copper_layers: usize) -> String {
 
 /// `BOARD_ITEM::IsSideSpecific`: a layer that belongs to one side of the board, so text on it reads mirrored from the
 /// back (`LSET::SideSpecificMask`: the front and back technical layers and every copper layer).
-fn side_specific(layer: &str) -> bool {
+pub(crate) fn side_specific(layer: &str) -> bool {
     layer.starts_with("F.") || layer.starts_with("B.") || (layer.starts_with("In") && layer.ends_with(".Cu"))
 }
 
@@ -117,11 +118,13 @@ struct Targets {
     shapes: BTreeSet<String>,
     texts: BTreeSet<String>,
     dimensions: BTreeSet<String>,
+    /// Footprint fields on their own (`REF:Reference`): text a footprint carries, moved without it.
+    fields: BTreeSet<String>,
 }
 
 impl Targets {
     fn is_empty(&self) -> bool {
-        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty()
+        self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.fields.is_empty()
     }
 }
 
@@ -226,6 +229,10 @@ impl Board<'_> {
                 return true;
             }
         }
+        if self.resolve_field(id).is_some() {
+            out.fields.insert(id.to_string());
+            return true;
+        }
         let Some(dr) = &self.design.drawings else { return false };
         if dr.shapes.iter().any(|s| s.id() == id) {
             out.shapes.insert(id.to_string());
@@ -279,7 +286,7 @@ impl Board<'_> {
         self.transform_items("flip_items", ids, Xform::Flip { pivot, dir: direction })
     }
 
-    fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn transform_items(&mut self, verb: &str, ids: &[String], x: Xform) -> Result<(), Vec<CheckResult>> {
         let targets = self.resolve_targets(verb, ids)?;
         let copper = self.model.board.layers.len();
         let outer = (self.model.board.layers.first().cloned(), self.model.board.layers.last().cloned());
@@ -290,11 +297,19 @@ impl Board<'_> {
             let (at, rot, side, label) = part_pose(&fp, x);
             self.set_pose(r, at, rot)?;
             let list = &mut self.design.placement.as_mut().expect("a Board always carries a placement section").footprints;
+            let turned_over = list.iter().find(|f| &f.id == r).is_some_and(|f| f.side != side);
             if let Some(f) = list.iter_mut().find(|f| &f.id == r) {
                 f.side = side;
                 f.label = label;
             }
+            // Its fields turn over with it (`FOOTPRINT::Flip`).
+            if turned_over {
+                self.flip_footprint_fields(r, copper);
+            }
         }
+        // A field of a footprint that is itself being transformed goes with the footprint, not on its own.
+        let own_fields: BTreeSet<String> = targets.fields.iter().filter(|f| !parse_field_id(f).is_some_and(|(r, _)| targets.parts.contains(r))).cloned().collect();
+        self.transform_fields(&own_fields, x, copper)?;
 
         if let Some(rt) = self.design.routing.as_mut() {
             for t in rt.tracks.iter_mut().filter(|t| targets.tracks.contains(&t.id)) {
@@ -335,7 +350,7 @@ impl Board<'_> {
 /// model draws a bottom-side part as its top-side pads with x negated, then turned by `rot` (`footprint::to_board`),
 /// so the mirror of a part turned by `rot` is the other side's part turned by `-rot` (left-right) or `180 - rot`
 /// (top-bottom). The refdes label sits on the mirrored side of the courtyard.
-fn part_pose(fp: &FootprintInstance, x: Xform) -> (Point, u32, Side, LabelSide) {
+pub(crate) fn part_pose(fp: &FootprintInstance, x: Xform) -> (Point, u32, Side, LabelSide) {
     let at = x.point(fp.at);
     match x {
         Xform::Move { .. } => (at, fp.rot, fp.side, fp.label),
@@ -363,7 +378,7 @@ fn part_pose(fp: &FootprintInstance, x: Xform) -> (Point, u32, Side, LabelSide) 
 /// A true arc is rebuilt from its three points rather than carried sample by sample: its polyline is the arc's
 /// tessellation, and a rotated or mirrored copy of the old samples can be a micrometre off the new arc's own
 /// (`Track::arc` would then refuse it, and the writer would turn the arc into 32 straight segments).
-fn transform_track(t: &mut Track, x: Xform, copper: usize) {
+pub(crate) fn transform_track(t: &mut Track, x: Xform, copper: usize) {
     if let Some((start, mid, end)) = t.arc() {
         let (s, m, e) = (x.point(start), x.point(mid), x.point(end));
         t.pts = tessellate_arc(s, m, e, TRACK_ARC_SEGMENTS);
@@ -383,7 +398,7 @@ fn transform_track(t: &mut Track, x: Xform, copper: usize) {
 
 /// `PCB_VIA::Flip`: the position mirrors; a blind or buried via changes its layer pair, a through via has none to
 /// change (`GetViaType() != VIATYPE::THROUGH`). A through via spans the outer layers.
-fn transform_via(v: &mut Via, x: Xform, copper: usize, outer: &(Option<String>, Option<String>)) {
+pub(crate) fn transform_via(v: &mut Via, x: Xform, copper: usize, outer: &(Option<String>, Option<String>)) {
     v.at = x.point(v.at);
     if x.is_flip() {
         let is_through = match outer {
@@ -399,7 +414,7 @@ fn transform_via(v: &mut Via, x: Xform, copper: usize, outer: &(Option<String>, 
 
 /// `ZONE::Move`/`::Rotate`/`::Flip` (`Mirror` of the outline, then the layer flips). The fill is derived from the
 /// outline every time it is wanted, so there is nothing else to carry.
-fn transform_zone(z: &mut Zone, x: Xform, copper: usize) {
+pub(crate) fn transform_zone(z: &mut Zone, x: Xform, copper: usize) {
     for p in z.outline.iter_mut() {
         *p = x.point(*p);
     }
@@ -422,7 +437,7 @@ fn norm_rect(start: &mut Point, end: &mut Point) {
 /// polygon (`m_shape = SHAPE_T::POLY`); every other rectangle is normalised after a turn or a flip (`Normalize`),
 /// start at the top left. A mirrored arc swaps its ends, as in source, so it still runs counter-clockwise from start
 /// to end; the three points describe the same arc either way.
-fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
+pub(crate) fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
     let flip = x.is_flip();
     let moving = matches!(x, Xform::Move { .. });
     let mut as_polygon: Option<Shape> = None;
@@ -479,7 +494,7 @@ fn transform_shape(s: &mut Shape, x: Xform, copper: usize) {
 /// `PCB_TEXT::Move`/`::Rotate`/`::Flip`. A text's angle is KiCad's (counter-clockwise on the screen), so a clockwise
 /// turn takes from it. Flipped left-right the angle negates; flipped top-bottom it becomes `180 - angle`. A text on a
 /// side-specific layer reads mirrored from the back, and turning it over toggles that.
-fn transform_text(t: &mut Text, x: Xform, copper: usize) {
+pub(crate) fn transform_text(t: &mut Text, x: Xform, copper: usize) {
     t.at = x.point(t.at);
     match x {
         Xform::Move { .. } => {}
@@ -503,7 +518,7 @@ fn transform_text(t: &mut Text, x: Xform, copper: usize) {
 /// turns the crossbar to the nearest quarter turn, `PCB_DIM_ALIGNED::Mirror` and `PCB_DIM_ORTHOGONAL::Mirror` move
 /// the side the crossbar sits on with the mirror. The text and the lines are worked out again from the two feature
 /// points, so only those, the kind's own numbers and the text angle are carried.
-fn transform_dimension(d: &mut Dimension, x: Xform, copper: usize) {
+pub(crate) fn transform_dimension(d: &mut Dimension, x: Xform, copper: usize) {
     match x {
         Xform::Move { dx, dy } => eda_connectivity::dimension::translate_dimension(d, dx, dy),
         Xform::Rotate { pivot, angle } => {

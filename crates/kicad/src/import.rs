@@ -133,7 +133,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // Each item parser records the uuid and lock of what it emits (`Refs`), so the groups and locks of the
     // file can be turned into ids once the items have them.
     let mut refs = Refs::default();
-    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
+    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let nets = build_nets(&net_names, &pin_nets);
     let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts) = import_drawings(root, &mut refs);
@@ -169,7 +169,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, outline_is_shapes, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
@@ -220,6 +220,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         stackup: import_stackup(root),
         impedance_targets: vec![],
         footprints: explicit_footprints.into_values().collect(),
+        instance_footprints: Default::default(),
         symbols: vec![],
         board,
         allow: Default::default(),
@@ -1121,9 +1122,10 @@ fn import_footprints(
     layers: &[String],
     notes: &mut ImportNotes,
     refs: &mut Refs,
-) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>, Vec<FootprintExtra>), Vec<CheckResult>> {
+) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>, Vec<FootprintExtra>, Vec<eda_model::fp_edit::FootprintEdit>), Vec<CheckResult>> {
     let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut extras: Vec<FootprintExtra> = Vec::new();
+    let mut edits: Vec<eda_model::fp_edit::FootprintEdit> = Vec::new();
     let title_vars = title_block_vars(root);
     let mut footprints_ir = Vec::new();
     let mut parts = Vec::new();
@@ -1165,10 +1167,12 @@ fn import_footprints(
         };
         let value = footprint_field(fp, "Value");
 
-        let mut pads = Vec::new();
+        let mut pads: Vec<Pad> = Vec::new();
         let mut pins = Vec::new();
         let fp_inst = FootprintInstance { id: reference.clone(), at: Point { x, y }, rot, side, label: Default::default() };
         let mut extra = footprint_extra_header(fp, &reference, file_version);
+        // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
+        let mut edit = crate::fp_fields::parse_footprint_edit(fp, &reference, value.as_deref(), side, rot);
         for pad in sexpr::find_all(fp, "pad") {
             let Some(p) = parse_pad_geometry(pad, side, rot, notes) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
@@ -1177,6 +1181,13 @@ fn import_footprints(
                 continue;
             };
             extra.pads.push(pad_mask_info(pad, layers, file_version));
+            // Offset and margins: the k-th kept pad that carries this number (the engine footprint's own list is what an edit counts in).
+            let mut pad_edit = crate::fp_fields::parse_pad_extras(pad, side, file_version);
+            if !pad_edit.is_empty() {
+                pad_edit.number = p.number.clone();
+                pad_edit.nth = pads.iter().filter(|q| q.number == p.number).count() as u32 + 1;
+                edit.set_pad(pad_edit);
+            }
 
             // A non-plated hole is mechanical, not electrical: it has no
             // net and is not a schematic pin (nothing a symbol would draw
@@ -1220,6 +1231,9 @@ fn import_footprints(
         extra.graphics.extend(import_fp_graphics(fp, &fp_inst));
         extra.texts = import_fp_texts(fp, &fp_inst, &reference, value.as_deref().unwrap_or(""), &title_vars);
         extras.push(extra);
+        if !edit.is_empty() {
+            edits.push(edit);
+        }
         // The 3D models with their placement, in the studio's frame: KiCad turns a back-side footprint's model with `Ry(pi) Rz(pi)` and the studio keeps
         // that footprint mirrored in x, which is a half turn about z apart (`Model3d::flipped_frame`). A slot is shared only by instances whose models
         // agree, like their pads.
@@ -1237,7 +1251,8 @@ fn import_footprints(
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok((footprints_ir, parts, explicit, pin_nets, extras))
+    edits.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok((footprints_ir, parts, explicit, pin_nets, extras, edits))
 }
 
 /// Footprint-level solder-mask facts: `(solder_mask_margin ..)` (pre-9.0

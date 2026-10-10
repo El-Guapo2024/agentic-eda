@@ -22,6 +22,7 @@ use std::fmt::Write as _;
 use eda_model::ir::{Design, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::{CheckResult, ConstraintModel, Footprint};
 
+use crate::fp_fields::FpExtra;
 use crate::pcb::{write_footprint, write_layers, write_shape, write_text};
 use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
 use crate::{duid, mm, sexpr_str};
@@ -65,6 +66,9 @@ pub struct ClipFootprint {
     pub definition: Option<Footprint>,
     /// Pad number -> net name, for the pads the text put on a net.
     pub pad_nets: Vec<(String, String)>,
+    /// What the text says about the footprint's fields, attributes and pads beyond the geometry ([`eda_model::fp_edit::FootprintEdit`],
+    /// under the copy's own id): the Reference and Value placement, user fields, `(attr ..)`, pad offsets and margins.
+    pub edit: Option<eda_model::fp_edit::FootprintEdit>,
     /// What the text set for how zones connect to the footprint and to its pads (`zone_connect`, the thermal relief and the
     /// clearance of the pads and of the footprint), as the board edit that gives the pasted footprint the same ones
     /// (`DrawingsSection::zone_overrides`; the `id` is the reference the text carried). `None` when it set none.
@@ -198,7 +202,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
     if picked.total() == 1 && picked.footprints.len() == 1 {
         let (part, footprint, moved) = fp_pieces(picked.footprints[0])?;
         let mut out = String::new();
-        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, "");
+        write_footprint(&mut out, &moved, part, &footprint, &BTreeMap::new(), model, design, false, "", &FpExtra::of(design, &moved.id, &footprint));
         return Ok(out);
     }
 
@@ -235,7 +239,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
 
     for fp in &picked.footprints {
         let (part, footprint, moved) = fp_pieces(fp)?;
-        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, "");
+        let uuid = write_footprint(&mut out, &moved, part, &footprint, &net_num, model, design, false, "", &FpExtra::of(design, &moved.id, &footprint));
         written.entry(fp.id.clone()).or_default().push(uuid);
     }
     for t in &picked.tracks {
@@ -351,6 +355,7 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
             label: fp.label,
             definition,
             pad_nets,
+            edit: design.footprint_edit(&fp.id).cloned(),
             zone_overrides,
         });
     }

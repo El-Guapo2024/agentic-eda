@@ -65,3 +65,16 @@ export function setFootprintZoneCmd(part: string, f: FootprintZoneForm): Cmd {
 export function padZoneIsSet(f: PadZoneForm): boolean {
   return f.connection != null || f.gap != null || f.spokeWidth != null || f.spokeAngleMdeg != null || f.clearance != null;
 }
+
+/**
+ * The commands a dialog's OK sends for its zone fields: the footprint's (`set_footprint_zone_connection`) when its form differs from what the part carries,
+ * and one `set_pad_zone_overrides` for every pad number whose form was opened and differs. None for a form nothing was changed on.
+ */
+export function zoneCmds(part: Part, footprint: FootprintZoneForm, pads: Readonly<Record<string, PadZoneForm>>): Cmd[] {
+  const cmds: Cmd[] = [];
+  const was = footprintZoneForm(part);
+  if (footprint.connection !== was.connection || footprint.clearance !== was.clearance) cmds.push(setFootprintZoneCmd(part.ref, footprint));
+  for (const [number, form] of Object.entries(pads)) if (JSON.stringify(form) !== JSON.stringify(padZoneForm(part, number))) cmds.push(setPadZoneCmd(part.ref, number, form));
+  return cmds;
+}
+

@@ -146,7 +146,23 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     // A placed symbol's own Footprint field (its library's default, or the one the Footprint Chooser assigned) names a library footprint the same
     // way an intent part does: resolve what the folded parts name, so it can be placed on the board.
     crate::resolve_footprint_libraries(&mut model);
+    // The pads a footprint's Pad Properties edits changed: its own footprint, for every reader of `footprint_of` (after the libraries are resolved, so
+    // a part placed from an installed library has its footprint to lay the edits on).
+    fold_footprint_edits(&design, &mut model);
     Ok((meta, design, model))
+}
+
+/// `model.instance_footprints` for every footprint whose pad edits change the geometry the engine knows (shape, size, hole, type,
+/// rotation, corner radius): the library footprint with the edits laid on ([`eda_model::fp_edit::patched_footprint`]). [`load`] calls it
+/// after the parts are all there; what the engine has no field for (a pad's offset and margins) stays in the design for the writer.
+pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
+    model.instance_footprints.clear();
+    let Some(dr) = design.drawings.as_ref() else { return };
+    for edit in dr.footprint_edits.iter().filter(|e| e.pads.iter().any(eda_model::fp_edit::PadEdit::changes_engine_pad)) {
+        let Some(part) = model.part(&edit.id).cloned() else { continue };
+        let Some(library) = model.library_footprint_of(&part) else { continue };
+        model.instance_footprints.insert(edit.id.clone(), eda_model::fp_edit::patched_footprint(&library, &edit.pads));
+    }
 }
 
 /// A *published* entry of the project's symbol library overrides whatever the intent and the installed libraries resolve for its `lib_id`.
@@ -383,7 +399,12 @@ pub(crate) fn reconcile_schematic(design: &mut eda_model::ir::Design, model: &mu
 /// module, a sheet symbol for each on the root; a design that is a single module stays one sheet). The modules a placement
 /// recorded are used when there are any. Always the same for the same board, so what is shown is what a first edit stores.
 pub(crate) fn derived_schematic(design: &eda_model::ir::Design, model: &ConstraintModel) -> Result<eda_model::ir::Design, Vec<CheckResult>> {
-    eda_engine::derive_schematic_modules_with(model, &eda_engine::EngineOptions::default(), design.placement.as_ref().map(|p| p.modules.as_slice()).unwrap_or(&[]))
+    let mut derived = eda_engine::derive_schematic_modules_with(model, &eda_engine::EngineOptions::default(), design.placement.as_ref().map(|p| p.modules.as_slice()).unwrap_or(&[]))?;
+    // A footprint marked Do Not Populate or excluded from the BOM says so on its symbol too (`Design::sync_symbol_bom_flags`).
+    if let Some(dr) = design.drawings.as_ref() {
+        derived.sync_symbol_bom_flags(&dr.footprint_edits);
+    }
+    Ok(derived)
 }
 
 pub(crate) fn save(dir: &Path, design: &eda_model::ir::Design) -> Result<(), Vec<CheckResult>> {
@@ -897,9 +918,12 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // A command that made footprints of its own (Duplicate, Paste) added parts the model loaded before it ran has not heard of;
     // the board that results is judged against a model that has them, as the next load will have.
     let board_parts = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.board_parts.clone()).unwrap_or_default();
-    let refolded: Option<ConstraintModel> = (board_parts(board.design()) != board_parts(was.design())).then(|| {
+    // Likewise a pad edit changes the footprint its part has (`fold_footprint_edits`).
+    let pad_edits = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.footprint_edits.iter().map(|e| (e.id.clone(), e.pads.clone())).collect::<Vec<_>>()).unwrap_or_default();
+    let refolded: Option<ConstraintModel> = (board_parts(board.design()) != board_parts(was.design()) || pad_edits(board.design()) != pad_edits(was.design())).then(|| {
         let mut m = model.clone();
         fold_board_parts(board.design(), &mut m);
+        fold_footprint_edits(board.design(), &mut m);
         m
     });
     let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
@@ -1129,6 +1153,24 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetItemNet { ids, net } => format!("net-set {} --net {net}", ids.join(" ")),
         Cmd::SetZoneName { id, name } => format!("zone name {id} --name {name:?}"),
         Cmd::ReplaceShape { id, .. } => format!("shape replace {id}"),
+        Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => {
+            let mut what: Vec<&str> = Vec::new();
+            if reference.is_some() {
+                what.push("reference");
+            }
+            if value.is_some() {
+                what.push("value");
+            }
+            if fields.is_some() {
+                what.push("fields");
+            }
+            if attrs.is_some() {
+                what.push("attributes");
+            }
+            format!("footprint edit {part} ({})", what.join(", "))
+        }
+        Cmd::EditBoardField { part, name, .. } => format!("field edit {part}:{name}"),
+        Cmd::EditBoardPad { part, edit } => format!("pad edit {}", edit.pad_id(part)),
 
         // No real `eda board` CLI subcommand parses these yet (the studio
         // UI is their only caller so far) -- this text exists purely for
@@ -1363,6 +1405,9 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetItemNet { .. } => "net-set",
         Cmd::SetZoneName { .. } => "zone",
         Cmd::ReplaceShape { .. } => "shape",
+        Cmd::EditBoardFootprint { .. } => "footprint-edit",
+        Cmd::EditBoardField { .. } => "field-edit",
+        Cmd::EditBoardPad { .. } => "pad-edit",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",
@@ -4172,6 +4217,224 @@ mod tests {
         step(&dir, Cmd::UpdateSymbolOnBoard { lib_id: "TEST:R".into() }, false, "test").unwrap();
         let (_, _, model) = load(&dir).unwrap();
         assert_eq!(model.symbol_of("TEST:R").unwrap().pins.len(), 2, "an explicit Update Symbol on Board must republish the edited definition");
+    }
+
+    /// The Footprint Properties and Pad Properties verbs end to end: each is one undo step, the model answers with the edited pads
+    /// afterwards, and the derived `.kicad_pcb` carries the text, the attributes and the pad extras.
+    #[test]
+    fn a_footprint_edit_and_a_pad_edit_are_one_undo_step_each_and_reach_the_model_and_the_board_file() {
+        use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintKind, PadEdit, UserField};
+        let dir = scratch("footprint_edit_undo");
+        setup(&dir);
+        let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
+        reference.size = (900, 900);
+        reference.thickness = 120;
+        let vendor = UserField { name: "Vendor".into(), text: "ACME".into(), layout: FieldLayout::new(Point { x: 0, y: 2_000 }, "F.Fab") };
+        let attrs = FootprintAttrs { kind: FootprintKind::Smd, exclude_from_pos_files: true, dnp: true, ..Default::default() };
+        step(&dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: Some(reference.clone()), value: None, fields: Some(vec![vendor]), attrs: Some(attrs) }, false, "test").unwrap();
+
+        let (_, design, model) = load(&dir).unwrap();
+        let pcb = |design: &Design, model: &ConstraintModel| eda_kicad::export_kicad_pcb(design, model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        let text = pcb(&design, &model);
+        assert!(text.contains("(property \"Reference\" \"U1\" (at 1.5 -2.5 0) (layer \"F.Fab\")"), "{text}");
+        assert!(text.contains("(property \"Vendor\" \"ACME\""), "{text}");
+        assert!(text.contains("(attr smd exclude_from_pos_files dnp)"), "{text}");
+        assert_eq!(design.footprint_edit("U1").unwrap().reference.as_ref(), Some(&reference));
+        assert!(design.footprint_edit("U2").is_none());
+
+        let mut pad = PadEdit::none("1", 1);
+        pad.shape = Some(PadShape::Oval);
+        pad.size = Some((1_200, 500));
+        pad.offset = Some(Point { x: 100, y: 0 });
+        step(&dir, Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let pads = |model: &ConstraintModel, r: &str| model.footprint_of(model.part(r).unwrap()).unwrap().pads;
+        assert_eq!((pads(&model, "U1")[0].size, pads(&model, "U1")[0].shape), ((1_200, 500), PadShape::Oval), "the model answers with the pad as edited");
+        assert_eq!(pads(&model, "U2")[0].size, (800, 800), "another instance of the same footprint keeps the library's pad");
+        let text = pcb(&design, &model);
+        assert!(text.contains("(size 1.2 0.5)") && text.contains("(drill (offset 0.1 0))"), "{text}");
+
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, after_pad, model) = load(&dir).unwrap();
+        assert_eq!(pads(&model, "U1")[0].size, (800, 800), "one undo takes the pad edit back");
+        assert!(after_pad.footprint_edit("U1").unwrap().pad("1", 1).is_none() && after_pad.footprint_edit("U1").unwrap().reference.is_some(), "and only the pad edit");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!(load(&dir).unwrap().1.footprint_edit("U1").is_none(), "the next one takes the footprint edit back");
+    }
+
+    /// A footprint carrying both overlays: our edit (fields, attributes, a pad's shape and offset) and the zone filler's (the footprint's zone
+    /// connection and clearance, a pad's connection, relief gap and clearance on the same pad).
+    fn edit_both_ways(dir: &Path) -> (eda_model::fp_edit::FieldLayout, eda_model::fp_edit::FootprintAttrs, eda_model::fp_edit::PadEdit) {
+        use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintKind, PadEdit};
+        use eda_model::ir::PadConnection;
+        let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
+        reference.size = (900, 900);
+        let attrs = FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() };
+        step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: Some(reference.clone()), value: None, fields: None, attrs: Some(attrs) }, false, "test").unwrap();
+        let mut pad = PadEdit::none("2", 1);
+        pad.size = Some((1_000, 1_000));
+        pad.offset = Some(Point { x: 100, y: 0 });
+        pad.solder_mask_margin = Some(50);
+        step(dir, Cmd::EditBoardPad { part: "U1".into(), edit: pad.clone() }, false, "test").unwrap();
+        step(dir, Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "2".into(), zone_connection: Some(PadConnection::Full), thermal_gap: Some(400), thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(250) }, false, "test").unwrap();
+        step(dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(PadConnection::None), clearance: Some(300) }, false, "test").unwrap();
+        (reference, attrs, pad)
+    }
+
+    /// What a footprint that went through [`edit_both_ways`] has, on `reference`: our edit and the zone overrides, and one `(pad ..)` form in the
+    /// file that carries the fields of both.
+    fn assert_has_both(design: &Design, model: &ConstraintModel, reference: &str, edited: &(eda_model::fp_edit::FieldLayout, eda_model::fp_edit::FootprintAttrs, eda_model::fp_edit::PadEdit)) {
+        use eda_model::ir::PadConnection;
+        let (layout, attrs, pad) = edited;
+        let ours = design.footprint_edit(reference).unwrap_or_else(|| panic!("{reference} has its own edit"));
+        assert_eq!((ours.reference.as_ref().map(|l| l.at), ours.attrs), (Some(layout.at), Some(*attrs)), "{reference}");
+        // The pad edit's extras are the edit's (a paste has the pad's shape and size in the footprint it brings: checked below).
+        let got = ours.pad("2", 1).unwrap_or_else(|| panic!("{reference}: the pad edit"));
+        assert_eq!((got.offset, got.solder_mask_margin), (pad.offset, pad.solder_mask_margin), "{reference}: the pad edit");
+        let zone = design.drawings.as_ref().unwrap().zone_overrides.iter().find(|z| z.id == reference).unwrap_or_else(|| panic!("{reference} has its own zone overrides"));
+        let p2 = zone.pads.iter().find(|p| p.number == "2").unwrap_or_else(|| panic!("{reference}: pad 2's zone overrides"));
+        assert_eq!((p2.zone_connection, p2.thermal_gap, p2.clearance), (Some(PadConnection::Full), Some(400), Some(250)), "{reference}");
+        assert_eq!(zone.footprint.map(|f| (f.zone_connection, f.clearance)), Some((Some(PadConnection::None), Some(300))), "{reference}: the footprint's own");
+        assert_eq!(model.footprint_of(model.part(reference).unwrap()).unwrap().pads[1].size, (1_000, 1_000), "{reference}: its pads are the edited ones");
+        // One pad form carries the pad edit's offset and margin and the zone facts, in KiCad's order.
+        let text = eda_kicad::export_kicad_pcb(design, model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        let line = text.lines().filter(|l| l.contains("(pad \"2\"") && l.contains("(size 1 1)")).find(|l| l.contains("(thermal_gap 0.4)")).unwrap_or_else(|| panic!("a pad 2 form with both overlays:\n{text}"));
+        assert!(line.contains("(drill (offset 0.1 0))") && line.find("(solder_mask_margin 0.05)") < line.find("(clearance 0.25)") && line.find("(clearance 0.25)") < line.find("(zone_connect 2)"), "{line}");
+    }
+
+    /// A duplicate of an edited footprint is edited the same way: its fields, attributes and pad edits, and the zone filler's overrides, are its own copies.
+    #[test]
+    fn a_duplicate_of_an_edited_footprint_keeps_its_fields_attributes_pad_edits_and_zone_overrides() {
+        let dir = scratch("footprint_edit_duplicate");
+        setup(&dir);
+        let edited = edit_both_ways(&dir);
+        step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, false, "test").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        assert_has_both(&design, &model, "U1", &edited);
+        assert_has_both(&design, &model, "U3", &edited);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, _) = load(&dir).unwrap();
+        assert!(back.footprint_edit("U3").is_none() && !back.drawings.as_ref().unwrap().zone_overrides.iter().any(|z| z.id == "U3"), "undo takes the copy's edit and its zone overrides with it");
+    }
+
+    /// Copy and Paste go through KiCad's clipboard text, whose one `(pad ..)` form carries both overlays: the paste, here and on another board,
+    /// has the pad edit, the fields, the attributes and the zone overrides.
+    #[test]
+    fn a_copy_and_paste_of_a_footprint_keeps_the_pad_edit_and_the_zone_overrides() {
+        let a = scratch("copy_both_from");
+        setup(&a);
+        let edited = edit_both_ways(&a);
+        let body = serde_json::json!({ "ids": ["U1"], "reference": { "x": 0, "y": 0 } }).to_string();
+        let reply = crate::clipboard_api::copy(&a, body.as_bytes());
+        assert_eq!(reply["ok"], true, "{reply}");
+        let text = reply["text"].as_str().unwrap().to_string();
+
+        // On the same board, where U1 exists: a part of its own.
+        step(&a, Cmd::PasteClipboard { text: text.clone(), at: Point { x: 30_000, y: 30_000 } }, false, "test").unwrap();
+        let (_, design, model) = load(&a).unwrap();
+        assert_has_both(&design, &model, "U3", &edited);
+        undo(&a, "test", Some(Domain::Pcb)).unwrap();
+
+        // On another board.
+        let b = scratch("paste_both_into");
+        setup(&b);
+        step(&b, Cmd::PasteClipboard { text, at: Point { x: 30_000, y: 30_000 } }, false, "test").unwrap();
+        let (_, design, model) = load(&b).unwrap();
+        assert_has_both(&design, &model, "U3", &edited);
+    }
+
+    /// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): the file we write for an edited board is one kicad-cli loads, and it honours what
+    /// the edits say. Through the existing fab routes: the position file leaves out a footprint excluded from position files, one marked
+    /// Do Not Populate when asked, and with `smd_only` the one whose type is not SMD; the BOM leaves out one excluded from the BOM and
+    /// one marked DNP. A pad's clearance override is a clearance kicad-cli enforces, and Undo takes it back.
+    #[test]
+    fn kicad_cli_loads_the_edited_board_and_its_position_and_bom_exports_honour_the_attributes() {
+        use eda_model::fp_edit::{FootprintAttrs, FootprintKind, PadEdit};
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("footprint_attrs_exports");
+        setup(&dir);
+        step(&dir, Cmd::Duplicate { ids: vec!["U1".into()] }, false, "test").unwrap();
+        step(&dir, Cmd::MoveItems { ids: vec!["U3".into()], dx: 0, dy: 6_000 }, false, "test").unwrap();
+        let attrs = |part: &str, a: FootprintAttrs| step(&dir, Cmd::EditBoardFootprint { part: part.into(), reference: None, value: None, fields: None, attrs: Some(a) }, false, "test").unwrap();
+        attrs("U1", FootprintAttrs { kind: FootprintKind::Smd, exclude_from_pos_files: true, ..Default::default() });
+        attrs("U2", FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() });
+        attrs("U3", FootprintAttrs { kind: FootprintKind::Unspecified, exclude_from_bom: true, ..Default::default() });
+
+        // kicad-cli loads the board with every kind of edit in it.
+        let clean = drc_counts(&dir);
+        assert_eq!(clean.get("clearance").copied().unwrap_or(0), 0, "{clean:?}");
+
+        let read = |reply: serde_json::Value| -> String {
+            assert_eq!(reply["ok"], true, "{reply}");
+            let file = reply["files"][0].as_str().unwrap_or_else(|| panic!("no file in {reply}")).to_string();
+            std::fs::read_to_string(dir.join(file)).unwrap()
+        };
+        let pos = |body: serde_json::Value| read(crate::fab_api::pos(&dir, body.to_string().as_bytes()));
+        let has = |text: &str, r: &str| text.contains(&format!("\"{r}\""));
+
+        let all = pos(serde_json::json!({ "format": "csv" }));
+        assert!(!has(&all, "U1") && has(&all, "U2") && has(&all, "U3"), "U1 is excluded from the position files:\n{all}");
+        let no_dnp = pos(serde_json::json!({ "format": "csv", "exclude_dnp": true }));
+        assert!(!has(&no_dnp, "U1") && !has(&no_dnp, "U2") && has(&no_dnp, "U3"), "Do Not Populate leaves U2 out when asked:\n{no_dnp}");
+        let smd = pos(serde_json::json!({ "format": "csv", "smd_only": true }));
+        assert!(!has(&smd, "U1") && has(&smd, "U2") && !has(&smd, "U3"), "only an SMD footprint is listed with smd_only (U3 is of no type):\n{smd}");
+
+        let bom = read(crate::fab_api::bom(&dir));
+        assert!(bom.contains("U1") && !bom.contains("U2") && !bom.contains("U3"), "the BOM has neither the DNP footprint nor the one excluded from it:\n{bom}");
+
+        // A pad's clearance override (the zone overlay's: a pad has one clearance) is the clearance kicad-cli enforces between pad 1 and pad 2 of
+        // U2 (1.2 mm apart); and a pad edit of ours beside it (a solder mask margin) is written with it, on the same pad line.
+        let mut pad = PadEdit::none("1", 1);
+        pad.solder_mask_margin = Some(50);
+        step(&dir, Cmd::EditBoardPad { part: "U2".into(), edit: pad }, false, "test").unwrap();
+        step(&dir, Cmd::SetPadZoneOverrides { part: "U2".into(), pad: "1".into(), zone_connection: None, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: Some(3_000) }, false, "test").unwrap();
+        {
+            let (_, design, model) = load(&dir).unwrap();
+            let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+            assert!(text.contains("(solder_mask_margin 0.05) (clearance 3)"), "one pad line carries the margin of the pad edit and the clearance of the zone overrides, in KiCad's order");
+        }
+        let tight = drc_counts(&dir);
+        assert!(tight.get("clearance").copied().unwrap_or(0) > 0, "a 3 mm override on a pad 1.2 mm from the next: {tight:?}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(drc_counts(&dir).get("clearance").copied().unwrap_or(0), 0, "Undo takes the override back");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    }
+
+    /// A grid array of a footprint is one command and so one undo step: the copies are parts of the board for the gates and the
+    /// writer, on the original's nets, with the next free references; Undo takes every copy back at once.
+    #[test]
+    fn an_array_of_a_footprint_is_one_undo_step_and_its_copies_are_parts_of_the_board() {
+        let dir = scratch("array_footprint");
+        setup(&dir);
+        let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: 0, dy: 0, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+        // a zero spacing is the dialog's refusal; a real one
+        let bad = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test");
+        assert!(bad.is_err(), "horizontal delta of zero with 2 objects");
+        let geometry = eda_ops::ArrayGeometry::Grid { nx: 2, ny: 2, dx: 3_000, dy: 4_000, offset_x: 0, offset_y: 0, centred: false, stagger: 0, stagger_rows: true, horizontal_then_vertical: true, reverse_alternate: false };
+        let msg = step(&dir, Cmd::CreateArray { ids: vec!["U1".into()], geometry, arrange: false, reannotate: true }, false, "test").unwrap();
+        assert!(msg.contains("5/5 placed"), "three copies join the two parts: {msg}");
+        let (_, design, model) = load(&dir).unwrap();
+        let refs: Vec<String> = design.placement.as_ref().unwrap().footprints.iter().map(|f| f.id.clone()).collect();
+        assert_eq!(refs, ["U1", "U2", "U3", "U4", "U5"]);
+        let at = |r: &str| design.placement.as_ref().unwrap().footprints.iter().find(|f| f.id == r).unwrap().at;
+        assert_eq!((at("U3"), at("U4"), at("U5")), (Point { x: at("U1").x + 3_000, y: at("U1").y }, Point { x: at("U1").x, y: at("U1").y + 4_000 }, Point { x: at("U1").x + 3_000, y: at("U1").y + 4_000 }));
+        let on = |net: &str| model.nets.iter().find(|n| n.name == net).unwrap().pins.clone();
+        assert!(on("GND").contains(&"U5.1".to_string()) && on("VCC").contains(&"U5.2".to_string()), "the copies are on U1's nets: {:?}", model.nets);
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        for r in ["U3", "U4", "U5"] {
+            assert!(pcb.contains(&format!("(property \"Reference\" \"{r}\"")), "{r} is in the file kicad-cli reads");
+        }
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, model) = load(&dir).unwrap();
+        assert_eq!(back.placement.as_ref().unwrap().footprints.len(), 2);
+        assert!(model.part("U3").is_none() && back.drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "one undo takes every copy away");
     }
 
     /// Pad Properties' and Footprint Properties' zone connection reach the fill the studio draws (and, through the derived

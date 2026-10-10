@@ -21,6 +21,7 @@ use eda_model::ir::{Design, FieldPlacement, NetLabel, NoConnect, PowerSymbol, Sc
 use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
+mod fp_fields;
 mod pcb;
 mod pcb_items;
 mod clipboard;

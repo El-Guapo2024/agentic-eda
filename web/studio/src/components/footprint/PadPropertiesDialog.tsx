@@ -299,16 +299,16 @@ export function PadPropertiesDialog() {
 }
 
 /** The spoke angle: "unset" is the shape's default (90 degrees for an oval or rectangle, 45 for a circle), set is an angle in degrees as the `.kicad_pcb` stores it. */
-export function AngleOverrideInput({ valueMdeg, defaultDeg, onChange }: { valueMdeg: number | null; defaultDeg: number; onChange: (v: number | null) => void }) {
+export function AngleOverrideInput({ valueMdeg, defaultDeg, onChange, testid }: { valueMdeg: number | null; defaultDeg: number; onChange: (v: number | null) => void; testid?: string }) {
   const on = valueMdeg != null;
   return (
     <span>
       <label style={{ marginRight: 8 }}>
-        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked ? defaultDeg * 1000 : null)} /> override
+        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked ? defaultDeg * 1000 : null)} data-testid={testid ? `${testid}-on` : undefined} /> override
       </label>
       {on ? (
         <>
-          <input type="number" step="any" value={valueMdeg / 1000} onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange((((Math.round(Number(e.target.value) * 1000) % 360_000) + 360_000) % 360_000))} style={{ width: 80 }} />°
+          <input type="number" step="any" value={valueMdeg / 1000} onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange((((Math.round(Number(e.target.value) * 1000) % 360_000) + 360_000) % 360_000))} style={{ width: 80 }} data-testid={testid} />°
         </>
       ) : (
         <span style={{ color: "var(--chrome-text-dim)" }}>{defaultDeg}° (shape default)</span>
@@ -318,12 +318,12 @@ export function AngleOverrideInput({ valueMdeg, defaultDeg, onChange }: { valueM
 }
 
 /** A length field that can also be "unset" (board default) -- the Pad Properties dialog's own clearance/thermal override convention (`None` = inherit). */
-export function OverrideInput({ valueUm, units, onChange }: { valueUm: number | null; units: Parameters<typeof umTo>[1]; onChange: (v: number | null) => void }) {
+export function OverrideInput({ valueUm, units, onChange, testid }: { valueUm: number | null; units: Parameters<typeof umTo>[1]; onChange: (v: number | null) => void; testid?: string }) {
   const on = valueUm != null;
   return (
     <span>
       <label style={{ marginRight: 8 }}>
-        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked ? 0 : null)} /> override
+        <input type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked ? 0 : null)} data-testid={testid ? `${testid}-on` : undefined} /> override
       </label>
       {on && (
         <input
@@ -332,6 +332,7 @@ export function OverrideInput({ valueUm, units, onChange }: { valueUm: number | 
           value={umTo(valueUm, units)}
           onChange={(e) => Number.isFinite(Number(e.target.value)) && onChange(Math.round(umFrom(Number(e.target.value), units)))}
           style={{ width: 80 }}
+          data-testid={testid}
         />
       )}
       {on && ` ${units}`}

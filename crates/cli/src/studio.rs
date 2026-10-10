@@ -946,14 +946,26 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "footprint": part.footprint.clone().or_else(|| part.package.clone()),
         });
         if let Some(fp) = fp {
+            let footprint = model.footprint_of(part);
+            let engine_pads = footprint.as_ref().map(crate::fp_json::pads_in_studio_order).unwrap_or_default();
             let pads: Vec<Value> = placed_pads(&model, part, fp)
                 .unwrap_or_default()
                 .iter()
-                .map(|q| {
+                .enumerate()
+                .map(|(i, q)| {
                     let net = net_of.get(format!("{}.{}", part.reference, q.number).as_str()).copied();
-                    json!({ "num": q.number, "net": net, "x": q.center.x, "y": q.center.y, "w": q.size.0, "h": q.size.1, "round": q.is_round(), "th": q.through_hole })
+                    match engine_pads.get(i) {
+                        // The pad with its own shape, type, hole and overrides (`crate::fp_json`).
+                        Some((pad, nth)) => crate::fp_json::pad_json(&design, &model, fp, q, pad, *nth, net),
+                        None => json!({ "num": q.number, "net": net, "x": q.center.x, "y": q.center.y, "w": q.size.0, "h": q.size.1, "round": q.is_round(), "th": q.through_hole }),
+                    }
                 })
                 .collect();
+            if let Some(footprint) = &footprint {
+                // The footprint's fields as laid out on the board, and its attributes.
+                p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
+                p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
+            }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
             p["side"] = json!(if fp.side == Side::Bottom { "bottom" } else { "top" });
