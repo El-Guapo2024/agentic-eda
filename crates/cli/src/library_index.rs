@@ -15,11 +15,14 @@
 //!     It is built on a thread of its own (the symbol pass reads all 220 MB) and the route answers `pending` until it
 //!     is done, like `/api/board.glb`: the request loop never waits for it.
 //!
-//! Opening an item is not here: `library_api` resolves a `Lib:Name` against the same roots
-//! (`eda_kicad::default_footprint_library_root` / `default_symbol_library_root`, overridable with `EDA_KICAD_FOOTPRINTS` /
-//! `EDA_KICAD_SYMBOLS`).
+//! Where the libraries come from is a [`LibSource`]: KiCad's library tables as the studio reads them (`library_tables::LibSet` -- the global table, the
+//! libraries it chains, the project's own table), or a plain folder of library files (the tests', and what KiCad.app's install is when no table names
+//! it: `eda_kicad::default_footprint_library_root` / `default_symbol_library_root`, overridable with `EDA_KICAD_FOOTPRINTS` / `EDA_KICAD_SYMBOLS`).
+//!
+//! Opening an item is not here: `library_api` resolves a `Lib:Name` against the same libraries.
 
 use eda_kicad::{default_footprint_library_root, default_symbol_library_root};
+use eda_kicad::library_table::TableKind;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -48,8 +51,16 @@ impl Kind {
         }
     }
 
+    /// The library table of this kind (`sym-lib-table`, `fp-lib-table`).
+    pub(crate) fn table_kind(self) -> TableKind {
+        match self {
+            Kind::Footprint => TableKind::Footprint,
+            Kind::Symbol => TableKind::Symbol,
+        }
+    }
+
     /// The path of library `lib` under `root`: a `.pretty` directory or a `.kicad_sym` file.
-    fn library_path(self, root: &Path, lib: &str) -> PathBuf {
+    pub(crate) fn library_path(self, root: &Path, lib: &str) -> PathBuf {
         match self {
             Kind::Footprint => root.join(format!("{lib}.pretty")),
             Kind::Symbol => root.join(format!("{lib}.kicad_sym")),
@@ -73,6 +84,72 @@ pub(crate) fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// Where the libraries of one kind come from. A library is a nickname that names a `.kicad_sym` file (symbols) or a `.pretty` folder (footprints), and what
+/// the trees, the choosers and the lookups need of a source is only that: the nickname's path, the list of nicknames to show, and a few words about each.
+pub(crate) trait LibSource: Send + Sync {
+    /// The file (symbols) or folder (footprints) of library `lib`, or why this source has none by that name.
+    fn lib_path(&self, kind: Kind, lib: &str) -> Result<PathBuf, String>;
+    /// The libraries the trees and the choosers list, sorted by name (case-insensitively, like the tree).
+    fn listed(&self, kind: Kind) -> Arc<Vec<LibraryInfo>>;
+    /// The description of a library (the Description column of a table row).
+    fn describe(&self, kind: Kind, lib: &str) -> Option<String>;
+    /// Which table the library is in: `global` (KiCad's own) or `project`; none for a plain folder.
+    fn scope_of(&self, _kind: Kind, _lib: &str) -> Option<&'static str> {
+        None
+    }
+    /// What names this source in the caches of the background builds: another set of libraries is another build.
+    fn fingerprint(&self, kind: Kind) -> String;
+    /// An owned copy a thread may keep.
+    fn boxed(&self) -> Arc<dyn LibSource>;
+}
+
+impl LibSource for PathBuf {
+    fn lib_path(&self, kind: Kind, lib: &str) -> Result<PathBuf, String> {
+        if !legal_library_name(lib) {
+            return Err(format!("{lib:?} is not a library name"));
+        }
+        Ok(kind.library_path(self, lib))
+    }
+
+    fn listed(&self, kind: Kind) -> Arc<Vec<LibraryInfo>> {
+        scan_root(kind, self)
+    }
+
+    fn describe(&self, kind: Kind, lib: &str) -> Option<String> {
+        crate::library_search::library_descriptions(kind, self).get(lib).cloned()
+    }
+
+    fn fingerprint(&self, kind: Kind) -> String {
+        format!("root:{kind:?}:{}", self.display())
+    }
+
+    fn boxed(&self) -> Arc<dyn LibSource> {
+        Arc::new(self.clone())
+    }
+}
+
+impl LibSource for Path {
+    fn lib_path(&self, kind: Kind, lib: &str) -> Result<PathBuf, String> {
+        self.to_path_buf().lib_path(kind, lib)
+    }
+
+    fn listed(&self, kind: Kind) -> Arc<Vec<LibraryInfo>> {
+        scan_root(kind, self)
+    }
+
+    fn describe(&self, kind: Kind, lib: &str) -> Option<String> {
+        crate::library_search::library_descriptions(kind, self).get(lib).cloned()
+    }
+
+    fn fingerprint(&self, kind: Kind) -> String {
+        format!("root:{kind:?}:{}", self.display())
+    }
+
+    fn boxed(&self) -> Arc<dyn LibSource> {
+        Arc::new(self.to_path_buf())
+    }
+}
+
 /// Everything already read, keyed by what it was read from and stamped with the modification time it was read at.
 #[derive(Default)]
 struct Cache {
@@ -89,8 +166,13 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The libraries of a source, sorted by name (case-insensitively, like the tree).
+pub(crate) fn libraries_in<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Arc<Vec<LibraryInfo>> {
+    src.listed(kind)
+}
+
 /// The libraries under `root`, sorted by name (case-insensitively, like the tree).
-pub(crate) fn libraries_in(kind: Kind, root: &Path) -> Arc<Vec<LibraryInfo>> {
+fn scan_root(kind: Kind, root: &Path) -> Arc<Vec<LibraryInfo>> {
     let stamp = modified(root);
     let key = (kind, root.to_path_buf());
     if let Some((s, hit)) = lock(cache()).libraries.get(&key) {
@@ -137,7 +219,7 @@ fn footprint_names(dir: &Path) -> Vec<String> {
     names
 }
 
-fn count_footprints(dir: &Path) -> usize {
+pub(crate) fn count_footprints(dir: &Path) -> usize {
     std::fs::read_dir(dir).map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("kicad_mod")).count()).unwrap_or(0)
 }
 
@@ -193,12 +275,9 @@ pub(crate) fn scan_symbol_names(text: &str) -> Vec<String> {
     names
 }
 
-/// The item names of library `lib` under `root` (sorted), cached against the library's modification time.
-fn items_in(kind: Kind, root: &Path, lib: &str) -> Result<Arc<Vec<String>>, String> {
-    if !legal_library_name(lib) {
-        return Err(format!("{lib:?} is not a library name"));
-    }
-    let path = kind.library_path(root, lib);
+/// The item names of library `lib` of a source (sorted), cached against the library's modification time.
+fn items_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> Result<Arc<Vec<String>>, String> {
+    let path = src.lib_path(kind, lib)?;
     let stamp = modified(&path);
     if stamp.is_none() {
         return Err(format!("no library {lib:?} is installed"));
@@ -225,21 +304,27 @@ fn items_in(kind: Kind, root: &Path, lib: &str) -> Result<Arc<Vec<String>>, Stri
     Ok(names)
 }
 
-/// `GET /api/library/index?kind=footprint|symbol`: `{"available": bool, "libraries": [{"name", "count"?, "description"?}]}` -- the installed
-/// libraries, names only, with the description KiCad's library table gives each (the choosers' Description column).
-pub fn libraries(kind: Kind) -> Value {
-    let root = kind.root();
-    let libs = libraries_in(kind, &root);
-    let described = crate::library_search::library_descriptions(kind, &root);
+/// `GET /api/library/index?kind=footprint|symbol`: `{"available": bool, "libraries": [{"name", "count"?, "description"?, "scope"?}]}` -- the libraries of
+/// the board's library tables (KiCad's own through the global table, the project's through its own), names only, with the description each row gives
+/// (the choosers' Description column) and the table it is in.
+pub fn libraries(dir: &Path, kind: Kind) -> Value {
+    libraries_json(kind, &*crate::library_tables::libs(dir, kind))
+}
+
+fn libraries_json<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
+    let libs = libraries_in(kind, src);
     json!({
-        "available": root.is_dir(),
+        "available": !libs.is_empty(),
         "libraries": libs.iter().map(|l| {
             let mut v = match l.count {
                 Some(count) => json!({ "name": l.name, "count": count }),
                 None => json!({ "name": l.name }),
             };
-            if let Some(d) = described.get(&l.name) {
+            if let Some(d) = src.describe(kind, &l.name) {
                 v["description"] = json!(d);
+            }
+            if let Some(scope) = src.scope_of(kind, &l.name) {
+                v["scope"] = json!(scope);
             }
             v
         }).collect::<Vec<_>>(),
@@ -247,28 +332,28 @@ pub fn libraries(kind: Kind) -> Value {
 }
 
 /// `GET /api/library/items?kind=...&lib=Name`: `{"lib", "names": [..]}` -- the bare item names of one library, or `{"error"}`.
-pub fn items(kind: Kind, lib: &str) -> Value {
-    match items_in(kind, &kind.root(), lib) {
+pub fn items(dir: &Path, kind: Kind, lib: &str) -> Value {
+    match items_in(kind, &*crate::library_tables::libs(dir, kind), lib) {
         Ok(names) => json!({ "lib": lib, "names": names.as_slice() }),
         Err(e) => json!({ "error": e }),
     }
 }
 
-/// What the background build of the all-libraries answer is doing, per kind.
+/// What the background build of the all-libraries answer is doing, per kind and set of libraries.
 enum AllBuild {
     Running,
     Done(Arc<BTreeMap<String, Arc<Vec<String>>>>),
 }
 
-fn all_builds() -> &'static Mutex<HashMap<Kind, AllBuild>> {
-    static BUILDS: OnceLock<Mutex<HashMap<Kind, AllBuild>>> = OnceLock::new();
+fn all_builds() -> &'static Mutex<HashMap<(Kind, String), AllBuild>> {
+    static BUILDS: OnceLock<Mutex<HashMap<(Kind, String), AllBuild>>> = OnceLock::new();
     BUILDS.get_or_init(Default::default)
 }
 
-fn build_all(kind: Kind, root: &Path) -> BTreeMap<String, Arc<Vec<String>>> {
+fn build_all<S: LibSource + ?Sized>(kind: Kind, src: &S) -> BTreeMap<String, Arc<Vec<String>>> {
     let mut all = BTreeMap::new();
-    for lib in libraries_in(kind, root).iter() {
-        if let Ok(names) = items_in(kind, root, &lib.name) {
+    for lib in libraries_in(kind, src).iter() {
+        if let Ok(names) = items_in(kind, src, &lib.name) {
             all.insert(lib.name.clone(), names);
         }
     }
@@ -276,11 +361,16 @@ fn build_all(kind: Kind, root: &Path) -> BTreeMap<String, Arc<Vec<String>>> {
 }
 
 /// `GET /api/library/all?kind=...`: every library's item names, for the tree's search box. `{"status": "pending"}` while the thread that reads them is
-/// running (the first call starts it), then `{"status": "ready", "libraries": {"Lib": [names]}}`.
-pub fn all(kind: Kind) -> Value {
-    let root = kind.root();
+/// running (the first call starts it), then `{"status": "ready", "libraries": {"Lib": [names]}}`. A different set of libraries (a row added to a table,
+/// a library file changed) is a different build.
+pub fn all(dir: &Path, kind: Kind) -> Value {
+    all_of(kind, &*crate::library_tables::libs(dir, kind))
+}
+
+fn all_of(kind: Kind, src: &dyn LibSource) -> Value {
+    let key = (kind, src.fingerprint(kind));
     let mut builds = lock(all_builds());
-    match builds.get(&kind) {
+    match builds.get(&key) {
         Some(AllBuild::Done(all)) => {
             let all = all.clone();
             drop(builds);
@@ -288,14 +378,18 @@ pub fn all(kind: Kind) -> Value {
         }
         Some(AllBuild::Running) => json!({ "status": "pending" }),
         None => {
-            builds.insert(kind, AllBuild::Running);
+            builds.insert(key.clone(), AllBuild::Running);
             drop(builds);
-            let spawned = std::thread::Builder::new().name("library-index".into()).spawn(move || {
-                let all = Arc::new(build_all(kind, &root));
-                lock(all_builds()).insert(kind, AllBuild::Done(all));
+            let owned = src.boxed();
+            let spawned = std::thread::Builder::new().name("library-index".into()).spawn({
+                let key = key.clone();
+                move || {
+                    let all = Arc::new(build_all(kind, &*owned));
+                    lock(all_builds()).insert(key, AllBuild::Done(all));
+                }
             });
             if spawned.is_err() {
-                lock(all_builds()).remove(&kind);
+                lock(all_builds()).remove(&key);
                 return json!({ "error": "could not start the library index thread" });
             }
             json!({ "status": "pending" })

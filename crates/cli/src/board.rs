@@ -860,8 +860,8 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, Vec<CheckResult>> {
     let (meta, mut design, mut model) = load(dir)?;
-    // A symbol or footprint out of KiCad's installed libraries goes in with its definition (`crate::library_place`).
-    let with_definitions = crate::library_place::with_installed_definitions(cmd, &design, &model);
+    // A symbol or footprint out of a library of the library tables goes in with its definition (`crate::library_place`).
+    let with_definitions = crate::library_place::with_installed_definitions(dir, cmd, &design, &model);
     let cmd = with_definitions.as_ref().unwrap_or(cmd);
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so

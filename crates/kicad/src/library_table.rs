@@ -991,6 +991,38 @@ pub fn derived_for_kicad(table: &Table, project_dir: &Path) -> Table {
     Table { kind: table.kind, version: Some(TABLE_VERSION), rows }
 }
 
+// ------------------------------------------------------------------------------------------------ a project's own path variables
+
+/// The file a project keeps its own path variables in, beside its library tables. KiCad keeps a project's variables in the project file (its text
+/// variables, which `PROJECT::TextVarResolver` reads before the environment, so `${NAME}` works in a library path); the studio's derived project file is
+/// rewritten on every run, so they live here and the derived file is given them.
+pub const PATH_VARIABLES_FILE: &str = "path-variables.json";
+
+/// The variables of the project in `dir`: `{"version": 1, "variables": {"NAME": "value"}}`. None when there is no such file, or it is not one.
+pub fn read_project_variables(dir: &Path) -> BTreeMap<String, String> {
+    let Ok(text) = std::fs::read_to_string(dir.join(PATH_VARIABLES_FILE)) else { return BTreeMap::new() };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else { return BTreeMap::new() };
+    v.get("variables").and_then(|m| m.as_object()).map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect()).unwrap_or_default()
+}
+
+/// Store the project's variables (an empty set removes the file). Through a temporary file and a rename.
+pub fn write_project_variables(dir: &Path, vars: &BTreeMap<String, String>) -> Result<(), String> {
+    let path = dir.join(PATH_VARIABLES_FILE);
+    if vars.is_empty() {
+        return match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("could not remove {}: {e}", path.display())),
+        };
+    }
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "version": 1, "variables": vars })).unwrap_or_default() + "\n";
+    let tmp = dir.join(format!("{PATH_VARIABLES_FILE}.tmp"));
+    std::fs::write(&tmp, text).and_then(|()| std::fs::rename(&tmp, &path)).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("could not write {}: {e}", path.display())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

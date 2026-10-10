@@ -8,6 +8,7 @@
 //! edit; these two routes never touch `design.json`.
 
 use crate::board;
+use crate::library_index::{Kind, LibSource};
 use eda_model::ir::{LibraryFootprint, LibrarySymbol};
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
@@ -18,21 +19,21 @@ fn path_safe(part: &str) -> bool {
     !part.is_empty() && !part.starts_with('.') && !part.contains(['/', '\\']) && !part.contains("..")
 }
 
-/// A footprint of KiCad's installed libraries (`Lib:Name` -> `<root>/Lib.pretty/Name.kicad_mod`) in the editable type, with every graphic, text, attribute
-/// and pad layer the file holds (`eda_kicad::parse_library_footprint`, the reader behind Import -- the engine's own loader keeps only pads and a courtyard)
-/// and named `Lib:Name`, the key the library tree shows it under.
-fn installed_footprint_in(root: &Path, name: &str) -> Option<LibraryFootprint> {
-    crate::library_search::installed_footprint(root, name)
+/// A footprint of the libraries of the library tables (`Lib:Name` -> the folder the row nicknamed `Lib` names, `/Name.kicad_mod`) in the editable type, with
+/// every graphic, text, attribute and pad layer the file holds (`eda_kicad::parse_library_footprint`, the reader behind Import -- the engine's own loader
+/// keeps only pads and a courtyard) and named `Lib:Name`, the key the library tree shows it under.
+fn installed_footprint_in<S: LibSource + ?Sized>(src: &S, name: &str) -> Option<LibraryFootprint> {
+    crate::library_search::installed_footprint(src, name)
 }
 
-/// A symbol of KiCad's installed libraries (`Lib:Name` in `<root>/Lib.kicad_sym`) in the editable type: units, body styles, keywords and footprint
-/// filters as the file has them. Only that symbol (and the ones it extends) is cut out of the file and parsed -- a library of hundreds of symbols is
-/// scanned once for the chooser and kept (`library_search::symbol_lib`), never parsed whole to open one of them.
-fn installed_symbol_in(root: &Path, lib_id: &str) -> Option<LibrarySymbol> {
-    if !path_safe(lib_id.split_once(':')?.0) || !path_safe(lib_id.split_once(':')?.1) {
+/// A symbol of the libraries of the library tables (`Lib:Name` in the file the row nicknamed `Lib` names) in the editable type: units, body styles, keywords
+/// and footprint filters as the file has them. Only that symbol (and the ones it extends) is cut out of the file and parsed -- a library of hundreds of
+/// symbols is scanned once for the chooser and kept (`library_search::symbol_lib`), never parsed whole to open one of them.
+fn installed_symbol_in<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Option<LibrarySymbol> {
+    if !path_safe(lib_id.split_once(':')?.1) {
         return None;
     }
-    crate::library_search::installed_symbol(root, lib_id).map(|(sym, _)| sym)
+    crate::library_search::installed_symbol(src, lib_id).map(|(sym, _)| sym)
 }
 
 /// A footprint by name from the project library, else KiCad's installed libraries, else whatever the model resolves it to (intent, a loaded
@@ -42,8 +43,8 @@ fn footprint_any(dir: &Path, name: &str) -> Result<(LibraryFootprint, bool), Vec
     if let Some(fp) = design.footprint_library.as_ref().and_then(|l| l.by_name(name)) {
         return Ok((fp.clone(), true));
     }
-    // KiCad's installed libraries come before what the board's own model resolved the name to: that is the pad-only copy of the same file.
-    if let Some(fp) = installed_footprint_in(&eda_kicad::default_footprint_library_root(), name) {
+    // The libraries of the library tables come before what the board's own model resolved the name to: that is the pad-only copy of the same file.
+    if let Some(fp) = installed_footprint_in(&*crate::library_tables::libs(dir, Kind::Footprint), name) {
         return Ok((fp, false));
     }
     resolve_footprint(&model, name)
@@ -69,16 +70,21 @@ fn resolve_footprint(model: &ConstraintModel, name: &str) -> Option<eda_model::F
 /// A symbol by `lib_id` from the project library, else KiCad's installed libraries, else the resolved one (the board's model, the builtin table).
 fn symbol_any(dir: &Path, lib_id: &str) -> Result<(LibrarySymbol, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    symbol_in(&design, &model, lib_id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the project library or anything it loads")])
+    symbol_in(dir, &design, &model, lib_id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the project library or anything it loads")])
 }
 
 /// [`symbol_any`]'s lookup over a design and model that are already loaded (a caller that resolves many symbols loads the board once).
-pub(crate) fn symbol_in(design: &eda_model::ir::Design, model: &ConstraintModel, lib_id: &str) -> Option<(LibrarySymbol, bool)> {
+pub(crate) fn symbol_in(dir: &Path, design: &eda_model::ir::Design, model: &ConstraintModel, lib_id: &str) -> Option<(LibrarySymbol, bool)> {
+    symbol_in_libs(&*crate::library_tables::libs(dir, Kind::Symbol), design, model, lib_id)
+}
+
+/// [`symbol_in`] over symbol libraries already read (a caller that resolves many symbols reads the tables once).
+pub(crate) fn symbol_in_libs<S: LibSource + ?Sized>(libs: &S, design: &eda_model::ir::Design, model: &ConstraintModel, lib_id: &str) -> Option<(LibrarySymbol, bool)> {
     if let Some(sym) = design.symbol_library.as_ref().and_then(|l| l.by_lib_id(lib_id)) {
         return Some((sym.clone(), true));
     }
-    // The installed library file first: the builtin table's hand-ported `Device:R` is a stand-in for it.
-    if let Some(sym) = installed_symbol_in(&eda_kicad::default_symbol_library_root(), lib_id) {
+    // The library file of the tables first: the builtin table's hand-ported `Device:R` is a stand-in for it.
+    if let Some(sym) = installed_symbol_in(libs, lib_id) {
         return Some((sym, false));
     }
     model.symbol_of(lib_id).map(|s| {

@@ -111,8 +111,9 @@ pub fn export_symbols(dir: &Path, body: &[u8]) -> Value {
         let more = if boxes.len() > shown.len() { format!(" and {} more", boxes.len() - shown.len()) } else { String::new() };
         skipped.push(format!("{} drawn as plain boxes, with no library symbol: {}{more}", if boxes.len() == 1 { "1 symbol is".to_string() } else { format!("{} symbols are", boxes.len()) }, shown.join(", ")));
     }
+    let libs = crate::library_tables::libs(dir, crate::library_index::Kind::Symbol);
     for id in ids {
-        match crate::library_api::symbol_in(&design, &model, &id) {
+        match crate::library_api::symbol_in_libs(&*libs, &design, &model, &id) {
             Some((sym, _)) => found.push((id, sym)),
             None => skipped.push(format!("{id}: no symbol with this lib_id in the project library or anything it loads")),
         }

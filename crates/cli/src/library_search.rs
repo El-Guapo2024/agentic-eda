@@ -23,7 +23,7 @@
 //! A word may carry `*` and `?` wildcards. KiCad's other two matchers -- the regular expression (`/pattern/`) and the relational
 //! one (`voltage>3.3`) -- are not ported; such a word is searched as the plain text it is.
 
-use crate::library_index::{legal_library_name, libraries_in, modified, Kind};
+use crate::library_index::{legal_library_name, libraries_in, modified, Kind, LibSource};
 use eda_kicad::{FootprintSummary, SymbolSummary};
 use eda_model::ir::{LibraryFootprint, LibrarySymbol};
 use serde_json::{json, Value};
@@ -299,21 +299,20 @@ fn footprint_cache() -> &'static FootprintCache {
     C.get_or_init(Default::default)
 }
 
-fn symbol_path(root: &Path, lib: &str) -> PathBuf {
-    root.join(format!("{lib}.kicad_sym"))
+/// The file of symbol library `lib`.
+fn symbol_path<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<PathBuf, String> {
+    src.lib_path(Kind::Symbol, lib)
 }
 
-fn footprint_dir(root: &Path, lib: &str) -> PathBuf {
-    root.join(format!("{lib}.pretty"))
+/// The folder of footprint library `lib`.
+fn footprint_dir<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<PathBuf, String> {
+    src.lib_path(Kind::Footprint, lib)
 }
 
-/// The index of symbol library `lib` under `root`, built if it is not cached (or the file changed since): one read of the file and one pass
+/// The index of symbol library `lib` of a source, built if it is not cached (or the file changed since): one read of the file and one pass
 /// over its text.
-pub(crate) fn symbol_lib(root: &Path, lib: &str) -> Result<Arc<SymbolLib>, String> {
-    if !legal_library_name(lib) {
-        return Err(format!("{lib:?} is not a library name"));
-    }
-    let path = symbol_path(root, lib);
+pub(crate) fn symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Arc<SymbolLib>, String> {
+    let path = symbol_path(src, lib)?;
     let stamp = modified(&path);
     if stamp.is_none() {
         return Err(format!("no library {lib:?} is installed"));
@@ -336,18 +335,15 @@ pub(crate) fn symbol_lib(root: &Path, lib: &str) -> Result<Arc<SymbolLib>, Strin
 }
 
 /// The cached index of a symbol library, if there is a fresh one.
-fn cached_symbol_lib(root: &Path, lib: &str) -> Option<Arc<SymbolLib>> {
-    let path = symbol_path(root, lib);
+fn cached_symbol_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Option<Arc<SymbolLib>> {
+    let path = symbol_path(src, lib).ok()?;
     let hit = lock(symbol_cache()).get(&path).cloned()?;
     (hit.stamp == modified(&path)).then_some(hit)
 }
 
-/// The index of footprint library `lib` under `root`: every `.kicad_mod` of the `.pretty` directory read once and scanned.
-pub(crate) fn footprint_lib(root: &Path, lib: &str) -> Result<Arc<FootprintLib>, String> {
-    if !legal_library_name(lib) {
-        return Err(format!("{lib:?} is not a library name"));
-    }
-    let dir = footprint_dir(root, lib);
+/// The index of footprint library `lib` of a source: every `.kicad_mod` of the `.pretty` directory read once and scanned.
+pub(crate) fn footprint_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Result<Arc<FootprintLib>, String> {
+    let dir = footprint_dir(src, lib)?;
     let stamp = modified(&dir);
     if stamp.is_none() {
         return Err(format!("no library {lib:?} is installed"));
@@ -379,46 +375,46 @@ pub(crate) fn footprint_lib(root: &Path, lib: &str) -> Result<Arc<FootprintLib>,
     Ok(built)
 }
 
-fn cached_footprint_lib(root: &Path, lib: &str) -> Option<Arc<FootprintLib>> {
-    let dir = footprint_dir(root, lib);
+fn cached_footprint_lib<S: LibSource + ?Sized>(src: &S, lib: &str) -> Option<Arc<FootprintLib>> {
+    let dir = footprint_dir(src, lib).ok()?;
     let hit = lock(footprint_cache()).get(&dir).cloned()?;
     (hit.stamp == modified(&dir)).then_some(hit)
 }
 
-/// Index library `lib` of `kind` under `root` (a no-op when it is indexed already).
-fn index_lib(kind: Kind, root: &Path, lib: &str) -> Result<(), String> {
+/// Index library `lib` of `kind` of a source (a no-op when it is indexed already).
+fn index_lib<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> Result<(), String> {
     match kind {
-        Kind::Symbol => symbol_lib(root, lib).map(|_| ()),
-        Kind::Footprint => footprint_lib(root, lib).map(|_| ()),
+        Kind::Symbol => symbol_lib(src, lib).map(|_| ()),
+        Kind::Footprint => footprint_lib(src, lib).map(|_| ()),
     }
 }
 
-fn indexed(kind: Kind, root: &Path, lib: &str) -> bool {
+fn indexed<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str) -> bool {
     match kind {
-        Kind::Symbol => cached_symbol_lib(root, lib).is_some(),
-        Kind::Footprint => cached_footprint_lib(root, lib).is_some(),
+        Kind::Symbol => cached_symbol_lib(src, lib).is_some(),
+        Kind::Footprint => cached_footprint_lib(src, lib).is_some(),
     }
 }
 
-/// Index every library of `kind` under `root`, one after the other.
-pub(crate) fn index_all(kind: Kind, root: &Path) {
-    for lib in libraries_in(kind, root).iter() {
-        let _ = index_lib(kind, root, &lib.name);
+/// Index every library of `kind` of a source, one after the other.
+pub(crate) fn index_all<S: LibSource + ?Sized>(kind: Kind, src: &S) {
+    for lib in libraries_in(kind, src).iter() {
+        let _ = index_lib(kind, src, &lib.name);
         std::thread::yield_now();
     }
 }
 
-type Builds = Mutex<HashMap<(Kind, PathBuf), Arc<AtomicBool>>>;
+type Builds = Mutex<HashMap<(Kind, String), Arc<AtomicBool>>>;
 
 fn builds() -> &'static Builds {
     static B: OnceLock<Builds> = OnceLock::new();
     B.get_or_init(Default::default)
 }
 
-/// Start the thread that indexes every library of `kind` under `root`, unless one is running or has run; the flag it returns is set when
-/// it is done.
-fn ensure_background_index(kind: Kind, root: &Path) -> Arc<AtomicBool> {
-    let key = (kind, root.to_path_buf());
+/// Start the thread that indexes every library of `kind` of a source, unless one is running or has run for this very set of libraries; the flag it
+/// returns is set when it is done.
+fn ensure_background_index<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Arc<AtomicBool> {
+    let key = (kind, src.fingerprint(kind));
     let mut all = lock(builds());
     if let Some(done) = all.get(&key) {
         return done.clone();
@@ -426,9 +422,9 @@ fn ensure_background_index(kind: Kind, root: &Path) -> Arc<AtomicBool> {
     let done = Arc::new(AtomicBool::new(false));
     all.insert(key.clone(), done.clone());
     drop(all);
-    let (root, flag) = (root.to_path_buf(), done.clone());
+    let (owned, flag) = (src.boxed(), done.clone());
     let spawned = std::thread::Builder::new().name("library-search-index".into()).spawn(move || {
-        index_all(kind, &root);
+        index_all(kind, &*owned);
         flag.store(true, AtomicOrdering::Release);
     });
     if spawned.is_err() {
@@ -488,14 +484,13 @@ fn footprint_item(name: &str, f: &FootprintSummary, score: Option<u32>) -> Value
 
 /// `GET /api/library/entries?kind=&lib=`: the items of one library with their descriptions, in the tree's order (names sorted naturally),
 /// narrowed by the footprint chooser's filters. `{"lib", "description"?, "entries": [..]}` or `{"error"}`.
-pub(crate) fn entries_in(kind: Kind, root: &Path, lib: &str, filter: &Filter) -> Value {
-    let described = library_descriptions(kind, root);
+pub(crate) fn entries_in<S: LibSource + ?Sized>(kind: Kind, src: &S, lib: &str, filter: &Filter) -> Value {
     let mut v = match kind {
-        Kind::Symbol => match symbol_lib(root, lib) {
+        Kind::Symbol => match symbol_lib(src, lib) {
             Ok(idx) => json!({ "lib": lib, "entries": idx.summaries.iter().filter(|s| !(filter.exclude_power && s.power)).map(|s| symbol_item(s, None)).collect::<Vec<_>>() }),
             Err(e) => return json!({ "error": e }),
         },
-        Kind::Footprint => match footprint_lib(root, lib) {
+        Kind::Footprint => match footprint_lib(src, lib) {
             Ok(idx) => json!({
                 "lib": lib,
                 "entries": idx.names.iter().zip(&idx.infos).filter(|(n, i)| filter.footprint_passes(lib, n, i.numbered_pads)).map(|(n, i)| footprint_item(n, i, None)).collect::<Vec<_>>(),
@@ -503,14 +498,14 @@ pub(crate) fn entries_in(kind: Kind, root: &Path, lib: &str, filter: &Filter) ->
             Err(e) => return json!({ "error": e }),
         },
     };
-    if let Some(d) = described.get(lib) {
+    if let Some(d) = src.describe(kind, lib) {
         v["description"] = json!(d);
     }
     v
 }
 
-pub(crate) fn entries(kind: Kind, lib: &str, filter: &Filter) -> Value {
-    entries_in(kind, &kind.root(), lib, filter)
+pub(crate) fn entries(dir: &Path, kind: Kind, lib: &str, filter: &Filter) -> Value {
+    entries_in(kind, &*crate::library_tables::libs(dir, kind), lib, filter)
 }
 
 /// The most items one search sends.
@@ -529,9 +524,9 @@ struct Hit {
 /// While the thread that indexes every library has not finished the answer is `"status": "indexing"` with `indexed` of `total` libraries done
 /// and the matches among those; an empty query only starts that thread. `matches` counts every match, `truncated` says the items sent are
 /// the best `limit` of them.
-pub(crate) fn search_in(kind: Kind, root: &Path, query: &str, filter: &Filter, limit: usize) -> Value {
-    let finished = ensure_background_index(kind, root);
-    let libs = libraries_in(kind, root);
+pub(crate) fn search_in<S: LibSource + ?Sized>(kind: Kind, src: &S, query: &str, filter: &Filter, limit: usize) -> Value {
+    let finished = ensure_background_index(kind, src);
+    let libs = libraries_in(kind, src);
     let matchers = parse_query(query);
     // Nothing installed is nothing to wait for.
     let done = finished.load(AtomicOrdering::Acquire) || libs.is_empty();
@@ -542,13 +537,13 @@ pub(crate) fn search_in(kind: Kind, root: &Path, query: &str, filter: &Filter, l
     let mut fp_libs: Vec<Option<Arc<FootprintLib>>> = Vec::new();
     for (li, info) in libs.iter().enumerate() {
         // A library the thread has not reached is skipped while it runs; once it is done, one it lacks (changed on disk since) is indexed here.
-        let have = indexed(kind, root, &info.name) || (done && index_lib(kind, root, &info.name).is_ok());
+        let have = indexed(kind, src, &info.name) || (done && index_lib(kind, src, &info.name).is_ok());
         if have {
             indexed_count += 1;
         }
         match kind {
-            Kind::Symbol => sym_libs.push(if have { cached_symbol_lib(root, &info.name) } else { None }),
-            Kind::Footprint => fp_libs.push(if have { cached_footprint_lib(root, &info.name) } else { None }),
+            Kind::Symbol => sym_libs.push(if have { cached_symbol_lib(src, &info.name) } else { None }),
+            Kind::Footprint => fp_libs.push(if have { cached_footprint_lib(src, &info.name) } else { None }),
         }
         if matchers.is_empty() {
             continue;
@@ -599,7 +594,6 @@ pub(crate) fn search_in(kind: Kind, root: &Path, query: &str, filter: &Filter, l
         });
         groups.get_mut(&h.lib).expect("just inserted").push(h);
     }
-    let described = library_descriptions(kind, root);
     let libraries: Vec<Value> = order
         .iter()
         .map(|&li| {
@@ -615,7 +609,7 @@ pub(crate) fn search_in(kind: Kind, root: &Path, query: &str, filter: &Filter, l
                 })
                 .collect();
             let mut lib = json!({ "name": name, "score": groups[&li][0].score, "items": items });
-            if let Some(d) = described.get(name) {
+            if let Some(d) = src.describe(kind, name) {
                 lib["description"] = json!(d);
             }
             lib
@@ -632,20 +626,20 @@ pub(crate) fn search_in(kind: Kind, root: &Path, query: &str, filter: &Filter, l
     })
 }
 
-pub(crate) fn search(kind: Kind, query: &str, filter: &Filter, limit: usize) -> Value {
-    search_in(kind, &kind.root(), query, filter, limit)
+pub(crate) fn search(dir: &Path, kind: Kind, query: &str, filter: &Filter, limit: usize) -> Value {
+    search_in(kind, &*crate::library_tables::libs(dir, kind), query, filter, limit)
 }
 
 /// A symbol of the installed libraries, cut out of its library file and parsed alone: the editable definition (units, body styles, keywords,
 /// footprint filters) named `Lib:Name`, and what the index knows of it (default footprint, datasheet, value).
-pub(crate) fn installed_symbol(root: &Path, lib_id: &str) -> Option<(LibrarySymbol, SymbolSummary)> {
+pub(crate) fn installed_symbol<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Option<(LibrarySymbol, SymbolSummary)> {
     let (lib, name) = lib_id.split_once(':')?;
-    if !legal_library_name(lib) || !legal_library_name(name) {
+    if !legal_library_name(name) {
         return None;
     }
-    let idx = symbol_lib(root, lib).ok()?;
+    let idx = symbol_lib(src, lib).ok()?;
     let summary = idx.find(name)?.clone();
-    let text = std::fs::read_to_string(symbol_path(root, lib)).ok()?;
+    let text = std::fs::read_to_string(symbol_path(src, lib).ok()?).ok()?;
     let mut sym = eda_kicad::parse_symbol(&text, &idx.summaries, name)?;
     sym.lib_id = lib_id.to_string();
     sym.assign_missing_ids();
@@ -654,9 +648,9 @@ pub(crate) fn installed_symbol(root: &Path, lib_id: &str) -> Option<(LibrarySymb
 
 /// `GET /api/library/details?kind=&id=Lib:Name`: what the chooser's preview and description pane show for the selected item -- its fields and
 /// its drawing, loaded now and only this one. `{"id", ..., "symbol" | "footprint": <editable definition>}` or `{"error"}`.
-pub(crate) fn details_in(kind: Kind, root: &Path, id: &str) -> Value {
+pub(crate) fn details_in<S: LibSource + ?Sized>(kind: Kind, src: &S, id: &str) -> Value {
     match kind {
-        Kind::Symbol => match installed_symbol(root, id) {
+        Kind::Symbol => match installed_symbol(src, id) {
             Some((sym, s)) => json!({
                 "id": id,
                 "description": s.description,
@@ -677,7 +671,7 @@ pub(crate) fn details_in(kind: Kind, root: &Path, id: &str) -> Value {
         },
         Kind::Footprint => {
             let Some((lib, name)) = id.split_once(':') else { return json!({ "error": format!("{id:?} is not a Lib:Name") }) };
-            let (Some(fp), Ok(idx)) = (installed_footprint(root, id), footprint_lib(root, lib)) else { return json!({ "error": format!("no footprint {id:?} in the installed libraries") }) };
+            let (Some(fp), Ok(idx)) = (installed_footprint(src, id), footprint_lib(src, lib)) else { return json!({ "error": format!("no footprint {id:?} in the installed libraries") }) };
             let at = idx.names.iter().position(|n| n == name);
             let info = at.map(|i| idx.infos[i].clone()).unwrap_or_default();
             json!({ "id": id, "description": info.description, "tags": info.tags, "pads": info.pads, "numbered_pads": info.numbered_pads, "footprint": fp })
@@ -685,18 +679,19 @@ pub(crate) fn details_in(kind: Kind, root: &Path, id: &str) -> Value {
     }
 }
 
-pub(crate) fn details(kind: Kind, id: &str) -> Value {
-    details_in(kind, &kind.root(), id)
+pub(crate) fn details(dir: &Path, kind: Kind, id: &str) -> Value {
+    details_in(kind, &*crate::library_tables::libs(dir, kind), id)
 }
 
 /// A footprint of the installed libraries (`Lib:Name` -> `<root>/Lib.pretty/Name.kicad_mod`) in the editable type, every graphic, text, attribute
 /// and pad layer included, named `Lib:Name`.
-pub(crate) fn installed_footprint(root: &Path, name: &str) -> Option<LibraryFootprint> {
+pub(crate) fn installed_footprint<S: LibSource + ?Sized>(src: &S, name: &str) -> Option<LibraryFootprint> {
     let (lib, item) = name.split_once(':')?;
-    if !legal_library_name(lib) || !legal_library_name(item) {
+    if !legal_library_name(item) || item.is_empty() {
         return None;
     }
-    let text = std::fs::read_to_string(eda_kicad::find_footprint_file(root, name)?).ok()?;
+    let file = footprint_dir(src, lib).ok()?.join(format!("{item}.kicad_mod"));
+    let text = std::fs::read_to_string(file).ok()?;
     let mut fp = eda_kicad::parse_library_footprint(&text).ok()?.footprint;
     fp.name = name.to_string();
     fp.assign_missing_ids();

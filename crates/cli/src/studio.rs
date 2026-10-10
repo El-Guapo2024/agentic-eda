@@ -679,15 +679,16 @@ fn handle(
         // The library editors' read-only lookups of ANY symbol / footprint (project entry or resolved), for Duplicate, Save Copy As, Copy.
         ("GET", "/api/library/symbol") => respond(stream, "200 OK", "application/json", crate::library_api::symbol(dir, &query_value(target, "lib_id")).to_string().as_bytes()),
         ("GET", "/api/library/footprint") => respond(stream, "200 OK", "application/json", crate::library_api::footprint(dir, &query_value(target, "name")).to_string().as_bytes()),
-        // The installed KiCad libraries (155 footprint, 223 symbol libraries) for the library trees: names only, one library at a time, cached
-        // (`crate::library_index`) -- the libraries are too big to send or parse whole.
+        // The libraries of the board's library tables -- KiCad's installed ones (155 footprint, 223 symbol libraries) through the global table, the
+        // board's own through its project table -- for the library trees: names only, one library at a time, cached (`crate::library_index`); the
+        // libraries are too big to send or parse whole.
         ("GET", "/api/library/index" | "/api/library/items" | "/api/library/all") => {
             let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
                 None => json!({ "error": "kind is footprint or symbol" }),
                 Some(kind) => match path {
-                    "/api/library/index" => crate::library_index::libraries(kind),
-                    "/api/library/items" => crate::library_index::items(kind, &query_value(target, "lib")),
-                    _ => crate::library_index::all(kind),
+                    "/api/library/index" => crate::library_index::libraries(dir, kind),
+                    "/api/library/items" => crate::library_index::items(dir, kind, &query_value(target, "lib")),
+                    _ => crate::library_index::all(dir, kind),
                 },
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
@@ -700,12 +701,12 @@ fn handle(
                 Some(kind) => {
                     let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power"));
                     match path {
-                        "/api/library/entries" => crate::library_search::entries(kind, &query_value(target, "lib"), &filter),
+                        "/api/library/entries" => crate::library_search::entries(dir, kind, &query_value(target, "lib"), &filter),
                         "/api/library/search" => {
                             let limit = query_value(target, "limit").parse::<usize>().ok().filter(|&n| n > 0).map_or(crate::library_search::SEARCH_LIMIT, |n| n.min(2000));
-                            crate::library_search::search(kind, &query_value(target, "q"), &filter, limit)
+                            crate::library_search::search(dir, kind, &query_value(target, "q"), &filter, limit)
                         }
-                        _ => crate::library_search::details(kind, &query_value(target, "id")),
+                        _ => crate::library_search::details(dir, kind, &query_value(target, "id")),
                     }
                 }
             };
@@ -913,6 +914,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         .unwrap_or_default();
     let net_of: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let pl = design.placement.as_ref();
+    // The footprint libraries the parts' bodies are looked up in (the board's library tables), read when the first part needs them.
+    let body_libs = crate::body_api::Libs::of_board(dir);
     let mut parts = Vec::new();
     for part in &model.parts {
         let fp = pl.and_then(|pl| pl.footprints.iter().find(|f| f.id == part.reference));
@@ -957,7 +960,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
-            p["body"] = json!(crate::body_api::placed_body(&design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            p["body"] = json!(crate::body_api::placed_body(&body_libs, &design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             p["pads"] = json!(pads);
             // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
             // there are any: `Design::pad_zone_facts` resolves an edit made on the board over an import's and a published library's.
