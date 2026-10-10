@@ -354,32 +354,24 @@ export interface MovePreview {
 }
 
 /**
- * The 3D viewer's own view-option toggles -- a local-UI-state mirror of
- * KiCad's Preferences > 3D Viewer > Appearance per-layer visibility
- * bitset (BOARD_ADAPTER::GetVisibleLayers/SetVisibleLayers; see
- * PARITY-3d.md for the full list and which of its ~27 flags this app
- * does/doesn't have a data model for).
+ * The 3D viewer's own settings: the Appearance manager's rows (the layer tree) and the viewer's switches. A mirror of KiCad's 3D viewer settings
+ * (EDA_3D_VIEWER_SETTINGS: the visible-layers bitset, the colours of the theme, `use_stackup_colors`, `use_board_editor_copper_colors`); the rows, their defaults and
+ * the colours are kicad-port/appearance3d.ts's.
  */
 export interface Viewer3DOptions {
-  /** Master "show any part body" switch -- real KiCad has no single flag like this (show_footprints_normal/virtual/insert/etc are independent); kept as this app's own pre-existing umbrella on top of the new showTHT/showSMD split below, both of which must also be true for a given part's body to actually show. */
-  showComponents: boolean;
-  /** render.show_footprints_normal's rough equivalent -- a part counts as "TH" here if it has at least one through-hole pad (`pad.th`). */
-  showTHT: boolean;
-  /** The SMD counterpart: a part with no through-hole pads at all. */
-  showSMD: boolean;
-  showSilkscreen: boolean;
-  showSolderMask: boolean;
-  /** render.show_solderpaste -- new in this port (phase 3); see scene.ts's addSolderPaste. */
-  showSolderPaste: boolean;
-  /** render.show_board_body -- the dielectric slab itself (and, following it, both solder-mask layers, which have nothing to tint without it). Independent of showSilkscreen/showComponents, same as source. */
-  showBoardBody: boolean;
-  /** render.opengl_show_model_bbox, default false in source too -- a wireframe box per placed part, sized to its courtyard footprint and body height. */
-  showBoundingBoxes: boolean;
-  /** True = viewing the board flipped (as if turned over a horizontal hinge) so the bottom side reads right-way-up. A camera action (TrackballCamera.flip(), see kicad-port/camera3d.ts), not a geometry edit -- this flag is read only to know how many times to call it (see Viewer3D.tsx's prevFlippedRef). */
+  /** Row id (kicad-port/appearance3d.ts `ROWS`: `board`, `copper_top`, `th_models`, `user_3`, `zones`, ...) -> shown. A row that is not here has its KiCad default. */
+  layers: Record<string, boolean>;
+  /** Row id -> the colour the person set with its swatch, `#rrggbb[aa]`. A row that is not here has the theme's (or the stackup's) colour. */
+  colors: Record<string, string>;
+  /** `m_UseStackupColors` (default on in KiCad): the board body, silkscreen, solder mask and copper finish take the colours of Board Setup's physical stackup. */
+  useStackupColors: boolean;
+  /** `render.use_board_editor_copper_colors`: copper is drawn in the PCB editor's colours for F.Cu and B.Cu. */
+  useEditorCopperColors: boolean;
+  /** True = viewing the board flipped (as if turned over a horizontal hinge) so the bottom side reads right-way-up. A camera action (TrackballCamera.animateFlip(), see kicad-port/camera3d.ts), not a geometry edit -- this flag is read only to know how many times to call it (see Viewer3D.tsx's prevFlippedRef). */
   flipped: boolean;
   /** True = a real orthographic projection (kicad-port/camera3d.ts's TrackballCamera, a faithful CAMERA::ToggleProjection port -- see that file). */
   orthographic: boolean;
-  /** True = show GET /api/board.glb's real KiCad-rendered board (real 3D models, kicad-cli's own colors/materials) in place of this app's own procedural scene. Viewer3D falls back to the procedural scene regardless of this flag when the GLB hasn't loaded (still fetching, or the board/kicad-cli export failed) -- there's nothing to show otherwise. Defaults on; the user can still turn it off to see the lighter procedural scene. */
+  /** True = "exact export": show GET /api/board.glb's whole board as kicad-cli renders it (every model through OpenCascade, seconds to minutes) in place of the live scene. The live scene is the default: it loads each part's KiCad 3D model by itself (components/viewer3d/modelCache.ts, GET /api/3dmodel) and has them in seconds. Viewer3D falls back to the live scene when the GLB hasn't loaded (still being built, or failed). */
   kicadModels: boolean;
 }
 
@@ -393,17 +385,13 @@ export interface Viewer3DOptions {
 export type GlbStatus = "idle" | "pending" | "loaded" | "failed";
 
 export const DEFAULT_VIEWER3D_OPTIONS: Viewer3DOptions = {
-  showComponents: true,
-  showTHT: true,
-  showSMD: true,
-  showSilkscreen: true,
-  showSolderMask: true,
-  showSolderPaste: true,
-  showBoardBody: true,
-  showBoundingBoxes: false,
+  layers: {},
+  colors: {},
+  useStackupColors: true,
+  useEditorCopperColors: false,
   flipped: false,
   orthographic: false,
-  kicadModels: true,
+  kicadModels: false,
 };
 
 /**

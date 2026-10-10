@@ -109,8 +109,37 @@ pub fn serve(dir: &Path, port: u16, ui: Option<PathBuf>) -> Result<(), Vec<Check
     let route_session: crate::route_api::RouteCell = Mutex::new(None);
     // Where DRC, ERC, statistics and the exports run -- see `offload`.
     let lane = Arc::new(Lane::default());
-    for stream in listener.incoming() {
-        let Ok(mut stream) = stream else { continue };
+    // A browser opens connections ahead of the requests it will send on them (Chrome's preconnect) and this loop reads one request at a time: a connection that has
+    // said nothing yet held every request behind it until the browser closed it -- 16 s, measured, with the 3D models of a board waiting. Each connection is
+    // waited on by a thread of its own and joins the loop when the first bytes of its request are there.
+    // The 3D model routes need nothing of the loop, so the connection's own thread answers them too: a model is not made to wait behind a slow `/api/state`.
+    let (ready, requests) = std::sync::mpsc::channel::<TcpStream>();
+    let (model_dir, model_lane) = (dir.to_path_buf(), lane.clone());
+    std::thread::Builder::new()
+        .name("accept".into())
+        .spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let (ready, dir, lane) = (ready.clone(), model_dir.clone(), model_lane.clone());
+                std::thread::spawn(move || {
+                    let mut head = [0u8; 32];
+                    let n = stream.peek(&mut head).unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    if head[..n].starts_with(b"GET /api/3dmodel") || head[..n].starts_with(b"POST /api/3dmodel/") {
+                        let done = read_request(&stream).and_then(|(method, target, body)| model_routes(&mut stream, &method, &target, &body, &dir, &lane, true).unwrap_or(Err("not a model route".into())));
+                        if let Err(e) = done {
+                            let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
+                        }
+                        return;
+                    }
+                    let _ = ready.send(stream);
+                });
+            }
+        })
+        .map_err(|e| vec![CheckResult::fail("serve_thread", "accept", e.to_string())])?;
+    for mut stream in requests {
         if let Err(e) = handle(&mut stream, dir, &job, &schematic, &glb_job, &route_session, ui_root.as_deref(), &lane) {
             let _ = respond(&mut stream, "500 Internal Server Error", "text/plain", e.as_bytes());
         }
@@ -140,71 +169,10 @@ fn serve_file(stream: &mut TcpStream, root: &Path, rel: &str) -> Result<(), Stri
     }
 }
 
-/// Where KiCad's own installed 3D model library lives, in precedence
-/// order: `EDA_KICAD_3DMODELS_DIR`, then the well-known macOS install
-/// path -- same "env var, then a sane default" shape as [`ui_dir`].
-fn kicad_3dmodels_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("EDA_KICAD_3DMODELS_DIR") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport/3dmodels")
-}
-
-/// GET /api/3dmodel?name=<Lib.3dshapes/File.ext> -- serves one file out
-/// of KiCad's own installed 3D model library, read-only, format-
-/// agnostic (whatever bytes are on disk at that path). `name` is
-/// rejected outright if it contains `..` or is itself an absolute path;
-/// what's left is resolved against the library root and canonicalized,
-/// the same traversal protection [`serve_file`] already uses for the UI
-/// directory, so nothing outside that one directory tree is ever
-/// readable through this route. Not percent-decoded: real KiCad
-/// library/file names are plain ASCII (letters, digits, `_.-` and the
-/// one literal `/` between library and file) with nothing that needs
-/// escaping in a query string, so the caller sends `name` unencoded
-/// rather than this needing a general percent-decoder for one path.
-///
-/// The task this route was built for asked for `.wrl` (VRML) files
-/// specifically, loaded client-side with three's VRMLLoader -- checked
-/// directly against the KiCad 10.99.0 install on this machine
-/// (`/Applications/KiCad/KiCad.app`, `EDA_KICAD_3DMODELS_DIR` unset) and
-/// it ships zero `.wrl` files: 7238 `.step` files and no VRML anywhere
-/// under 3dmodels/. Modern KiCad (this one included) bundles STEP, not
-/// VRML, for its footprint 3D models. Three.js has no STEP loader (it's
-/// a full CAD B-rep format, not a mesh format a mesh loader can read),
-/// so this route is real and correct but nothing in this app's frontend
-/// calls it yet -- wiring VRMLLoader up against a library that has no
-/// `.wrl` files would 404 on every single model. Left in place as
-/// working, generically useful (format-agnostic) infrastructure for
-/// whatever actually converts/serves real geometry later, rather than
-/// building a client-side loader that can only ever fail here.
-fn serve_3dmodel(stream: &mut TcpStream, name: &str) -> Result<(), String> {
-    if name.is_empty() || name.contains("..") || Path::new(name).is_absolute() {
-        return respond(stream, "400 Bad Request", "text/plain", b"invalid model name");
-    }
-    let root = kicad_3dmodels_dir();
-    let candidate = root.join(name);
-    let resolved = candidate.canonicalize().ok().zip(root.canonicalize().ok()).filter(|(p, r)| p.starts_with(r)).map(|(p, _)| p);
-    match resolved.and_then(|p| std::fs::read(&p).map(|b| (p, b)).ok()) {
-        // Content-Type by actual extension, not assumed VRML -- this
-        // library is all .step right now (see the doc comment above).
-        Some((p, bytes)) => {
-            let kind = match p.extension().and_then(|e| e.to_str()).unwrap_or("") {
-                "wrl" => "model/vrml",
-                "step" | "stp" => "model/step",
-                _ => "application/octet-stream",
-            };
-            respond(stream, "200 OK", kind, &bytes)
-        }
-        None => respond(stream, "404 Not Found", "text/plain", b"model not found"),
-    }
-}
-
 /// Where the real `kicad-cli` binary lives -- `EDA_KICAD_CLI` if set
 /// (it is not on PATH in this dev environment), else KiCad's own
 /// default macOS install location. Same "env var, then a sane default"
-/// shape as `kicad_3dmodels_dir`/`ui_dir`.
+/// shape as `ui_dir`.
 fn kicad_cli_path() -> PathBuf {
     if let Ok(p) = std::env::var("EDA_KICAD_CLI") {
         if !p.is_empty() {
@@ -524,22 +492,13 @@ fn offload(stream: &TcpStream, lane: &Arc<Lane>, dir: &Path, job: &Job, route: &
         .map_err(|e| e.to_string())
 }
 
-#[allow(clippy::too_many_arguments)] // mirrors the existing job/schematic/glb_job cells this one more (route_session) joins.
-fn handle(
-    stream: &mut TcpStream,
-    dir: &Path,
-    job: &Job,
-    schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
-    glb_job: &GlbJob,
-    route_session: &crate::route_api::RouteCell,
-    ui_root: Option<&Path>,
-    lane: &Arc<Lane>,
-) -> Result<(), String> {
+/// One request off a connection: its method, its target (path and query) and its body.
+fn read_request(stream: &TcpStream) -> Result<(String, String, Vec<u8>), String> {
     let mut reader = BufReader::new(stream.try_clone().map_err(|e| e.to_string())?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line).map_err(|e| e.to_string())?;
     let mut parts = request_line.split_whitespace();
-    let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
+    let (method, target) = (parts.next().unwrap_or("").to_string(), parts.next().unwrap_or("/").to_string());
     let mut length = 0usize;
     loop {
         let mut header = String::new();
@@ -554,7 +513,61 @@ fn handle(
     }
     let mut body = vec![0u8; length.min(1 << 20)];
     reader.read_exact(&mut body).map_err(|e| e.to_string())?;
+    Ok((method, target, body))
+}
+
+/// The 3D model routes (crates/cli/src/model3d_api.rs), or `None` for any other request. They need nothing of the request loop, so a connection's own thread answers
+/// them (`on_own_thread`, see `serve`): a model never waits behind a slow `/api/state`.
+///
+///   - `GET /api/3dmodel?name=..`: one footprint 3D model, read-only, for the 3D view's VRMLLoader: resolved like KiCad does and held to an allow-list; a STEP model is
+///     converted to VRML by kicad-cli in the background and cached. `&wait=1` holds the request until the model is in.
+///   - `POST /api/3dmodel/prepare`: every model of the board at once, queued for one conversion run.
+fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8], dir: &Path, lane: &Arc<Lane>, on_own_thread: bool) -> Option<Result<(), String>> {
+    match (method, target.split('?').next().unwrap_or("/")) {
+        ("GET", "/api/3dmodel") => Some((|| {
+            let store = crate::model3d_api::store(lane);
+            if !crate::model3d_api::wants_wait(target) {
+                let r = crate::model3d_api::reply(dir, target, &store);
+                return respond(stream, r.status, r.kind, &r.body);
+            }
+            if on_own_thread {
+                let r = crate::model3d_api::reply_waiting(dir, target, &store);
+                return respond(stream, r.status, r.kind, &r.body);
+            }
+            // Held until the model is converted, on a thread of its own so the loop goes on (the same hand-off `offload` makes).
+            let mut out = stream.try_clone().map_err(|e| e.to_string())?;
+            let (dir, target) = (dir.to_path_buf(), target.to_string());
+            std::thread::Builder::new()
+                .name("3dmodel-wait".into())
+                .spawn(move || {
+                    let r = crate::model3d_api::reply_waiting(&dir, &target, &store);
+                    let _ = respond(&mut out, r.status, r.kind, &r.body);
+                })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        })()),
+        ("POST", "/api/3dmodel/prepare") => Some(respond(stream, "200 OK", "application/json", crate::model3d_api::prepare(dir, body, &crate::model3d_api::store(lane)).to_string().as_bytes())),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)] // mirrors the existing job/schematic/glb_job cells this one more (route_session) joins.
+fn handle(
+    stream: &mut TcpStream,
+    dir: &Path,
+    job: &Job,
+    schematic: &Mutex<Option<(std::time::SystemTime, String)>>,
+    glb_job: &GlbJob,
+    route_session: &crate::route_api::RouteCell,
+    ui_root: Option<&Path>,
+    lane: &Arc<Lane>,
+) -> Result<(), String> {
+    let (method, target, body) = read_request(stream)?;
+    let (method, target) = (method.as_str(), target.as_str());
     let path = target.split('?').next().unwrap_or("/");
+    if let Some(done) = model_routes(stream, method, target, &body, dir, lane, false) {
+        return done;
+    }
 
     match (method, path) {
         ("GET", "/") => match ui_root {
@@ -570,11 +583,6 @@ fn handle(
             Ok(svg) => respond(stream, "200 OK", "image/svg+xml", svg.as_bytes()),
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
-        ("GET", "/api/3dmodel") => {
-            let query = target.split('?').nth(1).unwrap_or("");
-            let name = query.split('&').find_map(|kv| kv.strip_prefix("name=")).unwrap_or("");
-            serve_3dmodel(stream, name)
-        }
         ("GET", "/api/schematic") => {
             // `?sheet=<id>/<id>/...`: a `/`-joined path of `SheetInstance::id`s
             // from the root down to whichever sheet the Hierarchy panel has
@@ -916,7 +924,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
     let mut parts = Vec::new();
     for part in &model.parts {
         let fp = pl.and_then(|pl| pl.footprints.iter().find(|f| f.id == part.reference));
-        let size = model.footprint_of(part).map(|f| f.courtyard_half()).map(|(w, h)| [w * 2, h * 2]);
+        let resolved = model.footprint_of(part);
+        let size = resolved.as_ref().map(|f| f.courtyard_half()).map(|(w, h)| [w * 2, h * 2]);
         let mut p = json!({
             "ref": part.reference,
             "value": part.value,
@@ -970,6 +979,12 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
             p["body"] = json!(crate::body_api::placed_body(&design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            // The part's 3D models with the placement its footprint gives each, and whether KiCad counts it a through-hole, SMD or virtual model: what the 3D
+            // view loads (`GET /api/3dmodel`) and places. Absent when the footprint names no model: the view then draws the body box.
+            if let Some(models) = resolved.as_ref().and_then(|f| crate::model3d_api::part_json(&model, part, f)) {
+                p["models"] = models["models"].clone();
+                p["kind3d"] = models["kind3d"].clone();
+            }
             p["pads"] = json!(pads);
             // The zone-connection facts a pad or footprint carries (Pad Properties and Footprint Properties' zone fields), only when
             // there are any: `Design::pad_zone_facts` resolves an edit made on the board over an import's and a published library's.

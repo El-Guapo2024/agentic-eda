@@ -18,6 +18,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use eda_model::footprint::Model3d;
 use eda_model::ir::{Side, Um};
 use eda_model::{ConstraintModel, Footprint};
 
@@ -77,7 +78,7 @@ pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String>
         return Err("footprint has no pads this reader could place (missing at/size?)".into());
     }
 
-    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root), courtyard_outlines: vec![] })
+    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root), courtyard_outlines: vec![], models3d: models_from(root) })
 }
 
 /// The `(model "...")` path, verbatim (KiCad writes it with its own
@@ -90,6 +91,50 @@ pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String>
 /// only keeps one courtyard box rather than every graphic.
 pub(crate) fn model_from(root: &[Sexpr]) -> Option<String> {
     sexpr::find(root, "model").and_then(|m| sexpr::txt(m, 1)).map(str::to_string)
+}
+
+/// Every `(model "path" (offset (xyz x y z)) (scale (xyz x y z)) (rotate (xyz x y z)) [(opacity v)] [(hide yes)])` of a footprint, in file order
+/// (`PCB_IO_KICAD_SEXPR_PARSER::parse3DModel`). `offset` is millimetres; the legacy `(at (xyz ..))` form (KiCad before 5) is inches and is
+/// converted, as the parser does. A form with no path is skipped; a missing offset, scale, rotation or opacity is KiCad's default (0, 1, 0, 1).
+/// The placement is kept exactly as the file writes it, whatever side the footprint is on: [`Model3d::flipped_frame`] is the one place that
+/// turns it into the studio's frame for a bottom-side footprint.
+pub fn models_from(root: &[Sexpr]) -> Vec<Model3d> {
+    let xyz = |form: Option<&[Sexpr]>, scale_to_mm: f64| -> Option<[f64; 3]> {
+        let v = sexpr::find(form?, "xyz")?;
+        Some([sexpr::num(v, 1)? * scale_to_mm, sexpr::num(v, 2)? * scale_to_mm, sexpr::num(v, 3)? * scale_to_mm])
+    };
+    sexpr::find_all(root, "model")
+        .filter_map(|m| {
+            let path = sexpr::txt(m, 1).filter(|p| !p.is_empty())?;
+            let offset = xyz(sexpr::find(m, "offset"), 1.0).or_else(|| xyz(sexpr::find(m, "at"), 25.4)).unwrap_or([0.0; 3]);
+            // `(hide)` is a bare token in old files and `(hide yes)` in new ones; `(hide no)` shows the model.
+            let hidden = sexpr::find(m, "hide").is_some_and(|h| sexpr::txt(h, 1).map_or(true, |v| v != "no"));
+            let bare_hide = m.iter().any(|e| e.text() == Some("hide"));
+            Some(Model3d {
+                path: path.to_string(),
+                offset,
+                scale: xyz(sexpr::find(m, "scale"), 1.0).unwrap_or([1.0; 3]),
+                rotate: xyz(sexpr::find(m, "rotate"), 1.0).unwrap_or([0.0; 3]),
+                opacity: sexpr::find(m, "opacity").and_then(|o| sexpr::num(o, 1)).unwrap_or(1.0),
+                show: !(hidden || bare_hide),
+            })
+        })
+        .collect()
+}
+
+/// [`models_from`] for the text of a `.kicad_mod` file; empty when the text is no footprint.
+pub fn footprint_models(text: &str) -> Vec<Model3d> {
+    let Ok(tree) = sexpr::parse(text) else { return Vec::new() };
+    tree.as_list().filter(|l| sexpr::tag(l) == Some("footprint") || sexpr::tag(l) == Some("module")).map(models_from).unwrap_or_default()
+}
+
+/// The `(attr ...)` flags of a `.kicad_mod` file's footprint, as the words the file writes (`smd`, `through_hole`, `board_only`,
+/// `exclude_from_pos_files`, ...). KiCad's 3D viewer sorts models by them: `smd` is an SMD model, `through_hole` a through-hole one, and a footprint
+/// with neither is a virtual one (`BOARD_ADAPTER::IsFootprintShown`).
+pub fn footprint_attributes(text: &str) -> Vec<String> {
+    let Ok(tree) = sexpr::parse(text) else { return Vec::new() };
+    let Some(root) = tree.as_list().filter(|l| sexpr::tag(l) == Some("footprint") || sexpr::tag(l) == Some("module")) else { return Vec::new() };
+    sexpr::find(root, "attr").map(|a| a.iter().skip(1).filter_map(|e| e.text()).map(str::to_string).collect()).unwrap_or_default()
 }
 
 /// A symmetric-about-origin courtyard half-extent enclosing every
@@ -612,5 +657,29 @@ mod tests {
         assert_eq!(by_num("1").shape, eda_model::PadShape::Rect, "trapezoid exports as its own rect bounding-box approximation -- see export_kicad_mod's own doc");
         assert_eq!(by_num("2").shape, eda_model::PadShape::RoundRect, "chamfered_rect exports as roundrect");
         assert_eq!(by_num("2").roundrect_ratio, Some(0.3), "the chamfer ratio stands in for the roundrect ratio in this approximation");
+    }
+    /// `(model ...)` lines come with their placement (`parse3DModel`): the offset in millimetres (a legacy `(at (xyz ..))` in inches), the scale, the rotation in
+    /// degrees, the opacity and whether the model is hidden, in file order -- and the footprint keeps all of them, not only the first path.
+    #[test]
+    fn every_model_line_is_read_with_its_placement() {
+        let text = r#"(footprint "Test:X" (layer "F.Cu") (attr smd exclude_from_pos_files)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+            (model "${KICAD10_3DMODEL_DIR}/A.3dshapes/a.step" (offset (xyz 1 -2 0.5)) (scale (xyz 1 1 1)) (rotate (xyz 90 0 180)))
+            (model "b.wrl" (at (xyz 0.1 0 0)) (hide yes) (opacity 0.5))
+            (model "c.step" (hide))
+            (model "d.step" (scale (xyz 0.5 0.5 0.5)) (hide no))
+            (model ""))"#;
+        let models = footprint_models(text);
+        assert_eq!(models.len(), 4, "a model with no path is no model: {models:?}");
+        assert_eq!(models[0], Model3d { path: "${KICAD10_3DMODEL_DIR}/A.3dshapes/a.step".into(), offset: [1.0, -2.0, 0.5], scale: [1.0; 3], rotate: [90.0, 0.0, 180.0], opacity: 1.0, show: true });
+        assert_eq!(models[1].offset, [2.54, 0.0, 0.0], "a legacy (at (xyz ..)) is in inches");
+        assert!(!models[1].show && models[1].opacity == 0.5, "{:?}", models[1]);
+        assert!(!models[2].show, "a bare (hide) hides it, like (hide yes)");
+        assert!(models[3].show && models[3].scale == [0.5; 3], "(hide no) shows it: {:?}", models[3]);
+        assert_eq!(footprint_attributes(text), vec!["smd".to_string(), "exclude_from_pos_files".to_string()]);
+        assert!(footprint_models("not a footprint").is_empty() && footprint_attributes("(kicad_pcb)").is_empty());
+        let parsed = parse_footprint_file(text, "Test:X").expect("a loadable footprint");
+        assert_eq!(parsed.models3d.len(), 4);
+        assert_eq!(parsed.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/A.3dshapes/a.step"), "`model` stays the first path");
     }
 }

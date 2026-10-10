@@ -1451,7 +1451,7 @@ mod tests {
     /// One part, J1, on a 20 mm board with its origin at (10000, 10000): pad 1 on net "B", pad 2 (if any) on net "C".
     /// Nothing else is on the board, so a track on net "A" is a foreign net to every pad.
     fn pad_fixture(pads: Vec<Pad>, fp_rot: Millideg, side: Side, rt: RoutingSection) -> (Design, ConstraintModel) {
-        let footprint = Footprint { name: "PADTEST".into(), pads: pads.clone(), courtyard: Some((4000, 4000)), model: None, courtyard_outlines: vec![] };
+        let footprint = Footprint { name: "PADTEST".into(), pads: pads.clone(), courtyard: Some((4000, 4000)), model: None, courtyard_outlines: vec![], models3d: vec![] };
         let part = Part {
             reference: "J1".into(),
             mpn: None,

@@ -31,7 +31,12 @@ import { useStudioDispatch, useStudioState } from "../../state/store";
 import { TrackballCamera, FOV_DEG, KEY_ZOOM_FACTOR, ROTATION_STEP_DEG, type ViewPreset as FacePreset } from "../../kicad-port/camera3d";
 import { resolve3DAction, ROTATE_SIGN, type Action3D } from "../../kicad-port/actions3d";
 import { isMac } from "../../platform";
-import { buildBoardGroup, buildBackgroundTexture, disposeObject3D, boardOutlineBounds } from "./scene";
+import { buildBoardGroup, buildBackgroundTexture, countByName, disposeObject3D, boardOutlineBounds } from "./scene";
+import { MODEL_ROWS, ROWS, isVisible, toggled } from "../../kicad-port/appearance3d";
+import { useViewerColors } from "./useViewerColors";
+import { ModelCache } from "./modelCache";
+import { PartModels, type PartStats } from "./partModels";
+import { viewer3dProbe } from "./viewer3dProbe";
 
 const ROTATION_STEP_RAD = (ROTATION_STEP_DEG * Math.PI) / 180;
 
@@ -58,6 +63,20 @@ const GLB_STATUS_BADGE_STYLE: React.CSSProperties = {
   pointerEvents: "none",
 };
 
+/** KiCad's "hovered item" status text (`EDA_3D_VIEWER_STATUSBAR::HOVERED_ITEM`: the reference and value of the footprint under the pointer), over the view's top-left corner. */
+const HOVER_BADGE_STYLE: React.CSSProperties = {
+  position: "absolute",
+  left: 10,
+  top: 10,
+  padding: "4px 8px",
+  borderRadius: 4,
+  background: "var(--chrome-bg, #1e1e1e)",
+  color: "var(--chrome-text, #ddd)",
+  font: "12px/1 inherit",
+  border: "1px solid var(--chrome-border, #444)",
+  pointerEvents: "none",
+};
+
 interface ThreeContext {
   renderer: THREE.WebGLRenderer;
   scene: THREE.Scene;
@@ -69,6 +88,9 @@ interface ThreeContext {
   boardGroup: THREE.Group;
   /** GET /api/board.glb's real KiCad-rendered board, loaded into its own group so it can be shown/hidden independently of the procedural boardGroup rather than swapped in and out of the scene (cheaper, and keeps whichever one is hidden ready to reappear instantly). Empty until a GLB successfully loads. */
   glbGroup: THREE.Group;
+  /** The 3D models of the parts, loaded one by one from GET /api/3dmodel (modelCache.ts) -- no full-board export waited for -- and the parts drawn with them (partModels.ts). */
+  cache: ModelCache;
+  partModels: PartModels;
 }
 
 export type ViewPreset = FacePreset | "reset";
@@ -92,24 +114,27 @@ export interface Viewer3DApi {
  * one place that knows e.g. which sign CW/CCW maps to per axis.
  */
 function runAction3D(camera3d: TrackballCamera, action: Action3D, pivot: () => void): void {
+  // `EDA_3D_CANVAS::SetView3D`: the views, flip, zoom steps, arrow pans and the pivot are animated moves (camera3d.ts, "animation"), and a view command made while
+  // one is going is ignored (`if( m_camera_is_moving ) return false;`). The rotate steps are made at once, as `EDA_3D_CONTROLLER::RotateView` makes them.
+  const now = performance.now();
   switch (action.kind) {
     case "viewPreset":
-      camera3d.applyViewPreset(action.preset);
+      camera3d.animateViewPreset(action.preset, now);
       break;
     case "reset":
-      camera3d.reset();
+      camera3d.animateReset(now);
       break;
     case "flip":
-      camera3d.flip();
+      camera3d.animateFlip(now);
       break;
     case "pivot":
       pivot();
       break;
     case "zoomIn":
-      camera3d.zoomBy(KEY_ZOOM_FACTOR);
+      camera3d.animateZoom(KEY_ZOOM_FACTOR, now);
       break;
     case "zoomOut":
-      camera3d.zoomBy(1 / KEY_ZOOM_FACTOR);
+      camera3d.animateZoom(1 / KEY_ZOOM_FACTOR, now);
       break;
     case "zoomRedraw":
       // eda_3d_canvas.cpp's ZoomRedraw just calls Request_refresh() --
@@ -119,6 +144,7 @@ function runAction3D(camera3d: TrackballCamera, action: Action3D, pivot: () => v
       // (PARITY-pcb.md).
       break;
     case "rotate": {
+      if (camera3d.isMoving()) break;
       const sign = ROTATE_SIGN[action.axis][action.dir];
       const angle = sign * ROTATION_STEP_RAD;
       if (action.axis === "x") camera3d.rotateX(angle);
@@ -127,7 +153,7 @@ function runAction3D(camera3d: TrackballCamera, action: Action3D, pivot: () => v
       break;
     }
     case "pan":
-      camera3d.panArrow(action.direction);
+      camera3d.animatePan(action.direction, now);
       break;
   }
 }
@@ -160,6 +186,10 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   }, [onReady]);
   // "Reload board": bumps the nonce the GLB fetch effect below depends on, and asks its first request to build again (`?retry=1`).
   const [reloadNonce, setReloadNonce] = useState(0);
+  /** The models still loading, for the corner note: how many of the board's models are in. */
+  const [modelProgress, setModelProgress] = useState<{ done: number; total: number } | null>(null);
+  /** The part under the pointer: its reference and value, KiCad's "hovered item" text (`EDA_3D_CANVAS::OnMouseMove`). */
+  const [hoverText, setHoverText] = useState<string | null>(null);
   const retryNextRef = useRef(false);
   // Same ref-not-dependency reasoning for the view-option toggles: read
   // fresh inside effects (stable, empty deps) rather than closed over.
@@ -185,8 +215,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const applyPreset = useCallback((preset: ViewPreset) => {
     const three = threeRef.current;
     if (!three) return;
-    if (preset === "reset") three.camera3d.reset();
-    else three.camera3d.applyViewPreset(preset);
+    const now = performance.now();
+    if (preset === "reset") three.camera3d.animateReset(now);
+    else three.camera3d.animateViewPreset(preset, now);
   }, []);
 
   // Mount: create the renderer/scene/cameras/camera3d engine once and
@@ -268,7 +299,37 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     glbGroup.visible = false;
     scene.add(glbGroup);
 
-    threeRef.current = { renderer, scene, perspCamera, orthoCamera, camera3d, boardGroup, glbGroup };
+    // The parts: each is its KiCad 3D models as they load, a box until its first one is in.
+    viewer3dProbe.opened();
+    let partStats: PartStats = { total: 0, asModels: 0, asBoxes: 0, shown: 0 };
+    const cache = new ModelCache();
+    const publish = () => {
+      viewer3dProbe.update({
+        models: cache.stats(),
+        parts: partStats,
+        hovered: partModels.hoveredRef,
+        detail: cache.entries().map((r) => ({ name: r.name, status: r.status, fetchMs: r.fetchMs && Math.round(r.fetchMs), parseMs: r.parseMs && Math.round(r.parseMs), triangles: r.triangles, error: r.error })),
+      });
+      const m = cache.stats();
+      setModelProgress(m.requested > 0 && m.loading > 0 ? { done: m.requested - m.loading, total: m.requested } : null);
+    };
+    const partModels = new PartModels(cache, (stats) => {
+      partStats = stats;
+      publish();
+    });
+    scene.add(partModels.group);
+    const stopPublishing = cache.onChange(publish);
+    // For `window.__eda.viewer3dScreen(ref)`: where the part is on the canvas right now.
+    viewer3dProbe.setScreenOf((ref) => {
+      const part = boardRef.current?.parts.find((p) => p.ref === ref);
+      if (!part?.at) return null;
+      const cam = camera3d.projection === "perspective" ? perspCamera : orthoCamera;
+      cam.updateMatrixWorld();
+      const p = new THREE.Vector3(part.at[0] / 1000, part.side === "bottom" ? -1 : 1, part.at[1] / 1000).project(cam);
+      return { x: ((p.x + 1) / 2) * renderer.domElement.clientWidth, y: ((1 - p.y) / 2) * renderer.domElement.clientHeight };
+    });
+
+    threeRef.current = { renderer, scene, perspCamera, orthoCamera, camera3d, boardGroup, glbGroup, cache, partModels };
 
     // ---------------------------------------------------------- input
     // Ports HIDPI_GL_3D_CANVAS::OnMouseMoveCamera/OnMouseWheelCamera
@@ -307,7 +368,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       const currentBoard = boardRef.current;
       const bounds = currentBoard ? boardOutlineBounds(currentBoard) : null;
       if (bounds && (hit.x < bounds.minX || hit.x > bounds.maxX || hit.z < bounds.minZ || hit.z > bounds.maxZ)) return;
-      camera3d.pivotAt({ x: hit.x, y: 0, z: hit.z });
+      camera3d.animatePivot({ x: hit.x, y: 0, z: hit.z }, performance.now());
     };
 
     const onPointerDown = (e: PointerEvent) => {
@@ -321,7 +382,49 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       else return;
       el.setPointerCapture(e.pointerId);
     };
+    // `EDA_3D_CANVAS::OnMouseMove`'s rollover: when the pointer is not dragging, the part under it is highlighted (`highlight_on_rollover`) and its reference and value are
+    // reported. One ray per frame at most, and none while the camera moves (`if( m_camera_is_moving ) return;`).
+    let hoverPx: { x: number; y: number } | null = null;
+    let hoverFrame = 0;
+    const hoverRay = () => {
+      hoverFrame = 0;
+      const three = threeRef.current;
+      if (!three || !hoverPx || three.camera3d.isMoving()) return;
+      const activeCam = camera3d.projection === "perspective" ? three.perspCamera : three.orthoCamera;
+      raycaster.setFromCamera(new THREE.Vector2((hoverPx.x / el.clientWidth) * 2 - 1, -(hoverPx.y / el.clientHeight) * 2 + 1), activeCam);
+      const hit = three.partModels.pick(raycaster);
+      if (three.partModels.setHover(hit?.ref ?? null)) {
+        const part = hit ? boardRef.current?.parts.find((p) => p.ref === hit.ref) : undefined;
+        setHoverText(part ? `${part.ref}  ${part.value ?? ""}`.trimEnd() : null);
+        viewer3dProbe.update({ hovered: three.partModels.hoveredRef });
+      }
+    };
+    const requestHover = (px: { x: number; y: number } | null) => {
+      hoverPx = px;
+      if (px === null) {
+        if (hoverFrame) cancelAnimationFrame(hoverFrame);
+        hoverFrame = 0;
+        if (threeRef.current?.partModels.setHover(null)) {
+          setHoverText(null);
+          viewer3dProbe.update({ hovered: null });
+        }
+        return;
+      }
+      if (!hoverFrame) hoverFrame = requestAnimationFrame(hoverRay);
+    };
+    const onPointerLeave = () => requestHover(null);
     const onPointerMove = (e: PointerEvent) => {
+      if (dragButton === null) {
+        // From the client position and the canvas's box, which is the pointer's place on the canvas for a real event and for one a script dispatches alike (a script's `offsetX` is not reliable).
+        const box = el.getBoundingClientRect();
+        requestHover({ x: e.clientX - box.left, y: e.clientY - box.top });
+      } else if (hoverPx !== null) requestHover(null);
+      // `if( m_camera_is_moving ) return;` -- the mouse does nothing to a camera that is on its way to a view.
+      if (camera3d.isMoving()) {
+        camera3d.setCurMousePosition(e.offsetX, e.offsetY);
+        lastPointerPx = { x: e.offsetX, y: e.offsetY };
+        return;
+      }
       if (dragButton === "left") {
         camera3d.drag(e.offsetX, e.offsetY);
         draggedThisPress = true;
@@ -339,6 +442,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (camera3d.isMoving()) return;
       // Cmd is accepted alongside Ctrl for the pan-horizontal modifier:
       // source's own default (view_controls.cpp's WXK_CONTROL) means the
       // *physical* Control key on every platform including macOS, but
@@ -367,18 +471,17 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
      * listener and maybe firing an unrelated same-key 2D action.
      */
     const onKeyDown = (e: KeyboardEvent) => {
-      // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') -- visibility
+      // eda_3d_actions.cpp's showTHT ('T') / showSMD ('S') / showVirtual ('V') -- visibility
       // view-OPTIONS, not camera actions, so these go straight to the
       // store (Viewer3DOptions) rather than through Action3D/camera3d.
-      // (showVirtual/showNotInPosFile/showDNP -- 'V'/'P'/'D' in source --
-      // have no equivalent in this app's data model at all: no "virtual
-      // footprint", pick-and-place, or DNP concept exists here, so those
-      // 3 hotkeys are not bound; see PARITY-3d.md.)
-      if (!e.ctrlKey && !e.metaKey && !e.altKey && (e.key === "t" || e.key === "T" || e.key === "s" || e.key === "S")) {
+      // (showNotInPosFile/showDNP -- 'P'/'D' in source -- have no
+      // equivalent in this app's data model: no pick-and-place or DNP
+      // concept exists here, so those 2 hotkeys are not bound; see PARITY-3d.md.)
+      const modelRow = e.key === "t" || e.key === "T" ? "th_models" : e.key === "s" || e.key === "S" ? "smd_models" : e.key === "v" || e.key === "V" ? "virtual_models" : null;
+      if (modelRow && !e.ctrlKey && !e.metaKey && !e.altKey) {
         e.preventDefault();
         e.stopPropagation();
-        if (e.key === "t" || e.key === "T") dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showTHT: !viewer3dRef.current.showTHT } });
-        else dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { showSMD: !viewer3dRef.current.showSMD } });
+        dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { layers: toggled(viewer3dRef.current.layers, modelRow) } });
         return;
       }
 
@@ -398,6 +501,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
           if (lastPointerPx) pivotAtPointer(lastPointerPx);
         }),
       reload: () => {
+        // `EDA_3D_ACTIONS::reloadBoard`: every model is read again (a model file that changed on disk, a conversion that failed), and KiCad's export builds again when it is the view.
+        cache.clear();
+        partModels.refresh();
         retryNextRef.current = true;
         setReloadNonce((n) => n + 1);
       },
@@ -419,6 +525,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     el.addEventListener("pointermove", onPointerMove);
     el.addEventListener("pointerup", onPointerUp);
     el.addEventListener("pointercancel", onPointerUp);
+    el.addEventListener("pointerleave", onPointerLeave);
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("contextmenu", onContextMenu);
     el.addEventListener("keydown", onKeyDown);
@@ -438,7 +545,14 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     ro.observe(container);
 
     let raf = 0;
+    let wasMoving = false;
     const animate = () => {
+      // The move in flight (`EDA_3D_CANVAS::OnPaint`): the camera at this frame's time.
+      const moving = camera3d.tick(performance.now());
+      if (moving !== wasMoving) {
+        wasMoving = moving;
+        viewer3dProbe.update({ cameraMoving: moving });
+      }
       const pose = camera3d.getRenderPose();
       const proj = camera3d.getProjectionParams();
       // render_3d_opengl.cpp's init_lights() "front" headlight moves with
@@ -477,6 +591,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       el.removeEventListener("pointermove", onPointerMove);
       el.removeEventListener("pointerup", onPointerUp);
       el.removeEventListener("pointercancel", onPointerUp);
+      el.removeEventListener("pointerleave", onPointerLeave);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("contextmenu", onContextMenu);
       el.removeEventListener("keydown", onKeyDown);
@@ -484,6 +599,12 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
       scene.remove(boardGroup);
       disposeObject3D(glbGroup);
       scene.remove(glbGroup);
+      stopPublishing();
+      viewer3dProbe.setScreenOf(null);
+      partModels.dispose();
+      scene.remove(partModels.group);
+      cache.dispose();
+      viewer3dProbe.closed();
       (scene.background as THREE.Texture | null)?.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement);
@@ -509,18 +630,23 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   // alone never changes `board.outline` (boardOutlineBounds only looks at
   // that), so it rebuilds geometry without moving the camera -- the same
   // way KiCad's own show/hide toggles don't reset your view.
-  const { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes } = state.viewer3d;
+  const { layers } = state.viewer3d;
+  // Which of the Appearance manager's rows that gate the board's own geometry are shown, as one string: toggling a model row (T / S / V, bounding boxes) must not rebuild the board.
+  const sceneRows = ROWS.filter((r) => !MODEL_ROWS.has(r.id)).map((r) => (isVisible(layers, r.id) ? "1" : "0")).join("");
+  // The colour of every row: the theme's, the board's stackup when "Use board stackup colors" is on, the swatches (kicad-port/appearance3d.ts, BOARD_ADAPTER::GetLayerColors).
+  const resolved = useViewerColors();
   useEffect(() => {
     const three = threeRef.current;
     if (!three) return;
 
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
-    const nextGroup = board
-      ? buildBoardGroup(board, { showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes })
-      : new THREE.Group();
+    // The parts are not in this group: partModels draws them (the real models, a box until they are in).
+    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row), colors: resolved }) : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
+    syncActiveGroupRef.current();
+    viewer3dProbe.update({ scene: countByName(nextGroup) });
 
     const bounds = board ? boardOutlineBounds(board) : null;
     const spanMm = bounds ? Math.max(bounds.maxX - bounds.minX, bounds.maxZ - bounds.minZ, 1e-3) : EMPTY_BOARD_SPAN_MM;
@@ -536,7 +662,25 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
         (Math.abs(prev.minX - bounds.minX) > EPS_MM || Math.abs(prev.minZ - bounds.minZ) > EPS_MM || Math.abs(prev.maxX - bounds.maxX) > EPS_MM || Math.abs(prev.maxZ - bounds.maxZ) > EPS_MM));
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) three.camera3d.reset();
-  }, [board, showComponents, showTHT, showSMD, showSilkscreen, showSolderMask, showSolderPaste, showBoardBody, showBoundingBoxes]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [board, sceneRows, resolved]);
+
+  // The parts: the through-hole, SMD and virtual rows and the bounding boxes only touch their models.
+  const thtShown = isVisible(layers, "th_models");
+  const smdShown = isVisible(layers, "smd_models");
+  const virtualShown = isVisible(layers, "virtual_models");
+  const bboxShown = isVisible(layers, "bounding_boxes");
+  useEffect(() => {
+    threeRef.current?.partModels.sync(board, { showTHT: thtShown, showSMD: smdShown, showVirtual: virtualShown, showBoundingBoxes: bboxShown });
+  }, [board, thtShown, smdShown, virtualShown, bboxShown]);
+
+  // The background gradient (the Appearance manager's Background Start / End swatches).
+  useEffect(() => {
+    const three = threeRef.current;
+    if (!three) return;
+    (three.scene.background as THREE.Texture | null)?.dispose();
+    three.scene.background = buildBackgroundTexture(resolved.background_top, resolved.background_bottom);
+  }, [resolved]);
 
   // Flip/orthographic are camera-only now (KiCad's own flipView/
   // toggleOrtho actions move the camera, not the board -- eda_3d_actions.
@@ -551,8 +695,9 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     const three = threeRef.current;
     if (!three) return;
     if (state.viewer3d.flipped !== prevFlippedRef.current) {
-      three.camera3d.flip();
-      prevFlippedRef.current = state.viewer3d.flipped;
+      if (three.camera3d.animateFlip(performance.now())) prevFlippedRef.current = state.viewer3d.flipped;
+      // A move is going, so the command is refused (`SetView3D` returns false): the switch goes back to what the camera is.
+      else dispatch({ type: "SET_VIEWER3D_OPTIONS", options: { flipped: prevFlippedRef.current } });
     }
   }, [state.viewer3d.flipped]);
   useEffect(() => {
@@ -574,6 +719,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     const showGlb = viewer3dRef.current.kicadModels && glbLoadedRef.current;
     three.glbGroup.visible = showGlb;
     three.boardGroup.visible = !showGlb;
+    three.partModels.group.visible = !showGlb;
+    viewer3dProbe.update({ source: showGlb ? "export" : "live" });
   };
 
   // GET /api/board.glb -- KiCad's own render of the current board (real
@@ -665,8 +812,12 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     <div ref={containerRef} className="pcb-canvas-container">
       {!board && <div className="pcb-canvas-empty">{state.boardError ?? "Loading board…"}</div>}
       {state.viewer3d.kicadModels && state.glbStatus === "pending" && (
-        <div style={GLB_STATUS_BADGE_STYLE}>Loading KiCad models…</div>
+        <div style={GLB_STATUS_BADGE_STYLE}>Building KiCad's export…</div>
       )}
+      {!(state.viewer3d.kicadModels && state.glbStatus === "loaded") && modelProgress && (
+        <div style={GLB_STATUS_BADGE_STYLE}>Loading 3D models… {modelProgress.done} of {modelProgress.total}</div>
+      )}
+      {hoverText && <div style={HOVER_BADGE_STYLE}>{hoverText}</div>}
     </div>
   );
 }

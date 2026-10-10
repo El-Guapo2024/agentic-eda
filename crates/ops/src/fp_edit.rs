@@ -272,7 +272,7 @@ impl Board<'_> {
                 let footprint = self.model.part(reference).and_then(|p| self.model.footprint_of(p));
                 match footprint {
                     Some(f) => default_reference_layout(fp, &f),
-                    None => default_reference_layout(fp, &eda_model::Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None }),
+                    None => default_reference_layout(fp, &eda_model::Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] }),
                 }
             })),
             VALUE => Some(edit.and_then(|e| e.value.clone()).unwrap_or_else(|| default_value_layout(fp))),

@@ -538,7 +538,7 @@ impl Board<'_> {
             } else if let Some(shown) = f.shown_reference.as_ref() {
                 // Keeping the original's reference text: the layout the Reference had by default, with that text.
                 let part = self.model.part(&f.reference);
-                let footprint = part.and_then(|p| self.model.footprint_of(p)).or_else(|| f.definition.clone()).unwrap_or(Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None });
+                let footprint = part.and_then(|p| self.model.footprint_of(p)).or_else(|| f.definition.clone()).unwrap_or(Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
                 let mut l = eda_model::fp_edit::default_reference_layout(pose, &footprint);
                 l.text = Some(shown.clone());
                 e.reference = Some(l);

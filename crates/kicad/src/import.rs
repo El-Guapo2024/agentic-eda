@@ -478,6 +478,7 @@ fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
                 kind,
                 epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
                 loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
+                color: sexpr::find(l, "color").and_then(|c| sexpr::txt(c, 1)).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")).map(String::from),
             })
         })
         .collect();
@@ -972,16 +973,17 @@ pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, 
 /// (plain or suffixed) whose pads match, or a freshly inserted one if none
 /// do. See `import_footprints`'s call site for why this can legitimately
 /// happen (the same lib id placed on both sides of one board).
-fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str, pads: &[Pad]) -> String {
+fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str, pads: &[Pad], models3d: &[eda_model::footprint::Model3d]) -> String {
+    let same = |existing: &Footprint| existing.pads.as_slice() == pads && existing.models3d.as_slice() == models3d;
     match explicit.get(lib_id) {
         None => lib_id.to_string(),
-        Some(existing) if existing.pads.as_slice() == pads => lib_id.to_string(),
+        Some(existing) if same(existing) => lib_id.to_string(),
         Some(_) => {
             for n in 2.. {
                 let key = format!("{lib_id}#{n}");
                 match explicit.get(&key) {
                     None => return key,
-                    Some(existing) if existing.pads.as_slice() == pads => return key,
+                    Some(existing) if same(existing) => return key,
                     Some(_) => continue,
                 }
             }
@@ -1232,10 +1234,14 @@ fn import_footprints(
         if !edit.is_empty() {
             edits.push(edit);
         }
-        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads);
+        // The 3D models with their placement, in the studio's frame: KiCad turns a back-side footprint's model with `Ry(pi) Rz(pi)` and the studio keeps
+        // that footprint mirrored in x, which is a half turn about z apart (`Model3d::flipped_frame`). A slot is shared only by instances whose models
+        // agree, like their pads.
+        let models3d: Vec<eda_model::footprint::Model3d> = crate::footprint_lib::models_from(fp).into_iter().map(|m| if side == Side::Bottom { m.flipped_frame() } else { m }).collect();
+        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads, &models3d);
         let courtyard = footprint_courtyard_half(fp, side);
         let courtyard_outlines = footprint_courtyard_outlines(fp, side);
-        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp) });
+        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp), models3d });
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
@@ -2161,18 +2167,18 @@ mod tests {
         let bottom_pads = vec![Pad { opposite_side: false, number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
 
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
-        let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads);
+        let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[]);
         assert_eq!(key_top, lib_id, "first instance (R35, top) gets the plain lib id");
-        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None });
+        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
 
-        let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads);
+        let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[]);
         assert_ne!(key_bottom, lib_id, "R34 (bottom)'s own un-mirrored geometry disagrees with R35's cached one -- it must get its own slot, not silently reuse R35's");
-        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None });
+        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
 
         // A third instance matching either existing slot exactly must reuse
         // it rather than growing a new one every time.
-        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads), lib_id);
-        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads), key_bottom);
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[]), lib_id);
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[]), key_bottom);
     }
 
     /// GAPS.md #3's third over-firing source, pinned to `issue11814`'s U4

@@ -404,7 +404,7 @@ New. **Mostly done (2026-10-09).** Hit: every session. Blocks: no. WP3, size M (
 ### 19. Footprint and symbol editor leftovers
 Old #8. **Partial.** Hit: library work. Blocks: no. WP6, size M.
 - Exists: both editors with library trees, pad and pin tools, dialogs, tables, import and export (`PARITY-fpedit.md`, `PARITY-symedit.md`).
-- Missing: more than one 3D model per footprint with offset, scale and rotation (one path today); custom-shape pads (unwired);
+- Missing: the footprint editor's 3D model panel (it edits one model path; since item 23 the footprints of a board and of the installed libraries keep every `(model ...)` with its offset, scale, rotation and opacity, and the 3D viewer, the importer and the writer use them); custom-shape pads (unwired);
   the footprint fields grid (modelled, no UI); pad clearance and thermal overrides are stored but no check reads them; derived
   symbols; alternate pin functions; symbol fields on the canvas; a shape properties dialog.
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
@@ -441,14 +441,30 @@ Old #26. **Mostly done (2026-10-09).** Hit: connector rows, LED grids. Blocks: n
   ignores the origin it is given.
 
 ### 23. The 3D viewer
-Old honorable mention. **Partial.** Backlog, size L.
-- Camera, trackball, view presets, lighting and materials follow `3d-viewer` (`PARITY-3d.md`); the toolbar is KiCad's own, with its icons, and
-  the Appearance manager is a first version (view, show, render). The instant scene draws parts as boxes sized from the footprint's `F.Fab` body
-  (courtyard when it has none); the real board with its models comes from kicad-cli's GLB export in the background and takes minutes
-  (`components/viewer3d/Viewer3D.tsx`, `GET /api/board.glb`). A footprint without a `(model ...)` gets KiCad's model for its package from an
-  explicit table (`crates/model/src/footprint.rs::kicad_footprint_for`: 0402/0603/0805 passives and LEDs by reference prefix, SOT-23 and SOT-223, SOIC, TSSOP, MSOP, pin headers), and the export draws
-  copper on a net the netlist lost instead of refusing the board. Missing: the Appearance manager's layer tree and stackup colours, models for
-  every other package, hover highlight, raytracing, camera animation, a zone toggle. The instant scene's board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts (2026-10-09: round corners, cutouts, several pieces; `kicad-port/pcbOutline.ts::boardOutlinePolygons`); NPTH holes are not cut out of it yet (`aIncludeNPTHAsOutlines`).
+Old honorable mention. **Done (2026-10-09)**, limits below. Hit: every board review. Blocks: no. Size L.
+- Done (`PARITY-3d.md` sections 1, 3, 5, 6, 7): **real models in seconds.** The viewer no longer waits for kicad-cli's whole-board GLB export: each part is its own KiCad
+  3D model, fetched once per distinct model (`GET /api/3dmodel`, `crates/cli/src/model3d_api.rs`), read with three's `VRMLLoader` and placed by `render_3d_opengl.cpp`'s chain
+  (offset, scale, rotation, opacity, hide; `kicad-port/model3d.ts`). The route resolves a footprint's `(model ...)` path the way `FILENAME_RESOLVER` does
+  (`${KICAD10_3DMODEL_DIR}` and the older variables, `${KIPRJMOD}`, relative paths, `.wrl` for `.step`), serves it read-only (under KiCad's 3D library or the board's directory, `.wrl`/`.step`/`.stp` only, symlinks
+  resolved) and converts a STEP, which is all the installed library holds, once through `kicad-cli pcb export vrml` into a cache. A footprint keeps every model line with its placement
+  (`Footprint.models3d`, read from the installed libraries and from boards, written by the board writer, in KiCad's frame for a bottom part); a part with no model of its own gets the model of the
+  installed footprint its name stands for, with the pads fitted (`crates/kicad/src/model3d.rs`), the explicit table `kicad_footprint_for` being the fallback for generic package names. The board body, copper, silkscreen and mask stay the instant scene's, so the
+  first paint is as quick as before and a model replaces its box when it is in. kicad-cli's GLB is the optional "Exact export" switch now, off by default. **Time to the first real model, measured on mcu30 (30 parts) and the QA board `stonehenge` (93 parts) on a debug
+  server and a busy machine (`PARITY-3d.md` section 7):** before, the cold GLB export took 9.6 to 14.9 s on mcu30 (9 to 10 s of kicad-cli CPU) and 35 to 50 s on the QA board (41 to 46 s of CPU); after, one kicad-cli run
+  converts the board's distinct models once, 2.7 to 4.4 s from the request on both boards (2 to 2.4 s of CPU), 3 to 4 s to the first part drawn in a headless Chrome, and from the second session on the cache answers in
+  hundredths of a second. The measuring found two stalls of the studio's request loop and fixed them: a browser's idle preconnect held every request behind it for up to 16 s, and the model requests queued behind each
+  `/api/state` (2 s on the QA board in a debug build).
+- Done: the Appearance manager is `appearance_controls_3D.cpp`'s layer tree (`kicad-port/appearance3d.ts`): board body, plated barrels, F.Cu/B.Cu, adhesive, solder paste, silkscreen and mask per side, the user
+  layers a board has drawings on, through-hole / SMD / virtual models (T, S, V), bounding boxes, references, zones and the background, each an eye that hides what it names and a swatch where KiCad has
+  one. Use board stackup colors (default on) paints the body, silkscreen, mask and copper finish from Board Setup's physical stackup, which now stores `(color ...)` per layer (`StackupLayer.color`, read from and written to
+  the board file, a Color column on the Stackup page); Use PCB editor copper colors takes the 2D editor's. Hovering a part draws it in the selection colour (`highlight_on_rollover`) and names it; the face views, Home, Flip,
+  the zoom steps, the arrow-key pans and the pivot are animated moves with KiCad's easing and speeds (`m_animation`) that refuse the mouse while they run.
+- Done (board outline fidelity, 2026-10-09, merged from main): the instant scene's board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts (2026-10-09: round corners, cutouts, several pieces; `kicad-port/pcbOutline.ts::boardOutlinePolygons`); NPTH holes are not cut out of it yet (`aIncludeNPTHAsOutlines`).
+- Tests: 24 Rust tests (the model reader and writer, the pad fit, the resolver, the allow-list with no path escapes, the conversion batching, the model route in the studio's kicad-cli lane, the request loop's silent
+  connections and its busy loop) and 35 `node --test` cases (the model placement chain, the Appearance rows and colours, the camera animation); `web/studio/e2e/viewer3d.check.js` drives the viewer through `window.__eda`
+  (50 checks: every row's pieces, hover, animation, stackup colours); `EDA_SLOW_TESTS=1` runs one real STEP conversion through kicad-cli.
+- Missing: raytracing (out of scope); layer presets and viewports; the PCB editor's selection drawn green in the 3D view (`fp->IsSelected()`); the 3D Navigator; values, footprint text, off-board silkscreen, models not in the
+  position file and DNP models (no IR data for them); X3D and IGES models; per-layer ambient and specular colours of the board; the footprint editor's 3D model panel (item 19); the preferences that set the animation speed.
 
 ### 24. Item kinds the IR does not have
 New. **Open, deferred.** Backlog.

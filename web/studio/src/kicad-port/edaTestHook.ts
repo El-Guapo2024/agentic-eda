@@ -387,7 +387,7 @@ export function appearanceSummary(s: AppearanceSource): AppearanceSummary {
   };
 }
 
-/** The requests the hook waits for: the studio's own API calls, not its two polls (`/api/version`, `/api/view`), which never stop. */
+/** The requests the hook waits for: the studio's own API calls, not its two polls (`/api/version`, `/api/view`), which never stop, nor the 3D view's models (`/api/3dmodel`: held until a model is converted, background work). */
 export function isTrackedUrl(url: string): boolean {
-  return url.includes("/api/") && !/\/api\/(version|view)(\?|$)/.test(url);
+  return url.includes("/api/") && !/\/api\/(version|view|3dmodel)(\/|\?|$)/.test(url);
 }

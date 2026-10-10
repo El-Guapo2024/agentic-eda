@@ -129,6 +129,8 @@ test("only the studio's own API calls are waited for, not its polls", () => {
   assert.equal(isTrackedUrl("http://127.0.0.1:8792/api/state"), true);
   assert.equal(isTrackedUrl("/api/version"), false);
   assert.equal(isTrackedUrl("/api/view?x=1"), false);
+  assert.equal(isTrackedUrl("/api/3dmodel?name=a&wait=1"), false, "a model request is held until the model is converted: background work");
+  assert.equal(isTrackedUrl("/api/3dmodel/prepare"), false);
   assert.equal(isTrackedUrl("/assets/index.js"), false);
 });
 
