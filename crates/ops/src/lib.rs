@@ -64,6 +64,7 @@ mod zone_overrides;
 mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
+mod sheet_units;
 mod sheets;
 pub use sch_annotate::{AnnotateMessage, AnnotateOptions, AnnotateReport, AnnotateScope};
 pub use pcb_transform::{flip_layer, FlipDirection};

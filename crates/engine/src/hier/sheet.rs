@@ -24,10 +24,15 @@ pub fn placed(ctx: &Ctx, reference: &str) -> Placed {
         Some(kept_id) => ctx.model.fitting_lib_id(part, kept_id),
         None => ctx.model.lib_id_of(part),
     };
-    let resolved = ctx.model.real_symbol_of(&lib_id, part);
+    // the body style it was drawn in (the alternate one has its own box and its own pins), and the unit of a multi-unit part
+    let style = ctx.keep.body_styles.get(reference).copied().unwrap_or(1);
+    let unit = ctx.keep.units.get(reference).copied().unwrap_or(1);
+    let resolved = ctx.model.real_symbol_in_style(&lib_id, part, style);
     let value = kept.map(|k| k.value.clone()).unwrap_or_else(|| part.value.clone().unwrap_or_default());
     let footprint = kept.map(|k| k.footprint.clone()).filter(|f| !f.is_empty()).or_else(|| part.package.clone()).unwrap_or_default();
-    Placed::new(part, &lib_id, resolved, &value, &footprint)
+    let mut p = Placed::new(part, &lib_id, resolved, &value, &footprint).in_unit(unit);
+    p.kept_fields = ctx.keep.fields.get(reference).cloned();
+    p
 }
 
 /// One part of a chain: which pin faces the previous part (or the outside, for the first) and which faces the next.

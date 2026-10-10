@@ -299,7 +299,7 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
     for (mi, m) in modules.iter().enumerate() {
         let o = &mut outs[mi];
         let user_fields: BTreeMap<String, BTreeMap<String, String>> = m.refs.iter().filter_map(|r| keep.user_fields.get(r).map(|f| (r.clone(), f.clone()))).collect();
-        let sec = SchematicSection {
+        let mut sec = SchematicSection {
             symbols: std::mem::take(&mut o.items.symbols),
             wires: std::mem::take(&mut o.items.wires),
             labels: std::mem::take(&mut o.items.labels),
@@ -310,6 +310,17 @@ pub fn derive_hierarchy_full(model: &ConstraintModel, opts: &EngineOptions, modu
             extras: SchExtras { locked: locked_among(keep, &m.refs), ..Default::default() },
             ..Default::default()
         };
+        // what the sheet keeps of the symbol's look: the places of the fields the user placed by hand (the rest are placed below), the
+        // alternate body style
+        for s in &sec.symbols {
+            let key = eda_model::ir::field_key(&s.id, s.unit);
+            if let Some(fields) = keep.fields.get(&s.id) {
+                sec.field_layout.insert(key.clone(), fields.clone());
+            }
+            if let Some(style) = keep.body_styles.get(&s.id).filter(|st| **st > 1) {
+                sec.extras.body_styles.insert(key, *style);
+            }
+        }
         papers.insert(files[mi].clone(), o.paper);
         contents.insert(files[mi].clone(), sec);
     }
