@@ -81,7 +81,7 @@ pub struct AnnotateReport {
 
 /// Where an entry lives: its screen (`""` the root) and which item of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Item {
+pub(crate) enum Item {
     Symbol(usize),
     Power(usize),
 }
@@ -108,12 +108,12 @@ struct ScreenScope {
 
 /// One reference to change.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Rename {
-    file: String,
-    item: Item,
-    old: String,
-    unit: u32,
-    new: String,
+pub(crate) struct Rename {
+    pub(crate) file: String,
+    pub(crate) item: Item,
+    pub(crate) old: String,
+    pub(crate) unit: u32,
+    pub(crate) new: String,
 }
 
 fn lib_item_name(lib_id: &str) -> &str {
@@ -300,154 +300,40 @@ impl<'a> Board<'a> {
     }
 
     /// Write the new references: the symbols, and everything keyed by the old ones, on every screen at once (a reset can swap two
-    /// references, so the names are taken from the mapping, never one rename after another).
-    fn annotate_apply(&mut self, renames: &[Rename]) {
+    /// references, so the names are taken from the mapping, never one rename after another). `remap_nets` also renames the pins of the
+    /// design's net list (an annotation of symbols the nets already name; a sheet that has just come in is in no net yet).
+    pub(crate) fn annotate_apply(&mut self, renames: &[Rename], remap_nets: bool) {
         if renames.is_empty() {
             return;
         }
-        // the net list follows: its pins are "REF.PIN"
-        let uniform = |file: &str, old: &str, new_of: &BTreeMap<(String, String, u32), String>| -> Option<String> {
-            // one new reference for every placed unit of `old` on the screen, when they all move together
-            let units: Vec<u32> = self.screen_of_file(file).map(|s| s.symbols.iter().filter(|x| x.id == old).map(|x| x.unit).collect()).unwrap_or_default();
-            let news: BTreeSet<Option<&String>> = units.iter().map(|u| new_of.get(&(file.to_string(), old.to_string(), *u))).collect();
-            match news.into_iter().collect::<Vec<_>>().as_slice() {
-                [Some(n)] => Some((*n).clone()),
-                _ => None,
-            }
-        };
-        let mut new_of: BTreeMap<(String, String, u32), String> = BTreeMap::new();
-        for r in renames {
-            new_of.insert((r.file.clone(), r.old.clone(), r.unit), r.new.clone());
-        }
-        // references renamed as a whole (every unit of it, on its screen), and the ones whose units went separate ways
-        let mut whole: BTreeMap<String, String> = BTreeMap::new();
-        for r in renames.iter().filter(|r| matches!(r.item, Item::Symbol(_))) {
-            if let Some(n) = uniform(&r.file, &r.old, &new_of) {
-                whole.insert(r.old.clone(), n);
-            }
-        }
         let base = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
-
+        let mut whole_all: BTreeMap<String, String> = BTreeMap::new();
         let files: BTreeSet<String> = renames.iter().map(|r| r.file.clone()).collect();
         for file in files {
-            let mine: Vec<&Rename> = renames.iter().filter(|r| r.file == file).collect();
+            let mine: Vec<SecRename> = renames.iter().filter(|r| r.file == file).map(|r| SecRename { item: r.item, old: r.old.clone(), unit: r.unit, new: r.new.clone() }).collect();
             // pins of a unit that moved alone: which pin numbers belong to which unit
-            let pin_units: BTreeMap<String, BTreeMap<String, u32>> = {
-                let mut m: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
-                if let Some(sch) = self.screen_of_file(&file) {
-                    for r in mine.iter().filter(|r| matches!(r.item, Item::Symbol(_))) {
-                        if whole.get(&r.old).is_some_and(|n| *n == r.new) || m.contains_key(&r.old) {
-                            continue;
-                        }
-                        let units_of: BTreeMap<String, u32> = sch
-                            .symbols
-                            .iter()
-                            .find(|s| s.id == r.old)
-                            .and_then(|s| self.model.part(&s.id).and_then(|p| self.model.real_symbol_of(&s.lib_id, p)).or_else(|| self.design_symbol(&s.lib_id)))
-                            .map(|l| l.pins.iter().map(|p| (p.number.clone(), p.unit)).collect())
-                            .unwrap_or_default();
-                        m.insert(r.old.clone(), units_of);
-                    }
-                }
-                m
+            let pin_units = match self.screen_of_file(&file) {
+                Some(sch) => self.partial_pin_units(sch, &mine),
+                None => BTreeMap::new(),
             };
             let Some(sch) = self.screen_of_file_mut(&file) else { continue };
-            // the pins named in the sheet's own wires, power symbols and no-connect flags
-            let new_pin = |pin: &str| -> Option<String> {
-                let (r, n) = pin.split_once('.')?;
-                if let Some(new) = whole.get(r).filter(|_| mine.iter().any(|m| m.old == r)) {
-                    return Some(format!("{new}.{n}"));
-                }
-                let units = pin_units.get(r)?;
-                let unit = units.get(n).copied().unwrap_or(0);
-                let target = if unit == 0 { None } else { new_of.get(&(file.clone(), r.to_string(), unit)) };
-                target.map(|new| format!("{new}.{n}"))
-            };
-            for w in sch.wires.iter_mut() {
-                for p in w.pins.iter_mut() {
-                    if let Some(np) = new_pin(p) {
-                        *p = np;
-                    }
-                }
-            }
-            for ps in sch.power_symbols.iter_mut() {
-                if let Some(np) = new_pin(&ps.pin) {
-                    ps.pin = np;
-                }
-            }
-            for nc in sch.no_connects.iter_mut() {
-                if let Some(np) = new_pin(&nc.pin) {
-                    nc.pin = np;
-                }
-            }
-            // what is kept per placed unit under its reference
-            let mut layout = Vec::new();
-            let mut autoplaced = Vec::new();
-            let mut styles = Vec::new();
-            for r in &mine {
-                let (old_key, new_key) = (field_key(&r.old, r.unit), field_key(&r.new, r.unit));
-                if let Some(v) = sch.field_layout.remove(&old_key) {
-                    layout.push((new_key.clone(), v));
-                }
-                if let Some(v) = sch.extras.fields_autoplaced.remove(&old_key) {
-                    autoplaced.push((new_key.clone(), v));
-                }
-                if let Some(v) = sch.extras.body_styles.remove(&old_key) {
-                    styles.push((new_key, v));
-                }
-            }
-            sch.field_layout.extend(layout);
-            sch.extras.fields_autoplaced.extend(autoplaced);
-            sch.extras.body_styles.extend(styles);
-            // the user fields and the lock belong to the part: they move with a reference renamed as a whole
-            let moved: Vec<(String, String)> = whole.iter().filter(|(o, _)| mine.iter().any(|m| &m.old == *o)).map(|(o, n)| (o.clone(), n.clone())).collect();
-            let mut fields = Vec::new();
-            for (old, new) in &moved {
-                if let Some(f) = sch.user_fields.remove(old) {
-                    fields.push((new.clone(), f));
-                }
-            }
-            sch.user_fields.extend(fields);
-            for l in sch.extras.locked.iter_mut() {
-                if let Some((_, new)) = moved.iter().find(|(o, _)| o == l) {
-                    *l = new.clone();
-                }
-            }
-            sch.extras.locked.sort();
-            sch.extras.locked.dedup();
-            // and the symbols themselves
-            for r in &mine {
-                match r.item {
-                    Item::Symbol(i) => {
-                        if let Some(s) = sch.symbols.get_mut(i) {
-                            s.id = r.new.clone();
-                        }
-                    }
-                    Item::Power(i) => {
-                        if let Some(p) = sch.power_symbols.get_mut(i) {
-                            p.id = r.new.clone();
-                        }
-                    }
-                }
-            }
-            sch.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
-            sch.power_symbols.sort_by(|a, b| a.id.cmp(&b.id));
+            whole_all.extend(rename_in_section(sch, &mine, &pin_units));
         }
 
         // the net list's pins, so a net keeps its name through the renumbering
-        let remap = |pin: &str| -> String {
-            let Some((r, n)) = pin.split_once('.') else { return pin.to_string() };
-            // a pin of a part renamed as a whole; a part split between references keeps the pin where it was
-            match whole.get(r) {
-                Some(new) => format!("{new}.{n}"),
-                None => pin.to_string(),
-            }
-        };
-        if !whole.is_empty() {
+        if remap_nets && !whole_all.is_empty() {
             let nets: Vec<eda_model::Net> = base
                 .into_iter()
                 .map(|n| {
-                    let mut pins: Vec<String> = n.pins.iter().map(|p| remap(p)).collect();
+                    // a pin of a part renamed as a whole; a part split between references keeps the pin where it was
+                    let mut pins: Vec<String> = n
+                        .pins
+                        .iter()
+                        .map(|p| match p.split_once('.') {
+                            Some((r, num)) => whole_all.get(r).map_or_else(|| p.clone(), |new| format!("{new}.{num}")),
+                            None => p.clone(),
+                        })
+                        .collect();
                     pins.sort();
                     pins.dedup();
                     eda_model::Net { name: n.name, pins }
@@ -455,6 +341,31 @@ impl<'a> Board<'a> {
                 .collect();
             self.design.nets = Some(nets);
         }
+    }
+
+    /// For each reference of `sch` that some of `renames` give to its units separately: the unit of each of its pins (so a wire's pin follows its own unit).
+    pub(crate) fn partial_pin_units(&self, sch: &SchematicSection, renames: &[SecRename]) -> BTreeMap<String, BTreeMap<String, u32>> {
+        let mut out: BTreeMap<String, BTreeMap<String, u32>> = BTreeMap::new();
+        for r in renames.iter().filter(|r| matches!(r.item, Item::Symbol(_))) {
+            if out.contains_key(&r.old) {
+                continue;
+            }
+            let units: Vec<&SecRename> = renames.iter().filter(|x| x.old == r.old && matches!(x.item, Item::Symbol(_))).collect();
+            let placed = sch.symbols.iter().filter(|s| s.id == r.old).count();
+            let one_name = units.len() == placed && units.iter().all(|x| x.new == r.new);
+            if one_name {
+                continue;
+            }
+            let units_of: BTreeMap<String, u32> = sch
+                .symbols
+                .iter()
+                .find(|s| s.id == r.old)
+                .and_then(|s| self.model.part(&s.id).and_then(|p| self.model.real_symbol_of(&s.lib_id, p)).or_else(|| self.design_symbol(&s.lib_id)))
+                .map(|l| l.pins.iter().map(|p| (p.number.clone(), p.unit)).collect())
+                .unwrap_or_default();
+            out.insert(r.old.clone(), units_of);
+        }
+        out
     }
 
     /// `SCH_EDIT_FRAME::CheckAnnotate`: the findings on the references the scope takes, as they stand now.
@@ -475,7 +386,7 @@ impl<'a> Board<'a> {
     pub(crate) fn annotate(&mut self, reset: bool, order: AnnotateOrder, ids: Option<&[String]>, opts: &AnnotateOptions) -> Result<(), Vec<CheckResult>> {
         self.schematic()?;
         let (_, renames, _) = self.annotate_plan(reset, order, ids, opts);
-        self.annotate_apply(&renames);
+        self.annotate_apply(&renames, true);
         Ok(())
     }
 
@@ -489,7 +400,7 @@ impl<'a> Board<'a> {
         let scope = opts.scope.unwrap_or(if ids.is_some() { AnnotateScope::Selection } else { AnnotateScope::CurrentSheet });
         let (_, renames, mut messages) = board.annotate_plan(reset, order, ids, opts);
         let changed = renames.len();
-        board.annotate_apply(&renames);
+        board.annotate_apply(&renames, true);
         let problems = board.annotation_problems(scope, ids, opts);
         for p in &problems {
             messages.push(AnnotateMessage { severity: "error", text: p.message.trim_end().to_string() });
@@ -499,4 +410,108 @@ impl<'a> Board<'a> {
         }
         Ok(AnnotateReport { messages, changed, problems })
     }
+}
+
+/// One reference to change on a screen: which item, what it was (and which unit), what it is to be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SecRename {
+    pub item: Item,
+    pub old: String,
+    pub unit: u32,
+    pub new: String,
+}
+
+/// Rename the symbols of one screen, and everything on it keyed by the old references: the pins its wires, power symbols and no-connect flags
+/// name, the user fields, where the fields are drawn, the body style, the lock. All at once -- the names are taken from `renames`, never one
+/// after another, so two symbols can swap. `pin_units` says, for a reference whose units do not all get one new name, which unit each pin
+/// number belongs to. Returns the references that were renamed as a whole (old -> new).
+pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename], pin_units: &BTreeMap<String, BTreeMap<String, u32>>) -> BTreeMap<String, String> {
+    let new_of: BTreeMap<(&str, u32), &str> = renames.iter().filter(|r| matches!(r.item, Item::Symbol(_))).map(|r| ((r.old.as_str(), r.unit), r.new.as_str())).collect();
+    // references renamed as a whole: every placed unit of it moves to one name
+    let mut whole: BTreeMap<String, String> = BTreeMap::new();
+    for r in renames.iter().filter(|r| matches!(r.item, Item::Symbol(_))) {
+        let placed: Vec<u32> = sch.symbols.iter().filter(|x| x.id == r.old).map(|x| x.unit).collect();
+        let names: BTreeSet<Option<&&str>> = placed.iter().map(|u| new_of.get(&(r.old.as_str(), *u))).collect();
+        if let [Some(n)] = names.into_iter().collect::<Vec<_>>().as_slice() {
+            whole.insert(r.old.clone(), (**n).to_string());
+        }
+    }
+    // the pins the sheet's own wires, power symbols and no-connect flags name
+    let new_pin = |pin: &str| -> Option<String> {
+        let (r, n) = pin.split_once('.')?;
+        if let Some(new) = whole.get(r) {
+            return Some(format!("{new}.{n}"));
+        }
+        let unit = pin_units.get(r)?.get(n).copied().filter(|u| *u != 0)?;
+        new_of.get(&(r, unit)).map(|new| format!("{new}.{n}"))
+    };
+    for w in sch.wires.iter_mut() {
+        for p in w.pins.iter_mut() {
+            if let Some(np) = new_pin(p) {
+                *p = np;
+            }
+        }
+    }
+    for ps in sch.power_symbols.iter_mut() {
+        if let Some(np) = new_pin(&ps.pin) {
+            ps.pin = np;
+        }
+    }
+    for nc in sch.no_connects.iter_mut() {
+        if let Some(np) = new_pin(&nc.pin) {
+            nc.pin = np;
+        }
+    }
+    // what is kept per placed unit under its reference
+    let mut layout = Vec::new();
+    let mut autoplaced = Vec::new();
+    let mut styles = Vec::new();
+    for r in renames {
+        let (old_key, new_key) = (field_key(&r.old, r.unit), field_key(&r.new, r.unit));
+        if let Some(v) = sch.field_layout.remove(&old_key) {
+            layout.push((new_key.clone(), v));
+        }
+        if let Some(v) = sch.extras.fields_autoplaced.remove(&old_key) {
+            autoplaced.push((new_key.clone(), v));
+        }
+        if let Some(v) = sch.extras.body_styles.remove(&old_key) {
+            styles.push((new_key, v));
+        }
+    }
+    sch.field_layout.extend(layout);
+    sch.extras.fields_autoplaced.extend(autoplaced);
+    sch.extras.body_styles.extend(styles);
+    // the user fields and the lock belong to the part: they move with a reference renamed as a whole
+    let mut fields = Vec::new();
+    for (old, new) in &whole {
+        if let Some(f) = sch.user_fields.remove(old) {
+            fields.push((new.clone(), f));
+        }
+    }
+    sch.user_fields.extend(fields);
+    for l in sch.extras.locked.iter_mut() {
+        if let Some(new) = whole.get(l.as_str()) {
+            *l = new.clone();
+        }
+    }
+    sch.extras.locked.sort();
+    sch.extras.locked.dedup();
+    // and the symbols themselves
+    for r in renames {
+        match r.item {
+            Item::Symbol(i) => {
+                if let Some(s) = sch.symbols.get_mut(i) {
+                    s.id = r.new.clone();
+                }
+            }
+            Item::Power(i) => {
+                if let Some(p) = sch.power_symbols.get_mut(i) {
+                    p.id = r.new.clone();
+                }
+            }
+        }
+    }
+    sch.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
+    sch.power_symbols.sort_by(|a, b| a.id.cmp(&b.id));
+    whole
 }

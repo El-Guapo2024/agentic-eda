@@ -45,28 +45,21 @@ impl<'a> Board<'a> {
         self.model.symbol_of(lib_id)
     }
 
-    /// `Cmd::PasteSch` -- see the module doc.
-    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Result<(), Vec<CheckResult>> {
-        if fragment.is_empty() {
-            return Err(vec![CheckResult::fail("ops_empty_paste", "paste", "there is nothing to paste")]);
-        }
-        let src = &fragment.section;
-        let imported = self.schematic_mut_or_create().imported_from_kicad;
-
-        // ---- the library symbols: the design's own win; the fragment's come in only for a name the design lacks ----
-        let mut wanted: Vec<&str> = src.symbols.iter().map(|s| s.lib_id.as_str()).chain(src.power_symbols.iter().map(|p| p.lib_id.as_str())).collect();
-        wanted.sort_unstable();
-        wanted.dedup();
+    /// The library symbols a set of items names, as the design is to have them: the design's own win; a symbol it lacks comes in from `provided`
+    /// (a clipboard's `(lib_symbols ...)`, a file's), published under its own name -- or, when the design has another symbol of that name or the
+    /// symbol is a generated box (`eda:<ref>`, named for a part this design does not have), under a name of its own. Returns the name each
+    /// `lib_id` goes by now, the engine's symbol for it, and the entries to publish.
+    pub(crate) fn merge_lib_symbols(&self, wanted: &[String], provided: &[LibrarySymbol]) -> LibMerge {
         let mut lib_name: BTreeMap<String, String> = BTreeMap::new();
         let mut engine_of: BTreeMap<String, LibSymbol> = BTreeMap::new();
         let mut publish: Vec<LibrarySymbol> = Vec::new();
-        for lib_id in wanted {
+        for lib_id in wanted.iter().map(String::as_str) {
             if let Some(known) = self.design_symbol(lib_id) {
                 lib_name.insert(lib_id.to_string(), lib_id.to_string());
                 engine_of.insert(lib_id.to_string(), known);
                 continue;
             }
-            let Some(theirs) = fragment.lib_symbol(lib_id).map(|t| {
+            let Some(theirs) = provided.iter().find(|s| s.lib_id == lib_id).map(|t| {
                 let mut t = t.clone();
                 t.assign_missing_ids();
                 t
@@ -104,6 +97,22 @@ impl<'a> Board<'a> {
                 publish.push(ours);
             }
         }
+        LibMerge { lib_name, engine_of, publish }
+    }
+
+    /// `Cmd::PasteSch` -- see the module doc.
+    pub(crate) fn paste_sch(&mut self, fragment: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Result<(), Vec<CheckResult>> {
+        if fragment.is_empty() {
+            return Err(vec![CheckResult::fail("ops_empty_paste", "paste", "there is nothing to paste")]);
+        }
+        let src = &fragment.section;
+        let imported = self.schematic_mut_or_create().imported_from_kicad;
+
+        // ---- the library symbols: the design's own win; the fragment's come in only for a name the design lacks ----
+        let mut wanted: Vec<String> = src.symbols.iter().map(|s| s.lib_id.clone()).chain(src.power_symbols.iter().map(|p| p.lib_id.clone())).collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let LibMerge { lib_name, engine_of, publish } = self.merge_lib_symbols(&wanted, &fragment.lib_symbols);
 
         // ---- the numbers ----
         let units_of = |lib_id: &str| fragment.lib_symbol(lib_id).map(|l| l.unit_count).or_else(|| engine_of.get(lib_id).map(|e| e.unit_count)).unwrap_or(1);
@@ -215,6 +224,16 @@ impl<'a> Board<'a> {
         }
         Ok(())
     }
+}
+
+/// What [`Board::merge_lib_symbols`] settled.
+pub(crate) struct LibMerge {
+    /// The name each wanted `lib_id` goes by in the design now.
+    pub lib_name: BTreeMap<String, String>,
+    /// The engine's symbol for each `lib_id` that has a definition.
+    pub engine_of: BTreeMap<String, LibSymbol>,
+    /// The entries the design does not have yet.
+    pub publish: Vec<LibrarySymbol>,
 }
 
 /// Two library symbols draw the same: everything but the name and whether the project has published it.

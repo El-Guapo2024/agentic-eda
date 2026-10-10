@@ -533,55 +533,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     let mut sheets: Vec<&eda_model::ir::SheetInstance> = sch.sheets.iter().collect();
     sheets.sort_by(|a, b| (&a.file, a.at).cmp(&(&b.file, b.at)));
     for s in &sheets {
-        let x = mm(s.at.x);
-        let y = mm(s.at.y);
-        let w = mm(s.size.0);
-        let h = mm(s.size.1);
         let uuid = sheet_uuid(s);
         let page = ctx.sheet_pages.get(&uuid).copied().unwrap_or(1);
-        writeln!(out, "\t(sheet").unwrap();
-        writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
-        write!(out, "{}", fields_autoplaced_token(sch, &s.id)).unwrap();
-        writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
-        writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
-        writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
-        if sch.extras.is_locked(&s.id) {
-            writeln!(out, "\t\t(locked yes)").unwrap();
-        }
-        for f in eda_engine::fields::sheet_fields(sch, s) {
-            write_page_field(&mut out, &f);
-        }
-        for p in &s.pins {
-            let px = mm(p.at.x);
-            let py = mm(p.at.y);
-            let pin_uuid = if looks_like_uuid(&p.id) { p.id.clone() } else { duid(&format!("sheetpin:{uuid}:{}:{}:{}", p.name, p.at.x, p.at.y)) };
-            // The angle is the side of the sheet the pin sits on (`SCH_SHEET_PIN::SetSide`: 0 right, 90 top, 180 left, 270 bottom):
-            // KiCad moves the pin onto that edge when it reads the file, so a pin on the left written as 0 would jump to the right.
-            let angle = if p.at.x <= s.at.x {
-                180
-            } else if p.at.x >= s.at.x + s.size.0 {
-                0
-            } else if p.at.y <= s.at.y {
-                90
-            } else {
-                270
-            };
-            writeln!(out, "\t\t(pin {} {}", sexpr_str(&p.name), label_shape_token(p.shape)).unwrap();
-            writeln!(out, "\t\t\t(at {px} {py} {angle})").unwrap();
-            writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
-            // the pin's text reads into the sheet: left-justified from a pin on the left edge, right-justified from one on the right
-            let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
-            writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify {justify})))").unwrap();
-        }
-        writeln!(out, "\t\t(instances").unwrap();
-        writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
         // The sheet is filed under the path of the screen it is drawn on (its parent), with its own page number: the one the
         // user set (Edit Sheet Page Number), else the sheet's place in the hierarchy.
         let page = if s.page.is_empty() { page.to_string() } else { s.page.clone() };
-        writeln!(out, "\t\t\t\t(path \"{}\" (page {}))", ctx.instance_paths.first().map(String::as_str).unwrap_or("/"), sexpr_str(&page)).unwrap();
-        writeln!(out, "\t\t\t)").unwrap();
-        writeln!(out, "\t\t)").unwrap();
-        writeln!(out, "\t)").unwrap();
+        write_sheet_item(&mut out, sch, s, &page, ctx.instance_paths.first().map(String::as_str).unwrap_or("/"));
     }
 
     // ---- sheet instances (required by KiCad 9 for a valid project-less sheet) ----
@@ -592,6 +549,56 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
 
     writeln!(out, ")").unwrap();
     Ok(out)
+}
+
+/// One `(sheet ...)` item of a screen, as `SCH_IO_KICAD_SEXPR` writes it (`SCH_IO_KICAD_SEXPR::saveSheet`): its place and size, its fields
+/// (`Sheetname`, `Sheetfile`), its pins and the page it has under the path of the screen it is drawn on.
+pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicSection, s: &eda_model::ir::SheetInstance, page: &str, instance_path: &str) {
+    let x = mm(s.at.x);
+    let y = mm(s.at.y);
+    let w = mm(s.size.0);
+    let h = mm(s.size.1);
+    let uuid = sheet_uuid(s);
+    writeln!(out, "\t(sheet").unwrap();
+    writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
+    write!(out, "{}", fields_autoplaced_token(sch, &s.id)).unwrap();
+    writeln!(out, "\t\t(stroke (width 0.1524) (type solid))").unwrap();
+    writeln!(out, "\t\t(fill (color 255 255 194 1.0000))").unwrap();
+    writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
+    if sch.extras.is_locked(&s.id) {
+        writeln!(out, "\t\t(locked yes)").unwrap();
+    }
+    for f in eda_engine::fields::sheet_fields(sch, s) {
+        write_page_field(out, &f);
+    }
+    for p in &s.pins {
+        let px = mm(p.at.x);
+        let py = mm(p.at.y);
+        let pin_uuid = if looks_like_uuid(&p.id) { p.id.clone() } else { duid(&format!("sheetpin:{uuid}:{}:{}:{}", p.name, p.at.x, p.at.y)) };
+        // The angle is the side of the sheet the pin sits on (`SCH_SHEET_PIN::SetSide`: 0 right, 90 top, 180 left, 270 bottom):
+        // KiCad moves the pin onto that edge when it reads the file, so a pin on the left written as 0 would jump to the right.
+        let angle = if p.at.x <= s.at.x {
+            180
+        } else if p.at.x >= s.at.x + s.size.0 {
+            0
+        } else if p.at.y <= s.at.y {
+            90
+        } else {
+            270
+        };
+        writeln!(out, "\t\t(pin {} {}", sexpr_str(&p.name), label_shape_token(p.shape)).unwrap();
+        writeln!(out, "\t\t\t(at {px} {py} {angle})").unwrap();
+        writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
+        // the pin's text reads into the sheet: left-justified from a pin on the left edge, right-justified from one on the right
+        let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
+        writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify {justify})))").unwrap();
+    }
+    writeln!(out, "\t\t(instances").unwrap();
+    writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();
+    writeln!(out, "\t\t\t\t(path \"{instance_path}\" (page {}))", sexpr_str(page)).unwrap();
+    writeln!(out, "\t\t\t)").unwrap();
+    writeln!(out, "\t\t)").unwrap();
+    writeln!(out, "\t)").unwrap();
 }
 
 /// `export_kicad_sch`'s multi-file counterpart (GAPS.md #6): the root

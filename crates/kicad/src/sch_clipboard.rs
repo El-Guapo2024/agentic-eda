@@ -112,10 +112,6 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
     if imported.unresolved_symbols > 0 {
         notes.push(format!("{} symbol(s) had no library symbol in the clipboard and were left out", imported.unresolved_symbols));
     }
-    if !section.sheets.is_empty() {
-        notes.push(format!("{} hierarchical sheet(s) are not pasted", section.sheets.len()));
-        section.sheets.clear();
-    }
     for (tag, what) in [("table", "tables"), ("image", "images")] {
         if sexpr::find_all(root, tag).next().is_some() {
             notes.push(format!("{what} are not pasted"));
@@ -128,7 +124,7 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
     join_bends(&mut section);
     notes.sort();
     notes.dedup();
-    Ok(SchFragment { section, lib_symbols, notes })
+    Ok(SchFragment { section, lib_symbols, notes, sheet_screens: Default::default() })
 }
 
 /// KiCad has one segment to a wire, and a polyline this studio drew is written as one wire per segment. Read back, the segments that meet at a plain
@@ -210,8 +206,11 @@ pub struct CopyOutput {
     pub text: String,
     /// How many items it holds.
     pub items: usize,
-    /// What the selection had that a copy leaves out ("1 hierarchical sheet"), one line each.
+    /// What the selection had that a copy leaves out ("2 symbol(s) without a part to copy"), one line each.
     pub skipped: Vec<String>,
+    /// The files of the hierarchical sheets the text holds: what each one shows is not in the text (KiCad keeps it beside the clipboard,
+    /// `m_supplementaryClipboard`), so the caller keeps their screens.
+    pub sheet_files: Vec<String>,
 }
 
 /// One symbol of the selection, as the clipboard will have it.
@@ -411,16 +410,13 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     let junctions: Vec<&eda_model::ir::Junction> = sch.junctions.iter().filter(|j| wanted(&j.id)).collect();
     let lines: Vec<&eda_model::ir::SchLine> = sch.lines.iter().filter(|l| wanted(&l.id) && l.pts.len() >= 2).collect();
     let graphics: Vec<&eda_model::sch_extras::SchGraphic> = sch.extras.graphics.iter().filter(|g| wanted(&g.id)).collect();
-    let sheets = sch.sheets.iter().filter(|s| wanted(&s.id)).count();
-    if sheets > 0 {
-        skipped.push(format!("{sheets} hierarchical sheet(s)"));
-    }
+    let sheets: Vec<&eda_model::ir::SheetInstance> = sch.sheets.iter().filter(|s| wanted(&s.id)).collect();
     let dropped_symbols = sch.symbols.iter().filter(|s| wanted(&s.id)).count() - symbols.len();
     if dropped_symbols > 0 {
         skipped.push(format!("{dropped_symbols} symbol(s) without a part to copy"));
     }
 
-    let items = symbols.len() + powers.len() + wires.len() + labels.len() + texts.len() + no_connects.len() + bus_entries.len() + junctions.len() + lines.len() + graphics.len();
+    let items = symbols.len() + powers.len() + wires.len() + labels.len() + texts.len() + no_connects.len() + bus_entries.len() + junctions.len() + lines.len() + graphics.len() + sheets.len();
     if items == 0 {
         return Err(vec![CheckResult::fail("clipboard_empty", "selection", "nothing in the selection can be copied")]);
     }
@@ -542,7 +538,15 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim no)\n\t\t(at {x} {y} {})\n\t\t(effects (font (size {size} {size})) (justify left bottom))\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), fmt_mm_f(t.angle as f64 / 1000.0));
     }
 
-    Ok(CopyOutput { text: out, items, skipped })
+    // Hierarchical sheets: the sheet symbols, with their pins; their screens are not in the text.
+    for s in &sheets {
+        crate::write_sheet_item(&mut out, sch, s, if s.page.is_empty() { "1" } else { &s.page }, "/");
+    }
+    let mut sheet_files: Vec<String> = sheets.iter().map(|s| s.file.clone()).collect();
+    sheet_files.sort();
+    sheet_files.dedup();
+
+    Ok(CopyOutput { text: out, items, skipped, sheet_files })
 }
 
 #[cfg(test)]

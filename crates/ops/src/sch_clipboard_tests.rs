@@ -36,7 +36,7 @@ fn fragment(f: impl FnOnce(&mut SchematicSection)) -> SchFragment {
     let mut section = SchematicSection { imported_from_kicad: true, ..Default::default() };
     f(&mut section);
     let lib_symbols = ["Device:R", "Device:C", "power:GND"].iter().filter_map(|id| eda_model::symbol::builtin(id)).map(|s| LibrarySymbol::from_engine_symbol(&s)).collect();
-    SchFragment { section, lib_symbols, notes: vec![] }
+    SchFragment { section, lib_symbols, notes: vec![], sheet_screens: Default::default() }
 }
 
 fn paste(f: &SchFragment, dx: Um, dy: Um, mode: PasteMode) -> Cmd {
