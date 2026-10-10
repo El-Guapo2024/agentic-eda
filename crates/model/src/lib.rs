@@ -16,6 +16,7 @@ pub mod kicad_font;
 pub mod kicad_geom;
 pub mod modules;
 pub mod outline;
+pub mod pad_geom;
 pub mod page;
 pub mod rules;
 pub mod sch_clipboard;

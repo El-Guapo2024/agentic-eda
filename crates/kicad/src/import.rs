@@ -44,9 +44,9 @@
 //!   [`ImportNotes::track_arcs_kept`], and written back as an arc), and a board-level `gr_arc` is a
 //!   [`eda_model::ir::Shape::Arc`], exactly (KiCad's own three-point arc storage is our `Arc`'s storage
 //!   too).
-//! - **Non-rect/roundrect/circle/oval pads** (trapezoid, custom): mapped to
-//!   `PadShape::Rect` at the pad's nominal `size`, counted in
-//!   [`ImportNotes::non_rect_pad_shapes_approximated`].
+//! - **Pad shapes** are all kept (`crate::pad_shape`): a trapezoid with its delta, a chamfered rectangle with its ratio and corners,
+//!   a custom pad with its anchor, clearance mode and primitives, and the copper's offset from the pad's position. A padstack that
+//!   differs between layers (`(padstack (mode front_inner_back) ..)`) is read as its front shape.
 //! - **Board-level graphics and text** (`gr_line`/`gr_rect`/`gr_circle`/
 //!   `gr_poly`/`gr_arc`/`gr_curve`/`gr_text`): imported into `design.drawings` as
 //!   [`eda_model::ir::Shape`]/[`eda_model::ir::Text`] (see
@@ -78,6 +78,8 @@ pub struct ImportNotes {
     /// Track `(arc ...)`s kept as arcs (`Track::arc_mid_offset`); informational, nothing was lost.
     #[serde(default)]
     pub track_arcs_kept: usize,
+    /// Always 0 now: a trapezoid and a custom pad are kept as they are ([`crate::pad_shape`]). (Kept so an `ImportNotes` written by an
+    /// older build still reads.)
     pub non_rect_pad_shapes_approximated: usize,
     /// A `(pad ...)` whose own `(layers ...)` list names no copper layer at
     /// all (no `F.Cu`/`B.Cu`/`*.Cu`/inner `.Cu`) -- dropped on import rather
@@ -243,7 +245,7 @@ pub(crate) fn import_rot_millideg(file_deg: f64) -> u32 {
     md.rem_euclid(360_000) as u32
 }
 
-fn xy_point(list: &[Sexpr]) -> Option<Point> {
+pub(crate) fn xy_point(list: &[Sexpr]) -> Option<Point> {
     let (x, y) = (sexpr::num(list, 1)?, sexpr::num(list, 2)?);
     Some(Point { x: mm_to_um(x), y: mm_to_um(y) })
 }
@@ -876,20 +878,9 @@ pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, 
         "smd" | "connect" => PadKind::Smd,
         _ => PadKind::ThroughHole, // "thru_hole"
     };
-    let shape_tok = sexpr::txt(pad, 3).unwrap_or("");
-    let pad_shape = match shape_tok {
-        "circle" => PadShape::Circle,
-        "oval" => PadShape::Oval,
-        "roundrect" => PadShape::RoundRect,
-        "rect" => PadShape::Rect,
-        _ => {
-            // trapezoid / custom: no equivalent shape, keep the pad's
-            // nominal rectangle so it still occupies roughly the right
-            // footprint.
-            notes.non_rect_pad_shapes_approximated += 1;
-            PadShape::Rect
-        }
-    };
+    // The shape and everything that goes with it -- a trapezoid's delta, a chamfered rectangle's corners, a custom pad's primitives,
+    // the copper's offset (`parsePAD`).
+    let read = crate::pad_shape::read_pad_shape(pad, fp_side);
 
     // A pad with a `(layers ...)` list naming no copper layer at all has no
     // copper to flash anywhere -- see `ImportNotes::non_copper_pads_skipped`.
@@ -960,9 +951,7 @@ pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, 
         None => (None, None),
     };
 
-    let roundrect_ratio = sexpr::find(pad, "roundrect_rratio").and_then(|r| sexpr::num(r, 1));
-
-    Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: pad_shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio, opposite_side })
+    Some(Pad { number, at: (mm_to_um(px), mm_to_um(py)), size: (mm_to_um(w), mm_to_um(h)), shape: read.shape, kind: pad_kind, drill, drill_slot, rot, roundrect_ratio: read.roundrect_ratio, opposite_side, ext: read.ext })
 }
 
 /// The cache key `import_footprints` should use for an instance whose lib id
@@ -1726,7 +1715,7 @@ fn filled_of(item: &[Sexpr]) -> bool {
 /// One `PCB_SHAPE` item (`gr_line`, `gr_arc`, `gr_rect`, `gr_circle`, `gr_poly`, `gr_curve`, or the footprint-level `fp_` form of
 /// each: `tag` is the board-level name) as a [`Shape`]; every point goes through `at`, which takes a footprint's local frame to the
 /// board's. `None` when the item lacks what it needs.
-fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Point) -> Option<Shape> {
+pub(crate) fn graphic_shape(item: &[Sexpr], tag: &str, at: impl Fn(Point) -> Point) -> Option<Shape> {
     let pt = |name: &str| sexpr::find(item, name).and_then(xy_point).map(&at);
     let (layer, stroke_width, filled) = (layer_of(item), stroke_width_of(item), filled_of(item));
     Some(match tag {
@@ -2157,8 +2146,8 @@ mod tests {
     #[test]
     fn dedup_footprint_key_gives_mixed_side_instances_of_one_lib_id_separate_slots() {
         let mut explicit: BTreeMap<String, Footprint> = BTreeMap::new();
-        let top_pads = vec![Pad { opposite_side: false, number: "1".into(), at: (-598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
-        let bottom_pads = vec![Pad { opposite_side: false, number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let top_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (-598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
+        let bottom_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
 
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
         let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads);

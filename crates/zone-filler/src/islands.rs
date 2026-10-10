@@ -172,13 +172,17 @@ pub fn find_isolated_islands(zones: &[(&Zone, &ShapePolySet)], input: &FillInput
     // Items with a net: pads, vias, tracks.
     for pad in &input.pads {
         let Some(net) = pad.net.as_deref() else { continue };
-        let outline = shape::exact_polygon(&pad.copper, max_error);
-        if outline.len() < 3 {
-            continue;
-        }
         let (b0, b1, b2, b3) = shape::bounds(&pad.copper);
         let centre = pad.geometry.map(|g| g.center).unwrap_or(Point64::new((b0 + b2) / 2, (b1 + b3) / 2));
-        nodes.push(Node { kind: Kind::Pad, net, layers: pad.layers.iter().map(String::as_str).collect(), bbox: (b0, b1, b2, b3), outline, anchors: vec![centre], fragment: None, index: None });
+        // A custom pad is several outlines (its anchor and primitives): each one is a node, and they join through the zone and the
+        // pad's own overlaps like any other copper of the same net.
+        for outline in shape::exact_polygons(&pad.copper, max_error) {
+            if outline.len() < 3 {
+                continue;
+            }
+            let bbox = shape::bounds(&Shape::Polygon { pts: outline.clone() });
+            nodes.push(Node { kind: Kind::Pad, net, layers: pad.layers.iter().map(String::as_str).collect(), bbox, outline, anchors: vec![centre], fragment: None, index: None });
+        }
     }
     for via in &input.vias {
         let Some(net) = via.net.as_deref() else { continue };

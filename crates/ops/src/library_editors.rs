@@ -381,6 +381,7 @@ mod verb_tests {
             trapezoid_delta: None,
             chamfer_ratio: None,
             chamfer_corners: eda_model::ir::ChamferCorners::default(),
+            custom: None,
             layers: vec![],
             clearance_override: None,
             thermal_gap_override: None,

@@ -146,6 +146,8 @@ pub fn hull_of(shape: &Shape, clearance: Um, walkaround_width: Um) -> Vec<Point>
             convex_hull(&expanded)
         }
         Shape::Strokes { .. } => Vec::new(), // never a PNS item; see item.rs.
+        // A custom pad: the convex hull of the hulls of its parts. (The router's own hull, `primitive_hull`, keeps them apart.)
+        Shape::Compound { ref parts } => convex_hull(&parts.iter().flat_map(|p| hull_of(p, clearance, walkaround_width)).collect::<Vec<_>>()),
     }
 }
 
@@ -439,6 +441,13 @@ pub fn primitive_hull(shape: &Shape, clearance: Um, walk: Um) -> Vec<Point> {
             union_outline(&hulls)
         }
         Shape::Polygon { ref pts } => convex_hull_octagon(pts, cl),
+        // `SOLID::Hull` of a compound: the hull of each primitive, unioned (`hullSet.Simplify(); Outline( 0 )`).
+        Shape::Compound { ref parts } => match parts.as_slice() {
+            [only] => primitive_hull(only, clearance, walk),
+            _ => union_outline(&parts.iter().map(|p| primitive_hull(p, clearance, walk)).collect::<Vec<_>>()),
+        },
+        // A stroked arc (a custom pad's primitive): a segment per chord, unioned.
+        Shape::Strokes { ref segs, r } => union_outline(&segs.iter().map(|s| segment_hull(s.a, s.b, 2 * r, clearance, walk)).collect::<Vec<_>>()),
         _ => hull_of(shape, clearance, walk),
     }
 }

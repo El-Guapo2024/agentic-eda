@@ -96,7 +96,7 @@ fn a_pad_turned_forty_five_degrees_turns_its_spokes_with_it() {
     // The same relief, but the pad is turned 45 degrees: its spokes run along the diagonals, so the gap is bridged
     // on the diagonal and open on the axes.
     let pad = FillPad {
-        geometry: Some(PadGeometry { center: Point64::new(1000, 1000), size: (400, 400), circular: false, default_spoke_angle_mdeg: 90_000, orientation_mdeg: 45_000 }),
+        geometry: Some(PadGeometry { center: Point64::new(1000, 1000), size: (400, 400), circular: false, default_spoke_angle_mdeg: 90_000, orientation_mdeg: 45_000, box_offset: (0, 0) }),
         ..gnd_pad()
     };
     let fill = fill_with(&relief_zone(), pad);

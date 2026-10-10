@@ -1445,7 +1445,7 @@ mod tests {
     use eda_model::ir::Millideg;
 
     fn test_pad(number: &str, at: (Um, Um), size: (Um, Um), shape: PadShape) -> Pad {
-        Pad { opposite_side: false, number: number.into(), at, size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
+        Pad { opposite_side: false, ext: Default::default(), number: number.into(), at, size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
     }
 
     /// One part, J1, on a 20 mm board with its origin at (10000, 10000): pad 1 on net "B", pad 2 (if any) on net "C".

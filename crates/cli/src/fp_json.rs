@@ -77,6 +77,9 @@ fn shape_name(s: PadShape) -> &'static str {
         PadShape::RoundRect => "round_rect",
         PadShape::Circle => "circle",
         PadShape::Oval => "oval",
+        PadShape::Trapezoid => "trapezoid",
+        PadShape::ChamferedRect => "chamfered_rect",
+        PadShape::Custom => "custom",
     }
 }
 

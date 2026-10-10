@@ -75,6 +75,9 @@ pub struct PadGeometry {
     pub default_spoke_angle_mdeg: i64,
     /// `PAD::GetOrientation`, millidegrees, KiCad's sign convention.
     pub orientation_mdeg: i64,
+    /// Where the centre of the `size` box is from `center`, before the orientation is applied: `(0, 0)` unless the pad's bounding box is
+    /// not centred on its shape (`dummy_pad.GetBoundingBox` of a custom pad whose primitives reach farther one way, or a trapezoid).
+    pub box_offset: (i64, i64),
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +103,9 @@ pub struct FillPad {
     pub spoke_angle_mdeg: Option<i64>,
     /// `PAD_ATTRIB::PTH`: what `ZONE_CONNECTION::THT_THERMAL` thermal-relieves.
     pub plated_through_hole: bool,
+    /// `CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`: the knockout round this custom pad is the convex hull of its copper at the gap
+    /// (`ZONE_FILLER::addKnockout`), not the copper at the gap.
+    pub custom_convex_hull: bool,
 }
 
 impl Default for FillPad {
@@ -117,6 +123,7 @@ impl Default for FillPad {
             spoke_width: None,
             spoke_angle_mdeg: None,
             plated_through_hole: false,
+            custom_convex_hull: false,
         }
     }
 }
@@ -269,8 +276,7 @@ pub const EXTRA_MARGIN: i64 = 1;
 /// polygonal approximation's error lands *outside* the true boundary (`GetCircleToPolyCorrection` grows the radius by
 /// `aMaxError`), so the hole never comes closer than the gap anywhere along a curve.
 fn add_knockout_exact(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_error: i64) {
-    let poly = shape::shape_to_polygon_outside(shape, gap, max_error);
-    if poly.len() >= 3 {
+    for poly in shape::polygons_outside(shape, gap, max_error) {
         holes.add_outline(poly);
     }
 }
@@ -278,6 +284,20 @@ fn add_knockout_exact(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_err
 /// The same with the fill's extra margin (`gap + extra_margin`), used for every electrical clearance.
 fn add_knockout(holes: &mut ShapePolySet, shape: &Shape, gap: i64, max_error: i64) {
     add_knockout_exact(holes, shape, gap + EXTRA_MARGIN, max_error);
+}
+
+/// `ZONE_FILLER::addKnockout( pad, aLayer, aGap, holes )`: the pad's copper at `gap`; for a custom pad with the convex-hull clearance
+/// option, the convex hull of that (`BuildConvexHull( convex_hull, poly )`).
+fn add_pad_knockout(holes: &mut ShapePolySet, pad: &FillPad, gap: i64, max_error: i64) {
+    if pad.custom_convex_hull {
+        let outlines = shape::polygons_outside(&pad.copper, gap, max_error);
+        let hull = shape::convex_hull(&outlines);
+        if hull.len() >= 3 {
+            holes.add_outline(hull);
+        }
+    } else {
+        add_knockout_exact(holes, &pad.copper, gap, max_error);
+    }
 }
 
 fn bbox_of(shape: &Shape) -> (i64, i64, i64, i64) {
@@ -418,14 +438,14 @@ where
                 }
                 let gap = thermal_gap_of(pad, zone);
                 // `addKnockout( pad, aLayer, padClearance, holes )` -- the bare thermal gap, no extra margin.
-                add_knockout_exact(&mut thermal_holes, &pad.copper, gap, max_error);
+                add_pad_knockout(&mut thermal_holes, pad, gap, max_error);
                 thermal_items.push(thermal_item_of_pad(pad, zone, gap, hatch, epsilon));
             }
             PadConnection::Full => { /* no knockout: connects directly */ }
             PadConnection::None => {
                 // `PHYSICAL_CLEARANCE` (null here: 0), maxed with the zone's local clearance; no extra margin.
                 let gap = zone.clearance;
-                add_knockout_exact(&mut thermal_holes, &pad.copper, gap, max_error);
+                add_pad_knockout(&mut thermal_holes, pad, gap, max_error);
                 if let Some(hole) = &pad.hole {
                     add_knockout_exact(&mut thermal_holes, hole, gap, max_error);
                 }
@@ -481,7 +501,7 @@ where
                 (g, g.max(input.hole_clearance))
             }
         };
-        add_knockout(&mut clearance_holes, &pad.copper, gap, max_error);
+        add_pad_knockout(&mut clearance_holes, pad, gap + EXTRA_MARGIN, max_error);
         if let Some(hole) = &pad.hole {
             add_knockout(&mut clearance_holes, hole, hole_gap, max_error);
         }
@@ -728,6 +748,7 @@ fn thermal_item_of_pad(pad: &FillPad, zone: &Zone, gap: i64, hatch: bool, epsilo
         circular: false,
         default_spoke_angle_mdeg: 90_000,
         orientation_mdeg: 0,
+        box_offset: (0, 0),
     });
     let circular = geometry.circular;
     // Spoke width: never wider than the pad's minor axis (otherwise the relief is no relief and the spoke count test can
@@ -750,6 +771,7 @@ fn thermal_item_of_pad(pad: &FillPad, zone: &Zone, gap: i64, hatch: bool, epsilo
             orientation_mdeg: geometry.orientation_mdeg,
             thermal_gap: gap,
             spoke_width: spoke_w,
+            box_offset: geometry.box_offset,
         },
     }
 }
@@ -766,7 +788,7 @@ fn thermal_item_of_via(via: &FillVia, zone: &Zone, _epsilon: i64) -> ThermalItem
         position: via.at,
         gap,
         spoke_width,
-        source: spokes::SpokeSource { position: via.at, size: (via.diameter, via.diameter), circular: true, angle_mdeg: 45_000, orientation_mdeg: 0, thermal_gap: gap, spoke_width: spoke_w },
+        source: spokes::SpokeSource { position: via.at, size: (via.diameter, via.diameter), circular: true, angle_mdeg: 45_000, orientation_mdeg: 0, thermal_gap: gap, spoke_width: spoke_w, box_offset: (0, 0) },
     }
 }
 
@@ -798,12 +820,17 @@ fn shape_touches_fill(fill: &ShapePolySet, shape: &Shape, max_error: i64) -> boo
     if spokes::poly_set_contains(fill, centre) {
         return true;
     }
-    let pad_poly = shape::exact_polygon(shape, max_error);
-    if pad_poly.len() < 3 {
+    let mut pad_polys = ShapePolySet::new();
+    for poly in shape::exact_polygons(shape, max_error) {
+        if poly.len() >= 3 {
+            pad_polys.add_outline(poly);
+        }
+    }
+    if pad_polys.is_empty() {
         return false;
     }
     let mut probe = fill.clone();
-    probe.boolean_intersection(&ShapePolySet::from_outline(pad_poly));
+    probe.boolean_intersection(&pad_polys);
     !probe.is_empty()
 }
 

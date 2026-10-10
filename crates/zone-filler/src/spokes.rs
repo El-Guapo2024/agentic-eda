@@ -52,6 +52,9 @@ pub struct SpokeSource {
     pub thermal_gap: i64,
     /// The spoke width, already clamped to the pad and checked against the zone's minimum thickness.
     pub spoke_width: i64,
+    /// Where the `size` box is centred from `position` before the orientation is applied (`box.GetCenter()` of
+    /// `buildSpokesFromOrigin`): `(0, 0)` but for a pad whose bounding box is not centred on its shape.
+    pub box_offset: (i64, i64),
 }
 
 /// `KiROUND`: round half away from zero.
@@ -150,7 +153,7 @@ pub fn build_spokes(src: &SpokeSource, zone_half_width: i64, epsilon: i64) -> Ve
             let outline: LineChain = spoke
                 .into_iter()
                 .map(|(x, y)| {
-                    let (rx, ry) = rotate_point(x, y, src.orientation_mdeg);
+                    let (rx, ry) = rotate_point(x + src.box_offset.0, y + src.box_offset.1, src.orientation_mdeg);
                     Point64::new(src.position.x + rx, src.position.y + ry)
                 })
                 .collect();
@@ -284,7 +287,7 @@ mod tests {
     use super::*;
 
     fn src(circular: bool, angle: i64, orientation: i64) -> SpokeSource {
-        SpokeSource { position: Point64::new(1000, 2000), size: (1000, 600), circular, angle_mdeg: angle, orientation_mdeg: orientation, thermal_gap: 200, spoke_width: 300 }
+        SpokeSource { position: Point64::new(1000, 2000), size: (1000, 600), circular, angle_mdeg: angle, orientation_mdeg: orientation, thermal_gap: 200, spoke_width: 300, box_offset: (0, 0) }
     }
 
     #[test]
@@ -317,7 +320,7 @@ mod tests {
 
     #[test]
     fn a_circular_pad_defaults_to_the_x_shape() {
-        let s = SpokeSource { position: Point64::new(0, 0), size: (1000, 1000), circular: true, angle_mdeg: 45_000, orientation_mdeg: 0, thermal_gap: 200, spoke_width: 300 };
+        let s = SpokeSource { position: Point64::new(0, 0), size: (1000, 1000), circular: true, angle_mdeg: 45_000, orientation_mdeg: 0, thermal_gap: 200, spoke_width: 300, box_offset: (0, 0) };
         let spokes = build_spokes(&s, 125, 5);
         for sp in &spokes {
             let (x, y) = (sp.test_point.x, sp.test_point.y);

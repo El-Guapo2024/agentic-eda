@@ -20,15 +20,16 @@
 //! # Pad edits
 //!
 //! A [`PadEdit`] changes one pad of one footprint (the k-th pad that carries a number, as the studio names it `REF.NUM#k`):
-//! the shape, size, hole, offset, corner radius and the mask/paste margins of `dialog_pad_properties.cpp`. The pad's own clearance and
+//! the shape, size, hole, offset, corner radius, a trapezoid's delta, a chamfered rectangle's ratio and corners, a custom pad's
+//! basic shapes and the mask/paste margins of `dialog_pad_properties.cpp`. The pad's own clearance and
 //! its zone connection, thermal relief gap, spoke width and angle are the zone filler's overlay (`DrawingsSection::zone_overrides`,
 //! `Cmd::SetPadZoneOverrides`), not repeated here: a pad has one clearance.
 //! [`patched_footprint`] lays the edits on a library footprint; `ConstraintModel::instance_footprints` carries the result so
 //! every reader of `footprint_of` (the gates, the router, the exports) sees the pad as edited. What the engine's [`Pad`] has no
-//! field for (the offset, the margins) is read from the edit by the `.kicad_pcb` writer.
+//! field for (the margins) is read from the edit by the `.kicad_pcb` writer.
 
-use crate::footprint::{to_board, Footprint, Pad, PadKind, PadShape};
-use crate::ir::{Design, FootprintInstance, LabelSide, Millideg, Point, Side, Um};
+use crate::footprint::{to_board, Footprint, Pad, PadCustom, PadKind, PadShape};
+use crate::ir::{ChamferCorners, Design, FootprintInstance, LabelSide, Millideg, Point, Side, Um};
 use serde::{Deserialize, Serialize};
 
 /// The mandatory fields' names, as `PCB_FIELD::GetCanonicalName` gives them.
@@ -304,6 +305,18 @@ pub struct PadEdit {
     /// `PAD::SetLocalSolderPasteMarginRatio`: a fraction of the pad's size (-0.5 is 50% smaller).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solder_paste_margin_ratio: Option<f64>,
+    /// `PAD::SetDelta`: a trapezoid's two deltas, µm (KiCad keeps one of them zero); `(0, 0)` takes the delta away.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trapezoid_delta: Option<(Um, Um)>,
+    /// `PAD::SetChamferRectRatio`: the chamfer as a fraction of the shorter side, `0..=0.5`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chamfer_ratio: Option<f64>,
+    /// `PAD::SetChamferPositions`: which corners of a chamfered rectangle are cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chamfer_corners: Option<ChamferCorners>,
+    /// A custom pad's anchor, clearance option and basic shapes (`PAD::ReplacePrimitives`), replaced whole.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<PadCustom>,
 }
 
 impl PadEdit {
@@ -325,12 +338,27 @@ impl PadEdit {
             && self.solder_mask_margin.is_none()
             && self.solder_paste_margin.is_none()
             && self.solder_paste_margin_ratio.is_none()
+            && self.trapezoid_delta.is_none()
+            && self.chamfer_ratio.is_none()
+            && self.chamfer_corners.is_none()
+            && self.custom.is_none()
     }
 
-    /// Whether this edit changes the pad's geometry the engine knows (shape, size, hole, type, rotation, corner radius), as
-    /// opposed to what only the `.kicad_pcb` carries (offset, margins).
+    /// Whether this edit changes the pad's geometry the engine knows (shape, size, hole, type, rotation, corner radius, the copper's
+    /// offset, a trapezoid's delta, a chamfer, a custom pad's shapes), as opposed to what only the `.kicad_pcb` carries (the margins).
     pub fn changes_engine_pad(&self) -> bool {
-        self.kind.is_some() || self.shape.is_some() || self.size.is_some() || self.drill.is_some() || self.drill_slot.is_some() || self.rot.is_some() || self.roundrect_ratio.is_some()
+        self.kind.is_some()
+            || self.shape.is_some()
+            || self.size.is_some()
+            || self.drill.is_some()
+            || self.drill_slot.is_some()
+            || self.rot.is_some()
+            || self.roundrect_ratio.is_some()
+            || self.offset.is_some()
+            || self.trapezoid_delta.is_some()
+            || self.chamfer_ratio.is_some()
+            || self.chamfer_corners.is_some()
+            || self.custom.is_some()
     }
 
     /// The same pad, identified: `REF.NUM` for the first pad with the number, `REF.NUM#k` for the k-th (k from 2).
@@ -534,8 +562,9 @@ pub fn pad_index(footprint: &Footprint, number: &str, nth: u32) -> Option<usize>
     footprint.pads.iter().enumerate().filter(|(_, p)| p.number == number).map(|(i, _)| i).nth(nth.max(1) as usize - 1)
 }
 
-/// What editing the pad does to the engine's pad: shape, size, hole, type, rotation and corner radius. The offset and the
-/// margins have no place in a [`Pad`]; the writer reads them from the [`PadEdit`].
+/// What editing the pad does to the engine's pad: shape, size, hole, type, rotation, corner radius, and the rest of its padstack layer
+/// (the copper's offset, a trapezoid's delta, a chamfered rectangle's ratio and corners, a custom pad's shapes). The margins have no
+/// place in a [`Pad`]; the writer reads them from the [`PadEdit`].
 pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
     if let Some(k) = e.kind {
         pad.kind = k;
@@ -550,10 +579,6 @@ pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
     if let Some(sz) = e.size {
         pad.size = sz;
     }
-    // `PAD::SetShape( CIRCLE )` keeps the pad square: KiCad has one size for a circle.
-    if pad.shape == PadShape::Circle {
-        pad.size.1 = pad.size.0;
-    }
     if e.drill.is_some() || e.drill_slot.is_some() {
         pad.drill = e.drill;
         pad.drill_slot = if e.drill.is_some() { None } else { e.drill_slot };
@@ -564,12 +589,51 @@ pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
     if let Some(r) = e.roundrect_ratio {
         pad.roundrect_ratio = Some(r);
     }
-    // A pad turned into a rounded rectangle without a ratio takes KiCad's own default.
-    if pad.shape == PadShape::RoundRect && pad.roundrect_ratio.is_none() {
-        pad.roundrect_ratio = Some(0.25);
+    if let Some(o) = e.offset {
+        pad.ext.offset = (o.x != 0 || o.y != 0).then_some((o.x, o.y));
     }
-    if pad.shape != PadShape::RoundRect {
+    if let Some(d) = e.trapezoid_delta {
+        pad.ext.trapezoid_delta = Some(d).filter(|d| *d != (0, 0));
+    }
+    if let Some(r) = e.chamfer_ratio {
+        pad.ext.chamfer_ratio = Some(r.clamp(0.0, 0.5));
+    }
+    if let Some(c) = e.chamfer_corners {
+        pad.ext.chamfer_corners = c;
+    }
+    if let Some(c) = &e.custom {
+        pad.ext.custom = Some(c.clone());
+    }
+    // `PAD::SetShape( CIRCLE )` keeps the pad square: KiCad has one size for a circle (and for a custom pad's circular anchor).
+    if pad.shape == PadShape::Circle || (pad.shape == PadShape::Custom && pad.ext.custom.as_ref().is_none_or(|c| c.anchor == crate::footprint::PadAnchor::Circle)) {
+        pad.size.1 = pad.size.0;
+    }
+    // A pad turned into a rounded or chamfered rectangle without a ratio takes KiCad's own default.
+    if matches!(pad.shape, PadShape::RoundRect | PadShape::ChamferedRect) {
+        if pad.roundrect_ratio.is_none() {
+            pad.roundrect_ratio = Some(0.25);
+        }
+    } else {
         pad.roundrect_ratio = None;
+    }
+    // What belongs to one shape goes with it: a trapezoid's delta, a chamfer's ratio and corners, a custom pad's shapes.
+    if pad.shape == PadShape::ChamferedRect {
+        if pad.ext.chamfer_ratio.is_none() {
+            pad.ext.chamfer_ratio = Some(0.2);
+        }
+    } else {
+        pad.ext.chamfer_ratio = None;
+        pad.ext.chamfer_corners = ChamferCorners::default();
+    }
+    if pad.shape != PadShape::Trapezoid {
+        pad.ext.trapezoid_delta = None;
+    }
+    if pad.shape == PadShape::Custom {
+        if pad.ext.custom.is_none() {
+            pad.ext.custom = Some(PadCustom::default());
+        }
+    } else {
+        pad.ext.custom = None;
     }
 }
 
@@ -606,8 +670,25 @@ pub fn pad_edits_between(base: &Footprint, edited: &Footprint) -> Vec<PadEdit> {
         if pad.rot != was.rot {
             e.rot = Some(pad.rot);
         }
-        if pad.shape == PadShape::RoundRect && (pad.roundrect_ratio.unwrap_or(0.25) - was.roundrect_ratio.unwrap_or(0.25)).abs() > 1e-4 {
+        if matches!(pad.shape, PadShape::RoundRect | PadShape::ChamferedRect) && (pad.roundrect_ratio.unwrap_or(0.25) - was.roundrect_ratio.unwrap_or(0.25)).abs() > 1e-4 {
             e.roundrect_ratio = pad.roundrect_ratio.or(Some(0.25));
+        }
+        if pad.ext.offset != was.ext.offset {
+            e.offset = Some(pad.ext.offset.map(|(x, y)| Point { x, y }).unwrap_or_default());
+        }
+        if pad.shape == PadShape::Trapezoid && pad.ext.trapezoid_delta != was.ext.trapezoid_delta {
+            e.trapezoid_delta = Some(pad.ext.trapezoid_delta.unwrap_or((0, 0)));
+        }
+        if pad.shape == PadShape::ChamferedRect {
+            if (pad.ext.chamfer_ratio.unwrap_or(0.2) - was.ext.chamfer_ratio.unwrap_or(0.2)).abs() > 1e-4 {
+                e.chamfer_ratio = pad.ext.chamfer_ratio.or(Some(0.2));
+            }
+            if pad.ext.chamfer_corners != was.ext.chamfer_corners {
+                e.chamfer_corners = Some(pad.ext.chamfer_corners);
+            }
+        }
+        if pad.shape == PadShape::Custom && pad.ext.custom != was.ext.custom {
+            e.custom = pad.ext.custom.clone();
         }
         if !e.is_empty() {
             out.push(e);
@@ -636,7 +717,7 @@ mod tests {
     }
 
     fn pad(number: &str, at: (Um, Um)) -> Pad {
-        Pad { number: number.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false }
+        Pad { number: number.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext: Default::default() }
     }
 
     #[test]

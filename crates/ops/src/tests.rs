@@ -1463,6 +1463,7 @@ fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
         trapezoid_delta: None,
         chamfer_ratio: None,
         chamfer_corners: eda_model::ir::ChamferCorners::default(),
+        custom: None,
         layers: vec!["F.Cu".into(), "F.Paste".into(), "F.Mask".into()],
         clearance_override: None,
         thermal_gap_override: None,

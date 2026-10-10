@@ -210,7 +210,7 @@ pub fn resolve_library_footprints(model: &mut ConstraintModel, lib_root: &Path) 
 /// round-trips (`offset`/`clearance`/`layers`/`roundrect_rratio`/`drill`).
 /// See PARITY-fpedit.md for the tracked gap.
 pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
-    use eda_model::ir::{LibraryPadShape, Shape};
+    use eda_model::ir::Shape;
     use std::fmt::Write as _;
 
     let mut out = String::new();
@@ -300,12 +300,10 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
     }
 
     for pad in &fp.pads {
-        let shape = match pad.shape {
-            LibraryPadShape::Circle => "circle",
-            LibraryPadShape::Rect | LibraryPadShape::Trapezoid => "rect",
-            LibraryPadShape::Oval => "oval",
-            LibraryPadShape::RoundRect | LibraryPadShape::ChamferedRect => "roundrect",
-        };
+        // The engine's twin of the pad has the shape whole (trapezoid delta, chamfer, primitives, offset): written as KiCad does.
+        let engine = pad.to_engine_pad();
+        let shape = crate::pad_shape::shape_token(engine.shape);
+        let shape_text = crate::pad_shape::write_pad_shape(engine.shape, engine.roundrect_ratio, &engine.ext, eda_model::ir::Side::Top);
         let kind = match pad.kind {
             eda_model::PadKind::Smd => "smd",
             eda_model::PadKind::ThroughHole => "thru_hole",
@@ -315,24 +313,29 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
         let angle_deg = crate::pad_file_angle(eda_model::ir::Side::Top, 0, pad.rot);
         write!(out, "\t(pad {} {kind} {shape} (at {} {} {angle_deg})", crate::sexpr_str(&pad.number), crate::mm(pad.at.x), crate::mm(pad.at.y)).unwrap();
         write!(out, " (size {} {})", crate::mm(pad.size.0), crate::mm(pad.size.1)).unwrap();
-        if matches!(pad.shape, LibraryPadShape::RoundRect | LibraryPadShape::ChamferedRect) {
-            let ratio = if pad.shape == LibraryPadShape::ChamferedRect { pad.chamfer_ratio } else { pad.roundrect_ratio };
-            write!(out, " (roundrect_rratio {})", crate::fmt_mm_f(ratio.unwrap_or(0.25))).unwrap();
-        }
-        if pad.offset.x != 0 || pad.offset.y != 0 {
-            write!(out, " (offset {} {})", crate::mm(pad.offset.x), crate::mm(pad.offset.y)).unwrap();
-        }
+        write!(out, "{}{}", shape_text.delta, shape_text.corners).unwrap();
+        let offset = shape_text.offset.map(|(ox, oy)| format!(" (offset {} {})", crate::mm(ox), crate::mm(oy))).unwrap_or_default();
         match pad.kind {
             eda_model::PadKind::ThroughHole | eda_model::PadKind::NonPlatedHole => match (pad.drill, pad.drill_slot) {
                 (Some(d), _) => {
-                    write!(out, " (drill {})", crate::mm(d)).unwrap();
+                    write!(out, " (drill {}{offset})", crate::mm(d)).unwrap();
                 }
                 (None, Some((w, h))) => {
-                    write!(out, " (drill oval {} {})", crate::mm(w), crate::mm(h)).unwrap();
+                    write!(out, " (drill oval {} {}{offset})", crate::mm(w), crate::mm(h)).unwrap();
                 }
-                (None, None) => {} // Footprint::validate would have caught this on the way in; an empty footprint being exported mid-edit (validation not yet enforced on save) just emits no drill rather than panicking.
+                (None, None) => {
+                    // Footprint::validate would have caught this on the way in; an empty footprint being exported mid-edit (validation not yet
+                    // enforced on save) just emits no drill rather than panicking.
+                    if !offset.is_empty() {
+                        write!(out, " (drill{offset})").unwrap();
+                    }
+                }
             },
-            eda_model::PadKind::Smd => {}
+            eda_model::PadKind::Smd => {
+                if !offset.is_empty() {
+                    write!(out, " (drill{offset})").unwrap();
+                }
+            }
         }
         let layers = if pad.layers.is_empty() {
             match pad.kind {
@@ -359,7 +362,7 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
             write!(out, " (thermal_bridge_width {})", crate::mm(w)).unwrap();
         }
         if let Some(a) = pad.thermal_spoke_angle_mdeg {
-            let default_mdeg: eda_model::ir::Millideg = if pad.shape == LibraryPadShape::Circle { 45_000 } else { 90_000 };
+            let default_mdeg = engine.default_spoke_angle_mdeg() as eda_model::ir::Millideg;
             if a != default_mdeg {
                 write!(out, " (thermal_bridge_angle {})", crate::fmt_mm_f(a as f64 / 1000.0)).unwrap();
             }
@@ -367,6 +370,7 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
         if let Some(g) = pad.thermal_gap_override {
             write!(out, " (thermal_gap {})", crate::mm(g)).unwrap();
         }
+        out.push_str(&shape_text.custom);
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
@@ -548,6 +552,7 @@ mod tests {
             trapezoid_delta: None,
             chamfer_ratio: None,
             chamfer_corners: eda_model::ir::ChamferCorners::default(),
+            custom: None,
             layers: vec![],
             clearance_override: None,
             thermal_gap_override: None,
@@ -597,20 +602,40 @@ mod tests {
     }
 
     #[test]
-    fn export_kicad_mod_approximates_trapezoid_and_chamfered_pads_as_valid_kicad_shapes() {
+    fn export_kicad_mod_writes_trapezoid_chamfered_and_custom_pads_as_kicad_does_and_reads_them_back() {
+        use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive};
+        use eda_model::ir::{ChamferCorners, Point, Shape};
         let mut trap = lib_pad("1", 0, 0, eda_model::ir::LibraryPadShape::Trapezoid, PadKind::Smd);
         trap.trapezoid_delta = Some((200, 0));
+        trap.roundrect_ratio = None;
         let mut chf = lib_pad("2", 2000, 0, eda_model::ir::LibraryPadShape::ChamferedRect, PadKind::Smd);
         chf.chamfer_ratio = Some(0.3);
-        chf.roundrect_ratio = None;
-        let fp = eda_model::ir::LibraryFootprint { name: "Test:Approx".into(), pads: vec![trap, chf], ..eda_model::ir::LibraryFootprint::new_empty("Test:Approx") };
+        chf.chamfer_corners = ChamferCorners { top_left: true, bottom_right: true, ..Default::default() };
+        chf.roundrect_ratio = Some(0.1);
+        let mut custom = lib_pad("3", 4000, 0, eda_model::ir::LibraryPadShape::Custom, PadKind::Smd);
+        custom.roundrect_ratio = None;
+        custom.custom = Some(PadCustom {
+            anchor: PadAnchor::Rect,
+            zone: CustomZoneMode::ConvexHull,
+            primitives: vec![PadPrimitive { shape: Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, pts: vec![Point { x: 0, y: 0 }, Point { x: 1500, y: 0 }, Point { x: 0, y: 1500 }] }, proxy: false }],
+        });
+        let fp = eda_model::ir::LibraryFootprint { name: "Test:Shapes".into(), pads: vec![trap, chf, custom], ..eda_model::ir::LibraryFootprint::new_empty("Test:Shapes") };
 
         let text = export_kicad_mod(&fp);
-        let parsed = parse_footprint_file(&text, "Test:Approx").expect("a trapezoid/chamfer approximation must still be a valid, loadable footprint");
+        assert!(text.contains("trapezoid (at 0 0 0) (size 1 1) (rect_delta 0.2 0)"), "{text}");
+        assert!(text.contains("(roundrect_rratio 0.1) (chamfer_ratio 0.3) (chamfer top_left bottom_right)"), "{text}");
+        assert!(text.contains("(options (clearance convexhull) (anchor rect)) (primitives (gr_poly (pts (xy 0 0) (xy 1.5 0) (xy 0 1.5)) (width 0) (fill yes)))"), "{text}");
+        let parsed = parse_footprint_file(&text, "Test:Shapes").expect("a footprint with these pads loads");
         assert!(parsed.validate().is_empty());
         let by_num = |n: &str| parsed.pads.iter().find(|p| p.number == n).unwrap();
-        assert_eq!(by_num("1").shape, eda_model::PadShape::Rect, "trapezoid exports as its own rect bounding-box approximation -- see export_kicad_mod's own doc");
-        assert_eq!(by_num("2").shape, eda_model::PadShape::RoundRect, "chamfered_rect exports as roundrect");
-        assert_eq!(by_num("2").roundrect_ratio, Some(0.3), "the chamfer ratio stands in for the roundrect ratio in this approximation");
+        assert_eq!((by_num("1").shape, by_num("1").ext.trapezoid_delta), (eda_model::PadShape::Trapezoid, Some((200, 0))));
+        assert_eq!((by_num("2").shape, by_num("2").roundrect_ratio, by_num("2").ext.chamfer_ratio), (eda_model::PadShape::ChamferedRect, Some(0.1), Some(0.3)));
+        assert_eq!(by_num("3").shape, eda_model::PadShape::Custom);
+        assert_eq!(by_num("3").ext.custom.as_ref().map(|c| (c.anchor, c.zone, c.primitives.len())), Some((PadAnchor::Rect, CustomZoneMode::ConvexHull, 1)));
+        // And the editor's own reader gets the same library pads back.
+        let back = crate::parse_library_footprint(&text).expect("the editor's reader").footprint;
+        assert_eq!(back.pads.iter().map(|p| p.shape).collect::<Vec<_>>(), [eda_model::ir::LibraryPadShape::Trapezoid, eda_model::ir::LibraryPadShape::ChamferedRect, eda_model::ir::LibraryPadShape::Custom]);
+        assert_eq!(back.pads[2].custom, fp.pads[2].custom);
+        assert_eq!((back.pads[1].chamfer_ratio, back.pads[1].roundrect_ratio, back.pads[1].chamfer_corners), (Some(0.3), Some(0.1), fp.pads[1].chamfer_corners));
     }
 }
