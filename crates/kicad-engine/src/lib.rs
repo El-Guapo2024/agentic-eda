@@ -246,6 +246,16 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
             }
         }
     }
+    // The board's library tables and path variables, so kicad-cli reads the libraries the studio does (`eda_kicad::library_table::derive_project`). Only the
+    // studio's own `<board>/.kicad` has a board behind it; the gates' scratch folders and the tests' have no tables.
+    if let Some(board_dir) = work.file_name().filter(|n| *n == ".kicad").and(work.parent()) {
+        if let Ok(mut pro) = serde_json::from_str::<Value>(&pro_text) {
+            let derived = eda_kicad::library_table::derive_project(board_dir, work, &mut pro).map_err(|e| fail("kicad_engine_write", &work.display().to_string(), e))?;
+            if derived {
+                pro_text = format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default());
+            }
+        }
+    }
     write_file(&work.join(format!("{stem}.kicad_pro")), pro_text)?;
     let prl = work.join(format!("{stem}.kicad_prl"));
     match appearance.as_ref().and_then(|a| eda_kicad::appearance::local_settings(a, stem)) {

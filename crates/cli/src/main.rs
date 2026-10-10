@@ -238,6 +238,38 @@ pub(crate) fn resolve_symbol_libraries(model: &mut ConstraintModel) {
     }
 }
 
+/// [`resolve_footprint_libraries`] for the board in `dir`: a `Library:Footprint` is found the way KiCad finds it, through the board's footprint library
+/// tables -- KiCad's installed libraries by the global table, the board's own by its project table -- and the tables are read only when a part names one
+/// the model does not have yet.
+pub(crate) fn resolve_footprint_libraries_of(dir: &Path, model: &mut ConstraintModel) {
+    use library_index::{Kind, LibSource};
+    let libs = std::cell::OnceCell::new();
+    let warnings = eda_kicad::resolve_library_footprints_with(model, |lib_id| {
+        let (lib, item) = lib_id.split_once(':')?;
+        if !library_index::legal_library_name(item) {
+            return None;
+        }
+        let libs = libs.get_or_init(|| library_tables::libs(dir, Kind::Footprint));
+        Some(libs.lib_path(Kind::Footprint, lib).ok()?.join(format!("{item}.kicad_mod"))).filter(|p| p.is_file())
+    });
+    for w in warnings {
+        eprintln!("footprint library: {w}");
+    }
+}
+
+/// [`resolve_symbol_libraries`] for the board in `dir`: a library's nickname is found through the board's symbol library tables.
+pub(crate) fn resolve_symbol_libraries_of(dir: &Path, model: &mut ConstraintModel) {
+    use library_index::{Kind, LibSource};
+    let libs = std::cell::OnceCell::new();
+    let warnings = eda_kicad::resolve_library_symbols_with(model, |lib_name| {
+        let libs = libs.get_or_init(|| library_tables::libs(dir, Kind::Symbol));
+        libs.lib_path(Kind::Symbol, lib_name).ok().filter(|p| p.is_file())
+    });
+    for w in warnings {
+        eprintln!("symbol library: {w}");
+    }
+}
+
 fn intent_hash(path: &Path) -> String {
     std::fs::read(path).map(|b| blake3::hash(&b).to_hex().to_string()).unwrap_or_default()
 }

@@ -14,6 +14,7 @@
 
 use crate::library_index::{count_footprints, modified, Kind, LibSource, LibraryInfo};
 use eda_kicad::library_table::{self as lt, LoadedRow, LoadedTable, Scope, Table, TableKind, Vars};
+use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -116,7 +117,6 @@ pub(crate) enum GlobalOrigin {
 /// The two tables of one kind for a board, read. Nothing is cached: a table is a few kilobytes and a stat per library.
 pub(crate) struct Loaded {
     pub(crate) env: Env,
-    pub(crate) project_dir: PathBuf,
     pub(crate) project_vars: BTreeMap<String, String>,
     pub(crate) vars: Vars,
     pub(crate) kind: TableKind,
@@ -209,7 +209,7 @@ pub(crate) fn load_with(env: Env, dir: &Path, kind: TableKind) -> Loaded {
             Err(e) => project_error = Some(e),
         }
     }
-    Loaded { env, project_dir: dir.to_path_buf(), project_vars, vars, kind, global, global_origin: origin, global_error, project_path, project, project_error }
+    Loaded { env, project_vars, vars, kind, global, global_origin: origin, global_error, project_path, project, project_error }
 }
 
 impl Loaded {
@@ -264,6 +264,7 @@ impl LibSet {
         self.by_name.get(name).map(|&i| &self.entries[i])
     }
 
+    #[cfg(test)]
     pub(crate) fn entries(&self) -> &[LibEntry] {
         &self.entries
     }
@@ -322,8 +323,520 @@ pub(crate) fn libs(dir: &Path, kind: Kind) -> Arc<LibSet> {
     Arc::new(LibSet::from_libs(kind, load(dir, kind.table_kind()).libs()))
 }
 
+// ------------------------------------------------------------------------------------------------ the dialogs' data
+
+fn bad(msg: impl Into<String>) -> Value {
+    json!({ "error": msg.into() })
+}
+
+fn parse_body(body: &[u8]) -> Result<Value, Value> {
+    serde_json::from_slice::<Value>(body).map_err(|e| bad(format!("bad request: {e}")))
+}
+
+fn kind_in(req: &Value) -> Result<TableKind, Value> {
+    req.get("kind").and_then(Value::as_str).and_then(TableKind::parse).ok_or_else(|| bad("kind is symbol or footprint"))
+}
+
+fn text(v: &Value, key: &str) -> String {
+    v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+/// The rows of a request, field by field (the wire shape is the dialog's grid: `enabled` and `visible` are its two check boxes).
+fn rows_in(req: &Value) -> Result<Vec<lt::Row>, Value> {
+    let Some(rows) = req.get("rows").and_then(Value::as_array) else { return Err(bad("rows is a list")) };
+    Ok(rows
+        .iter()
+        .map(|r| lt::Row {
+            nickname: text(r, "nickname"),
+            uri: text(r, "uri"),
+            lib_type: text(r, "type"),
+            options: text(r, "options"),
+            description: text(r, "descr"),
+            disabled: r.get("enabled").and_then(Value::as_bool) == Some(false),
+            hidden: r.get("visible").and_then(Value::as_bool) == Some(false),
+        })
+        .collect())
+}
+
+/// `GuessPluginTypeFromLibPath`: a table file is a nested table; KiCad's own formats are told by their extension.
+fn guess_type(kind: TableKind, path: &Path) -> Option<&'static str> {
+    if path.is_file() {
+        if let Ok(t) = std::fs::read_to_string(path).map_err(|_| ()).and_then(|t| Table::parse(&t).map_err(|_| ())) {
+            if t.kind == kind {
+                return Some(lt::NESTED_TYPE);
+            }
+        }
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match kind {
+        TableKind::Symbol => (ext == "kicad_sym").then_some(lt::KICAD_TYPE),
+        TableKind::Footprint => (ext == "pretty").then_some(lt::KICAD_TYPE),
+    }
+}
+
+fn row_json(kind: TableKind, row: &lt::Row, loaded: Option<&LoadedRow>, vars: &Vars, base: &Path) -> Value {
+    let path = vars.expand_uri(&row.uri, base);
+    let error = match loaded {
+        Some(l) if !l.ok => Some(l.error.clone()),
+        _ => lt::check_row(kind, row, &path),
+    };
+    let status = if error.is_some() { "error" } else if row.is_table() { "table" } else { "ok" };
+    let mut v = json!({
+        "nickname": row.nickname, "uri": row.uri, "type": row.lib_type, "options": row.options, "descr": row.description,
+        "enabled": !row.disabled, "visible": !row.hidden,
+        "status": status, "error": error.unwrap_or_default(), "path": path.display().to_string(),
+    });
+    if let Some(child) = loaded.and_then(|l| l.child.as_deref()) {
+        v["table"] = table_json(kind, child, vars);
+    }
+    v
+}
+
+/// A table with the rows it holds, a chained table's own rows below its row.
+fn table_json(kind: TableKind, t: &LoadedTable, vars: &Vars) -> Value {
+    let base = t.path.parent().map(Path::to_path_buf).unwrap_or_default();
+    json!({
+        "path": t.path.display().to_string(),
+        "rows": t.table.rows.iter().zip(&t.rows).map(|(r, l)| row_json(kind, r, Some(l), vars, &base)).collect::<Vec<_>>(),
+    })
+}
+
+fn global_note(kind: TableKind, origin: &GlobalOrigin) -> String {
+    let name = kind.file_name();
+    match origin {
+        GlobalOrigin::Config(_) => format!("This is KiCad's own global {name}. The studio reads it and never writes it: change it in KiCad (Preferences, Manage Libraries)."),
+        GlobalOrigin::Stock(p) => format!("KiCad has written no global {name} in its configuration folder, so the studio reads the table KiCad installs ({}) -- the one KiCad creates on its first run. The studio never writes a global table.", p.display()),
+        GlobalOrigin::Folder(p) => format!("No library table was found: the library files in {} are listed, each as its own row. The studio never writes a global table.", p.display()),
+        GlobalOrigin::Missing => "No KiCad library table or library folder was found on this machine.".to_string(),
+    }
+}
+
+/// The two tables of one kind: the global one (read only) and the board's.
+fn kind_json(l: &Loaded) -> Value {
+    let kind = l.kind;
+    let global_path = match &l.global_origin {
+        GlobalOrigin::Config(p) | GlobalOrigin::Stock(p) | GlobalOrigin::Folder(p) => p.clone(),
+        GlobalOrigin::Missing => l.env.config_dir.clone().unwrap_or_default().join(kind.file_name()),
+    };
+    let origin = match &l.global_origin {
+        GlobalOrigin::Config(_) => "config",
+        GlobalOrigin::Stock(_) => "stock",
+        GlobalOrigin::Folder(_) => "folder",
+        GlobalOrigin::Missing => "missing",
+    };
+    let global_rows = l.global.as_ref().map(|t| table_json(kind, t, &l.vars)["rows"].clone()).unwrap_or_else(|| json!([]));
+    let project_rows = l.project.as_ref().map(|t| table_json(kind, t, &l.vars)["rows"].clone()).unwrap_or_else(|| json!([]));
+    let taken: Vec<String> = l.libs().into_iter().map(|lib| lib.nickname).collect();
+    json!({
+        "kind": kind.name(),
+        "file": kind.file_name(),
+        "supports_visibility": kind == TableKind::Symbol,
+        "types": lt::known_types(kind),
+        "new_library_name": unique_name(&taken),
+        "global": { "scope": "global", "path": global_path.display().to_string(), "exists": l.global.is_some(), "writable": false, "origin": origin,
+                    "note": global_note(kind, &l.global_origin), "error": l.global_error, "rows": global_rows },
+        "project": { "scope": "project", "path": l.project_path.display().to_string(), "exists": l.project_path.is_file(), "writable": true,
+                     "error": l.project_error, "rows": project_rows },
+    })
+}
+
+/// `SYMBOL_LIBRARY_MANAGER::GetUniqueLibraryName`: `New_Library`, else `New_Library_0`, `New_Library_1`, ...
+fn unique_name(taken: &[String]) -> String {
+    let base = "New_Library".to_string();
+    if !taken.contains(&base) {
+        return base;
+    }
+    (0u32..).map(|i| format!("{base}_{i}")).find(|n| !taken.contains(n)).unwrap_or(base)
+}
+
+/// The variables used in the tables and defined nowhere: KiCad lists them too (an old `KICAD8_FOOTPRINT_DIR` in a table), with the value the real
+/// environment gives them, so the person sees what a path needs.
+fn undefined_variables(loaded: &[Loaded]) -> Vec<Value> {
+    let mut defined: Vec<String> = vec!["KIPRJMOD".to_string()];
+    let mut used: Vec<String> = Vec::new();
+    for l in loaded {
+        defined.extend(l.env.global_vars().into_iter().map(|v| v.name));
+        defined.extend(l.project_vars.keys().cloned());
+        for lib in l.libs() {
+            for name in lt::variables_used(&lib.uri) {
+                if !used.contains(&name) {
+                    used.push(name);
+                }
+            }
+        }
+        for table in l.global.iter().chain(l.project.iter()) {
+            for row in &table.table.rows {
+                for name in lt::variables_used(&row.uri) {
+                    if !used.contains(&name) {
+                        used.push(name);
+                    }
+                }
+            }
+        }
+    }
+    let real = loaded.first().map(|l| l.env.real.clone()).unwrap_or_default();
+    used.into_iter().filter(|n| !defined.contains(n)).map(|n| json!({ "name": n, "value": real.get(&n).cloned().unwrap_or_default(), "external": real.contains_key(&n) })).collect()
+}
+
+/// `GET /api/library_tables`: everything the Manage Symbol Libraries and Manage Footprint Libraries dialogs and Configure Paths show.
+pub(crate) fn view(dir: &Path) -> Value {
+    view_with(&Env::discover(), dir)
+}
+
+pub(crate) fn view_with(env: &Env, dir: &Path) -> Value {
+    let loaded: Vec<Loaded> = TableKind::ALL.iter().map(|&k| load_with(env.clone(), dir, k)).collect();
+    let mut tables = serde_json::Map::new();
+    for l in &loaded {
+        tables.insert(l.kind.name().to_string(), kind_json(l));
+    }
+    let project_vars = lt::read_project_variables(dir);
+    json!({
+        "project_dir": dir.display().to_string(),
+        "config_dir": env.config_dir.as_ref().map(|d| d.display().to_string()),
+        "version": env.version,
+        "major": env.major,
+        "tables": tables,
+        "variables": {
+            "global": env.global_vars().into_iter().map(|v| {
+                let predefined = lt::is_predefined(&v.name, env.major);
+                json!({ "name": v.name, "value": v.value, "external": v.external, "default": v.default, "predefined": predefined })
+            }).collect::<Vec<_>>(),
+            "project": project_vars.iter().map(|(k, v)| json!({ "name": k, "value": v })).collect::<Vec<_>>(),
+            "undefined": undefined_variables(&loaded),
+            "reserved": ["KIPRJMOD"],
+            "file": lt::PATH_VARIABLES_FILE,
+        },
+    })
+}
+
+/// Why a table cannot be written the way the person typed it (the format has no escapes, so a quote or a line break in a field has no spelling).
+fn unwritable(rows: &[lt::Row]) -> Option<(usize, &'static str, String)> {
+    for (i, r) in rows.iter().enumerate() {
+        for (column, value, label) in [("nickname", &r.nickname, "A nickname"), ("uri", &r.uri, "A library path"), ("type", &r.lib_type, "A library format"), ("options", &r.options, "Options"), ("descr", &r.description, "A description")] {
+            if value.contains(['"', '\n', '\r']) {
+                return Some((i, column, format!("{label} cannot hold a double quote or a line break: KiCad's library table has no way to write one.")));
+            }
+        }
+    }
+    None
+}
+
+/// The project's table of `kind` as the file holds it, or an empty one when the board has none. A table that does not parse is an error, never overwritten blindly.
+fn project_table(dir: &Path, kind: TableKind) -> Result<Table, String> {
+    let path = project_table_path(dir, kind);
+    if !path.is_file() {
+        return Ok(Table::new(kind));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Table::parse(&text).map_err(|e| format!("The project's {} cannot be read ({}): {}", kind.file_name(), path.display(), e.message))
+}
+
+/// `POST /api/library_tables` `{kind, rows}`: the Project tab's OK. The rows go through KiCad's `VerifyTable` (a row with no path is dropped, a nickname must be
+/// there and legal, no two alike) and the project's table is written; the answer is the view again, or `{error, row, column}` for the row that was refused.
+pub(crate) fn set_table(dir: &Path, body: &[u8]) -> Value {
+    set_table_with(&Env::discover(), dir, body)
+}
+
+pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let kind = match kind_in(&req) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    let rows = match rows_in(&req) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    if let Some((row, column, message)) = unwritable(&rows) {
+        return json!({ "error": message, "row": row, "column": column });
+    }
+    let kept = match lt::verify_rows(&rows, kind == TableKind::Symbol) {
+        Ok(k) => k,
+        Err(p) => return json!({ "error": p.message, "row": p.row, "column": p.column }),
+    };
+    // a row whose format was left blank takes the one its path says (`GuessPluginTypeFromLibPath`)
+    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let kept: Vec<lt::Row> = kept
+        .into_iter()
+        .map(|mut r| {
+            if r.lib_type.trim().is_empty() {
+                r.lib_type = guess_type(kind, &vars.expand_uri(&r.uri, dir)).unwrap_or(lt::KICAD_TYPE).to_string();
+            }
+            r
+        })
+        .collect();
+    let path = project_table_path(dir, kind);
+    if kept.is_empty() && !path.is_file() {
+        let mut v = view_with(env, dir);
+        v["ok"] = json!(true);
+        return v;
+    }
+    let mut table = Table::new(kind);
+    table.rows = kept;
+    if let Err(e) = lt::write_table(&path, &table) {
+        return bad(e);
+    }
+    let mut v = view_with(env, dir);
+    v["ok"] = json!(true);
+    v
+}
+
+/// `POST /api/library_tables/check` `{kind, rows}`: `CheckTableRow` for each row as it stands in the grid -- where its path leads and why it cannot be read.
+pub(crate) fn check_rows(dir: &Path, body: &[u8]) -> Value {
+    check_rows_with(&Env::discover(), dir, body)
+}
+
+pub(crate) fn check_rows_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let kind = match kind_in(&req) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    let rows = match rows_in(&req) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let results: Vec<Value> = rows
+        .iter()
+        .map(|r| {
+            let path = vars.expand_uri(&r.uri, dir);
+            let mut error = if r.uri.trim().is_empty() { None } else { lt::check_row(kind, r, &path) };
+            if error.is_none() && r.is_table() && !r.uri.trim().is_empty() {
+                error = std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|t| Table::parse(&t).map_err(|e| e.message)).err();
+            }
+            json!({ "error": error.unwrap_or_default(), "path": path.display().to_string(), "guess": guess_type(kind, &path) })
+        })
+        .collect();
+    json!({ "results": results })
+}
+
+/// The variables a path may be written with, as `NormalizePath` takes them: KiCad's, then the project's (their values with their own variables replaced).
+fn normalize_vars(env: &Env, vars: &Vars) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = env.global_vars().into_iter().map(|v| (v.name, v.value)).collect();
+    for (k, v) in &vars.text {
+        out.push((k.clone(), vars.expand(v)));
+    }
+    out.sort();
+    out
+}
+
+/// `POST /api/library_tables/add` `{kind, path, create?, nickname?, descr?, table?}`: Add Existing Library, and New Library when `create` is set. The path may
+/// hold variables and is relative to the board's folder. A new library is an empty `.kicad_sym` file or `.pretty` folder (`SCH_IO::CreateLibrary`, `PCB_IO::CreateLibrary`);
+/// either way a row is added to the board's table (never the global one) with the path written as KiCad writes it (`NormalizePath`) and the nickname the file's name makes
+/// (`LIB_ID::FixIllegalChars`).
+pub(crate) fn add_library(dir: &Path, body: &[u8]) -> Value {
+    add_library_with(&Env::discover(), dir, body)
+}
+
+pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let kind = match kind_in(&req) {
+        Ok(k) => k,
+        Err(e) => return e,
+    };
+    let (create, nested) = (req.get("create").and_then(Value::as_bool) == Some(true), req.get("table").and_then(Value::as_bool) == Some(true));
+    let typed = text(&req, "path");
+    if typed.trim().is_empty() {
+        return bad(if create { "Give the new library a place and a name." } else { "Choose a library to add." });
+    }
+    let project_vars = lt::read_project_variables(dir);
+    let vars = env.vars(dir, &project_vars);
+    let ext = match kind {
+        TableKind::Symbol => "kicad_sym",
+        TableKind::Footprint => "pretty",
+    };
+    let mut path = vars.expand_uri(typed.trim(), dir);
+    if create && path.extension().and_then(|e| e.to_str()) != Some(ext) {
+        path = PathBuf::from(format!("{}.{ext}", path.display()));
+    }
+    let Some(file_name) = path.file_name().map(|n| n.to_string_lossy().into_owned()) else { return bad(format!("'{}' is not a library path.", path.display())) };
+    let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let has_ext = path.extension().and_then(|e| e.to_str()) == Some(ext);
+    let lib_type = if nested { lt::NESTED_TYPE } else { lt::KICAD_TYPE };
+    // a footprint library that is not a `.pretty` folder has its whole name for a nickname (`PCB_BASE_EDIT_FRAME::AddLibrary`)
+    let nickname = match text(&req, "nickname").trim() {
+        "" => lt::fix_nickname(if kind == TableKind::Footprint && !has_ext && !nested { &file_name } else { &stem }),
+        given => given.to_string(),
+    };
+    if nickname.is_empty() {
+        return bad("Library must have a nickname.");
+    }
+    if let Some(ch) = lt::illegal_nickname_char(&nickname) {
+        return bad(format!("Illegal character '{ch}' in nickname '{nickname}'."));
+    }
+    let mut table = match project_table(dir, kind) {
+        Ok(t) => t,
+        Err(e) => return bad(e),
+    };
+    let loaded = load_with(env.clone(), dir, kind);
+    if !nested && (table.has_row(&nickname) || loaded.libs().iter().any(|l| l.nickname == nickname && l.is_available())) {
+        return bad(format!("Library '{nickname}' already exists."));
+    }
+    if table.has_row(&nickname) {
+        return bad(format!("Library '{nickname}' already exists."));
+    }
+    let mut created = false;
+    if create {
+        let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if !parent.is_dir() {
+            if parent.starts_with(dir) {
+                if let Err(e) = std::fs::create_dir_all(&parent) {
+                    return bad(format!("Could not create the folder '{}': {e}", parent.display()));
+                }
+            } else {
+                return bad(format!("The folder '{}' does not exist.", parent.display()));
+            }
+        }
+        if path.exists() {
+            return bad(format!("Library {} already exists.", path.display()));
+        }
+        let made = match kind {
+            TableKind::Symbol => std::fs::write(&path, eda_kicad::export_kicad_sym_library(&[])),
+            TableKind::Footprint => std::fs::create_dir(&path),
+        };
+        if let Err(e) = made {
+            return bad(format!("Could not create the library '{}'.\nMake sure you have write permissions and try again. ({e})", path.display()));
+        }
+        created = true;
+    } else if nested {
+        match std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display())).and_then(|t| Table::parse(&t).map_err(|e| e.message)) {
+            Ok(t) if t.kind == kind => {}
+            Ok(t) => return bad(format!("Library table '{}' has type {} but expected {}.", path.display(), t.kind.keyword(), kind.keyword())),
+            Err(e) => return bad(e),
+        }
+    } else {
+        let row = lt::Row { nickname: nickname.clone(), uri: path.display().to_string(), lib_type: lib_type.to_string(), ..Default::default() };
+        if let Some(why) = lt::check_row(kind, &row, &path) {
+            return bad(why);
+        }
+        if kind == TableKind::Symbol && !has_ext {
+            return bad("Choose a .kicad_sym file.");
+        }
+    }
+    let uri = lt::normalize_path(&path, &normalize_vars(env, &vars), Some(dir));
+    table.rows.push(lt::Row { nickname: nickname.clone(), uri: uri.clone(), lib_type: lib_type.to_string(), description: text(&req, "descr"), ..Default::default() });
+    if let Err(e) = lt::write_table(&project_table_path(dir, kind), &table) {
+        return bad(e);
+    }
+    let mut v = view_with(env, dir);
+    v["ok"] = json!(true);
+    v["added"] = json!({ "kind": kind.name(), "nickname": nickname, "uri": uri, "path": path.display().to_string(), "created": created });
+    v
+}
+
+/// `POST /api/path_variables` `{variables: [{name, value}]}`: Configure Paths' OK for the board's own variables (KiCad's are read only here). The name rules are the
+/// dialog's: capitals, digits and `_`, `KIPRJMOD` reserved, a name and a path both there.
+pub(crate) fn set_variables(dir: &Path, body: &[u8]) -> Value {
+    set_variables_with(&Env::discover(), dir, body)
+}
+
+pub(crate) fn set_variables_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    let req = match parse_body(body) {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
+    let Some(list) = req.get("variables").and_then(Value::as_array) else { return bad("variables is a list") };
+    let mut vars: BTreeMap<String, String> = BTreeMap::new();
+    for (row, item) in list.iter().enumerate() {
+        let (name, value) = (text(item, "name").trim().to_string(), text(item, "value").trim().to_string());
+        let fail = |column: &str, message: String| json!({ "error": message, "row": row, "column": column });
+        if name.is_empty() && value.is_empty() {
+            continue;
+        }
+        if name.is_empty() {
+            return fail("name", "Environment variable name cannot be empty.".into());
+        }
+        if value.is_empty() {
+            return fail("value", "Environment variable path cannot be empty.".into());
+        }
+        if name == "KIPRJMOD" {
+            return fail("name", "The name KIPRJMOD is reserved, and cannot be used.".into());
+        }
+        if !lt::is_variable_name(&name) {
+            return fail("name", format!("'{name}' is not a variable name: capital letters, digits (not first) and underscores only."));
+        }
+        if value.contains(['"', '\n', '\r']) {
+            return fail("value", "A path cannot hold a double quote or a line break.".into());
+        }
+        if vars.insert(name.clone(), value).is_some() {
+            return fail("name", format!("Two variables are named {name}."));
+        }
+    }
+    if let Err(e) = lt::write_project_variables(dir, &vars) {
+        return bad(e);
+    }
+    let mut v = view_with(env, dir);
+    v["ok"] = json!(true);
+    v
+}
+
+/// `GET /api/fs/list?path=&what=`: the stand-in for the native file dialog the browse buttons open in KiCad -- a page cannot see the machine's folders, the
+/// server can. The folders of `path` (variables allowed, relative to the board's folder; a file stands for its folder), and the files `what` asks for:
+/// `symbol` (.kicad_sym), `table` (a library table), nothing but folders for `footprint` (a `.pretty` folder is flagged: it is the library) and `folder`.
+pub(crate) fn browse(dir: &Path, typed: &str, what: &str) -> Value {
+    browse_with(&Env::discover(), dir, typed, what)
+}
+
+pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Value {
+    const MAX: usize = 4000;
+    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let mut at = if typed.trim().is_empty() { dir.to_path_buf() } else { vars.expand_uri(typed.trim(), dir) };
+    if at.is_file() {
+        at = at.parent().map(Path::to_path_buf).unwrap_or(at);
+    }
+    if !at.is_dir() {
+        return bad(format!("'{}' is not a folder.", at.display()));
+    }
+    let read = match std::fs::read_dir(&at) {
+        Ok(r) => r,
+        Err(e) => return bad(format!("{}: {e}", at.display())),
+    };
+    let mut entries: Vec<(String, bool, bool)> = Vec::new();
+    for e in read.filter_map(|e| e.ok()) {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let path = e.path();
+        let is_dir = path.is_dir();
+        let wanted = if is_dir {
+            true
+        } else {
+            match what {
+                "symbol" => name.ends_with(".kicad_sym"),
+                "table" => name == "sym-lib-table" || name == "fp-lib-table",
+                _ => false,
+            }
+        };
+        if wanted {
+            entries.push((name.clone(), is_dir, is_dir && name.ends_with(".pretty")));
+        }
+    }
+    entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    let truncated = entries.len() > MAX;
+    entries.truncate(MAX);
+    json!({
+        "path": at.display().to_string(),
+        "parent": at.parent().map(|p| p.display().to_string()),
+        "home": env.real.get("HOME"),
+        "project": dir.display().to_string(),
+        "entries": entries.iter().map(|(n, d, l)| json!({ "name": n, "dir": d, "library": l })).collect::<Vec<_>>(),
+        "truncated": truncated,
+    })
+}
+
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     fn temp(tag: &str) -> PathBuf {
@@ -508,6 +1021,315 @@ mod tests {
         assert_eq!(m.set(Kind::Symbol).find("Team").unwrap().path, shared.join("Team.kicad_sym"));
         lt::write_project_variables(&m.board, &BTreeMap::new()).unwrap();
         assert!(m.set(Kind::Symbol).find("Team").is_none(), "without the variable the library is not found");
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    fn req(v: Value) -> Vec<u8> {
+        v.to_string().into_bytes()
+    }
+
+    fn row(nick: &str, uri: &str) -> Value {
+        json!({ "nickname": nick, "uri": uri, "type": "KiCad", "options": "", "descr": "", "enabled": true, "visible": true })
+    }
+
+    #[test]
+    fn the_view_shows_the_global_table_read_only_with_what_it_chains() {
+        let m = machine("view", true);
+        let v = view_with(&m.env(), &m.board);
+        let sym = &v["tables"]["symbol"];
+        assert_eq!((v["major"].clone(), v["version"].clone()), (json!(10), json!("10.99")));
+        assert_eq!(sym["supports_visibility"], true);
+        assert_eq!(v["tables"]["footprint"]["supports_visibility"], false);
+        assert_eq!((sym["global"]["writable"].clone(), sym["project"]["writable"].clone()), (json!(false), json!(true)));
+        assert_eq!(sym["global"]["origin"], "config");
+        assert!(sym["global"]["note"].as_str().unwrap().contains("never writes it"));
+        let kicad = &sym["global"]["rows"][0];
+        assert_eq!((kicad["nickname"].clone(), kicad["type"].clone(), kicad["status"].clone()), (json!("KiCad"), json!("Table"), json!("table")));
+        let chained: Vec<&str> = kicad["table"]["rows"].as_array().unwrap().iter().map(|r| r["nickname"].as_str().unwrap()).collect();
+        assert_eq!(chained, ["Device", "Amp"], "the 222 libraries of a real install, here two");
+        assert_eq!(kicad["table"]["rows"][0]["status"], "ok");
+        assert_eq!(kicad["table"]["rows"][0]["uri"], "${KICAD10_SYMBOL_DIR}/Device.kicad_sym");
+        assert!(kicad["table"]["rows"][0]["path"].as_str().unwrap().ends_with("symbols/Device.kicad_sym"));
+        assert_eq!((sym["project"]["exists"].clone(), sym["project"]["rows"].clone()), (json!(false), json!([])));
+        assert_eq!(sym["new_library_name"], "New_Library");
+        assert!(sym["types"].as_array().unwrap().contains(&json!("KiCad")) && sym["types"].as_array().unwrap().contains(&json!("Table")));
+        let g = v["variables"]["global"].as_array().unwrap();
+        let sym_dir = g.iter().find(|x| x["name"] == "KICAD10_SYMBOL_DIR").unwrap();
+        assert_eq!((sym_dir["predefined"].clone(), sym_dir["external"].clone()), (json!(true), json!(true)), "the test environment defines it, which wins over KiCad's default");
+        assert_eq!(v["variables"]["reserved"], json!(["KIPRJMOD"]));
+        assert_eq!(v["variables"]["project"], json!([]));
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn the_project_tab_writes_the_boards_table_after_kicads_own_checks() {
+        let m = machine("settable", true);
+        let env = m.env();
+        let table = |kind: &str, rows: Vec<Value>| req(json!({ "kind": kind, "rows": rows }));
+        // OK: the row with no path is dropped, values are trimmed, the symbol table keeps its Show flag
+        let ok = set_table_with(&env, &m.board, &table("symbol", vec![row(" Mine ", " ${KIPRJMOD}/libs/Mine.kicad_sym "), row("", ""), json!({ "nickname": "Hid", "uri": "/x/h.kicad_sym", "type": "KiCad", "options": "", "descr": "d", "enabled": false, "visible": false })]));
+        assert_eq!(ok["ok"], true, "{ok}");
+        let written = std::fs::read_to_string(m.board.join("sym-lib-table")).unwrap();
+        assert_eq!(written, "(sym_lib_table\n\t(version 7)\n\t(lib (name \"Mine\") (type \"KiCad\") (uri \"${KIPRJMOD}/libs/Mine.kicad_sym\") (options \"\") (descr \"\"))\n\t(lib (name \"Hid\") (type \"KiCad\") (uri \"/x/h.kicad_sym\") (options \"\") (descr \"d\") (disabled) (hidden))\n)\n");
+        let rows = ok["tables"]["symbol"]["project"]["rows"].as_array().unwrap();
+        assert_eq!((rows[0]["status"].clone(), rows[0]["error"].as_str().unwrap().starts_with("Library '")), (json!("error"), true), "Mine's file is not there yet");
+        assert_eq!((rows[1]["enabled"].clone(), rows[1]["visible"].clone()), (json!(false), json!(false)));
+        // a footprint table keeps no hidden flag
+        let ok = set_table_with(&env, &m.board, &table("footprint", vec![json!({ "nickname": "F", "uri": "${KIPRJMOD}/f.pretty", "type": "KiCad", "options": "", "descr": "", "enabled": true, "visible": false })]));
+        assert_eq!(ok["tables"]["footprint"]["project"]["rows"][0]["visible"], true);
+        assert!(!std::fs::read_to_string(m.board.join("fp-lib-table")).unwrap().contains("(hidden)"));
+        // refused: nothing is written
+        let before = std::fs::read_to_string(m.board.join("sym-lib-table")).unwrap();
+        for (rows, message, at) in [
+            (vec![row("A", "/a"), row("", "/b")], "Library must have a nickname.", (1, "nickname")),
+            (vec![row("A:B", "/a")], "Illegal character ':' in nickname 'A:B'.", (0, "nickname")),
+            (vec![row("A", "/a"), row("B", "/b"), row("A", "/c")], "Multiple libraries cannot share the same nickname ('A').", (2, "nickname")),
+            (vec![json!({ "nickname": "Q", "uri": "/a", "type": "KiCad", "options": "", "descr": "say \"hi\"", "enabled": true, "visible": true })], "A description cannot hold a double quote or a line break: KiCad's library table has no way to write one.", (0, "descr")),
+        ] {
+            let r = set_table_with(&env, &m.board, &table("symbol", rows));
+            assert_eq!(r["error"], message, "{r}");
+            assert_eq!((r["row"].clone(), r["column"].clone()), (json!(at.0), json!(at.1)));
+            assert_eq!(std::fs::read_to_string(m.board.join("sym-lib-table")).unwrap(), before, "a refused table leaves the file as it was");
+        }
+        // an empty table with no file writes none; with a file it writes an empty one
+        let none = machine("settable-empty", true);
+        assert_eq!(set_table_with(&none.env(), &none.board, &table("symbol", vec![]))["ok"], true);
+        assert!(!none.board.join("sym-lib-table").exists());
+        assert_eq!(set_table_with(&env, &m.board, &table("symbol", vec![]))["ok"], true);
+        assert_eq!(std::fs::read_to_string(m.board.join("sym-lib-table")).unwrap(), "(sym_lib_table\n\t(version 7)\n)\n");
+        // a blank format takes the one the path says
+        let r = set_table_with(&env, &m.board, &table("footprint", vec![json!({ "nickname": "G", "uri": "${KIPRJMOD}/g.pretty", "type": "", "options": "", "descr": "", "enabled": true, "visible": true })]));
+        assert_eq!(r["tables"]["footprint"]["project"]["rows"][0]["type"], "KiCad");
+        assert!(set_table_with(&env, &m.board, br#"{"kind":"nope","rows":[]}"#)["error"].is_string());
+        assert!(set_table_with(&env, &m.board, b"{").get("error").is_some());
+        // the global tables were never touched
+        assert!(std::fs::read_to_string(m.config.join("sym-lib-table")).unwrap().contains("KiCad Default Libraries"));
+        let _ = std::fs::remove_dir_all(&m.root);
+        let _ = std::fs::remove_dir_all(&none.root);
+    }
+
+    #[test]
+    fn new_library_makes_an_empty_file_or_folder_and_a_row_in_the_project_table() {
+        let m = machine("newlib", true);
+        let env = m.env();
+        // a symbol library in the project: the file, the row, the nickname from the file's name, the path written with ${KIPRJMOD}
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "libs/My Parts" })));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["added"]["nickname"], "My Parts");
+        assert_eq!(r["added"]["uri"], "${KIPRJMOD}/libs/My Parts.kicad_sym");
+        let file = m.board.join("libs").join("My Parts.kicad_sym");
+        assert!(std::fs::read_to_string(&file).unwrap().starts_with("(kicad_symbol_lib (version "), "an empty library file");
+        assert!(eda_kicad::scan_symbols(&std::fs::read_to_string(&file).unwrap()).is_empty(), "no symbol in it yet");
+        assert!(std::fs::read_to_string(m.board.join("sym-lib-table")).unwrap().contains("(name \"My Parts\") (type \"KiCad\") (uri \"${KIPRJMOD}/libs/My Parts.kicad_sym\")"));
+        assert!(m.set(Kind::Symbol).find("My Parts").is_some(), "the new library is a library of the board's set at once");
+        // and the same name again is refused, as is a nickname a global library has
+        for (path, nickname) in [("libs/My Parts", ""), ("libs/Other", "Device")] {
+            let again = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": path, "nickname": nickname })));
+            assert!(again["error"].as_str().unwrap().contains("already exists"), "{again}");
+        }
+        // a footprint library is a .pretty folder
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "footprint", "create": true, "path": "${KIPRJMOD}/fp/Chips", "descr": "My chips" })));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["added"]["uri"], "${KIPRJMOD}/fp/Chips.pretty");
+        assert!(m.board.join("fp").join("Chips.pretty").is_dir());
+        assert_eq!(m.set(Kind::Footprint).describe(Kind::Footprint, "Chips").as_deref(), Some("My chips"));
+        // a folder that is not there is made inside the project, not elsewhere
+        let elsewhere = m.root.join("elsewhere").join("deep").join("X");
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": elsewhere.display().to_string() })));
+        assert!(r["error"].as_str().unwrap().contains("does not exist"), "{r}");
+        assert!(!m.root.join("elsewhere").exists());
+        // a place that exists, outside the project, takes the file and the row says the full path
+        let outside = m.root.join("shared");
+        std::fs::create_dir_all(&outside).unwrap();
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": outside.join("Team.kicad_sym").display().to_string() })));
+        assert_eq!(r["added"]["uri"], outside.join("Team.kicad_sym").display().to_string());
+        // under a variable's folder the path is written with the variable
+        let under = m.share.join("symbols");
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "path": under.join("Device.kicad_sym").display().to_string(), "nickname": "DeviceCopy" })));
+        assert_eq!(r["added"]["uri"], "${KICAD10_SYMBOL_DIR}/Device.kicad_sym");
+        // a bad nickname, an empty path
+        assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "libs/x", "nickname": "a:b" })))["error"].as_str().unwrap().contains("Illegal character ':'"));
+        assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "  " })))["error"].is_string());
+        assert!(!m.root.join("config").join("10.99").join("fp-lib-table").to_string_lossy().contains("Chips"));
+        assert!(!std::fs::read_to_string(m.config.join("fp-lib-table")).unwrap().contains("Chips"), "the global table is never written");
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn add_existing_takes_a_file_a_folder_or_a_whole_table() {
+        let m = machine("addlib", true);
+        let env = m.env();
+        let shared = m.root.join("shared");
+        std::fs::create_dir_all(shared.join("Snap.pretty")).unwrap();
+        std::fs::create_dir_all(shared.join("plain_folder")).unwrap();
+        std::fs::write(shared.join("Snap.pretty").join("A.kicad_mod"), "(footprint \"A\")").unwrap();
+        std::fs::write(shared.join("Parts.kicad_sym"), "(kicad_symbol_lib (symbol \"P\"))").unwrap();
+        std::fs::write(shared.join("notes.txt"), "x").unwrap();
+        std::fs::write(shared.join("more-sym-lib-table"), "(sym_lib_table (version 7) (lib (name \"Z\") (type \"KiCad\") (uri \"/z.kicad_sym\")))").unwrap();
+        let add = |v: Value| add_library_with(&env, &m.board, &req(v));
+        assert_eq!(add(json!({ "kind": "symbol", "path": shared.join("Parts.kicad_sym").display().to_string() }))["added"]["nickname"], "Parts");
+        assert_eq!(add(json!({ "kind": "footprint", "path": shared.join("Snap.pretty").display().to_string() }))["added"]["nickname"], "Snap");
+        // a footprint folder that is not a .pretty keeps its whole name for a nickname
+        assert_eq!(add(json!({ "kind": "footprint", "path": shared.join("plain_folder").display().to_string() }))["added"]["nickname"], "plain_folder");
+        // not there, not the right shape
+        assert!(add(json!({ "kind": "symbol", "path": shared.join("Missing.kicad_sym").display().to_string() }))["error"].as_str().unwrap().contains("not found"));
+        assert!(add(json!({ "kind": "symbol", "path": shared.join("notes.txt").display().to_string() }))["error"].as_str().unwrap().contains(".kicad_sym"));
+        assert!(add(json!({ "kind": "footprint", "path": shared.join("Parts.kicad_sym").display().to_string() }))["error"].is_string());
+        // a table is chained in as a row of type Table
+        let r = add(json!({ "kind": "symbol", "table": true, "path": shared.join("more-sym-lib-table").display().to_string(), "nickname": "More" }));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["tables"]["symbol"]["project"]["rows"][1]["type"], "Table");
+        assert_eq!(r["tables"]["symbol"]["project"]["rows"][1]["table"]["rows"][0]["nickname"], "Z");
+        assert!(add(json!({ "kind": "footprint", "table": true, "path": shared.join("more-sym-lib-table").display().to_string(), "nickname": "Wrong" }))["error"].as_str().unwrap().contains("expected fp_lib_table"));
+        let names: Vec<String> = m.set(Kind::Symbol).entries().iter().map(|e| e.name.clone()).collect();
+        assert!(names.contains(&"Parts".to_string()), "{names:?}");
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn rows_are_checked_as_they_stand_in_the_grid() {
+        let m = machine("check", true);
+        let r = check_rows_with(&m.env(), &m.board, &req(json!({ "kind": "symbol", "rows": [
+            row("A", "${KICAD10_SYMBOL_DIR}/Device.kicad_sym"),
+            row("B", "${KICAD10_SYMBOL_DIR}/Nope.kicad_sym"),
+            { "nickname": "T", "uri": m.share.join("template").join("sym-lib-table").display().to_string(), "type": "Table" },
+            { "nickname": "T2", "uri": "/no/such", "type": "Table" },
+            { "nickname": "L", "uri": "/x", "type": "Legacy" },
+            row("E", ""),
+        ] })));
+        let res = r["results"].as_array().unwrap();
+        assert_eq!(res[0]["error"], "");
+        assert!(res[1]["error"].as_str().unwrap().ends_with("Nope.kicad_sym' not found."));
+        assert_eq!(res[2]["error"], "");
+        assert!(res[3]["error"].as_str().unwrap().starts_with("Nested table '/no/such' not found"));
+        assert!(res[4]["error"].as_str().unwrap().contains("KiCad-format libraries only"));
+        assert_eq!(res[5]["error"], "", "a row with no path is dropped on OK, not an error now");
+        assert_eq!(res[2]["guess"], "Table");
+        assert_eq!(res[0]["guess"], "KiCad");
+        assert!(res[0]["path"].as_str().unwrap().ends_with("symbols/Device.kicad_sym"));
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn the_boards_own_path_variables_follow_configure_paths_rules() {
+        let m = machine("pathvars", true);
+        let env = m.env();
+        let set = |v: Value| set_variables_with(&env, &m.board, &req(json!({ "variables": v })));
+        let ok = set(json!([{ "name": "TEAM_LIBS", "value": " /srv/libs " }, { "name": "", "value": "" }, { "name": "KICAD10_TEMPLATE_DIR", "value": "/mine/t" }]));
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!(ok["variables"]["project"], json!([{ "name": "KICAD10_TEMPLATE_DIR", "value": "/mine/t" }, { "name": "TEAM_LIBS", "value": "/srv/libs" }]));
+        assert_eq!(lt::read_project_variables(&m.board).get("TEAM_LIBS").map(String::as_str), Some("/srv/libs"));
+        for (v, message) in [
+            (json!([{ "name": "KIPRJMOD", "value": "/x" }]), "The name KIPRJMOD is reserved, and cannot be used."),
+            (json!([{ "name": "", "value": "/x" }]), "Environment variable name cannot be empty."),
+            (json!([{ "name": "A", "value": "" }]), "Environment variable path cannot be empty."),
+            (json!([{ "name": "a b", "value": "/x" }]), "'a b' is not a variable name: capital letters, digits (not first) and underscores only."),
+            (json!([{ "name": "A", "value": "/x" }, { "name": "A", "value": "/y" }]), "Two variables are named A."),
+        ] {
+            assert_eq!(set(v)["error"], message);
+        }
+        assert_eq!(lt::read_project_variables(&m.board).len(), 2, "a refused edit changes nothing");
+        // a variable the tables use and nothing defines is listed with what the environment says
+        let mut t = Table::new(TableKind::Footprint);
+        t.rows.push(lt::Row { nickname: "Old".into(), uri: "${KICAD6_FOOTPRINT_DIR}/Old.pretty".into(), lib_type: "KiCad".into(), ..Default::default() });
+        t.rows.push(lt::Row { nickname: "New".into(), uri: "${SOMETHING_ELSE}/New.pretty".into(), lib_type: "KiCad".into(), ..Default::default() });
+        lt::write_table(&project_table_path(&m.board, TableKind::Footprint), &t).unwrap();
+        let v = view_with(&env, &m.board);
+        let undefined: Vec<&str> = v["variables"]["undefined"].as_array().unwrap().iter().map(|u| u["name"].as_str().unwrap()).collect();
+        assert_eq!(undefined, ["KICAD6_FOOTPRINT_DIR", "SOMETHING_ELSE"]);
+        // none left removes the file
+        assert_eq!(set(json!([]))["ok"], true);
+        assert!(!m.board.join(lt::PATH_VARIABLES_FILE).exists());
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn the_browse_dialog_lists_folders_and_the_files_asked_for() {
+        let m = machine("browse", true);
+        let env = m.env();
+        let dir = m.root.join("shared");
+        std::fs::create_dir_all(dir.join("B.pretty")).unwrap();
+        std::fs::create_dir_all(dir.join("a_folder")).unwrap();
+        std::fs::create_dir_all(dir.join(".hidden")).unwrap();
+        std::fs::write(dir.join("Z.kicad_sym"), "").unwrap();
+        std::fs::write(dir.join("notes.txt"), "").unwrap();
+        std::fs::write(dir.join("fp-lib-table"), "").unwrap();
+        let names = |what: &str| -> Vec<(String, bool, bool)> {
+            let v = browse_with(&env, &m.board, &dir.display().to_string(), what);
+            v["entries"].as_array().unwrap().iter().map(|e| (e["name"].as_str().unwrap().to_string(), e["dir"].as_bool().unwrap(), e["library"].as_bool().unwrap())).collect()
+        };
+        assert_eq!(names("symbol"), [("a_folder".into(), true, false), ("B.pretty".into(), true, true), ("Z.kicad_sym".into(), false, false)], "folders first, then files, not the hidden or the others");
+        assert_eq!(names("footprint"), [("a_folder".into(), true, false), ("B.pretty".into(), true, true)]);
+        assert_eq!(names("table").len(), 3);
+        let v = browse_with(&env, &m.board, &dir.join("Z.kicad_sym").display().to_string(), "symbol");
+        assert_eq!(v["path"], dir.display().to_string(), "a file stands for its folder");
+        assert_eq!(v["parent"], m.root.display().to_string());
+        let here = browse_with(&env, &m.board, "", "folder");
+        assert_eq!(here["path"], m.board.display().to_string(), "the board's folder by default");
+        let variable = browse_with(&env, &m.board, "${KICAD10_SYMBOL_DIR}", "symbol");
+        assert_eq!(variable["path"], m.share.join("symbols").display().to_string());
+        assert!(browse_with(&env, &m.board, "/no/such/folder", "folder")["error"].is_string());
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn a_library_of_the_boards_table_lists_searches_opens_and_places_like_an_installed_one() {
+        use crate::library_index::{items_in_for_tests, libraries_json_for_tests};
+        let m = machine("e2e", true);
+        let env = m.env();
+        // a library of the project with one symbol and one footprint, added through the dialog's route
+        std::fs::create_dir_all(m.board.join("libs").join("Mine.pretty")).unwrap();
+        std::fs::write(
+            m.board.join("libs").join("Mine.kicad_sym"),
+            r#"(kicad_symbol_lib (version 20251024) (symbol "Chip9000" (property "Reference" "U") (property "Value" "Chip9000") (property "Footprint" "Mine:Pad2") (property "Description" "A made-up chip") (property "ki_keywords" "zeta widget")
+                (symbol "Chip9000_1_1" (pin input line (at 0 0 0) (length 1) (name "A") (number "1")) (pin output line (at 0 2.54 0) (length 1) (name "B") (number "2")))))"#,
+        )
+        .unwrap();
+        std::fs::write(m.board.join("libs").join("Mine.pretty").join("Pad2.kicad_mod"), r#"(footprint "Pad2" (descr "two pads") (tags "widget") (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu")) (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu")))"#).unwrap();
+        for (kind, path) in [("symbol", "${KIPRJMOD}/libs/Mine.kicad_sym"), ("footprint", "${KIPRJMOD}/libs/Mine.pretty")] {
+            let r = add_library_with(&env, &m.board, &req(json!({ "kind": kind, "path": path, "descr": "My parts" })));
+            assert_eq!(r["ok"], true, "{r}");
+        }
+        let (syms, fps) = (m.set(Kind::Symbol), m.set(Kind::Footprint));
+        // the index lists it with its description and table, its items by name
+        let idx = libraries_json_for_tests(Kind::Symbol, &syms);
+        let mine = idx["libraries"].as_array().unwrap().iter().find(|l| l["name"] == "Mine").unwrap().clone();
+        assert_eq!((mine["description"].clone(), mine["scope"].clone()), (json!("My parts"), json!("project")));
+        assert_eq!(items_in_for_tests(Kind::Symbol, &syms, "Mine").unwrap(), ["Chip9000"]);
+        assert_eq!(items_in_for_tests(Kind::Footprint, &fps, "Mine").unwrap(), ["Pad2"]);
+        // the chooser's search finds it, by name, keyword and description
+        crate::library_search::index_all(Kind::Symbol, &syms);
+        let found = |q: &str| -> Vec<String> {
+            let r = crate::library_search::search_in(Kind::Symbol, &syms, q, &crate::library_search::Filter::default(), 50);
+            r["libraries"].as_array().unwrap().iter().flat_map(|l| l["items"].as_array().unwrap().iter().map(move |i| format!("{}:{}", l["name"].as_str().unwrap(), i["name"].as_str().unwrap()))).collect()
+        };
+        assert_eq!(found("chip9000"), ["Mine:Chip9000"]);
+        assert_eq!(found("zeta"), ["Mine:Chip9000"], "a keyword");
+        assert_eq!(found("made-up"), ["Mine:Chip9000"], "a word of the description");
+        let d = crate::library_search::details_in(Kind::Symbol, &syms, "Mine:Chip9000");
+        assert_eq!((d["footprint"].clone(), d["pins"].clone(), d["symbol"]["lib_id"].clone()), (json!("Mine:Pad2"), json!(2), json!("Mine:Chip9000")));
+        let fp = crate::library_search::details_in(Kind::Footprint, &fps, "Mine:Pad2");
+        assert_eq!((fp["numbered_pads"].clone(), fp["footprint"]["name"].clone()), (json!(2), json!("Mine:Pad2")));
+        // placing it keeps its definition with the schematic, with the library's Footprint field
+        let design: eda_model::ir::Design = serde_json::from_str(r#"{"schema":1,"provenance":{"engine_version":"0","intent_hash":"x","seed":0,"stage_hashes":[]}}"#).unwrap();
+        let cmd = eda_ops::Cmd::AddSymbol { id: "U1".into(), lib_id: "Mine:Chip9000".into(), at: eda_model::ir::Point { x: 1000, y: 1000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 };
+        let rewritten = crate::library_place::rewrite_for_tests(&cmd, &design, &eda_model::ConstraintModel::default(), &syms, &fps).expect("placed from the table library");
+        let eda_ops::Cmd::Batch { cmds } = rewritten else { panic!("{rewritten:?}") };
+        assert!(matches!(&cmds[0], eda_ops::Cmd::EmbedLibSymbol { symbol } if symbol.lib_id == "Mine:Chip9000" && symbol.pins.len() == 2));
+        assert!(matches!(&cmds[1], eda_ops::Cmd::AddSymbol { value, footprint, .. } if value == "Chip9000" && footprint == "Mine:Pad2"));
+        let place = eda_ops::Cmd::PlaceFootprint { footprint: "Mine:Pad2".into(), at: eda_model::ir::Point { x: 0, y: 0 }, reference: String::new(), value: String::new(), definition: None };
+        let Some(eda_ops::Cmd::PlaceFootprint { definition: Some(def), .. }) = crate::library_place::rewrite_for_tests(&place, &design, &eda_model::ConstraintModel::default(), &syms, &fps) else { panic!("not rewritten") };
+        assert_eq!(def.pads.len(), 2);
+        // and an intent part naming the footprint finds its pads
+        let mut model = eda_model::ConstraintModel::default();
+        model.parts.push(eda_model::Part { reference: "U1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some("Mine:Pad2".into()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None });
+        let warnings = eda_kicad::resolve_library_footprints_with(&mut model, |id| {
+            let (lib, item) = id.split_once(':')?;
+            fps.lib_path(Kind::Footprint, lib).ok().map(|d| d.join(format!("{item}.kicad_mod")))
+        });
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(model.footprints.len(), 1);
+        assert_eq!(model.footprints[0].pads.len(), 2);
         let _ = std::fs::remove_dir_all(&m.root);
     }
 }

@@ -55,8 +55,9 @@ pub fn find_symbol_library_file(lib_root: &Path, lib_name: &str) -> Option<PathB
 /// from scratch each time.
 type LibraryTable = HashMap<String, LibSymbol>;
 
-fn cache() -> &'static Mutex<HashMap<PathBuf, std::sync::Arc<LibraryTable>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, std::sync::Arc<LibraryTable>>>> = OnceLock::new();
+/// Each parsed library with the modification time of the file it was read from: a library of the board's own tables is edited, and a changed file is read again.
+fn cache() -> &'static Mutex<HashMap<PathBuf, (Option<std::time::SystemTime>, std::sync::Arc<LibraryTable>)>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<std::time::SystemTime>, std::sync::Arc<LibraryTable>)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -95,7 +96,12 @@ pub fn resolve_symbol(lib_root: &Path, lib_id: &str) -> Option<LibSymbol> {
 /// field already resolved one of.
 pub fn list_symbols_in_library(lib_root: &Path, lib_name: &str) -> Vec<LibSymbol> {
     let Some(path) = find_symbol_library_file(lib_root, lib_name) else { return Vec::new() };
-    let Ok(table) = load_library_table(&path) else { return Vec::new() };
+    list_symbols_in_file(&path, lib_name)
+}
+
+/// [`list_symbols_in_library`] for a library whose file the caller already knows (the libraries of the board's library tables).
+pub fn list_symbols_in_file(path: &Path, lib_name: &str) -> Vec<LibSymbol> {
+    let Ok(table) = load_library_table(path) else { return Vec::new() };
     let mut out: Vec<LibSymbol> = table
         .iter()
         .map(|(name, sym)| {
@@ -127,16 +133,19 @@ pub fn list_symbol_libraries(lib_root: &Path) -> Vec<String> {
 }
 
 fn load_library_table(path: &Path) -> Result<std::sync::Arc<LibraryTable>, String> {
+    let stamp = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     {
         let guard = cache().lock().unwrap();
-        if let Some(t) = guard.get(path) {
-            return Ok(t.clone());
+        if let Some((s, t)) = guard.get(path) {
+            if *s == stamp {
+                return Ok(t.clone());
+            }
         }
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let table = parse_symbol_library(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     let table = std::sync::Arc::new(table);
-    cache().lock().unwrap().insert(path.to_path_buf(), table.clone());
+    cache().lock().unwrap().insert(path.to_path_buf(), (stamp, table.clone()));
     Ok(table)
 }
 
@@ -383,6 +392,12 @@ fn parse_pin(item: &[Sexpr], unit: u32) -> Option<LibPin> {
 /// human-readable warning per symbol that resolved to a file that exists
 /// but failed to parse.
 pub fn resolve_library_symbols(model: &mut ConstraintModel, lib_root: &Path) -> Vec<String> {
+    resolve_library_symbols_with(model, |lib_name| find_symbol_library_file(lib_root, lib_name))
+}
+
+/// [`resolve_library_symbols`] with the way a library's nickname finds its `.kicad_sym` file left to the caller -- the libraries of the board's library
+/// tables, where a nickname and a file name are two things. `find` is asked only for libraries the model needs.
+pub fn resolve_library_symbols_with(model: &mut ConstraintModel, mut find: impl FnMut(&str) -> Option<PathBuf>) -> Vec<String> {
     let have: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();
     let mut wanted: Vec<String> = model.parts.iter().map(resolve_lib_id).filter(|id| !eda_model::is_synthetic_lib_id(id) && !have.contains(id)).collect();
     wanted.sort();
@@ -391,7 +406,7 @@ pub fn resolve_library_symbols(model: &mut ConstraintModel, lib_root: &Path) -> 
     let mut warnings = Vec::new();
     for lib_id in wanted {
         let Some((lib_name, _)) = lib_id.split_once(':') else { continue };
-        let Some(path) = find_symbol_library_file(lib_root, lib_name) else { continue };
+        let Some(path) = find(lib_name) else { continue };
         match load_library_table(&path) {
             Ok(table) => {
                 if let Some((_, symbol_name)) = lib_id.split_once(':') {

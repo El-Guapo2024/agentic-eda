@@ -21,6 +21,7 @@
 //!
 //! Opening an item is not here: `library_api` resolves a `Lib:Name` against the same libraries.
 
+#[cfg(test)]
 use eda_kicad::{default_footprint_library_root, default_symbol_library_root};
 use eda_kicad::library_table::TableKind;
 use serde_json::{json, Value};
@@ -44,6 +45,8 @@ impl Kind {
         }
     }
 
+    /// KiCad's own library folder of this kind (what the installed libraries are read from when no table names them; the tests' real libraries).
+    #[cfg(test)]
     pub(crate) fn root(self) -> PathBuf {
         match self {
             Kind::Footprint => default_footprint_library_root(),
@@ -329,6 +332,17 @@ fn libraries_json<S: LibSource + ?Sized>(kind: Kind, src: &S) -> Value {
             v
         }).collect::<Vec<_>>(),
     })
+}
+
+/// (For the tests of the modules that build sources of their own.)
+#[cfg(test)]
+pub(crate) fn libraries_json_for_tests(kind: Kind, src: &dyn LibSource) -> Value {
+    libraries_json(kind, src)
+}
+
+#[cfg(test)]
+pub(crate) fn items_in_for_tests(kind: Kind, src: &dyn LibSource, lib: &str) -> Result<Vec<String>, String> {
+    items_in(kind, src, lib).map(|n| n.as_ref().clone())
 }
 
 /// `GET /api/library/items?kind=...&lib=Name`: `{"lib", "names": [..]}` -- the bare item names of one library, or `{"error"}`.

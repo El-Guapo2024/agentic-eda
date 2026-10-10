@@ -171,13 +171,19 @@ pub(crate) fn courtyard_from(root: &[Sexpr]) -> Option<(Um, Um)> {
 /// loaded, for the caller to print; an empty result means every named
 /// library footprint (if any) resolved.
 pub fn resolve_library_footprints(model: &mut ConstraintModel, lib_root: &Path) -> Vec<String> {
+    resolve_library_footprints_with(model, |lib_id| find_footprint_file(lib_root, lib_id))
+}
+
+/// [`resolve_library_footprints`] with the way a `Library:Footprint` id finds its `.kicad_mod` file left to the caller -- the libraries of the board's
+/// library tables, where a library's nickname and its folder are two things. `find` is asked only for ids the model needs.
+pub fn resolve_library_footprints_with(model: &mut ConstraintModel, mut find: impl FnMut(&str) -> Option<PathBuf>) -> Vec<String> {
     let have: BTreeSet<String> = model.footprints.iter().map(|f| f.name.clone()).collect();
     let mut warnings = Vec::new();
     let mut wanted: Vec<String> = model.parts.iter().filter_map(|p| p.footprint.clone()).filter(|f| f.contains(':') && !have.contains(f)).collect();
     wanted.sort();
     wanted.dedup();
     for lib_id in wanted {
-        let Some(path) = find_footprint_file(lib_root, &lib_id) else { continue };
+        let Some(path) = find(&lib_id) else { continue };
         match std::fs::read_to_string(&path) {
             Ok(text) => match parse_footprint_file(&text, &lib_id) {
                 Ok(fp) => model.footprints.push(fp),

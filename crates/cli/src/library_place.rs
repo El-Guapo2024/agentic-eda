@@ -105,6 +105,12 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
     }
 }
 
+/// (For the tests of the modules that build sources of their own.)
+#[cfg(test)]
+pub(crate) fn rewrite_for_tests(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &dyn LibSource, footprints: &dyn LibSource) -> Option<Cmd> {
+    rewrite(cmd, design, model, symbols, footprints)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -575,6 +575,23 @@ pub fn absolute(path: &Path, base: &Path) -> PathBuf {
     out
 }
 
+/// What `ENV_VAR_NAME_VALIDATOR` lets a name of a path variable be made of: capital letters, digits (not first) and `_`. Typing a lower-case letter gives the capital.
+pub fn fix_variable_name(typed: &str) -> String {
+    let mut out = String::new();
+    for c in typed.chars() {
+        let c = c.to_ascii_uppercase();
+        if c == '_' || c.is_ascii_uppercase() || (c.is_ascii_digit() && !out.is_empty()) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether `name` is one a path variable may have.
+pub fn is_variable_name(name: &str) -> bool {
+    !name.is_empty() && fix_variable_name(name) == name
+}
+
 /// The variable names a text uses (`${NAME}` and `$(NAME)`), in order of first use -- what the dialogs' "Available path substitutions" and Configure Paths scan the tables for.
 pub fn variables_used(text: &str) -> Vec<String> {
     let c: Vec<char> = text.chars().collect();
@@ -929,11 +946,11 @@ pub fn effective_libs(kind: TableKind, tables: &[&LoadedTable], vars: &Vars) -> 
 
 // ------------------------------------------------------------------------------------------------ the dialog's checks
 
-/// One thing `VerifyTable` refused, with the row it stopped at and the column to put the cursor in (1 is the nickname).
+/// One thing `VerifyTable` refused, with the row it stopped at and the column to put the cursor in (`nickname`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TableProblem {
     pub row: usize,
-    pub column: usize,
+    pub column: &'static str,
     pub message: String,
 }
 
@@ -948,10 +965,10 @@ pub fn verify_rows(rows: &[Row], supports_visibility: bool) -> Result<Vec<Row>, 
             continue;
         }
         if nick.is_empty() {
-            return Err(TableProblem { row: index, column: 1, message: "Library must have a nickname.".into() });
+            return Err(TableProblem { row: index, column: "nickname", message: "Library must have a nickname.".into() });
         }
         if let Some(ch) = illegal_nickname_char(&nick) {
-            return Err(TableProblem { row: index, column: 1, message: format!("Illegal character '{ch}' in nickname '{nick}'.") });
+            return Err(TableProblem { row: index, column: "nickname", message: format!("Illegal character '{ch}' in nickname '{nick}'.") });
         }
         let mut row = row.clone();
         row.nickname = nick;
@@ -965,7 +982,7 @@ pub fn verify_rows(rows: &[Row], supports_visibility: bool) -> Result<Vec<Row>, 
         if let Some((j, _)) = kept.iter().enumerate().skip(i + 1).find(|(_, b)| b.nickname == a.nickname) {
             // the position reported is among the rows the person sees, whichever of them were dropped
             let shown = rows.iter().enumerate().filter(|(_, r)| !r.uri.trim().is_empty()).map(|(k, _)| k).nth(j).unwrap_or(j);
-            return Err(TableProblem { row: shown, column: 1, message: format!("Multiple libraries cannot share the same nickname ('{}').", a.nickname) });
+            return Err(TableProblem { row: shown, column: "nickname", message: format!("Multiple libraries cannot share the same nickname ('{}').", a.nickname) });
         }
     }
     Ok(kept)
@@ -1021,6 +1038,46 @@ pub fn write_project_variables(dir: &Path, vars: &BTreeMap<String, String>) -> R
         let _ = std::fs::remove_file(&tmp);
         format!("could not write {}: {e}", path.display())
     })
+}
+
+// ------------------------------------------------------------------------------------------------ the derived project
+
+/// Give the derived KiCad project of a board the board's library setup, so kicad-cli reads the same libraries the studio does. `board_dir` is the board's folder (the
+/// studio's project folder) and `work` the folder of the derived project, `<board>/.kicad`, whose `<stem>.kicad_pro` is `pro`:
+///
+///   * the board's `sym-lib-table` and `fp-lib-table` are written into `work` ([`derived_for_kicad`]: `${KIPRJMOD}` named the real folder); a table the board lacks, or that does
+///     not parse, leaves none there. KiCad reads the global tables from its own configuration, as it does for any project;
+///   * the board's path variables go into the project file as its text variables, which `PROJECT::TextVarResolver` reads before the environment, with `KIPRJMOD` itself named the
+///     board's folder -- the derived project lives in a folder of its own, and a model path or a library path written with `${KIPRJMOD}` would otherwise lead into it.
+///
+/// A board with neither tables nor variables is left as it was: no table files, no `text_variables`. Returns whether there was anything to derive.
+pub fn derive_project(board_dir: &Path, work: &Path, pro: &mut serde_json::Value) -> Result<bool, String> {
+    let mut any = false;
+    for kind in TableKind::ALL {
+        let dst = work.join(kind.file_name());
+        let table = std::fs::read_to_string(board_dir.join(kind.file_name())).ok().and_then(|t| Table::parse(&t).ok()).filter(|t| t.kind == kind);
+        match table {
+            Some(t) => {
+                write_table(&dst, &derived_for_kicad(&t, board_dir))?;
+                any = true;
+            }
+            None => {
+                let _ = std::fs::remove_file(&dst);
+            }
+        }
+    }
+    let vars = read_project_variables(board_dir);
+    any |= !vars.is_empty();
+    if any {
+        let folder = board_dir.display().to_string();
+        let mut text = pro.get("text_variables").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        text.insert("KIPRJMOD".into(), serde_json::json!(folder));
+        for (name, value) in &vars {
+            text.insert(name.clone(), serde_json::json!(value.replace("${KIPRJMOD}", &folder).replace("$(KIPRJMOD)", &folder)));
+        }
+        pro["text_variables"] = serde_json::Value::Object(text);
+    }
+    Ok(any)
 }
 
 #[cfg(test)]
@@ -1158,6 +1215,14 @@ mod tests {
         assert_eq!(v.expand_uri("libs/a.kicad_sym", Path::new("/proj")), PathBuf::from("/proj/libs/a.kicad_sym"));
         assert_eq!(v.expand_uri("../t/sym-lib-table", Path::new("/proj/sub")), PathBuf::from("/proj/t/sym-lib-table"));
         assert_eq!(v.expand_uri("/abs/./x", Path::new("/proj")), PathBuf::from("/abs/x"));
+    }
+
+    #[test]
+    fn variable_names_are_capitals_digits_and_underscores() {
+        assert_eq!(fix_variable_name("my_libs-2 v3"), "MY_LIBS2V3");
+        assert_eq!(fix_variable_name("9lives"), "LIVES", "no digit first");
+        assert_eq!(fix_variable_name("A9"), "A9");
+        assert!(is_variable_name("KICAD10_SYMBOL_DIR") && is_variable_name("_X") && !is_variable_name("lower") && !is_variable_name("9X") && !is_variable_name("") && !is_variable_name("A B"));
     }
 
     #[test]
@@ -1345,7 +1410,7 @@ mod tests {
         let ok = verify_rows(&[row(" A ", " /a.kicad_sym "), row("", ""), row("B", "/b.kicad_sym")], true).unwrap();
         assert_eq!(ok.iter().map(|r| (r.nickname.as_str(), r.uri.as_str())).collect::<Vec<_>>(), [("A", "/a.kicad_sym"), ("B", "/b.kicad_sym")], "trimmed, and the row with no path is gone without a word");
         let p = verify_rows(&[row("A", "/a"), row("", "/b")], true).unwrap_err();
-        assert_eq!((p.row, p.column, p.message.as_str()), (1, 1, "Library must have a nickname."));
+        assert_eq!((p.row, p.column, p.message.as_str()), (1, "nickname", "Library must have a nickname."));
         let p = verify_rows(&[row("A:B", "/a")], true).unwrap_err();
         assert_eq!(p.message, "Illegal character ':' in nickname 'A:B'.");
         let p = verify_rows(&[row("A", "/a"), row("Z", ""), row("B", "/b"), row("A", "/c")], true).unwrap_err();
@@ -1354,6 +1419,38 @@ mod tests {
         let r = Row { hidden: true, ..row("A", "/a") };
         assert!(!verify_rows(std::slice::from_ref(&r), false).unwrap()[0].hidden);
         assert!(verify_rows(std::slice::from_ref(&r), true).unwrap()[0].hidden);
+    }
+
+    #[test]
+    fn the_derived_project_gets_the_boards_tables_and_variables_and_a_board_without_them_gets_nothing() {
+        let root = temp("derive");
+        let (board, work) = (root.join("board"), root.join("board").join(".kicad"));
+        std::fs::create_dir_all(&work).unwrap();
+        let mut pro = serde_json::json!({ "erc": {} });
+        assert_eq!(derive_project(&board, &work, &mut pro), Ok(false));
+        assert_eq!(pro, serde_json::json!({ "erc": {} }), "nothing to derive, nothing added");
+        assert!(!work.join("sym-lib-table").exists());
+        // a table and a variable
+        let mut t = Table::new(TableKind::Symbol);
+        t.rows.push(row("Mine", "${KIPRJMOD}/libs/Mine.kicad_sym"));
+        t.rows.push(row("Team", "${TEAM}/Team.kicad_sym"));
+        write_table(&board.join("sym-lib-table"), &t).unwrap();
+        write_project_variables(&board, &[("TEAM".to_string(), "${KIPRJMOD}/shared".to_string())].into()).unwrap();
+        std::fs::write(work.join("fp-lib-table"), "stale").unwrap();
+        assert_eq!(derive_project(&board, &work, &mut pro), Ok(true));
+        let derived = Table::parse(&std::fs::read_to_string(work.join("sym-lib-table")).unwrap()).unwrap();
+        assert_eq!(derived.rows[0].uri, format!("{}/libs/Mine.kicad_sym", board.display()), "the real project folder, not the derived one");
+        assert_eq!(derived.rows[1].uri, "${TEAM}/Team.kicad_sym", "a project variable stays a variable: the project file defines it");
+        assert!(!work.join("fp-lib-table").exists(), "no table of the board, none in the derived project");
+        assert_eq!(pro["text_variables"]["KIPRJMOD"], board.display().to_string());
+        assert_eq!(pro["text_variables"]["TEAM"], format!("{}/shared", board.display()));
+        assert_eq!(pro["erc"], serde_json::json!({}));
+        // a table that does not parse is left out rather than failing the export
+        std::fs::write(board.join("sym-lib-table"), "(sym_lib_table (oops))").unwrap();
+        write_project_variables(&board, &BTreeMap::new()).unwrap();
+        assert_eq!(derive_project(&board, &work, &mut serde_json::json!({})), Ok(false));
+        assert!(!work.join("sym-lib-table").exists());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

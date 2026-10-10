@@ -713,6 +713,15 @@ fn handle(
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
         ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
+        // The library tables (`crate::library_tables`): KiCad's global ones, read only, and the board's own `sym-lib-table` / `fp-lib-table`, which the Manage Symbol Libraries
+        // and Manage Footprint Libraries dialogs edit; New Library and Add Existing Library; the board's path variables (Configure Paths); and the folder listing the browse
+        // buttons use in place of a native file dialog.
+        ("GET", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::view(dir).to_string().as_bytes()),
+        ("POST", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_table(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library_tables/check") => respond(stream, "200 OK", "application/json", crate::library_tables::check_rows(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library_tables/add") => respond(stream, "200 OK", "application/json", crate::library_tables::add_library(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/path_variables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_variables(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/fs/list") => respond(stream, "200 OK", "application/json", crate::library_tables::browse(dir, &query_value(target, "path"), &query_value(target, "what")).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
@@ -1653,7 +1662,7 @@ fn viewed_file(design: &eda_model::ir::Design, breadcrumb: &[(String, String)]) 
 /// session could actually try it against.
 fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let lib_root = eda_kicad::default_symbol_library_root();
+    let libs = crate::library_tables::libs(dir, crate::library_index::Kind::Symbol);
 
     let lib_name_of = |lib_id: &str| lib_id.split_once(':').map(|(l, _)| l.to_string());
     let mut lib_names: std::collections::BTreeSet<String> = model.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)).collect();
@@ -1664,7 +1673,9 @@ fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 
     let mut by_lib_id: std::collections::BTreeMap<String, eda_model::LibSymbol> = std::collections::BTreeMap::new();
     for name in &lib_names {
-        for sym in eda_kicad::list_symbols_in_library(&lib_root, name) {
+        // the library of that nickname in the board's symbol library tables (KiCad's, or the board's own)
+        let Ok(path) = crate::library_index::LibSource::lib_path(&*libs, crate::library_index::Kind::Symbol, name) else { continue };
+        for sym in eda_kicad::list_symbols_in_file(&path, name) {
             by_lib_id.insert(sym.lib_id.clone(), sym);
         }
     }
