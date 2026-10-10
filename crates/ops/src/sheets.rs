@@ -339,7 +339,7 @@ mod tests {
         assert_eq!(b.apply(&on_mcu(rename)).unwrap_err()[0].check, "ops_duplicate_symbol");
         // an unnumbered symbol is numbered after the references of every sheet (R1..R8 are the channels')
         b.apply(&on_mcu(add("R?"))).unwrap();
-        b.apply(&on_mcu(Cmd::Annotate { reset_existing: false, order: Default::default(), ids: None })).unwrap();
+        b.apply(&on_mcu(Cmd::Annotate { reset_existing: false, order: Default::default(), ids: None, options: Default::default() })).unwrap();
         let screens = b.design().sheet_contents.clone().unwrap();
         let mcu_file = &root.sheets.iter().find(|s| s.id == mcu).unwrap().file;
         let mut on_mcu_sheet: Vec<&str> = screens[mcu_file].symbols.iter().map(|s| s.id.as_str()).filter(|r| r.starts_with('R')).collect();

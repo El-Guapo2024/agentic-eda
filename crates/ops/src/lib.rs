@@ -61,9 +61,11 @@ mod pcb_paste;
 mod pcb_props;
 mod pcb_transform;
 mod zone_overrides;
+mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
+pub use sch_annotate::{AnnotateMessage, AnnotateOptions, AnnotateReport, AnnotateScope};
 pub use pcb_transform::{flip_layer, FlipDirection};
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
@@ -1204,16 +1206,19 @@ pub enum Cmd {
     /// bottom). `reset_existing` mirrors the dialog's "Clear and
     /// re-annotate" vs "Keep existing" modes. `ids`, when given, is
     /// `dialog_annotate.cpp`'s own "Selection" scope -- only symbols named
-    /// here are reset/renumbered, everything else on the sheet is left
-    /// exactly as it is; `None` is the dialog's "Schematic"/"Sheet" scope
-    /// (this project's IR has no sheet hierarchy to tell those two apart,
-    /// so there's only one "whole sheet" scope here, not source's three).
+    /// here are reset/renumbered, everything else is left exactly as it
+    /// is; `None` is the sheet in view.
+    ///
+    /// The rest of `DIALOG_ANNOTATE` -- scope (entire schematic, the sheet in view, the selection), the numbering algorithm and start
+    /// number, "recursive", "regroup units" -- is `options` (`sch_annotate.rs`); an absent `options` is the dialog before it had them.
     Annotate {
         reset_existing: bool,
         #[serde(default)]
         order: AnnotateOrder,
         #[serde(default)]
         ids: Option<Vec<String>>,
+        #[serde(default)]
+        options: AnnotateOptions,
     },
 
     // ----------------------------------------- schematic control (sch_control.rs)
@@ -2358,7 +2363,7 @@ impl<'a> Board<'a> {
             Cmd::ReplaceText { search, items } => self.replace_text(search, items.as_deref()),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
             Cmd::ResetErcPinMap => self.reset_erc_pin_map(),
-            Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
+            Cmd::Annotate { reset_existing, order, ids, options } => self.annotate(*reset_existing, *order, ids.as_deref(), options),
 
             Cmd::OpenFootprintForEdit { name } => self.open_footprint_for_edit(name),
             Cmd::NewFootprint { name } => self.new_footprint(name),
@@ -4711,65 +4716,6 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    /// `Ctrl+A` (Annotate), `dialog_annotate.cpp`'s default mode
-    /// (`INCREMENTAL_BY_REF`, sort "top to bottom" -- by Y then X):
-    /// assigns the next free number, per reference-letter prefix, to
-    /// every symbol whose id is blank or ends in `?` (this project's own
-    /// placeholder for "not yet annotated", e.g. `AddSymbol`'s "U?").
-    /// `reset_existing` first strips every symbol's id back to
-    /// "<prefix>?" (dialog's "Reset existing annotations"), so the whole
-    /// sheet renumbers from scratch instead of only filling gaps.
-    fn annotate(&mut self, reset_existing: bool, order: AnnotateOrder, ids: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
-        // The numbers the other sheets use are taken: a reference is one part for the whole design, so numbering here continues after them.
-        let elsewhere: Vec<String> = self.symbols_elsewhere().into_iter().map(|(r, _)| r.to_string()).collect();
-        let sch = self.schematic_mut()?;
-        // Scope snapshot, by index, taken before any id mutates: `ids`
-        // names symbols by the id the caller/selection saw them under,
-        // which `reset_existing` below is about to change for exactly the
-        // ones in scope -- re-checking membership against the *new* id
-        // after that would wrongly drop them back out of scope.
-        let in_scope: Vec<bool> = sch.symbols.iter().map(|s| ids.is_none_or(|list| list.iter().any(|want| want == &s.id))).collect();
-
-        if reset_existing {
-            for (i, s) in sch.symbols.iter_mut().enumerate() {
-                if !in_scope[i] {
-                    continue;
-                }
-                let prefix: String = s.id.chars().take_while(|c| c.is_alphabetic()).collect();
-                if !prefix.is_empty() {
-                    s.id = format!("{prefix}?");
-                }
-            }
-        }
-        let mut next: BTreeMap<String, u32> = BTreeMap::new();
-        for id in sch.symbols.iter().map(|s| s.id.as_str()).chain(elsewhere.iter().map(String::as_str)) {
-            if id.ends_with('?') {
-                continue;
-            }
-            let prefix: String = id.chars().take_while(|c| c.is_alphabetic()).collect();
-            let num: u32 = id[prefix.len()..].parse().unwrap_or(0);
-            let e = next.entry(prefix).or_insert(0);
-            *e = (*e).max(num);
-        }
-        let mut to_number: Vec<usize> = (0..sch.symbols.len()).filter(|&i| sch.symbols[i].id.ends_with('?') && in_scope[i]).collect();
-        to_number.sort_by(|&a, &b| {
-            let (ya, xa) = (sch.symbols[a].at.y, sch.symbols[a].at.x);
-            let (yb, xb) = (sch.symbols[b].at.y, sch.symbols[b].at.x);
-            match order {
-                AnnotateOrder::YThenX => (ya, xa).cmp(&(yb, xb)),
-                AnnotateOrder::XThenY => (xa, ya).cmp(&(xb, yb)),
-            }
-        });
-        for i in to_number {
-            let prefix = sch.symbols[i].id.trim_end_matches('?').to_string();
-            let prefix = if prefix.is_empty() { "U".to_string() } else { prefix };
-            let n = next.entry(prefix.clone()).or_insert(0);
-            *n += 1;
-            sch.symbols[i].id = format!("{prefix}{n}");
-        }
-        Ok(())
-    }
-
     // -------------------------------------------------- footprint editor
     //
     // GAPS.md #8. See `Cmd`'s own "footprint editor" section for what each
@@ -5438,6 +5384,8 @@ mod pcb_props_tests;
 mod pcb_paste_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
+#[cfg(test)]
+mod sch_annotate_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 

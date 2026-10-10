@@ -34,6 +34,7 @@ mod sch_api;
 mod sch_clipboard_api;
 mod sch_control_api;
 mod sch_export_api;
+mod sch_hierarchy_api;
 mod sch_move_api;
 mod fab_cmd;
 #[cfg(test)]

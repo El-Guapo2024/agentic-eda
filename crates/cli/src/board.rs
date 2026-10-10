@@ -1180,7 +1180,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x), mm(at.y)),
         Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
         Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
-        Cmd::Annotate { reset_existing, order, ids } => format!(
+        Cmd::Annotate { reset_existing, order, ids, .. } => format!(
             "schematic annotate{}{}{}",
             if *reset_existing { " --reset" } else { "" },
             match order {
@@ -3102,7 +3102,7 @@ mod tests {
         }
         save(&dir, &design).unwrap();
 
-        step(&dir, Cmd::Annotate { reset_existing: false, order: eda_ops::AnnotateOrder::YThenX, ids: None }, false, "test").unwrap();
+        step(&dir, Cmd::Annotate { reset_existing: false, order: eda_ops::AnnotateOrder::YThenX, ids: None, options: Default::default() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
         let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
@@ -3111,7 +3111,7 @@ mod tests {
         assert_eq!(a.id, "C2");
 
         // Reset and redo with X-then-Y -- the order must flip.
-        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None }, false, "test").unwrap();
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None, options: Default::default() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
         let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
@@ -3309,18 +3309,16 @@ mod tests {
         step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
 
-        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]) }, false, "test").unwrap();
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]), options: Default::default() }, false, "test").unwrap();
 
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
         assert!(sch.symbols.iter().any(|s| s.id == "R1") && sch.symbols.iter().any(|s| s.id == "R2"), "R1/R2 were never in scope -- must be untouched");
         assert!(sch.symbols.iter().any(|s| s.id == "R4"), "R4 was never in scope either, even though it's the same prefix as the one being reset");
-        // R3 was in scope: reset to "R?", then renumbered to the next free
-        // "R" number -- which is 5, not 3, since R4 (number 4, untouched
-        // and out of scope) is still on the sheet contributing to "next
-        // free" -- `annotate` fills the next free slot, it does not
-        // backfill gaps, same as before this field existed.
-        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000, y: 10_000 }).unwrap().id, "R5");
+        // R3 was in scope: reset to "R?", then renumbered to the first free
+        // "R" number (`FindFirstUnusedReference`): R1, R2 and R4 are held by
+        // the symbols out of scope, so the gap is R3 again.
+        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000, y: 10_000 }).unwrap().id, "R3");
         assert!(!sch.symbols.iter().any(|s| s.id.ends_with('?')), "nothing should be left unannotated after the pass");
     }
 

@@ -98,6 +98,7 @@ pub struct Entry {
     /// A power symbol (its number is written with a leading zero, `#PWR012`).
     pub power: bool,
     // ---- `SCH_REFERENCE`'s working state
+    original: String,
     text: String,
     num: i64,
     num_str: String,
@@ -119,6 +120,7 @@ impl Entry {
             sheet_num,
             pos,
             power,
+            original: reference.to_string(),
             text: reference.to_string(),
             num: -1,
             num_str: String::new(),
@@ -167,6 +169,20 @@ impl Entry {
                 }
             }
             self.text = chars.into_iter().collect();
+        }
+    }
+
+    /// The reference text the entry was made with (`R12`, `R?`), before any numbering.
+    pub fn original(&self) -> &str {
+        &self.original
+    }
+
+    /// The reference it was made with, with the unit's letters after it for a multi-unit symbol (`GetRef( sheet, true )`: `U1A`).
+    pub fn original_with_unit(&self) -> String {
+        if self.unit_count > 1 {
+            format!("{}{}", self.original, unit_letters(self.unit))
+        } else {
+            self.original.clone()
         }
     }
 
