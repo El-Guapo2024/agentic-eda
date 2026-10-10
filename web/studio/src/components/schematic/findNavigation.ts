@@ -13,24 +13,29 @@
 //     the schematic view on the hit, keeping the current zoom (frame it
 //     tight only when the view was never initialized) -- same container
 //     lookup ErcDialog's jumpTo uses.
+//   * the item is on another sheet (the search went over every sheet, `searchAllSheets`) -> `RunAction( changeSheet, &sheet )` first, then the
+//     selection and the view as above.
 //   * no item left -> "Reached end of schematic. Find again to wrap around
 //     to the start." and the cursor resets so the next call wraps.
 import type { Dispatch } from "react";
 import { fetchSchFind } from "../../api/client";
 import type { FindMatch } from "../../api/types";
 import { fitTransform } from "../canvas/view";
-import { endReachedMessage, pickMatch } from "../../kicad-port/schFind";
-import type { Action, StudioState } from "../../state/store";
+import { endReachedMessage, pickMatch, searchesAllSheets } from "../../kicad-port/schFind";
+import { samePath } from "../../kicad-port/sheetPages";
+import type { Action, StudioApi } from "../../state/store";
 
-/** Select + pan to one match (the `FindNext` success path). */
-export function visitMatch(state: StudioState, dispatch: Dispatch<Action>, match: FindMatch): void {
+/** Go to the sheet of a match and select + pan to it (the `FindNext` success path). */
+export async function visitMatch(api: StudioApi, dispatch: Dispatch<Action>, match: FindMatch): Promise<void> {
+  // `editFrame->GetToolManager()->RunAction<SCH_SHEET_PATH*>( SCH_ACTIONS::changeSheet, &sheet )`
+  if (match.sheet && !samePath(match.sheet, api.getState().currentSheetPath)) await api.navigateToSheet(match.sheet);
   dispatch({ type: "SET_SELECTION", refs: [match.id] });
   dispatch({ type: "SET_HOT", refs: [match.id] });
   const container = document.querySelector(".pcb-canvas-container");
   const rect = container?.getBoundingClientRect();
   if (rect && rect.width >= 50 && rect.height >= 50) {
     const [x, y] = match.at;
-    const view = state.schematicView;
+    const view = api.getState().schematicView;
     if (view.scale > 0) {
       dispatch({ type: "SET_SCHEMATIC_VIEW", view: { scale: view.scale, x: rect.width / 2 - x * view.scale, y: rect.height / 2 - y * view.scale } });
     } else {
@@ -45,28 +50,31 @@ export function visitMatch(state: StudioState, dispatch: Dispatch<Action>, match
  * Find dialog instead (`return FindAndReplace( ACTIONS::find.MakeEvent() )`).
  * `cursorOverride` lets Replace continue from a cursor it just fixed up
  * (see FindReplaceDialog's `replaceCurrent`) instead of the stale one in
- * `state`. Returns the match visited, or null.
+ * `state`. Over every sheet unless "Search the current sheet only" is on (or the search is of the selection); a Find with no cursor starts on
+ * the sheet in view, and the sheets before it only come after the wrap. Returns the match visited, or null.
  */
-export async function findNextMatch(state: StudioState, dispatch: Dispatch<Action>, reversed: boolean, cursorOverride?: string | null): Promise<FindMatch | null> {
+export async function findNextMatch(api: StudioApi, dispatch: Dispatch<Action>, reversed: boolean, cursorOverride?: string | null): Promise<FindMatch | null> {
+  const state = api.getState();
   const { search } = state.schFind;
   const cursor = cursorOverride === undefined ? state.schFind.cursor : cursorOverride;
   if (search.find === "") {
     dispatch({ type: "SET_SCH_DIALOG", dialog: "find" });
     return null;
   }
-  const reply = await fetchSchFind({ ...search, search_and_replace: false }, undefined, state.currentSheetPath);
+  const allSheets = searchesAllSheets(state.schFind.currentSheetOnly, state.schFind.selectedOnly);
+  const reply = await fetchSchFind({ ...search, search_and_replace: false }, undefined, state.currentSheetPath, allSheets);
   if (!reply.ok) {
     dispatch({ type: "SET_SCH_FIND", find: { status: reply.message ?? "Find failed." } });
     return null;
   }
-  const picked = pickMatch(reply.matches, cursor, reversed);
+  const picked = pickMatch(reply.matches, cursor, reversed, allSheets ? (reply.current_rank ?? 0) : undefined);
   if (picked.match) {
     dispatch({ type: "SET_SCH_FIND", find: { cursor: picked.cursor, status: `${reply.matches.length} match${reply.matches.length === 1 ? "" : "es"}` } });
-    visitMatch(state, dispatch, picked.match);
+    await visitMatch(api, dispatch, picked.match);
     return picked.match;
   }
-  const message = reply.matches.length === 0 ? "No match found." : endReachedMessage();
-  dispatch({ type: "SET_SCH_FIND", find: { cursor: null, status: message } });
+  const message = reply.matches.length === 0 ? "No match found." : endReachedMessage(allSheets);
+  dispatch({ type: "SET_SCH_FIND", find: { cursor: picked.cursor, status: message } });
   dispatch({ type: "TOAST", message, kind: "info" });
   return null;
 }

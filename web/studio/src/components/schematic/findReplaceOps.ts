@@ -6,41 +6,50 @@
 import type { Dispatch } from "react";
 import { fetchSchFind } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
-import { scopeFromSelection } from "../../kicad-port/schFind";
+import { matchId, scopeFromSelection, searchesAllSheets } from "../../kicad-port/schFind";
+import { samePath } from "../../kicad-port/sheetPages";
 import { findNextMatch } from "./findNavigation";
 import { setFindHighlights } from "../../state/commonTool";
 
 /**
  * `ReplaceAndFindNext`: replace the match the cursor is on (when there is one), then go to the next. Without a current match it is just a
  * Find Next. The cursor continues after where the replaced item was: its own key when it still matches (so it is skipped, as `m_afterItem` is),
- * else the match before it.
+ * else the match before it. The match is on the sheet in view (Find Next took the view to it); the replace is addressed to that sheet.
  */
 export async function replaceAndFindNext(api: StudioApi, dispatch: Dispatch<Action>): Promise<void> {
   const state = api.getState();
-  const { search, cursor, backward } = state.schFind;
+  const { search, cursor, backward, currentSheetOnly, selectedOnly } = state.schFind;
   if (search.find === "") return;
   if (cursor === null) {
-    await findNextMatch(state, dispatch, backward);
+    await findNextMatch(api, dispatch, backward);
     return;
   }
-  const before = await fetchSchFind({ ...search, search_and_replace: true }, undefined, state.currentSheetPath);
-  const at = before.matches.findIndex((m) => m.key === cursor);
-  if (at === -1) {
-    await findNextMatch(state, dispatch, backward);
+  const allSheets = searchesAllSheets(currentSheetOnly, selectedOnly);
+  const before = await fetchSchFind({ ...search, search_and_replace: true }, undefined, state.currentSheetPath, allSheets);
+  const at = before.matches.findIndex((m) => matchId(m) === cursor);
+  const current = before.matches[at];
+  if (!current) {
+    await findNextMatch(api, dispatch, backward);
     return;
   }
-  const prevKey = at > 0 ? (before.matches[at - 1]?.key ?? null) : null;
-  const ok = await api.cmd({ op: "replace_text", search, items: [cursor] });
+  const prevId = at > 0 ? matchId(before.matches[at - 1]!) : null;
+  // `Replace` works on the sheet of the match: the view is there unless the user went elsewhere since
+  if (current.sheet && !samePath(current.sheet, state.currentSheetPath)) await api.navigateToSheet(current.sheet);
+  const ok = await api.cmd({ op: "replace_text", search, items: [current.key] });
   if (!ok) return;
-  const after = await fetchSchFind({ ...search, search_and_replace: false }, undefined, state.currentSheetPath);
-  const next = after.matches.some((m) => m.key === cursor) ? cursor : after.matches.some((m) => m.key === prevKey) ? prevKey : null;
-  await findNextMatch(api.getState(), dispatch, backward, next);
+  const now = api.getState();
+  const after = await fetchSchFind({ ...search, search_and_replace: false }, undefined, now.currentSheetPath, allSheets);
+  const next = after.matches.some((m) => matchId(m) === cursor) ? cursor : after.matches.some((m) => matchId(m) === prevId) ? prevId : null;
+  await findNextMatch(api, dispatch, backward, next);
 }
 
-/** `ReplaceAll`: every match -- or, with "selected objects only", those of the selection -- in one undoable step. */
+/**
+ * `ReplaceAll`: every match -- or, with "selected objects only", those of the selection -- in one undoable step. Over every sheet unless
+ * "Search the current sheet only" is on.
+ */
 export async function replaceAll(api: StudioApi, dispatch: Dispatch<Action>): Promise<void> {
   const state = api.getState();
-  const { search, selectedOnly } = state.schFind;
+  const { search, selectedOnly, currentSheetOnly } = state.schFind;
   if (search.find === "") return;
   let items: string[] | null = null;
   const scope = scopeFromSelection(state.selection, selectedOnly);
@@ -52,7 +61,7 @@ export async function replaceAll(api: StudioApi, dispatch: Dispatch<Action>): Pr
       return;
     }
   }
-  const ok = await api.cmd({ op: "replace_text", search, items });
+  const ok = await api.cmd({ op: "replace_text", search, items, all_sheets: searchesAllSheets(currentSheetOnly, selectedOnly) });
   dispatch({ type: "SET_SCH_FIND", find: { cursor: null, status: ok ? "Replaced." : "Nothing replaced." } });
 }
 

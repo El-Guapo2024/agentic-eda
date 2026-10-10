@@ -1206,8 +1206,8 @@ export function useActionRunner() {
       m.set("eeschema.EditorControl.schematicSetup", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "setup" }));
       m.set("common.Interactive.find", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "find" }));
       m.set("common.Interactive.findAndReplace", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "replace" }));
-      m.set("common.Interactive.findNext", () => void findNextMatch(state, dispatch, false));
-      m.set("common.Interactive.findPrevious", () => void findNextMatch(state, dispatch, true));
+      m.set("common.Interactive.findNext", () => void findNextMatch(api, dispatch, false));
+      m.set("common.Interactive.findPrevious", () => void findNextMatch(api, dispatch, true));
     }
 
     // `W`: arm/disarm the wire tool -- SchematicView.tsx's own

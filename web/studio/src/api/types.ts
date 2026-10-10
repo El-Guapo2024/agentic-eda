@@ -1081,7 +1081,7 @@ export type Cmd =
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
-  | { op: "replace_text"; search: SchSearchData; items?: string[] | null }
+  | { op: "replace_text"; search: SchSearchData; items?: string[] | null; /** Replace All over every sheet (`SCH_FIND_REPLACE_TOOL::ReplaceAll` without "Search the current sheet only"). */ all_sheets?: boolean }
   /** panel_setup_pinmap.cpp changeErrorLevel: one pin-map cell + its mirror (type indexes 0..11, level 0 OK / 1 warning / 2 error). */
   | { op: "set_erc_pin_map_cell"; a: number; b: number; level: number }
   /** `ERC_SETTINGS::ResetPinMap` ("Reset to Defaults"). */
@@ -2273,6 +2273,15 @@ export interface SchSearchData {
 export interface FindMatch {
   /** `kind:id:name` -- stable key `replace_text.items` is restricted by. */
   key: string;
+  /** The sheet and the key (`<placement ids>#<key>`): a key alone names an item of one sheet, this one names it in the hierarchy. */
+  uid?: string;
+  /** The sheet the match is on: the placement ids from the root (`[]` the root). */
+  sheet?: string[];
+  sheet_name?: string;
+  /** The page the sheet shows (`SCH_SHEET_PATH::GetPageNumber`, else its place in the hierarchy). */
+  page?: string;
+  /** The sheet's place in the page order: matches come sorted by it. */
+  sheet_rank?: number;
   kind: "field" | "label" | "text" | "pin";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
@@ -2286,6 +2295,8 @@ export interface FindMatch {
 export interface FindReply {
   ok: boolean;
   message?: string;
+  /** The page-order rank of the sheet that was in view: a Find with no cursor starts there. */
+  current_rank?: number;
   matches: FindMatch[];
 }
 

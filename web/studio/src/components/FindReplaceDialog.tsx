@@ -7,10 +7,11 @@
 // third EDA_SEARCH_MATCH_MODE the dialog does not expose but the data
 // struct has), Search all fields (hidden ones too: `searchAllFields`),
 // Search pins (`searchAllPins`), Search net names (`searchNetNames`),
-// Replace in references (`replaceReferences`) and "Search only selected
-// objects" (`searchSelectedOnly`). Not ported: regex mode and "current
-// sheet only" (this app edits one sheet's schematic at a time -- see
-// PARITY-sch.md).
+// Replace in references (`replaceReferences`), "Search the current sheet
+// only" (`searchCurrentSheetOnly`; off, the search goes over every sheet of
+// the hierarchy in page order and each match takes you to its sheet) and
+// "Search only selected objects" (`searchSelectedOnly`, which implies the
+// current sheet). Not ported: regex mode.
 //
 // Find Next/Previous cycle the match list GET /api/sch/find returns (the
 // `nextMatch` order) with a cursor shared with F3 / Shift+F3
@@ -32,7 +33,7 @@ export function FindReplaceDialog() {
   const api = useStudioApi();
   const { run } = useActionRunner();
   const open = state.schDialog === "find" || state.schDialog === "replace";
-  const { selectedOnly, backward } = state.schFind;
+  const { selectedOnly, currentSheetOnly, backward } = state.schFind;
   const search = state.schFind.search;
 
   // `DIALOG_SCH_FIND::OnSearchForText` / `SCH_BASE_FRAME::OnFindDialogClose` -> `ACTIONS::updateFind`: every match of the text is brightened while the dialog is
@@ -53,7 +54,7 @@ export function FindReplaceDialog() {
 
   const findNext = (reversed: boolean) => {
     if (search.find === "") return;
-    void findNextMatch(state, dispatch, reversed);
+    void findNextMatch(api, dispatch, reversed);
   };
 
   const modeValue = search.mode;
@@ -113,6 +114,15 @@ export function FindReplaceDialog() {
             <label className="toggle">
               <input type="checkbox" checked={search.search_net_names} onChange={(e) => update({ search_net_names: e.target.checked })} />
               Search net names
+            </label>
+            <label className="toggle" title="Off: the search goes over every sheet of the hierarchy, in page order, and takes you to the sheet of each match">
+              <input
+                type="checkbox"
+                checked={currentSheetOnly || selectedOnly}
+                disabled={selectedOnly}
+                onChange={(e) => dispatch({ type: "SET_SCH_FIND", find: { currentSheetOnly: e.target.checked, cursor: null, status: "" } })}
+              />
+              Search the current sheet only
             </label>
             <label className="toggle">
               <input type="checkbox" checked={selectedOnly} onChange={(e) => dispatch({ type: "SET_SCH_FIND", find: { selectedOnly: e.target.checked } })} />
