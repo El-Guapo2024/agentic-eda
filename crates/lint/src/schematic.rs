@@ -71,17 +71,46 @@ fn split_pin_ref(pin_ref: &str) -> (&str, &str) {
     pin_ref.split_once('.').unwrap_or((pin_ref, ""))
 }
 
-/// Runs every schematic geometry gate against `design.schematic`, re-using
-/// `model` to recompute each symbol's box/port layout the same way the
-/// engine and renderer do. Returns one `CheckResult` per finding, plus a
-/// `Pass` for any check that found nothing to fail/warn about, and always
-/// exactly one `schematic_wire_crossing_count` result (Warn, informational).
+/// Runs every schematic geometry gate against every sheet of `design` -- the root's `design.schematic` and each sheet of the hierarchy
+/// (`design.sheet_contents`, in the order the hierarchy is walked) -- re-using `model` to recompute each symbol's box/port layout the same
+/// way the engine and renderer do. Returns one `CheckResult` per finding, plus a `Pass` for any check that found nothing to fail/warn
+/// about on any sheet, and a `schematic_wire_crossing_count` result (Warn, informational) for each sheet. A finding on a sheet other than the
+/// root has its location prefixed with the sheet's name (`Power / U1`): the gates judge one sheet at a time, since a sheet is what is drawn
+/// and read.
 pub fn check_style(design: &Design, model: &ConstraintModel) -> Vec<CheckResult> {
-    let mut results = Vec::new();
-    let Some(sch) = design.schematic.as_ref() else {
-        results.push(CheckResult::fail("schematic_wire_through_symbol", "design", "design has no schematic section"));
-        return results;
+    let Some(root) = design.schematic.as_ref() else {
+        return vec![CheckResult::fail("schematic_wire_through_symbol", "design", "design has no schematic section")];
     };
+    let mut results = check_screen(root, model);
+    let walk = eda_model::sheet_list::walk(design);
+    let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    for (i, entry) in walk.iter().enumerate().skip(1) {
+        // a screen two sheets share is one set of drawn items
+        if !seen.insert(entry.file.as_str()) {
+            continue;
+        }
+        let Some(sch) = eda_model::sheet_list::screen_of(design, &entry.path) else { continue };
+        let label = walk[..=i].iter().filter(|e| e.path.len() <= entry.path.len() && entry.path.starts_with(&e.path) && !e.path.is_empty()).map(|e| e.name.as_str()).collect::<Vec<_>>().join(" / ");
+        for mut r in check_screen(sch, model) {
+            if r.status == CheckStatus::Pass {
+                continue;
+            }
+            r.location = Some(match r.location.take() {
+                Some(l) => format!("{label}: {l}"),
+                None => label.clone(),
+            });
+            results.push(r);
+        }
+    }
+    // a check that found something on a sheet did not pass
+    let found: std::collections::BTreeSet<String> = results.iter().filter(|r| r.status != CheckStatus::Pass).map(|r| r.check.clone()).collect();
+    results.retain(|r| r.status != CheckStatus::Pass || !found.contains(&r.check));
+    results
+}
+
+/// The gates on one sheet's content.
+fn check_screen(sch: &SchematicSection, model: &ConstraintModel) -> Vec<CheckResult> {
+    let mut results = Vec::new();
     let geos = build_geos(sch, model);
 
     check_offgrid(sch, &mut results);
@@ -106,7 +135,7 @@ pub fn check_style(design: &Design, model: &ConstraintModel) -> Vec<CheckResult>
     check_wire_ink(sch, &mut results);
     check_cluster_split(model, &geos, &mut results);
     check_sheet_density(sch, &geos, &mut results);
-    check_content_in_bounds(design, sch, model, &geos, &mut results);
+    check_content_in_bounds(sch, model, &geos, &mut results);
 
     results
 }
@@ -1017,7 +1046,7 @@ fn check_sheet_density(sch: &SchematicSection, geos: &BTreeMap<String, SymGeo<'_
 
 /// Extracts the `x y w h` of an SVG document's top-level `viewBox`
 /// attribute, in mm — `eda-render` always emits one on its root `<svg>`
-/// (see `render_schematic`).
+/// (see `render_screen`).
 fn parse_view_box(svg: &str) -> Option<(f64, f64, f64, f64)> {
     let start = svg.find("viewBox=\"")? + "viewBox=\"".len();
     let rest = &svg[start..];
@@ -1036,7 +1065,7 @@ fn parse_view_box(svg: &str) -> Option<(f64, f64, f64, f64)> {
 /// for Ground/Power, the leader line and bars/arrowhead) — lies outside the
 /// sheet bounding box `eda-render` actually emits as the SVG `viewBox`. This
 /// is deliberately checked against the *real rendered* viewBox (by calling
-/// `eda_render::render_schematic` directly), not a second independently
+/// `eda_render::render_screen` directly), not a second independently
 /// re-derived bounding box, so a future drawn element that `eda-render`'s
 /// own bounds computation forgets to include is still caught here rather
 /// than the two computations silently agreeing on the same mistake. Every
@@ -1045,8 +1074,8 @@ fn parse_view_box(svg: &str) -> Option<(f64, f64, f64, f64)> {
 /// `stub_tip`, `pin_text_box`, `resolve_net_label`/`net_label_extent`), so a
 /// disagreement here always means the sheet bounding box itself is wrong,
 /// never a difference in how the two crates estimate ink.
-fn check_content_in_bounds(design: &Design, sch: &SchematicSection, model: &ConstraintModel, geos: &BTreeMap<String, SymGeo<'_>>, out: &mut Vec<CheckResult>) {
-    let svg = match eda_render::render_schematic(design, model) {
+fn check_content_in_bounds(sch: &SchematicSection, model: &ConstraintModel, geos: &BTreeMap<String, SymGeo<'_>>, out: &mut Vec<CheckResult>) {
+    let svg = match eda_render::render_screen(sch, model) {
         Ok(s) => s,
         Err(_) => {
             // Rendering itself already failed for an unrelated reason (e.g.
@@ -1492,6 +1521,47 @@ mod tests {
         let sch = SchematicSection { power_symbols: vec![], no_connects: vec![], bus_entries: vec![], title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), texts: vec![], erc_exclusions: vec![], erc_pin_map: None, user_fields: Default::default(), field_layout: Default::default(), imported_from_kicad: false, symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], wires: vec![], labels: vec![] };
         let results = check_style(&design(sch), &model);
         assert!(results.iter().any(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Fail));
+    }
+
+    // ---------------------------------------------------------- every sheet
+
+    /// A root that places one sheet ("Power", file `power.kicad_sch`) holding `child`.
+    fn hierarchy(child: SchematicSection) -> Design {
+        let root = SchematicSection { sheets: vec![eda_model::ir::SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: IrPoint { x: 0, y: 0 }, size: (20_000, 10_000), pins: vec![], page: String::new() }], ..Default::default() };
+        let mut d = design(root);
+        d.sheet_contents = Some([("power.kicad_sch".to_string(), child)].into_iter().collect());
+        d
+    }
+
+    #[test]
+    fn a_defect_on_a_child_sheet_is_found_and_named_by_its_sheet() {
+        let model = one_part_model();
+        let child = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], ..Default::default() };
+        let results = check_style(&hierarchy(child), &model);
+        let bad: Vec<&CheckResult> = results.iter().filter(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Fail).collect();
+        assert_eq!(bad.len(), 1, "{results:?}");
+        assert_eq!(bad[0].location.as_deref(), Some("Power: R1"), "the sheet is named in front of the symbol");
+        // the check that failed on a sheet did not pass on the root alone
+        assert!(!results.iter().any(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Pass));
+    }
+
+    #[test]
+    fn a_clean_child_sheet_leaves_the_checks_passing_and_each_sheet_reports_its_crossings() {
+        let model = one_part_model();
+        let child = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 0, y: 0 })], ..Default::default() };
+        let results = check_style(&hierarchy(child), &model);
+        assert!(results.iter().any(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Pass));
+        assert_eq!(results.iter().filter(|r| r.check == "schematic_wire_crossing_count").count(), 2, "one for the root, one for the sheet");
+    }
+
+    #[test]
+    fn a_flat_design_is_checked_exactly_as_before() {
+        let model = one_part_model();
+        let sch = SchematicSection { symbols: vec![r1_symbol(IrPoint { x: 100, y: 0 })], ..Default::default() };
+        let flat = check_style(&design(sch), &model);
+        assert_eq!(flat.iter().filter(|r| r.check == "schematic_offgrid" && r.status == CheckStatus::Fail).count(), 1);
+        assert!(flat.iter().all(|r| r.location.as_deref().is_none_or(|l| !l.contains(": "))), "no sheet prefix on a flat design");
+        assert_eq!(flat.iter().filter(|r| r.check == "schematic_wire_crossing_count").count(), 1);
     }
 
     // ---------------------------------------------------------- orthogonal
