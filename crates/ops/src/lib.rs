@@ -1181,10 +1181,15 @@ pub enum Cmd {
     /// current match; `None` is "Replace All". Replacing a Reference
     /// renames the symbol (cascading like `RenameSymbol`) and only happens
     /// with `search.replace_references`. Refused when nothing matched.
+    ///
+    /// `all_sheets` is `SCH_FIND_REPLACE_TOOL::ReplaceAll` with the Find dialog's "Search the current sheet only" off: every sheet of the
+    /// hierarchy is replaced in (`items` is not used then: a key names an item of one sheet), as one undo step.
     ReplaceText {
         search: search::SearchData,
         #[serde(default)]
         items: Option<Vec<String>>,
+        #[serde(default)]
+        all_sheets: bool,
     },
 
     /// `panel_setup_pinmap.cpp::changeErrorLevel`: set one pin-map cell to
@@ -2360,7 +2365,7 @@ impl<'a> Board<'a> {
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
             Cmd::IncrementAnnotations { start, increment } => self.increment_annotations(start, *increment),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
-            Cmd::ReplaceText { search, items } => self.replace_text(search, items.as_deref()),
+            Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
             Cmd::ResetErcPinMap => self.reset_erc_pin_map(),
             Cmd::Annotate { reset_existing, order, ids, options } => self.annotate(*reset_existing, *order, ids.as_deref(), options),
@@ -4572,10 +4577,41 @@ impl<'a> Board<'a> {
     /// (`SCH_FIND_REPLACE_TOOL::ReplaceAll`'s `nextMatch` loop), written
     /// back per item kind, and Reference replacements are applied last
     /// through `rename_symbol` so wires/power symbols/no-connects follow.
-    fn replace_text(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
+    fn replace_text(&mut self, search: &search::SearchData, items: Option<&[String]>, all_sheets: bool) -> Result<(), Vec<CheckResult>> {
         if search.find.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_search", "replace_text", "nothing to search for")]);
         }
+        let replaced = if all_sheets {
+            // `ReplaceAll` over `Schematic().Hierarchy()`: every screen once (a screen two sheets share has one set of items)
+            let mut files: Vec<Option<String>> = vec![None];
+            files.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().cloned()).map(Some));
+            let saved_focus = self.focus.clone();
+            let mut total = 0usize;
+            let mut outcome: Result<(), Vec<CheckResult>> = Ok(());
+            for file in files {
+                self.focus = file;
+                match self.replace_text_here(search, None) {
+                    Ok(n) => total += n,
+                    Err(e) => {
+                        outcome = Err(e);
+                        break;
+                    }
+                }
+            }
+            self.focus = saved_focus;
+            outcome?;
+            total
+        } else {
+            self.replace_text_here(search, items)?
+        };
+        if replaced == 0 {
+            return Err(vec![CheckResult::fail("ops_nothing_to_replace", "replace_text", "nothing to replace")]);
+        }
+        Ok(())
+    }
+
+    /// [`Self::replace_text`] on the screen the verbs act on: how many items it replaced in.
+    fn replace_text_here(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<usize, Vec<CheckResult>> {
         let mut data = search.clone();
         data.search_and_replace = true;
         let model = self.model;
@@ -4638,10 +4674,7 @@ impl<'a> Board<'a> {
         for (old, new) in renames {
             self.rename_symbol(&old, &new)?;
         }
-        if replaced == 0 {
-            return Err(vec![CheckResult::fail("ops_nothing_to_replace", "replace_text", "nothing to replace")]);
-        }
-        Ok(())
+        Ok(replaced)
     }
 
     /// `panel_setup_pinmap.cpp::changeErrorLevel`: see
@@ -5385,7 +5418,9 @@ mod pcb_paste_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
 #[cfg(test)]
-mod sch_annotate_tests;
+pub(crate) mod sch_annotate_tests;
+#[cfg(test)]
+mod sch_hierarchy_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 

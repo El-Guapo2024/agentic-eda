@@ -2,19 +2,19 @@
 use super::*;
 use eda_model::ir::{Provenance, SheetInstance};
 
-fn p(x: Um, y: Um) -> Point {
+pub(crate) fn p(x: Um, y: Um) -> Point {
     Point { x, y }
 }
 
-fn symbol(id: &str, lib_id: &str, value: &str, unit: u32, at: Point) -> SymbolInstance {
+pub(crate) fn symbol(id: &str, lib_id: &str, value: &str, unit: u32, at: Point) -> SymbolInstance {
     SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: value.into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false }
 }
 
-fn placement(id: &str, name: &str, file: &str, page: &str) -> SheetInstance {
+pub(crate) fn placement(id: &str, name: &str, file: &str, page: &str) -> SheetInstance {
     SheetInstance { id: id.into(), name: name.into(), file: file.into(), at: p(0, 0), size: (50_000, 30_000), pins: vec![], page: page.into() }
 }
 
-fn section(symbols: Vec<SymbolInstance>, sheets: Vec<SheetInstance>) -> SchematicSection {
+pub(crate) fn section(symbols: Vec<SymbolInstance>, sheets: Vec<SheetInstance>) -> SchematicSection {
     SchematicSection { symbols, sheets, ..Default::default() }
 }
 
@@ -30,7 +30,7 @@ fn dual() -> LibrarySymbol {
 /// root -> A (a.kicad_sch) -> C (c.kicad_sch), root -> B (b.kicad_sch).
 ///
 /// A: R5 at x=30, R9 at x=10, R? at x=50.  B: R1 at x=20, C? at x=0.  C: R? at x=0.
-fn design() -> Design {
+pub(crate) fn design() -> Design {
     let r = |id: &str, x: Um| symbol(id, "Device:R", "10k", 1, p(x, 0));
     let mut contents = BTreeMap::new();
     contents.insert("a.kicad_sch".to_string(), section(vec![r("R5", 30), r("R9", 10), r("R?", 50)], vec![placement("sc", "C", "c.kicad_sch", "")]));
@@ -59,11 +59,11 @@ fn all(algo: eda_model::annotate::Algo, start: i64) -> AnnotateOptions {
     AnnotateOptions { scope: Some(AnnotateScope::All), algo, start_number: start, ..Default::default() }
 }
 
-fn on(sheet: &str, cmd: Cmd) -> Cmd {
+pub(crate) fn on(sheet: &str, cmd: Cmd) -> Cmd {
     Cmd::OnSheet { sheet: sheet.into(), cmd: Box::new(cmd) }
 }
 
-fn at<'a>(d: &'a Design, file: &str, x: Um) -> &'a SymbolInstance {
+pub(crate) fn at<'a>(d: &'a Design, file: &str, x: Um) -> &'a SymbolInstance {
     d.sheet_contents.as_ref().unwrap()[file].symbols.iter().find(|s| s.at.x == x).unwrap_or_else(|| panic!("no symbol at x={x} on {file}"))
 }
 
