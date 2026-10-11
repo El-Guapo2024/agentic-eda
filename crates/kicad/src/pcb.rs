@@ -719,9 +719,14 @@ pub(crate) fn write_footprint(
         model.nets.iter().find(|n| n.pins.iter().any(|p| p == &key)).map(|n| n.name.as_str())
     };
 
+    // The layers a pad of an imported board is on besides copper, paste and mask (an older library's through-hole pads are on the silkscreen too, and kicad-cli's silkscreen checks
+    // measure them there): the importer kept them per pad, in the footprint's pad order.
+    let pad_infos = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).map(|e| e.pads.as_slice()).filter(|p| p.len() == footprint.pads.len());
+
     // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
     for &(pad_idx, pad) in &pads {
+        let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -775,7 +780,11 @@ pub(crate) fn write_footprint(
                     (None, Some((w, h))) => write!(out, " (drill oval {} {}{offset})", mm(w), mm(h)).unwrap(),
                     (None, None) => unreachable!("Footprint::validate requires a drill on a through-hole/non-plated pad"),
                 }
-                write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
+                if art_layers.is_empty() {
+                    write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
+                } else {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu", "F.Mask", "B.Mask"], art_layers, fp.side)).unwrap();
+                }
             }
             PadKind::Smd => {
                 if let Some((ox, oy)) = shape_text.offset {
@@ -786,7 +795,11 @@ pub(crate) fn write_footprint(
                 } else {
                     ("F.Cu", "F.Paste", "F.Mask")
                 };
-                write!(out, " (layers {} {} {})", sexpr_str(cu), sexpr_str(paste), sexpr_str(mask)).unwrap();
+                if art_layers.is_empty() {
+                    write!(out, " (layers {} {} {})", sexpr_str(cu), sexpr_str(paste), sexpr_str(mask)).unwrap();
+                } else {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&[cu, paste, mask], art_layers, fp.side)).unwrap();
+                }
             }
         }
         // A non-plated hole has no net by definition -- nothing to look up.

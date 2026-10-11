@@ -111,6 +111,45 @@ fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
     assert_eq!(art_lines(&export(&again, &model2)), art_lines(&text));
 }
 
+/// The through-hole pads of an older library are on the silkscreen too (`(layers "*.Cu" "*.Mask" "F.SilkS")`): kicad-cli's silkscreen checks measure them there, so the writer keeps them
+/// there -- and on the other side's layer once the footprint is flipped.
+#[test]
+fn the_layers_of_a_pad_besides_copper_paste_and_mask_come_back_out_on_the_footprints_side() {
+    let text = board(
+        r#"	(footprint "T:Old" (layer "F.Cu") (uuid "00000000-0000-0000-0000-0000000000c1") (at 10 10)
+		(property "Reference" "J1" (at 0 -3 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
+		(pad "1" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask" "F.SilkS"))
+		(pad "2" smd rect (at 3 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask" "F.Fab"))
+		(pad "3" smd rect (at 6 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+	(footprint "T:Back" (layer "B.Cu") (uuid "00000000-0000-0000-0000-0000000000d1") (at 30 10)
+		(property "Reference" "J2" (at 0 -3 0) (layer "B.SilkS") (effects (font (size 1 1) (thickness 0.15)) (justify mirror)))
+		(pad "1" thru_hole circle (at 0 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask" "B.SilkS")))
+"#,
+    );
+    let (mut design, model, _) = import_kicad_pcb(&text).expect("imports");
+    let layers_of = |out: &str| out.lines().filter(|l| l.trim_start().starts_with("(pad ")).map(|l| l[l.find("(layers").expect("layers")..].split(')').next().unwrap().to_string() + ")").collect::<Vec<_>>();
+
+    // as the file had them (the pads are written in number order, J1 then J2)
+    let out = export(&design, &model);
+    assert_eq!(
+        layers_of(&out),
+        vec![r#"(layers "*.Cu" "*.Mask" "F.SilkS")"#, r#"(layers "F.Cu" "F.Paste" "F.Mask" "F.Fab")"#, r#"(layers "F.Cu" "F.Paste" "F.Mask")"#, r#"(layers "*.Cu" "*.Mask" "B.SilkS")"#],
+        "{out}"
+    );
+    // and read again it is the same text
+    let (again, model2, _) = import_kicad_pcb(&out).expect("re-imports");
+    assert_eq!(layers_of(&export(&again, &model2)), layers_of(&out));
+
+    // a footprint that is flipped takes its pads' silkscreen and fab layers to the other side
+    for fp in design.placement.as_mut().expect("placement").footprints.iter_mut().filter(|f| f.id == "J1") {
+        fp.side = eda_model::ir::Side::Bottom;
+    }
+    let flipped = layers_of(&export(&design, &model));
+    assert_eq!(flipped[0], r#"(layers "*.Cu" "*.Mask" "B.SilkS")"#, "{flipped:?}");
+    assert_eq!(flipped[1], r#"(layers "B.Cu" "B.Paste" "B.Mask" "B.Fab")"#, "{flipped:?}");
+    assert_eq!(flipped[2], r#"(layers "B.Cu" "B.Paste" "B.Mask")"#, "{flipped:?}");
+}
+
 #[test]
 fn a_library_footprint_placed_by_the_studio_carries_its_silkscreen_to_the_board() {
     // `parse_footprint_file` is how a part that names `Lib:Name` gets its pads; it now brings the graphics and texts as well.
@@ -316,6 +355,15 @@ fn attr<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
     Some(&tag[start..end])
 }
 
+/// The style an element is drawn in: its own `style` when it has one (a filled polygon is plotted with its own, wherever the plotter happens to have it in a group of
+/// strokes), else the groups round it.
+fn styled(tag: &str, groups: &[String]) -> Vec<String> {
+    match attr(tag, "style") {
+        Some(own) => vec![own.split_whitespace().collect::<Vec<_>>().join(" ")],
+        None => groups.to_vec(),
+    }
+}
+
 /// The drawing primitives of an SVG plot: every `path`, `circle`, `rect`, `ellipse` and `text`, with the style of the `g` they are in.
 fn svg_items(svg: &str) -> Vec<Item> {
     // The plot also marks every drill hole, in black or white: pads and vias, which are not this test's business.
@@ -338,12 +386,12 @@ fn svg_items(svg: &str) -> Vec<Item> {
             "path" => {
                 let d = attr(tag, "d").unwrap_or("");
                 let kind = if d.contains('A') { "arc" } else if d.contains('C') { "curve" } else if d.contains('Z') { "poly" } else { "line" };
-                items.push(Item::new(kind, &styles, numbers(&d.replace(['M', 'L', 'A', 'C', 'Z'], " "))));
+                items.push(Item::new(kind, &styled(tag, &styles), numbers(&d.replace(['M', 'L', 'A', 'C', 'Z'], " "))));
             }
             "circle" if styles.last().is_some_and(|s| is_hole_mark(s)) => {}
-            "circle" => items.push(Item::new("circle", &styles, ["cx", "cy", "r"].iter().filter_map(|a| attr(tag, a).and_then(|v| v.parse().ok())).collect())),
-            "rect" => items.push(Item::new("rect", &styles, ["x", "y", "width", "height"].iter().filter_map(|a| attr(tag, a).and_then(|v| v.parse().ok())).collect())),
-            "text" => items.push(Item::new(&format!("text:{}", rest[end + 1..].split('<').next().unwrap_or("")), &styles, ["x", "y", "font-size"].iter().filter_map(|a| attr(tag, a).and_then(|v| v.parse().ok())).collect())),
+            "circle" => items.push(Item::new("circle", &styled(tag, &styles), ["cx", "cy", "r"].iter().filter_map(|a| attr(tag, a).and_then(|v| v.parse().ok())).collect())),
+            "rect" => items.push(Item::new("rect", &styled(tag, &styles), ["x", "y", "width", "height"].iter().filter_map(|a| attr(tag, a).and_then(|v| v.parse().ok())).collect())),
+            "text" => items.push(Item::new(&format!("text:{}", rest[end + 1..].split('<').next().unwrap_or("")), &styled(tag, &styles), ["x", "y", "font-size"].iter().filter_map(|a| attr(tag, a).and_then(|v| v.parse().ok())).collect())),
             _ if name == "/g" || tag.starts_with("/g") => {
                 styles.pop();
             }
@@ -445,11 +493,11 @@ fn kicad_cli_plots_the_same_silkscreen_and_fab_after_the_round_trip_of_a_small_b
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// KiCad boards with a lot of footprint graphics, texts on both sides and no pad on the silkscreen layer (a legacy pad `(layers "*.Cu" "*.Mask" "F.SilkS")`
-/// is silk, which the pad writer decides, not the art; `complex_hierarchy` is made of them). Not here, for what they have besides: a board-level text of
+/// KiCad boards with a lot of footprint graphics and texts on both sides, and `complex_hierarchy`, whose 185 through-hole pads are on the silkscreen too
+/// (`(layers "*.Cu" "*.Mask" "F.SilkS")`, the legacy libraries' pads: `PadMaskInfo::art_layers`). Not here, for what they have besides: a board-level text of
 /// several lines or of a glyph that is not square (`issue7004`, `issue8407`, `issue11814`, `issue22826`, `connect`) and a board-level dotted rectangle
 /// (`connect`) -- the board-level `Text` and `Shape` keep neither -- and the 1 um grid, which moves the radius of a nearly closed arc.
-const QA_BOARDS: [&str; 5] = ["footprints_load_save", "component_classes", "issue24078/issue24078", "issue5102", "issue5990"];
+const QA_BOARDS: [&str; 6] = ["footprints_load_save", "component_classes", "issue24078/issue24078", "issue5102", "issue5990", "complex_hierarchy"];
 
 #[test]
 fn kicad_cli_plots_the_same_silkscreen_and_fab_after_the_round_trip_of_qa_boards() {

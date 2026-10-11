@@ -2365,6 +2365,12 @@ pub struct PadMaskInfo {
     /// (`*.Cu` -> every copper layer, `*.Mask` -> `F.Mask`+`B.Mask`).
     #[serde(default)]
     pub layers: Vec<String>,
+    /// The layers of the pad besides copper, paste and mask: the silkscreen, fab, courtyard and adhesive layers and the user ones (the
+    /// through-hole pads of an older library are on `F.SilkS`, and kicad-cli's silkscreen checks measure them there). Named as for a
+    /// top-side footprint, like [`crate::fp_art::FpArt`] (a back-side footprint's `B.SilkS` is `F.SilkS` here), so a footprint that is
+    /// flipped takes them to the other side; the writer puts them back into the pad's `(layers ..)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub art_layers: Vec<String>,
     /// `(solder_mask_margin ..)`: the pad's own margin override
     /// (`PADSTACK::SolderMaskMargin`); `None` inherits.
     #[serde(default, skip_serializing_if = "Option::is_none")]

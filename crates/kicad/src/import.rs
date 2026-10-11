@@ -1169,7 +1169,7 @@ fn import_footprints(
                 }
                 continue;
             };
-            extra.pads.push(pad_mask_info(pad, layers, file_version));
+            extra.pads.push(pad_mask_info(pad, layers, file_version, side));
             // Offset and margins: the k-th kept pad that carries this number (the engine footprint's own list is what an edit counts in).
             let mut pad_edit = crate::fp_fields::parse_pad_extras(pad, side, file_version);
             if !pad_edit.is_empty() {
@@ -1293,11 +1293,14 @@ fn expand_layer_names(names: &[&str], copper: &[String]) -> Vec<String> {
 
 /// `PADSTACK` facts beyond geometry: layer set, `(solder_mask_margin ..)`
 /// (pre-9.0: 0 = inherit), `(tenting ..)`, `(pintype ..)`.
-fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64) -> PadMaskInfo {
+fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side) -> PadMaskInfo {
     let mut info = PadMaskInfo::default();
     if let Some(l) = sexpr::find(pad, "layers") {
         let names: Vec<&str> = l.iter().skip(1).filter_map(Sexpr::text).collect();
         info.layers = expand_layer_names(&names, copper);
+        // The layers beyond copper, paste and mask, as for a top-side footprint (see `PadMaskInfo::art_layers`).
+        info.art_layers = info.layers.iter().filter(|l| !(l.ends_with(".Cu") || l.ends_with(".Mask") || l.ends_with(".Paste"))).map(|l| eda_model::fp_art::layer_on_side(l, side)).collect();
+        info.art_layers.sort();
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_um(m);

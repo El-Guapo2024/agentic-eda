@@ -321,6 +321,14 @@ fn layers_token(layers: &[String]) -> String {
     format!("(layers {})", words.iter().map(|w| sexpr_str(w)).collect::<Vec<_>>().join(" "))
 }
 
+/// A pad's `(layers ..)`: the layers it is on by its type and side (`base`), and those its import found it on besides copper, paste and mask (`PadMaskInfo::art_layers`, named as
+/// for a top-side footprint, so they go to `side`'s).
+pub(crate) fn pad_layers_token(base: &[&str], art: &[String], side: Side) -> String {
+    let mut all: Vec<String> = base.iter().map(|l| l.to_string()).collect();
+    all.extend(art.iter().map(|l| eda_model::fp_art::layer_on_side(l, side)));
+    layers_token(&all)
+}
+
 /// A string as KiCad's `Quotew` writes it: a newline is `\n`.
 fn quote(s: &str) -> String {
     sexpr_str(s).replace('\n', "\\n")
