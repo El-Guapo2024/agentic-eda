@@ -9,6 +9,7 @@
 // Built from `BoardState` (api/types.ts, the type only: this module has no runtime dependency on the app) and cached per board object by `sceneOf`.
 import type { BoardState, BoardText, Dimension, Pad, Part, Shape, Track, Via, Zone } from "../api/types";
 import { arcThrough, box, circle, seg, type ArcG, type Box, type Geom, type Pt } from "./snapGeom";
+import { outlineContains } from "./padOutline";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 
 export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text";
@@ -144,7 +145,9 @@ function distToArc(p: Pt, a: ArcG): number {
 const padHalf = (w: number, h: number) => [w / 2, h / 2] as const;
 
 /** `PAD::HitTest( pos, 0 )`: the point is inside the pad's shape. */
-export function padHit(pad: Pick<Pad, "x" | "y" | "w" | "h" | "round">, p: Pt): boolean {
+export function padHit(pad: Pick<Pad, "x" | "y" | "w" | "h" | "round" | "outline">, p: Pt): boolean {
+  // A trapezoid, a chamfered rectangle or a custom pad is the contours of its copper.
+  if (pad.outline?.length) return outlineContains(pad.outline, p[0], p[1]);
   const [hx, hy] = padHalf(pad.w, pad.h);
   const dx = p[0] - pad.x;
   const dy = p[1] - pad.y;
