@@ -137,7 +137,7 @@ fn check_sheet_file(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> 
         .collect();
     lib_ids.sort();
     lib_ids.dedup();
-    let mut missing: Vec<String> = lib_ids.iter().filter(|id| crate::library_api::symbol_in(&design, &model, id).is_none()).filter_map(|id| id.split_once(':').map(|(l, _)| l.to_string())).collect();
+    let mut missing: Vec<String> = lib_ids.iter().filter(|id| crate::library_api::symbol_in(dir, &design, &model, id).is_none()).filter_map(|id| id.split_once(':').map(|(l, _)| l.to_string())).collect();
     missing.sort();
     missing.dedup();
     if !missing.is_empty() {

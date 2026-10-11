@@ -569,7 +569,7 @@ export function SchematicView() {
 
         // Import Sheet... / Draw Sheet from File: the same two corners, or one click for a file's contents (components/schematic/schImportTool.ts).
         if (state.activeTool === "sch_import_sheet") {
-          importSheetClick(state, snapToGrid(wx, wy), GRID, api, dispatch);
+          importSheetClick(state, snapToGrid(wx, wy), snap.gridSize("connectable"), api, dispatch);
           return;
         }
 
