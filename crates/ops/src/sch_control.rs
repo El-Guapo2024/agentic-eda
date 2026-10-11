@@ -95,6 +95,8 @@ impl<'a> Board<'a> {
                 s.exclude_from_sim = v;
             }
         }
+        // The board's footprint carries the same two flags: the one edited last wins (`Board::sync_footprint_bom_flags`).
+        self.sync_footprint_bom_flags(ids, dnp, exclude_from_bom);
         Ok(())
     }
 

@@ -17,7 +17,7 @@ pub(super) fn id(s: &str) -> String {
 /// Three pads, none on an axis of symmetry, so a mirror image cannot be mistaken for the original.
 pub(super) fn lopsided() -> Footprint {
     let pad = |n: &str, at: (Um, Um)| Pad { opposite_side: false, number: n.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-    Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (-1500, -600)), pad("2", (1500, 0)), pad("3", (-1500, 700))], courtyard: Some((4000, 2400)), model: None, courtyard_outlines: vec![] }
+    Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (-1500, -600)), pad("2", (1500, 0)), pad("3", (-1500, 700))], courtyard: Some((4000, 2400)), model: None, courtyard_outlines: vec![], models3d: vec![] }
 }
 
 pub(super) fn part(r: &str) -> Part {

@@ -631,6 +631,7 @@ mod tests {
                 courtyard: None,
                 model: None,
                 courtyard_outlines: vec![],
+                models3d: vec![],
             }],
             ..model()
         };

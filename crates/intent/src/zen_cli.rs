@@ -275,6 +275,7 @@ fn parse_netlist_json(json: &str) -> Result<ConstraintModel, String> {
         stackup: None,
         impedance_targets: Vec::new(),
         footprints: Vec::new(),
+        instance_footprints: Default::default(),
         symbols: Vec::new(),
         board: Default::default(),
         allow: Default::default(),

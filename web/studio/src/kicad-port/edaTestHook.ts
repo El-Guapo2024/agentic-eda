@@ -131,7 +131,7 @@ type IdItems = readonly { id?: string }[] | undefined;
 
 /** The board's state JSON as far as the hook reads it. */
 export interface BoardLike {
-  parts?: readonly { ref: string; pads?: readonly { num: string }[] }[];
+  parts?: readonly { ref: string; pads?: readonly { num: string }[]; fields?: readonly { id: string }[] }[];
   routing?: { tracks?: IdItems; vias?: IdItems; zones?: IdItems } | null;
   drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems } | null;
 }
@@ -157,6 +157,8 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
   return {
     footprint: (board?.parts ?? []).map((p) => p.ref),
     pad: (board?.parts ?? []).flatMap((p) => padIds(p)),
+    // A footprint's Reference, Value and user fields (`PCB_FIELD`) are items of their own: `REF:Name`.
+    field: (board?.parts ?? []).flatMap((p) => (p.fields ?? []).map((f) => f.id)),
     track: ids(board?.routing?.tracks),
     via: ids(board?.routing?.vias),
     zone: ids(board?.routing?.zones),
@@ -385,7 +387,7 @@ export function appearanceSummary(s: AppearanceSource): AppearanceSummary {
   };
 }
 
-/** The requests the hook waits for: the studio's own API calls, not its two polls (`/api/version`, `/api/view`), which never stop. */
+/** The requests the hook waits for: the studio's own API calls, not its two polls (`/api/version`, `/api/view`), which never stop, nor the 3D view's models (`/api/3dmodel`: held until a model is converted, background work). */
 export function isTrackedUrl(url: string): boolean {
-  return url.includes("/api/") && !/\/api\/(version|view)(\?|$)/.test(url);
+  return url.includes("/api/") && !/\/api\/(version|view|3dmodel)(\/|\?|$)/.test(url);
 }

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { footprintZoneForm, NO_PAD_ZONE_FACTS, padNumbers, padZoneForm, padZoneIsSet, setFootprintZoneCmd, setPadZoneCmd } from "./padZone";
+import { footprintZoneForm, NO_PAD_ZONE_FACTS, padNumbers, padZoneForm, padZoneIsSet, setFootprintZoneCmd, setPadZoneCmd, zoneCmds } from "./padZone";
 import type { Part } from "../api/types";
 
 function part(over: Partial<Part> = {}): Part {
@@ -57,3 +57,17 @@ test("setFootprintZoneCmd sends the footprint's connection and clearance", () =>
   assert.deepEqual(setFootprintZoneCmd("U1", { connection: "None", clearance: 900 }), { op: "set_footprint_zone_connection", part: "U1", zone_connection: "None", clearance: 900 });
   assert.deepEqual(setFootprintZoneCmd("U1", { connection: null, clearance: null }), { op: "set_footprint_zone_connection", part: "U1", zone_connection: null, clearance: null });
 });
+
+test("a dialog's OK sends the zone commands of what it changed and nothing for what it left, the footprint first", () => {
+  const p = part({ zone: { connection: "Thermal", clearance: 200, pads: [{ num: "1", connection: "Full", gap: 300, spoke_width: null, spoke_angle_mdeg: null, clearance: null }] } });
+  const same = footprintZoneForm(p);
+  assert.deepEqual(zoneCmds(p, same, {}), [], "no form was opened");
+  assert.deepEqual(zoneCmds(p, same, { "1": padZoneForm(p, "1"), "2": padZoneForm(p, "2") }), [], "forms that were opened and left as they were");
+  const cmds = zoneCmds(p, { connection: null, clearance: 200 }, { "1": { ...padZoneForm(p, "1"), clearance: 250 }, "2": { ...NO_PAD_ZONE_FACTS, connection: "None" } });
+  assert.deepEqual(
+    cmds.map((c) => (c.op === "set_footprint_zone_connection" ? [c.op, c.zone_connection, c.clearance] : c.op === "set_pad_zone_overrides" ? [c.op, c.pad, c.zone_connection, c.clearance] : c.op)),
+    [["set_footprint_zone_connection", null, 200], ["set_pad_zone_overrides", "1", "Full", 250], ["set_pad_zone_overrides", "2", "None", null]],
+    "the footprint's, then each pad number that changed, a pad's whole panel at a time"
+  );
+});
+

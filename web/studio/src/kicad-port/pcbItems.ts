@@ -10,9 +10,10 @@
 import type { BoardState, BoardText, Pad, Part, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { circumcircle } from "./trackArc";
+import { fieldAsText, fieldById } from "./fpFields";
 import { groupLeaves } from "./groupTree";
 
-export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad";
+export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field";
 
 /**
  * The id a pad is selected, highlighted and listed under: `REF.NUMBER`, with `#k` after it for the k-th pad (from 2) of the footprint that
@@ -26,6 +27,14 @@ export function padIds(part: { ref: string; pads?: readonly { num: string }[] })
     seen.set(pad.num, n);
     return n === 1 ? `${part.ref}.${pad.num}` : `${part.ref}.${pad.num}#${n}`;
   });
+}
+
+/**
+ * The pads and the fields of the placed footprints: items of their own (`REF.NUMBER[#k]`, `REF:Name`) that are selected through their footprint and last as long
+ * as it does, so a refresh of the board must not drop them from the selection (a field that is hidden is still there to be edited).
+ */
+export function subItemIds(board: Pick<BoardState, "parts">): string[] {
+  return board.parts.filter((p) => p.placed).flatMap((p) => [...padIds(p), ...(p.fields ?? []).map((f) => f.id)]);
 }
 
 /** The pad `id` names and the footprint it belongs to, or null (a `REF.NUMBER[#k]` of a placed footprint). */
@@ -56,6 +65,8 @@ export function itemKind(board: BoardState, id: string): ItemKind | null {
   if (dr?.dimensions.some((d) => d.id === id)) return "dimension";
   if (dr?.groups.some((g) => g.id === id)) return "group";
   if (id.includes(".") && padById(board, id)) return "pad";
+  // A footprint's Reference, Value or user field (`PCB_FIELD`): an item of its own, `REF:Name`.
+  if (id.includes(":") && fieldById(board, id)) return "field";
   return null;
 }
 
@@ -113,6 +124,10 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
       const hit = padById(board, id);
       return hit ? [hit.pad.x, hit.pad.y] : null;
     }
+    case "field": {
+      const hit = fieldById(board, id);
+      return hit ? [hit.field.x, hit.field.y] : null;
+    }
     default:
       return null;
   }
@@ -165,6 +180,10 @@ export function itemBounds(board: BoardState, id: string): [number, number, numb
     case "pad": {
       const hit = padById(board, id);
       return hit ? [hit.pad.x - hit.pad.w / 2, hit.pad.y - hit.pad.h / 2, hit.pad.x + hit.pad.w / 2, hit.pad.y + hit.pad.h / 2] : null;
+    }
+    case "field": {
+      const hit = fieldById(board, id);
+      return hit && hit.field.text !== "" ? textBounds(fieldAsText(hit.field)) : hit ? [hit.field.x, hit.field.y, hit.field.x, hit.field.y] : null;
     }
     default:
       return null;

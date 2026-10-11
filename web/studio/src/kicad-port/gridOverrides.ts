@@ -94,7 +94,7 @@ export function selectionGrid(categories: readonly GridCategory[], size: (catego
 // ----------------------------------------------------------------------------------------------------------------------------------------- item kinds
 
 /** What the board editor's grid helper calls an item (`PCB_GRID_HELPER::GetItemGrid`: by `Type()`). */
-export type PcbItemKind = "footprint" | "pad" | "track" | "via" | "shape" | "dimension" | "text" | "zone" | "group" | "other";
+export type PcbItemKind = "footprint" | "pad" | "track" | "via" | "shape" | "dimension" | "text" | "field" | "zone" | "group" | "other";
 
 /** `PCB_GRID_HELPER::GetItemGrid`. */
 export function pcbItemGrid(kind: PcbItemKind | null | undefined): GridCategory {
@@ -102,7 +102,9 @@ export function pcbItemGrid(kind: PcbItemKind | null | undefined): GridCategory 
     case "footprint":
     case "pad":
       return "connectable";
+    // A footprint's field (`PCB_FIELD_T`) is text.
     case "text":
+    case "field":
       return "text";
     case "shape":
     case "dimension":

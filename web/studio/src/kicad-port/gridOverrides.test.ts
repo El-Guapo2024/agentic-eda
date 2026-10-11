@@ -86,6 +86,7 @@ test("PCB_GRID_HELPER::GetItemGrid", () => {
   assert.equal(pcbItemGrid("track"), "wires");
   assert.equal(pcbItemGrid("via"), "vias");
   assert.equal(pcbItemGrid("text"), "text");
+  assert.equal(pcbItemGrid("field"), "text", "a footprint's field is text (`PCB_FIELD_T`)");
   assert.equal(pcbItemGrid("shape"), "graphics");
   assert.equal(pcbItemGrid("dimension"), "graphics");
   assert.equal(pcbItemGrid("zone"), "current");

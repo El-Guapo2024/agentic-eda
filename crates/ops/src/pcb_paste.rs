@@ -17,13 +17,14 @@
 
 use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
+use eda_model::fp_edit::FootprintEdit;
 use eda_model::ir::{next_item_id, BoardPart, Dimension, FootprintInstance, FootprintZoneOverrides, Group, LabelSide, LibraryFootprint, Millideg, Point, Shape, Side, Text, Track, Via, Zone};
 use eda_model::{CheckResult, Footprint, Part};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// An item among the copies being made: the position of a copy in its list.
 #[derive(Debug, Clone, Copy)]
-enum Member {
+pub(crate) enum Member {
     Track(usize),
     Via(usize),
     Zone(usize),
@@ -37,48 +38,81 @@ enum Member {
 
 /// A footprint to be copied onto the board.
 #[derive(Debug, Clone)]
-struct FootprintCopy {
-    reference: String,
-    value: Option<String>,
+pub(crate) struct FootprintCopy {
+    pub(crate) reference: String,
+    pub(crate) value: Option<String>,
     /// The name `Part::footprint` will carry.
-    footprint: String,
+    pub(crate) footprint: String,
     /// The pads and courtyard, stored with the copy when the model cannot resolve `footprint` itself.
-    definition: Option<Footprint>,
-    at: Point,
-    rot: Millideg,
-    side: Side,
-    label: LabelSide,
-    pad_nets: Vec<(String, String)>,
+    pub(crate) definition: Option<Footprint>,
+    pub(crate) at: Point,
+    pub(crate) rot: Millideg,
+    pub(crate) side: Side,
+    pub(crate) label: LabelSide,
+    pub(crate) pad_nets: Vec<(String, String)>,
+    /// What was edited on the footprint (its fields, attributes and pad overrides): a copy has them too, under its own reference.
+    pub(crate) edit: Option<FootprintEdit>,
+    /// The reference the copy shows when it is not its own (Create Array's "Keep original reference designators": the id is unique, the
+    /// text is the original's).
+    pub(crate) shown_reference: Option<String>,
     /// How zones connect to the footprint and to its pads, as the original had it (`PAD::GetLocalZoneConnection`, the thermal
     /// relief and the clearance overrides): the copy is filed under its own reference in `DrawingsSection::zone_overrides`.
-    zone_overrides: Option<FootprintZoneOverrides>,
+    pub(crate) zone_overrides: Option<FootprintZoneOverrides>,
     /// A paste puts a part of this board that is not placed back, rather than making a second one.
-    reuse_unplaced: bool,
+    pub(crate) reuse_unplaced: bool,
 }
 
 #[derive(Debug, Clone)]
-struct GroupCopy {
-    name: String,
-    members: Vec<Member>,
+pub(crate) struct GroupCopy {
+    pub(crate) name: String,
+    pub(crate) members: Vec<Member>,
 }
 
 /// Everything a Duplicate or a Paste adds.
 #[derive(Debug, Default)]
-struct Copies {
-    tracks: Vec<Track>,
-    vias: Vec<Via>,
-    zones: Vec<Zone>,
-    shapes: Vec<Shape>,
-    texts: Vec<Text>,
-    dimensions: Vec<Dimension>,
-    footprints: Vec<FootprintCopy>,
-    groups: Vec<GroupCopy>,
+pub(crate) struct Copies {
+    pub(crate) tracks: Vec<Track>,
+    pub(crate) vias: Vec<Via>,
+    pub(crate) zones: Vec<Zone>,
+    pub(crate) shapes: Vec<Shape>,
+    pub(crate) texts: Vec<Text>,
+    pub(crate) dimensions: Vec<Dimension>,
+    pub(crate) footprints: Vec<FootprintCopy>,
+    pub(crate) groups: Vec<GroupCopy>,
     /// A copy of a member of a group that is not itself copied joins that group (`addToParentGroup`).
-    join: Vec<(Member, String)>,
+    pub(crate) join: Vec<(Member, String)>,
 }
 
 impl Copies {
-    fn is_empty(&self) -> bool {
+    /// Add every copy of `other` to this set, its groups' members and joins following to their new places.
+    pub(crate) fn absorb(&mut self, other: Copies) {
+        let shift = |m: Member, this: &Copies| -> Member {
+            match m {
+                Member::Track(i) => Member::Track(i + this.tracks.len()),
+                Member::Via(i) => Member::Via(i + this.vias.len()),
+                Member::Zone(i) => Member::Zone(i + this.zones.len()),
+                Member::Shape(i) => Member::Shape(i + this.shapes.len()),
+                Member::Text(i) => Member::Text(i + this.texts.len()),
+                Member::Dimension(i) => Member::Dimension(i + this.dimensions.len()),
+                Member::Footprint(i) => Member::Footprint(i + this.footprints.len()),
+                // A group copy that holds another group copy (nested groups).
+                Member::Group(i) => Member::Group(i + this.groups.len()),
+            }
+        };
+        let groups: Vec<GroupCopy> = other.groups.iter().map(|g| GroupCopy { name: g.name.clone(), members: g.members.iter().map(|m| shift(*m, self)).collect() }).collect();
+        let join: Vec<(Member, String)> = other.join.iter().map(|(m, g)| (shift(*m, self), g.clone())).collect();
+        self.tracks.extend(other.tracks);
+        self.vias.extend(other.vias);
+        self.zones.extend(other.zones);
+        self.shapes.extend(other.shapes);
+        self.texts.extend(other.texts);
+        self.dimensions.extend(other.dimensions);
+        self.footprints.extend(other.footprints);
+        self.groups.extend(groups);
+        self.join.extend(join);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
         self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.footprints.is_empty()
     }
 }
@@ -135,7 +169,7 @@ impl Board<'_> {
     }
 
     /// Every reference a new footprint must not take: the intent's parts, the placed footprints, the board's own parts.
-    fn all_references(&self) -> BTreeSet<String> {
+    pub(crate) fn all_references(&self) -> BTreeSet<String> {
         let mut out: BTreeSet<String> = self.model.parts.iter().map(|p| p.reference.clone()).collect();
         out.extend(self.placement().footprints.iter().map(|f| f.id.clone()));
         if let Some(dr) = &self.design.drawings {
@@ -153,11 +187,38 @@ impl Board<'_> {
         }
     }
 
+    /// The edit a footprint that comes off the clipboard has: what its text says beyond the geometry (the fields, the attributes, the pads' offsets and
+    /// margins), and, when the model already knows the footprint by that name, the pads of the text that are not the library's own -- the shape, size,
+    /// hole, type and rotation of a pad edited on the board the copy was made on. (A footprint the model does not know keeps the pads of the text as its
+    /// own definition instead.) The text's extras of a pad and the geometry that differs are one edit of that pad.
+    fn clip_edit(&self, f: &eda_kicad::ClipFootprint) -> Option<FootprintEdit> {
+        let mut edit = f.edit.clone();
+        let Some(def) = &f.definition else { return edit };
+        // The library's own footprint by that name: a probe with no reference, so that the copy's source (a footprint of this board with this
+        // reference, whose pads may be edited) is not what is found.
+        let probe = Part { reference: String::new(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(f.name.clone()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+        let Some(known) = self.model.footprint_of(&probe) else { return edit };
+        for d in eda_model::fp_edit::pad_edits_between(&known, def) {
+            let e = edit.get_or_insert_with(|| FootprintEdit::new(&f.reference));
+            let mut pad = e.pad(&d.number, d.nth).cloned().unwrap_or_else(|| eda_model::fp_edit::PadEdit::none(&d.number, d.nth));
+            (pad.kind, pad.shape, pad.size, pad.drill, pad.drill_slot, pad.rot, pad.roundrect_ratio) = (d.kind, d.shape, d.size, d.drill, d.drill_slot, d.rot, d.roundrect_ratio);
+            e.set_pad(pad);
+        }
+        edit
+    }
+
     // ------------------------------------------------------------- duplicate
 
     /// `Cmd::Duplicate`: exact copies of the named items, at the same place, under new ids -- footprints as new parts, a group
     /// with copies of its members. See the module doc.
     pub(crate) fn duplicate_all(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
+        let copies = self.collect_copies(ids)?;
+        self.insert_copies_all(copies)
+    }
+
+    /// The copies `Cmd::Duplicate` would make of `ids`, not yet on the board: exact copies at the same place, a group with copies of
+    /// its members, an id that is nothing duplicable skipped. Create Array makes one set for every point of the array.
+    pub(crate) fn collect_copies(&self, ids: &[String]) -> Result<Copies, Vec<CheckResult>> {
         if ids.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_duplicate", "duplicate", "no ids given")]);
         }
@@ -189,7 +250,7 @@ impl Board<'_> {
         if copies.is_empty() {
             return Err(vec![CheckResult::fail("ops_unknown_duplicate", "duplicate", "none of the given ids name a footprint, track, via, zone, shape, text or dimension")]);
         }
-        self.insert_copies_all(copies)
+        Ok(copies)
     }
 
     /// The copy of the group `id` and of everything below it (`PCB_GROUP::DeepDuplicate`): its items are copied once whoever asks, the
@@ -222,7 +283,7 @@ impl Board<'_> {
     }
 
     /// The copy of the item `id` names, filed into `copies`; `None` when it names nothing duplicable.
-    fn copy_of(&self, id: &str, copies: &mut Copies) -> Option<Member> {
+    pub(crate) fn copy_of(&self, id: &str, copies: &mut Copies) -> Option<Member> {
         if let Some(fp) = self.pose_of(id) {
             let part = self.model.part(id)?;
             let nets = self.pad_nets_of(id);
@@ -242,6 +303,8 @@ impl Board<'_> {
                 side: fp.side,
                 label: fp.label,
                 pad_nets: nets,
+                edit: self.design.footprint_edit(id).cloned(),
+                shown_reference: None,
                 zone_overrides,
                 reuse_unplaced: false,
             });
@@ -386,6 +449,8 @@ impl Board<'_> {
                 label: f.label,
                 // KiCad's single-footprint clipboard has no nets: its pads stay on none.
                 pad_nets: f.pad_nets.clone(),
+                edit: self.clip_edit(f),
+                shown_reference: None,
                 zone_overrides: f.zone_overrides.clone(),
                 reuse_unplaced: true,
             });
@@ -415,7 +480,7 @@ impl Board<'_> {
 
     /// Inserts `copies`: ids for everything (`next_item_id`, so they read like every other id), footprints placed or made
     /// into parts of their own, groups made over the new ids.
-    fn insert_copies_all(&mut self, mut copies: Copies) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn insert_copies_all(&mut self, mut copies: Copies) -> Result<(), Vec<CheckResult>> {
         let mut taken = self.all_item_ids();
         let mut mint = |prefix: &str, seed: String| -> String {
             let id = next_item_id(prefix, &seed, &taken);
@@ -463,13 +528,32 @@ impl Board<'_> {
         let mut fp_refs: Vec<String> = Vec::new();
         let mut new_parts: Vec<(BoardPart, FootprintInstance)> = Vec::new();
         let mut replaced: Vec<FootprintInstance> = Vec::new();
+        let mut new_edits: Vec<FootprintEdit> = Vec::new();
+        // The copy's edit under its own reference, showing that reference (the text of a field follows the footprint it is on).
+        let own_edit = |f: &FootprintCopy, reference: &str, pose: &FootprintInstance| -> Option<FootprintEdit> {
+            let mut e = f.edit.clone().unwrap_or_else(|| FootprintEdit::new(reference));
+            e.id = reference.to_string();
+            if let Some(l) = e.reference.as_mut() {
+                l.text = f.shown_reference.clone();
+            } else if let Some(shown) = f.shown_reference.as_ref() {
+                // Keeping the original's reference text: the layout the Reference had by default, with that text.
+                let part = self.model.part(&f.reference);
+                let footprint = part.and_then(|p| self.model.footprint_of(p)).or_else(|| f.definition.clone()).unwrap_or(Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
+                let mut l = eda_model::fp_edit::default_reference_layout(pose, &footprint);
+                l.text = Some(shown.clone());
+                e.reference = Some(l);
+            }
+            (!e.is_empty()).then_some(e)
+        };
         // The zone-connection edits of the copies, each under the reference its footprint ends up with.
         let mut zone_edits: Vec<FootprintZoneOverrides> = Vec::new();
         for f in &copies.footprints {
             let at = self.snap_point(f.at.x, f.at.y);
             if f.reuse_unplaced && self.model.part(&f.reference).is_some() && self.pose_of(&f.reference).is_none() && !replaced.iter().any(|r| r.id == f.reference) {
-                replaced.push(FootprintInstance { id: f.reference.clone(), at, rot: f.rot, side: f.side, label: f.label });
+                let pose = FootprintInstance { id: f.reference.clone(), at, rot: f.rot, side: f.side, label: f.label };
+                new_edits.extend(own_edit(f, &f.reference, &pose));
                 zone_edits.extend(f.zone_overrides.iter().map(|z| FootprintZoneOverrides { id: f.reference.clone(), ..z.clone() }));
+                replaced.push(pose);
                 fp_refs.push(f.reference.clone());
                 continue;
             }
@@ -484,10 +568,9 @@ impl Board<'_> {
             };
             let mut pad_nets = f.pad_nets.clone();
             pad_nets.sort();
-            new_parts.push((
-                BoardPart { reference: reference.clone(), value: f.value.clone(), footprint: f.footprint.clone(), definition, pad_nets },
-                FootprintInstance { id: reference.clone(), at, rot: f.rot, side: f.side, label: f.label },
-            ));
+            let pose = FootprintInstance { id: reference.clone(), at, rot: f.rot, side: f.side, label: f.label };
+            new_edits.extend(own_edit(f, &reference, &pose));
+            new_parts.push((BoardPart { reference: reference.clone(), value: f.value.clone(), footprint: f.footprint.clone(), definition, pad_nets }, pose));
             fp_refs.push(reference);
         }
 
@@ -527,7 +610,7 @@ impl Board<'_> {
             rt.zones.append(&mut copies.zones);
             self.sort_routing();
         }
-        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() {
+        if !copies.shapes.is_empty() || !copies.texts.is_empty() || !copies.dimensions.is_empty() || !new_groups.is_empty() || !new_parts.is_empty() || !joins.is_empty() || !new_edits.is_empty() {
             let dr = self.drawings_mut();
             dr.shapes.append(&mut copies.shapes);
             dr.texts.append(&mut copies.texts);
@@ -544,6 +627,11 @@ impl Board<'_> {
                 dr.board_parts.push(bp.clone());
             }
             dr.board_parts.sort_by(|a, b| a.reference.cmp(&b.reference));
+            if !new_edits.is_empty() {
+                dr.footprint_edits.retain(|e| !new_edits.iter().any(|n| n.id == e.id));
+                dr.footprint_edits.append(&mut new_edits);
+                dr.footprint_edits.sort_by(|a, b| a.id.cmp(&b.id));
+            }
         }
         if !zone_edits.is_empty() {
             let dr = self.drawings_mut();

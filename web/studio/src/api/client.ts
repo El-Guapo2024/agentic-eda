@@ -297,6 +297,8 @@ export interface FabPosOptions {
   units_mm: boolean;
   smd_only: boolean;
   exclude_fp_th: boolean;
+  /** "Exclude all footprints with the Do Not Populate flag set" (`m_excludeDNP`). */
+  exclude_dnp?: boolean;
   /** "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
   use_aux_origin?: boolean;
 }

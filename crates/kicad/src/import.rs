@@ -133,7 +133,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // Each item parser records the uuid and lock of what it emits (`Refs`), so the groups and locks of the
     // file can be turned into ids once the items have them.
     let mut refs = Refs::default();
-    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
+    let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
     let nets = build_nets(&net_names, &pin_nets);
     let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts) = import_drawings(root, &mut refs);
@@ -169,7 +169,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, outline_is_shapes, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
@@ -220,6 +220,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         stackup: import_stackup(root),
         impedance_targets: vec![],
         footprints: explicit_footprints.into_values().collect(),
+        instance_footprints: Default::default(),
         symbols: vec![],
         board,
         allow: Default::default(),
@@ -477,6 +478,7 @@ fn import_stackup(root: &[Sexpr]) -> Option<eda_model::Stackup> {
                 kind,
                 epsilon_r: sexpr::find(l, "epsilon_r").and_then(|e| sexpr::num(e, 1)),
                 loss_tangent: sexpr::find(l, "loss_tangent").and_then(|e| sexpr::num(e, 1)),
+                color: sexpr::find(l, "color").and_then(|c| sexpr::txt(c, 1)).filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case("not specified")).map(String::from),
             })
         })
         .collect();
@@ -971,16 +973,17 @@ pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, 
 /// (plain or suffixed) whose pads match, or a freshly inserted one if none
 /// do. See `import_footprints`'s call site for why this can legitimately
 /// happen (the same lib id placed on both sides of one board).
-fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str, pads: &[Pad]) -> String {
+fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str, pads: &[Pad], models3d: &[eda_model::footprint::Model3d]) -> String {
+    let same = |existing: &Footprint| existing.pads.as_slice() == pads && existing.models3d.as_slice() == models3d;
     match explicit.get(lib_id) {
         None => lib_id.to_string(),
-        Some(existing) if existing.pads.as_slice() == pads => lib_id.to_string(),
+        Some(existing) if same(existing) => lib_id.to_string(),
         Some(_) => {
             for n in 2.. {
                 let key = format!("{lib_id}#{n}");
                 match explicit.get(&key) {
                     None => return key,
-                    Some(existing) if existing.pads.as_slice() == pads => return key,
+                    Some(existing) if same(existing) => return key,
                     Some(_) => continue,
                 }
             }
@@ -1119,9 +1122,10 @@ fn import_footprints(
     layers: &[String],
     notes: &mut ImportNotes,
     refs: &mut Refs,
-) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>, Vec<FootprintExtra>), Vec<CheckResult>> {
+) -> Result<(Vec<FootprintInstance>, Vec<Part>, BTreeMap<String, Footprint>, Vec<(String, String)>, Vec<FootprintExtra>, Vec<eda_model::fp_edit::FootprintEdit>), Vec<CheckResult>> {
     let file_version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut extras: Vec<FootprintExtra> = Vec::new();
+    let mut edits: Vec<eda_model::fp_edit::FootprintEdit> = Vec::new();
     let title_vars = title_block_vars(root);
     let mut footprints_ir = Vec::new();
     let mut parts = Vec::new();
@@ -1163,10 +1167,12 @@ fn import_footprints(
         };
         let value = footprint_field(fp, "Value");
 
-        let mut pads = Vec::new();
+        let mut pads: Vec<Pad> = Vec::new();
         let mut pins = Vec::new();
         let fp_inst = FootprintInstance { id: reference.clone(), at: Point { x, y }, rot, side, label: Default::default() };
         let mut extra = footprint_extra_header(fp, &reference, file_version);
+        // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
+        let mut edit = crate::fp_fields::parse_footprint_edit(fp, &reference, value.as_deref(), side, rot);
         for pad in sexpr::find_all(fp, "pad") {
             let Some(p) = parse_pad_geometry(pad, side, rot, notes) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
@@ -1175,6 +1181,13 @@ fn import_footprints(
                 continue;
             };
             extra.pads.push(pad_mask_info(pad, layers, file_version));
+            // Offset and margins: the k-th kept pad that carries this number (the engine footprint's own list is what an edit counts in).
+            let mut pad_edit = crate::fp_fields::parse_pad_extras(pad, side, file_version);
+            if !pad_edit.is_empty() {
+                pad_edit.number = p.number.clone();
+                pad_edit.nth = pads.iter().filter(|q| q.number == p.number).count() as u32 + 1;
+                edit.set_pad(pad_edit);
+            }
 
             // A non-plated hole is mechanical, not electrical: it has no
             // net and is not a schematic pin (nothing a symbol would draw
@@ -1218,10 +1231,17 @@ fn import_footprints(
         extra.graphics.extend(import_fp_graphics(fp, &fp_inst));
         extra.texts = import_fp_texts(fp, &fp_inst, &reference, value.as_deref().unwrap_or(""), &title_vars);
         extras.push(extra);
-        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads);
+        if !edit.is_empty() {
+            edits.push(edit);
+        }
+        // The 3D models with their placement, in the studio's frame: KiCad turns a back-side footprint's model with `Ry(pi) Rz(pi)` and the studio keeps
+        // that footprint mirrored in x, which is a half turn about z apart (`Model3d::flipped_frame`). A slot is shared only by instances whose models
+        // agree, like their pads.
+        let models3d: Vec<eda_model::footprint::Model3d> = crate::footprint_lib::models_from(fp).into_iter().map(|m| if side == Side::Bottom { m.flipped_frame() } else { m }).collect();
+        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads, &models3d);
         let courtyard = footprint_courtyard_half(fp, side);
         let courtyard_outlines = footprint_courtyard_outlines(fp, side);
-        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp) });
+        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp), models3d });
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
@@ -1231,7 +1251,8 @@ fn import_footprints(
     if !errors.is_empty() {
         return Err(errors);
     }
-    Ok((footprints_ir, parts, explicit, pin_nets, extras))
+    edits.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok((footprints_ir, parts, explicit, pin_nets, extras, edits))
 }
 
 /// Footprint-level solder-mask facts: `(solder_mask_margin ..)` (pre-9.0
@@ -2146,18 +2167,18 @@ mod tests {
         let bottom_pads = vec![Pad { opposite_side: false, number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
 
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
-        let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads);
+        let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[]);
         assert_eq!(key_top, lib_id, "first instance (R35, top) gets the plain lib id");
-        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None });
+        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
 
-        let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads);
+        let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[]);
         assert_ne!(key_bottom, lib_id, "R34 (bottom)'s own un-mirrored geometry disagrees with R35's cached one -- it must get its own slot, not silently reuse R35's");
-        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None });
+        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
 
         // A third instance matching either existing slot exactly must reuse
         // it rather than growing a new one every time.
-        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads), lib_id);
-        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads), key_bottom);
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[]), lib_id);
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[]), key_bottom);
     }
 
     /// GAPS.md #3's third over-firing source, pinned to `issue11814`'s U4

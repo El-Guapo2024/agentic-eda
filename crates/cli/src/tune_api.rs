@@ -245,7 +245,7 @@ mod tests {
     /// Two parts 20 mm apart, each with a USB_P pad above a USB_N pad (1 mm pitch), and a 20 mm P and N track joining them.
     fn setup_pair(dir: &Path) {
         let pad = |n: &str, y: i64| Pad { opposite_side: false, number: n.into(), at: (0, y), size: (400, 400), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -500), pad("2", 500)], courtyard: Some((1000, 2000)), model: None, courtyard_outlines: vec![] };
+        let fp = Footprint { name: "PAIR2".into(), pads: vec![pad("1", -500), pad("2", 500)], courtyard: Some((1000, 2000)), model: None, courtyard_outlines: vec![], models3d: vec![] };
         let part = |r: &str| Part {
             reference: r.into(),
             mpn: None,

@@ -5,7 +5,7 @@
 // does the screen mapping, so this file never touches pixels directly
 // except for hairline compensation (view.ts `hairlineUm`) and text size.
 
-import type { BoardState, Dimension, DrcViolation, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
+import type { BoardState, Dimension, DrcViolation, FieldInfo, FillReport, Part, Pad, RatsnestEdge, Shape, Um, Zone } from "../../api/types";
 import type { DrawState, ToolId, ViewTransform } from "../../state/store";
 import { hairlineUm } from "./view";
 import { layerColor, copperColorKey, drawOrder } from "./layers";
@@ -18,6 +18,7 @@ import { originMarkerColor } from "../../kicad-port/gridOrigin";
 import { netHighlightColor, hexToRgb, rgbToHex } from "../../kicad-port/netHighlight";
 import { carryRatsnest, offsetRatsnestForPreview } from "../../kicad-port/localRatsnest";
 import { carryMatrix, carryPoint, splitCarried, type CarryPreview } from "../../kicad-port/pcbCarry";
+import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { itemBounds, padIds } from "../../kicad-port/pcbItems";
 import { ancestors } from "../../kicad-port/groupTree";
 import type { LengthUnit } from "../../state/units";
@@ -29,7 +30,7 @@ import { BEZIER_MAX_ERROR_UM } from "./itemHitTest";
 import { isHighlighted } from "../../kicad-port/boardControl";
 import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
-import { layerIsVisible, isCopper } from "../../kicad-port/layerPresets";
+import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
 
@@ -162,9 +163,32 @@ function pathForPad(ctx: CanvasRenderingContext2D, pad: Pad) {
   if (isCircle) {
     ctx.arc(pad.x, pad.y, pad.w / 2, 0, Math.PI * 2);
   } else {
-    const r = pad.round ? Math.min(pad.w, pad.h) / 2 : Math.min(pad.w, pad.h) * 0.15;
+    // A pad that says what shape it is (`pad.shape`) is drawn as that: a rectangle has square corners, a rounded rectangle the radius of its ratio
+    // (KiCad's 25% when it has none), an oval a stadium. One that does not (an older backend) keeps the rounded box it was always drawn as.
+    const shorter = Math.min(pad.w, pad.h);
+    const r = pad.shape === "rect" ? 0 : pad.shape === "round_rect" ? shorter * (pad.ratio ?? 0.25) : pad.round ? shorter / 2 : shorter * 0.15;
     ctx.roundRect(pad.x - pad.w / 2, pad.y - pad.h / 2, pad.w, pad.h, r);
   }
+}
+
+/** A through-hole pad's hole: a circle of the drill, or the slot of an oblong one, at the pad's position (not the copper's centre, which an offset moves). Null when there is none to draw. */
+function pathForHole(ctx: CanvasRenderingContext2D, pad: Pad): boolean {
+  const cx = pad.px ?? pad.x;
+  const cy = pad.py ?? pad.y;
+  ctx.beginPath();
+  if (pad.slot) {
+    // the slot lies along the pad's longer side (KiCad draws an oblong hole along the axis it is longer in, turned with the pad)
+    const [sw, sh] = pad.slot;
+    const turned = pad.w < pad.h;
+    const [w, h] = turned ? [sh, sw] : [sw, sh];
+    ctx.roundRect(cx - w / 2, cy - h / 2, w, h, Math.min(w, h) / 2);
+    return true;
+  }
+  if (pad.drill) {
+    ctx.arc(cx, cy, pad.drill / 2, 0, Math.PI * 2);
+    return true;
+  }
+  return false;
 }
 
 // The full-viewport background fill happens once in Canvas.tsx, in
@@ -296,9 +320,19 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.fill();
     }
     if (pad.th) {
-      ctx.strokeStyle = layerColor("pad_th");
-      ctx.lineWidth = hairlineUm(view, 1);
-      ctx.stroke();
+      // The hole punched through the copper (the board's background shows in it), with the wall around it, when the backend says how big it is.
+      if (pathForHole(ctx, pad)) {
+        ctx.fillStyle = layerColor("background");
+        ctx.fill();
+        ctx.strokeStyle = layerColor("pad_th");
+        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.stroke();
+      } else {
+        pathForPad(ctx, pad);
+        ctx.strokeStyle = layerColor("pad_th");
+        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.stroke();
+      }
     }
     // Net name, only once the pad is legible on screen.
     const numbered = opts.showPadNumbers && pad.num !== "" && padNumberLegible(pad, view);
@@ -327,33 +361,79 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     });
   }
 
-  // Reference designator.
-  const fs = Math.max(500, Math.min(900, Math.min(x1 - x0, y1 - y0) * 0.45));
-  const cx = (x0 + x1) / 2,
-    cy = (y0 + y1) / 2;
-  let tx = cx,
-    ty = y0 - fs * 0.3,
-    align: CanvasTextAlign = "center";
-  if (part.label === "below") ty = y1 + fs * 0.95;
-  if (part.label === "left") {
-    tx = x0 - fs * 0.3;
-    ty = cy + fs * 0.35;
-    align = "right";
-  }
-  if (part.label === "right") {
-    tx = x1 + fs * 0.3;
-    ty = cy + fs * 0.35;
-    align = "left";
-  }
-  const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
-  // The reference shows when its layer does and both Footprint Text and References are on (`PCB_TEXT::ViewGetLOD`).
-  if (opts.layerVisible[silkKey] !== false && on(opts.layerVisible, "footprint_text") && on(opts.layerVisible, "footprint_references")) {
-    withAlpha(ctx, layerAlpha(opts, silkKey), () => {
-      drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : fs / 6, color: layerColor(silkKey) });
-    });
+  // The Reference, the Value and the user fields are drawn by `drawFields` once the backend says where they are (`part.fields`); an older backend's footprint has
+  // only its reference, drawn beside the courtyard the way it always was.
+  if (!part.fields) {
+    const fs = Math.max(500, Math.min(900, Math.min(x1 - x0, y1 - y0) * 0.45));
+    const cx = (x0 + x1) / 2,
+      cy = (y0 + y1) / 2;
+    let tx = cx,
+      ty = y0 - fs * 0.3,
+      align: CanvasTextAlign = "center";
+    if (part.label === "below") ty = y1 + fs * 0.95;
+    if (part.label === "left") {
+      tx = x0 - fs * 0.3;
+      ty = cy + fs * 0.35;
+      align = "right";
+    }
+    if (part.label === "right") {
+      tx = x1 + fs * 0.3;
+      ty = cy + fs * 0.35;
+      align = "left";
+    }
+    const silkKey = part.side === "bottom" ? "b_silks" : "f_silks";
+    // The reference shows when its layer does and both Footprint Text and References are on (`PCB_TEXT::ViewGetLOD`).
+    if (opts.layerVisible[silkKey] !== false && on(opts.layerVisible, "footprint_text") && on(opts.layerVisible, "footprint_references")) {
+      withAlpha(ctx, layerAlpha(opts, silkKey), () => {
+        drawStrokeText(ctx, part.ref, tx, ty, { sizeUm: fs, justify: align, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : fs / 6, color: layerColor(silkKey) });
+      });
+    }
+
   }
 
   ctx.restore();
+}
+
+/** A field to draw, with the footprint it is on (none for a field carried on its own, which has no footprint to ask). */
+export interface FieldToDraw {
+  field: FieldInfo;
+  part?: Pick<Part, "ref" | "side">;
+}
+
+/** The fields of the placed footprints, each with its footprint. */
+export function fieldsToDraw(parts: readonly Part[]): FieldToDraw[] {
+  return parts.flatMap((part) => (part.placed ? (part.fields ?? []).map((field) => ({ field, part })) : []));
+}
+
+/**
+ * A footprint's fields (`PCB_FIELD`: Reference, Value, user fields) as the board has them -- position, size, thickness, layer, angle, justification, mirroring --
+ * in KiCad's stroke font. A hidden field is not drawn (it is when the footprint is selected in KiCad, with "Force show fields when footprint selected" on; the
+ * Properties panel and the dialog show it). `GetDrawRotation`'s keep-upright rule has already been applied in `fieldAsText`.
+ *
+ * The Appearance panel's Objects rows apply as `PCB_FIELD::ViewGetLOD` has them: the Reference needs References, the Value Values, every field Footprint Text, and the
+ * footprint's side (Footprints Front or Back) must show -- unless the footprint is selected, which shows its fields whatever those rows say ("Force show fields when
+ * footprint selected", on by default). The field's own layer must be on in any case.
+ */
+export function drawFields(ctx: CanvasRenderingContext2D, view: ViewTransform, items: readonly FieldToDraw[], opts: PaintOptions) {
+  for (const { field: f, part } of items) {
+    const selected = opts.selection.has(f.id);
+    if (!f.visible && !selected) continue;
+    const key = layerStateKey(f.layer);
+    if (!f.text || !layerIsVisible(opts.layerVisible, f.layer)) continue;
+    if (part && !fieldShownByObjects(opts.layerVisible, part, f, opts.selection.has(part.ref))) continue;
+    const t = fieldAsText(f);
+    const color = selected ? layerColor("selection") : layerColor(realLayerKey(f.layer));
+    // millideg, KiCad's counter-clockwise; the canvas turns clockwise.
+    const angleRad = (-t.angle / 1000) * (Math.PI / 180);
+    // The anchor is where the text box is centred (or its top or bottom edge sits); the font draws from the baseline.
+    const sizeUm = Math.max(f.h, hairlineUm(view, 8));
+    const down = f.valign > 0 ? 0 : f.valign < 0 ? 0.72 * sizeUm : 0.36 * sizeUm;
+    const x = f.x - down * Math.sin(angleRad);
+    const y = f.y + down * Math.cos(angleRad);
+    withAlpha(ctx, layerAlpha(opts, key) * (f.visible ? 1 : 0.5), () => {
+      drawStrokeText(ctx, t.content, x, y, { sizeUm, thicknessUm: opts.sketchText ? hairlineUm(view, 1) : Math.max(f.thickness, sizeUm / 20), justify: t.justify, angleRad, mirror: f.mirror, italic: f.italic, color });
+    });
+  }
 }
 
 function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
@@ -1156,6 +1236,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     withAlpha(ctx, pass.alpha, () => {
       // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
       for (const part of pass.b.parts) drawFootprint(ctx, view, part, opts);
+      // Their fields (Reference, Value, user fields: `PCB_FIELD`), each on its own layer.
+      drawFields(ctx, view, fieldsToDraw(pass.b.parts), opts);
       // Free-standing graphics/text (Place > Line/Arc/.../Text) -- same visual tier as silkscreen, after copper and footprints, before the in-progress tool preview.
       drawShapes(ctx, view, pass.b, opts);
       drawTexts(ctx, view, pass.b, opts);
@@ -1175,6 +1257,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
     const moving = copper(carry.moving);
     for (const key of drawOrder()) moving[key]?.();
     for (const part of carry.moving.parts) drawFootprint(ctx, view, part, own);
+    drawFields(ctx, view, [...fieldsToDraw(carry.moving.parts), ...carry.fields.map((field) => ({ field }))], own);
     drawShapes(ctx, view, carry.moving, own);
     drawTexts(ctx, view, carry.moving, own);
     drawDimensions(ctx, view, carry.moving, own);

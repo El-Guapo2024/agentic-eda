@@ -3,7 +3,8 @@
 // dielectric constant and loss tangent of the dielectrics, and the finish. The table is the `(stackup ..)` of the derived `.kicad_pcb`;
 // the board thickness is what the layers add up to (`BuildBoardThicknessFromStackup`), and the copper layers are the board's layers.
 //
-// Not ported: colours, sub-layers of a dielectric, "Add/Remove Dielectric Layer...", "Adjust Dielectric Thickness" and the impedance-
+// Colours: a mask, a silkscreen and a dielectric carry KiCad's colour name (or a typed `#RRGGBB`), which the 3D viewer's "Use board stackup colors" paints the board
+// with (kicad-port/appearance3d.ts). Not ported: sub-layers of a dielectric, "Add/Remove Dielectric Layer...", "Adjust Dielectric Thickness" and the impedance-
 // controlled switch. A different copper layer count rebuilds the table from the default stackup, keeping what the layers that remain say
 // (`withCopperLayers`); reducing it is refused up front while a track, via or zone is still on a layer that would go.
 import { useEffect, useMemo } from "react";
@@ -20,6 +21,7 @@ import {
   withCopperLayers,
   withKnownKinds,
 } from "../../kicad-port/boardSetupRules";
+import { NOT_SPECIFIED, STACKUP_COLOR_NAMES, parseColor, stackupColorKind, toRgbHex } from "../../kicad-port/appearance3d";
 import type { StackupLayer, StackupSettings } from "../../api/types";
 import { Check, FieldRow, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
@@ -29,6 +31,36 @@ const COPPER_COUNTS = Array.from({ length: 16 }, (_, i) => (i + 1) * 2);
 const COPPER_FINISHES = ["ENIG", "ENEPIG", "HAL SnPb", "HAL lead-free", "Hard gold", "Immersion tin", "Immersion nickel", "Immersion silver", "Immersion gold", "HT_OSP", "OSP", "None"];
 
 const EDGE_CONNECTORS = ["No", "Yes", "Yes, bevelled"];
+
+const USER_DEFINED = "User defined";
+
+/** The colour cell of a stackup row (`PANEL_BOARD_STACKUP`'s colour combo): KiCad's names for the item's kind, "User defined" for a typed `#RRGGBB`. */
+function StackupColor({ kind, value, ariaLabel, onChange }: { kind: "silk" | "mask" | "dielectric"; value: string | undefined; ariaLabel: string; onChange: (color: string | undefined) => void }) {
+  const names: readonly string[] = STACKUP_COLOR_NAMES[kind];
+  const custom = value !== undefined && value.startsWith("#");
+  const selected = custom ? USER_DEFINED : (value ?? NOT_SPECIFIED);
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+      <select
+        aria-label={ariaLabel}
+        value={selected}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange(v === NOT_SPECIFIED ? undefined : v === USER_DEFINED ? (custom ? value : "#808080") : v);
+        }}
+      >
+        {names.map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+        {!custom && value !== undefined && !names.includes(value) && <option value={value}>{value}</option>}
+        <option value={USER_DEFINED}>{USER_DEFINED}</option>
+      </select>
+      {custom && <input type="color" aria-label={`${ariaLabel} (user defined)`} value={toRgbHex(parseColor(value!) ?? { r: 0.5, g: 0.5, b: 0.5, a: 1 })} onChange={(e) => onChange(e.target.value)} style={{ width: 22, height: 18, padding: 0 }} />}
+    </span>
+  );
+}
 
 export function StackupPage({ hidden, onDirty }: PageProps) {
   const state = useStudioState();
@@ -91,6 +123,7 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
                   <th>Layer</th>
                   <th>Type</th>
                   <th>Material</th>
+                  <th>Color</th>
                   <th>Thickness (mm)</th>
                   <th>Epsilon R</th>
                   <th>Loss Tan</th>
@@ -109,6 +142,11 @@ export function StackupPage({ hidden, onDirty }: PageProps) {
                           <input type="text" aria-label={`${l.name} material`} value={l.material ?? ""} onChange={(e) => edit({ material: e.target.value === "" ? null : e.target.value })} style={{ width: 110 }} />
                         ) : (
                           (l.material ?? "")
+                        )}
+                      </td>
+                      <td>
+                        {stackupColorKind(l.kind) && (
+                          <StackupColor kind={stackupColorKind(l.kind)!} value={l.color} ariaLabel={`${l.name} color`} onChange={(color) => (color === undefined ? edit({ color: undefined }) : edit({ color }))} />
                         )}
                       </td>
                       <td>

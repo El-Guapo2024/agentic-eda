@@ -69,9 +69,10 @@ pub(crate) fn pos_args(format: &str, side: &str, units_mm: bool, smd_only: bool,
 
 /// `kicad-cli sch export bom` in JLCPCB's column layout (Comment,
 /// Designator, Footprint, LCSC Part #), grouped by what makes two parts
-/// interchangeable.
+/// interchangeable. A part marked Do Not Populate is not on an assembly BOM (`--exclude-dnp`), and one excluded from the BOM never is
+/// (the symbol's `in_bom no`, which a footprint's "Exclude from bill of materials" sets too).
 pub(crate) fn bom_args() -> Vec<String> {
-    ["--fields", "Value,Reference,Footprint,LCSC", "--labels", "Comment,Designator,Footprint,LCSC Part #", "--group-by", "Value,Footprint,LCSC", "--sort-field", "Reference"].map(String::from).to_vec()
+    ["--fields", "Value,Reference,Footprint,LCSC", "--labels", "Comment,Designator,Footprint,LCSC Part #", "--group-by", "Value,Footprint,LCSC", "--sort-field", "Reference", "--exclude-dnp"].map(String::from).to_vec()
 }
 
 fn copper_layers(dir: &Path) -> Result<Vec<String>, String> {
@@ -115,16 +116,21 @@ pub fn drill(dir: &Path, body: &[u8]) -> Value {
 }
 
 /// `POST /api/fab/pos`: `{"format": "csv"|"ascii", "side": "front"|"back"|"both",
-/// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool}`.
+/// "units_mm": bool, "smd_only": bool, "exclude_fp_th": bool, "exclude_dnp": bool}`. A footprint marked "exclude from position files" is never
+/// in the file; the other three options leave out SMD-less, through-hole and Do-Not-Populate footprints.
 pub fn pos(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
-    let args = pos_args(
+    let mut args = pos_args(
         req.get("format").and_then(Value::as_str).unwrap_or("csv"),
         req.get("side").and_then(Value::as_str).unwrap_or("both"),
         req.get("units_mm").and_then(Value::as_bool).unwrap_or(true),
         req.get("smd_only").and_then(Value::as_bool).unwrap_or(false),
         req.get("exclude_fp_th").and_then(Value::as_bool).unwrap_or(false),
     );
+    // `PLACE_FILE_EXPORTER`'s `m_excludeDNP`: footprints marked Do Not Populate stay out of the file.
+    if req.get("exclude_dnp").and_then(Value::as_bool).unwrap_or(false) {
+        args.push("--exclude-dnp".into());
+    }
     reply(kicad_engine::export(dir, "pos", &with_aux_origin("pos", args, &req)))
 }
 

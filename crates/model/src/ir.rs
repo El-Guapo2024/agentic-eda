@@ -2315,6 +2315,12 @@ pub struct DrawingsSection {
     /// absent in an older `design.json` reads as "nothing waived". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub drc_exclusions: Vec<DrcExclusion>,
+    /// What was edited on the footprints of the board (the Footprint Properties and Pad Properties dialogs, the Properties panel): the
+    /// Reference and Value text, user fields, the attributes (DNP, BOM, position files ...) and per-pad overrides. One entry per footprint
+    /// that has any, sorted by id -- see [`crate::fp_edit`]. Additive: absent in an older `design.json` reads as "every footprint is as its
+    /// library has it". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_edits: Vec<crate::fp_edit::FootprintEdit>,
     /// `true` when the board's outline is made of the shapes on layer `Edge.Cuts` in [`Self::shapes`] and of nothing else: an
     /// imported board whose Edge.Cuts have arcs, circles, rectangles, curves, cutouts or several loops, which a closed polygon of
     /// straight edges cannot hold. `placement.outline` is then only their summary (the outer ring of the largest outline, curves
@@ -3108,7 +3114,7 @@ impl LibraryFootprint {
     /// silkscreen art or a BOM-exclude flag), same split `LibraryPad::
     /// to_engine_pad`'s doc explains.
     pub fn to_engine_footprint(&self) -> crate::footprint::Footprint {
-        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone(), courtyard_outlines: vec![] }
+        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone(), courtyard_outlines: vec![], models3d: vec![] }
     }
 
     /// Assign a deterministic id to every pad/graphic/text whose `id` is

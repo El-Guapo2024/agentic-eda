@@ -42,6 +42,17 @@ sleep {secs}
 case "$1-$2" in
   pcb-drc) echo '{{"coordinate_units":"mm","kicad_version":"10.99.0-fake","violations":[],"unconnected_items":[]}}' > "$out" ;;
   sch-erc) echo '{{"coordinate_units":"mm","kicad_version":"10.99.0-fake","sheets":[]}}' > "$out" ;;
+  pcb-export)
+    # `pcb export vrml --models-dir m`: one VRML file per `(model ...)` of the board, in `m` beside the output.
+    if [ "$3" = vrml ]; then
+      for a in "$@"; do board="$a"; done
+      outdir=$(dirname "$out"); mkdir -p "$outdir/m"
+      grep -o '(model "[^"]*"' "$board" | sed 's/(model "//; s/"$//' | while read -r p; do
+        stem=$(basename "$p" | sed 's/\.[^.]*$//')
+        printf '#VRML V2.0 utf8\n# fake %s\n' "$stem" > "$outdir/m/$stem.wrl"
+      done
+      printf '#VRML V2.0 utf8\n' > "$out"
+    fi ;;
 esac
 rmdir "$FAKE_KICAD_LOG.running" 2>/dev/null
 echo "end $1-$2" >> "$FAKE_KICAD_LOG"
@@ -338,4 +349,117 @@ fn a_hung_kicad_cli_is_killed_with_a_clear_error_and_the_lane_goes_on() {
     let (status, _, took) = studio.request("GET", "/api/version", "");
     assert_eq!(status, 200);
     assert!(took < Duration::from_secs(2), "{took:?}");
+}
+
+/// `GET /api/3dmodel?name=<model path>` over real HTTP, for a model KiCad's library holds as STEP only (all of them in the installed 10.99 library): the page
+/// sends every model of the board in one `prepare` and then one request per model that waits for it; the request loop is not held up by kicad-cli's conversion
+/// nor by the held requests; the models of one board are one kicad-cli run; the answer is cached; and nothing outside the library and the board is readable.
+#[test]
+fn the_3d_model_route_converts_in_the_lane_without_holding_the_loop_and_reads_nothing_outside() {
+    let name = "models";
+    let base = std::env::temp_dir().join(format!("eda_cli_lane_{}_{name}", std::process::id()));
+    let (library, cache) = (base.join("3dmodels"), base.join("cache"));
+    let studio = Studio::start_with(name, 2, &[("EDA_KICAD_3DMODELS_DIR", library.to_str().unwrap()), ("EDA_3DMODEL_CACHE", cache.to_str().unwrap())]);
+    std::fs::create_dir_all(library.join("Lib.3dshapes")).unwrap();
+    for part in ["a", "b"] {
+        std::fs::write(library.join(format!("Lib.3dshapes/{part}.step")), "ISO-10303-21;").unwrap();
+    }
+    std::fs::write(base.join("secret.wrl"), "#VRML V2.0 utf8\n# SECRET").unwrap();
+    let url = |model: &str, wait: bool| format!("/api/3dmodel?name={}{}", model.replace('{', "%7B").replace('}', "%7D").replace('/', "%2F"), if wait { "&wait=1" } else { "" });
+    let (a, b) = ("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/a.step", "${KICAD10_3DMODEL_DIR}/Lib.3dshapes/b.wrl");
+
+    // The board's models, queued together; and the loop is free while kicad-cli runs.
+    let names = json!({ "names": [a, b, "${KICAD10_3DMODEL_DIR}/../secret.wrl"] }).to_string();
+    let (status, body, took) = studio.request("POST", "/api/3dmodel/prepare", &names);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap(), json!({ "ready": 0, "pending": 2, "failed": 0, "missing": 1 }), "{body}");
+    quick("/api/3dmodel/prepare", &[took]);
+    // One request per model, each held until its model is in -- a b.wrl the library lacks is its b.step (kicad-cli's --subst-models).
+    let port = studio.port;
+    let held: Vec<_> = [a, b].iter().map(|m| { let target = url(m, true); std::thread::spawn(move || request(port, "GET", &target, "")) }).collect();
+    studio.wait_for_kicad_cli("pcb-export");
+    let polls: Vec<Duration> = (0..5).map(|_| studio.request("GET", "/api/version", "").2).collect();
+    quick("/api/version while a model converts and two requests are held", &polls);
+    let answers: Vec<(u16, String, Duration)> = held.into_iter().map(|t| t.join().unwrap()).collect();
+    assert!(answers.iter().all(|(status, _, _)| *status == 200), "{answers:?}");
+    assert!(answers[0].1.starts_with("#VRML V2.0 utf8") && answers[0].1.contains("fake a"), "{}", answers[0].1);
+    assert!(answers[1].1.contains("fake b"), "{}", answers[1].1);
+    assert!(answers.iter().all(|(_, _, took)| *took > Duration::from_millis(1500)), "held for the run, which takes the fake kicad-cli two seconds: {answers:?}");
+    assert_eq!(studio.kicad_cli_runs("pcb-export"), 1, "two models of one board, one kicad-cli run: {:?}", studio.kicad_cli_log());
+    // Asked again, with or without waiting: from the cache, no new run, and as quick as any other answer.
+    for wait in [false, true] {
+        let (status, _, took) = studio.request("GET", &url(a, wait), "");
+        assert_eq!(status, 200);
+        assert!(took < INSTANT, "{took:?}");
+    }
+    assert_eq!(studio.kicad_cli_runs("pcb-export"), 1);
+
+    // A request that does not wait is answered pending at once, for a model that is not converted yet.
+    std::fs::write(library.join("Lib.3dshapes/c.step"), "ISO-10303-21;").unwrap();
+    let (status, body, took) = studio.request("GET", &url("${KICAD10_3DMODEL_DIR}/Lib.3dshapes/c.step", false), "");
+    assert_eq!((status, serde_json::from_str::<Value>(&body).unwrap()["status"].clone()), (202, json!("pending")), "{body}");
+    quick("/api/3dmodel pending", &[took]);
+
+    // Nothing outside the library and the board: not by `..`, not by an absolute path, not by an encoded one, not a file that is no model.
+    for target in [
+        url("${KICAD10_3DMODEL_DIR}/../secret.wrl", false),
+        url(&base.join("secret.wrl").to_string_lossy(), false),
+        "/api/3dmodel?name=%2e%2e%2fsecret.wrl".to_string(),
+        url("/etc/passwd", false),
+        url("${KIPRJMOD}/design.json", false),
+        url("${KICAD10_3DMODEL_DIR}/../board/design.json", true),
+    ] {
+        let (status, body, _) = studio.request("GET", &target, "");
+        assert!(status == 403 || status == 404, "{target} -> {status} {body}");
+        assert!(!body.contains("SECRET") && !body.contains("root:") && !body.contains("\"schema\""), "{target} leaked a file: {body}");
+    }
+}
+
+/// A browser opens connections ahead of the requests it will send on them (Chrome's preconnect). The serve loop reads one request at a time, and used to
+/// block on a connection that had said nothing, so every request behind it -- the page's polls, the 3D models of a board -- waited until the browser closed
+/// that socket (16 s, measured on a board with 16 models). A silent connection is waited on by its own thread now.
+#[test]
+fn a_connection_that_has_sent_nothing_does_not_hold_up_the_requests_behind_it() {
+    let studio = Studio::start("idle_connection", 0);
+    let silent: Vec<TcpStream> = (0..3).map(|_| TcpStream::connect(("127.0.0.1", studio.port)).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(150));
+    // On its own thread: a server that blocks on the silent connections never answers, and the test should say so rather than hang.
+    let (port, (tx, rx)) = (studio.port, std::sync::mpsc::channel());
+    std::thread::spawn(move || {
+        let tries: Vec<Duration> = (0..3).map(|_| request(port, "GET", "/api/version", "").2).collect();
+        let _ = tx.send(tries);
+    });
+    let tries = rx.recv_timeout(Duration::from_secs(30)).expect("a request made behind three silent connections was never answered");
+    let fastest = tries.iter().min().unwrap();
+    assert!(*fastest < Duration::from_secs(1), "a request made behind three silent connections took {tries:?}");
+    // A silent connection is not dropped: when its request comes, it is answered.
+    let mut late = silent.into_iter().next().unwrap();
+    write!(late, "GET /api/version HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").unwrap();
+    let mut raw = String::new();
+    late.read_to_string(&mut raw).unwrap();
+    assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+}
+
+/// The 3D model routes are answered on the connection's own thread, not by the request loop: a model does not wait behind whatever the loop is busy with (a
+/// `/api/state` of two seconds on the QA board in a debug build, with the page's models queued behind it). A request that has not finished arriving keeps the loop
+/// busy, which is the stand-in for it here.
+#[test]
+fn a_3d_model_request_is_answered_while_the_request_loop_is_busy() {
+    let studio = Studio::start("model_beside_loop", 0);
+    let mut busy = TcpStream::connect(("127.0.0.1", studio.port)).unwrap();
+    write!(busy, "POST /api/cmd HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\nabc").unwrap(); // the loop now waits for the other 97 bytes
+    std::thread::sleep(Duration::from_millis(200));
+    let (port, (tx, rx)) = (studio.port, std::sync::mpsc::channel());
+    std::thread::spawn(move || {
+        let model = request(port, "GET", "/api/3dmodel?name=nothing.step", "");
+        let prepare = request(port, "POST", "/api/3dmodel/prepare", r#"{"names":["nothing.step"]}"#);
+        let _ = tx.send((model, prepare));
+    });
+    let ((m_status, m_body, _), (p_status, p_body, _)) = rx.recv_timeout(Duration::from_secs(20)).expect("a 3D model request waited for the busy request loop");
+    assert_eq!(m_status, 404, "{m_body}");
+    assert_eq!(p_status, 200, "{p_body}");
+    assert_eq!(serde_json::from_str::<Value>(&p_body).unwrap()["missing"], 1, "{p_body}");
+    drop(busy);
+    // The loop goes on once the busy request is gone.
+    assert_eq!(studio.request("GET", "/api/version", "").0, 200);
 }

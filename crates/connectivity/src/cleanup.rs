@@ -561,6 +561,7 @@ mod tests {
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
+            models3d: vec![],
         });
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());
