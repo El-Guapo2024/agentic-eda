@@ -6,11 +6,12 @@
 
 use eda_engine::nets::{trace_nets, ScreenIn};
 use eda_engine::placed::pin_points;
-use eda_engine::{derive_hierarchy, EngineOptions, Keep};
+use eda_engine::{derive_hierarchy, EngineOptions};
 use eda_model::modules::infer_modules;
 use eda_model::{CheckResult, Net};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::sheet_units;
 use crate::Board;
 
 fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
@@ -113,15 +114,10 @@ impl<'a> Board<'a> {
         if !root.sheets.is_empty() || self.design.sheet_contents.as_ref().is_some_and(|c| !c.is_empty()) {
             return Err(fail("ops_already_hierarchical", "sheets", "the schematic already has sheets; there is nothing to reorganize"));
         }
-        let mut symbols = BTreeMap::new();
+        // a symbol on the sheet is a part of the design
         for s in &root.symbols {
-            if symbols.insert(s.id.clone(), s.clone()).is_some() {
-                return Err(fail("ops_multi_unit", &s.id, format!("{} is a multi-unit symbol; module sheets do not split units yet", s.id)));
-            }
-        }
-        for r in symbols.keys() {
-            if self.model.part(r).is_none() {
-                return Err(fail("ops_unknown_part", r, format!("{r} is on the sheet but is not a part of the design, so it cannot be placed in a module")));
+            if self.model.part(&s.id).is_none() {
+                return Err(fail("ops_unknown_part", &s.id, format!("{} is on the sheet but is not a part of the design, so it cannot be placed in a module", s.id)));
             }
         }
 
@@ -138,17 +134,23 @@ impl<'a> Board<'a> {
         if modules.len() < 2 {
             return Err(fail("ops_one_module", "sheets", "the design is a single functional module; one sheet already holds it"));
         }
-        let keep = Keep {
-            locked: root.extras.locked.iter().filter(|id| symbols.contains_key(*id)).cloned().collect(),
-            symbols,
-            user_fields: root.user_fields.clone(),
-            erc_exclusions: root.erc_exclusions.clone(),
-            erc_pin_map: root.erc_pin_map.clone(),
-            title_block: root.title_block.clone(),
-        };
+        // A part with several units is laid out unit by unit (each unit a part of its own for the layout), the units in their part's module.
+        let split = sheet_units::split(&model, &nets, &root);
+        let keep = split.keep(&root);
+        let modules = sheet_units::expand_modules(&modules, &split.expand);
         let p = &self.design.provenance;
         let opts = EngineOptions { seed: p.seed, engine_version: p.engine_version.clone(), intent_hash: p.intent_hash.clone() };
-        let derived = derive_hierarchy(&model, &opts, &modules, &keep)?;
+        let mut derived = derive_hierarchy(&split.model, &opts, &modules, &keep)?;
+
+        // What the layout drew is the one reference with its units again, and the symbols keep the look they had.
+        {
+            let mut screens: Vec<&mut eda_model::ir::SchematicSection> = derived.sheet_contents.iter_mut().flat_map(|c| c.values_mut()).collect();
+            for sec in screens.iter_mut() {
+                sheet_units::restore(sec, &split.back);
+                sheet_units::carry_field_looks(&root, sec);
+            }
+            sheet_units::carry_label_looks(&root, &mut screens);
+        }
         self.design.schematic = derived.schematic;
         self.design.sheet_contents = derived.sheet_contents;
         self.design.nets = Some(nets);
@@ -257,6 +259,200 @@ mod tests {
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets.len(), 3);
     }
 
+    // ------------------------------------------------------------------ what Reorganize keeps of a symbol's look, and multi-unit parts
+
+    use eda_model::ir::{field_key, FieldPlacement};
+    use eda_model::sch_extras::LabelLook;
+    use eda_model::symbol::{AlternateBody, LibPin, LibSymbol, SPoint};
+    use eda_model::{Part, Pin, PinKind};
+
+    /// The mcu30 flat design, with the root section edited by `edit` first.
+    fn flat_board_with<'a>(model: &'a ConstraintModel, edit: impl FnOnce(&mut eda_model::ir::SchematicSection)) -> Board<'a> {
+        let mut design: Design = eda_engine::derive_schematic(model, &EngineOptions::new(1, "t")).unwrap();
+        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+        edit(design.schematic.as_mut().unwrap());
+        Board::new(design, model, 100, 300)
+    }
+
+    fn screen_with<'d>(d: &'d Design, reference: &str) -> &'d eda_model::ir::SchematicSection {
+        d.sheet_contents.as_ref().unwrap().values().find(|s| s.symbols.iter().any(|x| x.id == reference)).unwrap_or_else(|| panic!("no sheet has {reference}"))
+    }
+
+    fn placement(name: &str, dx: i64, dy: i64) -> FieldPlacement {
+        FieldPlacement { dx, dy, ..FieldPlacement::at_origin(name) }
+    }
+
+    /// Fields the user placed stay where they were put; fields Autoplace Fields placed are placed again but keep their look; a label keeps the look
+    /// its net's labels had.
+    #[test]
+    fn reorganize_keeps_the_places_of_fields_and_the_looks_of_fields_and_labels() {
+        let model = mcu30();
+        // R3: the user put the Reference far to the left and hid the Value. U1: Autoplace Fields' places, but the Value is bold and larger.
+        let custom = vec![FieldPlacement { h: eda_model::ir::TextJustify::Right, ..placement("Reference", -6_350, 0) }, FieldPlacement { visible: false, ..placement("Value", 2_540, 5_080) }];
+        let mut label_net = String::new();
+        let labelled_on_new_sheets: BTreeSet<String> = {
+            let mut probe = flat_board(&model);
+            probe.apply(&Cmd::ReorganizeSheets).unwrap();
+            probe.design().sheet_contents.as_ref().unwrap().values().flat_map(|s| s.labels.iter().map(|l| l.net.clone())).collect()
+        };
+        let mut b = flat_board_with(&model, |root| {
+            root.field_layout.insert("R3".into(), custom.clone());
+            root.extras.fields_autoplaced.remove("R3");
+            let u1 = root.field_layout.get_mut("U1").expect("a derivation stores the places of every symbol's fields");
+            let value = u1.iter_mut().find(|f| f.name == "Value").unwrap();
+            value.bold = true;
+            value.size_um = 1_778;
+            assert!(root.extras.fields_autoplaced.contains_key("U1"));
+            // a label of a net, set in a look of its own
+            // (one the new sheets draw a label for: a net between two modules)
+            let l = root.labels.iter().find(|l| l.kind.is_local() && labelled_on_new_sheets.contains(&l.net)).expect("the flat design has a local label of a net the new sheets label").clone();
+            label_net = l.net.clone();
+            root.extras.label_looks.insert(l.id.clone(), LabelLook { size_um: 2_032, bold: true, italic: false });
+        });
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let d = b.design();
+
+        let r3 = screen_with(d, "R3");
+        assert_eq!(r3.field_layout.get("R3"), Some(&custom), "the fields the user placed are where they were put");
+        assert!(!r3.extras.fields_autoplaced.contains_key("R3"), "and still the user's");
+        let r4 = screen_with(d, "R4");
+        assert!(r4.extras.fields_autoplaced.contains_key("R4"), "the others were placed by Autoplace Fields and are again");
+
+        let u1 = screen_with(d, "U1");
+        let value = u1.field_layout["U1"].iter().find(|f| f.name == "Value").unwrap();
+        assert!(value.bold && value.size_um == 1_778, "Autoplace Fields placed it again, and it is still bold and larger: {value:?}");
+        let reference = u1.field_layout["U1"].iter().find(|f| f.name == "Reference").unwrap();
+        assert!(!reference.bold && reference.size_um == 0);
+
+        let looked: Vec<&eda_model::ir::NetLabel> = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.labels.iter().map(move |l| (s, l))).filter(|(s, l)| l.net == label_net && s.extras.label_looks.contains_key(&l.id)).map(|(_, l)| l).collect();
+        let all: usize = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.labels.iter()).filter(|l| l.net == label_net).count();
+        assert!(all > 0 && looked.len() == all, "every label of {label_net} has the net's look ({} of {all})", looked.len());
+        let any = d.sheet_contents.as_ref().unwrap().values().find_map(|s| s.labels.iter().find(|l| l.net == label_net).map(|l| s.extras.label_looks[&l.id])).unwrap();
+        assert_eq!((any.size_um, any.bold), (2_032, true));
+    }
+
+    /// A symbol drawn in the alternate body style of its library symbol is laid out in it, and stays in it.
+    #[test]
+    fn reorganize_keeps_the_body_style_and_lays_the_symbol_out_in_it() {
+        let mut model = mcu30();
+        let mut led = eda_model::symbol::builtin("Device:LED").unwrap();
+        led.lib_id = "Device:LED".into();
+        // an alternate body whose pins sit a cell further out than the normal one's
+        let wide = |p: &LibPin| LibPin { at: SPoint::new(p.at.x, p.at.y + p.at.y.signum() * 2.54), ..p.clone() };
+        led.alternate = Some(Box::new(AlternateBody::new(led.graphics.clone(), led.pins.iter().map(wide).collect())));
+        model.symbols.push(led);
+        let mut b = flat_board_with(&model, |root| {
+            root.extras.body_styles.insert(field_key("D1", 1), 2);
+        });
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let d = b.design();
+        let sheet = screen_with(d, "D1");
+        assert_eq!(sheet.extras.body_styles.get("D1"), Some(&2), "D1 is still in the alternate body style");
+        assert!(sheet.extras.body_styles.get("D2").is_none());
+        // it is laid out in that body: the pins the tracer finds are where the wires end
+        assert_eq!(traced(&model, d), drawn_nets(&model));
+    }
+
+    /// A dual op-amp the way a library has it: unit 1 and unit 2 the amplifiers, unit 3 the power pins.
+    fn dual_opamp() -> (LibSymbol, Part) {
+        let pin = |number: &str, name: &str, unit: u32, y: f64, left: bool| LibPin {
+            number: number.into(),
+            name: name.into(),
+            electrical_type: if unit == 3 { "power_in" } else { "passive" }.into(),
+            shape: "line".into(),
+            at: SPoint::new(if left { -7.62 } else { 7.62 }, y),
+            angle_deg: if left { 0.0 } else { 180.0 },
+            length_mm: 2.54,
+            unit,
+        };
+        let sym = LibSymbol {
+            lib_id: "Test:Dual3".into(),
+            graphics: vec![eda_model::symbol::SymbolGraphic::Rectangle { unit: 0, start: SPoint::new(-5.08, 5.08), end: SPoint::new(5.08, -5.08), stroke_mm: 0.254, filled: false }],
+            pins: vec![
+                pin("1", "OUT1", 1, 0.0, false),
+                pin("2", "IN1-", 1, 2.54, true),
+                pin("3", "IN1+", 1, -2.54, true),
+                pin("7", "OUT2", 2, 0.0, false),
+                pin("6", "IN2-", 2, 2.54, true),
+                pin("5", "IN2+", 2, -2.54, true),
+                pin("8", "V+", 3, 2.54, false),
+                pin("4", "V-", 3, -2.54, false),
+            ],
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: String::new(),
+            reference_prefix: "U".into(),
+            unit_count: 3,
+            pin_names_hidden: false,
+            pin_numbers_hidden: false,
+            pin_name_offset_mm: 0.508,
+            alternate: None,
+        };
+        let pins = ["1", "2", "3", "4", "5", "6", "7", "8"].iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect();
+        let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_um: None, edge: None };
+        (sym, part)
+    }
+
+    /// mcu30 with a dual op-amp, wired to the rails and to itself.
+    fn mcu30_with_opamp() -> ConstraintModel {
+        let mut model = mcu30();
+        let (sym, part) = dual_opamp();
+        model.symbols.push(sym);
+        model.parts.push(part);
+        model.nets.iter_mut().find(|n| n.name == "VDD").unwrap().pins.push("U9.8".into());
+        model.nets.iter_mut().find(|n| n.name == "GND").unwrap().pins.push("U9.4".into());
+        model.nets.push(Net { name: "AMP_FB1".into(), pins: vec!["U9.1".into(), "U9.2".into()] });
+        model.nets.push(Net { name: "AMP_FB2".into(), pins: vec!["U9.7".into(), "U9.6".into()] });
+        model.nets.push(Net { name: "AMP_X".into(), pins: vec!["U9.3".into(), "U9.5".into()] });
+        model
+    }
+
+    fn unit_of(model: &ConstraintModel, id: &str, unit: u32, at: Point) -> eda_model::ir::SymbolInstance {
+        let mut s = eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: "Test:Dual3".into(), unit, value: "TL072".into(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        s.value = model.part(id).and_then(|p| p.value.clone()).unwrap_or_default();
+        s
+    }
+
+    #[test]
+    fn reorganize_places_every_unit_of_a_multi_unit_part_in_the_same_module_and_the_nets_stay() {
+        let model = mcu30_with_opamp();
+        // the flat drawing is mcu30's, plus the op-amp's three units placed (and not wired: the nets are the model's)
+        let flat = mcu30();
+        let mut design: Design = eda_engine::derive_schematic(&flat, &EngineOptions::new(1, "t")).unwrap();
+        design.placement = Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+        {
+            let root = design.schematic.as_mut().unwrap();
+            for (unit, x) in [(1, 300_000), (2, 330_000), (3, 360_000)] {
+                root.symbols.push(unit_of(&model, "U9", unit, Point { x, y: 20_000 }));
+            }
+            root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
+        }
+        let mut b = Board::new(design, &model, 100, 300);
+        b.apply(&Cmd::ReorganizeSheets).unwrap();
+        let d = b.design();
+        let units: Vec<(String, u32)> = d.sheet_contents.as_ref().unwrap().values().flat_map(|s| s.symbols.iter()).filter(|s| s.id == "U9").map(|s| (s.id.clone(), s.unit)).collect();
+        let mut sorted = units.clone();
+        sorted.sort();
+        assert_eq!(sorted, vec![("U9".to_string(), 1), ("U9".to_string(), 2), ("U9".to_string(), 3)], "each unit placed once");
+        let sheet = screen_with(d, "U9");
+        assert_eq!(sheet.symbols.iter().filter(|s| s.id == "U9").count(), 3, "all three units are on one sheet");
+        // the part is one part: its identity is kept, and no name made for the layout is left
+        assert!(sheet.symbols.iter().filter(|s| s.id == "U9").all(|s| s.lib_id == "Test:Dual3" && s.value == "TL072"));
+        for sec in d.sheet_contents.as_ref().unwrap().values() {
+            let named: Vec<&str> = sec.symbols.iter().map(|s| s.id.as_str()).chain(sec.wires.iter().flat_map(|w| w.pins.iter().map(String::as_str))).chain(sec.power_symbols.iter().map(|p| p.pin.as_str())).chain(sec.no_connects.iter().map(|n| n.pin.as_str())).collect();
+            assert!(named.iter().all(|n| !n.contains('#') || n.starts_with("#PWR") || n.starts_with("#FLG")), "no unit part's name is left in the design: {named:?}");
+            assert!(!sec.user_fields.keys().any(|k| k.contains("U9#")) && !sec.extras.locked.iter().any(|k| k.contains("U9#")));
+        }
+        // each unit has the places of its own fields
+        for key in ["U9", "U9#2", "U9#3"] {
+            assert!(sheet.field_layout.contains_key(key), "{key}");
+        }
+        // the nets after are the nets before, drawn back from the units
+        assert_eq!(traced(&model, d), drawn_nets(&model));
+    }
+
     #[test]
     fn reorganize_is_a_schematic_edit() {
         assert_eq!(Cmd::ReorganizeSheets.domain(), Domain::Schematic);
@@ -339,7 +535,7 @@ mod tests {
         assert_eq!(b.apply(&on_mcu(rename)).unwrap_err()[0].check, "ops_duplicate_symbol");
         // an unnumbered symbol is numbered after the references of every sheet (R1..R8 are the channels')
         b.apply(&on_mcu(add("R?"))).unwrap();
-        b.apply(&on_mcu(Cmd::Annotate { reset_existing: false, order: Default::default(), ids: None })).unwrap();
+        b.apply(&on_mcu(Cmd::Annotate { reset_existing: false, order: Default::default(), ids: None, options: Default::default() })).unwrap();
         let screens = b.design().sheet_contents.clone().unwrap();
         let mcu_file = &root.sheets.iter().find(|s| s.id == mcu).unwrap().file;
         let mut on_mcu_sheet: Vec<&str> = screens[mcu_file].symbols.iter().map(|s| s.id.as_str()).filter(|r| r.starts_with('R')).collect();

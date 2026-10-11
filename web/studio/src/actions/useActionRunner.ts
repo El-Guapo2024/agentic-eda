@@ -71,6 +71,7 @@ import { useCommonOptions } from "../state/commonOptions";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { registerSchControlActions, schControlChecked } from "./schControlActions";
+import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
@@ -1205,8 +1206,8 @@ export function useActionRunner() {
       m.set("eeschema.EditorControl.schematicSetup", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "setup" }));
       m.set("common.Interactive.find", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "find" }));
       m.set("common.Interactive.findAndReplace", () => dispatch({ type: "SET_SCH_DIALOG", dialog: "replace" }));
-      m.set("common.Interactive.findNext", () => void findNextMatch(state, dispatch, false));
-      m.set("common.Interactive.findPrevious", () => void findNextMatch(state, dispatch, true));
+      m.set("common.Interactive.findNext", () => void findNextMatch(api, dispatch, false));
+      m.set("common.Interactive.findPrevious", () => void findNextMatch(api, dispatch, true));
     }
 
     // `W`: arm/disarm the wire tool -- SchematicView.tsx's own
@@ -2246,6 +2247,8 @@ export function useActionRunner() {
 
     // The schematic editor's control actions (eeschema.EditorControl / NavigateTool / InspectionTool / Interactive.increment*).
     registerSchControlActions(m, { tab: state.tab, state, api, dispatch, requestSelection, symApi, symDispatch, control: schControl, controlDispatch: schControlDispatch });
+    // Import Sheet... / Draw Sheet from File (SCH_DRAWING_TOOLS::ImportSheet / DrawSheet).
+    registerSchSheetFileActions(m, { tab: state.tab, state, api, dispatch, controlDispatch: schControlDispatch });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);

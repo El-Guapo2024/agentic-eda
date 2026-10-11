@@ -37,6 +37,7 @@ mod sch_api;
 mod sch_clipboard_api;
 mod sch_control_api;
 mod sch_export_api;
+mod sch_hierarchy_api;
 mod sch_move_api;
 mod fab_cmd;
 #[cfg(test)]
@@ -44,6 +45,9 @@ mod gate_vs_kicad;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;
+mod sheet_import;
+#[cfg(test)]
+mod sch_hierarchy_tests;
 mod studio;
 mod view_api;
 mod appearance_api;

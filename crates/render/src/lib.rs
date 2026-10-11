@@ -25,14 +25,116 @@ const STUB: i64 = 1_270; // 1.27mm, one GRID
 /// SVG-space margin around all content, in mm.
 const MARGIN_MM: f64 = 5.0;
 
-/// Renders `design`'s schematic section (looked up against `model` for
-/// part/pin metadata) as a complete standalone SVG document.
+/// Renders `design`'s schematic (looked up against `model` for part/pin metadata) as a complete standalone SVG document.
+///
+/// A flat design is its one sheet, drawn by [`render_screen`]. A hierarchical one is every sheet, the root first and then the sheets in the
+/// order the hierarchy is walked (`SCH_SHEET_LIST`), one under the other, each with its name above it: the picture has to show the whole
+/// schematic, not the root's sheet symbols alone. [`render_sheets`] gives the sheets one by one instead.
 pub fn render_schematic(design: &Design, model: &ConstraintModel) -> Result<String, Vec<CheckResult>> {
-    let sch = design
+    let root = design
         .schematic
         .as_ref()
         .ok_or_else(|| vec![CheckResult::fail("render.no_schematic", "design", "Design has no schematic section to render")])?;
+    if root.sheets.is_empty() {
+        return render_screen(root, model);
+    }
+    let sheets = render_sheets(design, model)?;
+    Ok(stack_sheets(&sheets))
+}
 
+/// One sheet of a hierarchy drawn: where it is, and its picture.
+#[derive(Debug, Clone)]
+pub struct RenderedSheet {
+    /// The placement ids from the root; the root is `[]`.
+    pub path: Vec<String>,
+    /// The placement's name (empty for the root).
+    pub name: String,
+    /// The sheet's file (empty for the root).
+    pub file: String,
+    /// The sheet as a standalone SVG document.
+    pub svg: String,
+}
+
+/// Every sheet of `design` drawn on its own, the root first and then depth first (`eda_model::sheet_list::walk`). A screen two sheets share is
+/// drawn once per sheet, as it appears in each; a sheet whose file has no screen is left out, as the walk leaves it.
+pub fn render_sheets(design: &Design, model: &ConstraintModel) -> Result<Vec<RenderedSheet>, Vec<CheckResult>> {
+    let mut out = Vec::new();
+    let mut errors = Vec::new();
+    for entry in eda_model::sheet_list::walk(design) {
+        let Some(screen) = eda_model::sheet_list::screen_of(design, &entry.path) else { continue };
+        match render_screen(screen, model) {
+            Ok(svg) => out.push(RenderedSheet { path: entry.path.clone(), name: entry.name.clone(), file: entry.file.clone(), svg }),
+            Err(e) => errors.extend(e.into_iter().map(|mut c| {
+                if !entry.file.is_empty() {
+                    c.location = c.location.map(|l| format!("{}: {l}", entry.file));
+                }
+                c
+            })),
+        }
+    }
+    if errors.is_empty() {
+        Ok(out)
+    } else {
+        Err(errors)
+    }
+}
+
+/// The sheets one under the other in one document: each with a title above it, a frame round it, and a gap between.
+fn stack_sheets(sheets: &[RenderedSheet]) -> String {
+    const GAP_MM: f64 = 12.0;
+    const TITLE_MM: f64 = 6.0;
+    let parsed: Vec<((f64, f64, f64, f64), &str)> = sheets
+        .iter()
+        .map(|s| {
+            let (vb, body) = split_document(&s.svg);
+            (vb, body)
+        })
+        .collect();
+    let width = parsed.iter().map(|((_, _, w, _), _)| *w).fold(0.0, f64::max);
+    let mut y = 0.0;
+    let mut body = String::new();
+    for (sheet, ((vx, vy, w, h), inner)) in sheets.iter().zip(&parsed) {
+        let title = if sheet.path.is_empty() { "Root sheet".to_string() } else { format!("{} ({})", sheet.name, sheet.file) };
+        let _ = writeln!(body, r#"<text class="sheet-title" x="2" y="{}">{}</text>"#, fmt_f(y + TITLE_MM - 2.0), xml_escape(&title));
+        let top = y + TITLE_MM;
+        let _ = writeln!(body, r#"<rect class="sheet-frame" x="0" y="{}" width="{}" height="{}"/>"#, fmt_f(top), fmt_f(*w), fmt_f(*h));
+        let _ = writeln!(body, r#"<g transform="translate({} {})">"#, fmt_f(-vx), fmt_f(top - vy));
+        body.push_str(inner);
+        body.push_str("</g>\n");
+        y = top + h + GAP_MM;
+    }
+    let mut svg = String::new();
+    let _ = writeln!(svg, r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {} {}">"#, fmt_f(width), fmt_f((y - GAP_MM).max(1.0)));
+    svg.push_str(STYLE);
+    svg.push_str(SHEET_STYLE);
+    svg.push_str(&body);
+    svg.push_str("</svg>\n");
+    svg
+}
+
+const SHEET_STYLE: &str = r#"<style>
+.sheet-title{font-size:2.6px;font-weight:bold;fill:#222222;}
+.sheet-frame{fill:none;stroke:#999999;stroke-width:0.2;stroke-dasharray:1 1;}
+</style>
+"#;
+
+/// `(viewBox, everything between the document's stylesheet and its closing tag)` of an SVG [`render_screen`] made.
+fn split_document(svg: &str) -> ((f64, f64, f64, f64), &str) {
+    let vb = svg
+        .split("viewBox=\"")
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .map(|t| t.split_whitespace().filter_map(|n| n.parse::<f64>().ok()).collect::<Vec<_>>())
+        .filter(|v| v.len() == 4)
+        .map(|v| (v[0], v[1], v[2], v[3]))
+        .unwrap_or((0.0, 0.0, 1.0, 1.0));
+    let start = svg.find("</style>\n").map_or(0, |i| i + "</style>\n".len());
+    let end = svg.rfind("</svg>").unwrap_or(svg.len());
+    (vb, &svg[start..end])
+}
+
+/// Renders one screen -- a sheet's own content -- as a complete standalone SVG document.
+pub fn render_screen(sch: &SchematicSection, model: &ConstraintModel) -> Result<String, Vec<CheckResult>> {
     let mut errors = Vec::new();
     let mut boxes = Vec::with_capacity(sch.symbols.len());
     for sym in &sch.symbols {
@@ -1169,5 +1271,53 @@ mod tests {
         let design = ldo_design(); // has symbols U1/CIN/COUT
         let err = render_schematic(&design, &model).unwrap_err();
         assert!(err.iter().any(|e| e.check == "render.missing_part"));
+    }
+
+    /// A hierarchy: the root places one sheet whose file holds the LDO.
+    fn hierarchical_design() -> Design {
+        use eda_model::ir::{SchematicSection, SheetInstance};
+        let mut d = ldo_design();
+        let ldo = d.schematic.take().unwrap();
+        let root = SchematicSection {
+            sheets: vec![SheetInstance { id: "s1".into(), name: "Power".into(), file: "power.kicad_sch".into(), at: Point { x: 20_000, y: 20_000 }, size: (30_000, 20_000), pins: vec![], page: String::new() }],
+            ..Default::default()
+        };
+        d.schematic = Some(root);
+        d.sheet_contents = Some([("power.kicad_sch".to_string(), ldo)].into_iter().collect());
+        d
+    }
+
+    #[test]
+    fn a_flat_design_renders_exactly_its_one_sheet() {
+        let model = ldo_model();
+        let design = ldo_design();
+        assert_eq!(render_schematic(&design, &model).unwrap(), render_screen(design.schematic.as_ref().unwrap(), &model).unwrap());
+    }
+
+    #[test]
+    fn a_hierarchy_renders_every_sheet_not_just_the_roots() {
+        let model = ldo_model();
+        let design = hierarchical_design();
+        let sheets = render_sheets(&design, &model).unwrap();
+        assert_eq!(sheets.iter().map(|s| (s.path.join("/"), s.file.as_str())).collect::<Vec<_>>(), vec![("".to_string(), ""), ("s1".to_string(), "power.kicad_sch")]);
+        assert!(!sheets[0].svg.contains(">U1<"), "the root draws no symbol of its own");
+        assert!(sheets[1].svg.contains(">U1<") && sheets[1].svg.contains(">CIN<"));
+        // the one document shows both, the sheet's name above its drawing
+        let all = render_schematic(&design, &model).unwrap();
+        assert!(all.contains(">U1<") && all.contains(">Power (power.kicad_sch)<") && all.contains(">Root sheet<"), "{}", &all[..400.min(all.len())]);
+        let doc = roxmltree::Document::parse(&all).expect("the stacked document is well-formed XML");
+        let vb: Vec<f64> = doc.root_element().attribute("viewBox").unwrap().split_whitespace().map(|n| n.parse().unwrap()).collect();
+        assert!(vb[2] > 10.0 && vb[3] > 10.0, "{vb:?}");
+        // deterministic
+        assert_eq!(all, render_schematic(&design, &model).unwrap());
+    }
+
+    #[test]
+    fn a_sheet_that_cannot_be_drawn_is_named_by_its_file() {
+        let model = ldo_model();
+        let mut design = hierarchical_design();
+        design.sheet_contents.as_mut().unwrap().get_mut("power.kicad_sch").unwrap().symbols[0].id = "GHOST".into();
+        let errors = render_schematic(&design, &model).unwrap_err();
+        assert!(errors.iter().any(|e| e.check == "render.missing_part" && e.location.as_deref().is_some_and(|l| l.starts_with("power.kicad_sch: "))), "{errors:?}");
     }
 }

@@ -64,9 +64,14 @@ mod pcb_paste;
 mod pcb_props;
 mod pcb_transform;
 mod zone_overrides;
+mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
+mod sch_sheets;
+mod sheet_units;
 mod sheets;
+pub use sch_annotate::{AnnotateMessage, AnnotateOptions, AnnotateReport, AnnotateScope};
+pub use sch_sheets::{unique_sheet_name, SheetFileFinding};
 pub use pcb_transform::{flip_layer, FlipDirection};
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
@@ -947,6 +952,35 @@ pub enum Cmd {
     /// (`EditSheetProperties`' "use the existing file" case). Refused for an empty or already-used sheet name
     /// ("A sheet named ... already exists"), a name with a path separator, or a non-positive size.
     AddSheet { name: String, file: String, at: Point, size: (Um, Um) },
+    /// Import Sheet... and Draw Sheet from File (`eeschema.InteractiveDrawing.importSheet` / `drawSheetFromFile`, `SCH_DRAWING_TOOLS::ImportSheet` /
+    /// `DrawSheet`, with `SCH_EDIT_FRAME::LoadSheetFromFile`): put the schematic file `source` in the design as a sheet -- a sheet symbol `name` of `size`
+    /// at `at` showing a copy of the file under `file` (a bare name; made unique when the design has one of that name), and a copy of the screen of each sheet
+    /// inside it -- or, with `as_sheet` off, put its contents on the sheet in view (carried to `at`). The symbols are numbered anew, in the `order` and with the
+    /// numbering `options` say, unless `keep_annotations` is on, which renumbers only the references the design already holds. Refused for a file that
+    /// places itself, symbols that name no library, a name already used on the sheet.
+    ///
+    /// The verb reads no file: the studio's server reads `source` into `content` (`eda_kicad::load_sheet_file`) before the command runs, so that it replays
+    /// and undoes the same anywhere.
+    ImportSheet {
+        source: String,
+        #[serde(default)]
+        content: Option<eda_model::sheet_file::SheetFile>,
+        #[serde(default = "d_true")]
+        as_sheet: bool,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        file: String,
+        at: Point,
+        #[serde(default)]
+        size: (Um, Um),
+        #[serde(default)]
+        keep_annotations: bool,
+        #[serde(default)]
+        order: AnnotateOrder,
+        #[serde(default)]
+        options: AnnotateOptions,
+    },
     /// Alt+S (`eeschema.InteractiveEdit.swap`, `SCH_EDIT_TOOL::Swap`): exchange the positions of two schematic
     /// items -- symbols (placed or power), labels and free texts, found by id -- and, for two symbols of the
     /// same library symbol, their orientations. A selection of more than two is a Batch of these in selection
@@ -1097,10 +1131,15 @@ pub enum Cmd {
     /// current match; `None` is "Replace All". Replacing a Reference
     /// renames the symbol (cascading like `RenameSymbol`) and only happens
     /// with `search.replace_references`. Refused when nothing matched.
+    ///
+    /// `all_sheets` is `SCH_FIND_REPLACE_TOOL::ReplaceAll` with the Find dialog's "Search the current sheet only" off: every sheet of the
+    /// hierarchy is replaced in (`items` is not used then: a key names an item of one sheet), as one undo step.
     ReplaceText {
         search: search::SearchData,
         #[serde(default)]
         items: Option<Vec<String>>,
+        #[serde(default)]
+        all_sheets: bool,
     },
 
     /// `panel_setup_pinmap.cpp::changeErrorLevel`: set one pin-map cell to
@@ -1122,16 +1161,19 @@ pub enum Cmd {
     /// bottom). `reset_existing` mirrors the dialog's "Clear and
     /// re-annotate" vs "Keep existing" modes. `ids`, when given, is
     /// `dialog_annotate.cpp`'s own "Selection" scope -- only symbols named
-    /// here are reset/renumbered, everything else on the sheet is left
-    /// exactly as it is; `None` is the dialog's "Schematic"/"Sheet" scope
-    /// (this project's IR has no sheet hierarchy to tell those two apart,
-    /// so there's only one "whole sheet" scope here, not source's three).
+    /// here are reset/renumbered, everything else is left exactly as it
+    /// is; `None` is the sheet in view.
+    ///
+    /// The rest of `DIALOG_ANNOTATE` -- scope (entire schematic, the sheet in view, the selection), the numbering algorithm and start
+    /// number, "recursive", "regroup units" -- is `options` (`sch_annotate.rs`); an absent `options` is the dialog before it had them.
     Annotate {
         reset_existing: bool,
         #[serde(default)]
         order: AnnotateOrder,
         #[serde(default)]
         ids: Option<Vec<String>>,
+        #[serde(default)]
+        options: AnnotateOptions,
     },
 
     // ----------------------------------------- schematic control (sch_control.rs)
@@ -1521,6 +1563,7 @@ impl Cmd {
             | Cmd::AddSchLine { .. }
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
+            | Cmd::ImportSheet { .. }
             | Cmd::SwapSchItems { .. }
             | Cmd::PasteSch { .. }
             | Cmd::SchEdit(_)
@@ -1722,6 +1765,7 @@ impl Cmd {
             Cmd::AddJunction { .. } => vec!["junction"],
             Cmd::AddSchLine { .. } => vec!["sch_line"],
             Cmd::AddSheet { name, .. } => vec![name.as_str()],
+            Cmd::ImportSheet { source, .. } => vec![source.as_str()],
             Cmd::SwapSchItems { a, b } => vec![a, b],
             Cmd::PasteSch { .. } => vec!["paste"],
             Cmd::SchEdit(c) => c.ids(),
@@ -2254,6 +2298,10 @@ impl<'a> Board<'a> {
             Cmd::AddSchLine { pts, width_um } => self.add_sch_line(pts.clone(), *width_um),
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
+            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options } => match content {
+                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options),
+                None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
+            },
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
@@ -2279,10 +2327,10 @@ impl<'a> Board<'a> {
             Cmd::SetSymbolLibIds { changes, update_fields } => self.set_symbol_lib_ids(changes, *update_fields),
             Cmd::IncrementAnnotations { start, increment } => self.increment_annotations(start, *increment),
             Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => self.set_symbol_fields(edits, add_fields, rename_fields, remove_fields),
-            Cmd::ReplaceText { search, items } => self.replace_text(search, items.as_deref()),
+            Cmd::ReplaceText { search, items, all_sheets } => self.replace_text(search, items.as_deref(), *all_sheets),
             Cmd::SetErcPinMapCell { a, b, level } => self.set_erc_pin_map_cell(*a, *b, *level),
             Cmd::ResetErcPinMap => self.reset_erc_pin_map(),
-            Cmd::Annotate { reset_existing, order, ids } => self.annotate(*reset_existing, *order, ids.as_deref()),
+            Cmd::Annotate { reset_existing, order, ids, options } => self.annotate(*reset_existing, *order, ids.as_deref(), options),
 
             Cmd::OpenFootprintForEdit { name } => self.open_footprint_for_edit(name),
             Cmd::NewFootprint { name } => self.new_footprint(name),
@@ -4224,10 +4272,41 @@ impl<'a> Board<'a> {
     /// (`SCH_FIND_REPLACE_TOOL::ReplaceAll`'s `nextMatch` loop), written
     /// back per item kind, and Reference replacements are applied last
     /// through `rename_symbol` so wires/power symbols/no-connects follow.
-    fn replace_text(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
+    fn replace_text(&mut self, search: &search::SearchData, items: Option<&[String]>, all_sheets: bool) -> Result<(), Vec<CheckResult>> {
         if search.find.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_search", "replace_text", "nothing to search for")]);
         }
+        let replaced = if all_sheets {
+            // `ReplaceAll` over `Schematic().Hierarchy()`: every screen once (a screen two sheets share has one set of items)
+            let mut files: Vec<Option<String>> = vec![None];
+            files.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().cloned()).map(Some));
+            let saved_focus = self.focus.clone();
+            let mut total = 0usize;
+            let mut outcome: Result<(), Vec<CheckResult>> = Ok(());
+            for file in files {
+                self.focus = file;
+                match self.replace_text_here(search, None) {
+                    Ok(n) => total += n,
+                    Err(e) => {
+                        outcome = Err(e);
+                        break;
+                    }
+                }
+            }
+            self.focus = saved_focus;
+            outcome?;
+            total
+        } else {
+            self.replace_text_here(search, items)?
+        };
+        if replaced == 0 {
+            return Err(vec![CheckResult::fail("ops_nothing_to_replace", "replace_text", "nothing to replace")]);
+        }
+        Ok(())
+    }
+
+    /// [`Self::replace_text`] on the screen the verbs act on: how many items it replaced in.
+    fn replace_text_here(&mut self, search: &search::SearchData, items: Option<&[String]>) -> Result<usize, Vec<CheckResult>> {
         let mut data = search.clone();
         data.search_and_replace = true;
         let model = self.model;
@@ -4290,10 +4369,7 @@ impl<'a> Board<'a> {
         for (old, new) in renames {
             self.rename_symbol(&old, &new)?;
         }
-        if replaced == 0 {
-            return Err(vec![CheckResult::fail("ops_nothing_to_replace", "replace_text", "nothing to replace")]);
-        }
-        Ok(())
+        Ok(replaced)
     }
 
     /// `panel_setup_pinmap.cpp::changeErrorLevel`: see
@@ -4337,6 +4413,8 @@ impl<'a> Board<'a> {
         if new_id == id {
             return Ok(()); // renaming to the same id is a no-op, not an error
         }
+        // a generated symbol is drawn from the part it is named for: it keeps its drawing under a name of its own
+        self.freeze_generated_symbols(&BTreeSet::from([id.to_string()]));
         let sch = self.schematic_mut()?;
         let old_prefix = format!("{id}.");
         let new_prefix = format!("{new_id}.");
@@ -4365,65 +4443,6 @@ impl<'a> Board<'a> {
         }
         // where its fields are, and whether Autoplace Fields put them there, follow the new reference
         sch_fields::rename_symbol_keys(sch, id, new_id);
-        Ok(())
-    }
-
-    /// `Ctrl+A` (Annotate), `dialog_annotate.cpp`'s default mode
-    /// (`INCREMENTAL_BY_REF`, sort "top to bottom" -- by Y then X):
-    /// assigns the next free number, per reference-letter prefix, to
-    /// every symbol whose id is blank or ends in `?` (this project's own
-    /// placeholder for "not yet annotated", e.g. `AddSymbol`'s "U?").
-    /// `reset_existing` first strips every symbol's id back to
-    /// "<prefix>?" (dialog's "Reset existing annotations"), so the whole
-    /// sheet renumbers from scratch instead of only filling gaps.
-    fn annotate(&mut self, reset_existing: bool, order: AnnotateOrder, ids: Option<&[String]>) -> Result<(), Vec<CheckResult>> {
-        // The numbers the other sheets use are taken: a reference is one part for the whole design, so numbering here continues after them.
-        let elsewhere: Vec<String> = self.symbols_elsewhere().into_iter().map(|(r, _)| r.to_string()).collect();
-        let sch = self.schematic_mut()?;
-        // Scope snapshot, by index, taken before any id mutates: `ids`
-        // names symbols by the id the caller/selection saw them under,
-        // which `reset_existing` below is about to change for exactly the
-        // ones in scope -- re-checking membership against the *new* id
-        // after that would wrongly drop them back out of scope.
-        let in_scope: Vec<bool> = sch.symbols.iter().map(|s| ids.is_none_or(|list| list.iter().any(|want| want == &s.id))).collect();
-
-        if reset_existing {
-            for (i, s) in sch.symbols.iter_mut().enumerate() {
-                if !in_scope[i] {
-                    continue;
-                }
-                let prefix: String = s.id.chars().take_while(|c| c.is_alphabetic()).collect();
-                if !prefix.is_empty() {
-                    s.id = format!("{prefix}?");
-                }
-            }
-        }
-        let mut next: BTreeMap<String, u32> = BTreeMap::new();
-        for id in sch.symbols.iter().map(|s| s.id.as_str()).chain(elsewhere.iter().map(String::as_str)) {
-            if id.ends_with('?') {
-                continue;
-            }
-            let prefix: String = id.chars().take_while(|c| c.is_alphabetic()).collect();
-            let num: u32 = id[prefix.len()..].parse().unwrap_or(0);
-            let e = next.entry(prefix).or_insert(0);
-            *e = (*e).max(num);
-        }
-        let mut to_number: Vec<usize> = (0..sch.symbols.len()).filter(|&i| sch.symbols[i].id.ends_with('?') && in_scope[i]).collect();
-        to_number.sort_by(|&a, &b| {
-            let (ya, xa) = (sch.symbols[a].at.y, sch.symbols[a].at.x);
-            let (yb, xb) = (sch.symbols[b].at.y, sch.symbols[b].at.x);
-            match order {
-                AnnotateOrder::YThenX => (ya, xa).cmp(&(yb, xb)),
-                AnnotateOrder::XThenY => (xa, ya).cmp(&(xb, yb)),
-            }
-        });
-        for i in to_number {
-            let prefix = sch.symbols[i].id.trim_end_matches('?').to_string();
-            let prefix = if prefix.is_empty() { "U".to_string() } else { prefix };
-            let n = next.entry(prefix.clone()).or_insert(0);
-            *n += 1;
-            sch.symbols[i].id = format!("{prefix}{n}");
-        }
         Ok(())
     }
 
@@ -5087,6 +5106,10 @@ mod pcb_props_tests;
 mod pcb_paste_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
+#[cfg(test)]
+pub(crate) mod sch_annotate_tests;
+#[cfg(test)]
+mod sch_hierarchy_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 

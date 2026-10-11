@@ -186,12 +186,23 @@ pub struct Placed {
     /// The text the painter draws under or beside it.
     pub value: String,
     pub footprint: String,
+    /// Which unit of its library symbol it draws (1 for a symbol of one unit).
+    pub unit: u32,
+    /// Where the user placed its fields, when they did: they are measured there, not where Autoplace Fields would put them.
+    pub kept_fields: Option<Vec<eda_model::ir::FieldPlacement>>,
 }
 
 impl Placed {
     pub fn new(part: &Part, lib_id: &str, resolved: Option<LibSymbol>, value: &str, footprint: &str) -> Placed {
         let b = part_box(part, resolved.as_ref(), 1);
-        Placed { part: part.clone(), lib_id: lib_id.to_string(), resolved, b, x: 0, y: 0, flip: false, value: value.to_string(), footprint: footprint.to_string() }
+        Placed { part: part.clone(), lib_id: lib_id.to_string(), resolved, b, x: 0, y: 0, flip: false, value: value.to_string(), footprint: footprint.to_string(), unit: 1, kept_fields: None }
+    }
+
+    /// The same symbol drawn as its unit `unit`: the box and the ports of that unit's body and pins.
+    pub fn in_unit(mut self, unit: u32) -> Placed {
+        self.unit = unit;
+        self.b = part_box(&self.part, self.resolved.as_ref(), unit);
+        self
     }
 
     pub fn w(&self) -> i64 {
@@ -258,7 +269,7 @@ impl Placed {
             mirrored: false,
             mirror_y: false,
             lib_id: self.lib_id.clone(),
-            unit: 1,
+            unit: self.unit,
             value: self.value.clone(),
             footprint: self.footprint.clone(),
             datasheet: String::new(),
@@ -274,10 +285,15 @@ impl Placed {
         crate::symgeom::SymbolGeom::of(&self.instance(), &self.part, self.resolved.as_ref())
     }
 
-    /// The fields where Autoplace Fields puts them (`crate::fields`), on the sheet.
+    /// The fields where the user placed them, else where Autoplace Fields puts them (`crate::fields`), on the sheet.
     pub fn page_fields(&self) -> Vec<crate::fields::PageField> {
         let sym = self.instance();
         let geom = self.geom();
+        if let Some(kept) = &self.kept_fields {
+            // the user's own places, kept: the same lookup a stored section makes
+            let sch = eda_model::ir::SchematicSection { field_layout: [(eda_model::ir::field_key(&sym.id, sym.unit), kept.clone())].into_iter().collect(), ..Default::default() };
+            return crate::fields::symbol_fields(&sch, &sym, Some(&self.part), self.resolved.as_ref(), &geom);
+        }
         let specs = crate::fields::symbol_specs(&sym, Some(&self.part), self.resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
         let placed = crate::fields::autoplace_symbol(&sym, &geom, &specs);
         specs.iter().zip(placed.iter()).map(|(spec, p)| crate::fields::page_field(sym.at, sym.rot, sym.mirrored, geom.width, p, &spec.text)).collect()

@@ -47,6 +47,11 @@ pub struct SchFragment {
     /// What the reader could not carry across, one line each ("2 symbols had no library definition ... and were left out").
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    /// The screens of the hierarchical sheets in `section.sheets`, and of the sheets inside those, by the file the sheet names. KiCad keeps
+    /// them beside the clipboard (`SCH_EDITOR_CONTROL::m_supplementaryClipboard`: the clipboard text has the sheet symbol, not what it shows);
+    /// they come with the fragment here, and a paste puts a copy of each under a file of its own.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub sheet_screens: std::collections::BTreeMap<String, SchematicSection>,
 }
 
 /// A fragment is data from outside; commands compare by value (`eda_ops::Cmd: PartialEq`) and a section has no equality of its own -- two
@@ -87,6 +92,12 @@ impl SchFragment {
 pub fn split_reference(reference: &str) -> (String, Option<u32>) {
     if let Some(prefix) = reference.strip_suffix('?') {
         return (prefix.to_string(), None);
+    }
+    // the placeholder the sheet importer gives a symbol it cannot tell apart (`R?1`)
+    if let Some(q) = reference.rfind('?') {
+        if reference[q + 1..].chars().all(|c| c.is_ascii_digit()) && q + 1 < reference.len() {
+            return (reference[..q].to_string(), None);
+        }
     }
     // The run of digits and blanks at the end; `Split` needs it to end on a digit and to leave something in front of it.
     let mut start = reference.len();

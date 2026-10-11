@@ -11,7 +11,8 @@
 //!    Text that is not a schematic fragment comes back as `kind: "text"`: a single text item, as KiCad pastes it.
 
 use crate::board;
-use eda_model::ir::{Design, Point, SchematicText};
+use eda_model::ir::{Design, Point, SchematicSection, SchematicText};
+use std::collections::BTreeMap;
 use eda_model::sch_clipboard::{closest_anchor, place_offset_um, top_left_anchor, PasteMode, SchFragment};
 use eda_model::ConstraintModel;
 use eda_ops::{Board, Cmd};
@@ -20,6 +21,45 @@ use std::path::Path;
 
 fn err(message: impl Into<String>) -> Value {
     json!({ "ok": false, "message": message.into() })
+}
+
+/// `SCH_EDITOR_CONTROL::m_supplementaryClipboard`: the screens of the sheets the last copy took, by the file their sheet names. The clipboard text has the
+/// sheet symbols, not what they show; KiCad keeps the screens beside it, and a paste of the sheets (here or in the same session) finds them there.
+static SUPPLEMENTARY: std::sync::Mutex<BTreeMap<String, SchematicSection>> = std::sync::Mutex::new(BTreeMap::new());
+
+/// A copy replaces what the last one kept (`m_supplementaryClipboard.clear()` in `doCopy`): the screens of `files`, and of the sheets inside them.
+fn remember_screens(design: &Design, files: &[String]) {
+    let mut kept: BTreeMap<String, SchematicSection> = BTreeMap::new();
+    let mut queue: Vec<String> = files.to_vec();
+    while let Some(file) = queue.pop() {
+        if kept.contains_key(&file) {
+            continue;
+        }
+        if let Some(sec) = design.sheet_contents.as_ref().and_then(|c| c.get(&file)) {
+            queue.extend(sec.sheets.iter().map(|s| s.file.clone()));
+            kept.insert(file, sec.clone());
+        }
+    }
+    if let Ok(mut buffer) = SUPPLEMENTARY.lock() {
+        *buffer = kept;
+    }
+}
+
+/// The screens the last copy kept that the sheets of `fragment` show (and the sheets inside those show).
+fn recall_screens(fragment: &SchFragment) -> BTreeMap<String, SchematicSection> {
+    let mut out: BTreeMap<String, SchematicSection> = BTreeMap::new();
+    let Ok(buffer) = SUPPLEMENTARY.lock() else { return out };
+    let mut queue: Vec<String> = fragment.section.sheets.iter().map(|s| s.file.clone()).collect();
+    while let Some(file) = queue.pop() {
+        if out.contains_key(&file) {
+            continue;
+        }
+        if let Some(sec) = buffer.get(&file) {
+            queue.extend(sec.sheets.iter().map(|s| s.file.clone()));
+            out.insert(file, sec.clone());
+        }
+    }
+    out
 }
 
 /// KiCad's `m_MaxPastedTextLength` (`advanced_config.cpp`): a longer plain-text paste asks first.
@@ -50,7 +90,10 @@ pub fn copy(dir: &Path, body: &[u8]) -> Value {
     let (section, _) = crate::studio::resolve_sheet(&design, req.get("sheet").and_then(Value::as_str).unwrap_or(""));
     let project = dir.file_name().and_then(|n| n.to_str()).unwrap_or("project").to_string();
     match eda_kicad::write_clipboard(&eda_kicad::CopyInput { design: &design, model: &model, section: &section, project: &project }, &ids) {
-        Ok(out) => json!({ "ok": true, "text": out.text, "items": out.items, "skipped": out.skipped }),
+        Ok(out) => {
+            remember_screens(&design, &out.sheet_files);
+            json!({ "ok": true, "text": out.text, "items": out.items, "skipped": out.skipped, "sheets": out.sheet_files.len() })
+        }
         Err(e) => err(board::reasons(&e)),
     }
 }
@@ -94,10 +137,12 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
     let duplicate = req.get("duplicate").and_then(Value::as_bool).unwrap_or(false);
     let cursor = req.get("cursor").and_then(Value::as_array).and_then(|c| Some(Point { x: c.first()?.as_i64()?, y: c.get(1)?.as_i64()? }));
 
-    let (kind, fragment) = match eda_kicad::parse_clipboard(text) {
+    let (kind, mut fragment) = match eda_kicad::parse_clipboard(text) {
         Ok(f) => ("fragment", f),
         Err(_) => ("text", text_fragment(text)),
     };
+    // the sheets of the fragment show the screens the last copy kept (else the design's own of that file, else nothing: an empty sheet)
+    fragment.sheet_screens = recall_screens(&fragment);
     if fragment.is_empty() {
         return err("the clipboard holds no schematic items");
     }
@@ -134,6 +179,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
         "wires": new_items(&before, &after, "wires", &by_id),
         "labels": new_items(&before, &after, "labels", &by_id),
         "texts": new_items(&before, &after, "texts", &by_id),
+        "sheets": new_items(&before, &after, "sheets", &by_id),
         "no_connects": new_items(&before, &after, "no_connects", &by_id),
         "bus_entries": new_items(&before, &after, "bus_entries", &by_id),
         "junctions": new_items(&before, &after, "junctions", &by_id),

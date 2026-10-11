@@ -291,6 +291,8 @@ fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String
 /// global labels and power symbols are one net across sheets. Writes what the drawing says back into the design's wires (their net and
 /// pins), power symbols and no-connect flags, and returns the nets read.
 fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
+    // a screen no sheet shows any more (its sheet was deleted) is not part of the schematic: its pins are on no net
+    let reachable = eda_model::sheet_list::reachable_files(design);
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
@@ -321,11 +323,11 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
     };
     let mut contents = design.sheet_contents.take();
     let root_pins = pins_of(&root);
-    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().map(|(f, s)| (f.clone(), pins_of(s))).collect();
+    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().filter(|(f, _)| reachable.contains(*f)).map(|(f, s)| (f.clone(), pins_of(s))).collect();
     let traced = {
         let mut screens = vec![eda_engine::nets::ScreenIn { sch: &mut root, file: String::new(), pins: root_pins }];
         if let Some(c) = contents.as_mut() {
-            for (file, sec) in c.iter_mut() {
+            for (file, sec) in c.iter_mut().filter(|(f, _)| reachable.contains(*f)) {
                 screens.push(eda_engine::nets::ScreenIn { sch: sec, file: file.clone(), pins: child_pins.remove(file).unwrap_or_default() });
             }
         }
@@ -884,6 +886,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // A symbol or footprint out of a library of the library tables goes in with its definition (`crate::library_place`).
     let with_definitions = crate::library_place::with_installed_definitions(dir, cmd, &design, &model);
     let cmd = with_definitions.as_ref().unwrap_or(cmd);
+    // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
+    let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
+    let cmd = with_file.as_ref().unwrap_or(cmd);
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
@@ -1194,6 +1199,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddSchLine { pts, .. } => format!("schematic line --points {}", pts.len()),
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
         Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
+        Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, .. } => format!("schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}", if *as_sheet { "--as-sheet" } else { "--contents" }, mm(at.x), mm(at.y), if *keep_annotations { " --keep-annotations" } else { "" }),
         Cmd::SwapSchItems { a, b } => format!("schematic swap {a} {b}"),
         Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
@@ -1212,7 +1218,7 @@ fn cmd_line(c: &Cmd) -> String {
         ),
         Cmd::RenameSymbol { id, new_id } => format!("schematic rename {id} {new_id}"),
         Cmd::SetSymbolFields { edits, add_fields, rename_fields, remove_fields } => format!("schematic fields-table --edits {} --add {} --rename {} --remove {}", edits.len(), add_fields.len(), rename_fields.len(), remove_fields.len()),
-        Cmd::ReplaceText { search, items } => format!("schematic replace {:?} {:?}{}", search.find, search.replace, items.as_ref().map(|i| format!(" --items {}", i.len())).unwrap_or_default()),
+        Cmd::ReplaceText { search, items, all_sheets } => format!("schematic replace {:?} {:?}{}{}", search.find, search.replace, items.as_ref().map(|i| format!(" --items {}", i.len())).unwrap_or_default(), if *all_sheets { " --all-sheets" } else { "" }),
         Cmd::SetErcPinMapCell { a, b, level } => format!("schematic erc-pin-map {a} {b} {level}"),
         Cmd::ResetErcPinMap => "schematic erc-pin-map-reset".to_string(),
         Cmd::AddPowerSymbol { lib_id, at, net, rot_millideg, .. } => format!("schematic power {lib_id} --net {net} --at {},{} --rot {:.3}", mm(at.x), mm(at.y), *rot_millideg as f64 / 1000.0),
@@ -1222,7 +1228,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x), mm(at.y)),
         Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
         Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
-        Cmd::Annotate { reset_existing, order, ids } => format!(
+        Cmd::Annotate { reset_existing, order, ids, .. } => format!(
             "schematic annotate{}{}{}",
             if *reset_existing { " --reset" } else { "" },
             match order {
@@ -1420,6 +1426,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddJunction { .. } | Cmd::DeleteJunction { .. } => "schematic-junction",
         Cmd::AddSchLine { .. } | Cmd::DeleteSchLine { .. } => "schematic-line",
         Cmd::AddSheet { .. } => "schematic-sheet",
+        Cmd::ImportSheet { .. } => "schematic-import-sheet",
         Cmd::SwapSchItems { .. } => "schematic-swap",
         Cmd::PasteSch { .. } => "schematic-paste",
         Cmd::SchEdit(c) => c.kind(),
@@ -3012,7 +3019,7 @@ mod tests {
 
         // Replace All, case-insensitive: "K" also hits "22K" and the note text.
         let search = SearchData { find: "k".into(), replace: "kR".into(), ..Default::default() };
-        step(&dir, Cmd::ReplaceText { search: search.clone(), items: None }, false, "test").unwrap();
+        step(&dir, Cmd::ReplaceText { search: search.clone(), items: None, all_sheets: false }, false, "test").unwrap();
         assert_eq!(values(&dir), vec!["10kR".to_string(), "22kR".to_string()]);
         let (_, design, _) = load(&dir).unwrap();
         assert_eq!(design.schematic.as_ref().unwrap().texts[0].content, "set to 10kR");
@@ -3023,18 +3030,18 @@ mod tests {
         assert_eq!(design.schematic.as_ref().unwrap().texts[0].content, "set to 10k");
 
         // Single "Replace": only the keyed match changes.
-        step(&dir, Cmd::ReplaceText { search: search.clone(), items: Some(vec!["field:R2:Value".into()]) }, false, "test").unwrap();
+        step(&dir, Cmd::ReplaceText { search: search.clone(), items: Some(vec!["field:R2:Value".into()]), all_sheets: false }, false, "test").unwrap();
         assert_eq!(values(&dir), vec!["10k".to_string(), "22kR".to_string()]);
 
         // Whole-word + match-case: "10K" does not match "10k"; nothing to replace is refused.
         let strict = SearchData { find: "10K".into(), replace: "x".into(), match_case: true, mode: MatchMode::WholeWord, ..Default::default() };
-        assert!(step(&dir, Cmd::ReplaceText { search: strict, items: None }, false, "test").is_err());
+        assert!(step(&dir, Cmd::ReplaceText { search: strict, items: None, all_sheets: false }, false, "test").is_err());
 
         // Reference replacement needs replace_references, then renames like `RenameSymbol`.
         let refs_off = SearchData { find: "R1".into(), replace: "R7".into(), mode: MatchMode::WholeWord, ..Default::default() };
-        assert!(step(&dir, Cmd::ReplaceText { search: refs_off.clone(), items: None }, false, "test").is_err(), "references are not replaced by default");
+        assert!(step(&dir, Cmd::ReplaceText { search: refs_off.clone(), items: None, all_sheets: false }, false, "test").is_err(), "references are not replaced by default");
         let refs_on = SearchData { replace_references: true, ..refs_off };
-        step(&dir, Cmd::ReplaceText { search: refs_on, items: None }, false, "test").unwrap();
+        step(&dir, Cmd::ReplaceText { search: refs_on, items: None, all_sheets: false }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let ids: Vec<&str> = design.schematic.as_ref().unwrap().symbols.iter().map(|s| s.id.as_str()).collect();
         assert!(ids.contains(&"R7") && !ids.contains(&"R1"), "{ids:?}");
@@ -3127,6 +3134,54 @@ mod tests {
         assert_eq!((m["custom"].clone(), m["matrix"][1][1].clone()), (json!(true), json!(0)));
     }
 
+    /// Find across the sheets (`POST /api/sch/find` with `all_sheets`): every sheet's matches, in page order, each with the sheet it is on, and the
+    /// rank of the sheet in view where a Find with no cursor starts.
+    #[test]
+    fn find_walks_every_sheet_in_page_order() {
+        use serde_json::{json, Value};
+        let dir = scratch("sch_find_sheets");
+        setup_schematic(&dir);
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k".into()), footprint: None, datasheet: None }, false, "test").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("10k".into()), footprint: None, datasheet: None }, false, "test").unwrap();
+        // R2 moves to a sheet of its own
+        let (_, mut design, _) = load(&dir).unwrap();
+        let root = design.schematic.as_mut().unwrap();
+        let r2 = root.symbols.iter().position(|s| s.id == "R2").map(|i| root.symbols.remove(i)).unwrap();
+        root.sheets.push(eda_model::ir::SheetInstance { id: "s1".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: Point { x: 0, y: 0 }, size: (10_000, 10_000), pins: vec![], page: "7".into() });
+        let mut sub = eda_model::ir::SchematicSection::default();
+        sub.symbols.push(r2);
+        design.sheet_contents = Some([("sub.kicad_sch".to_string(), sub)].into_iter().collect());
+        save(&dir, &design).unwrap();
+
+        let call = |v: Value| crate::sch_api::find(&dir, v.to_string().as_bytes());
+        let one = call(json!({ "search": { "find": "10k" } }));
+        let keys: Vec<&str> = one["matches"].as_array().unwrap().iter().map(|m| m["key"].as_str().unwrap()).collect();
+        // the symbol's Reference field matches when the symbol does (`SCH_FIELD::Matches`)
+        assert_eq!(keys, vec!["field:R1:Reference", "field:R1:Value"], "the sheet in view only");
+
+        let all = call(json!({ "search": { "find": "10k" }, "all_sheets": true }));
+        let hits = all["matches"].as_array().unwrap();
+        assert_eq!(hits.iter().map(|m| m["key"].as_str().unwrap()).collect::<Vec<_>>(), vec!["field:R1:Reference", "field:R1:Value", "field:R2:Reference", "field:R2:Value"]);
+        assert_eq!(hits[3]["sheet"], json!(["s1"]));
+        assert_eq!((hits[0]["sheet_rank"].clone(), hits[3]["sheet_rank"].clone(), hits[3]["page"].clone(), hits[3]["sheet_name"].clone()), (json!(0), json!(1), json!("7"), json!("Sub")));
+        assert_eq!(hits[3]["uid"], json!("s1#field:R2:Value"));
+        assert_eq!(all["current_rank"], json!(0));
+        assert_eq!(call(json!({ "search": { "find": "10k" }, "all_sheets": true, "sheet": "s1" }))["current_rank"], json!(1), "a Find with no cursor starts on the sheet in view");
+
+        // a search restricted to the selection stays on the sheet in view
+        let selected = call(json!({ "search": { "find": "10k" }, "all_sheets": true, "scope": ["R1"] }));
+        assert_eq!(selected["matches"].as_array().unwrap().len(), 2, "R1's Reference and Value");
+
+        // Replace All over the sheets, and one Undo puts both back
+        step(&dir, Cmd::ReplaceText { search: eda_ops::search::SearchData { find: "10k".into(), replace: "22k".into(), ..Default::default() }, items: None, all_sheets: true }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!(design.schematic.as_ref().unwrap().symbols[0].value, "22k");
+        assert_eq!(design.sheet_contents.as_ref().unwrap()["sub.kicad_sch"].symbols[0].value, "22k");
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert_eq!((design.schematic.as_ref().unwrap().symbols[0].value.as_str(), design.sheet_contents.as_ref().unwrap()["sub.kicad_sch"].symbols[0].value.as_str()), ("10k", "10k"));
+    }
+
     /// `dialog_annotate.cpp`'s "Order Options": Y-then-X is the default
     /// (top to bottom, left to right as the tiebreak) -- same numbering
     /// this project always did before `AnnotateOrder` existed, confirmed
@@ -3148,7 +3203,7 @@ mod tests {
         }
         save(&dir, &design).unwrap();
 
-        step(&dir, Cmd::Annotate { reset_existing: false, order: eda_ops::AnnotateOrder::YThenX, ids: None }, false, "test").unwrap();
+        step(&dir, Cmd::Annotate { reset_existing: false, order: eda_ops::AnnotateOrder::YThenX, ids: None, options: Default::default() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
         let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
@@ -3157,7 +3212,7 @@ mod tests {
         assert_eq!(a.id, "C2");
 
         // Reset and redo with X-then-Y -- the order must flip.
-        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None }, false, "test").unwrap();
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::XThenY, ids: None, options: Default::default() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
         let a = sch.symbols.iter().find(|s| s.at == Point { x: 5_000, y: 50_000 }).unwrap();
@@ -3487,18 +3542,16 @@ mod tests {
         step(&dir, Cmd::AddSymbol { id: "R3".into(), lib_id: "TEST:R".into(), at: Point { x: 30_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
         step(&dir, Cmd::AddSymbol { id: "R4".into(), lib_id: "TEST:R".into(), at: Point { x: 40_000, y: 10_000 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
 
-        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]) }, false, "test").unwrap();
+        step(&dir, Cmd::Annotate { reset_existing: true, order: eda_ops::AnnotateOrder::default(), ids: Some(vec!["R3".into()]), options: Default::default() }, false, "test").unwrap();
 
         let (_, design, _) = load(&dir).unwrap();
         let sch = design.schematic.as_ref().unwrap();
         assert!(sch.symbols.iter().any(|s| s.id == "R1") && sch.symbols.iter().any(|s| s.id == "R2"), "R1/R2 were never in scope -- must be untouched");
         assert!(sch.symbols.iter().any(|s| s.id == "R4"), "R4 was never in scope either, even though it's the same prefix as the one being reset");
-        // R3 was in scope: reset to "R?", then renumbered to the next free
-        // "R" number -- which is 5, not 3, since R4 (number 4, untouched
-        // and out of scope) is still on the sheet contributing to "next
-        // free" -- `annotate` fills the next free slot, it does not
-        // backfill gaps, same as before this field existed.
-        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000, y: 10_000 }).unwrap().id, "R5");
+        // R3 was in scope: reset to "R?", then renumbered to the first free
+        // "R" number (`FindFirstUnusedReference`): R1, R2 and R4 are held by
+        // the symbols out of scope, so the gap is R3 again.
+        assert_eq!(sch.symbols.iter().find(|s| s.at == Point { x: 30_000, y: 10_000 }).unwrap().id, "R3");
         assert!(!sch.symbols.iter().any(|s| s.id.ends_with('?')), "nothing should be left unannotated after the pass");
     }
 

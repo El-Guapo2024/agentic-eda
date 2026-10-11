@@ -158,21 +158,27 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `panel_text_variables.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`.
 
 ### 4. Hierarchical sheets
-**Editing and the nets across sheets are done (2026-10-08, `08c70c8`); the rest is in flight (`task-sch-hierarchy`).** Hit: every multi-sheet design. Package P4.
-- Done: the schematic is derived as one sheet per functional module (`PARITY-sch.md` section 14). The sheet in view is part of every command the Schematic tab
-  sends (`Cmd::OnSheet`, `Board.focus` in `crates/ops/src/lib.rs`, `kicad-port/schSheetCmd.ts`), so move, drag, wires, labels, delete, properties, the drawing tools,
-  the sheet pin tools and Undo work on a nested sheet; nets are traced across sheets as `connection_graph.cpp` does (`eda_engine::nets::trace_nets_with`, drivers by
-  priority, hierarchical labels and sheet pins, global labels and power symbols) and `reconcile_schematic` applies only the difference to `design.nets`
-  (`nets::follow`); Reorganize into Module Sheets (`Cmd::ReorganizeSheets`); the Hierarchy panel and Back/Forward/Up; the Symbol Fields Table, BOM preview, symbol
-  chooser and Annotate's numbering see every sheet. kicad-cli's ERC on mcu30 as module sheets: no findings.
-- In flight (`task-sch-hierarchy`, not merged): Annotate with KiCad's dialog (scope, recursion, order, keep or reset, regroup units, numbering, the messages),
-  Find and Replace across the hierarchy in page order, the SVG renderer and the schematic gates walking every sheet.
-- Missing: Import Sheet, Draw Sheet from File and the schematic file drop (stale reasons, `STALE-REASONS.md` SR1; placing a design block is the same function);
-  hierarchical sheets are not copied or pasted; a screen placed by two sheet symbols is traced once (KiCad makes a net per placement) and buses are traced as plain
-  wires; Reorganize into Module Sheets lays the sheets out again and loses the stored places of fields, label spins and looks and body styles; Find on a nested sheet and
-  Place Pins from Sheet were not click-tested; no browser check (item 33).
-- Port from: `eeschema/sch_sheet_path.cpp`, `sch_screen.cpp`, `connection_graph.cpp`, `tools/sch_navigate_tool.cpp`, `tools/sch_drawing_tools.cpp` (`ImportSheet`,
-  `DrawSheet`), `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
+**Mostly done (2026-10-10, `task-sch-hierarchy`)**, limits below. Hit: every multi-sheet design. Package P4 for what is left.
+- Done earlier: the IR (`SchematicSection::sheets`, `Design::sheet_contents` in `crates/model/src/ir.rs`); tree import and multi-file export
+  (`crates/kicad/src/sch_import.rs::import_kicad_sch_tree`, `lib.rs`); one derived schematic as module sheets (`crates/engine/src/hier/`,
+  Tools > Reorganize into Module Sheets); every schematic command acts on the sheet in view (`Cmd::OnSheet`); the nets traced across sheets
+  (`crates/engine/src/nets.rs`, `reconcile_schematic`); the Hierarchy panel, Back/Forward/Up, Draw Sheet, sheet pins and their sync, page numbers
+  (`PARITY-sch.md` section 14); ERC per sheet through kicad-cli.
+- Done 2026-10-10 (`PARITY-sch.md` sections 5, 8, 14, 15, 19): **Find and Replace over every sheet** (the sheets in page order, the match's sheet shown,
+  Replace All one undo step; "Search the current sheet only" off by default); **Annotate over the whole schematic** (`DIALOG_ANNOTATE` in full: scope,
+  recursion, X or Y order, reset or keep, regroup units, first free / sheet x 100 / x 1000, multi-unit parts, the messages and `CheckAnnotation`'s findings; a port of
+  `SCH_REFERENCE_LIST` and `REFDES_TRACKER`, `crates/model/src/annotate.rs`); **Import Sheet and Draw Sheet from File** (`LoadSheetFromFile` and its checks: loops,
+  symbols with no library link, references the design holds, missing libraries; as a sheet with its own file or as contents on the sheet in view; the symbols numbered by the
+  Annotate settings or kept); **Copy, Cut and Paste of whole sheets** (a copy of each screen under a file of its own, a name that counts up, library symbols merged, symbols numbered unique across
+  every sheet); **Reorganize into Module Sheets** keeps the places and looks of fields, the looks of labels and the body styles and takes multi-unit symbols (item 12); **Lint and
+  the SVG render walk every sheet** and name the sheet a finding is on. kicad-cli's ERC after each (`EDA_SLOW_TESTS=1`): no `unannotated`, `duplicate_reference` or `duplicate_sheet_names` finding after Import
+  Sheet, a sheet paste and Annotate over the whole schematic; none at all after Reorganize, with and without a multi-unit part; kicad-cli reads a copy of sheets beside their screens.
+- Left: a screen two sheet symbols show is traced once (KiCad makes a net per placement) and a pasted sheet is a copy, never a shared screen; buses across sheets are traced as plain wires;
+  Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
+  a file dropped on the sheet (`DdAppendFile`, a browser has no path for it); the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps
+  the reference it had when Annotate or Rename changes the schematic's.
+- Port from: `eeschema/sch_sheet_path.cpp`, `sch_screen.cpp`, `connection_graph.cpp`, `tools/sch_navigate_tool.cpp`,
+  `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
 ### 5. Access to the installed libraries
 **Mostly closed (the choosers 2026-10-08, `80e972d`; library tables 2026-10-10, `task-lib-tables`): the choosers, the library trees and the lookups read the libraries KiCad's library tables name, the board has library tables of its own and the dialogs to edit them exist. Saving into a table library's file is open.** Hit: every session that adds a part. Package P3.
@@ -292,8 +298,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`SchExtras::fields_autoplaced`). A label's spin, size, bold and italic are stored and edited. A placed symbol in the alternate ("De Morgan") body style is drawn, written and read back (`LibSymbol::alternate`,
   `SchExtras::body_styles`, Cycle Body Style). 44 Rust tests, 17 `node --test` cases.
 - Missing: a field's font face and colour, a free text's justification, a label's own fields (netclass, intersheet references) and a user-defined field's place on the sheet have no place in the IR; the
-  fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on; Reorganize into Module Sheets loses the stored places of fields, label spins and looks, and body
-  styles; only the normal and the De Morgan body style are modelled; pins cannot be selected (Swap Pins, pin-level highlight).
+  fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
+  label's spin; only the normal and the De Morgan body style are modelled; pins cannot be selected (Swap Pins, pin-level highlight).
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: fill fidelity and settings
@@ -516,7 +522,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 3 | DRC precision | Out of scope | same |
 | 4 | ERC has no UI | **Closed** | `components/ErcDialog.tsx`, `GET /api/erc` to `crates/kicad-engine/src/lib.rs::erc`, exclusions `Cmd::AddErcExclusion`, pin map `SchematicSetupDialog.tsx`. Review workflow: item 11. |
 | 5 | Zone fill | Partial | `crates/zone-filler`, `crates/drc/src/fill.rs`, `ZoneDialog.tsx`, `ZoneManagerDialog.tsx`; 190 of 208 fills within 1% of kicad-cli's area; items 13 and 31. |
-| 6 | Hierarchical sheets | Partial | editing on every sheet and nets traced across sheets (`08c70c8`: `Cmd::OnSheet`, `eda_engine::nets::trace_nets_with`), panel, navigation (`HierarchyPanel.tsx`); the rest is item 4 (in flight). |
+| 6 | Hierarchical sheets | Partial | IR, import, export, panel, navigation, editing on every sheet, nets across sheets, Find, Annotate, Import Sheet, sheet copy and paste, lint and render over the hierarchy (`ir.rs`, `sch_import.rs`, `HierarchyPanel.tsx`, `sch_annotate.rs`, `sch_sheets.rs`); item 4 lists what is left. |
 | 7 | Routing | Partial | `crates/pns`; item 7. |
 | 8 | Footprint editor and pad tool | Partial | editor, pad tools, dialogs, import and export (`components/footprint/`, `crates/ops/src/library_editors.rs`); items 19, 30, 31. |
 | 9 | Board Setup | Partial | `BoardSetupDialog.tsx`: all 10 pages edit (rules overlay and 7 verbs, item 3); 8 of KiCad's pages have no model yet. |
@@ -610,7 +616,7 @@ Rules that keep them apart (each is how an earlier package did it):
 
 Waves:
 
-- **Running now**: P4 (`task-sch-hierarchy`), P7 (`task-custom-pads`). P3 (`task-lib-tables`) is done but for what its section lists.
+- **Running now** (2026-10-10): P7 (`task-custom-pads`), P5a (`task-router-drag`), P6 (`task-pcb-edit-details`). P3 and P4 are merged; their sections list what is left.
 - **Next free slot**: P1 -- P2, P14, P16, P17 and the Footprint Checker and Compare Footprint stand on a footprint that carries its graphics -- and P5 part 1, which shares no hub with anything.
 - **After P1 has merged its IR**: P2 (its assignment overlay holds a definition with graphics). Step 1 of P2, the rename, can start sooner if P4 has merged its Annotate.
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
@@ -692,7 +698,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `eeschema/dialogs/panel_sym_lib_table.cpp`, `pcbnew/dialogs/panel_fp_lib_table.cpp`, `eeschema/tools/symbol_editor_control.cpp` and `pcbnew/tools/pcb_control.cpp` (`AddLibrary`, `NewLibrary`).
 - Conflicts: P17 and P18 build on it; P2 (`library_place.rs`).
 
-### P4. Schematic hierarchy: the rest (item 4; SR1's sheet half). Size M for what is left. Rank 4. **In flight: `task-sch-hierarchy`.**
+### P4. Schematic hierarchy: the rest (item 4; SR1's sheet half). Size M for what is left. Rank 4. **Merged 2026-10-10 (`task-sch-hierarchy`); item 4 lists what is left.**
 - Done in the branch: Annotate with KiCad's dialog and numbering (`crates/model/src/{annotate,sheet_list}.rs`, `crates/ops/src/sch_annotate.rs`), Find and Replace across sheets, the SVG render and the gates over every sheet.
 - Left: Import Sheet, Draw Sheet from File and the schematic drop (`Cmd::ImportSheet` = `AddSheet` + the file's screen from `import_kicad_sch`, renumbered with `annotate_paste`; a route that reads the file); hierarchical sheets
   in the clipboard; a net per placement of a shared screen; buses across sheets; Reorganize keeping stored field places, label spins, looks and body styles; browser check for the hierarchy.

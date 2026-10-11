@@ -47,6 +47,7 @@ import { heldCmd, holdPoint, turnCmd } from "../kicad-port/schMove";
 import type { ShapeEdit } from "../kicad-port/schShapeEdit";
 import type { PolyGeom } from "../kicad-port/polygonGeom";
 import type { BreakState } from "../kicad-port/schBreak";
+import type { SheetImportPlan } from "../kicad-port/schImportSheet";
 import type { PinPlacement } from "../components/schematic/schPinTool";
 import type { AlignEdge } from "../kicad-port/alignDistribute";
 
@@ -131,6 +132,8 @@ export type ToolId =
   | "sch_line"
   /** `S` (eeschema.InteractiveDrawing.drawSheet): two clicks (opposite corners) size a hierarchical sheet, then its properties dialog names it. */
   | "sch_sheet"
+  /** Import Sheet... / Draw Sheet from File: the file is chosen (ImportSheetDialog) and the tool waits for the click(s) that place it -- see `state.schSheetImport`. */
+  | "sch_import_sheet"
   /** `A`: armed once SymbolChooserDialog confirms a choice -- see `state.armedSymbol`. */
   | "sch_place_symbol"
   /** `eeschema.EditorControl.highlightNetTool` (Highlight Nets): each click highlights the net under it, the tool stays armed -- see SchematicView.tsx. */
@@ -182,6 +185,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   sch_junction: "Junction: click where wires/pins meet (three or more directions) to join them, Esc to finish",
   sch_line: "Line: click to start/add a point, double-click or Enter to finish, Backspace to undo the last point, Esc to cancel",
   sch_sheet: "Hierarchical Sheet: click one corner, then the opposite one, then name the sheet. Esc to cancel",
+  sch_import_sheet: "Import Sheet: click one corner of the sheet, then the opposite one, then name it (a sheet's contents: click where they go). Esc to cancel",
   sch_place_symbol: "Place Symbol: click where to place it",
   sch_highlight_net: "Highlight Nets: click a wire, label or power symbol to highlight its net (click empty space to clear), Esc to leave",
   sch_rect: "Rectangle: click one corner, then the opposite one. Esc to cancel",
@@ -600,8 +604,10 @@ export interface StudioState {
   textDialog: { mode: "add"; at: [Um, Um] } | { mode: "edit"; id: string } | null;
   /** `L`/Ctrl+`L`/`H`: a just-clicked point waiting for LabelDialog to confirm its text (and, for global/hierarchical, its shape) before `add_label` commits -- same "draw/click first, dialog last" shape as `zonePending`. */
   schLabelPending: { at: [Um, Um]; scope: LabelScope } | null;
-  /** `S`: a sheet's two corners, waiting for SheetDialog to name it before `add_sheet` commits. */
-  schSheetPending: { at: [Um, Um]; size: [Um, Um] } | null;
+  /** `S`: a sheet's two corners, waiting for SheetDialog to name it before `add_sheet` commits (or, with `source`, before `import_sheet` does). */
+  schSheetPending: { at: [Um, Um]; size: [Um, Um]; source?: SheetImportPlan } | null;
+  /** Import Sheet... / Draw Sheet from File: the schematic file the `sch_import_sheet` tool places and the options it was chosen with (kicad-port/schImportSheet.ts). */
+  schSheetImport: SheetImportPlan | null;
   /** `C` (`SCH_LINE_WIRE_BUS_TOOL::UnfoldBus`): the bus member chosen to break out of a bus -- the bus entry sits at `entryAt` and the wire being drawn from its far end takes a label of `net` when it finishes. */
   busUnfold: { net: string; entryAt: [Um, Um]; size: [Um, Um] } | null;
   /** `C`: the member nets of the bus under the cursor, waiting for BusUnfoldDialog to pick one (`BUS_UNFOLD_MENU`); `entryAt` is where the bus entry will root on the bus. */
@@ -623,7 +629,7 @@ export interface StudioState {
   /** Which of the Symbol Fields Table / Find / Find and Replace / Schematic Setup dialogs is open (eeschema's editSymbolFields / find / findAndReplace / schematicSetup actions) -- one slot because they are never open together. */
   schDialog: SchDialog;
   /** Find / Replace's last search (`SCH_EDIT_FRAME::GetFindReplaceData`) plus its `m_afterItem` cursor (the key of the last visited match) -- shared by the dialog and F3 / Shift+F3 so Find Next works with the dialog closed. */
-  schFind: { search: SchSearchData; cursor: string | null; status: string; /** `searchSelectedOnly`: restrict Find / Replace to the selection. */ selectedOnly: boolean; /** The Find dialog's "Backward" direction, which Replace and Find Next continues in. */ backward: boolean };
+  schFind: { search: SchSearchData; cursor: string | null; status: string; /** `searchSelectedOnly`: restrict Find / Replace to the selection. */ selectedOnly: boolean; /** `searchCurrentSheetOnly`: "Search the current sheet only" (off: every sheet of the hierarchy). */ currentSheetOnly: boolean; /** The Find dialog's "Backward" direction, which Replace and Find Next continues in. */ backward: boolean };
   /** Schematic tab's File > Plot... (`common.Control.plot`, DIALOG_PLOT_SCHEMATIC), see PlotSchematicDialog.tsx. */
   schPlotDialogOpen: boolean;
   /** Schematic tab's File > Export > Netlist... (`eeschema.EditorControl.exportNetlist`, DIALOG_EXPORT_NETLIST), see ExportNetlistDialog.tsx. */
@@ -874,6 +880,7 @@ const initialState: StudioState = {
   textDialog: null,
   schLabelPending: null,
   schSheetPending: null,
+  schSheetImport: null,
   busUnfold: null,
   busUnfoldPicker: null,
   schRepeat: [],
@@ -885,7 +892,7 @@ const initialState: StudioState = {
   symbolProperties: null,
   annotateDialogOpen: false,
   schDialog: null,
-  schFind: { search: defaultSearch(), cursor: null, status: "", selectedOnly: false, backward: false },
+  schFind: { search: defaultSearch(), cursor: null, status: "", selectedOnly: false, currentSheetOnly: false, backward: false },
   schPlotDialogOpen: false,
   exportNetlistDialogOpen: false,
   lastLabelText: "",
@@ -1075,6 +1082,8 @@ export type Action =
   | { type: "SET_TEXT_DIALOG"; dialog: StudioState["textDialog"] }
   | { type: "SET_SCH_LABEL_PENDING"; pending: StudioState["schLabelPending"] }
   | { type: "SET_SCH_SHEET_PENDING"; pending: StudioState["schSheetPending"] }
+  /** Arm the `sch_import_sheet` tool with a chosen file (null leaves it). */
+  | { type: "SET_SCH_SHEET_IMPORT"; plan: SheetImportPlan | null }
   | { type: "SET_BUS_UNFOLD"; unfold: StudioState["busUnfold"] }
   | { type: "SET_BUS_UNFOLD_PICKER"; picker: StudioState["busUnfoldPicker"] }
   | { type: "SET_SCH_REPEAT"; cmds: Cmd[] }
@@ -1243,6 +1252,7 @@ function reducer(state: StudioState, action: Action): StudioState {
         boardPadPropertiesId: null,
         schLabelPending: null,
         schSheetPending: null,
+        schSheetImport: null,
         busUnfold: null,
         busUnfoldPicker: null,
         schPowerPending: null,
@@ -1276,6 +1286,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           textDialog: null,
           schLabelPending: null,
           schSheetPending: null,
+          schSheetImport: null,
           busUnfold: null,
           busUnfoldPicker: null,
           schPowerPending: null,
@@ -1311,7 +1322,7 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_MOVE_PREVIEW":
       return { ...state, movePreview: action.preview };
     case "SET_ACTIVE_TOOL":
-      return { ...state, activeTool: action.tool };
+      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null };
     case "SET_VIEW":
       return { ...state, view: action.view };
     case "SET_SCHEMATIC_VIEW":
@@ -1486,6 +1497,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, textDialog: action.dialog };
     case "SET_SCH_SHEET_PENDING":
       return { ...state, schSheetPending: action.pending };
+    case "SET_SCH_SHEET_IMPORT":
+      return action.plan ? { ...state, schSheetImport: action.plan, activeTool: "sch_import_sheet", drawState: null } : { ...state, schSheetImport: null, activeTool: state.activeTool === "sch_import_sheet" ? "select" : state.activeTool, drawState: null };
     case "SET_BUS_UNFOLD":
       return { ...state, busUnfold: action.unfold };
     case "SET_BUS_UNFOLD_PICKER":

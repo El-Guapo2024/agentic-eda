@@ -46,7 +46,21 @@ pub struct SchImportNotes {
     pub unresolved_symbols: usize,
 }
 
+/// How a file is read, beyond what a file says.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ImportOptions {
+    /// A symbol with no number (`R?`), and one that repeats the reference and unit another has, is given a placeholder reference of its own
+    /// (`R?1`, `R?2`, ...; the units of one unnumbered part share one), so that a design -- which names a part by its reference -- can hold it and
+    /// Annotate can number it. Off, every symbol of one reference is one part, as a file's own `Reference` says (the project importer's reading).
+    pub unique_references: bool,
+}
+
 pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
+    import_kicad_sch_with(text, &ImportOptions::default())
+}
+
+/// [`import_kicad_sch`] with the choices of [`ImportOptions`].
+pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     let tree = sexpr::parse(text).map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
     let root = tree
         .as_list()
@@ -173,6 +187,39 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 
         overrides.extend(parse_instance_overrides(item, at_um));
         raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim });
+    }
+
+    if opts.unique_references {
+        // Symbols that cannot be told apart by their reference get a placeholder of their own (`R?1`, `R?2`): one with no number, and one that
+        // repeats the reference and unit another has. The units of an unnumbered part share a placeholder (a unit joins the first of its
+        // prefix, library symbol and value that does not have it yet); Annotate numbers them afterwards.
+        let mut seen: BTreeSet<(String, u32)> = BTreeSet::new();
+        let mut next: BTreeMap<String, u32> = BTreeMap::new();
+        let mut holders: Vec<(String, String, String, BTreeSet<u32>)> = Vec::new(); // (placeholder, lib_id, value, units)
+        for r in raw.iter_mut() {
+            let numbered = r.reference.ends_with(|c: char| c.is_ascii_digit()) && !r.reference.contains('?');
+            let repeated = numbered && seen.contains(&(r.reference.clone(), r.unit));
+            if numbered && !repeated {
+                seen.insert((r.reference.clone(), r.unit));
+                continue;
+            }
+            let prefix: String = r.reference.trim_end_matches(|c: char| c.is_ascii_digit() || c == '?').to_string();
+            let prefix = if prefix.is_empty() { "U".to_string() } else { prefix };
+            let joined = (!repeated).then(|| holders.iter_mut().find(|(name, lib, value, units)| name.starts_with(&format!("{prefix}?")) && *lib == r.lib_id && *value == r.value && !units.contains(&r.unit))).flatten();
+            match joined {
+                Some((name, _, _, units)) => {
+                    units.insert(r.unit);
+                    r.reference = name.clone();
+                }
+                None => {
+                    let n = next.entry(prefix.clone()).or_default();
+                    *n += 1;
+                    let name = format!("{prefix}?{n}");
+                    holders.push((name.clone(), r.lib_id.clone(), r.value.clone(), BTreeSet::from([r.unit])));
+                    r.reference = name;
+                }
+            }
+        }
     }
 
     // Group by reference, preserving first-sighting order (file order) so
@@ -534,8 +581,13 @@ pub fn import_kicad_sch(text: &str) -> Result<(Design, ConstraintModel, SchImpor
 /// that are *still* un-descended after this whole walk, not the
 /// per-file-read tally `import_kicad_sch` itself would have left it at.
 pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
+    import_kicad_sch_tree_with(path, &ImportOptions::default())
+}
+
+/// [`import_kicad_sch_tree`] with the choices of [`ImportOptions`], applied to every file of the tree.
+pub fn import_kicad_sch_tree_with(path: &Path, opts: &ImportOptions) -> Result<(Design, ConstraintModel, SchImportNotes), Vec<CheckResult>> {
     let text = std::fs::read_to_string(path).map_err(|e| vec![CheckResult::fail("kicad_import.read", path.display().to_string(), format!("{e}"))])?;
-    let (mut design, mut model, mut notes) = import_kicad_sch(&text)?;
+    let (mut design, mut model, mut notes) = import_kicad_sch_with(&text, opts)?;
     let Some(dir) = path.parent() else { return Ok((design, model, notes)) };
 
     let mut sheet_contents: BTreeMap<String, SchematicSection> = BTreeMap::new();
@@ -549,7 +601,7 @@ pub fn import_kicad_sch_tree(path: &Path) -> Result<(Design, ConstraintModel, Sc
         }
         let child_path = resolve_dir.join(&file);
         let Ok(child_text) = std::fs::read_to_string(&child_path) else { continue };
-        let Ok((child_design, child_model, child_notes)) = import_kicad_sch(&child_text) else { continue };
+        let Ok((child_design, child_model, child_notes)) = import_kicad_sch_with(&child_text, opts) else { continue };
         notes.unresolved_symbols += child_notes.unresolved_symbols;
         model.parts.extend(child_model.parts);
         model.symbols.extend(child_model.symbols);

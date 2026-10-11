@@ -135,7 +135,7 @@ pub(crate) fn unannotated(design: &eda_model::ir::Design) -> Vec<String> {
     let mut found: Vec<String> = Vec::new();
     let screens = design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values()));
     for sch in screens {
-        found.extend(sch.symbols.iter().filter(|s| s.id.ends_with('?')).map(|s| s.id.clone()));
+        found.extend(sch.symbols.iter().filter(|s| eda_model::annotate::is_unannotated(&s.id)).map(|s| s.id.clone()));
     }
     found.sort();
     found.dedup();

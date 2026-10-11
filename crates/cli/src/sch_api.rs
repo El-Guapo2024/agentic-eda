@@ -159,12 +159,18 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
     json!({ "ok": true, "file": rel.to_string_lossy(), "text": text })
 }
 
-/// `POST /api/sch/find`: `{search: SearchData, scope?: [ids], sheet?: "id/id/..."}` ->
-/// `{ok, matches: [{key, kind, id, name, at: [x, y], text}]}` in
+/// `POST /api/sch/find`: `{search: SearchData, scope?: [ids], sheet?: "id/id/...", all_sheets?: bool}` ->
+/// `{ok, current_rank, matches: [{key, uid, kind, id, name, at: [x, y], text, sheet, sheet_name, page, sheet_rank}]}` in
 /// `nextMatch` order (ascending x, y). `scope` (the dialog's "Search only
 /// selected objects") keeps only matches whose owning id is listed. `sheet`
 /// is the sheet in view (the root when absent): the positions are on its
-/// page, and Replace edits that sheet (`Cmd::OnSheet`), so Find searches it.
+/// page, and Replace edits that sheet (`Cmd::OnSheet`).
+///
+/// `all_sheets` (the dialog's "Search the current sheet only" off, `SCH_FIND_REPLACE_TOOL::FindNext`'s `searchAllSheets`) searches the
+/// whole hierarchy: the sheets in page order (`SCH_SHEET_LIST::SortByPageNumbers`), each one's matches in `nextMatch` order. Every match
+/// says which sheet it is on (`sheet`, the placement ids from the root; `page`; `sheet_rank`, its sheet's place in the page order) and has
+/// a `uid` (the sheet and the key: a key alone names an item of one sheet), and `current_rank` is the rank of `sheet`, where a Find with
+/// no cursor starts. A search restricted to a selection (`scope`) is of the sheet in view, as in KiCad.
 pub fn find(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let search: SearchData = match serde_json::from_value(req.get("search").cloned().unwrap_or(Value::Null)) {
@@ -175,15 +181,37 @@ pub fn find(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let (sch, _) = crate::studio::resolve_sheet(&design, req.get("sheet").and_then(Value::as_str).unwrap_or(""));
-    let sch = &sch;
     let scope: Option<Vec<String>> = req.get("scope").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect());
-    let matches: Vec<Value> = search::find_items(sch, &model, &search)
-        .into_iter()
-        .filter(|h| scope.as_ref().is_none_or(|s| s.contains(&h.id)))
-        .map(|h| json!({ "key": h.key(), "kind": h.kind, "id": h.id, "name": h.name, "at": [h.at.x, h.at.y], "text": h.text }))
-        .collect();
-    json!({ "ok": true, "matches": matches })
+    let sheet_text = req.get("sheet").and_then(Value::as_str).unwrap_or("");
+    let all_sheets = req.get("all_sheets").and_then(Value::as_bool).unwrap_or(false) && scope.is_none();
+    let in_view: Vec<String> = sheet_text.split('/').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    let walk = eda_model::sheet_list::walk(&design);
+    let sorted = eda_model::sheet_list::sort_by_page_numbers(&walk);
+    let rank_of = |path: &[String]| sorted.iter().position(|e| e.path == path).unwrap_or(0);
+    let hit_json = |h: &search::Hit, entry: &eda_model::sheet_list::SheetEntry, rank: usize| {
+        json!({
+            "key": h.key(), "uid": format!("{}#{}", entry.path_text(), h.key()), "kind": h.kind, "id": h.id, "name": h.name, "at": [h.at.x, h.at.y], "text": h.text,
+            "sheet": entry.path, "sheet_name": entry.name, "page": entry.effective_page(), "sheet_rank": rank,
+        })
+    };
+    let mut matches: Vec<Value> = Vec::new();
+    if all_sheets {
+        for (rank, entry) in sorted.iter().enumerate() {
+            let Some(sch) = eda_model::sheet_list::screen_of(&design, &entry.path) else { continue };
+            matches.extend(search::find_items(sch, &model, &search).iter().map(|h| hit_json(h, entry, rank)));
+        }
+    } else {
+        let (sch, _) = crate::studio::resolve_sheet(&design, sheet_text);
+        let rank = rank_of(&in_view);
+        let entry = sorted.get(rank).cloned().unwrap_or_else(|| eda_model::sheet_list::SheetEntry { path: in_view.clone(), name: String::new(), file: String::new(), page: String::new(), virtual_page: 1 });
+        matches.extend(
+            search::find_items(&sch, &model, &search)
+                .iter()
+                .filter(|h| scope.as_ref().is_none_or(|s| s.contains(&h.id)))
+                .map(|h| hit_json(h, &entry, rank)),
+        );
+    }
+    json!({ "ok": true, "current_rank": rank_of(&in_view), "matches": matches })
 }
 
 /// `GET /api/sch/erc_pin_map`: `{ok, matrix, custom}` -- the matrix ERC

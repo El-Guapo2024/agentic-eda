@@ -66,6 +66,7 @@ import { hitField } from "../kicad-port/schFieldEdit";
 import { measureStrokeText } from "./text/strokeFont";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
+import { importSheetClick } from "./schematic/schImportTool";
 import { isStale } from "../kicad-port/checkRevision";
 import { useSchControlState } from "../state/schControlStore";
 import { hitSheet } from "../kicad-port/schControl";
@@ -563,6 +564,12 @@ export function SchematicView() {
             return;
           }
           void api.cmd({ op: "add_junction", at: { x: snapped[0], y: snapped[1] } });
+          return;
+        }
+
+        // Import Sheet... / Draw Sheet from File: the same two corners, or one click for a file's contents (components/schematic/schImportTool.ts).
+        if (state.activeTool === "sch_import_sheet") {
+          importSheetClick(state, snapToGrid(wx, wy), GRID, api, dispatch);
           return;
         }
 

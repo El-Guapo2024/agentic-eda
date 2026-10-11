@@ -107,6 +107,72 @@ fn what_a_copy_writes_loads_in_kicad_and_keeps_the_connections() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The `(uuid "...")` the file names itself by: the first one in the header line.
+fn root_uuid_of(file: &str) -> String {
+    let at = file.find("(uuid \"").expect("the file has a uuid") + "(uuid \"".len();
+    file[at..].split('"').next().unwrap().to_string()
+}
+
+fn components(netlist: &str) -> std::collections::BTreeSet<String> {
+    netlist.lines().map(str::trim).filter(|l| l.starts_with("<comp ")).filter_map(|l| l.split("ref=\"").nth(1)?.split('"').next().map(String::from)).collect()
+}
+
+#[test]
+fn what_a_copy_of_sheets_writes_loads_in_kicad_beside_the_screens_it_shows() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/mcu_board_30plus.yaml");
+    let model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let design = eda_engine::derive_schematic_modules(&model, &EngineOptions::new(1, "hash")).unwrap();
+    let root = design.schematic.as_ref().unwrap();
+    assert!(root.sheets.len() >= 2, "mcu30 is drawn as module sheets");
+    let ids: Vec<String> = root.sheets.iter().map(|s| s.id.clone()).collect();
+    let copy = write_clipboard(&CopyInput { design: &design, model: &model, section: root, project: "demo" }, &ids).unwrap();
+    assert_eq!(copy.text.matches("(sheet").count(), root.sheets.len(), "every sheet symbol is in the text");
+    assert_eq!(copy.sheet_files.len(), root.sheets.len(), "and the files they show are named");
+    assert!(copy.skipped.is_empty(), "{:?}", copy.skipped);
+
+    // The screens a paste needs travel beside the text (KiCad's supplementary clipboard); here they are the files kicad-cli finds next to the fragment.
+    let meta = eda_kicad::ExportMeta { date: "2026-10-10", title: "demo" };
+    let tree = eda_kicad::export_kicad_sch_tree(&design, &model, &meta, "whole.kicad_sch").unwrap();
+    let uuid = root_uuid_of(&tree[0].1);
+    let dir = std::env::temp_dir().join(format!("eda_sch_clipboard_sheets_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, text) in &tree {
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+    let text = copy.text.replace("(path \"\"", &format!("(path \"/{uuid}\""));
+    let fragment = format!("(kicad_sch (version 20260326) (generator \"eeschema\") (generator_version \"10.0\") (uuid \"{uuid}\") (paper \"A3\")\n{text}\n)\n");
+    std::fs::write(dir.join("fragment.kicad_sch"), fragment).unwrap();
+
+    let netlist = |file: &str| -> String {
+        let out = dir.join(format!("{file}.xml"));
+        let run = Command::new(&cli).args(["sch", "export", "netlist", "--format", "kicadxml", "-o"]).arg(&out).arg(dir.join(file)).output().expect("run kicad-cli");
+        assert!(run.status.success() && out.exists(), "kicad-cli could not read {file}: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+        std::fs::read_to_string(&out).unwrap()
+    };
+    let from_fragment = netlist("fragment.kicad_sch");
+    let from_whole = netlist("whole.kicad_sch");
+
+    // KiCad finds every symbol of the screens the pasted sheets show...
+    let inside: std::collections::BTreeSet<String> = design.sheet_contents.iter().flatten().flat_map(|(_, s)| s.symbols.iter().map(|x| x.id.clone())).collect();
+    assert_eq!(components(&from_fragment), inside, "the fragment's sheets show their screens");
+    assert!(components(&from_whole).is_superset(&inside));
+    // ...and the connections inside a sheet are the ones the whole schematic has (the root's wires between the sheets are not in the copy)
+    let whole = pin_groups(&from_whole);
+    for group in pin_groups(&from_fragment).into_iter().filter(|g| g.len() > 1) {
+        assert!(whole.iter().any(|w| group.iter().all(|p| w.contains(p))), "a net of the copied sheets is not one of the schematic's: {group:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ------------------------------------------------------------------ fragments of real KiCad files
 
 fn qa_data() -> Option<PathBuf> {

@@ -9,6 +9,7 @@
 // board sizes this project deals with). Angles in `rot` are degrees
 // (the backend already divides millidegrees by 1000 before sending).
 
+import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
 
 export type Um = number;
@@ -1179,6 +1180,23 @@ export type Cmd =
   | { op: "delete_sch_line"; id: string }
   /** `S` (eeschema.InteractiveDrawing.drawSheet): a hierarchical sheet symbol; `file` is a bare `.kicad_sch` name (extension added when missing). */
   | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Um, Um] }
+  /**
+   * Import Sheet... / Draw Sheet from File (`SCH_DRAWING_TOOLS::ImportSheet` / `DrawSheet`, `LoadSheetFromFile`): the schematic file `source` (a path under the board's folder or an
+   * absolute one; the server reads it) as a sheet `name` of `size` at `at` showing a copy of it under `file`, or -- with `as_sheet` off -- its items on the sheet in view carried to `at`.
+   * The symbols are numbered anew (in `order`, by `options`) unless `keep_annotations`. Refused for a file that places itself, symbols that name no library, a name already used.
+   */
+  | {
+      op: "import_sheet";
+      source: string;
+      as_sheet?: boolean;
+      name?: string;
+      file?: string;
+      at: PointXY;
+      size?: [Um, Um];
+      keep_annotations?: boolean;
+      order?: "y_then_x" | "x_then_y";
+      options?: AnnotateOptions;
+    }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
   /** Ctrl+V / Ctrl+Shift+V / Ctrl+D (`SCH_EDITOR_CONTROL::Paste`): the `fragment` `POST /api/sch/clipboard/parse` returned, added to the sheet in view moved by (`dx`, `dy`); `mode` is Paste Special's reference-designator choice. One undo step. */
@@ -1201,7 +1219,8 @@ export type Cmd =
   | { op: "add_symbol"; id: string; lib_id: string; at: PointXY; rot_millideg: number; value: string; footprint: string; unit?: number }
   | { op: "edit_symbol_fields"; id: string; value?: string | null; footprint?: string | null; datasheet?: string | null }
   | { op: "rename_symbol"; id: string; new_id: string }
-  | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[] }
+  /** `DIALOG_ANNOTATE` (`options`: scope, numbering algorithm, start number, recursive, regroup units; see hierarchyTypes.ts). */
+  | { op: "annotate"; reset_existing: boolean; order?: "y_then_x" | "x_then_y"; ids?: string[]; options?: AnnotateOptions }
   /** `eeschema.EditorControl.setDNP` / `setExcludeFromBOM` / `setExcludeFromBoard` / `setExcludeFromSimulation` (`SCH_EDIT_TOOL::SetAttribute`): the attributes given are set on every unit of every reference in `ids`; one left out stays. */
   | { op: "set_symbol_attrs"; ids: string[]; dnp?: boolean | null; exclude_from_bom?: boolean | null; exclude_from_board?: boolean | null; exclude_from_sim?: boolean | null }
   /** `eeschema.EditorControl.editPageNumber`: the page number of the sheet placement `sheet` (its id); letters and digits, empty for "by place in the hierarchy". */
@@ -1218,7 +1237,7 @@ export type Cmd =
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
-  | { op: "replace_text"; search: SchSearchData; items?: string[] | null }
+  | { op: "replace_text"; search: SchSearchData; items?: string[] | null; /** Replace All over every sheet (`SCH_FIND_REPLACE_TOOL::ReplaceAll` without "Search the current sheet only"). */ all_sheets?: boolean }
   /** panel_setup_pinmap.cpp changeErrorLevel: one pin-map cell + its mirror (type indexes 0..11, level 0 OK / 1 warning / 2 error). */
   | { op: "set_erc_pin_map_cell"; a: number; b: number; level: number }
   /** `ERC_SETTINGS::ResetPinMap` ("Reset to Defaults"). */
@@ -2410,6 +2429,15 @@ export interface SchSearchData {
 export interface FindMatch {
   /** `kind:id:name` -- stable key `replace_text.items` is restricted by. */
   key: string;
+  /** The sheet and the key (`<placement ids>#<key>`): a key alone names an item of one sheet, this one names it in the hierarchy. */
+  uid?: string;
+  /** The sheet the match is on: the placement ids from the root (`[]` the root). */
+  sheet?: string[];
+  sheet_name?: string;
+  /** The page the sheet shows (`SCH_SHEET_PATH::GetPageNumber`, else its place in the hierarchy). */
+  page?: string;
+  /** The sheet's place in the page order: matches come sorted by it. */
+  sheet_rank?: number;
   kind: "field" | "label" | "text" | "pin";
   /** Symbol reference / label id / text id that owns the match. */
   id: string;
@@ -2423,6 +2451,8 @@ export interface FindMatch {
 export interface FindReply {
   ok: boolean;
   message?: string;
+  /** The page-order rank of the sheet that was in view: a Find with no cursor starts there. */
+  current_rank?: number;
   matches: FindMatch[];
 }
 

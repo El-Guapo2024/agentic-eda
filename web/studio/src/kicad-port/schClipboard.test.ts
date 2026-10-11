@@ -103,3 +103,38 @@ test("Paste Special offers KiCad's three options in its order", () => {
   assert.deepEqual(PASTE_SPECIAL_OPTIONS.map((o) => o.mode), ["unique", "keep", "remove"]);
   assert.match(PASTE_SPECIAL_OPTIONS[1]!.label, /Keep existing reference designators/);
 });
+
+const field = (name: string, at: [number, number]) => ({ name, text: name, at, vertical: false, h: "left" as const, v: "bottom" as const, visible: true });
+const placed = (id: string, name: string, at: [number, number]) => ({ id, name, file: `${name}.kicad_sch`, at, size: [10_000, 5_000] as [number, number], pins: [{ id: `${id}_p`, name: "VIN", shape: "input" as const, at: [at[0], at[1] + 2_540] as [number, number] }], fields: [field("Sheetname", [at[0], at[1] - 400]), field("Sheetfile", [at[0], at[1] + 5_400])] });
+
+test("a pasted sheet is carried with its pins and its fields, and its size stays", () => {
+  const p = { ...preview(), sheets: [placed("sheet_b", "LDO", [1000, 2000])] };
+  const moved = shiftPreview(p, 500, -500).sheets![0]!;
+  assert.deepEqual(moved.at, [1500, 1500]);
+  assert.deepEqual(moved.size, [10_000, 5_000], "a size is not a place");
+  assert.deepEqual(moved.pins[0]!.at, [1500, 4040]);
+  assert.deepEqual(moved.fields!.map((f) => f.at), [[1500, 1100], [1500, 6900]]);
+  assert.deepEqual(p.sheets[0]!.at, [1000, 2000], "the original is left alone");
+});
+
+test("the fields of a pasted symbol go with it (they were drawn where the clipboard had them)", () => {
+  const p = { ...preview(), symbols: [{ ...sym("R2", [100, 200]), fields: [field("Reference", [100, 100])] }] };
+  assert.deepEqual(shiftPreview(p, 10, 20).symbols[0]!.fields![0]!.at, [110, 120]);
+  assert.equal("fields" in shiftPreview(preview(), 10, 20).symbols[0]!, false, "an item without fields stays without");
+});
+
+test("a preview without sheets (an older server) shifts and draws as before", () => {
+  assert.equal("sheets" in shiftPreview(preview(), 1, 1), false);
+  assert.deepEqual(withPaste(sheet(), preview(), 0, 0).sheets, []);
+});
+
+test("the sheets of a paste are drawn on the sheet in view, are selected while carried, and are selected once placed", () => {
+  const p = { ...preview(), sheets: [placed("sheet_b", "LDO", [1000, 2000])] };
+  const drawn = withPaste(sheet({ sheets: [placed("sheet_a", "Power", [0, 0])] }), p, 100, 0);
+  assert.deepEqual(drawn.sheets.map((s) => s.id), ["sheet_a", "sheet_b"]);
+  assert.deepEqual(drawn.sheets[1]!.at, [1100, 2000]);
+  assert.ok(previewIds(p).includes("sheet_b"));
+  const before = sheet({ sheets: [placed("sheet_a", "Power", [0, 0])] });
+  const after = sheet({ sheets: [placed("sheet_a", "Power", [0, 0]), placed("sheet_c", "LDO", [3000, 0])] });
+  assert.deepEqual(newIdsAfter(before, after), ["sheet_c"]);
+});

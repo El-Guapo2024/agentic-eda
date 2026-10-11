@@ -3,6 +3,7 @@ import { useSchControlDispatch, useSchControlState } from "../../state/schContro
 import { AssignFootprintsDialog } from "./AssignFootprintsDialog";
 import { BusSyntaxHelpDialog } from "./BusSyntaxHelpDialog";
 import { ExportSymbolsDialog } from "./ExportSymbolsDialog";
+import { ImportSheetDialog } from "./ImportSheetDialog";
 import { IncrementAnnotationsDialog } from "./IncrementAnnotationsDialog";
 import { LegacyBomDialog } from "./LegacyBomDialog";
 import { LibLinksDialog } from "./LibLinksDialog";
@@ -25,6 +26,7 @@ export function SchControlHost() {
       {dialog?.kind === "export_symbols" && <ExportSymbolsDialog onClose={close} />}
       {dialog?.kind === "legacy_bom" && <LegacyBomDialog onClose={close} />}
       {dialog?.kind === "symbol_check" && <SymbolCheckerDialog onClose={close} />}
+      {dialog?.kind === "import_sheet" && <ImportSheetDialog forceSheet={dialog.forceSheet} onClose={close} />}
       {dialog?.kind === "symbol_diff" && <SymbolDiffDialog reference={dialog.ref} onClose={close} />}
     </>
   );

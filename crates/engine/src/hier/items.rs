@@ -22,6 +22,14 @@ pub struct Keep {
     pub title_block: Option<eda_model::ir::TitleBlock>,
     /// References of the symbols that were locked (`SchExtras::locked`); the lock goes with the symbol to its new sheet.
     pub locked: Vec<String>,
+    /// A multi-unit part is laid out unit by unit, each unit a part of its own under a name of its own (`eda_model::ir::field_key`: `U1`, `U1#2`);
+    /// this says which unit such a part draws. A part with no entry draws unit 1.
+    pub units: BTreeMap<String, u32>,
+    /// The body style a symbol is drawn in, by reference, for the ones in the alternate ("De Morgan") one (2); the others are in the normal one.
+    pub body_styles: BTreeMap<String, u32>,
+    /// Where the fields of a symbol whose fields the user placed by hand are drawn, by reference: they stay where they are (a symbol with none
+    /// has its fields placed by Autoplace Fields, as a derivation always did).
+    pub fields: BTreeMap<String, Vec<eda_model::ir::FieldPlacement>>,
 }
 
 /// The room kept around what hangs on a pin (micrometres), and how many cells a stub may be made longer to find it.
@@ -288,7 +296,7 @@ impl Items {
             mirrored: false,
             mirror_y: false,
             lib_id: p.lib_id.clone(),
-            unit: 1,
+            unit: p.unit,
             value: kept.map(|k| k.value.clone()).unwrap_or_else(|| p.part.value.clone().unwrap_or_default()),
             footprint: kept.map(|k| k.footprint.clone()).unwrap_or_else(|| p.part.footprint.clone().unwrap_or_default()),
             datasheet: kept.map(|k| k.datasheet.clone()).unwrap_or_else(|| p.part.datasheet.clone().unwrap_or_default()),

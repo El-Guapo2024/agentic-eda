@@ -7,7 +7,7 @@
 // whole paste away. Here the studio asks the server for what a paste would add (`POST /api/sch/clipboard/parse`: the new items, already
 // numbered, drawn the way the sheet draws them), shows them shifted by the cursor, and a click sends `paste_sch` with that shift.
 // This module is the part with no React in it: the shift, the ghost of the paste on a sheet, and which items a paste made.
-import type { LibSymbols, Schematic } from "../api/types";
+import type { LibSymbols, Schematic, SchField } from "../api/types";
 import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
 
 /** `PASTE_MODE` (dialog_paste_special.h): what Paste Special does to the reference designators. */
@@ -27,6 +27,8 @@ export interface SchPastePreview {
   wires: Schematic["wires"];
   labels: Schematic["labels"];
   texts: Schematic["texts"];
+  /** Hierarchical sheets (their symbols with the pins; each one has a screen of its own on the server -- `SCH_EDITOR_CONTROL::Paste`'s sheet branch). Absent from an older server. */
+  sheets?: Schematic["sheets"];
   no_connects: Schematic["no_connects"];
   bus_entries: Schematic["bus_entries"];
   junctions: NonNullable<Schematic["junctions"]>;
@@ -65,15 +67,22 @@ export function shiftShape(shape: SchGraphicShape, dx: number, dy: number): SchG
   }
 }
 
+/** An item's fields (where the server draws its Reference, Value, a sheet's name and file) go with it. The key stays absent where the item had none. */
+function withShiftedFields<T extends { fields?: SchField[] }>(item: T, dx: number, dy: number): T {
+  return item.fields ? { ...item, fields: item.fields.map((f) => ({ ...f, at: shiftPt(f.at, dx, dy) })) } : item;
+}
+
 /** The preview moved by `(dx, dy)`. */
 export function shiftPreview(p: SchPastePreview, dx: number, dy: number): SchPastePreview {
   return {
     ...p,
-    symbols: p.symbols.map((s) => ({ ...s, at: shiftPt(s.at, dx, dy) })),
-    power_symbols: p.power_symbols.map((s) => ({ ...s, at: shiftPt(s.at, dx, dy) })),
+    symbols: p.symbols.map((s) => withShiftedFields({ ...s, at: shiftPt(s.at, dx, dy) }, dx, dy)),
+    power_symbols: p.power_symbols.map((s) => withShiftedFields({ ...s, at: shiftPt(s.at, dx, dy) }, dx, dy)),
     wires: p.wires.map((w) => ({ ...w, pts: w.pts.map((q) => shiftPt(q, dx, dy)) })),
     labels: p.labels.map((l) => ({ ...l, at: shiftPt(l.at, dx, dy) })),
     texts: p.texts.map((t) => ({ ...t, at: shiftPt(t.at, dx, dy) })),
+    // a sheet's size is not a place; its pins sit on its border and move with it
+    ...(p.sheets ? { sheets: p.sheets.map((s) => withShiftedFields({ ...s, at: shiftPt(s.at, dx, dy), pins: s.pins.map((pin) => ({ ...pin, at: shiftPt(pin.at, dx, dy) })) }, dx, dy)) } : {}),
     no_connects: p.no_connects.map((n) => ({ ...n, at: shiftPt(n.at, dx, dy) })),
     bus_entries: p.bus_entries.map((b) => ({ ...b, at: shiftPt(b.at, dx, dy) })),
     junctions: p.junctions.map((j) => ({ ...j, at: shiftPt(j.at, dx, dy) })),
@@ -84,7 +93,7 @@ export function shiftPreview(p: SchPastePreview, dx: number, dy: number): SchPas
 
 /** The ids of everything the preview holds (what the canvas draws as selected while the paste is carried). */
 export function previewIds(p: SchPastePreview): string[] {
-  return [...p.symbols, ...p.power_symbols, ...p.wires, ...p.labels, ...p.texts, ...p.no_connects, ...p.bus_entries, ...p.junctions, ...p.lines, ...p.graphics].map((x) => x.id).filter((id) => id !== "");
+  return [...p.symbols, ...p.power_symbols, ...p.wires, ...p.labels, ...p.texts, ...(p.sheets ?? []), ...p.no_connects, ...p.bus_entries, ...p.junctions, ...p.lines, ...p.graphics].map((x) => x.id).filter((id) => id !== "");
 }
 
 /** `sch` with the paste drawn on it, shifted by `(dx, dy)`. A library symbol the sheet already draws is left as the sheet has it. */
@@ -97,6 +106,7 @@ export function withPaste(sch: Schematic, preview: SchPastePreview, dx: number, 
     wires: [...sch.wires, ...p.wires],
     labels: [...sch.labels, ...p.labels],
     texts: [...sch.texts, ...p.texts],
+    sheets: [...sch.sheets, ...(p.sheets ?? [])],
     no_connects: [...sch.no_connects, ...p.no_connects],
     bus_entries: [...sch.bus_entries, ...p.bus_entries],
     junctions: [...(sch.junctions ?? []), ...p.junctions],
@@ -115,13 +125,13 @@ export function previewIsEmpty(p: SchPastePreview): boolean {
 export function newIdsAfter(before: Schematic, after: Schematic): string[] {
   const known = new Set<string>();
   const add = (list: ReadonlyArray<{ id: string }> | undefined) => (list ?? []).forEach((x) => known.add(x.id));
-  [before.wires, before.labels, before.texts, before.power_symbols, before.no_connects, before.bus_entries, before.junctions, before.lines, before.graphics].forEach(add);
+  [before.wires, before.labels, before.texts, before.sheets, before.power_symbols, before.no_connects, before.bus_entries, before.junctions, before.lines, before.graphics].forEach(add);
   const units = new Set(before.symbols.map((s) => `${s.id}#${s.unit}`));
   const ids: string[] = [];
   const take = (id: string) => {
     if (id && !ids.includes(id)) ids.push(id);
   };
-  for (const list of [after.wires, after.labels, after.texts, after.power_symbols, after.no_connects, after.bus_entries, after.junctions ?? [], after.lines ?? [], after.graphics ?? []] as ReadonlyArray<{ id: string }>[]) {
+  for (const list of [after.wires, after.labels, after.texts, after.sheets, after.power_symbols, after.no_connects, after.bus_entries, after.junctions ?? [], after.lines ?? [], after.graphics ?? []] as ReadonlyArray<{ id: string }>[]) {
     for (const x of list) if (!known.has(x.id)) take(x.id);
   }
   for (const s of after.symbols) if (!units.has(`${s.id}#${s.unit}`)) take(s.id);
