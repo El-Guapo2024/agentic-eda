@@ -1106,7 +1106,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteText { id } => format!("text delete {id}"),
         Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
-        Cmd::EditTextAndGraphics { shape_ids, text_ids, .. } => format!("global-edit text-and-graphics --shapes {} --texts {}", shape_ids.len(), text_ids.len()),
+        Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
+            format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
+        }
         Cmd::SetTeardropSettings { .. } => "board-setup teardrops".to_string(),
         Cmd::AddAllTeardrops => "teardrops add-all".to_string(),
         Cmd::RemoveAllTeardrops => "teardrops remove-all".to_string(),

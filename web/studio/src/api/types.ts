@@ -1100,14 +1100,15 @@ export type Cmd =
   | { op: "move_text"; id: string; x: Um; y: Um }
   /**
    * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
-   * scoped to this model's two free-standing board drawing kinds (no
-   * footprint reference/value fields, dimensions, tables or barcodes
-   * exist as editable board items here -- see PARITY-pcb.md). Every
-   * field omitted (or `null`) leaves that property alone; filtering
-   * (item type/layer/"selected only") is `GlobalEditTextAndGraphicsDialog.tsx`'s
-   * own client-side job.
+   * scoped to the free-standing board items this model has: graphics,
+   * text and dimensions (no footprint reference/value fields, tables or
+   * barcodes exist as editable board items here -- see PARITY-pcb.md).
+   * Every field omitted (or `null`) leaves that property alone;
+   * `layer_defaults` is "Set to layer default values:" and ignores the
+   * fields. Filtering (scope, layer, "selected only") is
+   * `kicad-port/globalEditTextGraphics.ts`'s client-side job.
    */
-  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
+  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; dimension_ids?: string[]; layer_defaults?: boolean; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
   /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */

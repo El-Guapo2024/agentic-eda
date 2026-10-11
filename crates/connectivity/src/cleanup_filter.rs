@@ -8,7 +8,7 @@
 //! if( m_selectedItemsFilter )  skip an item that is neither selected nor in a selected group
 //! if( m_netFilterOpt )         skip an item on another net
 //! if( m_netclassFilterOpt )    skip an item whose effective net class does not contain the named one
-//! if( m_layerFilterOpt )       skip an item on another layer (`GetLayer()`: a via's is its first, top, layer)
+//! if( m_layerFilterOpt )       skip an item on another layer (`GetLayer()`: a via's is the top layer of its span)
 //! ```
 //!
 //! Items the filter skips are not removed or merged, but they still count as copper to everything else (they are what a dangling end is connected to, what a
@@ -16,7 +16,7 @@
 
 use std::collections::BTreeSet;
 
-use eda_model::ir::Design;
+use eda_model::ir::{Design, Via};
 use eda_model::ConstraintModel;
 
 /// The dialog's four filters; `None` is a filter that is off.
@@ -89,7 +89,7 @@ impl CleanupFilter {
             }
         }
         for v in &rt.vias {
-            if is_locked(design, &v.id) || self.skips(design, model, &v.id, &v.net, &v.from_layer) {
+            if is_locked(design, &v.id) || self.skips(design, model, &v.id, &v.net, via_top_layer(v, &model.board.layers)) {
                 out.vias.insert(v.id.clone());
             }
         }
@@ -110,6 +110,16 @@ impl Protected {
     }
     pub fn via(&self, id: &str) -> bool {
         self.vias.contains(id)
+    }
+}
+
+/// `PCB_VIA::GetLayer()`: the top layer of the via's span, whichever way round the span is written.
+fn via_top_layer<'a>(v: &'a Via, copper: &[String]) -> &'a str {
+    let at = |l: &str| copper.iter().position(|c| c == l).unwrap_or(usize::MAX);
+    if at(&v.to_layer) < at(&v.from_layer) {
+        &v.to_layer
+    } else {
+        &v.from_layer
     }
 }
 
@@ -216,6 +226,18 @@ mod tests {
         assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), vec![]));
         let f = CleanupFilter { layer: Some("F.Cu".into()), ..Default::default() };
         assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v2", "w2"])));
+    }
+
+    #[test]
+    fn a_via_written_bottom_to_top_is_on_its_top_layer() {
+        let (mut design, model) = two_of_everything();
+        for v in design.routing.as_mut().unwrap().vias.iter_mut() {
+            std::mem::swap(&mut v.from_layer, &mut v.to_layer);
+        }
+        let f = CleanupFilter { layer: Some("F.Cu".into()), ..Default::default() };
+        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z1"]), ids(&["v2", "w2"])));
+        let f = CleanupFilter { layer: Some("B.Cu".into()), ..Default::default() };
+        assert_eq!(nulls_and_vias(&design, &model, &f), (ids(&["z2"]), vec![]));
     }
 
     #[test]
