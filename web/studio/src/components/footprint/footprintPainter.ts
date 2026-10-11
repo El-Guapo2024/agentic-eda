@@ -160,10 +160,36 @@ function tracePadPath(ctx: CanvasRenderingContext2D, pad: LibraryPad) {
     case "chamfered_rect":
       chamferedRectPath(ctx, w, h, (pad.chamfer_ratio ?? 0.2) * Math.min(w, h), pad.chamfer_corners);
       return;
+    case "custom":
+      // The anchor only (`PAD::GetAnchorPadShape`: a circle of the pad's width, or its rectangle); the basic shapes follow in `paintCustomPrimitives`.
+      ctx.beginPath();
+      if (pad.custom?.anchor === "rect") ctx.rect(-w / 2, -h / 2, w, h);
+      else ctx.arc(0, 0, w / 2, 0, Math.PI * 2);
+      return;
     case "rect":
     default:
       ctx.beginPath();
       ctx.rect(-w / 2, -h / 2, w, h);
+  }
+}
+
+/**
+ * A custom pad's basic shapes (`PAD::GetPrimitives`) as copper, in the pad's frame like its anchor: a filled shape is its area and half its width all
+ * round, an unfilled one a stroke of its width with round ends -- the copper `PAD::GetEffectiveShape` hands the DRC. `grow` widens each by that much
+ * on every side. A proxy item (`gr_vector`, `gr_bbox`) is not copper.
+ */
+function paintCustomPrimitives(ctx: CanvasRenderingContext2D, pad: LibraryPad, color: string, grow: number) {
+  for (const prim of pad.custom?.primitives ?? []) {
+    if (prim.proxy) continue;
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    // A canvas ignores a line width of 0, which would leave the one the last shape set; a micrometre is no line at any zoom.
+    ctx.lineWidth = Math.max(Math.max(prim.shape.stroke_width, 0) + 2 * grow, 1);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    drawShapeGeometry(ctx, prim.shape);
+    ctx.restore();
   }
 }
 
@@ -179,13 +205,33 @@ function drawPad(ctx: CanvasRenderingContext2D, view: ViewTransform, pad: Librar
 
   ctx.save();
   ctx.translate(pad.offset.x, pad.offset.y);
-  tracePadPath(ctx, pad);
-  ctx.fillStyle = layerColor("f_cu");
-  ctx.fill();
-  if (opts.selected) {
-    ctx.strokeStyle = layerColor("selection");
-    ctx.lineWidth = hairlineUm(view, 2.5);
-    ctx.stroke();
+  if (pad.shape === "custom") {
+    // A custom pad is the anchor and its basic shapes. The selection is a halo of every part grown a little, under the copper, so the outline
+    // that shows is the union's and not each part's own.
+    if (opts.selected) {
+      const halo = hairlineUm(view, 1.25);
+      const selection = layerColor("selection");
+      tracePadPath(ctx, pad);
+      ctx.fillStyle = selection;
+      ctx.strokeStyle = selection;
+      ctx.lineWidth = 2 * halo;
+      ctx.fill();
+      ctx.stroke();
+      paintCustomPrimitives(ctx, pad, selection, halo);
+    }
+    tracePadPath(ctx, pad);
+    ctx.fillStyle = layerColor("f_cu");
+    ctx.fill();
+    paintCustomPrimitives(ctx, pad, layerColor("f_cu"), 0);
+  } else {
+    tracePadPath(ctx, pad);
+    ctx.fillStyle = layerColor("f_cu");
+    ctx.fill();
+    if (opts.selected) {
+      ctx.strokeStyle = layerColor("selection");
+      ctx.lineWidth = hairlineUm(view, 2.5);
+      ctx.stroke();
+    }
   }
   ctx.restore();
 

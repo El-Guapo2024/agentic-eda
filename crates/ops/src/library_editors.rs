@@ -89,6 +89,7 @@ pub fn import_pad_settings(dst: &mut LibraryPad, master: &LibraryPad) {
     dst.trapezoid_delta = master.trapezoid_delta;
     dst.chamfer_ratio = master.chamfer_ratio;
     dst.chamfer_corners = master.chamfer_corners;
+    dst.custom = master.custom.clone();
     dst.clearance_override = master.clearance_override;
     dst.thermal_gap_override = master.thermal_gap_override;
     dst.thermal_spoke_width_override = master.thermal_spoke_width_override;

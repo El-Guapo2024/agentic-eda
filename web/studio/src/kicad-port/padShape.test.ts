@@ -9,6 +9,8 @@ import {
   checkShape,
   choiceOf,
   chooseShape,
+  customPadBox,
+  customPadExtent,
   defaultIpcRoundingRatio,
   describePrimitive,
   enabledCorners,
@@ -258,4 +260,37 @@ test("a chamfer is checked in the dialog's words: too large for the corners cut,
   assert.equal(checkShape({ ...form, chamferRatio: -0.1 }), "Error: (negative corner chamfer is not allowed)");
   const mixed = { ...form, choice: "chamfered_round_rect" as const, ratio: 0.5, corners: { ...NO_CORNERS, top_left: true }, chamferRatio: 0.8 };
   assert.equal(checkShape(mixed), "Error: (corner chamfer is too large)", "the rounded corners leave 50% of the side");
+});
+
+test("a custom pad reaches as far as its anchor and its copper shapes, each as wide as its stroke, and not as far as a proxy item", () => {
+  const prim = (shape: CmdShape, proxy = false) => ({ shape, proxy });
+  const seg = (a: [number, number], b: [number, number], w: number): CmdShape => ({ kind: "segment", layer: "", stroke_width: w, filled: false, start: { x: a[0], y: a[1] }, end: { x: b[0], y: b[1] } });
+  const custom: PadCustom = { anchor: "circle", zone: "outline", primitives: [prim(seg([0, 0], [2000, 0], 200)), prim(seg([0, 0], [0, -9000], 200), true)] };
+  // The anchor is a circle of the pad's width, the line goes 2 mm out and is 0.2 mm wide; the proxy line is not copper.
+  assert.deepEqual(customPadExtent({ size: [800, 800], custom }), [-400, -400, 2100, 400]);
+  const rect: PadCustom = { ...custom, anchor: "rect" };
+  assert.deepEqual(customPadExtent({ size: [800, 500], custom: rect }), [-400, -250, 2100, 250], "a rectangular base is the pad's own size");
+  assert.deepEqual(customPadExtent({ size: [800, 500], custom: null }), [-400, -400, 400, 400], "no data: the circle base");
+  // A circle reaches its radius and its stroke; an arc reaches the side of its circle that its sweep passes.
+  const ring: CmdShape = { kind: "circle", layer: "", stroke_width: 100, filled: false, center: { x: 1000, y: 0 }, end: { x: 1500, y: 0 } };
+  assert.deepEqual(customPadExtent({ size: [100, 100], custom: { ...custom, primitives: [prim(ring)] } }), [-50, -550, 1550, 550]);
+  const arc: CmdShape = { kind: "arc", layer: "", stroke_width: 0, filled: false, start: { x: 0, y: 1000 }, mid: { x: 1000, y: 0 }, end: { x: 0, y: -1000 } };
+  // Through (1000, 0) between (0, 1000) and (0, -1000): the circle is centred on the origin with radius 1000, and the arc takes its right side.
+  assert.deepEqual(customPadExtent({ size: [100, 100], custom: { ...custom, primitives: [prim(arc)] } }).map(Math.round), [-50, -1000, 1000, 1000]);
+  const opposite: CmdShape = { ...arc, mid: { x: -1000, y: 0 } };
+  assert.deepEqual(customPadExtent({ size: [100, 100], custom: { ...custom, primitives: [prim(opposite)] } }).map(Math.round), [-1000, -1000, 50, 1000], "the other way round, the left side");
+});
+
+test("a custom pad's box on the footprint is moved by its offset and turned with the pad", () => {
+  const custom: PadCustom = {
+    anchor: "circle",
+    zone: "outline",
+    primitives: [{ shape: { kind: "segment", layer: "", stroke_width: 0, filled: false, start: { x: 0, y: 0 }, end: { x: 2000, y: 0 } } }],
+  };
+  const at = { x: 10_000, y: 5_000 };
+  const base = { size: [400, 400] as [number, number], custom, at, offset: { x: 0, y: 0 } };
+  assert.deepEqual(customPadBox({ ...base, rot: 0 }).map(Math.round), [9_800, 4_800, 12_000, 5_200]);
+  // Turned a quarter: the arm points along +y (the canvas is y-down, so a positive angle runs clockwise on the screen).
+  assert.deepEqual(customPadBox({ ...base, rot: 90_000 }).map(Math.round), [9_800, 4_800, 10_200, 7_000]);
+  assert.deepEqual(customPadBox({ ...base, rot: 0, offset: { x: 100, y: -100 } }).map(Math.round), [9_900, 4_700, 12_100, 5_100]);
 });

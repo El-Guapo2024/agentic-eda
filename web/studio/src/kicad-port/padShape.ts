@@ -501,3 +501,95 @@ export function libraryFieldsOf(form: PadShapeForm): Pick<LibraryPad, "shape" | 
     custom: e.custom ?? null,
   };
 }
+
+// ---------------------------------------------------------------------------------------------------------- where a custom pad's copper is
+
+/** The points that bound a basic shape's own geometry, pad frame: an arc adds the extremes of its circle that its sweep reaches, a circle its four sides, a curve its control points. */
+function shapeExtentPoints(s: CmdShape): [number, number][] {
+  switch (s.kind) {
+    case "segment":
+    case "rect":
+      return [
+        [s.start.x, s.start.y],
+        [s.end.x, s.end.y],
+      ];
+    case "circle": {
+      const r = radiusOf(s);
+      return [
+        [s.center.x - r, s.center.y - r],
+        [s.center.x + r, s.center.y + r],
+      ];
+    }
+    case "polygon":
+      return s.pts.map((p) => [p.x, p.y]);
+    case "bezier":
+      return [s.start, s.c1, s.c2, s.end].map((p) => [p.x, p.y]);
+    case "arc": {
+      const pts: [number, number][] = [
+        [s.start.x, s.start.y],
+        [s.mid.x, s.mid.y],
+        [s.end.x, s.end.y],
+      ];
+      const d = 2 * (s.start.x * (s.mid.y - s.end.y) + s.mid.x * (s.end.y - s.start.y) + s.end.x * (s.start.y - s.mid.y));
+      if (Math.abs(d) < 1e-9) return pts;
+      const sq = (p: PointXY) => p.x * p.x + p.y * p.y;
+      const cx = (sq(s.start) * (s.mid.y - s.end.y) + sq(s.mid) * (s.end.y - s.start.y) + sq(s.end) * (s.start.y - s.mid.y)) / d;
+      const cy = (sq(s.start) * (s.end.x - s.mid.x) + sq(s.mid) * (s.start.x - s.end.x) + sq(s.end) * (s.mid.x - s.start.x)) / d;
+      const r = Math.hypot(s.start.x - cx, s.start.y - cy);
+      const a0 = Math.atan2(s.start.y - cy, s.start.x - cx);
+      const am = Math.atan2(s.mid.y - cy, s.mid.x - cx);
+      const a1 = Math.atan2(s.end.y - cy, s.end.x - cx);
+      const tau = Math.PI * 2;
+      const fwd = (a: number) => ((a % tau) + tau) % tau;
+      // The arc runs the way that passes through its recorded mid point.
+      const increasing = fwd(am - a0) <= fwd(a1 - a0);
+      for (let k = 0; k < 4; k++) {
+        const a = (k * Math.PI) / 2;
+        const reached = increasing ? fwd(a - a0) <= fwd(a1 - a0) : fwd(a0 - a) <= fwd(a0 - a1);
+        if (reached) pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]);
+      }
+      return pts;
+    }
+  }
+}
+
+/**
+ * The box `[x0, y0, x1, y1]` of a custom pad's copper in the pad's own frame, shape offset not applied: the anchor and every basic shape that is
+ * copper, each as far out as its stroke reaches (`SHAPE_COMPOUND::BBox` of `PAD::GetEffectiveShape`; a proxy item is not copper).
+ */
+export function customPadExtent(pad: Pick<LibraryPad, "size" | "custom">): [Um, Um, Um, Um] {
+  const [w, h] = pad.size;
+  const hx = w / 2;
+  const hy = pad.custom?.anchor === "rect" ? h / 2 : w / 2;
+  let box: [number, number, number, number] = [-hx, -hy, hx, hy];
+  for (const prim of pad.custom?.primitives ?? []) {
+    if (prim.proxy) continue;
+    const reach = Math.max(prim.shape.stroke_width, 0) / 2;
+    for (const [x, y] of shapeExtentPoints(prim.shape)) {
+      box = [Math.min(box[0], x - reach), Math.min(box[1], y - reach), Math.max(box[2], x + reach), Math.max(box[3], y + reach)];
+    }
+  }
+  return box;
+}
+
+/** [`customPadExtent`] where the pad is on the footprint: moved to `at + offset` and turned with the pad (the box of the turned box). */
+export function customPadBox(pad: Pick<LibraryPad, "size" | "custom" | "at" | "offset" | "rot">): [Um, Um, Um, Um] {
+  const [x0, y0, x1, y1] = customPadExtent(pad);
+  const rad = (pad.rot / 1000) * (Math.PI / 180);
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const cx = pad.at.x + pad.offset.x;
+  const cy = pad.at.y + pad.offset.y;
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (const [x, y] of [
+    [x0, y0],
+    [x1, y0],
+    [x1, y1],
+    [x0, y1],
+  ] as const) {
+    xs.push(cx + x * cos - y * sin);
+    ys.push(cy + x * sin + y * cos);
+  }
+  return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+}
