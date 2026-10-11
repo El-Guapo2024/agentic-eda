@@ -147,6 +147,10 @@
     button("OK").click();
     await sleep(300);
     check("OK refuses a nickname with a colon", banner() === "Illegal character ':' in nickname 'Lt:Dev'.", banner());
+    setNative(row(baseSym, "nickname"), "eda");
+    button("OK").click();
+    await sleep(300);
+    check("OK refuses the nickname the studio keeps for its own project library", /studio's own project library/.test(banner()) && mine(await tables(), "symbol").length === 0, banner());
     setNative(row(baseSym, "nickname"), "LtDevice");
     top().querySelector('[aria-label="Add empty row to table"]').click();
     await sleep(150);

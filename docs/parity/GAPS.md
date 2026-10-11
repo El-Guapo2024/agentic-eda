@@ -157,7 +157,7 @@ New (the old "library browsers" mention). **Mostly closed on 2026-10-10: the cho
   **Configure Paths** (KiCad's variables read only, the board's own editable) and a folder browser for the server's folders are in `components/libraryTables/`. The derived KiCad project
   carries the tables and the variables (`derive_project`), so kicad-cli ERC (`lib_symbol_issues`), DRC (`lib_footprint_issues`) and the 3D export resolve the same libraries (slow-tier tests).
   `eda import-kicad` brings a project's own tables and variables along (`import_project_setup`, `${KIPRJMOD}` written out as the project's folder).
-  Tests: Rust unit tests for the format, the variables, the resolution, the routes and a place-from-table round trip; 13 web unit tests; `e2e/library-tables.check.js` (49 checks).
+  Tests: Rust unit tests for the format, the variables, the resolution, the routes and a place-from-table round trip; 13 web unit tests; `e2e/library-tables.check.js` (50 checks).
 - Exists besides: library trees for the project library (`components/library/`); `.kicad_sym` and `.kicad_mod` reading from one root set by `EDA_KICAD_SYMBOLS` and
   `EDA_KICAD_FOOTPRINTS` (now the defaults of `${KICAD10_SYMBOL_DIR}` and `${KICAD10_FOOTPRINT_DIR}`); the Footprint and Symbol editors' trees list every library of the tables
   (`crates/cli/src/library_index.rs`, `GET /api/library/index|items|all`, `components/library/LibraryTree.tsx`) and opening an item copies it into the project library first.
