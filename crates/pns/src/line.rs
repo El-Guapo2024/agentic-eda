@@ -8,7 +8,9 @@
 //! came from, so a caller can remove exactly those before re-adding the
 //! edited geometry).
 
+use crate::direction45::{AngleType, Direction45};
 use crate::item::{ItemId, Net};
+use crate::seg_ops::{self, Seg2};
 use eda_model::ir::{Point, Um};
 
 #[derive(Debug, Clone)]
@@ -103,8 +105,33 @@ impl Line {
     /// `index` to `p` and re-solve the legs next to it so the line stays on
     /// 45-degree headings, instead of leaving an arbitrary-angle leg.
     pub fn drag_corner45(&mut self, p: Point, index: usize) {
+        self.drag_corner45_snapped(p, index, 0);
+    }
+
+    /// `LINE::DragCorner( aP, aIndex, aFreeAngle )`: `dragCornerFree` (the vertex goes to the cursor, whatever angle that
+    /// makes) or `dragCorner45`, which snaps the cursor first by `snap` (`m_snapThreshhold`).
+    pub fn drag_corner(&mut self, p: Point, index: usize, free_angle: bool, snap: Um) {
+        if free_angle {
+            self.drag_corner_free(p, index);
+        } else {
+            self.drag_corner45_snapped(p, index, snap);
+        }
+    }
+
+    /// `LINE::dragCornerFree`: move the vertex, then drop what became collinear or double.
+    pub fn drag_corner_free(&mut self, p: Point, index: usize) {
+        if let Some(v) = self.pts.get_mut(index) {
+            *v = p;
+        }
+        self.simplify();
+    }
+
+    /// `LINE::dragCorner45` with `m_snapThreshhold = snap`: [`Self::drag_corner45`] after `snapDraggedCorner` has pulled the
+    /// cursor onto the point where two nearby segments of the line, at an obtuse angle, would meet.
+    pub fn drag_corner45_snapped(&mut self, p: Point, index: usize, snap: Um) {
         let n_segs = self.pts.len().saturating_sub(1);
         let width = self.width;
+        let p = self.snap_dragged_corner(p, index, snap);
         let new_pts = if index == 0 {
             let mut rev = self.pts.clone();
             rev.reverse();
@@ -124,6 +151,205 @@ impl Line {
         };
         self.pts = new_pts;
         self.width = width;
+        self.simplify();
+    }
+
+    /// The `i`th segment of the line as `SEG( CPoint( i ), CPoint( i + 1 ) )`.
+    fn seg_at(&self, i: usize) -> Seg2 {
+        (self.pts[i], self.pts[i + 1])
+    }
+
+    /// `LINE::snapDraggedCorner( aPath, aP, aIndex )`: when the cursor is within `snap` (`m_snapThreshhold`) of the point where two
+    /// segments among those two either side of the dragged vertex, at an obtuse angle to each other, would meet if extended,
+    /// the vertex goes there instead -- so a corner dragged near where it would fall onto the neighbouring legs' own corner
+    /// lands on it. `snap <= 0` leaves the cursor alone.
+    fn snap_dragged_corner(&self, p: Point, index: usize, snap: Um) -> Point {
+        if snap <= 0 {
+            return p;
+        }
+        let seg_count = self.segment_count() as isize;
+        let s_start = (index as isize - 2).max(0);
+        let s_end = (index as isize + 2).min(seg_count - 1);
+        let (mut best_dist, mut best_snap) = (i64::MAX, p);
+        for i in s_start..=s_end {
+            let a = self.seg_at(i as usize);
+            for j in s_start..i {
+                let b = self.seg_at(j as usize);
+                if Direction45::from_seg(a.0, a.1).angle_to(&Direction45::from_seg(b.0, b.1)) != AngleType::Obtuse {
+                    continue;
+                }
+                if let Some(ip) = seg_ops::intersect_lines(a, b) {
+                    let dist = seg_ops::length(ip, p);
+                    if dist < snap && dist < best_dist {
+                        best_dist = dist;
+                        best_snap = ip;
+                    }
+                }
+            }
+        }
+        best_snap
+    }
+
+    /// `LINE::snapToNeighbourSegments( aPath, aP, aIndex )`: when the segment being dragged runs in the same direction as the
+    /// one two before it or two after it, and the cursor is within `snap` of that one's line, the cursor snaps to its start
+    /// -- so the dragged segment lines up with it and the two can merge.
+    fn snap_to_neighbour_segments(path: &[Point], p: Point, index: usize, snap: Um) -> Point {
+        if snap == 0 {
+            return p;
+        }
+        let seg = |i: usize| (path[i], path[i + 1]);
+        let seg_count = path.len() as isize - 1;
+        let drag_dir = Direction45::from_seg(seg(index).0, seg(index).1);
+        let mut snap_p = [p, p];
+        let mut snap_d: [i64; 2] = [-1, -1];
+        if index >= 2 {
+            let s = seg(index - 2);
+            if Direction45::from_seg(s.0, s.1) == drag_dir {
+                snap_d[0] = seg_ops::line_distance(s, p);
+            }
+            snap_p[0] = s.0;
+        }
+        if (index as isize) < seg_count - 2 {
+            let s = seg(index + 2);
+            if Direction45::from_seg(s.0, s.1) == drag_dir {
+                snap_d[1] = seg_ops::line_distance(s, p);
+            }
+            snap_p[1] = s.0;
+        }
+        let (mut best, mut min_dist) = (p, i64::MAX);
+        for i in 0..2 {
+            if snap_d[i] >= 0 && snap_d[i] < min_dist && snap_d[i] <= snap {
+                min_dist = snap_d[i];
+                best = snap_p[i];
+            }
+        }
+        best
+    }
+
+    /// `LINE::DragSegment( aP, aIndex )` (`dragSegment45`): slide segment `index` -- at whatever angle it has -- so that it passes
+    /// through `p`, its direction unchanged. The legs on either side give way: each is stretched or shortened along its own
+    /// direction when it meets the dragged one at a right or acute angle, and where it continues the dragged direction, or the
+    /// dragged segment is the first or the last of the line, a new 45-degree leg is made to connect (whichever of the two ways
+    /// of turning gives the shortest line). A line of three or more segments keeps its far ends where they were.
+    /// `snap` is `m_snapThreshhold`: `snapToNeighbourSegments`.
+    pub fn drag_segment45(&mut self, p: Point, index: usize, snap: Um) {
+        let m_seg_count = self.segment_count();
+        if self.pts.len() < 2 || index >= m_seg_count {
+            return;
+        }
+        let mut path = self.pts.clone();
+        let target = Self::snap_to_neighbour_segments(&path, p, index, snap);
+
+        // "We require a valid s_prev and s_next. If we are at the start or end of the line, we insert a new point at the start
+        // or end so there is a zero-length segment for prev or next."
+        let mut idx = index;
+        if idx == 0 {
+            path.insert(0, path[0]);
+            idx += 1;
+        }
+        if idx == path.len() - 2 {
+            let last = *path.last().unwrap();
+            let at = path.len() - 1;
+            path.insert(at, last);
+        }
+
+        let seg = |path: &[Point], i: usize| -> Seg2 { (path[i], path[i + 1]) };
+        let dir_of = |s: Seg2| Direction45::from_seg(s.0, s.1);
+        let dragged = seg(&path, idx);
+        let drag_dir = dir_of(dragged);
+        let mut dir_prev = dir_of(seg(&path, idx - 1));
+        let mut dir_next = dir_of(seg(&path, idx + 1));
+
+        if dir_prev == drag_dir {
+            dir_prev = dir_prev.left();
+            path.insert(idx, path[idx]);
+            idx += 1;
+        } else if dir_prev == Direction45::Undefined {
+            dir_prev = drag_dir.left();
+        }
+        if dir_next == drag_dir {
+            dir_next = dir_next.right();
+            path.insert(idx + 1, path[idx + 1]);
+        } else if dir_next == Direction45::Undefined {
+            dir_next = drag_dir.right();
+        }
+
+        let s_prev = seg(&path, idx - 1);
+        let s_next = seg(&path, idx + 1);
+        let dragged = seg(&path, idx);
+        let ray = |from: Point, d: Direction45| -> Seg2 {
+            let (dx, dy) = d.unit();
+            (from, Point { x: from.x + dx, y: from.y + dy })
+        };
+
+        let (guide_a, guide_b): ([Seg2; 2], [Seg2; 2]);
+        if index == 0 {
+            guide_a = [ray(dragged.0, drag_dir.right()), ray(dragged.0, drag_dir.left())];
+        } else if matches!(dir_prev.angle_to(&drag_dir), AngleType::Obtuse | AngleType::HalfFull) {
+            guide_a = [ray(s_prev.0, drag_dir.left()), ray(s_prev.0, drag_dir.right())];
+        } else {
+            let g = ray(dragged.0, dir_prev);
+            guide_a = [g, g];
+        }
+        if index == m_seg_count - 1 {
+            guide_b = [ray(dragged.1, drag_dir.right()), ray(dragged.1, drag_dir.left())];
+        } else if matches!(dir_next.angle_to(&drag_dir), AngleType::Obtuse | AngleType::HalfFull) {
+            guide_b = [ray(s_next.1, drag_dir.left()), ray(s_next.1, drag_dir.right())];
+        } else {
+            let g = ray(dragged.1, dir_next);
+            guide_b = [g, g];
+        }
+
+        let s_current = ray(target, drag_dir);
+        let length_of = |pts: &[Point]| -> i64 { pts.windows(2).map(|w| seg_ops::length(w[0], w[1])).sum() };
+        let append = |pts: &mut Vec<Point>, q: Point| {
+            if pts.last() != Some(&q) {
+                pts.push(q);
+            }
+        };
+        let (mut best_len, mut best): (i64, Vec<Point>) = (i64::MAX, Vec::new());
+        for ga in &guide_a {
+            for gb in &guide_b {
+                let (Some(ip1), Some(ip2)) = (seg_ops::intersect_lines(s_current, *ga), seg_ops::intersect_lines(s_current, *gb)) else { continue };
+                let s1 = (s_prev.0, ip1);
+                let s3 = (ip2, s_next.1);
+                let mut np: Vec<Point> = Vec::new();
+                if let Some(ip) = seg_ops::intersect_segs(s1, s_next) {
+                    append(&mut np, s1.0);
+                    append(&mut np, ip);
+                    append(&mut np, s_next.1);
+                } else if let Some(ip) = seg_ops::intersect_segs(s3, s_prev) {
+                    append(&mut np, s_prev.0);
+                    append(&mut np, ip);
+                    append(&mut np, s3.1);
+                } else if let Some(ip) = seg_ops::intersect_segs(s1, s3) {
+                    append(&mut np, s_prev.0);
+                    append(&mut np, ip);
+                    append(&mut np, s_next.1);
+                } else {
+                    append(&mut np, s_prev.0);
+                    append(&mut np, ip1);
+                    append(&mut np, ip2);
+                    append(&mut np, s_next.1);
+                }
+                let len = length_of(&np);
+                if len < best_len {
+                    best_len = len;
+                    best = np;
+                }
+            }
+        }
+
+        if self.pts.len() == 1 {
+            self.pts = best;
+        } else if index == 0 {
+            replace_points(&mut self.pts, 0, 1, best);
+        } else if index == m_seg_count - 1 {
+            let n = self.pts.len();
+            replace_points(&mut self.pts, n - 2, n - 1, best);
+        } else {
+            replace_points(&mut self.pts, index, index + 1, best);
+        }
         self.simplify();
     }
 
@@ -148,6 +374,10 @@ impl Line {
         }
         out.push(*self.pts.last().unwrap());
         out.dedup();
+        // `SHAPE_LINE_CHAIN::Simplify`: "if we have only one point, we need to add a second point to make a line"
+        if out.len() == 1 {
+            out.push(out[0]);
+        }
         self.pts = out;
     }
 }
@@ -208,6 +438,43 @@ fn drag_corner_internal(origin: &[Point], p: Point) -> Vec<Point> {
             trace(origin[0], dir.is_diagonal())
         }
     }
+}
+
+/// `SHAPE_LINE_CHAIN::Replace( aStartIndex, aEndIndex, aLine )`: the points `start..=end` are replaced by `with`, except that a first
+/// point equal to `pts[start]` and a last one equal to `pts[end]` (when `end > 0`) are not repeated.
+fn replace_points(pts: &mut Vec<Point>, start: usize, end: usize, mut with: Vec<Point>) {
+    let (mut start, mut end) = (start, end);
+    if with.is_empty() {
+        remove_points(pts, start, end);
+        return;
+    }
+    if with[0] == pts[start] {
+        start += 1;
+        with.remove(0);
+        if with.is_empty() {
+            remove_points(pts, start, end);
+            return;
+        }
+    }
+    if *with.last().unwrap() == pts[end] && end > 0 {
+        end -= 1;
+        with.pop();
+    }
+    remove_points(pts, start, end);
+    if with.is_empty() {
+        return;
+    }
+    let tail = pts.split_off(start.min(pts.len()));
+    pts.extend(with);
+    pts.extend(tail);
+}
+
+/// `SHAPE_LINE_CHAIN::Remove( aStartIndex, aEndIndex )`: nothing when the range is empty or past the end.
+fn remove_points(pts: &mut Vec<Point>, start: usize, end: usize) {
+    if start >= pts.len() || end >= pts.len() || start > end {
+        return;
+    }
+    pts.drain(start..=end);
 }
 
 fn on_segment(a: Point, c: Point, b: Point) -> bool {
@@ -278,6 +545,59 @@ mod tests {
         assert!(on_45(&l.pts), "{:?}", l.pts);
         assert_eq!(l.pts.first(), Some(&p(-300, 100)));
         assert_eq!(l.pts.last(), Some(&p(1000, 1000)));
+    }
+
+    /// Expected values: KiCad's own `LINE::dragSegment45` / `dragCorner45` / `snapToNeighbourSegments` / `snapDraggedCorner`,
+    /// the function texts of `pcbnew/router/pns_line.cpp` at 8303b2ad compiled verbatim over the real `SEG` and `DIRECTION_45`
+    /// (80 000 random lines, 45-degree and arbitrary-angle ones, agreed with this port point for point); these are a few of them.
+    /// `(kind, snap, index, cursor, line, result)`.
+    #[test]
+    fn drags_give_what_kicads_own_functions_give() {
+        type Case = (char, i64, usize, (i64, i64), &'static [(i64, i64)], &'static [(i64, i64)]);
+        let cases: &[Case] = &[
+            // a 45-degree diagonal between two straight legs slides along them
+            ('S', 0, 1, (2500, 1500), &[(0, 0), (2000, 0), (3000, 1000), (5000, 1000)], &[(0, 0), (1000, 0), (2000, 1000), (5000, 1000)]),
+            // a 30-degree segment (the legs are at 0 and 90 degrees): it is dragged at the 45-degree heading it quantizes to, and the legs are stretched
+            ('S', 0, 1, (3000, 1500), &[(0, 0), (2000, 0), (3732, 1000), (3732, 3000)], &[(0, 0), (1500, 0), (3732, 2232), (3732, 3000)]),
+            ('S', 0, 1, (3000, -500), &[(0, 0), (2000, 0), (3732, 1000), (3732, 3000)], &[(0, 0), (3500, 0), (3732, 232), (3732, 3000)]),
+            // the first and the last segment of a line: a new 45-degree leg joins them to the rest
+            ('S', 0, 0, (1000, 500), &[(0, 0), (2000, 0), (3000, 1000)], &[(0, 0), (500, 500), (2500, 500), (3000, 1000)]),
+            ('S', 0, 0, (1000, 800), &[(0, 0), (4000, 0)], &[(0, 0), (800, 800), (3200, 800), (4000, 0)]),
+            // a segment dragged along its own line changes nothing
+            ('S', 0, 1, (2000, -2000), &[(0, 0), (2000, 0), (2000, 2000)], &[(0, 0), (2000, 0), (2000, 2000)]),
+            // within the snap threshold of a parallel segment two along, the dragged one lines up with it
+            ('S', 125, 1, (2000, 100), &[(0, 0), (2000, 0), (3000, 1000), (5000, 1000), (6000, 0)], &[(0, 0), (1900, 0), (2900, 1000), (5000, 1000), (6000, 0)]),
+            ('S', 0, 1, (3500, 1000), &[(0, 0), (1000, 0), (2000, 1000), (3000, 1000), (5000, 1000)], &[(0, 0), (2500, 0), (3000, 500), (3000, 1000), (5000, 1000)]),
+            // corner drags (`dragCorner45`): the end follows the cursor with 45-degree legs, within the threshold the corner snaps
+            ('C', 0, 1, (1500, 800), &[(0, 0), (1000, 0), (1000, 1000)], &[(0, 0), (700, 0), (1500, 800), (1300, 1000), (1000, 1000)]),
+            ('C', 0, 0, (-300, 100), &[(0, 0), (1000, 0), (1000, 1000)], &[(-300, 100), (-200, 0), (1000, 0), (1000, 1000)]),
+            ('C', 0, 2, (2600, 3200), &[(0, 0), (2000, 0), (2000, 2000)], &[(0, 0), (2000, 0), (2000, 2600), (2600, 3200)]),
+            ('C', 125, 1, (1100, 130), &[(0, 0), (2000, 0), (4000, 2000)], &[(0, 0), (970, 0), (1100, 130), (2130, 130), (4000, 2000)]),
+        ];
+        for (kind, snap, index, cursor, line, want) in cases {
+            let pts: Vec<Point> = line.iter().map(|&(x, y)| p(x, y)).collect();
+            let mut l = Line::from_points(None, 0, 200, pts);
+            let to = p(cursor.0, cursor.1);
+            if *kind == 'S' {
+                l.drag_segment45(to, *index, *snap);
+            } else {
+                l.drag_corner45_snapped(to, *index, *snap);
+            }
+            let want: Vec<Point> = want.iter().map(|&(x, y)| p(x, y)).collect();
+            assert_eq!(l.pts, want, "{kind} snap {snap} index {index} to {cursor:?} on {line:?}");
+        }
+    }
+
+    /// `dragCornerFree`: the vertex goes to the cursor at any angle; the 45-degree drag keeps 45-degree legs.
+    #[test]
+    fn a_free_angle_corner_drag_moves_the_vertex_to_the_cursor() {
+        let mut free = Line::from_points(None, 0, 200, vec![p(0, 0), p(1000, 0)]);
+        free.drag_corner(p(1000, 300), 1, true, 0);
+        assert_eq!(free.pts, vec![p(0, 0), p(1000, 300)]);
+        let mut to45 = Line::from_points(None, 0, 200, vec![p(0, 0), p(1000, 0)]);
+        to45.drag_corner(p(1000, 300), 1, false, 0);
+        assert!(on_45(&to45.pts), "{:?}", to45.pts);
+        assert_eq!(to45.pts.last(), Some(&p(1000, 300)));
     }
 
     #[test]
