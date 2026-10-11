@@ -1515,13 +1515,22 @@ export type TuneMode = "single" | "diffpair" | "skew";
  * `POST /api/cleanup_tracks/{preview,apply}` and
  * `components/CleanupTracksDialog.tsx`. Every field defaults `false`,
  * matching the base dialog's own ctor (no checkbox starts checked). */
-export interface CleanupOptions {
+export interface CleanupActions {
   delete_shorting: boolean;
   delete_redundant_vias: boolean;
   delete_dangling_vias: boolean;
   merge_segments: boolean;
   delete_dangling_tracks: boolean;
   delete_tracks_in_pads: boolean;
+}
+
+/** The checkboxes and the dialog's "Filter Items" box (kicad-port/cleanupFilters.ts; crates/connectivity/src/cleanup_filter.rs). A filter that is off has no key. */
+export interface CleanupOptions extends CleanupActions {
+  filter_net?: string;
+  filter_netclass?: string;
+  filter_layer?: string;
+  /** "Selected items only": the selected ids, groups among them (the backend opens them). Present -- even empty -- is on. */
+  selected_ids?: string[];
 }
 
 /** `crates/connectivity/src/cleanup.rs`'s `CleanupKind`, wire names. */
