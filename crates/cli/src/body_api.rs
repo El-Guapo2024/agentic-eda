@@ -75,8 +75,11 @@ pub fn fab_bbox(graphics: &[Shape]) -> Option<Rect> {
     ((bb.2 - bb.0) > 0 && (bb.3 - bb.1) > 0).then_some(bb)
 }
 
-fn installed_cache() -> &'static Mutex<HashMap<PathBuf, (Option<SystemTime>, Option<Rect>)>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (Option<SystemTime>, Option<Rect>)>>> = OnceLock::new();
+/// Each library footprint's body box with the modification time of the file it was read from.
+type BodyCache = Mutex<HashMap<PathBuf, (Option<SystemTime>, Option<Rect>)>>;
+
+fn installed_cache() -> &'static BodyCache {
+    static CACHE: OnceLock<BodyCache> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
