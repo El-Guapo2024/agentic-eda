@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   grabNearestUnconnectedFootprints,
-  otherEndOfStart,
   polarTranslation,
   positionRelativeSelectionAnchor,
   relativeMoveVector,
@@ -193,9 +192,3 @@ test("routeStartLayer: active layer when the pad can sit on it, else the pad's s
   assert.equal(routeStartLayer({ th: true, side: "top" }, layers, "F.SilkS"), "F.Cu");
 });
 
-test("otherEndOfStart: far end of the ratsnest line at the route start, null off any line", () => {
-  assert.deepEqual(otherEndOfStart([0, 0], "N", edges), [1000, 0]);
-  assert.deepEqual(otherEndOfStart([2000, 0], "N", edges), [1000, 0]);
-  assert.equal(otherEndOfStart([3, 3], "N", edges), null);
-  assert.equal(otherEndOfStart([0, 0], "X", edges), null);
-});

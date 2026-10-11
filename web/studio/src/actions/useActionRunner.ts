@@ -19,7 +19,8 @@ import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
-import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
+import { finishInteractiveRoute, cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute } from "../components/canvas/routing";
+import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic } from "../api/client";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
@@ -31,7 +32,7 @@ import { snapPoint } from "../components/canvas/gridHelper";
 import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
 import { editableSelection, flipPivot, rotationPivot } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
-import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
+import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
@@ -1986,7 +1987,7 @@ export function useActionRunner() {
           }
           dispatch({ type: "SET_SELECTION", refs: [] });
           const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
-          const settings = state.routerSettings;
+          const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
             return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch)) ? "live" : "done";
@@ -2023,24 +2024,17 @@ export function useActionRunner() {
       m.set("pcbnew.InteractiveRouter.RouteSelectedFromEnd", routeSelected("fromEnd"));
       m.set("pcbnew.InteractiveRouter.Autoroute", routeSelected("auto"));
 
-      // ---- ContinueFromEnd (Ctrl+E while routing) -- router_tool.cpp `routerContinueFromEnd` -> pns_router.cpp ROUTER::ContinueFromEnd: restart the route from the far end of its
-      // ratsnest line. Only before anything was fixed (source's `HasPlacedAnything()` false case: nothing to carry over); the live session is replaced.
+      // ---- ContinueFromEnd (Ctrl+E while routing) -- router_tool.cpp `routerContinueFromEnd` -> pns_router.cpp ROUTER::ContinueFromEnd: what the route has fixed is committed (nothing, if nothing was)
+      // and a new route starts at the far end of the connection, heading for where this one's head ended. Before the first fix and after it alike; the router finds the far end
+      // (`GetNearestRatnestAnchor`: the nearest unconnected pad, via or track of the net, the fixed segments counting as connected) and `committed` says whether the board changed.
       if (routing && state.drawState?.kind === "route") {
         const live = state.drawState;
         m.set(
           "pcbnew.InteractiveRouter.ContinueFromEnd",
           pcbOnly(async () => {
-            if ((live.runs?.length ?? 0) > 0 || live.via || live.pts.length === 0) {
-              dispatch({ type: "TOAST", message: "Route From Other End: only available before the first segment is fixed.", kind: "error" });
-              return;
-            }
-            const far = otherEndOfStart(live.pts[0]!, live.net, ratsnestEdges);
-            if (!far) {
-              dispatch({ type: "TOAST", message: "Route From Other End: this route does not start on an unrouted connection.", kind: "error" });
-              return;
-            }
-            cancelInteractiveRoute(dispatch);
-            await startInteractiveRoute(far[0], far[1], live.layer, live.width, state.routerSettings, dispatch);
+            const end = live.pts[live.pts.length - 1] ?? (state.cursorUm ? ([state.cursorUm.x, state.cursorUm.y] as [number, number]) : null);
+            if (!end) return;
+            await continueInteractiveRouteFromEnd(end, live, dispatch, api);
           })
         );
       }

@@ -1385,6 +1385,10 @@ export interface RoutePreview {
   displaced: RouteDisplacedLine[];
   /** `Mode::Shove` only: other vias this preview would push out of the way. */
   displaced_vias: RouteDisplacedVia[];
+  /** `POST /api/route/continue_from_end` only (Route From Other End): the route fixed so far was committed, so the board changed. */
+  committed?: boolean;
+  /** `POST /api/route/continue_from_end` only: the far end of the connection, where the new route starts. */
+  from?: [Um, Um];
 }
 
 export interface RouteFixReply {
@@ -1410,9 +1414,17 @@ export interface RouteFixReply {
 export interface DragPreview {
   ok: boolean;
   message?: string;
+  /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
+   * vertex (`DM_CORNER`) or a via (`DM_VIA`). */
+  drag?: "segment" | "corner" | "via";
   colliding: boolean;
+  /** The cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last
+   * solution"), and letting go commits that one. */
+  restored?: boolean;
+  /** The first position failed, so the drag only marks obstacles (`GetForceMarkObstaclesMode`): a violation is committed with Ctrl+click only. */
+  forced_mark_obstacles?: boolean;
   /** The dragged item's own new shape: just its live position (1 point)
-   * for a via, or N points for a stretched track corner drag. */
+   * for a via, or N points for the whole stretched track (a corner or a segment drag). */
   pts: [Um, Um][];
   /** `shove` mode only: other tracks this drag would push out of the way. */
   displaced: RouteDisplacedLine[];

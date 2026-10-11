@@ -248,7 +248,7 @@ export type DrawState =
    * manually kept in sync, same convention as the "route" variant above). */
   | {
       kind: "drag";
-      dragKind: "corner" | "via";
+      dragKind: "corner" | "segment" | "via";
       net: string | null;
       layer: string;
       width: Um;
@@ -258,6 +258,10 @@ export type DrawState =
        * `DragPreview`'s own doc comment. */
       pts: [Um, Um][];
       colliding?: boolean;
+      /** The cursor is where the drag cannot be resolved: `pts` is the last position that could be (see kicad-port/dragTool.ts). */
+      restored?: boolean;
+      /** The first position failed, so the drag only marks obstacles; Ctrl+click commits a violation. */
+      forcedMark?: boolean;
       /** `shove` mode only: other tracks/vias this drag would push aside. */
       displaced?: { layer: string; pts: [Um, Um][] }[];
       displacedVias?: { source_via: string; x: Um; y: Um }[];
