@@ -3379,6 +3379,53 @@ mod tests {
         assert!(without.iter().any(|f| f.contains("MyFoot")), "without the table kicad-cli does not know the library: {without:?}");
     }
 
+    /// 3D models through a table library's path (slow tier): a footprint of the board's own library whose model is addressed with one of the board's path variables
+    /// (`${TEAM}/R_0603.step`) gets its model in the 3D export, and loses it when the variable is not defined -- the export is told the board's variables.
+    #[test]
+    fn the_3d_export_finds_a_models_of_a_table_library_through_the_boards_variable() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let share = eda_kicad::default_footprint_library_root();
+        let footprint = share.join("Resistor_SMD.pretty").join("R_0603_1608Metric.kicad_mod");
+        let step = share.parent().map(|p| p.join("3dmodels").join("Resistor_SMD.3dshapes").join("R_0603_1608Metric.step"));
+        let Some(step) = step.filter(|s| s.is_file() && footprint.is_file() && eda_kicad_engine::find_cli().is_some()) else {
+            eprintln!("no kicad-cli or no KiCad footprint and 3D model libraries; skipping");
+            return;
+        };
+        let dir = scratch("tables_glb");
+        setup(&dir);
+        std::fs::create_dir_all(dir.join("libs").join("Res.pretty")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::copy(&step, dir.join("models").join("R_0603_1608Metric.step")).unwrap();
+        let text = std::fs::read_to_string(&footprint).unwrap().replace("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step", "${TEAM}/R_0603_1608Metric.step");
+        assert!(text.contains("${TEAM}/R_0603_1608Metric.step"), "the footprint names its model through the variable");
+        std::fs::write(dir.join("libs").join("Res.pretty").join("R_0603_1608Metric.kicad_mod"), text).unwrap();
+        assert_eq!(crate::library_tables::add_library(&dir, br#"{"kind":"footprint","path":"${KIPRJMOD}/libs/Res.pretty"}"#)["ok"], true);
+        step_ok(&dir, Cmd::PlaceFootprint { footprint: "Res:R_0603_1608Metric".into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None });
+
+        let meshes = |glb: &[u8]| -> usize {
+            let json_len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+            let json: serde_json::Value = serde_json::from_slice(&glb[20..20 + json_len]).unwrap();
+            json["meshes"].as_array().map_or(0, Vec::len)
+        };
+        let set_team = |on: bool| {
+            let body = if on { br#"{"variables":[{"name":"TEAM","value":"${KIPRJMOD}/models"}]}"#.to_vec() } else { br#"{"variables":[]}"#.to_vec() };
+            assert_eq!(crate::library_tables::set_variables(&dir, &body)["ok"], true);
+        };
+        set_team(true);
+        let with = crate::studio::build_glb(&dir).expect("kicad-cli exports the board");
+        set_team(false);
+        let without = crate::studio::build_glb(&dir).expect("kicad-cli exports the board");
+        assert!(meshes(&with) > meshes(&without), "the resistor's model is in the export when the board defines the variable: {} meshes with it, {} without", meshes(&with), meshes(&without));
+    }
+
+    /// `step` for a command that must pass, with the failure told.
+    fn step_ok(dir: &Path, cmd: Cmd) {
+        step(dir, cmd, false, "test").unwrap_or_else(|e| panic!("{e:?}"));
+    }
+
     fn kicad_pcb_text_of(dir: &Path) -> String {
         let (_, design, model) = load(dir).unwrap();
         eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-08", title: "t" }).unwrap()

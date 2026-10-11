@@ -370,7 +370,7 @@ fn ensure_routed_nets(design: &eda_model::ir::Design, model: &mut eda_model::Con
 /// files open) if it runs longer, so a stuck or pathological export can
 /// never pile up processes or run forever even though nothing is
 /// polling its stdout.
-fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
     let (meta, design, mut model) = board::load(dir).map_err(|e| board::reasons(&e))?;
     ensure_routed_nets(&design, &mut model);
     let title = Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
@@ -397,6 +397,12 @@ fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
     if let Err(e) = std::fs::write(&pcb_path, &pcb_text) {
         cleanup();
         return Err(format!("could not write temp .kicad_pcb: {e}"));
+    }
+    // The board's path variables, so a model addressed through one of them (`${TEAM_LIBS}/part.step`, `${KIPRJMOD}/3d/part.step`: a footprint of one of the board's own
+    // libraries) is found here as it is in the derived project kicad-cli runs on elsewhere (`eda_kicad::library_table::derive_project`).
+    let mut project = json!({});
+    if eda_kicad::library_table::derive_project(dir, &tmp_dir, &mut project).unwrap_or(false) {
+        let _ = std::fs::write(tmp_dir.join(format!("{title}.kicad_pro")), serde_json::to_string_pretty(&project).unwrap_or_default());
     }
     let stderr_file = match std::fs::File::create(&stderr_path) {
         Ok(f) => f,
