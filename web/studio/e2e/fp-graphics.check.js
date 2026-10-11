@@ -1,14 +1,14 @@
 // Footprint graphics check (GAPS.md items 2 and 25, PARITY-pcb.md section 28): a placed footprint carries the silkscreen outline, the pin-1 mark, the fab body and the texts of its
 // footprint (`parts[].graphics`, `parts[].texts` in `GET /api/state`, board space), and the canvas draws them -- each on its layer, in that layer's colour, under the Appearance
 // panel's rows (the layer's switch, Footprints Front, Footprint Text) -- a click on one of their strokes picks the footprint, and a turn and a flip of the footprint carry them with it
-// (the layers go to the other side, the text turns and is mirrored).
+// (the layers go to the other side, the text turns and is mirrored), and the 3D view draws the silkscreen.
 // Run it in the page of a served board that has footprints placed -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY of a board
 // (it selects, turns and flips a footprint and undoes both, and it switches Appearance rows off and back on). It makes nothing that stays: it compares the board with how it was.
 //
 // It needs placed footprints whose packages are KiCad's (the examples' `0603`, `SOIC-8`: `eda board new examples/opamp_filter.yaml`, then `eda board place U1 --at 9,9` ...) and the
 // installed KiCad footprint libraries (their silkscreen is what the built-in packages are given). It answers through `window.__fpGraphicsCheck`:
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
-// Read it with `await __fpGraphicsCheck.wait(40000)` until `.done` (a run takes about ten seconds).
+// Read it with `await __fpGraphicsCheck.wait(60000)` until `.done` (a run takes about twenty seconds).
 //
 // It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, `pcbnew.InteractiveEdit.rotateCcw` / `flip`, undo with `common.Interactive.undo`, the Appearance
 // rows through `studio.Appearance.op`), the canvas's own pixels and a synthetic click on the canvas (pointer events at the position a stroke is drawn at).
@@ -188,6 +188,23 @@
     const back = await get();
     t(JSON.stringify(bbox(back)) === JSON.stringify(b0) && back.side === "top" && JSON.stringify(layersOf(back)) === JSON.stringify(layersOf(start)), "two undos bring the drawings back exactly");
     void c0;
+  });
+
+  await scenario("the 3D view draws the silkscreen of the footprints", async (t) => {
+    const silkCount = (await placed()).reduce((n, p) => n + p.graphics.filter((g) => g.layer === "F.SilkS" || g.layer === "B.SilkS").length, 0);
+    const view = () => __eda.state().viewer3d;
+    await __eda.run("common.Control.show3DViewer");
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000 && !(view() && view().open && view().parts.total > 0)) await sleep(150);
+    await sleep(800);
+    const scene = view().scene;
+    const drawn = (scene["silk-shape-line"] ?? 0) + (scene["silk-shape-fill"] ?? 0);
+    t(silkCount > 0, `${silkCount} silkscreen graphics on the placed footprints`);
+    t(drawn === silkCount, `the scene has one piece for each: ${drawn} (${scene["silk-shape-line"] ?? 0} lines, ${scene["silk-shape-fill"] ?? 0} fills)`);
+    // back to the board
+    [...document.querySelectorAll("button, [role=tab]")].find((b) => b.textContent.trim() === "PCB")?.click();
+    await sleep(800);
+    t(__eda.state().tab === "pcb", "and the PCB tab again");
   });
 
   await scenario("the board is as it was and nothing broke", async (t) => {
