@@ -168,3 +168,23 @@ fn fix_discontinuities_closes_an_outline_whose_corners_miss() {
     let report = drc(&cli, &dir, &pcb);
     assert!(!has_violation(&report, "invalid_outline"), "the fix closes it: {}", report["violations"]);
 }
+
+#[test]
+fn an_svg_outline_is_a_closed_outline_to_kicad_cli_too() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let model = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &model, 100, 300);
+    let svg = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_rect.svg", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let req = ImportGraphics { format: GraphicsFormat::Svg, text: svg, layer: "Edge.Cuts".into(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 100, group: false, fix_tolerance_um: None, replace_outline: false };
+    b.apply(&Cmd::ImportGraphics(req)).expect("the import applies");
+    let dir = scratch("svg");
+    let pcb = write_board(&dir, b.design(), &model);
+    let report = drc(&cli, &dir, &pcb);
+    assert!(!has_violation(&report, "invalid_outline"), "kicad-cli finds the imported polygon outline closed: {}", report["violations"]);
+}

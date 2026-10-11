@@ -258,6 +258,71 @@ fn a_file_that_cannot_be_imported_is_refused_with_the_reason_and_nothing_changes
     assert_eq!(serde_json::to_string(b.design()).unwrap(), serde_json::to_string(&before).unwrap(), "a refused command changes nothing");
 }
 
+fn svg_req(name: &str, layer: &str) -> ImportGraphics {
+    ImportGraphics { format: GraphicsFormat::Svg, ..req(fixture(name), layer) }
+}
+
+#[test]
+fn an_svg_outline_becomes_a_polygon_on_the_layer_with_the_strokes_width() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&Cmd::ImportGraphics(svg_req("board_outline_rect.svg", "Dwgs.User"))).unwrap();
+    let new = added(&b);
+    assert_eq!(new.len(), 1, "{new:?}");
+    let Shape::Polygon { layer, stroke_width, filled, pts, .. } = &new[0] else { panic!("{new:?}") };
+    // The stroke of the SVG is 0.1 mm; the dialog's DXF line width (0.2) has no say for an SVG. An SVG's Y axis already points down.
+    assert_eq!((layer.as_str(), *stroke_width, *filled), ("Dwgs.User", 100, false));
+    let (minx, maxx) = (pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap());
+    let (miny, maxy) = (pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap());
+    assert_eq!((minx, maxx, miny, maxy), (0, 40_000, 0, 30_000));
+    assert!(pts.len() > 20, "the rounded corners are cut into segments: {}", pts.len());
+}
+
+#[test]
+fn an_svg_scale_and_origin_work_as_a_dxfs_do() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let mut r = svg_req("board_outline_rect.svg", "Cmts.User");
+    r.scale = 0.5;
+    r.offset_x_nm = 10_000_000;
+    r.offset_y_nm = 20_000_000;
+    b.apply(&Cmd::ImportGraphics(r)).unwrap();
+    let Shape::Polygon { stroke_width, pts, .. } = &added(&b)[0] else { panic!() };
+    assert_eq!(*stroke_width, 50, "0.1 mm halved");
+    assert_eq!((pts.iter().map(|p| p.x).min().unwrap(), pts.iter().map(|p| p.x).max().unwrap()), (10_000, 30_000));
+    assert_eq!((pts.iter().map(|p| p.y).min().unwrap(), pts.iter().map(|p| p.y).max().unwrap()), (20_000, 35_000));
+}
+
+#[test]
+fn an_svg_with_curves_filled_shapes_and_text_keeps_the_curves_and_the_fills() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    b.apply(&Cmd::ImportGraphics(req_fmt(GraphicsFormat::Svg, fixture("paths_and_transforms.svg"), "F.SilkS"))).unwrap();
+    let new = added(&b);
+    assert!(new.iter().any(|s| matches!(s, Shape::Bezier { .. })), "the cubic, the quadratic and the arc keep their bend: {new:?}");
+    assert!(new.iter().any(|s| matches!(s, Shape::Segment { .. })), "the straight pieces are lines");
+    let fills: Vec<&Shape> = new.iter().filter(|s| matches!(s, Shape::Polygon { filled: true, .. })).collect();
+    assert_eq!(fills.len(), 1, "the shape with the hole is one filled polygon");
+    assert_eq!(fills[0].stroke_width(), 0, "a fill with no stroke has no width");
+    assert_eq!(drawings(&b).texts.len(), 1, "text is not imported: only the fixture board's own is there");
+}
+
+fn req_fmt(format: GraphicsFormat, text: String, layer: &str) -> ImportGraphics {
+    ImportGraphics { format, ..req(text, layer) }
+}
+
+#[test]
+fn an_svg_outline_can_replace_the_boards_outline_too() {
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let mut r = svg_req("board_outline_rect.svg", "Edge.Cuts");
+    r.replace_outline = true;
+    b.apply(&Cmd::ImportGraphics(r)).unwrap();
+    assert!(eda_model::outline::outline_is_shapes(b.design()));
+    let ring = &b.design().placement.as_ref().unwrap().outline;
+    assert_eq!((ring.iter().map(|p| p.x).min().unwrap(), ring.iter().map(|p| p.x).max().unwrap(), ring.iter().map(|p| p.y).max().unwrap()), (0, 40_000, 30_000), "{}", ring.len());
+}
+
 #[test]
 fn the_command_reads_from_and_writes_to_the_json_the_studio_sends() {
     let r = req("0\nEOF\n".into(), "Edge.Cuts");

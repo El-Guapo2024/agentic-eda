@@ -58,9 +58,13 @@
   /** A 10 mm square whose corners miss by 0.3 mm. */
   const gappy = dxf([[0, 0, 9.7, 0], [10, 0.3, 10, 9.7], [9.7, 10, 0.3, 10], [0, 9.7, 0, 0.3]].map((l) => line(...l)).join(""));
 
+  /** A 40 x 30 mm rounded rect drawn with a 0.1 mm stroke, the way a vector drawing tool writes it, and a small filled logo with a hole. */
+  const svgRect = `<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="30mm" viewBox="0 0 40 30"><rect x="0" y="0" width="40" height="30" rx="3" fill="none" stroke="#000" stroke-width="0.1"/></svg>`;
+  const svgLogo = `<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="20mm" viewBox="0 0 20 20"><path d="M0 0 h20 v20 h-20 z M5 5 v10 h10 v-10 z" fill="#333" fill-rule="evenodd"/><text x="1" y="1">x</text></svg>`;
+
   /** The extent of the shapes on the board: [minx, miny, maxx, maxy] in um. */
   const extent = (shapes) => {
-    const pts = shapes.flatMap((s) => s.kind === "arc" ? [s.start, s.mid, s.end] : s.kind === "circle" ? [s.center] : [s.start, s.end]);
+    const pts = shapes.flatMap((s) => s.kind === "arc" ? [s.start, s.mid, s.end] : s.kind === "circle" ? [s.center] : s.kind === "polygon" ? s.pts : [s.start, s.end]);
     return [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
   };
 
@@ -207,6 +211,28 @@
     r = await importFile({ name: "gappy.dxf", text: gappy }, { Layer: "Edge.Cuts", "Place at": true, "Fix discontinuities": true, Tolerance: "1", "Group imported items": false, "Use as the board outline": false });
     applied++;
     check("with it (tolerance 1 mm) each side ends where the next begins", joined(added(r.st).slice(-4)), JSON.stringify(added(r.st).slice(-4).map((s) => [s.start, s.end])));
+    await undo();
+    applied--;
+
+
+    // ============================================================================================================================ SVG
+    r = await importFile({ name: "outline.svg", text: svgRect }, { Layer: "Dwgs.User", "Place at": true, "Group imported items": true }, { ok: false });
+    check("an SVG is read by the same dialog: its contents are described", /1 item: 1 polygon/.test(r.info), r.info);
+    check("the DXF's line width and unit have no say for an SVG: those controls are off", field("DXF default line width").disabled && field("DXF default units").disabled);
+    button("OK").click();
+    await sleep(1500);
+    applied++;
+    sh = added(await board());
+    const poly = sh.find((s) => s.kind === "polygon");
+    check("a stroked rounded rect is one unfilled polygon with the stroke's own width (0.1 mm), not the DXF default", !!poly && !poly.filled && poly.stroke_width === 100, JSON.stringify(poly && { kind: poly.kind, w: poly.stroke_width, filled: poly.filled }));
+    const [vx0, vy0, vx1, vy1] = extent([poly]);
+    check("at the origin, 40 x 30 mm, y down as the SVG has it", vx0 === 0 && vy0 === 0 && vx1 === 40000 && vy1 === 30000, [vx0, vy0, vx1, vy1]);
+    await undo();
+    applied--;
+    r = await importFile({ name: "logo.svg", text: svgLogo }, { Layer: "F.SilkS", "Place at": true, "Group imported items": false });
+    applied++;
+    const logo = added(r.st).filter((s) => s.kind === "polygon");
+    check("a filled shape with a hole is one filled polygon of no width, and the SVG's text is said not to be imported", logo.length === 1 && logo[0].filled && logo[0].stroke_width === 0 && /text elements are not currently supported/.test(r.info), `${logo.length} ${r.info}`);
     await undo();
     applied--;
 
