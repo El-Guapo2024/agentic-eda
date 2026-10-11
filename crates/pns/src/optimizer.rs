@@ -559,23 +559,114 @@ fn find_coupled_vertices(vertex: eda_model::ir::Point, orig_seg: crate::seg_ops:
     out
 }
 
-/// `verifyDpBypass`: the new reference line and the new coupled one keep the clearance from each other and from the world.
-fn verify_dp_bypass(node: &Node, rules: &BoardRules, pair: &crate::diff_pair::DiffPair, ref_is_p: bool, new_ref: &[eda_model::ir::Point], new_coupled: &[eda_model::ir::Point]) -> bool {
+/// The answers `NODE::CheckColliding` has given for the segments (and vias) the pair optimizer has asked about so far. The world does
+/// not change while a pair is optimized and the candidates it tries share nearly all their segments, so each distinct segment is
+/// asked once.
+struct HitCache<'a> {
+    node: &'a Node,
+    rules: &'a BoardRules,
+    memo: std::cell::RefCell<std::collections::HashMap<(i64, i64, i64, i64, Um, i32, crate::item::Net), bool, std::hash::BuildHasherDefault<Fnv>>>,
+}
+
+/// FNV-1a: the memo is hit by the thousand per preview, and its keys are small and not adversarial.
+#[derive(Default)]
+struct Fnv(u64);
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut h = if self.0 == 0 { 0xcbf2_9ce4_8422_2325 } else { self.0 };
+        for b in bytes {
+            h ^= *b as u64;
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        self.0 = h;
+    }
+}
+
+impl<'a> HitCache<'a> {
+    fn new(node: &'a Node, rules: &'a BoardRules) -> Self {
+        HitCache { node, rules, memo: std::cell::RefCell::new(std::collections::HashMap::default()) }
+    }
+
+    /// Whether one segment of a line collides with the world.
+    fn segment_hits(&self, a: eda_model::ir::Point, b: eda_model::ir::Point, l: &crate::diff_pair::PairLine) -> bool {
+        use crate::node::kind_mask;
+        let key = (a.x, a.y, b.x, b.y, l.width, l.layer, l.net.clone());
+        let cached = self.memo.borrow().get(&key).copied();
+        cached.unwrap_or_else(|| {
+            let one = [a, b];
+            let hit = crate::diff_pair::PairLine { pts: &one, via: None, ..*l }.hits_node(self.node, self.rules, kind_mask::ANY);
+            self.memo.borrow_mut().insert(key, hit);
+            hit
+        })
+    }
+
+    fn via_hits(&self, l: &crate::diff_pair::PairLine) -> bool {
+        l.via.is_some_and(|v| crate::diff_pair::PairLine { pts: &[], via: Some(v), ..*l }.hits_node(self.node, self.rules, crate::node::kind_mask::ANY))
+    }
+
+    /// Which segments of a line collide with the world, to be reused for the candidates that change only part of it.
+    fn chain_hits(&self, l: &crate::diff_pair::PairLine) -> ChainHits {
+        let mut prefix = vec![0usize];
+        for w in l.pts.windows(2) {
+            prefix.push(prefix.last().unwrap() + usize::from(self.segment_hits(w[0], w[1], l)));
+        }
+        ChainHits { pts: l.pts.to_vec(), prefix }
+    }
+
+    /// `NODE::CheckColliding( &line )` (any kind of item): some segment of the line, or its via, is within clearance of the world. `base`
+    /// is the line this one is a variation of: the segments both share, at the start and at the end, are not asked about again.
+    fn hits_with_base(&self, base: &ChainHits, l: &crate::diff_pair::PairLine) -> bool {
+        let (b, c) = (&base.pts, l.pts);
+        let lp = b.iter().zip(c.iter()).take_while(|(x, y)| x == y).count();
+        let ls = b.iter().rev().zip(c.iter().rev()).take(b.len().min(c.len()) - lp.min(b.len().min(c.len()))).take_while(|(x, y)| x == y).count();
+        // segments with both ends in the shared start are the base's own, and so are those with both ends in the shared end
+        if lp >= 2 && base.prefix[lp - 1] > 0 {
+            return true;
+        }
+        if ls >= 2 && base.prefix[b.len() - 1] - base.prefix[b.len() - ls] > 0 {
+            return true;
+        }
+        let first_new = lp.saturating_sub(1);
+        let end_new = if ls >= 2 { c.len() - ls } else { c.len().saturating_sub(1) };
+        if (first_new..end_new).any(|i| self.segment_hits(c[i], c[i + 1], l)) {
+            return true;
+        }
+        self.via_hits(l)
+    }
+}
+
+/// [`HitCache::chain_hits`]: the vertices of a line, and how many of its segments collide among the first `i` of them.
+struct ChainHits {
+    pts: Vec<eda_model::ir::Point>,
+    prefix: Vec<usize>,
+}
+
+/// `verifyDpBypass`: the new reference line and the new coupled one keep the clearance from each other and from the world. `base_ref`
+/// and `base_coupled` are the lines the candidates are variations of.
+fn verify_dp_bypass(cache: &HitCache, base: (&ChainHits, &ChainHits), pair: &crate::diff_pair::DiffPair, ref_is_p: bool, new_ref: &[eda_model::ir::Point], new_coupled: &[eda_model::ir::Point]) -> bool {
     use crate::diff_pair::PairLine;
-    use crate::node::kind_mask;
     let (ref_base, coupled_base) = if ref_is_p { (pair.p_pair_line(), pair.n_pair_line()) } else { (pair.n_pair_line(), pair.p_pair_line()) };
     let ref_line = PairLine { pts: new_ref, ..ref_base };
     let coupled_line = PairLine { pts: new_coupled, ..coupled_base };
-    !(ref_line.hits_line(&coupled_line, rules) || ref_line.hits_node(node, rules, kind_mask::ANY) || coupled_line.hits_node(node, rules, kind_mask::ANY))
+    !(cache.hits_with_base(base.0, &ref_line) || cache.hits_with_base(base.1, &coupled_line) || ref_line.hits_line(&coupled_line, cache.rules))
 }
 
 /// `coupledBypass`: a new route for the coupled line that follows the bypass the reference line took -- from a vertex of the coupled line
 /// beside the bypass's start to another vertex of it -- picking the one that keeps the most coupled length and that is clear.
-fn coupled_bypass(node: &Node, rules: &BoardRules, pair: &crate::diff_pair::DiffPair, ref_is_p: bool, new_ref: &[eda_model::ir::Point], ref_bypass: &[eda_model::ir::Point], coupled: &[eda_model::ir::Point]) -> Option<Vec<eda_model::ir::Point>> {
+///
+/// KiCad walks the candidates in order and keeps a clear one only when it is longer than the best so far; so the winner is the clear
+/// candidate with the most coupled length, the first of them in that order on a tie. That is also the first clear one when they are tried
+/// longest first, which is how it is found here: clearing a candidate costs a walk over both lines, working out its length does not.
+fn coupled_bypass(cache: &HitCache, base: (&ChainHits, &ChainHits), pair: &crate::diff_pair::DiffPair, ref_is_p: bool, new_ref: &[eda_model::ir::Point], ref_bypass: &[eda_model::ir::Point], coupled: &[eda_model::ir::Point]) -> Option<Vec<eda_model::ir::Point>> {
     let starts = find_coupled_vertices(ref_bypass[0], (ref_bypass[0], ref_bypass[1]), coupled, pair);
     let dir = Direction45::from_seg(ref_bypass[0], ref_bypass[1]);
-    let mut best_length: i64 = -1;
-    let mut best: Option<Vec<eda_model::ir::Point>> = None;
+    // (coupled length, position in KiCad's order, the coupled line with the bypass in it)
+    let mut candidates: Vec<(i64, usize, Vec<eda_model::ir::Point>)> = Vec::new();
     for &si in &starts {
         for j in 1..coupled.len().saturating_sub(1) {
             if si.abs_diff(j) <= 1 {
@@ -593,21 +684,29 @@ fn coupled_bypass(node: &Node, rules: &BoardRules, pair: &crate::diff_pair::Diff
                 rev.reverse();
                 crate::line::replace_points(&mut new_coupled, j, si, rev);
             }
-            if coupled_length > best_length && verify_dp_bypass(node, rules, pair, ref_is_p, new_ref, &new_coupled) {
-                best_length = coupled_length;
-                best = Some(new_coupled);
-            }
+            candidates.push((coupled_length, candidates.len(), new_coupled));
         }
     }
-    best
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    candidates.into_iter().find(|(_, _, new_coupled)| verify_dp_bypass(cache, base, pair, ref_is_p, new_ref, new_coupled)).map(|(_, _, c)| c)
 }
 
 /// `OPTIMIZER::mergeDpStep`: a shortcut between segments `n` and `n + step` of one line of the pair (an obtuse corner pair), with the other
 /// line taking the matching shortcut if it can; the first that gives up no more than a tenth of the coupled length wins.
-fn merge_dp_step(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pair::DiffPair, try_p: bool, step: usize) -> bool {
+fn merge_dp_step(cache: &HitCache, pair: &mut crate::diff_pair::DiffPair, try_p: bool, step: usize) -> bool {
     let (current_path, coupled_path) = if try_p { (pair.p.clone(), pair.n.clone()) } else { (pair.n.clone(), pair.p.clone()) };
+    let (ref_line, coupled_line) = if try_p { (pair.p_pair_line(), pair.n_pair_line()) } else { (pair.n_pair_line(), pair.p_pair_line()) };
+    let base = (cache.chain_hits(&ref_line), cache.chain_hits(&coupled_line));
     let n_segs = current_path.len() as i64 - 1 - 1;
-    let clen_pre = pair.coupled_length_of(&current_path, &coupled_path);
+    // `CoupledLength( aRef, aCoupled )` is a sum over every segment of the reference with every segment of the coupled line. Each
+    // candidate replaces a stretch of the reference, so its coupled length is the total less the replaced segments' share plus the
+    // bypass's: the shares are worked out once here, not for every candidate (a walk round a pad cluster leaves tens of segments).
+    let share = |a: crate::seg_ops::Seg2| coupled_path.windows(2).map(|w| pair.coupled_length_of_segs(a, (w[0], w[1]))).sum::<i64>();
+    let mut prefix = vec![0i64];
+    for w in current_path.windows(2) {
+        prefix.push(prefix.last().unwrap() + share((w[0], w[1])));
+    }
+    let clen_pre = *prefix.last().unwrap();
     let budget = clen_pre / 10; // "fixme: come up with something more intelligent here..."
     let mut n = 1usize;
     while (n as i64) < n_segs - step as i64 {
@@ -617,8 +716,13 @@ fn merge_dp_step(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pair::D
             let bypass = Direction45::Undefined.build_initial_trace(s1.0, s2.1, dir1.is_diagonal(), CornerMode::Mitered45);
             let mut new_ref = current_path.clone();
             crate::line::replace_points(&mut new_ref, n, n + step, bypass.clone());
-            let delta_uni = pair.coupled_length_of(&new_ref, &coupled_path) - clen_pre + budget;
-            if let Some(new_coup) = coupled_bypass(node, rules, pair, try_p, &new_ref, &bypass, &coupled_path) {
+            // segments 0..n and n+step+1.. of the reference are as they were; the bypass is new
+            let coupled_uni = prefix[n] + (clen_pre - prefix[n + step + 1]) + bypass.windows(2).map(|w| share((w[0], w[1]))).sum::<i64>();
+            if cfg!(test) {
+                assert_eq!(coupled_uni, pair.coupled_length_of(&new_ref, &coupled_path), "the coupled length of a candidate is the total less what it replaced plus what it adds");
+            }
+            let delta_uni = coupled_uni - clen_pre + budget;
+            if let Some(new_coup) = coupled_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &bypass, &coupled_path) {
                 let delta_coupled = pair.coupled_length_of(&new_ref, &new_coup) - clen_pre + budget;
                 if delta_coupled >= 0 {
                     let (mut r, mut c) = (Line::from_points(None, 0, 0, new_ref), Line::from_points(None, 0, 0, new_coup));
@@ -627,7 +731,7 @@ fn merge_dp_step(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pair::D
                     pair.set_shape(r.pts, c.pts, !try_p);
                     return true;
                 }
-            } else if delta_uni >= 0 && verify_dp_bypass(node, rules, pair, try_p, &new_ref, &coupled_path) {
+            } else if delta_uni >= 0 && verify_dp_bypass(cache, (&base.0, &base.1), pair, try_p, &new_ref, &coupled_path) {
                 let (mut r, mut c) = (Line::from_points(None, 0, 0, new_ref), Line::from_points(None, 0, 0, coupled_path.clone()));
                 r.simplify();
                 c.simplify();
@@ -643,6 +747,7 @@ fn merge_dp_step(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pair::D
 /// `OPTIMIZER::mergeDpSegments` / `Optimize( DIFF_PAIR* )`: shorten the pair's lines by the shortcuts [`merge_dp_step`] finds, the longest
 /// span first, as long as the pair stays clear. `node` is the world the pair is checked against (neither line is in it).
 pub fn optimize_pair(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pair::DiffPair) {
+    let cache = HitCache::new(node, rules);
     let seg_count = |pts: &[eda_model::ir::Point]| pts.len() as i64 - 1;
     let (mut step_p, mut step_n) = (seg_count(&pair.p) - 2, seg_count(&pair.n) - 2);
     for _ in 0..10_000 {
@@ -654,10 +759,10 @@ pub fn optimize_pair(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pai
         }
         let (mut found_p, mut found_n) = (false, false);
         if step_p > 1 {
-            found_p = merge_dp_step(node, rules, pair, true, step_p as usize);
+            found_p = merge_dp_step(&cache, pair, true, step_p as usize);
         }
         if step_n > 1 {
-            found_n = merge_dp_step(node, rules, pair, false, step_n as usize);
+            found_n = merge_dp_step(&cache, pair, false, step_n as usize);
         }
         if !found_n && !found_p {
             step_n -= 1;

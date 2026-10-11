@@ -288,9 +288,12 @@ pub(crate) fn chains_intersect(a: &[Point], b: &[Point]) -> bool {
     a.windows(2).any(|sa| b.windows(2).any(|sb| seg_ops::intersect((sa[0], sa[1]), (sb[0], sb[1]), false, false).is_some()))
 }
 
-/// `DIRECTION_45().BuildInitialTrace( a, b, start_diagonal )` in the default 45-degree mitered corner mode.
+/// `DIRECTION_45().BuildInitialTrace( a, b, start_diagonal )` in the default 45-degree mitered corner mode. Two equal points are one
+/// point (`SHAPE_LINE_CHAIN::Append` does not repeat the last point), so a trace from a point to itself has no segment.
 pub(crate) fn initial_trace(a: Point, b: Point, start_diagonal: bool) -> Vec<Point> {
-    Direction45::Undefined.build_initial_trace(a, b, start_diagonal, CornerMode::Mitered45)
+    let mut pts = Direction45::Undefined.build_initial_trace(a, b, start_diagonal, CornerMode::Mitered45);
+    pts.dedup();
+    pts
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -321,20 +324,35 @@ impl PairLine<'_> {
     /// `LINE::Collide( &other, aNode, aLayer )`: the two lines, and each one's via against the other, are within the rules' clearance of
     /// each other (no epsilon: `collideSimple` without a context). Lines of the same net never collide.
     pub fn hits_line(&self, other: &PairLine, rules: &BoardRules) -> bool {
-        let segs = |l: &PairLine| l.pts.windows(2).map(|w| Shape::Stadium { a: w[0], b: w[1], r: l.width / 2 }).collect::<Vec<_>>();
+        // a segment's shape and the box it can reach, for the pairs that are near enough to be worth the exact test
+        let segs = |l: &PairLine, reach: Um| {
+            l.pts
+                .windows(2)
+                .map(|w| {
+                    let shape = Shape::Stadium { a: w[0], b: w[1], r: l.width / 2 };
+                    let bbox = shape.bbox(reach);
+                    (shape, bbox)
+                })
+                .collect::<Vec<_>>()
+        };
         let via_shape = |v: &Via| Shape::Circle { c: v.pos, r: v.diameter / 2 };
         if !same_net(self.net, other.net) && self.layer == other.layer {
             let clearance = Node::clearance(rules, self.net, other.net);
-            let theirs = segs(other);
-            if segs(self).iter().any(|a| theirs.iter().any(|b| a.collides(b, clearance).is_some())) {
-                return true;
+            let (mine, mut theirs) = (segs(self, clearance), segs(other, 0));
+            // sweep along x: for each of mine, only the segments of theirs that start before it ends are candidates
+            theirs.sort_by_key(|(_, b)| b.0);
+            for (a, ab) in &mine {
+                let reach = theirs.partition_point(|(_, b)| b.0 <= ab.2);
+                if theirs[..reach].iter().any(|(b, bb)| bb.2 >= ab.0 && bb.3 >= ab.1 && bb.1 <= ab.3 && a.collides(b, clearance).is_some()) {
+                    return true;
+                }
             }
         }
         for (mine, theirs) in [(self, other), (other, self)] {
             if let Some(v) = mine.via {
                 if !same_net(&v.net, theirs.net) && v.layers.overlaps_layer(theirs.layer) {
                     let clearance = Node::clearance(rules, &v.net, theirs.net);
-                    if segs(theirs).iter().any(|s| via_shape(v).collides(s, clearance).is_some()) {
+                    if segs(theirs, 0).iter().any(|(s, _)| via_shape(v).collides(s, clearance).is_some()) {
                         return true;
                     }
                 }

@@ -675,7 +675,8 @@ impl Router {
         let track = |net: &Net, layer: i32, width: Um, pts: &[Point]| eda_model::ir::Track { id: String::new(), net: net.as_deref().unwrap_or("").to_string(), pins: Vec::new(), layer: self.layer_name(layer).to_string(), width, pts: pts.to_vec(), arc_mid_offset: None };
         for leg in &c.legs {
             for (net, pts) in [(&c.net_p, &leg.p), (&c.net_n, &leg.n)] {
-                if pts.len() >= 2 {
+                // a line that goes nowhere is no track
+                if pts.windows(2).any(|w| w[0] != w[1]) {
                     commit.tracks.push(track(net, leg.layer, leg.width, pts));
                 }
             }
