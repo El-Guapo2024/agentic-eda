@@ -68,6 +68,10 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 
     std::fs::create_dir_all(&out).map_err(|e| fail("io", &out.display().to_string(), e.to_string()))?;
 
+    // The project's own library tables and variables come along, so its libraries still resolve from the new folder (`library_table::import_project_setup`).
+    let source_dir = std::fs::canonicalize(&input).ok().and_then(|p| p.parent().map(std::path::Path::to_path_buf));
+    let setup = source_dir.map(|dir| eda_kicad::library_table::import_project_setup(&dir, &out, std::fs::read_to_string(&pro_path).ok().as_deref()));
+
     let intent_path = out.join("intent.yaml");
     let intent_yaml = serde_yaml::to_string(&model).map_err(|e| fail("kicad_import_encode", "intent.yaml", e.to_string()))?;
     std::fs::write(&intent_path, intent_yaml).map_err(|e| fail("io", "intent.yaml", e.to_string()))?;
@@ -109,6 +113,42 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
     if notes.non_rect_pad_shapes_approximated > 0 {
         eprintln!("  {} pad(s) with an unsupported shape (trapezoid/custom) approximated as rect", notes.non_rect_pad_shapes_approximated);
     }
+    if let Some(setup) = setup {
+        if !setup.tables.is_empty() || setup.variables > 0 {
+            eprintln!("  library setup: {} table(s) ({}), {} path variable(s) from the project; its libraries are found where they are", setup.tables.len(), setup.tables.join(", "), setup.variables);
+        }
+        for note in &setup.notes {
+            eprintln!("  library setup: {note}");
+        }
+    }
     eprintln!("wrote {}", out.join("design.json").display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A project that has library tables and variables of its own is imported with them: the libraries still resolve from the new board folder.
+    #[test]
+    fn the_projects_library_tables_and_variables_come_along() {
+        let root = std::env::temp_dir().join(format!("eda-import-setup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (project, board) = (root.join("project"), root.join("board"));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("b.kicad_pcb"), "(kicad_pcb (version 20240108) (generator \"test\") (general (thickness 1.6)))\n").unwrap();
+        std::fs::write(project.join("fp-lib-table"), "(fp_lib_table\n\t(version 7)\n\t(lib (name \"Mine\") (type \"KiCad\") (uri \"${KIPRJMOD}/Mine.pretty\") (options \"\") (descr \"\"))\n)\n").unwrap();
+        std::fs::write(project.join("b.kicad_pro"), r#"{ "text_variables": { "MYLIBS": "${KIPRJMOD}/libs" } }"#).unwrap();
+        let args = [project.join("b.kicad_pcb").display().to_string(), "-o".to_string(), board.display().to_string()];
+        if let Err(e) = run(&args) {
+            panic!("import failed: {}", e.iter().map(|c| format!("{c:?}")).collect::<String>());
+        }
+        let folder = std::fs::canonicalize(&project).unwrap().display().to_string();
+        let table = std::fs::read_to_string(board.join("fp-lib-table")).unwrap();
+        assert!(table.contains(&format!("(uri \"{folder}/Mine.pretty\")")), "{table}");
+        assert!(!board.join("sym-lib-table").exists(), "a project without a table brings none");
+        let vars = eda_kicad::library_table::read_project_variables(&board);
+        assert_eq!(vars.get("MYLIBS"), Some(&format!("{folder}/libs")));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

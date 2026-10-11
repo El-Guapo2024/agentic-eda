@@ -1080,6 +1080,72 @@ pub fn derive_project(board_dir: &Path, work: &Path, pro: &mut serde_json::Value
     Ok(any)
 }
 
+// ------------------------------------------------------------------------------------------------ importing a KiCad project
+
+/// What [`import_project_setup`] carried over.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ImportedSetup {
+    /// The table files written into the board's folder.
+    pub tables: Vec<&'static str>,
+    /// How many of the project's variables became the board's path variables.
+    pub variables: usize,
+    /// What was left alone, and why: a table that does not parse, a file the board's folder already has.
+    pub notes: Vec<String>,
+}
+
+/// A real KiCad project keeps its library tables beside the board and its own variables in the project file's `text_variables`; `eda import-kicad` brings both along, so the
+/// libraries of the project still resolve from the new board folder. `${KIPRJMOD}` in them named the project's folder, so it is written out as `source_dir` (a path relative to
+/// the project is made absolute against it, [`derived_for_kicad`]). A table or a variables file the board's folder already has is kept, and importing into the project's own
+/// folder carries nothing: its setup already is the board's. Only the names a path variable may have ([`is_variable_name`]) are taken, never `KIPRJMOD`.
+pub fn import_project_setup(source_dir: &Path, board_dir: &Path, project_file: Option<&str>) -> ImportedSetup {
+    let mut done = ImportedSetup::default();
+    let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b);
+    if same(source_dir, board_dir) {
+        return done;
+    }
+    for kind in TableKind::ALL {
+        let name = kind.file_name();
+        let Ok(text) = std::fs::read_to_string(source_dir.join(name)) else { continue };
+        let table = match Table::parse(&text) {
+            Ok(t) if t.kind == kind => t,
+            Ok(_) => {
+                done.notes.push(format!("{name}: not a {} library table, left behind", kind.name()));
+                continue;
+            }
+            Err(e) => {
+                done.notes.push(format!("{name}: {e}, left behind"));
+                continue;
+            }
+        };
+        if board_dir.join(name).exists() {
+            done.notes.push(format!("{name}: the board's folder has one already, kept"));
+            continue;
+        }
+        match write_table(&board_dir.join(name), &derived_for_kicad(&table, source_dir)) {
+            Ok(()) => done.tables.push(name),
+            Err(e) => done.notes.push(e),
+        }
+    }
+    let taken = project_file.and_then(|t| serde_json::from_str::<serde_json::Value>(t).ok()).and_then(|v| v.get("text_variables")?.as_object().cloned()).unwrap_or_default();
+    let folder = source_dir.display().to_string();
+    let vars: BTreeMap<String, String> = taken
+        .iter()
+        .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.replace("${KIPRJMOD}", &folder).replace("$(KIPRJMOD)", &folder))))
+        .filter(|(name, _)| is_variable_name(name) && name != "KIPRJMOD")
+        .collect();
+    if !vars.is_empty() {
+        if board_dir.join(PATH_VARIABLES_FILE).exists() {
+            done.notes.push(format!("{PATH_VARIABLES_FILE}: the board's folder has one already, kept"));
+        } else {
+            match write_project_variables(board_dir, &vars) {
+                Ok(()) => done.variables = vars.len(),
+                Err(e) => done.notes.push(e),
+            }
+        }
+    }
+    done
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1095,6 +1161,46 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn importing_a_kicad_project_brings_its_tables_and_variables_with_the_folder_written_out() {
+        let root = temp("import");
+        let (project, board) = (root.join("project"), root.join("board"));
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&board).unwrap();
+        std::fs::write(
+            project.join("sym-lib-table"),
+            "(sym_lib_table\n\t(version 7)\n\t(lib (name \"Mine\") (type \"KiCad\") (uri \"${KIPRJMOD}/libs/Mine.kicad_sym\") (options \"\") (descr \"\"))\n\t(lib (name \"Theirs\") (type \"KiCad\") (uri \"${THEIRS}/T.kicad_sym\") (options \"\") (descr \"\") (hidden))\n)\n",
+        )
+        .unwrap();
+        // a footprint table that is really a symbol table, and one that does not parse
+        std::fs::write(project.join("fp-lib-table"), "(sym_lib_table (version 7))\n").unwrap();
+        let pro = r#"{ "text_variables": { "THEIRS": "${KIPRJMOD}/theirs", "REVISION": "B", "Not a name": "x", "KIPRJMOD": "/nope", "COUNT": 3 } }"#;
+        let done = import_project_setup(&project, &board, Some(pro));
+        assert_eq!(done.tables, vec!["sym-lib-table"]);
+        assert_eq!(done.notes.len(), 1, "{:?}", done.notes);
+        assert!(done.notes[0].starts_with("fp-lib-table: not a footprint library table"), "{:?}", done.notes);
+        let table = Table::parse(&std::fs::read_to_string(board.join("sym-lib-table")).unwrap()).unwrap();
+        let folder = project.display().to_string();
+        assert_eq!(table.rows[0].uri, format!("{folder}/libs/Mine.kicad_sym"), "the project's folder, not the board's");
+        assert_eq!(table.rows[1].uri, "${THEIRS}/T.kicad_sym", "another variable stays a variable");
+        assert!(table.rows[1].hidden, "the flags come along");
+        assert!(!board.join("fp-lib-table").exists());
+        // the valid names only, never KIPRJMOD; the folder written out in a value
+        let vars = read_project_variables(&board);
+        assert_eq!(vars.keys().map(String::as_str).collect::<Vec<_>>(), vec!["REVISION", "THEIRS"]);
+        assert_eq!(vars["THEIRS"], format!("{folder}/theirs"));
+        assert_eq!(done.variables, 2);
+        // a second import into the same board keeps what is there; the project's own folder carries nothing
+        let again = import_project_setup(&project, &board, Some(pro));
+        assert_eq!((again.tables.len(), again.variables, again.notes.len()), (0, 0, 3), "{:?}", again.notes);
+        assert_eq!(import_project_setup(&project, &project, Some(pro)), ImportedSetup::default());
+        // a project without tables or variables brings nothing
+        let empty = root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        assert_eq!(import_project_setup(&empty, &root.join("elsewhere"), None), ImportedSetup::default());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

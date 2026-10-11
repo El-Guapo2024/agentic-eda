@@ -41,6 +41,7 @@ never edited as masters.
   like the intent, not derived files, and are not part of the design or of undo; the derived
   `.kicad/` project carries them (`<board>/.kicad/sym-lib-table`, `fp-lib-table`, and the variables
   as `text_variables` with `KIPRJMOD` the board's folder), so kicad-cli reads the same libraries.
+  `eda import-kicad` brings a real project's tables and text variables along into the board's folder.
 - **One shared history**: `.history/undo|redo` snapshots, each tagged with
   its author (`ui`, `cli`, `agent`, ...). A direct edit of `design.json`
   (detected against `.history/head.json`) becomes its own `file` step, so
