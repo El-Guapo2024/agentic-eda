@@ -551,6 +551,53 @@ fn random_corner_drags_never_leave_a_new_violation() {
     }
 }
 
+/// P5a: segments slid and corners dragged at random, in Walk around and Shove, through the stateful `Dragger::drag` (a position that cannot
+/// be resolved shows the last valid one): whatever the drag shows and commits leaves no clearance violation it did not have. Half of the
+/// grabs are in the middle of a segment (`DM_SEGMENT`), half near an end (`DM_CORNER`).
+#[test]
+fn random_segment_and_corner_drags_never_leave_a_new_violation() {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    for board in ["simple", "pic_programmer"] {
+        let (design, model) = load(&root, board, "simple-shove-1");
+        let (node, _) = build_node(&design, &model);
+        let mut segs: Vec<(eda_pns::item::ItemId, Point, Point)> = node.iter().filter_map(|(id, it)| if let Item::Segment(s) = it { Some((id, s.a, s.b)) } else { None }).collect();
+        segs.sort_by_key(|&(id, _, _)| id);
+        for mode in [Mode::Shove, Mode::Walkaround] {
+            let settings = RoutingSettings { mode, ..RoutingSettings::default() };
+            let mut rng = Rng(0xA24BAED4963EE407);
+            let (mut segment_drags, mut corner_drags, mut accepted, mut restored) = (0, 0, 0, 0);
+            for k in 0..120 {
+                let (id, a, b) = segs[rng.below(segs.len() as i64) as usize];
+                let near_end = k % 2 == 1;
+                let at = if near_end { a } else { Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } };
+                let Some(mut d) = Dragger::start_with(&node, at, id, false) else { continue };
+                match d.kind {
+                    DragKind::Segment => segment_drags += 1,
+                    DragKind::Corner => corner_drags += 1,
+                    DragKind::Via => continue,
+                }
+                // the priming move at the grab point, then a few cursor positions
+                let mut shown = d.drag(&node, &model.board, &settings, at);
+                for _ in 0..3 {
+                    let to = Point { x: at.x + rng.below(5_000) - 2_500, y: at.y + rng.below(5_000) - 2_500 };
+                    shown = d.drag(&node, &model.board, &settings, to);
+                    restored += usize::from(shown.restored);
+                }
+                if shown.colliding {
+                    continue;
+                }
+                accepted += 1;
+                let new_ones = new_item_violations(&node, &dragged(&node, &d, &shown, at), &model.board);
+                assert!(new_ones.is_empty(), "{board} {mode:?} #{k}: dragging {at:?} ({:?}) leaves {} new violations, e.g. {:?}", d.kind, new_ones.len(), &new_ones[..new_ones.len().min(2)]);
+            }
+            eprintln!("{board} {mode:?}: {segment_drags} segment and {corner_drags} corner drags, {accepted} shown legal, {restored} positions restored");
+        }
+    }
+}
+
 /// D7: dragging a via. Before it, the dragged via was never a pusher, so a via dropped onto a track left a violation (6 of 200
 /// random drags on `simple`); now it is shoved, or pushed off what it lands on, or the drag says it collides. Whichever mode,
 /// a drag the router accepts leaves no new violation, the board outline included.
