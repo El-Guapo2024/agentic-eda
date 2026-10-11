@@ -193,7 +193,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   **Add Library**, **New Library** (an empty `.kicad_sym` or `.pretty` and a row) and **Configure Paths** (KiCad's variables read only, the board's own editable) are in `components/libraryTables/`.
   The derived KiCad project carries the tables and the variables (`derive_project`), so kicad-cli ERC (`lib_symbol_issues`), DRC (`lib_footprint_issues`) and the 3D export resolve the same libraries
   (slow-tier tests); `eda import-kicad` brings a project's own tables and variables along. Tests: Rust unit tests for the format, the variables, the resolution, the routes, the import and a
-  place-from-table round trip; 13 web unit tests; `e2e/library-tables.check.js` (50 checks).
+  place-from-table round trip; 13 web unit tests; `e2e/library-tables.check.js` (53 checks).
 - Missing: saving the editors' symbols and footprints into a table library's file (they write the project library of `design.json`; a library made with New Library stays empty until a file is put
   into it), Add Library by drop (a browser drop has no path), Reset and Migrate Libraries, formats other than KiCad's (listed with a warning, kept in the table, not read), symbol folders of
   `.kicad_sym` files, Edit Options..., 3D model search paths (Configure Paths lists KiCad's variables; the `3D Models` paths are the footprint's own text); KiCad's

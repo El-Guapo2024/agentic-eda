@@ -485,6 +485,7 @@ pub fn reply_waiting(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
 }
 
 /// [`reply`] with the model library and the environment given (the tests'), and how long to wait for a model that is being converted (`None`: not at all).
+#[cfg(test)]
 pub fn reply_with(dir: &Path, target: &str, store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>, wait: Option<Duration>) -> Reply {
     reply_in(target, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new() }, env, wait)
 }
@@ -529,6 +530,7 @@ pub fn prepare(dir: &Path, body: &[u8], store: &Arc<Store>) -> Value {
     prepare_in(body, store, &board_roots(dir, &names), &|v| names.get(v))
 }
 
+#[cfg(test)]
 pub fn prepare_with(dir: &Path, body: &[u8], store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>) -> Value {
     prepare_in(body, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new() }, env)
 }

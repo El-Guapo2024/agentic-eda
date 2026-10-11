@@ -15,6 +15,7 @@
 //     part with its pads, both are undone;
 //   Add Library (a path typed, the nickname from the file's name, written with a variable) and New Library (an empty .kicad_sym, in the project's table as ${KIPRJMOD}/...);
 //   Configure Paths: KiCad's variables listed read only, the board's own added (the name rules, "path cannot be empty") and used in a library path.
+//   a board variable reaches a 3D model: GET /api/3dmodel finds a model written with it, and stops finding it when the variable is gone.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__libraryTablesCheck.results` (`.done` is set at the end).
 (async () => {
@@ -262,6 +263,22 @@
     button("OK").click();
     await sleep(900);
     check("OK saves the board's variable", titles().length === 0 && (await tables()).variables.project.some((v) => v.name === "LT_CHECK_DIR" && v.value === "${KIPRJMOD}"), JSON.stringify((await tables()).variables.project));
+    // a board variable reaches the 3D models too: GET /api/3dmodel asks the board's variables before the environment, the way a library path does
+    {
+      const saved = (await tables()).variables;
+      const modelsDir = saved.global.find((v) => v.name === `KICAD${lt.major}_3DMODEL_DIR`)?.value;
+      const ask = (name) => fetch(`/api/3dmodel?name=${encodeURIComponent(name)}`, { cache: "no-store" }).then((r) => r.status);
+      if (modelsDir) {
+        await post("/api/path_variables", { variables: [...saved.project, { name: "LT_MODELS_DIR", value: modelsDir }] });
+        const found = await ask("${LT_MODELS_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step");
+        check("a model written with a board variable is found (served, or being converted)", found === 200 || found === 202, found);
+        check("a variable nothing defines finds no model", (await ask("${LT_NOT_DEFINED}/Resistor_SMD.3dshapes/R_0603_1608Metric.step")) === 404);
+        await post("/api/path_variables", { variables: saved.project });
+        check("and the model is not found once the variable is gone", (await ask("${LT_MODELS_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step")) === 404);
+      } else {
+        check("KiCad's 3D model folder is defined (skipped: this machine has no KiCad variables)", true, "skipped");
+      }
+    }
     await E.run("common.SuiteControl.showSymbolLibTable");
     await waitFor(() => row(0, "nickname"));
     const at = [...document.querySelectorAll('.lt-grid [data-col="nickname"]')].findIndex((i) => i.value === fresh);
