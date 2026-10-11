@@ -39,11 +39,14 @@ pub fn models_dir() -> PathBuf {
     PathBuf::from("/Applications/KiCad/KiCad.app/Contents/SharedSupport/3dmodels")
 }
 
-/// The two directories a model may be read from: KiCad's 3D model library and the board's own directory (`${KIPRJMOD}`, and what a relative path is relative to).
+/// The directories a model may be read from: KiCad's 3D model library, the board's own directory (`${KIPRJMOD}`, and what a relative path is relative to) and
+/// the folders the board's path variables name.
 #[derive(Debug, Clone)]
 pub struct Roots {
     pub models: PathBuf,
     pub project: PathBuf,
+    /// The folders the person named in Configure Paths (the board's variables, or KiCad's own): `library_tables::ModelNames::folders`. Never the environment's.
+    pub extra: Vec<PathBuf>,
 }
 
 /// Why a model name does not name a readable model.
@@ -151,8 +154,9 @@ fn format_of(path: &Path) -> Option<Format> {
 /// ("the legacy partial path": `Resistor_SMD.3dshapes/R_0603_1608Metric.wrl`); a `.wrl` that is not there is a `.step` in the same place.
 ///
 /// The allow-list is the part KiCad does not have, because KiCad reads files for the person who owns them and this route answers a browser: after the
-/// search, the file is made canonical (every symlink and `..` resolved) and must lie under the model library or the board's directory, and be a model
-/// file (`.wrl`, `.step`, `.stp`). A name that finds a file anywhere else is [`Reject::Forbidden`], whatever it holds.
+/// search, the file is made canonical (every symlink and `..` resolved) and must lie under the model library, the board's directory or a folder one of the
+/// board's path variables names ([`Roots::extra`]), and be a model file (`.wrl`, `.step`, `.stp`). A name that finds a file anywhere else is
+/// [`Reject::Forbidden`], whatever it holds.
 pub fn resolve(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Result<Resolved, Reject> {
     if name.is_empty() || name.len() > 4096 || name.contains('\0') {
         return Err(Reject::BadName);
@@ -167,9 +171,9 @@ pub fn resolve(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) 
     let found = candidates.into_iter().find_map(|c| if c.is_file() { Some(c) } else { step_for_missing_wrl(&c) }).ok_or(Reject::NotFound)?;
 
     let canonical = found.canonicalize().map_err(|_| Reject::NotFound)?;
-    let inside = [&roots.models, &roots.project].iter().filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
+    let inside = [&roots.models, &roots.project].into_iter().chain(&roots.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
     if !inside {
-        return Err(Reject::Forbidden("the file is outside KiCad's 3D model directory and the board's directory".into()));
+        return Err(Reject::Forbidden("the file is outside KiCad's 3D model directory, the board's directory and the folders its path variables name".into()));
     }
     match format_of(&canonical) {
         Some(format) => Ok(Resolved { path: canonical, format }),
@@ -454,7 +458,14 @@ fn file_reply(path: &Path) -> Reply {
 ///   - `404 {"status":"missing"}`: the name finds no model; `403 {"status":"forbidden"}`: it finds a file this route may not serve (nothing is read);
 ///     `400`: no usable name.
 pub fn reply(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
-    reply_with(dir, target, store, &models_dir(), &|v| std::env::var(v).ok(), None)
+    let names = crate::library_tables::model_names(dir);
+    reply_in(target, store, &board_roots(dir, &names), &|v| names.get(v), None)
+}
+
+/// Where the board in `dir` may read models from: KiCad's library, its own folder and the folders its path variables name. A name's `${VARIABLE}` is asked of
+/// `names` (the board's variables, KiCad's, the environment), so a variable that gives a library its folder gives the 3D models theirs.
+fn board_roots(dir: &Path, names: &crate::library_tables::ModelNames) -> Roots {
+    Roots { models: models_dir(), project: dir.to_path_buf(), extra: names.folders.clone() }
 }
 
 /// How long a request with `wait=1` is held for its model: the page asks again after this (a conversion that long is a conversion that is stuck, or a queue of
@@ -469,19 +480,25 @@ pub fn wants_wait(target: &str) -> bool {
 /// [`reply`] for a request that waits: a STEP model still being converted is waited for (up to [`WAIT_FOR_MODEL`]) and then answered, so one request per model is
 /// all the page sends and the answer comes the moment the model is in. Blocks its thread: not for the request loop.
 pub fn reply_waiting(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
-    reply_with(dir, target, store, &models_dir(), &|v| std::env::var(v).ok(), Some(WAIT_FOR_MODEL))
+    let names = crate::library_tables::model_names(dir);
+    reply_in(target, store, &board_roots(dir, &names), &|v| names.get(v), Some(WAIT_FOR_MODEL))
 }
 
 /// [`reply`] with the model library and the environment given (the tests'), and how long to wait for a model that is being converted (`None`: not at all).
+#[cfg(test)]
 pub fn reply_with(dir: &Path, target: &str, store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>, wait: Option<Duration>) -> Reply {
+    reply_in(target, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new() }, env, wait)
+}
+
+/// [`reply_with`] with the roots given.
+pub fn reply_in(target: &str, store: &Arc<Store>, roots: &Roots, env: &dyn Fn(&str) -> Option<String>, wait: Option<Duration>) -> Reply {
     let query = target.split_once('?').map_or("", |(_, q)| q);
     let value = |key: &str| query.split('&').find_map(|kv| kv.strip_prefix(key).and_then(|v| v.strip_prefix('=')));
     let Some(name) = value("name").and_then(percent_decode) else {
         return Reply { status: "400 Bad Request", kind: "text/plain", body: b"invalid model name".to_vec() };
     };
     let retry = value("retry") == Some("1");
-    let roots = Roots { models: models.to_path_buf(), project: dir.to_path_buf() };
-    match resolve(&name, &roots, env) {
+    match resolve(&name, roots, env) {
         Err(Reject::BadName) => Reply { status: "400 Bad Request", kind: "text/plain", body: b"invalid model name".to_vec() },
         Err(Reject::NotFound) => json_reply("404 Not Found", json!({ "status": "missing", "error": format!("no 3D model file for {name}") })),
         Err(Reject::Forbidden(why)) => json_reply("403 Forbidden", json!({ "status": "forbidden", "error": why })),
@@ -509,15 +526,21 @@ const MAX_PREPARE: usize = 1024;
 /// kicad-cli run and not in the runs the browser's own pace of asking would make. Names that resolve to nothing, or to a file this route may not serve, are counted
 /// as missing and not read.
 pub fn prepare(dir: &Path, body: &[u8], store: &Arc<Store>) -> Value {
-    prepare_with(dir, body, store, &models_dir(), &|v| std::env::var(v).ok())
+    let names = crate::library_tables::model_names(dir);
+    prepare_in(body, store, &board_roots(dir, &names), &|v| names.get(v))
 }
 
+#[cfg(test)]
 pub fn prepare_with(dir: &Path, body: &[u8], store: &Arc<Store>, models: &Path, env: &dyn Fn(&str) -> Option<String>) -> Value {
+    prepare_in(body, store, &Roots { models: models.to_path_buf(), project: dir.to_path_buf(), extra: Vec::new() }, env)
+}
+
+/// [`prepare_with`] with the roots given.
+pub fn prepare_in(body: &[u8], store: &Arc<Store>, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> Value {
     let names: Vec<String> = serde_json::from_slice::<Value>(body).ok().and_then(|v| v["names"].as_array().map(|a| a.iter().filter_map(|n| n.as_str().map(String::from)).collect())).unwrap_or_default();
-    let roots = Roots { models: models.to_path_buf(), project: dir.to_path_buf() };
     let (mut ready, mut pending, mut failed, mut missing) = (0, 0, 0, 0);
     for name in names.iter().take(MAX_PREPARE) {
-        match resolve(name, &roots, env) {
+        match resolve(name, roots, env) {
             Ok(Resolved { format: Format::Vrml, .. }) => ready += 1,
             Ok(Resolved { path, format: Format::Step }) => match store.ask(&path, false) {
                 Ask::Ready(_) => ready += 1,
@@ -578,7 +601,7 @@ mod tests {
             Tree { root }
         }
         fn roots(&self) -> Roots {
-            Roots { models: self.root.join("models"), project: self.root.join("project") }
+            Roots { models: self.root.join("models"), project: self.root.join("project"), extra: Vec::new() }
         }
         fn path(&self, rel: &str) -> PathBuf {
             self.root.join(rel).canonicalize().unwrap()
@@ -670,6 +693,38 @@ mod tests {
             let body = String::from_utf8_lossy(&r.body);
             assert!(!body.contains("SECRET") && !body.contains("secret\":\"design") && !body.contains("root:"), "{target} leaked a file: {body}");
         }
+    }
+
+    /// A footprint of a team library writes its model as `${TEAM}/...`: the board's path variable (Configure Paths) gives the route the folder, as it gives
+    /// a library its folder; a folder only the process environment names stays closed, and so does everything beside the folder the variable names.
+    #[test]
+    fn a_board_variable_reaches_a_model_and_the_environment_alone_does_not() {
+        let m = crate::library_tables::tests::machine("model-variables", true);
+        let (team, shell) = (m.root.join("team"), m.root.join("shell"));
+        for d in [team.join("Lib.3dshapes"), shell.clone()] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(team.join("Lib.3dshapes/t.wrl"), "#VRML V2.0 utf8\n# t").unwrap();
+        std::fs::write(shell.join("e.wrl"), "#VRML V2.0 utf8\n# e").unwrap();
+        std::fs::write(m.root.join("secret.wrl"), "#VRML V2.0 utf8\n# SECRET").unwrap();
+        eda_kicad::library_table::write_project_variables(&m.board, &[("TEAM".to_string(), team.display().to_string())].into()).unwrap();
+        let mut env = m.env();
+        env.real.insert("FROM_THE_SHELL".into(), shell.display().to_string());
+        let names = crate::library_tables::model_names_with(&env, &m.board);
+        let roots = Roots { models: m.share.join("3dmodels"), project: m.board.clone(), extra: names.folders.clone() };
+        let store = Store::new(m.root.join("cache"), Arc::new(|b: &[PathBuf]| b.iter().map(|_| Err("no converter".to_string())).collect()), Duration::from_millis(1));
+        let enc = |s: &str| s.replace('%', "%25").replace('{', "%7B").replace('}', "%7D").replace('/', "%2F");
+        let get = |name: &str| reply_in(&format!("/api/3dmodel?name={}", enc(name)), &store, &roots, &|v| names.get(v), None);
+        let ok = get("${TEAM}/Lib.3dshapes/t.wrl");
+        assert_eq!((ok.status, ok.body.as_slice()), ("200 OK", b"#VRML V2.0 utf8\n# t".as_slice()), "a board variable names the folder");
+        assert_eq!(get("${KIPRJMOD}/../shell/e.wrl").status, "403 Forbidden", "a .. out of the board's folder into one nobody named");
+        assert_eq!(get("${FROM_THE_SHELL}/e.wrl").status, "403 Forbidden", "the environment defines it, but nobody named that folder for this board");
+        assert_eq!(get("${TEAM}/../secret.wrl").status, "403 Forbidden", "only the folder the variable names, not what lies beside it");
+        assert_eq!(get("${NOBODY_DEFINES_THIS}/x.wrl").status, "404 Not Found");
+        // and `prepare` asks the same question
+        let body = format!("{{\"names\":[\"${{TEAM}}/Lib.3dshapes/t.wrl\",\"${{FROM_THE_SHELL}}/e.wrl\",\"${{NOBODY_DEFINES_THIS}}/x.wrl\"]}}");
+        assert_eq!(prepare_in(body.as_bytes(), &store, &roots, &|v| names.get(v)), json!({ "ready": 1, "pending": 0, "failed": 0, "missing": 2 }));
+        let _ = std::fs::remove_dir_all(&m.root);
     }
 
     #[test]

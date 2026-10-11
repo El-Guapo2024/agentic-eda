@@ -1,0 +1,376 @@
+/* Manage Symbol Libraries, Manage Footprint Libraries, Configure Paths, New / Add Library and the folder browser
+   (components/libraryTables/*): KiCad's library table grid (`LIB_TABLE_GRID_DATA_MODEL`) and its dialogs. */
+.dialog.lt-dialog {
+  width: min(1180px, 96vw);
+  height: min(700px, 92vh);
+  max-height: 92vh;
+}
+.dialog.lt-small {
+  width: min(560px, 96vw);
+  height: auto;
+  max-height: 92vh;
+}
+.dialog.lt-paths {
+  width: min(900px, 96vw);
+  height: min(680px, 92vh);
+  max-height: 92vh;
+}
+.lt-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 12px;
+  gap: 6px;
+  overflow: hidden;
+}
+.lt-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--chrome-border);
+  flex-wrap: wrap;
+}
+.lt-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--chrome-text-dim);
+  cursor: pointer;
+  font-size: 12px;
+}
+.dialog .lt-tab {
+  background: transparent;
+  border-color: transparent;
+}
+.lt-tab.active,
+.dialog .lt-tab.active {
+  background: var(--chrome-bg);
+  border-color: var(--chrome-border);
+  color: var(--chrome-text);
+  font-weight: 600;
+}
+.lt-tab .lt-x {
+  font-size: 11px;
+  opacity: 0.7;
+}
+.lt-note {
+  font-size: 11px;
+  color: var(--chrome-text-dim);
+  padding: 2px 0;
+}
+.lt-error {
+  color: var(--chrome-danger);
+  font-size: 12px;
+  padding: 4px 0;
+}
+.lt-dim {
+  color: var(--chrome-text-dim);
+  font-size: 11px;
+}
+.lt-banner {
+  border: 1px solid var(--chrome-danger);
+  color: var(--chrome-danger);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.lt-gridwrap {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow: auto;
+  border: 1px solid var(--chrome-border);
+  background: var(--chrome-input-bg, var(--chrome-bg));
+}
+.lt-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  table-layout: fixed;
+}
+.lt-grid th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--chrome-bg-raised);
+  color: var(--chrome-text-dim);
+  text-align: left;
+  font-weight: 600;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--chrome-border);
+  border-right: 1px solid var(--chrome-border);
+}
+.lt-grid td {
+  padding: 0;
+  border-bottom: 1px solid var(--chrome-border);
+  border-right: 1px solid var(--chrome-border);
+  vertical-align: middle;
+}
+.lt-grid tr.selected td {
+  background: var(--chrome-selected-bg);
+}
+.lt-grid tr.disabled-row td input[type="text"],
+.lt-grid tr.disabled-row td select {
+  color: var(--chrome-text-dim);
+}
+.lt-grid td input[type="text"],
+.lt-grid td select {
+  width: 100%;
+  box-sizing: border-box;
+  border: none;
+  background: transparent;
+  color: var(--chrome-text);
+  padding: 4px 6px;
+  font: inherit;
+  outline: none;
+}
+.lt-grid tr.selected td input[type="text"],
+.lt-grid tr.selected td select {
+  color: var(--chrome-selected-text);
+}
+.lt-grid td input[type="text"]:focus,
+.lt-grid td select:focus {
+  outline: 1px solid var(--chrome-accent);
+  outline-offset: -1px;
+}
+.lt-grid td.lt-bad input,
+.lt-grid td.lt-bad select {
+  outline: 2px solid var(--chrome-danger);
+  outline-offset: -2px;
+}
+.lt-grid td.lt-center {
+  text-align: center;
+}
+.lt-grid td.lt-with-button {
+  display: table-cell;
+}
+.lt-cellrow {
+  display: flex;
+  align-items: center;
+}
+.lt-cellrow input {
+  flex: 1;
+  min-width: 0;
+}
+.dialog .lt-grid td button,
+.dialog .lt-cellrow button {
+  padding: 1px 6px;
+  font-size: 11px;
+}
+.lt-status {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 4px;
+  color: var(--chrome-text);
+}
+.dialog button.lt-status {
+  border: none;
+  background: transparent;
+  padding: 2px 4px;
+}
+.lt-status.lt-warn {
+  color: var(--chrome-warn, #d9a400);
+}
+.lt-status.lt-open {
+  color: var(--chrome-accent);
+}
+.lt-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.lt-toolbar .lt-spacer {
+  flex: 1;
+}
+.lt-split {
+  display: inline-flex;
+  position: relative;
+}
+.lt-menu {
+  position: absolute;
+  left: 0;
+  bottom: 100%;
+  margin-bottom: 2px;
+  z-index: 5;
+  background: var(--chrome-bg-raised);
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px var(--chrome-shadow);
+  min-width: 260px;
+  padding: 3px 0;
+}
+.dialog .lt-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: 5px 12px;
+}
+.dialog .lt-menu button:hover {
+  background: var(--chrome-hover);
+}
+.lt-subs {
+  max-height: 110px;
+  min-height: 60px;
+  overflow: auto;
+  border: 1px solid var(--chrome-border);
+  flex: 0 0 auto;
+}
+.lt-subs table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.lt-subs th,
+.lt-subs td {
+  text-align: left;
+  padding: 2px 8px;
+  border-bottom: 1px solid var(--chrome-border);
+  user-select: text;
+}
+.lt-subs th {
+  color: var(--chrome-text-dim);
+  position: sticky;
+  top: 0;
+  background: var(--chrome-bg-raised);
+}
+.lt-label {
+  font-size: 12px;
+  color: var(--chrome-text);
+}
+.lt-form {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  gap: 6px 8px;
+  align-items: center;
+}
+.lt-form input[type="text"] {
+  box-sizing: border-box;
+  width: 100%;
+}
+.lt-link {
+  border: none;
+  background: transparent;
+  color: var(--chrome-accent);
+  cursor: pointer;
+  padding: 0 6px;
+  font-size: 11px;
+  text-decoration: underline;
+}
+.dialog button.lt-link {
+  border: none;
+  background: transparent;
+  color: var(--chrome-accent);
+  padding: 0 6px;
+}
+/* the folder browser sits over the dialog that opened it */
+.dialog-backdrop.lt-browser-backdrop {
+  z-index: 2100;
+}
+.dialog.lt-browser {
+  width: min(640px, 96vw);
+  height: min(520px, 90vh);
+}
+.lt-browser-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.lt-browser-bar {
+  display: flex;
+  gap: 6px;
+}
+.lt-browser-bar input {
+  flex: 1;
+  min-width: 0;
+}
+.lt-browser-quick {
+  display: flex;
+  gap: 4px;
+  min-height: 16px;
+}
+.lt-browser-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--chrome-border);
+  font-size: 12px;
+}
+.lt-browser-item {
+  display: flex;
+  gap: 8px;
+  padding: 3px 8px;
+  cursor: default;
+  user-select: none;
+}
+.lt-browser-item.selected {
+  background: var(--chrome-selected-bg);
+  color: var(--chrome-selected-text);
+}
+.lt-browser-icon {
+  width: 12px;
+  color: var(--chrome-text-dim);
+}
+.lt-vars {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.lt-vars th {
+  text-align: left;
+  color: var(--chrome-text-dim);
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--chrome-border);
+  position: sticky;
+  top: 0;
+  background: var(--chrome-bg-raised);
+}
+.lt-vars td {
+  padding: 2px 6px;
+  border-bottom: 1px solid var(--chrome-border);
+}
+.lt-vars td.ro {
+  color: var(--chrome-text-dim);
+  user-select: text;
+  word-break: break-all;
+}
+.lt-vars td.external {
+  background: var(--chrome-hover);
+}
+.lt-vars input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+}
+.lt-vars td.lt-bad input {
+  outline: 2px solid var(--chrome-danger);
+}
+.lt-section {
+  font-weight: 600;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.lt-scroll {
+  overflow: auto;
+  border: 1px solid var(--chrome-border);
+  min-height: 60px;
+}
+.lt-help {
+  font-size: 12px;
+  color: var(--chrome-text);
+  border: 1px solid var(--chrome-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  background: var(--chrome-bg);
+}

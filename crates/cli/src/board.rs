@@ -90,8 +90,8 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
             .map_err(|e| fail("board_no_intent", &meta.intent, format!("the intent this board came from is gone: {e}")))?,
     )
     .map_err(|e| fail("board_bad_intent", &meta.intent, format!("the intent does not parse: {e}")))?;
-    crate::resolve_footprint_libraries(&mut model);
-    crate::resolve_symbol_libraries(&mut model);
+    crate::resolve_footprint_libraries_of(dir, &mut model);
+    crate::resolve_symbol_libraries_of(dir, &mut model);
     // Once a schematic `Cmd` has run on this board, its own derived net
     // list (see `Design::nets`'s doc) is the one netlist -- it overrides
     // whatever the intent file says, exactly the way a real KiCad project
@@ -145,7 +145,7 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     fold_board_parts(&design, &mut model);
     // A placed symbol's own Footprint field (its library's default, or the one the Footprint Chooser assigned) names a library footprint the same
     // way an intent part does: resolve what the folded parts name, so it can be placed on the board.
-    crate::resolve_footprint_libraries(&mut model);
+    crate::resolve_footprint_libraries_of(dir, &mut model);
     // The pads a footprint's Pad Properties edits changed: its own footprint, for every reader of `footprint_of` (after the libraries are resolved, so
     // a part placed from an installed library has its footprint to lay the edits on).
     fold_footprint_edits(&design, &mut model);
@@ -881,8 +881,8 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
 
 fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, Vec<CheckResult>> {
     let (meta, mut design, mut model) = load(dir)?;
-    // A symbol or footprint out of KiCad's installed libraries goes in with its definition (`crate::library_place`).
-    let with_definitions = crate::library_place::with_installed_definitions(cmd, &design, &model);
+    // A symbol or footprint out of a library of the library tables goes in with its definition (`crate::library_place`).
+    let with_definitions = crate::library_place::with_installed_definitions(dir, cmd, &design, &model);
     let cmd = with_definitions.as_ref().unwrap_or(cmd);
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
@@ -3338,6 +3338,138 @@ mod tests {
         let after = drc_counts(&dir);
         let new: Vec<(&String, u64)> = after.iter().map(|(k, v)| (k, v.saturating_sub(base.get(k).copied().unwrap_or(0)))).filter(|(_, n)| *n > 0).collect();
         assert!(new.is_empty(), "placing the hole added DRC findings {new:?}: before {base:?}, after {after:?}");
+    }
+
+    /// Library tables reach kicad-cli (slow tier): a symbol of a library only the board's own `sym-lib-table` names passes ERC's library check
+    /// (`lib_symbol_issues` is switched on here; the derived project ignores it otherwise), and the same board without the table does not -- so the
+    /// derived project carries the table, and `${KIPRJMOD}` in it names the board's folder and not the derived project's own.
+    #[test]
+    fn kicad_cli_erc_resolves_a_symbol_of_a_project_table_library() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let device = eda_kicad::default_symbol_library_root().join("Device.kicad_sym");
+        if eda_kicad_engine::find_cli().is_none() || !device.is_file() {
+            eprintln!("no kicad-cli or no KiCad symbol libraries; skipping");
+            return;
+        }
+        let dir = scratch("tables_erc");
+        setup_schematic(&dir);
+        // MyParts: one symbol, KiCad's Device:R under another library's name
+        let text = std::fs::read_to_string(&device).unwrap();
+        let summaries = eda_kicad::scan_symbols(&text);
+        let r = summaries.iter().find(|s| s.name == "R").expect("Device has R");
+        std::fs::create_dir_all(dir.join("libs")).unwrap();
+        std::fs::write(dir.join("libs").join("MyParts.kicad_sym"), format!("(kicad_symbol_lib (version 20251024) (generator \"eda\")\n{}\n)\n", eda_kicad::symbol_text(&text, r))).unwrap();
+        let added = crate::library_tables::add_library(&dir, br#"{"kind":"symbol","path":"${KIPRJMOD}/libs/MyParts.kicad_sym","descr":"mine"}"#);
+        assert_eq!(added["ok"], true, "{added}");
+        step(&dir, Cmd::SetErcSeverities { severities: [("lib_symbol_issues".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddSymbol { id: "U90".into(), lib_id: "MyParts:R".into(), at: Point { x: 63_500, y: 25_400 }, rot_millideg: 0, value: String::new(), footprint: String::new(), unit: 1 }, false, "test").unwrap();
+        let (_, design, _) = load(&dir).unwrap();
+        assert!(design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id("MyParts:R").is_some()), "the placed symbol kept its definition with the schematic");
+
+        let library_findings = |dir: &Path| -> Vec<String> {
+            let erc = crate::kicad_engine::erc(dir).expect("kicad-cli runs ERC");
+            erc["violations"].as_array().unwrap().iter().map(|v| v.to_string()).filter(|v| v.contains("lib_symbol_issues")).collect()
+        };
+        assert!(dir.join(".kicad").join("sym-lib-table").is_file() || { library_findings(&dir); dir.join(".kicad").join("sym-lib-table").is_file() }, "the derived project carries the table");
+        let with_table = library_findings(&dir);
+        assert!(!with_table.iter().any(|f| f.contains("MyParts")), "kicad-cli finds MyParts in the project's table: {with_table:?}");
+        std::fs::remove_file(dir.join("sym-lib-table")).unwrap();
+        let without = library_findings(&dir);
+        assert!(without.iter().any(|f| f.contains("MyParts")), "without the table kicad-cli does not know the library: {without:?}");
+        assert!(!dir.join(".kicad").join("sym-lib-table").exists(), "and the derived project has none either");
+    }
+
+    /// The footprint half (slow tier): a footprint of a library only the board's `fp-lib-table` names passes DRC's `lib_footprint_issues` check (switched
+    /// on here), a path variable of the board's own is what the table's path is written with, and without the table kicad-cli reports the library.
+    #[test]
+    fn kicad_cli_drc_resolves_a_footprint_of_a_project_table_library() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let source = eda_kicad::default_footprint_library_root().join("Resistor_SMD.pretty").join("R_0603_1608Metric.kicad_mod");
+        if eda_kicad_engine::find_cli().is_none() || !source.is_file() {
+            eprintln!("no kicad-cli or no KiCad footprint libraries; skipping");
+            return;
+        }
+        let dir = scratch("tables_drc");
+        setup(&dir);
+        // the library is in a folder of its own, reached through a variable the board defines
+        let shared = dir.join("shared_libs");
+        std::fs::create_dir_all(shared.join("MyFoot.pretty")).unwrap();
+        std::fs::copy(&source, shared.join("MyFoot.pretty").join("R_0603_1608Metric.kicad_mod")).unwrap();
+        let vars = crate::library_tables::set_variables(&dir, br#"{"variables":[{"name":"TEAM_LIBS","value":"${KIPRJMOD}/shared_libs"}]}"#);
+        assert_eq!(vars["ok"], true, "{vars}");
+        let table = br#"{"kind":"footprint","rows":[{"nickname":"MyFoot","uri":"${TEAM_LIBS}/MyFoot.pretty","type":"KiCad","options":"","descr":"","enabled":true,"visible":true}]}"#;
+        let set = crate::library_tables::set_table(&dir, table);
+        assert_eq!(set["ok"], true, "{set}");
+        step(&dir, Cmd::SetRuleSeverities { severities: [("lib_footprint_issues".to_string(), "warning".to_string())].into() }, false, "test").unwrap();
+        step(&dir, Cmd::PlaceFootprint { footprint: "MyFoot:R_0603_1608Metric".into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None }, false, "test").unwrap();
+        let (_, _, model) = load(&dir).unwrap();
+        assert!(model.part("R1").is_some_and(|p| model.footprint_of(p).is_some_and(|f| f.pads.len() == 2)), "placed from the table library as R1, with its two pads");
+
+        let library_findings = |dir: &Path| -> Vec<String> {
+            let drc = crate::kicad_engine::drc_with(dir, false, false).expect("kicad-cli runs DRC");
+            drc["violations"].as_array().unwrap().iter().map(|v| v.to_string()).filter(|v| v.contains("lib_footprint_issues")).collect()
+        };
+        let with_table = library_findings(&dir);
+        assert!(!with_table.iter().any(|f| f.contains("MyFoot")), "kicad-cli finds MyFoot through the board's table and its variable: {with_table:?}");
+        assert!(dir.join(".kicad").join("fp-lib-table").is_file());
+        let pro: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pro")).unwrap()).unwrap();
+        assert_eq!(pro["text_variables"]["TEAM_LIBS"], format!("{}/shared_libs", dir.display()), "the board's variable is a text variable of the derived project, its ${{KIPRJMOD}} the real folder");
+        std::fs::remove_file(dir.join("fp-lib-table")).unwrap();
+        let without = library_findings(&dir);
+        assert!(without.iter().any(|f| f.contains("MyFoot")), "without the table kicad-cli does not know the library: {without:?}");
+    }
+
+    /// 3D models through a table library's path (slow tier): a footprint of the board's own library whose model is addressed with one of the board's path variables
+    /// (`${TEAM}/R_0603.step`) gets its model in the 3D export, and loses it when the variable is not defined -- the export is told the board's variables.
+    #[test]
+    fn the_3d_export_finds_a_models_of_a_table_library_through_the_boards_variable() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let share = eda_kicad::default_footprint_library_root();
+        let footprint = share.join("Resistor_SMD.pretty").join("R_0603_1608Metric.kicad_mod");
+        let step = share.parent().map(|p| p.join("3dmodels").join("Resistor_SMD.3dshapes").join("R_0603_1608Metric.step"));
+        let Some(step) = step.filter(|s| s.is_file() && footprint.is_file() && eda_kicad_engine::find_cli().is_some()) else {
+            eprintln!("no kicad-cli or no KiCad footprint and 3D model libraries; skipping");
+            return;
+        };
+        let dir = scratch("tables_glb");
+        setup(&dir);
+        std::fs::create_dir_all(dir.join("libs").join("Res.pretty")).unwrap();
+        std::fs::create_dir_all(dir.join("models")).unwrap();
+        std::fs::copy(&step, dir.join("models").join("R_0603_1608Metric.step")).unwrap();
+        let text = std::fs::read_to_string(&footprint).unwrap().replace("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step", "${TEAM}/R_0603_1608Metric.step");
+        assert!(text.contains("${TEAM}/R_0603_1608Metric.step"), "the footprint names its model through the variable");
+        std::fs::write(dir.join("libs").join("Res.pretty").join("R_0603_1608Metric.kicad_mod"), text).unwrap();
+        assert_eq!(crate::library_tables::add_library(&dir, br#"{"kind":"footprint","path":"${KIPRJMOD}/libs/Res.pretty"}"#)["ok"], true);
+        step_ok(&dir, Cmd::PlaceFootprint { footprint: "Res:R_0603_1608Metric".into(), at: Point { x: 10_000, y: 14_000 }, reference: String::new(), value: String::new(), definition: None });
+
+        let meshes = |glb: &[u8]| -> usize {
+            let json_len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+            let json: serde_json::Value = serde_json::from_slice(&glb[20..20 + json_len]).unwrap();
+            json["meshes"].as_array().map_or(0, Vec::len)
+        };
+        let set_team = |on: bool| {
+            let body = if on { br#"{"variables":[{"name":"TEAM","value":"${KIPRJMOD}/models"}]}"#.to_vec() } else { br#"{"variables":[]}"#.to_vec() };
+            assert_eq!(crate::library_tables::set_variables(&dir, &body)["ok"], true);
+        };
+        set_team(true);
+        let with = crate::studio::build_glb(&dir).expect("kicad-cli exports the board");
+        set_team(false);
+        let without = crate::studio::build_glb(&dir).expect("kicad-cli exports the board");
+        assert!(meshes(&with) > meshes(&without), "the resistor's model is in the export when the board defines the variable: {} meshes with it, {} without", meshes(&with), meshes(&without));
+    }
+
+    /// `step` for a command that must pass, with the failure told.
+    fn step_ok(dir: &Path, cmd: Cmd) {
+        step(dir, cmd, false, "test").unwrap_or_else(|e| panic!("{e:?}"));
     }
 
     fn kicad_pcb_text_of(dir: &Path) -> String {

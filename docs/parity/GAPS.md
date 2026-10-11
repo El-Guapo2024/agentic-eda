@@ -10,22 +10,20 @@ each touches and the packages it collides with, so several agents can run at onc
 where a doc and the code disagree, the code wins and the doc is named.
 
 Item numbers are names: code comments and the PARITY docs cite "GAPS.md item 14" and "#8", so they never change and the rank is in the table below,
-not in the numbers. Items 25 to 35 are new in this revision. The package names `WP1` to `WP6` of the first phase are kept at the end for the six
-library-table reasons in `ui-parity-missing.json` that cite "WP6"; that is P3 now.
+not in the numbers. Items 25 to 35 are new in this revision. The package names `WP1` to `WP6` of the first phase are kept at the end as history.
 
 ## Status
 
-- **Actions wired: 579 of 766** (pcbnew 266/350, eeschema 168/233, common 145/183; `UI-ACTIONS.md`), up from 462 on 2026-10-07. The other 187 are
+- **Actions wired: 584 of 766** (pcbnew 266/350, eeschema 168/233, common 150/183; `UI-ACTIONS.md`), up from 462 on 2026-10-07. The other 182 are
   recorded with a reason in `web/studio/tools/ui-parity-missing.json`; none is bare. **Every reason was re-checked against main on 2026-10-10
-  (`STALE-REASONS.md`): 10 are stale (what they say is missing now exists), 18 are partly stale, 159 hold** (10 of those wait for a branch in
-  flight). The stale ones are Find by Properties, Migrate 3D Models, the microwave gap and stub, Append Board and its drop, the Footprint Editor's
+  (`STALE-REASONS.md`): 10 are stale (what they say is missing now exists), 18 are partly stale, 154 hold** (4 of those wait for a branch in
+  flight; the library tables wired five reasons). The stale ones are Find by Properties, Migrate 3D Models, the microwave gap and stub, Append Board and its drop, the Footprint Editor's
   drop, Import Sheet, Draw Sheet from File and the schematic drop; the plan below carries them.
 - **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"): **12 closed, 10 partial, 0 open,
   8 out of scope** (was 10, 12, 0, 8 on 2026-10-07; #11 Property dialogs and #25 Align and distribute closed).
 - **Items 1 to 24** are the ranked list of 2026-10-07 with their state brought forward; **items 25 to 35 are new**: the gaps the second phase
   found, from the `PARITY-*.md` "left" notes, the merge messages and reading the code.
-- **In flight, not on main** (read with `git diff main...<branch>`): `task-lib-tables` (item 5; the file format, path variables, global and project
-  tables, and the index, choosers and lookups running over them: 2 commits, no dialog yet), `task-sch-hierarchy` (item 4; Annotate over the whole
+- **In flight, not on main** (read with `git diff main...<branch>`): `task-sch-hierarchy` (item 4; Annotate over the whole
   schematic with KiCad's scope and numbering options, Find and Replace across sheets, the SVG render and the schematic gates over every sheet:
   6 commits), `task-custom-pads` (item 31; branched, no commit yet). Do not start work that touches their files without reading them first.
 - **Four findings change the picture.**
@@ -56,7 +54,7 @@ library-table reasons in `ui-parity-missing.json` that cite "WP6"; that is P3 no
 | 2 | KiCad files keep zone settings, keepouts, arcs, groups; the outline as Edge.Cuts items | Mostly done | `b145f0e` (10-08), `a46fd29` (10-09) |
 | 3 | Board Setup and the rules edit through an overlay | Mostly done | `b145f0e` (10-08) |
 | 4 | Module sheets: editing on every sheet, nets traced across sheets | Partly (the rest in flight) | `08c70c8` (10-08) |
-| 5 | Symbol Chooser and Footprint Chooser over the installed libraries | Partly (tables in flight) | `80e972d` (10-08) |
+| 5 | Symbol Chooser and Footprint Chooser over the installed libraries; library tables, Manage Libraries, New and Add Library, Configure Paths | Mostly done (saving into a table library is left) | `80e972d` (10-08), `task-lib-tables` (10-10) |
 | 6 | Schematic clipboard | **Closed** | `ee20bab` (10-08) |
 | 7 | Router: shove near pads, the board edge, settings, via drag | Partly | `1e4d7ea`, `03b46de` (10-08) |
 | 8 | PCB edit tools and the clipboard for every item kind | Mostly done | `88c8c0a` (10-08) |
@@ -84,7 +82,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 |---|---|---|---|---|---|
 | 1 | P1 Footprint graphics on the board | 25, 2 | no part outline, pin-1 mark or fab body on the canvas, in the file or in the silkscreen; an imported board loses them on export | open | L |
 | 2 | P2 Footprint assignment, exchange and reference rename | 26, 9 | the Footprint field of a symbol does nothing on the board; no Change Footprint; a rename leaves the footprint and its routing behind | open | L |
-| 3 | P3 Library tables and paths | 5 | libraries other than KiCad's installed ones cannot be added | engine in flight | M |
+| 3 | P3 Library tables and paths | 5 | a symbol or footprint made in the editors cannot be saved into a table library's file; no Reset or Migrate Libraries; no 3D model search paths | mostly done | S |
 | 4 | P4 Schematic hierarchy: the rest | 4 | Import Sheet, sheets in the clipboard, the last cross-sheet cases | in flight | M |
 | 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | dragging a segment moves its end; no start or end mid-segment; no coupled diff pair shove; no U meander | open | XL (3 parts) |
 | 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | open | M, ongoing |
@@ -177,17 +175,28 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `DrawSheet`), `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
 ### 5. Access to the installed libraries
-**Partly closed (2026-10-08, `80e972d`): the two choosers read KiCad's installed libraries; library tables are in flight (`task-lib-tables`).** Hit: every session that adds a part. Package P3.
+**Mostly closed (the choosers 2026-10-08, `80e972d`; library tables 2026-10-10, `task-lib-tables`): the choosers, the library trees and the lookups read the libraries KiCad's library tables name, the board has library tables of its own and the dialogs to edit them exist. Saving into a table library's file is open.** Hit: every session that adds a part. Package P3.
 - Done: **the Symbol Chooser is KiCad's** (`components/SymbolChooserDialog.tsx`, `components/chooser/`, `kicad-port/libChooser.ts`): a tree of "-- Recently Used --", "-- Already Placed --",
   the project's own libraries and all 222 installed ones, a search scored as `EDA_COMBINED_MATCHER` does, a row per unit, the symbol's drawing, its default footprint and the description pane.
   **The Footprint Chooser** (`components/FootprintChooserDialog.tsx`): the 155 installed footprint libraries with the same search, the drawing, the description, and, for a symbol, "Filter by
   pin count" and "Apply footprint filters". It serves **Place Footprint** (a mounting hole, a fiducial: `Cmd::PlaceFootprint` makes a board part), the Footprint field of Symbol Properties and
   Assign Footprints. **Placing an installed symbol** keeps its definition with the schematic in the same undoable command (`Cmd::EmbedLibSymbol`). Libraries are indexed on demand by one pass over
   their text and cached (`crates/kicad/src/{symbol_scan,footprint_scan}.rs`, `crates/cli/src/library_search.rs`); the Footprint and Symbol editors' trees list every installed library.
-- In flight: a `LibSource` (a folder, or the resolved tables: KiCad's global table with the libraries it chains, then the board's own `sym-lib-table` and `fp-lib-table`, a nickname defined
-  twice being the project's) behind `library_index`, `library_search`, `library_api`, `library_place` and `body_api`, with the file format, path variables and both table scopes
-  (`crates/kicad/src/library_table.rs`, `crates/cli/src/library_tables.rs`). No dialog, no Add Library or New Library yet.
-- Missing: the library table dialogs, Add Library, New Library, the library drop and Configure Paths (six rows of `ui-parity-missing.json` that go stale when the branch merges); KiCad's
+- Done (2026-10-10): **library tables** (`PARITY-common.md` section 14). `crates/kicad/src/library_table.rs` ports KiCad's table format (a byte-for-byte round trip of KiCad's own global table),
+  `LIBRARY_MANAGER`'s way of putting the tables together (the global table, the tables it chains -- KiCad's 222 symbol and 155 footprint libraries are one such row -- then the board's own, a
+  nickname defined twice being the later) and `KIwxExpandEnvVars` (`${NAME}`, the project's variables, `KIPRJMOD`, the environment, `kicad_common.json`, KiCad's defaults). KiCad's global tables in
+  `~/Library/Preferences/kicad/<version>/` are **read only** (every route that writes refuses that folder); the board's `sym-lib-table` and `fp-lib-table` are the studio's to create and edit
+  (`crates/cli/src/library_tables.rs`, `GET|POST /api/library_tables`, `/check`, `/add`, `/normalize`, `POST /api/path_variables`, `GET /api/fs/list`). A `LibSource` (`library_index.rs`: a folder, or
+  the resolved tables) sits behind the index, the choosers, the editor trees, placing (`Cmd::EmbedLibSymbol`, `PlaceFootprint`), a part naming `Lib:Footprint`, the Change Symbols catalog, the body
+  lookup and the 3D export, so a library of the tables lists, searches, opens and places like an installed one; `GET /api/3dmodel` reads a model path with the board's variables and KiCad's
+  (item 23). **Manage Symbol Libraries**, **Manage Footprint Libraries** (a Global tab, read only, with the tables it chains in tabs of their own, and a Project tab with `VerifyTable`'s checks),
+  **Add Library**, **New Library** (an empty `.kicad_sym` or `.pretty` and a row) and **Configure Paths** (KiCad's variables read only, the board's own editable) are in `components/libraryTables/`.
+  The derived KiCad project carries the tables and the variables (`derive_project`), so kicad-cli ERC (`lib_symbol_issues`), DRC (`lib_footprint_issues`) and the 3D export resolve the same libraries
+  (slow-tier tests); `eda import-kicad` brings a project's own tables and variables along. Tests: Rust unit tests for the format, the variables, the resolution, the routes, the import and a
+  place-from-table round trip; 13 web unit tests; `e2e/library-tables.check.js` (53 checks).
+- Missing: saving the editors' symbols and footprints into a table library's file (they write the project library of `design.json`; a library made with New Library stays empty until a file is put
+  into it), Add Library by drop (a browser drop has no path), Reset and Migrate Libraries, formats other than KiCad's (listed with a warning, kept in the table, not read), symbol folders of
+  `.kicad_sym` files, Edit Options..., 3D model search paths (Configure Paths lists KiCad's variables; the `3D Models` paths are the footprint's own text); KiCad's
   regular-expression (`/re/`) and relational (`voltage>3.3`) search words; the Footprint selector's list and the 3D preview of the Footprint Chooser; the chooser places a symbol in its normal
   body style (Cycle Body Style changes it afterwards, item 12); Change Symbols lists only the libraries the design references; power symbols are placed by `P`, not offered here.
 - Port from: `common/libraries/{library_manager,library_table,library_table_parser}.cpp`, `common/libraries/lib_table_grid_data_model.cpp`, `common/dialogs/{dialog_edit_library_tables,dialog_configure_paths}.cpp`,
@@ -380,7 +389,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 ### 23. The 3D viewer
 **Done (2026-10-09/10, `89ff669`)**, limits below. Hit: every board review. Blocks: no.
 - Done (`PARITY-3d.md` sections 1, 3, 5, 6, 7): each part is its own KiCad 3D model, fetched once per distinct model (`GET /api/3dmodel`, `crates/cli/src/model3d_api.rs`), read with three's `VRMLLoader` and placed by
-  `render_3d_opengl.cpp`'s chain (`kicad-port/model3d.ts`); the route resolves a footprint's `(model ...)` path as `FILENAME_RESOLVER` does, serves it read-only and converts a STEP once through
+  `render_3d_opengl.cpp`'s chain (`kicad-port/model3d.ts`); the route resolves a footprint's `(model ...)` path as `FILENAME_RESOLVER` does (a `${NAME}` is asked of the board's path variables and KiCad's before the environment, and the folders those name are readable, `library_tables::ModelNames`), serves it read-only and converts a STEP once through
   `kicad-cli pcb export vrml` into a cache. Time to the first real model on mcu30 (30 parts) and a 93-part QA board: 2.7 to 4.4 s from the request, from 10 to 50 s with the GLB export (now the optional "Exact
   export"). The Appearance manager is `appearance_controls_3D.cpp`'s layer tree (`kicad-port/appearance3d.ts`); stackup colours come from Board Setup (`StackupLayer.color`); hover highlight; animated view
   moves. The board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts. `e2e/viewer3d.check.js` (50 checks). Two stalls of the request loop were found by measuring and fixed.
@@ -563,10 +572,10 @@ Each row below is measured against kicad-cli in `crates/zone-filler/PARITY.md` (
 
 ## Phase one: the six packages (history)
 
-Kept because six reasons in `ui-parity-missing.json` cite "GAPS.md item 5, WP6" (that is P3 now). WP1 schematic editing fidelity: done (`2a8bf8f`, `ee20bab`, `2d92851`, `358606b`); what is left is P10.
+Kept as history. WP1 schematic editing fidelity: done (`2a8bf8f`, `ee20bab`, `2d92851`, `358606b`); what is left is P10.
 WP2 hierarchy and connectivity: module sheets (`08c70c8`), the rest is P4. WP3 PCB editing, selection and display: done (`88c8c0a`, `bd712d3`, `4c041a6`, `6611ade`, `358606b`); the rest is P6. WP4 router:
 shove and follow-ups done (`1e4d7ea`, `03b46de`); the rest is P5. WP5 rules, zones and file fidelity: the writer and Board Setup (`b145f0e`), the review workflow (`02f383c`), zone fill (`eabaf91`), the outline
-(`a46fd29`); the rest is P1, P9, P13 and P15. WP6 libraries, parts and footprints on the board: the choosers (`80e972d`), footprints as objects and arrays (`afcb91b`); library tables are P3, Change and Update
+(`a46fd29`); the rest is P1, P9, P13 and P15. WP6 libraries, parts and footprints on the board: the choosers (`80e972d`), footprints as objects and arrays (`afcb91b`); library tables (`task-lib-tables`, P3) are mostly done, Change and Update
 Footprint are P2.
 
 ## Next phase: work packages
@@ -601,7 +610,7 @@ Rules that keep them apart (each is how an earlier package did it):
 
 Waves:
 
-- **Running now**: P3 (`task-lib-tables`), P4 (`task-sch-hierarchy`), P7 (`task-custom-pads`).
+- **Running now**: P4 (`task-sch-hierarchy`), P7 (`task-custom-pads`). P3 (`task-lib-tables`) is done but for what its section lists.
 - **Next free slot**: P1 -- P2, P14, P16, P17 and the Footprint Checker and Compare Footprint stand on a footprint that carries its graphics -- and P5 part 1, which shares no hub with anything.
 - **After P1 has merged its IR**: P2 (its assignment overlay holds a definition with graphics). Step 1 of P2, the rename, can start sooner if P4 has merged its Annotate.
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
@@ -617,7 +626,7 @@ Waves:
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | P1 footprint graphics | x |  |  | x | x |  | (x) | x |  |  |  | (x) |  |
 | P2 assignment, exchange, rename | x | x | x | (x) |  | (x) | (x) |  | (x) | x |  |  | (x) |
-| P3 library tables (in flight) |  |  | (x) | x | (x) | (x) | (x) |  |  |  |  |  | x |
+| P3 library tables (done) |  |  | (x) | x | (x) | (x) | (x) |  |  |  |  |  | x |
 | P4 hierarchy (in flight) |  | x | x | x | (x) | x | x |  | x |  |  |  |  |
 | P5 router |  |  |  |  |  | (x) | (x) | (x) |  |  | x |  |  |
 | P6 PCB editing details |  | x |  |  | (x) | x | x | x |  |  |  |  |  |
@@ -670,17 +679,18 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `tools/global_edit_tool.cpp` (`ExchangeFootprints`), `tools/board_reannotate_tool.cpp`, `dialogs/dialog_board_reannotate.cpp`, `footprint.cpp` (`FootprintNeedsUpdate`), `tools/board_inspection_tool.cpp` (`DiffFootprint`),
   `eeschema/tools/assign_footprints.cpp`, `backannotate.cpp`, `tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
 - Order: the seven steps of item 26; Swap Pad Nets last and only if the board may disagree with the schematic.
-- Conflicts: P4 (`rename_symbol` and `annotate` in `ops/lib.rs`, `reconcile_schematic`); P1 (the definition carries graphics); P14, P7 (`fp_edit.rs`); P3 (library lookup in `library_place.rs`, a hunk).
+- Conflicts: P4 (`rename_symbol` and `annotate` in `ops/lib.rs`, `reconcile_schematic`); P1 (the definition carries graphics); P14, P7 (`fp_edit.rs`); P3 (merged: `library_place.rs` reads the libraries through a `LibSource`).
 
-### P3. Library tables and paths (item 5). Size M for what is left. Rank 3. **In flight: `task-lib-tables`.**
-- Why: only KiCad's installed libraries and the project library can be used; no user library can be added.
-- Done in the branch: the table file format, path variables, global and project tables, the index, search, place and body lookups over a `LibSource` (`crates/kicad/src/library_table.rs`, `crates/cli/src/library_tables.rs`).
-- Left: `GET/POST /api/library/tables`, `POST /api/library/new`, a new `components/LibraryTablesDialog.tsx` (Global and Project tabs; Nickname, URI, Options, Description; Add, Move, Delete, Browse) and
-  `ConfigurePathsDialog.tsx`, Add Library / New Library / the library drop in `actions/commonLibraryActions.ts`, the library trees (`components/library/`) listing table libraries, the 3D path variables shared with
-  `model3d_api.rs::resolve`; delete the six rows from `ui-parity-missing.json`.
+### P3. Library tables and paths (item 5). Size S for what is left. Rank 3. **Mostly done: `task-lib-tables`.**
+- Why: only KiCad's installed libraries and the project library could be used; no user library could be added.
+- Done: the table format, path variables, the global (read only) and project tables, and the index, search, place, body and 3D lookups over a `LibSource` (`crates/kicad/src/library_table.rs`,
+  `crates/cli/src/library_tables.rs`); Manage Symbol Libraries, Manage Footprint Libraries, Configure Paths, New Library and Add Library (`components/libraryTables/`, `actions/libraryTableActions.ts`);
+  the derived KiCad project and `eda import-kicad` carry the tables and the variables; `GET /api/3dmodel` reads a model path with the board's variables (`library_tables::ModelNames`).
+- Left: saving the Symbol and Footprint editors' work into a table library's file (the editors write the project library; Save, Save As and Export would write the library the row names), the library
+  drop (a browser drop carries no path), Reset and Migrate Libraries, Edit Options..., symbol folders of `.kicad_sym` files, formats other than KiCad's, the 3D model search paths and Migrate 3D Models (P14).
 - KiCad: `common/libraries/{library_manager,library_table,library_table_parser}.cpp`, `common/libraries/lib_table_grid_data_model.cpp`, `common/dialogs/{dialog_edit_library_tables,dialog_configure_paths}.cpp`,
   `eeschema/dialogs/panel_sym_lib_table.cpp`, `pcbnew/dialogs/panel_fp_lib_table.cpp`, `eeschema/tools/symbol_editor_control.cpp` and `pcbnew/tools/pcb_control.cpp` (`AddLibrary`, `NewLibrary`).
-- Conflicts: P4 (`studio.rs`, `board.rs`: a few lines each); P17 and P18 build on it; P2 (`library_place.rs`).
+- Conflicts: P17 and P18 build on it; P2 (`library_place.rs`).
 
 ### P4. Schematic hierarchy: the rest (item 4; SR1's sheet half). Size M for what is left. Rank 4. **In flight: `task-sch-hierarchy`.**
 - Done in the branch: Annotate with KiCad's dialog and numbering (`crates/model/src/{annotate,sheet_list}.rs`, `crates/ops/src/sch_annotate.rs`), Find and Replace across sheets, the SVG render and the gates over every sheet.

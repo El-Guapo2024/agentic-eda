@@ -10,8 +10,7 @@
 // the editor-specific ones). Each handler cites the KiCad function it ports (commit 8303b2ad).
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: the actions that need a subsystem the
-// studio does not have (library tables and on-disk libraries, tables, the Python plugin host, the project manager, the
-// simulator's plot zoom).
+// studio does not have (tables of items, the Python plugin host, the project manager, the simulator's plot zoom).
 import type { Dispatch } from "react";
 import type { Action as StudioAction, EditorTab, StudioApi, StudioState } from "../state/store";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
@@ -26,6 +25,7 @@ import { registerGroupActions } from "./commonGroupActions";
 import { registerCheckerActions } from "./commonCheckerActions";
 import { registerSuiteActions } from "./commonSuiteActions";
 import { registerLibraryActions } from "./commonLibraryActions";
+import { registerLibraryTableActions } from "./libraryTableActions";
 import { registerTextActions } from "./commonTextActions";
 import { registerGridActions } from "./commonGridActions";
 import { registerGridListActions } from "./commonGridListActions";
@@ -217,6 +217,7 @@ export function registerCommonActions(m: Map<string, ActionHandler>, ctx: Common
   registerCheckerActions(m, ctx);
   registerSuiteActions(m, ctx);
   registerLibraryActions(m, ctx);
+  registerLibraryTableActions(m, ctx);
   registerTextActions(m, ctx);
   registerGridActions(m, ctx);
   registerGridListActions(m, ctx);

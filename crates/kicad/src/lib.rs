@@ -41,7 +41,7 @@ mod footprint_import;
 pub use footprint_import::{parse_library_footprint, ParsedFootprint};
 
 mod footprint_lib;
-pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, footprint_attributes, footprint_models, parse_footprint_file, resolve_library_footprints, LIBRARY_ROOT_ENV};
+pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, footprint_attributes, footprint_models, parse_footprint_file, resolve_library_footprints, resolve_library_footprints_with, LIBRARY_ROOT_ENV};
 
 mod model3d;
 pub use model3d::{fit_pads, installed_footprint, installed_footprint_in, part_models, part_models_in, Fit, InstalledFootprint, ModelKind, PartModels};
@@ -56,7 +56,10 @@ mod footprint_scan;
 pub use footprint_scan::{is_numbered_pad, scan_footprint, FootprintSummary};
 
 mod symbol_lib;
-pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_library, resolve_library_symbols, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+pub use symbol_lib::{default_symbol_library_root, export_kicad_sym, export_kicad_sym_library, find_symbol_library_file, list_symbol_libraries, list_symbols_in_file, list_symbols_in_library, resolve_library_symbols, resolve_library_symbols_with, resolve_symbol, SYMBOL_LIBRARY_ROOT_ENV};
+
+// KiCad's library tables (`sym-lib-table`, `fp-lib-table`): the file format, the path variables, how global and project tables are put together.
+pub mod library_table;
 
 mod bus;
 pub use bus::expand_bus_members;

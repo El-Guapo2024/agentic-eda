@@ -1,9 +1,9 @@
-//! Placing something out of KiCad's installed libraries: the definition goes in with the command.
+//! Placing something out of the libraries of the library tables: the definition goes in with the command.
 //!
 //! A symbol the design does not know (`Amplifier_Operational:LM358`) or a footprint the board does not know
-//! (`MountingHole:MountingHole_3.2mm_M3`) is drawn from a library file KiCad.app ships. The ops verbs do not read libraries -- a command
-//! has to replay and undo the same on a machine without them -- so the studio's server, which does know where the libraries are,
-//! rewrites the command before it is applied (`board::step_quiet`):
+//! (`MountingHole:MountingHole_3.2mm_M3`) is drawn from a library file: one KiCad.app ships (the global table) or one of the board's own (its project
+//! table, `MyParts:Chip`). The ops verbs do not read libraries -- a command has to replay and undo the same on a machine without them -- so the studio's
+//! server, which does know where the libraries are, rewrites the command before it is applied (`board::step_quiet`):
 //!
 //!   * `AddSymbol { lib_id }` becomes one command that first keeps the symbol's definition with the schematic
 //!     (`Cmd::EmbedLibSymbol`, KiCad's `SCH_SCREEN::AddLibSymbol`), then adds the instance with the library's own Value and Footprint where the
@@ -14,14 +14,29 @@
 //!
 //! A symbol the model already resolves (the intent's own, one it already uses, one the design keeps) is left alone: the design's copy wins.
 
+use crate::library_index::{Kind, LibSource};
 use eda_model::ir::Design;
 use eda_model::ConstraintModel;
 use eda_ops::Cmd;
 use std::path::Path;
 
-/// `cmd` with the definitions of the installed symbols and footprints it names, or `None` when there is nothing to add.
-pub(crate) fn with_installed_definitions(cmd: &Cmd, design: &Design, model: &ConstraintModel) -> Option<Cmd> {
-    rewrite(cmd, design, model, &eda_kicad::default_symbol_library_root(), &eda_kicad::default_footprint_library_root())
+/// Whether `cmd` can name a library symbol or footprint at all: the library tables are read only for a command that does.
+fn places_from_libraries(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::Batch { cmds } => cmds.iter().any(places_from_libraries),
+        Cmd::OnSheet { cmd, .. } => places_from_libraries(cmd),
+        Cmd::AddSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } => true,
+        _ => false,
+    }
+}
+
+/// `cmd` with the definitions of the library symbols and footprints it names, or `None` when there is nothing to add. `dir` is the board's folder: its
+/// library tables say where the libraries are.
+pub(crate) fn with_installed_definitions(dir: &Path, cmd: &Cmd, design: &Design, model: &ConstraintModel) -> Option<Cmd> {
+    if !places_from_libraries(cmd) {
+        return None;
+    }
+    rewrite(cmd, design, model, &*crate::library_tables::libs(dir, Kind::Symbol), &*crate::library_tables::libs(dir, Kind::Footprint))
 }
 
 /// A library symbol the design has no definition of: a `Lib:Name` the model's explicit symbols (the intent's, a library's it resolved, a published one) and the project
@@ -33,7 +48,7 @@ fn lacks_definition(lib_id: &str, design: &Design, model: &ConstraintModel) -> b
         && !design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id(lib_id).is_some())
 }
 
-fn rewrite(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &Path, footprints: &Path) -> Option<Cmd> {
+fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &S, footprints: &F) -> Option<Cmd> {
     match cmd {
         Cmd::Batch { cmds } => {
             let rewritten: Vec<Option<Cmd>> = cmds.iter().map(|c| rewrite(c, design, model, symbols, footprints)).collect();
@@ -88,6 +103,12 @@ fn rewrite(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &Path, 
         }
         _ => None,
     }
+}
+
+/// (For the tests of the modules that build sources of their own.)
+#[cfg(test)]
+pub(crate) fn rewrite_for_tests(cmd: &Cmd, design: &Design, model: &ConstraintModel, symbols: &dyn LibSource, footprints: &dyn LibSource) -> Option<Cmd> {
+    rewrite(cmd, design, model, symbols, footprints)
 }
 
 #[cfg(test)]

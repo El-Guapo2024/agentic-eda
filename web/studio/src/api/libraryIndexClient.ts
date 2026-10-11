@@ -12,6 +12,8 @@ export interface InstalledLibrary {
   count?: number;
   /** What KiCad's library table says it is (the choosers' Description column of a library row). */
   description?: string;
+  /** The table the library is in: KiCad's own (`global`) or the board's (`project`). */
+  scope?: "global" | "project";
 }
 
 async function get<T extends { error?: string }>(url: string): Promise<T> {
@@ -42,6 +44,28 @@ const everything = new Map<LibraryKind, Promise<Record<string, string[]>>>();
 const knownLibraries = new Map<LibraryKind, InstalledLibrary[]>();
 const knownItems = new Map<string, string[]>();
 const knownEverything = new Map<LibraryKind, Record<string, string[]>>();
+
+const resetListeners = new Set<() => void>();
+
+/**
+ * Forget every answer: the library tables changed (a library was added, a path edited, a variable defined), so what the server lists is not what was asked
+ * before. The next ask goes to the server; the trees that are on screen are told (`onInstalledLibrariesReset`) to ask again.
+ */
+export function resetInstalledLibraries(): void {
+  libraryLists.clear();
+  itemLists.clear();
+  everything.clear();
+  knownLibraries.clear();
+  knownItems.clear();
+  knownEverything.clear();
+  for (const l of [...resetListeners]) l();
+}
+
+/** Called when the answers were forgotten (`resetInstalledLibraries`); returns the unsubscribe. */
+export function onInstalledLibrariesReset(listener: () => void): () => void {
+  resetListeners.add(listener);
+  return () => resetListeners.delete(listener);
+}
 
 /** The installed libraries' names (and counts where cheap), sorted; empty when KiCad is not installed. */
 export function fetchInstalledLibraries(kind: LibraryKind): Promise<InstalledLibrary[]> {

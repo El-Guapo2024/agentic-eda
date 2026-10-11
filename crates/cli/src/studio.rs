@@ -338,7 +338,7 @@ fn ensure_routed_nets(design: &eda_model::ir::Design, model: &mut eda_model::Con
 /// files open) if it runs longer, so a stuck or pathological export can
 /// never pile up processes or run forever even though nothing is
 /// polling its stdout.
-fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
+pub(crate) fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
     let (meta, design, mut model) = board::load(dir).map_err(|e| board::reasons(&e))?;
     ensure_routed_nets(&design, &mut model);
     let title = Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
@@ -365,6 +365,12 @@ fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
     if let Err(e) = std::fs::write(&pcb_path, &pcb_text) {
         cleanup();
         return Err(format!("could not write temp .kicad_pcb: {e}"));
+    }
+    // The board's path variables, so a model addressed through one of them (`${TEAM_LIBS}/part.step`, `${KIPRJMOD}/3d/part.step`: a footprint of one of the board's own
+    // libraries) is found here as it is in the derived project kicad-cli runs on elsewhere (`eda_kicad::library_table::derive_project`).
+    let mut project = json!({});
+    if eda_kicad::library_table::derive_project(dir, &tmp_dir, &mut project).unwrap_or(false) {
+        let _ = std::fs::write(tmp_dir.join(format!("{title}.kicad_pro")), serde_json::to_string_pretty(&project).unwrap_or_default());
     }
     let stderr_file = match std::fs::File::create(&stderr_path) {
         Ok(f) => f,
@@ -687,15 +693,16 @@ fn handle(
         // The library editors' read-only lookups of ANY symbol / footprint (project entry or resolved), for Duplicate, Save Copy As, Copy.
         ("GET", "/api/library/symbol") => respond(stream, "200 OK", "application/json", crate::library_api::symbol(dir, &query_value(target, "lib_id")).to_string().as_bytes()),
         ("GET", "/api/library/footprint") => respond(stream, "200 OK", "application/json", crate::library_api::footprint(dir, &query_value(target, "name")).to_string().as_bytes()),
-        // The installed KiCad libraries (155 footprint, 223 symbol libraries) for the library trees: names only, one library at a time, cached
-        // (`crate::library_index`) -- the libraries are too big to send or parse whole.
+        // The libraries of the board's library tables -- KiCad's installed ones (155 footprint, 223 symbol libraries) through the global table, the
+        // board's own through its project table -- for the library trees: names only, one library at a time, cached (`crate::library_index`); the
+        // libraries are too big to send or parse whole.
         ("GET", "/api/library/index" | "/api/library/items" | "/api/library/all") => {
             let reply = match crate::library_index::Kind::parse(&query_value(target, "kind")) {
                 None => json!({ "error": "kind is footprint or symbol" }),
                 Some(kind) => match path {
-                    "/api/library/index" => crate::library_index::libraries(kind),
-                    "/api/library/items" => crate::library_index::items(kind, &query_value(target, "lib")),
-                    _ => crate::library_index::all(kind),
+                    "/api/library/index" => crate::library_index::libraries(dir, kind),
+                    "/api/library/items" => crate::library_index::items(dir, kind, &query_value(target, "lib")),
+                    _ => crate::library_index::all(dir, kind),
                 },
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
@@ -708,18 +715,28 @@ fn handle(
                 Some(kind) => {
                     let filter = crate::library_search::Filter::parse(&query_value(target, "pins"), &query_value(target, "fp_filters"), &query_value(target, "power"));
                     match path {
-                        "/api/library/entries" => crate::library_search::entries(kind, &query_value(target, "lib"), &filter),
+                        "/api/library/entries" => crate::library_search::entries(dir, kind, &query_value(target, "lib"), &filter),
                         "/api/library/search" => {
                             let limit = query_value(target, "limit").parse::<usize>().ok().filter(|&n| n > 0).map_or(crate::library_search::SEARCH_LIMIT, |n| n.min(2000));
-                            crate::library_search::search(kind, &query_value(target, "q"), &filter, limit)
+                            crate::library_search::search(dir, kind, &query_value(target, "q"), &filter, limit)
                         }
-                        _ => crate::library_search::details(kind, &query_value(target, "id")),
+                        _ => crate::library_search::details(dir, kind, &query_value(target, "id")),
                     }
                 }
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
         ("GET", "/api/library/project") => respond(stream, "200 OK", "application/json", crate::library_api::project_symbols(dir).to_string().as_bytes()),
+        // The library tables (`crate::library_tables`): KiCad's global ones, read only, and the board's own `sym-lib-table` / `fp-lib-table`, which the Manage Symbol Libraries
+        // and Manage Footprint Libraries dialogs edit; New Library and Add Existing Library; the board's path variables (Configure Paths); and the folder listing the browse
+        // buttons use in place of a native file dialog.
+        ("GET", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::view(dir).to_string().as_bytes()),
+        ("POST", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_table(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/library_tables/check") => respond(stream, "200 OK", "application/json", crate::library_tables::check_rows(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/library_tables/normalize") => respond(stream, "200 OK", "application/json", crate::library_tables::normalize(dir, &query_value(target, "path")).to_string().as_bytes()),
+        ("POST", "/api/library_tables/add") => respond(stream, "200 OK", "application/json", crate::library_tables::add_library(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/path_variables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_variables(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/fs/list") => respond(stream, "200 OK", "application/json", crate::library_tables::browse(dir, &query_value(target, "path"), &query_value(target, "what")).to_string().as_bytes()),
         // Import / Paste in the two library editors: the read-only half (`crate::library_api`); the store is a `put_library_*` verb.
         ("POST", "/api/symbol_library/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_symbols(&body).to_string().as_bytes()),
         ("POST", "/api/footprint/parse") => respond(stream, "200 OK", "application/json", crate::library_api::parse_footprint(&body).to_string().as_bytes()),
@@ -921,6 +938,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         .unwrap_or_default();
     let net_of: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let pl = design.placement.as_ref();
+    // The footprint libraries the parts' bodies are looked up in (the board's library tables), read when the first part needs them.
+    let body_libs = crate::body_api::Libs::of_board(dir);
     let mut parts = Vec::new();
     for part in &model.parts {
         let fp = pl.and_then(|pl| pl.footprints.iter().find(|f| f.id == part.reference));
@@ -978,7 +997,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
-            p["body"] = json!(crate::body_api::placed_body(&design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            p["body"] = json!(crate::body_api::placed_body(&body_libs, &design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's 3D models with the placement its footprint gives each, and whether KiCad counts it a through-hole, SMD or virtual model: what the 3D
             // view loads (`GET /api/3dmodel`) and places. Absent when the footprint names no model: the view then draws the body box.
             if let Some(models) = resolved.as_ref().and_then(|f| crate::model3d_api::part_json(&model, part, f)) {
@@ -1677,7 +1696,7 @@ fn viewed_file(design: &eda_model::ir::Design, breadcrumb: &[(String, String)]) 
 /// session could actually try it against.
 fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let lib_root = eda_kicad::default_symbol_library_root();
+    let libs = crate::library_tables::libs(dir, crate::library_index::Kind::Symbol);
 
     let lib_name_of = |lib_id: &str| lib_id.split_once(':').map(|(l, _)| l.to_string());
     let mut lib_names: std::collections::BTreeSet<String> = model.symbols.iter().filter_map(|s| lib_name_of(&s.lib_id)).collect();
@@ -1688,7 +1707,9 @@ fn symbol_library_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
 
     let mut by_lib_id: std::collections::BTreeMap<String, eda_model::LibSymbol> = std::collections::BTreeMap::new();
     for name in &lib_names {
-        for sym in eda_kicad::list_symbols_in_library(&lib_root, name) {
+        // the library of that nickname in the board's symbol library tables (KiCad's, or the board's own)
+        let Ok(path) = crate::library_index::LibSource::lib_path(&*libs, crate::library_index::Kind::Symbol, name) else { continue };
+        for sym in eda_kicad::list_symbols_in_file(&path, name) {
             by_lib_id.insert(sym.lib_id.clone(), sym);
         }
     }
