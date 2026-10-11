@@ -13,7 +13,10 @@
 //     scale, the DXF width and units and no layer, group or discontinuities; OK with "At" puts the lines (graphic lines of the sheet, shapes for the arcs) at the origin over the scale with the
 //     sheet's default width, as ONE undo step of the schematic's own history; interactive placement puts the drawing's origin at the cursor's grid point and arms the Move tool, Escape takes it
 //     back; an SVG becomes polygons; in the Symbol Editor the items are polylines and arcs of the open symbol in mm with the Y axis up, on the unit being edited, as one undo step of that editor;
-//   (Append Board and the file drops are added to this script with the package's later steps.)
+//   Append Board (PCB_CONTROL::AppendBoard): the action, its drop and the File menu entry are wired; a dropped `.kicad_pcb` is read by the server (what is in it and the point it is held by:
+//     its top left item), its items are pasted with that item at the cursor's grid point, selected and carried by the Move tool as ONE undo step (Escape takes them back, a click drops them where
+//     the pointer went), the footprint it brings is a part of this board and the copper keeps its place relative to the line; a file that is not a KiCad board is refused in KiCad's words;
+//   (the file drops are added to this script with the package's last step.)
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__filesInCheck.results` (`.done` is set at the end).
 (async () => {
@@ -65,6 +68,23 @@
   /** A 40 x 30 mm rounded rect drawn with a 0.1 mm stroke, the way a vector drawing tool writes it, and a small filled logo with a hole. */
   const svgRect = `<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="40mm" height="30mm" viewBox="0 0 40 30"><rect x="0" y="0" width="40" height="30" rx="3" fill="none" stroke="#000" stroke-width="0.1"/></svg>`;
   const svgLogo = `<svg xmlns="http://www.w3.org/2000/svg" width="20mm" height="20mm" viewBox="0 0 20 20"><path d="M0 0 h20 v20 h-20 z M5 5 v10 h10 v-10 z" fill="#333" fill-rule="evenodd"/><text x="1" y="1">x</text></svg>`;
+
+  /** Another board: a part ZZ1 (two pads, one on GND), a track on GND, a line on Dwgs.User and a text. The line's start (15, 5) is its top left item. */
+  const otherBoard = `(kicad_pcb (version 20241229) (generator "pcbnew") (generator_version "9.0")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user) (5 "F.SilkS" user) (7 "F.Fab" user) (40 "Dwgs.User" user))
+  (net 0 "")
+  (net 1 "GND")
+  (footprint "Lib:R0603" (layer "F.Cu") (uuid "a0000000-0000-0000-0000-000000000001") (at 30 20)
+    (property "Reference" "ZZ1" (at 0 -1 0) (layer "F.SilkS") (uuid "a0000000-0000-0000-0000-000000000002") (effects (font (size 1 1) (thickness 0.15))))
+    (property "Value" "10k" (at 0 1 0) (layer "F.Fab") (uuid "a0000000-0000-0000-0000-000000000003") (effects (font (size 1 1) (thickness 0.15))))
+    (pad "1" smd rect (at -0.8 0) (size 0.8 0.9) (layers "F.Cu" "F.Mask" "F.Paste") (net 1 "GND") (uuid "a0000000-0000-0000-0000-000000000004"))
+    (pad "2" smd rect (at 0.8 0) (size 0.8 0.9) (layers "F.Cu" "F.Mask" "F.Paste") (uuid "a0000000-0000-0000-0000-000000000005")))
+  (segment (start 20 10) (end 40 10) (width 0.25) (layer "F.Cu") (net 1) (uuid "a0000000-0000-0000-0000-000000000006"))
+  (gr_line (start 15 5) (end 45 5) (stroke (width 0.1) (type solid)) (layer "Dwgs.User") (uuid "a0000000-0000-0000-0000-000000000007"))
+  (gr_text "ZZ" (at 25 30 0) (layer "F.SilkS") (uuid "a0000000-0000-0000-0000-000000000008") (effects (font (size 1 1) (thickness 0.15))))
+)`;
 
   /** The extent of the shapes on the board: [minx, miny, maxx, maxy] in um. */
   const extent = (shapes) => {
@@ -262,6 +282,67 @@
     check("nothing is left on the board by all of this", added(await board()).length === base.shapes);
     void noItems; void garbage; void dropped;
 
+    // ============================================================================================================================ Append Board
+    const acts2 = Object.fromEntries(E.actions({ all: true }).map((a) => [a.id, a]));
+    check("Append Board and its drop are wired on the PCB tab", acts2["pcbnew.EditorControl.appendBoard"]?.enabled && acts2["pcbnew.Control.DdAppendBoard"]?.enabled, JSON.stringify([acts2["pcbnew.EditorControl.appendBoard"], acts2["pcbnew.Control.DdAppendBoard"]]));
+    const appendEntry = await fromMenu("File", "Append Board");
+    check("File has Append Board... and it is enabled (it opens a file chooser, so it is not clicked here)", !!appendEntry && appendEntry.getAttribute("aria-disabled") === "false", appendEntry?.outerHTML?.slice(0, 120));
+    if (document.querySelector('.menubar-dropdown [role="menuitem"]')) { [...document.querySelectorAll(".menubar-item")].find((e) => e.childNodes[0]?.textContent?.trim() === "File")?.click(); await sleep(250); } // a click toggles: close the menu left open
+    const notBoard = await E.run("pcbnew.Control.DdAppendBoard", { name: "old.brd", text: "x" });
+    check("a dropped file that is not a KiCad board is refused in KiCad's words", notBoard.toast === "Only KiCad boards (.kicad_pcb files) can be appended.", JSON.stringify(notBoard));
+    const garbageBoard = await E.run("pcbnew.Control.DdAppendBoard", { name: "bad.kicad_pcb", text: "hello" });
+    check("a .kicad_pcb that does not parse is refused as 'Error loading board.'", /^Error loading board\./.test(garbageBoard.toast ?? ""), JSON.stringify(garbageBoard));
+    const partsBefore = (await board()).parts.length;
+    check("nothing came of the refusals", (await board()).parts.length === partsBefore && added(await board()).length === base.shapes);
+
+    // Under strict (the default) a command that makes the board worse is refused, as any other is: the part would land outside this 35 x 35 mm board.
+    await hover(50000, 20000);
+    const strictRefusal = await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
+    const afterStrict = await board();
+    check("in strict mode an append that makes the board worse is refused with the reason, and nothing is added or carried", /refused because --strict/.test(strictRefusal.toast ?? "") && afterStrict.parts.length === partsBefore && added(afterStrict).length === base.shapes && E.state().tool === "select", JSON.stringify([strictRefusal.toast, E.state().tool]));
+    const strictBox = () => [...document.querySelectorAll("label")].find((l) => l.textContent.trim() === "strict")?.querySelector("input");
+    const wasStrict = strictBox()?.checked;
+    if (wasStrict) { strictBox().click(); await sleep(300); }
+    await hover(50000, 20000);
+    const appended = await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
+    applied++;
+    await sleep(800);
+    const after = await board();
+    const zz = after.parts.find((p) => p.ref === "ZZ1");
+    check("the file's part is a part of this board, placed", !!zz && zz.placed && after.parts.length === partsBefore + 1, JSON.stringify(zz && { ref: zz.ref, at: zz.at }));
+    const newLine = added(after).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.start[0] === 50000 && x.start[1] === 20000);
+    check("the line that was the file's top left item is at the cursor's grid point, 30 mm long as it was", !!newLine && newLine.end[0] === 80000 && newLine.end[1] === 20000, JSON.stringify(newLine && [newLine.start, newLine.end]));
+    check("the part keeps its place relative to the line: the file's (30, 20) against (15, 5) is 15, 15 mm on", !!zz && zz.at[0] === 65000 && zz.at[1] === 35000, JSON.stringify(zz?.at));
+    const trk = (after.routing?.tracks ?? []).find((t) => t.pts?.[0]?.[0] === 55000 && t.pts?.[0]?.[1] === 25000);
+    check("and the track starts at (55, 25): the file's (20, 10) less (15, 5), on the cursor", !!trk && trk.net === "GND", JSON.stringify(trk && { net: trk.net, pts: trk.pts }));
+    check("the Move tool carries what came in, and it is what is selected", E.state().tool === "move" && E.state().selection.length >= 4, JSON.stringify([E.state().tool, E.state().selection.map((x) => x.kind)]));
+    check("the toast says what was appended", /Appended 1 footprint, 1 track, 1 graphic, 1 text\./.test(appended.toast ?? ""), JSON.stringify(appended.toast));
+    key("Escape");
+    await sleep(1000);
+    const gone3 = await board();
+    check("Escape takes the whole append back, one undo step: no part ZZ1, no new shapes", !gone3.parts.some((p) => p.ref === "ZZ1") && gone3.parts.length === partsBefore && added(gone3).length === base.shapes && E.state().tool === "select", `${gone3.parts.length} parts, ${added(gone3).length} shapes, tool ${E.state().tool}`);
+    applied--;
+    // again, and this time a click drops it where the pointer went
+    await hover(50000, 20000);
+    await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
+    applied++;
+    await sleep(800);
+    await hover(60000, 30000);
+    const [dx, dy] = w2c(60000, 30000);
+    fire("pointerdown", dx, dy, 1);
+    fire("pointerup", dx, dy);
+    await sleep(1200);
+    applied++;
+    const dropped2 = await board();
+    const line2 = added(dropped2).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.end[0] === 90000);
+    check("a click drops the carried board where the pointer went: the line's start is at (60, 30)", !!line2 && line2.start[0] === 60000 && line2.start[1] === 30000 && E.state().tool === "select", JSON.stringify(line2 && [line2.start, line2.end]) + " tool " + E.state().tool);
+    await undo(2);
+    applied -= 2;
+    const clean = await board();
+    check("two undos (the move, then the append) leave the board as it was", clean.parts.length === partsBefore && added(clean).length === base.shapes && !clean.parts.some((p) => p.ref === "ZZ1"));
+    if (wasStrict && !strictBox()?.checked) { strictBox().click(); await sleep(300); }
+    void appended;
+
     // ============================================================================================================================ the schematic
     const clickTab = async (name) => { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === name)?.click(); await sleep(1200); };
     await clickTab("Schematic");
@@ -440,11 +521,12 @@
     for (let guard = 0; guard < 6 && dialogs().length > 0; guard++) { (button("Cancel") ?? { click() {} }).click(); await sleep(150); }
     if (E.state().tool !== "select") { key("Escape"); await sleep(300); }
     if (applied > 0) await undo(applied);
+    { const box = [...document.querySelectorAll("label")].find((l) => l.textContent.trim() === "strict")?.querySelector("input"); if (box && !box.checked) box.click(); }
     for (let i = 0; i < appliedSch; i++) await post("/api/undo", { domain: "schematic" });
     for (let i = 0; i < appliedSym; i++) await post("/api/undo", { domain: "symbol_editor" });
     if (E.state().tab !== firstTab) { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === (firstTab === "schematic" ? "Schematic" : firstTab === "symbol" ? "Symbol" : "PCB"))?.click(); await sleep(800); }
     // The refusals this check provokes on purpose raise an error toast each; anything else is an error.
-    const meant = [/There is no plugin to handle this file type\./, /No graphic items found in file\./];
+    const meant = [/There is no plugin to handle this file type\./, /No graphic items found in file\./, /Only KiCad boards \(\.kicad_pcb files\) can be appended\./, /Error loading board\./, /refused because --strict/];
     const now = E.errors().slice(errorsBefore).filter((x) => !/Unable to preventDefault/.test(x.message) && !meant.some((re) => re.test(x.message)));
     check("no error was raised in the page", now.length === 0, now.map((x) => x.message).join(" | "));
     window.__filesInCheck.done = true;

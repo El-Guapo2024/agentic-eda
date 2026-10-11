@@ -27,6 +27,7 @@ mod cleanup_api;
 mod convert_api;
 mod fab_api;
 mod fp_json;
+mod append_api;
 mod graphics_api;
 mod library_api;
 mod library_index;

@@ -195,7 +195,7 @@ export function useActionRunner() {
     // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
     registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
     registerAppearanceActions(m, { state, dispatch });
-    registerImportActions(m, { tab: state.tab, dispatch });
+    registerImportActions(m, { tab: state.tab, dispatch, api });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
