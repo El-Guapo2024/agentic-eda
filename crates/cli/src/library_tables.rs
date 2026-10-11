@@ -618,10 +618,11 @@ pub(crate) fn check_rows_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
 }
 
 /// The variables a path may be written with, as `NormalizePath` takes them: KiCad's, then the project's (their values with their own variables replaced).
-fn normalize_vars(env: &Env, vars: &Vars) -> Vec<(String, String)> {
+fn normalize_vars(env: &Env, vars: &Vars, project_dir: &Path) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = env.global_vars().into_iter().map(|v| (v.name, v.value)).collect();
     for (k, v) in &vars.text {
-        out.push((k.clone(), vars.expand(v)));
+        // a variable's folder as a path has it: its own variables replaced and `..` resolved
+        out.push((k.clone(), lt::absolute(Path::new(&vars.expand(v)), project_dir).display().to_string()));
     }
     out.sort();
     out
@@ -638,7 +639,7 @@ pub(crate) fn normalize_with(env: &Env, dir: &Path, typed: &str) -> Value {
     }
     let vars = env.vars(dir, &lt::read_project_variables(dir));
     let path = vars.expand_uri(typed.trim(), dir);
-    json!({ "uri": lt::normalize_path(&path, &normalize_vars(env, &vars), Some(dir)), "path": path.display().to_string() })
+    json!({ "uri": lt::normalize_path(&path, &normalize_vars(env, &vars, dir), Some(dir)), "path": path.display().to_string() })
 }
 
 /// `POST /api/library_tables/add` `{kind, path, create?, nickname?, descr?, table?}`: Add Existing Library, and New Library when `create` is set. The path may
@@ -737,7 +738,7 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
             return bad("Choose a .kicad_sym file.");
         }
     }
-    let uri = lt::normalize_path(&path, &normalize_vars(env, &vars), Some(dir));
+    let uri = lt::normalize_path(&path, &normalize_vars(env, &vars, dir), Some(dir));
     table.rows.push(lt::Row { nickname: nickname.clone(), uri: uri.clone(), lib_type: lib_type.to_string(), description: text(&req, "descr"), ..Default::default() });
     if let Err(e) = lt::write_table(&project_table_path(dir, kind), &table) {
         return bad(e);
@@ -1234,6 +1235,17 @@ pub(crate) mod tests {
         assert_eq!(normalize_with(&env, &m.board, "libs/Y.kicad_sym")["uri"], "${KIPRJMOD}/libs/Y.kicad_sym", "a relative path is the board's");
         assert_eq!(normalize_with(&env, &m.board, "/somewhere/else/Z.kicad_sym")["uri"], "/somewhere/else/Z.kicad_sym");
         assert!(normalize_with(&env, &m.board, "  ")["error"].is_string());
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn a_path_under_a_variable_with_dots_in_its_value_is_written_with_the_variable() {
+        let m = machine("dotted", true);
+        let env = m.env();
+        let libs = m.root.join("mylibs");
+        std::fs::create_dir_all(&libs).unwrap();
+        lt::write_project_variables(&m.board, &[("TEAM".to_string(), "${KIPRJMOD}/../mylibs".to_string())].into()).unwrap();
+        assert_eq!(normalize_with(&env, &m.board, &libs.join("X.pretty").display().to_string())["uri"], "${TEAM}/X.pretty");
         let _ = std::fs::remove_dir_all(&m.root);
     }
 
