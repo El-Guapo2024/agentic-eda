@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn an_explicit_footprint_keeps_its_own_models_as_written() {
         let model = ConstraintModel {
-            footprints: vec![Footprint { name: "stones:C_1206_Flat".into(), pads: vec![], courtyard: None, model: Some("${KICAD9_3DMODEL_DIR}/C.step".into()), courtyard_outlines: vec![], models3d: vec![Model3d { rotate: [90.0, 0.0, 0.0], ..Model3d::identity("${KICAD9_3DMODEL_DIR}/C.step") }] }],
+            footprints: vec![Footprint { name: "stones:C_1206_Flat".into(), pads: vec![], courtyard: None, model: Some("${KICAD9_3DMODEL_DIR}/C.step".into()), courtyard_outlines: vec![], models3d: vec![Model3d { rotate: [90.0, 0.0, 0.0], ..Model3d::identity("${KICAD9_3DMODEL_DIR}/C.step") }], art: Default::default() }],
             ..Default::default()
         };
         let part = Part { reference: "C1".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some("stones:C_1206_Flat".into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None };

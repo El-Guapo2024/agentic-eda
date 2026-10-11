@@ -709,6 +709,10 @@ pub(crate) fn write_footprint(
         }
     }
 
+    // The footprint's silkscreen, fab drawings and texts (`fp_line`, `fp_arc`, ..., `fp_text user`), in its own frame -- a bottom-side footprint's mirrored
+    // like its pads and on the other side's layers: after the fields and before the pads, where `format( FOOTPRINT )` writes the drawings.
+    crate::fp_art_io::write_art(out, &footprint.art, fp);
+
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
     let pin_net = |number: &str| -> Option<&str> {
         let key = format!("{}.{}", fp.id, number);

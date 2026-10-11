@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn the_default_reference_is_where_the_writer_has_always_put_it_and_stays_horizontal() {
-        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (-1_000, 0)), pad("2", (1_000, 0))], courtyard: Some((2_000, 1_000)), courtyard_outlines: vec![], model: None, models3d: vec![] };
+        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (-1_000, 0)), pad("2", (1_000, 0))], courtyard: Some((2_000, 1_000)), courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         for (side, rot) in [(Side::Top, 0), (Side::Top, 90_000), (Side::Bottom, 0), (Side::Bottom, 270_000)] {
             let f = fp(side, rot);
             let l = default_reference_layout(&f, &footprint);
@@ -821,7 +821,7 @@ mod tests {
 
     #[test]
     fn an_edit_finds_the_kth_pad_with_a_number_and_changes_what_it_names() {
-        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000, 0)), pad("2", (2_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] };
+        let footprint = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000, 0)), pad("2", (2_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         assert_eq!(pad_index(&footprint, "2", 2), Some(2));
         assert_eq!(pad_index(&footprint, "2", 3), None);
         let mut e = PadEdit::none("2", 2);
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn the_edits_between_two_footprints_are_the_pads_that_differ_and_lay_back_on_the_first() {
-        let base = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000, 0)), pad("2", (2_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] };
+        let base = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0)), pad("2", (1_000, 0)), pad("2", (2_000, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         let mut edited = base.clone();
         edited.pads[1].shape = PadShape::Oval;
         edited.pads[1].size = (900, 500);
@@ -901,12 +901,12 @@ mod tests {
 
     #[test]
     fn the_derived_attributes_follow_the_pads_and_the_symbol() {
-        let smd = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] };
+        let smd = Footprint { name: "X".into(), pads: vec![pad("1", (0, 0))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         let mut th_pad = pad("1", (0, 0));
         th_pad.kind = PadKind::ThroughHole;
         th_pad.drill = Some(800);
-        let th = Footprint { name: "Y".into(), pads: vec![pad("2", (0, 0)), th_pad], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] };
-        let hole = Footprint { name: "Z".into(), pads: vec![Pad { kind: PadKind::NonPlatedHole, drill: Some(2_000), ..pad("", (0, 0)) }], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] };
+        let th = Footprint { name: "Y".into(), pads: vec![pad("2", (0, 0)), th_pad], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
+        let hole = Footprint { name: "Z".into(), pads: vec![Pad { kind: PadKind::NonPlatedHole, drill: Some(2_000), ..pad("", (0, 0)) }], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() };
         assert_eq!(FootprintAttrs::derived(&smd, false, false).kind, FootprintKind::Smd);
         assert_eq!(FootprintAttrs::derived(&th, false, false).kind, FootprintKind::ThroughHole, "any hole makes it through-hole");
         assert_eq!(FootprintAttrs::derived(&hole, false, false).kind, FootprintKind::Unspecified);

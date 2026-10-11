@@ -223,6 +223,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         impedance_targets: vec![],
         footprints: explicit_footprints.into_values().collect(),
         instance_footprints: Default::default(),
+        installed_art: Default::default(),
         symbols: vec![],
         board,
         allow: Default::default(),
@@ -962,8 +963,8 @@ pub(crate) fn parse_pad_geometry_opt(pad: &[Sexpr], fp_side: Side, fp_rot: u32, 
 /// (plain or suffixed) whose pads match, or a freshly inserted one if none
 /// do. See `import_footprints`'s call site for why this can legitimately
 /// happen (the same lib id placed on both sides of one board).
-fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str, pads: &[Pad], models3d: &[eda_model::footprint::Model3d]) -> String {
-    let same = |existing: &Footprint| existing.pads.as_slice() == pads && existing.models3d.as_slice() == models3d;
+fn dedup_footprint_key(explicit: &mut BTreeMap<String, Footprint>, lib_id: &str, pads: &[Pad], models3d: &[eda_model::footprint::Model3d], art: &eda_model::fp_art::FpArt) -> String {
+    let same = |existing: &Footprint| existing.pads.as_slice() == pads && existing.models3d.as_slice() == models3d && existing.art == *art;
     match explicit.get(lib_id) {
         None => lib_id.to_string(),
         Some(existing) if same(existing) => lib_id.to_string(),
@@ -1161,7 +1162,7 @@ fn import_footprints(
         let fp_inst = FootprintInstance { id: reference.clone(), at: Point { x, y }, rot, side, label: Default::default() };
         let mut extra = footprint_extra_header(fp, &reference, file_version);
         // The Reference and Value text as the file has it, the user fields and the attributes; the pad offsets and margins join below.
-        let mut edit = crate::fp_fields::parse_footprint_edit(fp, &reference, value.as_deref(), side, rot);
+        let mut edit = crate::fp_fields::parse_footprint_edit_in(fp, &reference, value.as_deref(), side, rot, file_version);
         for pad in sexpr::find_all(fp, "pad") {
             let Some(p) = parse_pad_geometry(pad, side, rot, notes) else {
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
@@ -1227,10 +1228,13 @@ fn import_footprints(
         // that footprint mirrored in x, which is a half turn about z apart (`Model3d::flipped_frame`). A slot is shared only by instances whose models
         // agree, like their pads.
         let models3d: Vec<eda_model::footprint::Model3d> = crate::footprint_lib::models_from(fp).into_iter().map(|m| if side == Side::Bottom { m.flipped_frame() } else { m }).collect();
-        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads, &models3d);
+        // The footprint's silkscreen, fab drawings and texts, in the definition's frame (`crate::fp_art_io`): an instance whose own differ from another's of the
+        // same lib id gets a slot of its own, like one whose pads differ.
+        let art = crate::fp_art_io::read_art(fp, side, rot);
+        let key = dedup_footprint_key(&mut explicit, &lib_id, &pads, &models3d, &art);
         let courtyard = footprint_courtyard_half(fp, side);
         let courtyard_outlines = footprint_courtyard_outlines(fp, side);
-        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp), models3d });
+        explicit.entry(key.clone()).or_insert_with(|| Footprint { name: key.clone(), pads, courtyard, courtyard_outlines, model: crate::footprint_lib::model_from(fp), models3d, art });
 
         parts.push(Part { reference: reference.clone(), mpn: None, lcsc: None, value, package: None, footprint: Some(key), pins, body_um: None, symbol: None, datasheet: None, edge: None });
         footprints_ir.push(FootprintInstance { id: reference, at: Point { x, y }, rot, side, label: Default::default() });
@@ -1699,7 +1703,7 @@ fn stroke_width_of(item: &[Sexpr]) -> i64 {
 /// The arc of a file written before `LEGACY_ARC_FORMATTING` (20210925), `(start CENTER) (end ARC_START) (angle A)` in degrees, as the
 /// three points of the arc (`parsePCB_SHAPE`: `SetCenter`, `SetStart`, `SetArcAngleAndEnd( A )` -- the end is the start turned by A, the
 /// middle by half of it, the same way, in the file's own axes). Returns (start, mid, end).
-fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
+pub(crate) fn legacy_arc(center: Point, start: Point, angle_deg: f64) -> (Point, Point, Point) {
     let turn = |deg: f64| -> Point {
         let (s, c) = deg.to_radians().sin_cos();
         let (dx, dy) = ((start.x - center.x) as f64, (start.y - center.y) as f64);
@@ -2156,18 +2160,18 @@ mod tests {
         let bottom_pads = vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (598, 0), size: (715, 640), shape: PadShape::RoundRect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: Some(0.25) }];
 
         let lib_id = "fixed_standard:R_0402_1005Metric_Pad0.72x0.64mm_HandSolder";
-        let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[]);
+        let key_top = dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[], &Default::default());
         assert_eq!(key_top, lib_id, "first instance (R35, top) gets the plain lib id");
-        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
+        explicit.insert(key_top, Footprint { name: lib_id.into(), pads: top_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() });
 
-        let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[]);
+        let key_bottom = dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[], &Default::default());
         assert_ne!(key_bottom, lib_id, "R34 (bottom)'s own un-mirrored geometry disagrees with R35's cached one -- it must get its own slot, not silently reuse R35's");
-        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
+        explicit.insert(key_bottom.clone(), Footprint { name: key_bottom.clone(), pads: bottom_pads.clone(), courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() });
 
         // A third instance matching either existing slot exactly must reuse
         // it rather than growing a new one every time.
-        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[]), lib_id);
-        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[]), key_bottom);
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &top_pads, &[], &Default::default()), lib_id);
+        assert_eq!(dedup_footprint_key(&mut explicit, lib_id, &bottom_pads, &[], &Default::default()), key_bottom);
     }
 
     /// GAPS.md #3's third over-firing source, pinned to `issue11814`'s U4

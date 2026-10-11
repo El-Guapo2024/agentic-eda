@@ -78,7 +78,7 @@ pub fn parse_footprint_file(text: &str, name: &str) -> Result<Footprint, String>
         return Err("footprint has no pads this reader could place (missing at/size?)".into());
     }
 
-    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root), courtyard_outlines: vec![], models3d: models_from(root) })
+    Ok(Footprint { name: name.to_string(), pads, courtyard: courtyard_from(root), model: model_from(root), courtyard_outlines: vec![], models3d: models_from(root), art: crate::fp_art_io::read_art(root, Side::Top, 0) })
 }
 
 /// The `(model "...")` path, verbatim (KiCad writes it with its own
@@ -237,6 +237,8 @@ pub fn resolve_library_footprints_with(model: &mut ConstraintModel, mut find: im
             Err(e) => warnings.push(format!("{}: {e}", path.display())),
         }
     }
+    // The built-in packages (`0603`, `SOIC-8`) have pads and no outline: their part gets the silkscreen and fab drawings of the KiCad footprint they stand for.
+    crate::fp_art_io::attach_installed_art(model, &mut find);
     warnings
 }
 

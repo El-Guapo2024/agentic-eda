@@ -3130,9 +3130,13 @@ impl LibraryFootprint {
     /// at their defaults since `crate::footprint::Footprint` has no
     /// concept of any of them yet.
     pub fn from_engine_footprint(fp: &crate::footprint::Footprint) -> Self {
+        // The footprint's silkscreen, fab drawings and texts come across as the editor's graphics and texts (ids are backfilled by the caller).
+        let (graphics, texts) = fp.art.to_library();
         LibraryFootprint {
             name: fp.name.clone(),
             pads: fp.pads.iter().map(LibraryPad::from_engine_pad).collect(),
+            graphics,
+            texts,
             courtyard: fp.courtyard,
             model: fp.model.clone(),
             ..Default::default()
@@ -3140,13 +3144,23 @@ impl LibraryFootprint {
     }
 
     /// The reverse of `from_engine_footprint`/the basis for exporting a
-    /// derived `.kicad_mod` (GAPS.md #8 step 6): this footprint's pads
-    /// and courtyard/model as the engine's own `Footprint` -- graphics/
-    /// text/fields/attributes stay editor-only (the engine has no use for
-    /// silkscreen art or a BOM-exclude flag), same split `LibraryPad::
-    /// to_engine_pad`'s doc explains.
+    /// derived `.kicad_mod` (GAPS.md #8 step 6): this footprint's pads,
+    /// courtyard, model and its graphics and texts ([`crate::fp_art`]: the
+    /// silkscreen, the fab body and the texts a board shows) as the engine's own
+    /// `Footprint` -- fields/attributes stay editor-only (the engine has no use
+    /// for a BOM-exclude flag), same split `LibraryPad::to_engine_pad`'s doc
+    /// explains. A graphic on the courtyard or the board edge is not art (the
+    /// footprint's courtyard is the `courtyard` field).
     pub fn to_engine_footprint(&self) -> crate::footprint::Footprint {
-        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone(), courtyard_outlines: vec![], models3d: vec![] }
+        crate::footprint::Footprint {
+            name: self.name.clone(),
+            pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(),
+            courtyard: self.courtyard,
+            model: self.model.clone(),
+            courtyard_outlines: vec![],
+            models3d: vec![],
+            art: crate::fp_art::FpArt::from_library(&self.graphics, &self.texts),
+        }
     }
 
     /// Assign a deterministic id to every pad/graphic/text whose `id` is
