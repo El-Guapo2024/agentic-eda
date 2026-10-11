@@ -2238,12 +2238,13 @@ pub struct DrawingsSection {
     /// re-applied automatically, matching source).
     #[serde(default)]
     pub dimension_settings: DimensionSettings,
-    /// Per-placed-footprint solder-mask/silk facts an imported board needs
-    /// but a library [`crate::Footprint`] + [`FootprintInstance`] cannot
-    /// carry (pad layer sets and mask margins, footprint graphics on the
-    /// silk/mask layers, net-tie groups, `allow_soldermask_bridges`). Read
-    /// only by `eda_drc`'s silk/solder-mask providers; empty for a design
-    /// that did not come from a `.kicad_pcb`.
+    /// Per-placed-footprint solder-mask facts an imported board needs but a
+    /// library [`crate::Footprint`] + [`FootprintInstance`] cannot carry (pad
+    /// layer sets and mask margins, mask-only pads, net-tie groups,
+    /// `allow_soldermask_bridges`, the zone facts). The footprint's silkscreen,
+    /// fab and mask graphics and its texts are not here any more: they are the
+    /// footprint's own ([`crate::fp_art::FpArt`], [`crate::Footprint::art`]).
+    /// Empty for a design that did not come from a `.kicad_pcb`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_extras: Vec<FootprintExtra>,
     /// Zone-connection edits made on the board to placed footprints and their pads (Footprint Properties and Pad Properties:
@@ -2597,10 +2598,14 @@ pub struct FootprintExtra {
     pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
-    /// Footprint graphics on silk/mask layers, board space.
+    /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
+    /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
+    /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them
+    /// only for a footprint that has no art.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<FootprintGraphic>,
-    /// Visible footprint text (reference/value/user) on silk layers.
+    /// Visible footprint texts on silk layers, board space: likewise only in a design imported before footprints had texts of
+    /// their own ([`crate::fp_art::FpArt::texts`], and the Reference, Value and user fields of [`crate::fp_edit`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<FootprintText>,
 }
