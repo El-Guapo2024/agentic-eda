@@ -15,6 +15,9 @@
 //! kicad-cli runs with `--all-track-errors`: by default it reports only the first violation of each track
 //! (`DRC_ENGINE::GetReportAllTrackErrors`), so a pair it does not list may still be one it stopped looking for.
 //!
+//! The fourth is the differential pair's: pairs placed by the pair router (`eda_pns::dp_placer`) on KiCad's own pair board leave
+//! kicad-cli no new `clearance` and no `diff_pair_gap_out_of_range` against a `diff_pair_gap` rule of the pair's own gap.
+//!
 //! The third test is the board outline's: shoves toward the top edge of `mcu30` -- committed with the strict gates off, since
 //! `routing_pass_through_pad` refuses some of them for a reason that is not the edge's -- leave kicad-cli no
 //! `copper_edge_clearance` violation. Before the outline was a router obstacle they did (a shoved track ended 300 um from it).
@@ -145,6 +148,93 @@ mod tests {
         let (mut design, model, _) = eda_kicad::import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import {name}: {e:?}"));
         design.assign_missing_ids();
         Some((design, model))
+    }
+
+    /// The counts of the violation kinds a pair can cause in kicad-cli's report for `design`.
+    fn pair_counts(design: &Design, model: &ConstraintModel, work: &Path) -> std::collections::BTreeMap<String, usize> {
+        let report = eda_kicad_engine::drc(design, model, work, false).unwrap_or_else(|e| panic!("kicad-cli: {e:?}"));
+        let mut out = std::collections::BTreeMap::new();
+        for v in report.violations.iter().filter(|v| !v.excluded) {
+            if matches!(v.kind.as_str(), "clearance" | "shorting_items" | "tracks_crossing" | "hole_clearance" | "copper_edge_clearance" | "diff_pair_gap_out_of_range" | "track_width") {
+                *out.entry(v.kind.clone()).or_insert(0) += 1;
+            }
+        }
+        out
+    }
+
+    /// The design after a finished route's commit, as `Cmd::CommitRoute` applies it.
+    fn apply_commit(design: &Design, commit: &eda_pns::router::RouteCommit) -> Design {
+        let mut d = design.clone();
+        let rt = d.routing.as_mut().unwrap();
+        rt.tracks.retain(|t| !commit.remove_track_ids.contains(&t.id));
+        rt.vias.retain(|v| !commit.remove_via_ids.contains(&v.id));
+        rt.tracks.extend(commit.tracks.iter().cloned());
+        rt.vias.extend(commit.vias.iter().cloned());
+        d.assign_missing_ids();
+        d
+    }
+
+    /// `dp_test.kicad_pcb` (a connector and a micro-BGA with a D+/D- pair between them), the pair's net class a KiCad project would give it
+    /// (0.2 mm tracks, 0.25 mm gap), a `diff_pair_gap` rule that asks for that gap and no less, and three GND tracks across the open board.
+    fn pair_board() -> Option<(Design, ConstraintModel)> {
+        let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
+        let text = std::fs::read_to_string(root.join("pcbnew/pns_regressions/boards/dp_test.kicad_pcb")).ok()?;
+        let (mut design, mut model, _) = eda_kicad::import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import: {e:?}"));
+        model.board.net_classes.push(eda_model::NetClass { name: "usb".into(), nets: vec!["/D+".into(), "/D-".into()], track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: Some(200), diff_pair_gap: Some(250), diff_pair_via_gap: Some(250), priority: 0 });
+        // coupled stretches of the pair may not come closer than 0.24 mm (the pair's gap, less the rounding of a micrometre grid)
+        model.board.custom_rules_text = Some("(version 1)\n(rule \"pair gap\"\n  (condition \"A.inDiffPair('/D')\")\n  (constraint diff_pair_gap (min 0.24mm)))\n".into());
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let rt = design.routing.as_mut().unwrap();
+        for (id, pts) in [("gnd_east", vec![p(128_000, 90_000), p(128_000, 93_000), p(130_000, 95_000), p(130_000, 100_000)]), ("gnd_north", vec![p(109_000, 92_500), p(114_000, 91_500), p(119_000, 91_500), p(121_000, 89_500)])] {
+            rt.tracks.push(eda_model::ir::Track { id: id.into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts, arc_mid_offset: None });
+        }
+        design.assign_missing_ids();
+        Some((design, model))
+    }
+
+    /// A pair placed by the pair router -- from the connector's pads into the open board, walked round or pushing the GND tracks in its way,
+    /// and from the neck-down stubs' side meeting them -- is clean for kicad-cli: no new `clearance` (or any other copper violation), and no
+    /// `diff_pair_gap_out_of_range` against a rule that asks for the pair's own gap. (Slow tier: four kicad-cli runs.)
+    #[test]
+    fn a_placed_pair_passes_kicad_clis_clearance_and_diff_pair_gap_checks() {
+        if !kicad_available() {
+            return;
+        }
+        let Some((design, model)) = pair_board() else {
+            eprintln!("KiCad's QA corpus not found; skipping");
+            return;
+        };
+        let dir = scratch("pair_drc");
+        let baseline = pair_counts(&design, &model, &dir);
+        eprintln!("the board before the pair: {baseline:?}");
+        let mut placed = 0;
+        // (the pad or track end the pair starts on, the cursor it goes to, the mode)
+        let p = |x, y| eda_model::ir::Point { x, y };
+        let runs = [
+            (p(124_700, 95_900), p(135_000, 95_265), eda_pns::settings::Mode::Walkaround),
+            (p(124_700, 95_900), p(135_000, 99_000), eda_pns::settings::Mode::Shove),
+            (p(124_700, 95_900), p(133_000, 91_000), eda_pns::settings::Mode::Shove),
+            (p(118_950, 95_075), p(118_050, 95_300), eda_pns::settings::Mode::Walkaround),
+        ];
+        for (start, at, mode) in runs {
+            let mut router = eda_pns::router::Router::new(&design, &model);
+            router.settings.mode = mode;
+            router.start_diff_pair(start, "F.Cu").unwrap_or_else(|e| panic!("{mode:?} from {start:?}: {e}"));
+            let pv = router.diff_pair_preview(at).expect("a pair is running");
+            assert!(!pv.colliding, "{mode:?} from {start:?} to {at:?}: the pair does not fit: {pv:?}");
+            let shoved = !pv.displaced_lines.is_empty();
+            let commit = router.finish_diff_pair(at).expect("a pair that fits commits");
+            let after = apply_commit(&design, &commit);
+            let counts = pair_counts(&after, &model, &dir);
+            eprintln!("{mode:?} {start:?} -> {at:?} ({} tracks, {} shoved): {counts:?}", commit.tracks.len(), commit.remove_track_ids.len());
+            for kind in ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "diff_pair_gap_out_of_range", "track_width"] {
+                let (was, now) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                assert!(now <= was, "{mode:?} {start:?} -> {at:?}: kicad-cli reports {now} {kind} (the board had {was}) after the pair (shoved: {shoved})");
+            }
+            placed += 1;
+        }
+        assert_eq!(placed, runs.len());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
