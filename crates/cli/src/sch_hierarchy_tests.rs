@@ -307,3 +307,106 @@ fn slow_the_annotated_import_and_paste_leave_kicad_cli_with_no_reference_finding
     step(&dir, all, false, "test").unwrap();
     assert_only_flag_clashes(&dir, "after Annotate over the whole schematic");
 }
+
+// ---------------------------------------------------------------------------------------- Reorganize with a multi-unit part
+
+/// A dual op-amp the way a library has it: units 1 and 2 the amplifiers, unit 3 the power pins.
+fn dual_opamp() -> (eda_model::symbol::LibSymbol, eda_model::Part) {
+    use eda_model::symbol::{LibPin, LibSymbol, SPoint, SymbolGraphic};
+    use eda_model::{Part, Pin, PinKind};
+    let pin = |number: &str, name: &str, unit: u32, y: f64, left: bool| LibPin {
+        number: number.into(),
+        name: name.into(),
+        electrical_type: if unit == 3 { "power_in" } else { "passive" }.into(),
+        shape: "line".into(),
+        at: SPoint::new(if left { -7.62 } else { 7.62 }, y),
+        angle_deg: if left { 0.0 } else { 180.0 },
+        length_mm: 2.54,
+        unit,
+    };
+    let sym = LibSymbol {
+        lib_id: "Test:Dual3".into(),
+        graphics: vec![SymbolGraphic::Rectangle { unit: 0, start: SPoint::new(-5.08, 5.08), end: SPoint::new(5.08, -5.08), stroke_mm: 0.254, filled: false }],
+        pins: vec![
+            pin("1", "OUT1", 1, 0.0, false),
+            pin("2", "IN1-", 1, 2.54, true),
+            pin("3", "IN1+", 1, -2.54, true),
+            pin("7", "OUT2", 2, 0.0, false),
+            pin("6", "IN2-", 2, 2.54, true),
+            pin("5", "IN2+", 2, -2.54, true),
+            pin("8", "V+", 3, 2.54, false),
+            pin("4", "V-", 3, -2.54, false),
+        ],
+        power: false,
+        in_bom: true,
+        on_board: true,
+        datasheet: String::new(),
+        description: String::new(),
+        reference_prefix: "U".into(),
+        unit_count: 3,
+        pin_names_hidden: false,
+        pin_numbers_hidden: false,
+        pin_name_offset_mm: 0.508,
+        alternate: None,
+    };
+    let pins = ["1", "2", "3", "4", "5", "6", "7", "8"].iter().map(|n| Pin { number: n.to_string(), name: None, kind: PinKind::Passive }).collect();
+    let part = Part { reference: "U9".into(), mpn: None, lcsc: None, value: Some("TL072".into()), package: None, footprint: None, symbol: Some("Test:Dual3".into()), datasheet: None, pins, body_um: None, edge: None };
+    (sym, part)
+}
+
+#[test]
+fn slow_reorganize_with_a_multi_unit_part_is_a_hierarchy_kicad_cli_reads_without_a_unit_finding() {
+    if !kicad_cli_ready() {
+        return;
+    }
+    let dir = scratch("slow_multi_unit");
+    let (_, flat_model) = example("mcu_board_30plus.yaml");
+    // mcu30 with a dual op-amp wired to the rails and to itself, as the intent file of the scratch board
+    let mut model = flat_model.clone();
+    let (sym, part) = dual_opamp();
+    model.symbols.push(sym);
+    model.parts.push(part);
+    model.nets.iter_mut().find(|n| n.name == "VDD").unwrap().pins.push("U9.8".into());
+    model.nets.iter_mut().find(|n| n.name == "GND").unwrap().pins.push("U9.4".into());
+    for (name, a, b) in [("AMP_FB1", "U9.1", "U9.2"), ("AMP_FB2", "U9.7", "U9.6"), ("AMP_X", "U9.3", "U9.5")] {
+        model.nets.push(eda_model::Net { name: name.into(), pins: vec![a.into(), b.into()] });
+    }
+    let intent = dir.join("intent.yaml");
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    // the flat drawing is mcu30's, with the op-amp's three units placed on the root (the nets are the model's)
+    let mut design = eda_engine::derive_schematic(&flat_model, &eda_engine::EngineOptions::new(1, "t")).unwrap();
+    design.placement = Some(eda_model::ir::PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });
+    {
+        let root = design.schematic.as_mut().unwrap();
+        for (unit, x) in [(1, 300_000), (2, 330_000), (3, 360_000)] {
+            root.symbols.push(eda_model::ir::SymbolInstance {
+                id: "U9".into(),
+                at: Point { x, y: 20_000 },
+                rot: 0,
+                mirrored: false,
+                mirror_y: false,
+                lib_id: "Test:Dual3".into(),
+                unit,
+                value: "TL072".into(),
+                footprint: String::new(),
+                datasheet: String::new(),
+                dnp: false,
+                exclude_from_bom: false,
+                exclude_from_board: false,
+                exclude_from_sim: false,
+            });
+        }
+        root.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
+    }
+    save(&dir, &design).unwrap();
+    let meta = Meta { intent: intent.display().to_string(), snap_um: 100, spacing_um: 300 };
+    std::fs::write(dir.join("board.json"), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+
+    step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+    let (_, after, _) = load(&dir).unwrap();
+    let units: Vec<u32> = after.sheet_contents.iter().flatten().flat_map(|(_, s)| s.symbols.iter()).filter(|s| s.id == "U9").map(|s| s.unit).collect();
+    assert_eq!(units.len(), 3, "each unit is placed once: {units:?}");
+    assert_no_reference_findings(&dir, "reorganized with a multi-unit part");
+    let kinds = erc_kinds(&dir);
+    assert!(kinds.is_empty(), "the reorganized board with its dual op-amp is clean: {kinds:?}");
+}
