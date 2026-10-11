@@ -19,11 +19,11 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   (`STALE-REASONS.md`): 10 are stale (what they say is missing now exists), 18 are partly stale, 154 hold** (4 of those wait for a branch in
   flight; the library tables wired five reasons). The stale ones are Find by Properties, Migrate 3D Models, the microwave gap and stub, Append Board and its drop, the Footprint Editor's
   drop, Import Sheet, Draw Sheet from File and the schematic drop; the plan below carries them.
-- **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"): **12 closed, 10 partial, 0 open,
-  8 out of scope** (was 10, 12, 0, 8 on 2026-10-07; #11 Property dialogs and #25 Align and distribute closed).
+- **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"): **13 closed, 9 partial, 0 open,
+  8 out of scope** (was 10, 12, 0, 8 on 2026-10-07; #11 Property dialogs, #25 Align and distribute and, on `task-pcb-edit-details`, #14 Clipboard closed).
 - **Items 1 to 24** are the ranked list of 2026-10-07 with their state brought forward; **items 25 to 35 are new**: the gaps the second phase
   found, from the `PARITY-*.md` "left" notes, the merge messages and reading the code.
-- **In flight, not on main** (2026-10-10; read with `git diff main...<branch>`): `task-fp-graphics` (P1), `task-pcb-edit-details` (P6), `task-files-in` (P8).
+- **In flight, not on main** (2026-10-10; read with `git diff main...<branch>`): `task-fp-graphics` (P1), `task-diff-pairs` (P5b), `task-files-in` (P8).
   Do not start work that touches their files without reading them first.
 - **Trapezoid, chamfered and custom pads are KiCad's (2026-10-10; `PARITY-pcb.md` section 27, `PARITY-fpedit.md` section 10).** A pad keeps its real shape in the IR (`Pad::ext`, `LibraryPad::custom`); the `.kicad_pcb` and `.kicad_mod`
   readers and writers are `pcb_io_kicad_sexpr`'s (kicad-cli's plot of the original and of our export is identical, for a board and for a library footprint); and the DRC, the routing gate, the router, connectivity and the zone filler
@@ -91,7 +91,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 3 | P3 Library tables and paths | 5 | a symbol or footprint made in the editors cannot be saved into a table library's file; no Reset or Migrate Libraries; no 3D model search paths | mostly done | S |
 | 4 | P4 Schematic hierarchy: the rest | 4 | Import Sheet, sheets in the clipboard, the last cross-sheet cases | in flight | M |
 | 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | **P5a done on `task-router-drag` (2026-10-10)**: a segment slides, an illegal drag falls back, routes start and end mid-track, Route From Other End after the first fix. Left: no coupled diff pair shove; no U meander | P5a done, P5b and P5c open | L (2 parts left) |
-| 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | open | M, ongoing |
+| 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | mostly done (merged 2026-10-10); items 8, 15, 17 and 35 list what is left | M, ongoing |
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | no way to bring an outline from a DXF or another board in | open | L |
 | 9 | P9 Board Setup completion and the rule editor | 3 | Board Editor Layers, Text Variables, Formatting, Tuning and Component Classes pages; regex net patterns | open | L (rule editor XL) |
@@ -244,16 +244,18 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`, `pcbnew/tools/generator_tool.cpp`.
 
 ### 8. PCB edit tools
-**Mostly done (2026-10-08, `88c8c0a`).** Hit: every layout session. Blocks: no. Package P6 for what is left.
+**Done (2026-10-08, `88c8c0a`; the details 2026-10-10, `task-pcb-edit-details`, not merged).** Hit: every layout session. Blocks: no. Package P6.
 - Done (`PARITY-pcb.md` section 22): `move_items`, `rotate_items` and `flip_items` (`crates/ops/src/pcb_transform.rs`) move, turn and flip footprints, tracks (arcs stay arcs), vias, zones, graphics, text,
   dimensions and groups as KiCad's item classes do, one undo step each, and reach the `.kicad_pcb` kicad-cli reads. Move, drag, Move Individually, Move with Reference, Position Relative, Move Exactly,
   Rotate, Flip, Align and Distribute work for every kind with `FilterCollectorForLockedItems` and KiCad's rotation and flip points; `R` turns counter-clockwise. Duplicate, Copy, Cut and Paste take footprints
   (a copy is a `BoardPart`), dimensions and groups, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `POST /api/clipboard/copy`). Pads are selectable (click, box, Selection
   Filter, highlight, the Properties pane); the pad edits are item 9's and are done.
-- Missing: Paste Special on the PCB (`DIALOG_PASTE_SPECIAL`: annotation modes, clear nets; the action answers with a toast, and plain Paste renumbers a taken reference where KiCad's default keeps it);
-  the rotation step and flip direction settings (`m_RotationAngle`, the flip direction; both planners and verbs take them); the anchor half of `BestSnapAnchor` for a Rotate or Flip reference point and a
-  footprint's own bounding box (`FOOTPRINT::GetBoundingBox( false )`; the courtyard stands in); a footprint with copper routed to its pads still clears the routing when edited; Duplicate and Paste are a
-  step of their own and the drop a second one; a copy keeps the original's nets, so `--strict` refuses moving it away.
+- Done 2026-10-10 (`PARITY-pcb.md` sections 5 and 22): Paste Special on the PCB (`DIALOG_PASTE_SPECIAL`: the three annotation modes and Clear Nets, `Cmd::PasteSpecial`; a plain Paste keeps the reference the clipboard has, as
+  KiCad's default does); the rotation step and the flip direction are settings (Preferences > PCB Editor > Editing Options) the planners and the verbs take; the reference point of Rotate and Flip is the best snap anchor of the
+  centre of the selection's box, and a footprint's box is `FOOTPRINT::GetBoundingBox` (the origin square, pads, courtyard and fab body, with text for Rotate and Flip, without it for Align); editing a footprint whose pads
+  are routed keeps the routing; Duplicate and Paste are one undo step with the drop, and Escape leaves nothing, not even a redo entry (`crates/cli/src/carry.rs`).
+- Missing: a copy keeps the original's nets, so `--strict` refuses moving it away (paste it, or untick Strict); under `--strict` an edit that breaks a net that was complete is still refused (`routing_connectivity`) where KiCad
+  shows a ratsnest line; a footprint's box lacks the silkscreen and fab graphics beyond the courtyard and the fab body until they are on the board (item 25).
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcb_control.cpp` (`Paste`, `placeBoardItems`), `common/dialogs/dialog_paste_special.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are editable objects
@@ -338,9 +340,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 ### 15. Interaction details that differ
 **Partial.** Hit: constantly, one detail at a time. Package P6 (PCB) and P10 (schematic).
 - 42 of `CODE-COMPARE-ui.md`'s 266 rows were marked divergent (some since fixed), and about 310 handlers added since have not been compared. Fixed since 2026-10-07: High Contrast cycles in three states
-  (`6611ade`) and `toggleLastNetHighlight` is wired. Carried forward from 2026-10-07 and not re-checked: Enter during a PCB route finishes it instead of clicking (`common.Control.cursorClick`); Route From Other End
-  only before the first fix; `V` does nothing outside a route; Select Connection needs a selection (PCB and schematic); schematic net highlight and Select Node miss pins; Ctrl+U never returns to mils;
-  Alt+` (`toggleNetHighlight`) is selection-driven; Mirror X then Y collapses to one flag; Add Corner inserts the cursor point instead of the nearest point on the edge.
+  (`6611ade`) and `toggleLastNetHighlight` is wired. Fixed 2026-10-10 on the board (`task-pcb-edit-details`, `PARITY-pcb.md` section 22): Select Connection with nothing selected takes the connected item under the cursor
+  (a pad starts a connection; a chain of graphic lines is not followed), Ctrl+U returns to the imperial unit last used, Alt+` (`toggleNetHighlight`) turns the highlight off and on from the net it remembers, and Add Corner
+  puts the corner at the nearest point of the edge (zone, polygon, line, arc). Carried forward from 2026-10-07 and not re-checked: Enter during a PCB route finishes it instead of clicking (`common.Control.cursorClick`),
+  Route From Other End only before the first fix and `V` does nothing outside a route (all three belong to the router, package P5); Select Connection needs a selection on the schematic; schematic net highlight and Select Node
+  miss pins; Mirror X then Y collapses to one flag.
 
 ### 16. The PCB context menu
 **Mostly done (2026-10-08/09, `4c041a6`).** Hit: constantly. Blocks: no.
@@ -355,7 +359,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 **Mostly done on the board (2026-10-08/09, `4c041a6`); the schematic and the footprint editor have none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
 - Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`Cmd::EditGroup`); groups nest (`EDA_GROUP`; `crates/model/src/groups.rs`,
   `crates/ops/src/pcb_groups.rs`); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree; the entered group is drawn with its box and name; the `.kicad_pcb` file and the clipboard hold the tree.
-- Missing: items drawn or pasted while a group is entered do not join it (`BOARD_COMMIT::Push`); Create Array skips groups (item 22); no groups in the schematic or the footprint editor.
+- Done 2026-10-10 (`task-pcb-edit-details`): items drawn, pasted, duplicated or arrayed while a group is entered join it (`BOARD_COMMIT::Push`; `Cmd::InGroup`, `crates/ops/src/pcb_groups.rs`; `PARITY-pcb.md` section 16).
+- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the schematic or the footprint editor.
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
 
 ### 18. Appearance and display options
@@ -517,9 +522,11 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 35. The long tail of the PCB tools
 **New, open.** Hit: rarely each. Package P6, with P13 for zones. From the "not ported" rows of `PARITY-pcb.md`.
-- Cleanup Tracks & Vias: the net, net class, layer and "selected items only" filters, "Refill zones before and after cleanup" (section 12). Global edits of tracks and vias: filter by net class or exact width,
-  through / micro / blind / buried via types, annular-ring and IPC-4761 presets; of text and graphics: footprint reference, value and other-field scope, dimension items, bold, italic, font, keep upright, "center
-  text on footprint", "Set to layer default values" (section 13). Rule areas: multi-layer rule areas, `(disallow ...)` rules on non-keepout items, `DRCE_TEXT_ON_EDGECUTS` (section 14). Teardrops: curved edges,
+- Done 2026-10-10 (`task-pcb-edit-details`): Cleanup Tracks & Vias takes the net, net class, layer and "selected items only" filters and "Refill zones before and after cleanup", and leaves locked tracks and vias alone
+  (section 12); Edit Track & Via Properties filters by net class, exact track width and via diameter and picks through / blind / buried vias, and its layer filter reaches vias by the top layer of their span; Edit Text &
+  Graphics Properties reaches dimensions, lists every board layer and has "Set to layer (and dimension) default values" (section 13). Still open there: microvias and the annular-ring and IPC-4761 presets (a via has no
+  padstack here); of text and graphics the footprint reference, value, other-field, text, graphic and dimension scopes, the two "By parent ..." filters, bold, italic, font, keep upright, visible and "center text on footprint"
+  (a footprint's own text is not an item of the board until package P1). Rule areas: multi-layer rule areas, `(disallow ...)` rules on non-keepout items, `DRCE_TEXT_ON_EDGECUTS` (section 14). Teardrops: curved edges,
   rectangular and non-circular pad anchors, track-to-track, two-segment borrowing, `m_TdOnPadsInZones`, incremental updates (section 15). Dimensions: a leader's text border, manual text position,
   Rotate/Flip of a dimension (section 18). The Draw Zone Fill Fracture Borders / Triangulation debug modes draw strokes only (the triangulation is an earcut port without KiCad's Z-order hash); Flip Board View mirrors text on
   non-side-specific layers with the board where KiCad keeps it readable; Automatically select track width does not turn off when a width is picked in the toolbar and the first width key while routing
@@ -527,7 +534,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ## Appendix A. The original 30, one verdict each
 
-12 closed, 10 partial, 0 open, 8 out of scope (2026-10-10). Changed since 2026-10-07: #11 and #25 closed; #6 and #26 re-worded.
+13 closed, 9 partial, 0 open, 8 out of scope (2026-10-10). Changed since 2026-10-07: #11 and #25 closed, #14 closed on `task-pcb-edit-details` (not merged); #6 and #26 re-worded.
 
 | # | Gap | Verdict | Evidence, or where it went |
 |---|---|---|---|
@@ -544,7 +551,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 11 | Property dialogs | **Closed** | via, shape, zone, text, dimension and track width edit (`Cmd::EditVia`, `EditShape`, `EditZone`, `EditText`); the footprint (fields, attributes) and pad dialogs and the Properties panel edit every kind (`bd712d3`, `afcb91b`; items 9, 10). |
 | 12 | Move excludes tracks and zones | **Closed** | `Cmd::MoveItems`, `RotateItems`, `FlipItems` (`crates/ops/src/pcb_transform.rs`), `kicad-port/pcbTransform.ts`, `pcbEditActions.ts::movableItem` for every kind; item 8. |
 | 13 | Selection modifiers and box select | **Closed** | `kicad-port/selection.ts`, `components/canvas/selectionCandidates.ts::collectBoxSelection`, `Canvas.tsx`; `PARITY-pcb.md` section 3. |
-| 14 | Clipboard | Partial | PCB: every item kind, footprints included, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `Cmd::Duplicate`, `components/canvas/clipboard.ts`); schematic: done in KiCad's format (`Cmd::PasteSch`, item 6). Left: Paste Special on the PCB (item 8). |
+| 14 | Clipboard | **Closed** (on `task-pcb-edit-details`, not merged) | PCB: every item kind, footprints included, in KiCad's clipboard format (`crates/kicad/src/clipboard.rs`, `Cmd::PasteClipboard`, `Cmd::PasteSpecial`, `Cmd::Duplicate`, `components/canvas/clipboard.ts`, `components/PcbPasteSpecialDialog.tsx`), Paste Special with KiCad's annotation modes and Clear Nets (2026-10-10, item 8); schematic: done in KiCad's format (`Cmd::PasteSch`, item 6). |
 | 15 | Cross-tab undo | **Closed** | `crates/ops` `Domain`, `crates/cli/src/board.rs::restore_domain` (test `undo_redo_are_scoped_to_the_tab_that_asked`); the Footprint and Symbol tabs undo in their own scopes. |
 | 16 | Hotkey extraction | **Closed** | `web/studio/tools/lib/actionsParser.js::extractPlatformRaw` (with test), `src/kicad/actions.json` (`common.Interactive.redo` is Ctrl+Y), `actions/hotkeys.ts::effectiveHotkey`. |
 | 17 | Click-versus-drag threshold | **Closed** | `kicad-port/dragThreshold.ts` in all four editors (2026-10-09); item 14. |
@@ -630,7 +637,7 @@ Rules that keep them apart (each is how an earlier package did it):
 
 Waves:
 
-- **Running now** (2026-10-10): P1 (`task-fp-graphics`), P6 (`task-pcb-edit-details`), P8 (`task-files-in`). P3, P4, P5a and P7 are merged; their sections list what is left.
+- **Running now** (2026-10-10): P1 (`task-fp-graphics`), P5b (`task-diff-pairs`), P8 (`task-files-in`). P3, P4, P5a, P6 and P7 are merged; their sections list what is left.
 - **Next free slot**: P5b and P5c (P5a is merged), which share no hub with anything; P2, P14, P16, P17 and the Footprint Checker and Compare Footprint once P1 has merged its IR.
 - **After P1 has merged its IR**: P2 (its assignment overlay holds a definition with graphics). Step 1 of P2, the rename, can start sooner if P4 has merged its Annotate.
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
@@ -735,7 +742,10 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `pcbnew/tools/generator_tool.cpp`.
 - Conflicts: only among the three parts (`crates/pns`) and P6 in `Canvas.tsx` handlers. Each part ends with a replay of KiCad's own QA cases (`crates/pns/tests/qa_regressions.rs`) and a browser check.
 
-### P6. PCB editing details (items 8, 15, 17, 35). Size M, ongoing. Rank 6.
+### P6. PCB editing details (items 8, 15, 17, 35). Size M, ongoing. Rank 6. **Mostly done; merged 2026-10-10 (`task-pcb-edit-details`).**
+- Status: everything in the first bullet below is done except what items 8, 15, 17 and 35 list as open: the router's rows of item 15 (Enter during a route, Route From Other End, `V`) and the router's commits in an entered
+  group wait for P5; Select Connection does not follow a chain of graphic lines; microvias, annular rings, IPC-4761 and the footprint-owned scopes of the global text edit wait for a via padstack and for P1; the rest of item 35
+  (rule areas, teardrops, dimensions, the zone debug views, board flip, track width) is untouched and belongs to P13, P16 and the router.
 - Paste Special on the PCB (`DIALOG_PASTE_SPECIAL`, `PASTE_MODE`, clear nets; a plain Paste then keeps references as KiCad's default does), the rotation step and flip direction settings, a footprint's bounding box and the anchor half of
   `BestSnapAnchor` for Rotate and Flip, the routing kept when a footprint with routed pads is edited, Duplicate and Paste as one step with the drop, items drawn while a group is entered joining it, the item 15 list, the item 35 tail.
 - Files: `web/studio/src/components/canvas/{Canvas.tsx,clipboard.ts}`, `state/store.tsx`, `actions/{pcbEditSweep,pcbMenuActions}.ts`, `kicad-port/{pcbTransform,pcbCarry,pcbReference,alignDistribute,groupEdit}.ts`,

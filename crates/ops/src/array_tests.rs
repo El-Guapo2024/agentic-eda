@@ -441,18 +441,17 @@ fn arranging_on_a_circle_turns_a_footprint_when_asked() {
 // ------------------------------------------------------------------------------------------------------ the routing
 
 #[test]
-fn an_array_of_copper_leaves_the_routing_be_and_one_of_a_routed_footprint_clears_it() {
+fn an_array_never_clears_the_routing_not_even_of_a_routed_footprint() {
     let m = model(&["F.Cu", "B.Cu"]);
     let b = board(&m);
-    // trk_a is not on a pad of any footprint, so arraying it or U2 (no copper on its pads) leaves the routing alone
     assert!(!array(&["trk_a"], grid(2, 1, 5_000, 0)).clears_routing_in(&b));
     assert!(!array(&["U2"], grid(2, 1, 5_000, 0)).clears_routing_in(&b));
-    // a track that ends on U1's pad 1 is routed to it
+    // a track that ends on U1's pad 1 is routed to it: `ARRAY_TOOL::CreateArray` copies or arranges the items, the copper stays
     let mut d = design();
     let pad = eda_model::footprint::placed_pads(&m, m.part("U1").unwrap(), &d.placement.as_ref().unwrap().footprints[0].clone()).unwrap();
     let on_pad = pad[0].center;
     d.routing.as_mut().unwrap().tracks.push(Track { id: "trk_pad".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![on_pad, p(on_pad.x, on_pad.y + 5_000)], arc_mid_offset: None });
     let routed = Board::new(d, &m, 100, 300);
-    assert!(array(&["U1"], grid(2, 1, 5_000, 0)).clears_routing_in(&routed));
-    assert!(array(&["U1.1"], grid(2, 1, 5_000, 0)).clears_routing_in(&routed), "a pad stands for its footprint");
+    assert!(!array(&["U1"], grid(2, 1, 5_000, 0)).clears_routing_in(&routed));
+    assert!(!array(&["U1.1"], grid(2, 1, 5_000, 0)).clears_routing_in(&routed), "a pad stands for its footprint");
 }

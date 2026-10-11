@@ -30,6 +30,7 @@
 
 pub mod algo;
 pub mod cleanup;
+pub mod cleanup_filter;
 pub mod dangling;
 pub mod delaunay;
 pub mod dimension;
@@ -40,7 +41,8 @@ pub mod ratsnest;
 pub mod teardrop;
 
 pub use algo::{build_graph, search_clusters, Cluster, ConnGraph};
-pub use cleanup::{compute_cleanup, CleanupChange, CleanupKind, CleanupOptions, CleanupReport};
+pub use cleanup::{compute_cleanup, compute_cleanup_filtered, CleanupChange, CleanupKind, CleanupOptions, CleanupReport};
+pub use cleanup_filter::CleanupFilter;
 pub use dangling::{dangling_tracks_and_vias, DanglingItem, DanglingKind};
 pub use items::{CnItem, ItemRef};
 pub use ratsnest::{compute_ratsnest, RatsnestEdge};

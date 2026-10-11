@@ -2,8 +2,8 @@
 // submenu, no default hotkeys in source either) and libs/kimath/src/
 // geometry/distribute.cpp's two gap-math helpers it calls.
 //
-// Every kind of item aligns and distributes, as in source (`BOARD_ITEM::Move`): placed footprints (by their courtyard, standing in for
-// `FOOTPRINT::GetBoundingBox( false )`), tracks, vias, zones, graphics, text, dimensions and groups. A pad selected on its own stands for its
+// Every kind of item aligns and distributes, as in source (`BOARD_ITEM::Move`): placed footprints (by `FOOTPRINT::GetBoundingBox( false )`,
+// kicad-port/footprintBox.ts: the courtyard and the pads, not the text), tracks, vias, zones, graphics, text, dimensions and groups. A pad selected on its own stands for its
 // footprint but aligns by the pad's box (`GetSelections`' `addToList( list, pad, parentFp )`).
 //
 // Locks are KiCad's two rules (`GetSelections`, `selectTarget`, `DistributeItems`): Align leaves a locked item where it is and moves
@@ -204,7 +204,8 @@ export function alignItems(board: BoardState, selection: readonly string[]): Ali
     if (id == null || listed.has(id) || itemKind(board, id) == null) continue;
     const group = groupOf(board, id);
     if (group != null && chosen.has(group)) continue;
-    const box = isPad ? itemBounds(board, raw) : itemBounds(board, id);
+    // A footprint aligns by `FOOTPRINT::GetBoundingBox( false )` (`getBoundingBox` of align_distribute_tool.cpp): its pads, courtyard and graphics, not its text.
+    const box = isPad ? itemBounds(board, raw) : itemBounds(board, id, { includeText: false });
     if (!box) continue;
     listed.add(id);
     out.push({ id, box: [box[0], box[1], box[2], box[3]], locked: isLocked(board, id) });

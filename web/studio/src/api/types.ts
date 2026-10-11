@@ -987,6 +987,9 @@ export interface PadEditCmd {
   custom?: PadCustom;
 }
 
+/** `PASTE_MODE` (`include/dialogs/dialog_paste_special.h`): the reference designators of pasted footprints are given the next free number ("unique"), left as the clipboard has them even if another footprint has them ("keep", a plain paste's default) or cleared to `REF**` ("remove"). */
+export type PcbPasteMode = "unique" | "keep" | "remove";
+
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
@@ -1130,18 +1133,23 @@ export type Cmd =
   | { op: "move_text"; id: string; x: Um; y: Um }
   /**
    * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
-   * scoped to this model's two free-standing board drawing kinds (no
-   * footprint reference/value fields, dimensions, tables or barcodes
-   * exist as editable board items here -- see PARITY-pcb.md). Every
-   * field omitted (or `null`) leaves that property alone; filtering
-   * (item type/layer/"selected only") is `GlobalEditTextAndGraphicsDialog.tsx`'s
-   * own client-side job.
+   * scoped to the free-standing board items this model has: graphics,
+   * text and dimensions (no footprint reference/value fields, tables or
+   * barcodes exist as editable board items here -- see PARITY-pcb.md).
+   * Every field omitted (or `null`) leaves that property alone;
+   * `layer_defaults` is "Set to layer default values:" and ignores the
+   * fields. Filtering (scope, layer, "selected only") is
+   * `kicad-port/globalEditTextGraphics.ts`'s client-side job.
    */
-  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
+  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; dimension_ids?: string[]; layer_defaults?: boolean; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
   /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
   | { op: "paste_clipboard"; text: string; at: PointXY }
+  /** Paste Special... (`DIALOG_PASTE_SPECIAL`, crates/ops/src/pcb_paste_special.rs): a paste with the dialog's two answers -- what happens to the reference designators of the pasted footprints (`PASTE_MODE`; "keep" is what a plain paste does) and "Clear net assignments". */
+  | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
+  /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
+  | { op: "in_group"; group: string; cmd: Cmd }
   /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
   | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
@@ -1573,13 +1581,22 @@ export type TuneMode = "single" | "diffpair" | "skew";
  * `POST /api/cleanup_tracks/{preview,apply}` and
  * `components/CleanupTracksDialog.tsx`. Every field defaults `false`,
  * matching the base dialog's own ctor (no checkbox starts checked). */
-export interface CleanupOptions {
+export interface CleanupActions {
   delete_shorting: boolean;
   delete_redundant_vias: boolean;
   delete_dangling_vias: boolean;
   merge_segments: boolean;
   delete_dangling_tracks: boolean;
   delete_tracks_in_pads: boolean;
+}
+
+/** The checkboxes and the dialog's "Filter Items" box (kicad-port/cleanupFilters.ts; crates/connectivity/src/cleanup_filter.rs). A filter that is off has no key. */
+export interface CleanupOptions extends CleanupActions {
+  filter_net?: string;
+  filter_netclass?: string;
+  filter_layer?: string;
+  /** "Selected items only": the selected ids, groups among them (the backend opens them). Present -- even empty -- is on. */
+  selected_ids?: string[];
 }
 
 /** `crates/connectivity/src/cleanup.rs`'s `CleanupKind`, wire names. */

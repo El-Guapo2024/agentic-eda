@@ -9,15 +9,18 @@
 //   * "Use zoom acceleration" and the zoom speed with its "Automatic" switch (`input.zoom_acceleration`,
 //     `input.zoom_speed`, `input.zoom_speed_auto` -> `WX_VIEW_CONTROLS::LoadSettings`);
 //   * the board editor's magnetic points (`PCBNEW_SETTINGS::m_MagneticItems`, "Snap to Pads", "Snap to Tracks and Vias", "Snap to graphics": the board editor's
-//     Preferences > Editing Options), which decide what the drawing and move tools snap to (kicad-port/snapAnchors.ts).
+//     Preferences > Editing Options), which decide what the drawing and move tools snap to (kicad-port/snapAnchors.ts);
+//   * the board editor's "Step for rotate commands" (`PCBNEW_SETTINGS::m_RotationAngle`, `editing.rotation_angle`) and "Flip board items" (`m_FlipDirection`,
+//     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts).
 // Not offered: "Center and warp cursor on zoom" (it moves the real pointer, which a page may not and this studio
 // never does), the drag gestures and "Pan on mouse movement with key" (the canvases' own drag handling is not
 // configurable), and "Pan left/right with horizontal movement" (stored by KiCad but never read by the wheel code).
 import { DEFAULT_VIEW_CONTROL_SETTINGS, type ScrollModifier, type ViewControlSettings } from "./viewControls";
 import type { MagneticOption, PcbMagnetic } from "./snapAnchors";
+import type { FlipDirection } from "./pcbTransform";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
 
-export type { ScrollModifier };
+export type { ScrollModifier, FlipDirection };
 export type ScrollRow = "zoom" | "panH" | "panV";
 
 export interface Preferences {
@@ -43,6 +46,21 @@ export interface Preferences {
   magneticTracks: MagneticOption;
   /** `MAGNETIC_SETTINGS::graphics`: snap to graphics -- default off. */
   magneticGraphics: boolean;
+  /** `PCBNEW_SETTINGS::m_RotationAngle` ("Step for rotate commands", Preferences > PCB Editor > Editing Options): the degrees one R or Shift+R turns by. Default 90. */
+  rotationStepDeg: number;
+  /** `PCBNEW_SETTINGS::m_FlipDirection` ("Flip board items"): which way F turns a board item over. Default left/right (the `editing.flip_left_right` default). */
+  flipDirection: FlipDirection;
+}
+
+/**
+ * The step of the rotate commands, as `PCBNEW_SETTINGS` keeps it: tenths of a degree, one turn at most (`rot % 3600`), and a step of nothing is not a step
+ * (`if( aVal ) m_RotationAngle = ...` leaves the old one). Anything unusable is the default 90.
+ */
+export function sanitizeRotationStep(v: unknown, fallback = 90): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return fallback;
+  const tenths = Math.round(v * 10) % 3600;
+  const norm = ((tenths % 3600) + 3600) % 3600;
+  return norm === 0 ? fallback : norm / 10;
 }
 
 /** `COMMON_SETTINGS` factory defaults (common_settings.cpp `input.*`): wheel zooms, Ctrl pans left/right, Shift pans up/down. */
@@ -60,6 +78,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   magneticPads: "track-tool",
   magneticTracks: "track-tool",
   magneticGraphics: false,
+  rotationStepDeg: 90,
+  flipDirection: "left_right",
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH">;
@@ -152,6 +172,8 @@ export function sanitizePreferences(raw: unknown): Preferences {
     magneticPads: magnetic(o.magneticPads, d.magneticPads),
     magneticTracks: magnetic(o.magneticTracks, d.magneticTracks),
     magneticGraphics: bool(o.magneticGraphics, d.magneticGraphics),
+    rotationStepDeg: sanitizeRotationStep(o.rotationStepDeg, d.rotationStepDeg),
+    flipDirection: o.flipDirection === "top_bottom" ? "top_bottom" : d.flipDirection,
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

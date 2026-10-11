@@ -22,6 +22,7 @@ import { picker } from "./pcbPicker";
 import { viewer3dProbe, type Viewer3dSnapshot } from "../components/viewer3d/viewer3dProbe";
 import { getGridOverrides } from "../state/gridOverrides";
 import { gridEditorOfTab } from "../kicad-port/gridSettings";
+import { highlightedNets } from "../kicad-port/boardControl";
 import { lastSnapReport, type SnapReport } from "../kicad-port/snapReport";
 import {
   ErrorLog,
@@ -61,6 +62,9 @@ export interface HookState {
   /** The group being worked in on the board (`PCB_SELECTION_TOOL::m_enteredGroup`), or null. */
   entered: string | null;
   counts: Counts;
+  /** The display units of the editor (`mm`, `mil`, `in`) and the nets highlighted on the board (the first, then the rest of a multi-net highlight). */
+  units: string;
+  highlight: string[];
   /** The grid of the editor on screen, in um; null on the 3D tab, which has none. */
   grid: number | null;
   /** Grid Overrides (Ctrl+Shift+G) of the editor on screen: on or off; null on the 3D tab. */
@@ -233,6 +237,8 @@ function build(latest: { current: Latest }): EdaTestHook {
         selection: selectionWithKinds(selection, kindIndex(lists)),
         entered: studio.tab === "pcb" ? studio.enteredGroupId : null,
         counts: countsOf(studio.board, studio.schematic),
+        units: studio.units,
+        highlight: highlightedNets(studio.netHighlight, studio.bcx.netHighlightMore),
         grid: studio.tab === "pcb" ? studio.gridUm : studio.tab === "footprint" ? L.fp.gridUm : studio.tab === "symbol" ? L.sym.gridUm : studio.tab === "schematic" ? studio.schGridUm : null,
         gridOverrides: editor ? getGridOverrides(editor).enabled : null,
         snap: lastSnapReport(),

@@ -169,7 +169,7 @@ const part = (ref: string, at: [number, number], pads: Pad[] = []): Part =>
   ({ ref, value: null, package: null, mpn: null, footprint: null, block: null, placed: true, size: [2000, 1000], at, rot: 0, side: "top", label: "above", courtyard: [at[0] - 1000, at[1] - 500, at[0] + 1000, at[1] + 500], pads }) as Part;
 const drawings = (extra: object) => ({ shapes: [], texts: [], groups: [], dimensions: [], dimension_settings: {}, ...extra }) as unknown as NonNullable<BoardState["drawings"]>;
 
-test("alignItems: a footprint by its courtyard, a track by its copper, a group by its members", () => {
+test("alignItems: a footprint by its box without text (courtyard and pads), a track by its copper, a group by its members", () => {
   const b = board({
     parts: [part("U1", [0, 0], [pad("1", -800, 0)]), part("U2", [9000, 3000])],
     routing: { tracks: [{ id: "t1", net: "GND", layer: "F.Cu", width: 200, pts: [[2000, 5000], [4000, 5000]] }], vias: [], zones: [], track_width_presets: [], via_presets: [], teardrop_settings: {} } as unknown as BoardState["routing"],
@@ -179,7 +179,8 @@ test("alignItems: a footprint by its courtyard, a track by its copper, a group b
   const byId = (ids: string[]) => Object.fromEntries(alignItems(b, ids).map((i) => [i.id, i]));
   const plain = byId(["U1", "t1"]);
   assert.deepEqual(plain["t1"]!.box, [1900, 4900, 4100, 5100]);
-  assert.deepEqual(plain["U1"]!.box, [-1000, -500, 1000, 500]);
+  // `FOOTPRINT::GetBoundingBox( false )`: the courtyard, widened by the pad that pokes out of it (800 +- 300 reaches 1100).
+  assert.deepEqual(plain["U1"]!.box, [-1100, -500, 1000, 500]);
   assert.equal(plain["U1"]!.locked, false);
   const group = byId(["g"])["g"]!;
   assert.deepEqual(group.box, [1900, 2500, 10_000, 5100]);
@@ -191,7 +192,7 @@ test("alignItems: a pad selected alone stands for its footprint but aligns by th
   const b = board({ parts: [part("U1", [0, 0], [pad("1", -800, 0), pad("2", 800, 0)])] });
   assert.deepEqual(alignItems(b, ["U1.2"]), [{ id: "U1", box: [500, -300, 1100, 300], locked: false }]);
   assert.deepEqual(alignItems(b, ["U1.1", "U1.2"]), [{ id: "U1", box: [-1100, -300, -500, 300], locked: false }]);
-  assert.deepEqual(alignItems(b, ["U1", "U1.2"]), [{ id: "U1", box: [-1000, -500, 1000, 500], locked: false }]);
+  assert.deepEqual(alignItems(b, ["U1", "U1.2"]), [{ id: "U1", box: [-1100, -500, 1100, 500], locked: false }], "the footprint's own box, pads included");
 });
 
 test("planAlignSelection / planDistributeSelection: one move_items per moved item, locked footprints are the target / left out", () => {

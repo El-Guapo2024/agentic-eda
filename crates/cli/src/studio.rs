@@ -758,12 +758,28 @@ fn handle(
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
+            // `"carry": "begin"` / `"commit"`: the command starts or ends a carried placement (Duplicate and Paste and the drop are one undo step; `carry.rs`).
+            let carry = req.get("carry").and_then(Value::as_str).and_then(board::carry::Carry::parse);
             let reply = match serde_json::from_value::<eda_ops::Cmd>(req.get("cmd").cloned().unwrap_or(Value::Null)) {
                 Err(e) => json!({ "ok": false, "message": format!("not a board command: {e}") }),
-                Ok(cmd) => match board::step(dir, cmd, strict, "ui") {
+                Ok(cmd) => match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                     Ok(summary) => json!({ "ok": true, "message": summary }),
                     Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
                 },
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        // The end of a carried placement without a command of its own: `{"action": "commit"}` (a drop where the items already were) or `{"action": "cancel"}` (Escape).
+        ("POST", "/api/carry") => {
+            let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let done = match req.get("action").and_then(Value::as_str) {
+                Some("commit") => board::carry::commit(dir),
+                Some("cancel") => board::carry::cancel(dir, "ui"),
+                _ => Err(vec![eda_model::CheckResult::fail("board_bad_carry", "carry", "the action is commit or cancel")]),
+            };
+            let reply = match done {
+                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }

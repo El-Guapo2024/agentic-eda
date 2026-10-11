@@ -24,7 +24,7 @@ use std::path::Path;
 fn places_from_libraries(cmd: &Cmd) -> bool {
     match cmd {
         Cmd::Batch { cmds } => cmds.iter().any(places_from_libraries),
-        Cmd::OnSheet { cmd, .. } => places_from_libraries(cmd),
+        Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => places_from_libraries(cmd),
         Cmd::AddSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } => true,
         _ => false,
     }
@@ -55,6 +55,7 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
             rewritten.iter().any(Option::is_some).then(|| Cmd::Batch { cmds: cmds.iter().zip(rewritten).map(|(old, new)| new.unwrap_or_else(|| old.clone())).collect() })
         }
         Cmd::OnSheet { sheet, cmd } => rewrite(cmd, design, model, symbols, footprints).map(|inner| Cmd::OnSheet { sheet: sheet.clone(), cmd: Box::new(inner) }),
+        Cmd::InGroup { group, cmd } => rewrite(cmd, design, model, symbols, footprints).map(|inner| Cmd::InGroup { group: group.clone(), cmd: Box::new(inner) }),
         Cmd::AddSymbol { id, lib_id, at, rot_millideg, value, footprint, unit } => {
             // The design's own definition (the intent's, a published one, one a placed symbol already needed) stands.
             if !lacks_definition(lib_id, design, model) {

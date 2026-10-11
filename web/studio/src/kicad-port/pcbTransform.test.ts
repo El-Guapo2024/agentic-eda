@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Dimension, Part, Pad } from "../api/types";
-import { carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planMoveExact, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
+import { carryAngleDeg, carryStart, editableSelection, flipPivot, isLocked, modificationPoint, planCarry, planFlip, planMove, planMoveExact, planRotate, rotationPivot, selectionCenter } from "./pcbTransform";
 import { padById, padIds, padParent, itemKind, itemPosition, itemBounds } from "./pcbItems";
 
 function board(partial: Partial<BoardState>): BoardState {
@@ -161,7 +161,7 @@ test("planRotate: locked items stay and say so; all locked is no command at all"
 });
 
 test("planFlip: left-right by default, about the box centre; a pad flips its footprint", () => {
-  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 0, 0)]), part("U2", [9000, 2000])] });
+  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 1000, 2000)]), part("U2", [9000, 2000])] });
   assert.deepEqual(planFlip(b, ["U1", "U2"]).cmds, [{ op: "flip_items", ids: ["U1", "U2"], pivot: { x: 5000, y: 2000 }, direction: "left_right" }]);
   assert.deepEqual(planFlip(b, ["U1.1"], "top_bottom").cmds, [{ op: "flip_items", ids: ["U1"], pivot: { x: 1000, y: 2000 }, direction: "top_bottom" }]);
 });
@@ -179,6 +179,33 @@ test("planCarry: a Move that was turned and flipped on the way turns and flips a
   assert.deepEqual(planCarry(b, ["U1"], 0, 0, 3, false).cmds, [{ op: "rotate_items", ids: ["U1"], pivot: { x: 1000, y: 2000 }, angle_millideg: -270_000 }]);
 });
 
+test("planCarry: R presses turn by the rotation step and F flips across the flip direction of the preferences", () => {
+  const b = board({ parts: [part("U1", [1000, 2000])] });
+  // two presses at a 15 degree step are a 30 degree turn, counter-clockwise on the screen
+  assert.deepEqual(planCarry(b, ["U1"], 0, 0, 2, false, undefined, 15).cmds, [{ op: "rotate_items", ids: ["U1"], pivot: { x: 1000, y: 2000 }, angle_millideg: -30_000 }]);
+  // Shift+R takes one away: -1 press at 45 degrees is 315 counter-clockwise (the verb's clockwise-positive -315, the same turn as a clockwise 45)
+  assert.deepEqual(planCarry(b, ["U1"], 0, 0, -1, false, undefined, 45).cmds, [{ op: "rotate_items", ids: ["U1"], pivot: { x: 1000, y: 2000 }, angle_millideg: -315_000 }]);
+  // a whole number of turns is nothing to send, whatever the step
+  assert.deepEqual(planCarry(b, ["U1"], 0, 0, 24, false, undefined, 15).cmds, []);
+  assert.deepEqual(planCarry(b, ["U1"], 0, 0, 3, false, undefined, 120).cmds, []);
+  // a step that does not divide a turn adds up to an angle all the same: 7 presses of 50 degrees are 350
+  assert.equal((planCarry(b, ["U1"], 0, 0, 7, false, undefined, 50).cmds[0] as { angle_millideg: number }).angle_millideg, -350_000);
+  // the flip goes across the preferred axis
+  assert.deepEqual(planCarry(b, ["U1"], 0, 0, 0, true, undefined, 90, "top_bottom").cmds, [{ op: "flip_items", ids: ["U1"], pivot: { x: 1000, y: 2000 }, direction: "top_bottom" }]);
+  assert.deepEqual(planCarry(b, ["U1"], 0, 0, 0, true).cmds, [{ op: "flip_items", ids: ["U1"], pivot: { x: 1000, y: 2000 }, direction: "left_right" }], "left/right is the default");
+});
+
+test("carryAngleDeg: the presses of R add up, a turn is nothing, the angle is counter-clockwise in [0, 360)", () => {
+  assert.equal(carryAngleDeg(1), 90);
+  assert.equal(carryAngleDeg(5), 90);
+  assert.equal(carryAngleDeg(-1), 270);
+  assert.equal(carryAngleDeg(4), 0);
+  assert.equal(carryAngleDeg(3, 15), 45);
+  assert.equal(carryAngleDeg(24, 15), 0);
+  assert.equal(carryAngleDeg(1, 22.5), 22.5);
+  assert.equal(carryAngleDeg(16, 22.5), 0);
+});
+
 test("a dimension and a group have a position and a box too", () => {
   const b = board({
     parts: [part("U1", [20_000, 0])],
@@ -193,7 +220,7 @@ test("a dimension and a group have a position and a box too", () => {
 });
 
 test("carryStart: the editable selection with the points a turn and a flip act about; locked items stay out", () => {
-  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 0, 2000)]), part("U2", [9000, 2000]), part("U3", [20000, 2000])], locked: ["U3"] });
+  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 500, 2000)]), part("U2", [9000, 2000]), part("U3", [20000, 2000])], locked: ["U3"] });
   const start = carryStart(b, ["U1.1", "U2", "U3"]);
   assert.deepEqual(start.refs, ["U1", "U2"], "the pad stands for its footprint, the locked footprint stays");
   assert.equal(start.lockedOut, true);

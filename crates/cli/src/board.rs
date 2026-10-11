@@ -45,6 +45,13 @@ use eda_model::{CheckResult, CheckStatus, ConstraintModel};
 use eda_ops::{Board, Cmd, Dir, Domain, Region};
 use std::path::{Path, PathBuf};
 
+// Duplicate and Paste, and the drop that ends them, are one undo step; Escape leaves nothing behind (`crates/cli/src/carry.rs`).
+#[path = "carry.rs"]
+pub(crate) mod carry;
+#[cfg(test)]
+#[path = "pcb_edit_details_tests.rs"]
+mod edit_details_tests;
+
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct Meta {
@@ -605,7 +612,16 @@ pub(crate) enum Strictness {
 
 /// [`step`] with the full choice of [`Strictness`].
 pub(crate) fn step_with(dir: &Path, cmd: Cmd, strictness: Strictness, by: &str) -> Result<String, Vec<CheckResult>> {
+    step_carrying(dir, cmd, strictness, by, None)
+}
+
+/// [`step_with`] for a command that starts or ends a carried placement (`carry::Carry`): the history keeps the step open from the Duplicate or the Paste to the
+/// drop. Any command that is not the drop first settles a step held open as a step of its own.
+pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &str, carry: Option<carry::Carry>) -> Result<String, Vec<CheckResult>> {
     let _lock = lock(dir);
+    if carry != Some(carry::Carry::Commit) {
+        carry::settle_locked(dir);
+    }
     sync_external_edits_locked(dir);
     let line = cmd_line(&cmd);
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
@@ -614,8 +630,7 @@ pub(crate) fn step_with(dir: &Path, cmd: Cmd, strictness: Strictness, by: &str) 
     match &r {
         Ok(summary) => {
             if let Some(before) = before {
-                let _ = push_snapshot_tagged(&undo_dir(dir), &before, domain_tag(domain), by);
-                clear_dir(&redo_dir(dir));
+                carry::record(dir, carry, &before, domain, by);
             }
             log_activity(dir, by, &line, true, summary)
         }
@@ -808,6 +823,7 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
 /// undone was itself a route, undo removes the routing along with it.
 pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
     let _lock = lock(dir);
+    carry::settle_locked(dir);
     sync_external_edits_locked(dir);
     let (_, current, _) = load(dir)?;
     let Some(snap) = pop_snapshot(&undo_dir(dir), scope) else {
@@ -840,6 +856,7 @@ pub(crate) fn append_to_previous_undo(dir: &Path) {
 /// stack.
 pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String, Vec<CheckResult>> {
     let _lock = lock(dir);
+    carry::settle_locked(dir);
     sync_external_edits_locked(dir);
     let (_, current, _) = load(dir)?;
     let Some(snap) = pop_snapshot(&redo_dir(dir), scope) else {
@@ -1103,7 +1120,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditText { id, content, layer, .. } => format!("text edit {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteText { id } => format!("text delete {id}"),
         Cmd::MoveText { id, x, y } => format!("text move {id} --to {},{}", mm(*x), mm(*y)),
-        Cmd::EditTextAndGraphics { shape_ids, text_ids, .. } => format!("global-edit text-and-graphics --shapes {} --texts {}", shape_ids.len(), text_ids.len()),
+        Cmd::EditTextAndGraphics { shape_ids, text_ids, dimension_ids, layer_defaults, .. } => {
+            format!("global-edit text-and-graphics --shapes {} --texts {} --dimensions {}{}", shape_ids.len(), text_ids.len(), dimension_ids.len(), if *layer_defaults { " --layer-defaults" } else { "" })
+        }
         Cmd::SetTeardropSettings { .. } => "board-setup teardrops".to_string(),
         Cmd::AddAllTeardrops => "teardrops add-all".to_string(),
         Cmd::RemoveAllTeardrops => "teardrops remove-all".to_string(),
@@ -1149,6 +1168,7 @@ fn cmd_line(c: &Cmd) -> String {
             format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
         }
         Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), text.len()),
+        Cmd::PasteSpecial { text, at, mode, clear_nets } => format!("paste-special --at {},{} --references {mode:?}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *clear_nets { " --clear-nets" } else { "" }, text.len()),
         Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => format!(
             "move-exact {} --by {},{} --rotate {:.3} --pivot {}",
             parts.join(" "),
@@ -1236,6 +1256,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EmbedLibSymbol { symbol } => format!("schematic keep-symbol {:?}", symbol.lib_id),
         Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x), mm(at.y)),
         Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
+        Cmd::InGroup { group, cmd } => format!("in-group {group:?} {}", cmd_line(cmd)),
         Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
         Cmd::Annotate { reset_existing, order, ids, .. } => format!(
             "schematic annotate{}{}{}",
@@ -1409,7 +1430,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetBoardPage { .. } => "page",
         Cmd::SetSchematicPage { .. } => "schematic-page",
         Cmd::RepairBoard => "repair",
-        Cmd::Duplicate { .. } | Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => "duplicate",
+        Cmd::Duplicate { .. } | Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => "duplicate",
         Cmd::CommitRoute { .. } => "route",
         Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
@@ -1447,7 +1468,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSymbol { .. } => "schematic-place",
         Cmd::EmbedLibSymbol { .. } => "schematic-keep-symbol",
         Cmd::PlaceFootprint { .. } => "place-footprint",
-        Cmd::OnSheet { cmd, .. } => cmd_name(cmd),
+        Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd_name(cmd),
         Cmd::ReorganizeSheets => "schematic-reorganize-sheets",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",
         Cmd::RenameSymbol { .. } => "schematic-rename",
@@ -1875,7 +1896,7 @@ mod tests {
     use eda_model::ir::{Design, FootprintInstance, PlacementSection, Provenance, Side, Um};
     use eda_model::{Footprint, Net, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
-    fn scratch(name: &str) -> PathBuf {
+    pub(super) fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("eda_cli_board_copper_test_{}_{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -1887,7 +1908,7 @@ mod tests {
     /// can be pointed exactly at a pad. U1 and U2 each have pad 1 on GND
     /// and pad 2 on VCC; U1's pads sit at board (4000,5000) and
     /// (6000,5000).
-    fn setup(dir: &Path) {
+    pub(super) fn setup(dir: &Path) {
         let fp = Footprint {
             name: "2PAD".into(),
             pads: vec![
@@ -1991,7 +2012,7 @@ mod tests {
     }
 
     /// kicad-cli's violation counts by type on the board in `dir`, as the studio's DRC reports them.
-    fn drc_counts(dir: &Path) -> std::collections::BTreeMap<String, u64> {
+    pub(super) fn drc_counts(dir: &Path) -> std::collections::BTreeMap<String, u64> {
         let report = crate::kicad_engine::drc_with(dir, false, false).expect("kicad-cli ran");
         report["counts"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_u64().unwrap())).collect()
     }
@@ -2060,12 +2081,13 @@ mod tests {
         let msg = step(&dir, Cmd::MoveItems { ids: vec![track.clone(), "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
         assert!(!msg.contains("routing cleared"), "{msg}");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        // ...one with a track on its pad does, as every footprint move always has.
+        // ...and neither does one with a track on its pad: KiCad's Move leaves the copper where it was (it is no longer connected to the pad).
         step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 4_000, y: 5_000 }, Point { x: 4_000, y: 9_000 }] }, false, "test").unwrap();
         let msg = step(&dir, Cmd::MoveItems { ids: vec![track, "U1".into()], dx: 100, dy: 0 }, false, "test").unwrap();
-        assert!(msg.contains("routing cleared"), "{msg}");
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 2, "both tracks are still there");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 2, "Undo brings the routing back");
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 2, "and Undo takes back the move alone");
     }
 
     /// The Properties panel sends one edit of a row as one `Batch` (`PCB_PROPERTIES_PANEL::valueChanged` pushes one
@@ -2114,8 +2136,8 @@ mod tests {
         assert_eq!(back.routing.as_ref().unwrap().vias.len(), 1, "no more than the one step went");
     }
 
-    /// Duplicate a footprint on a routed board, place the copy and delete it again: the copy has nothing routed to it, so
-    /// none of it clears the routing -- and moving the original, which has copper on its pad, still does.
+    /// Duplicate a footprint on a routed board, place the copy and delete it again, then move the original, which has copper on its pad:
+    /// none of it clears the routing (KiCad's edit tools never do).
     #[test]
     fn placing_and_deleting_a_copied_footprint_leaves_the_routing_alone() {
         let dir = scratch("copy_keeps_routing");
@@ -2133,9 +2155,10 @@ mod tests {
         assert_eq!(design.routing.as_ref().unwrap().tracks.len(), 1, "the routing is still there");
         assert!(model.part("U3").is_none(), "and the copy is gone");
 
-        // The original has a track on its pad: that is a move out from under it.
+        // The original has a track on its pad: moving it leaves the track where it was, as KiCad does.
         let msg = step(&dir, Cmd::MoveItems { ids: vec!["U1".into()], dx: 0, dy: 100 }, false, "test").unwrap();
-        assert!(msg.contains("routing cleared"), "{msg}");
+        assert!(!msg.contains("routing cleared"), "{msg}");
+        assert_eq!(load(&dir).unwrap().1.routing.as_ref().unwrap().tracks.len(), 1, "the routing is still there");
     }
 
     /// Turn a selection about a point and flip it: each is one step, each undoes, and the same two verbs reach the file kicad-cli reads.

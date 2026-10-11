@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addMember, newMemberFromPick, planAddToGroup, planRemoveFromGroup, removeMemberAt } from "./groupEdit";
+import { addMember, inEnteredGroup, newMemberFromPick, planAddToGroup, planRemoveFromGroup, removeMemberAt } from "./groupEdit";
+import type { Cmd } from "../api/types";
 
 const groups = [
   { id: "g1", member_ids: ["a", "b"] },
@@ -36,4 +37,14 @@ test("a picked group is a new member unless it would hold itself", () => {
   const nested = [...groups, { id: "top", member_ids: ["g1", "z"] }];
   assert.equal(newMemberFromPick("top", nested, "g1"), null, "a group that holds it");
   assert.equal(newMemberFromPick("g1", nested, "top"), "g1", "a group below it is fine");
+});
+
+test("with a group entered a command is sent wrapped in it, so what it adds joins the group", () => {
+  const add: Cmd = { op: "delete_track", id: "t" };
+  assert.deepEqual(inEnteredGroup(add, "g1", groups), { op: "in_group", group: "g1", cmd: add });
+  assert.equal(inEnteredGroup(add, null, groups), add, "no group entered");
+  assert.equal(inEnteredGroup(add, "gone", groups), add, "an entered group the board no longer has");
+  assert.equal(inEnteredGroup(add, "g1", undefined), add, "a board with no groups");
+  const wrapped: Cmd = { op: "in_group", group: "g2", cmd: add };
+  assert.equal(inEnteredGroup(wrapped, "g1", groups), wrapped, "never twice");
 });
