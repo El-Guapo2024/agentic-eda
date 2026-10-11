@@ -149,6 +149,13 @@ function remember<T>(cache: Map<string, Promise<T>>, key: string, load: () => Pr
 const symbolDetails = new Map<string, Promise<SymbolDetails>>();
 const footprintDetails = new Map<string, Promise<FootprintDetails>>();
 
+/** Forget the items and drawings read so far: the library tables changed, so a nickname may lead to another file. */
+export function resetChooserCaches(): void {
+  entriesCache.clear();
+  symbolDetails.clear();
+  footprintDetails.clear();
+}
+
 /** The selected installed symbol (`GET /api/library/details`): cut out of its library file on the server, only this one. */
 export function fetchSymbolDetails(id: string): Promise<SymbolDetails> {
   return remember(symbolDetails, id, async () => {

@@ -719,6 +719,7 @@ fn handle(
         ("GET", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::view(dir).to_string().as_bytes()),
         ("POST", "/api/library_tables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_table(dir, &body).to_string().as_bytes()),
         ("POST", "/api/library_tables/check") => respond(stream, "200 OK", "application/json", crate::library_tables::check_rows(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/library_tables/normalize") => respond(stream, "200 OK", "application/json", crate::library_tables::normalize(dir, &query_value(target, "path")).to_string().as_bytes()),
         ("POST", "/api/library_tables/add") => respond(stream, "200 OK", "application/json", crate::library_tables::add_library(dir, &body).to_string().as_bytes()),
         ("POST", "/api/path_variables") => respond(stream, "200 OK", "application/json", crate::library_tables::set_variables(dir, &body).to_string().as_bytes()),
         ("GET", "/api/fs/list") => respond(stream, "200 OK", "application/json", crate::library_tables::browse(dir, &query_value(target, "path"), &query_value(target, "what")).to_string().as_bytes()),

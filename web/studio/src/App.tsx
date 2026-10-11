@@ -28,6 +28,7 @@ import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
 import { CommonOverlay } from "./components/CommonOverlay";
 import { CommonToolHost } from "./components/CommonToolHost";
 import { CommonDialogs } from "./components/CommonDialogs";
+import { LibraryTableDialogs } from "./components/libraryTables/LibraryTableDialogs";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
 import { ZoneDialog } from "./components/ZoneDialog";
@@ -274,6 +275,7 @@ function StudioFrame() {
       <SchControlHost />
       <BoardControlDialogs />
       <CommonDialogs />
+      <LibraryTableDialogs />
     </div>
   );
 }

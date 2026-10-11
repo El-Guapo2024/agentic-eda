@@ -627,6 +627,20 @@ fn normalize_vars(env: &Env, vars: &Vars) -> Vec<(String, String)> {
     out
 }
 
+/// `GET /api/library_tables/normalize?path=`: a path the way a table holds it (`NormalizePath`) -- what the browse buttons of the grid put in a new row.
+pub(crate) fn normalize(dir: &Path, typed: &str) -> Value {
+    normalize_with(&Env::discover(), dir, typed)
+}
+
+pub(crate) fn normalize_with(env: &Env, dir: &Path, typed: &str) -> Value {
+    if typed.trim().is_empty() {
+        return bad("Choose a library to add.");
+    }
+    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let path = vars.expand_uri(typed.trim(), dir);
+    json!({ "uri": lt::normalize_path(&path, &normalize_vars(env, &vars), Some(dir)), "path": path.display().to_string() })
+}
+
 /// `POST /api/library_tables/add` `{kind, path, create?, nickname?, descr?, table?}`: Add Existing Library, and New Library when `create` is set. The path may
 /// hold variables and is relative to the board's folder. A new library is an empty `.kicad_sym` file or `.pretty` folder (`SCH_IO::CreateLibrary`, `PCB_IO::CreateLibrary`);
 /// either way a row is added to the board's table (never the global one) with the path written as KiCad writes it (`NormalizePath`) and the nickname the file's name makes
@@ -1207,6 +1221,19 @@ pub(crate) mod tests {
         assert_eq!(res[2]["guess"], "Table");
         assert_eq!(res[0]["guess"], "KiCad");
         assert!(res[0]["path"].as_str().unwrap().ends_with("symbols/Device.kicad_sym"));
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn a_path_is_written_the_way_a_table_holds_it() {
+        let m = machine("normalize", true);
+        let env = m.env();
+        let under = m.share.join("symbols").join("Device.kicad_sym");
+        assert_eq!(normalize_with(&env, &m.board, &under.display().to_string())["uri"], "${KICAD10_SYMBOL_DIR}/Device.kicad_sym");
+        assert_eq!(normalize_with(&env, &m.board, &m.board.join("libs").join("X.pretty").display().to_string())["uri"], "${KIPRJMOD}/libs/X.pretty");
+        assert_eq!(normalize_with(&env, &m.board, "libs/Y.kicad_sym")["uri"], "${KIPRJMOD}/libs/Y.kicad_sym", "a relative path is the board's");
+        assert_eq!(normalize_with(&env, &m.board, "/somewhere/else/Z.kicad_sym")["uri"], "/somewhere/else/Z.kicad_sym");
+        assert!(normalize_with(&env, &m.board, "  ")["error"].is_string());
         let _ = std::fs::remove_dir_all(&m.root);
     }
 

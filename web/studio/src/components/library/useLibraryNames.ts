@@ -5,7 +5,7 @@
 // search box needs them (`ensureSearchIndex`). Everything installed is read from the server once and kept (api/libraryIndexClient.ts).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchFootprintLibraryNames, fetchSymbolEditorNames } from "../../api/client";
-import { fetchAllInstalledItems, fetchInstalledItems, fetchInstalledLibraries, knownInstalledItems, knownInstalledLibraries, knownSearchIndex, type LibraryKind } from "../../api/libraryIndexClient";
+import { fetchAllInstalledItems, fetchInstalledItems, fetchInstalledLibraries, knownInstalledItems, knownInstalledLibraries, knownSearchIndex, onInstalledLibrariesReset, type LibraryKind } from "../../api/libraryIndexClient";
 import type { InstalledLib, TreeItem } from "../../kicad-port/libraryTreeModel";
 
 const listeners = new Set<() => void>();
@@ -88,6 +88,26 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
       cancelled = true;
     };
   }, [kind]);
+
+  // The library tables changed (Manage Libraries, New Library, Configure Paths): what was listed is stale, so ask the server again.
+  useEffect(
+    () =>
+      onInstalledLibrariesReset(() => {
+        searchStarted.current = false;
+        loadingRef.current.clear();
+        setLoading(new Set());
+        setLoaded(new Map());
+        setSearchIndex("idle");
+        fetchInstalledLibraries(kind)
+          .then((libs) => {
+            if (alive.current) setInstalled(libs);
+          })
+          .catch(() => {
+            /* the server is busy: the next change asks again */
+          });
+      }),
+    [kind]
+  );
 
   const load = useCallback(
     (lib: string) => {
