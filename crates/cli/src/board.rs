@@ -1141,6 +1141,8 @@ fn cmd_line(c: &Cmd) -> String {
         }
         Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), text.len()),
         Cmd::ImportGraphics(r) => format!("import-graphics --format {:?} --layer {} --scale {} --offset {},{} ({} bytes of file)", r.format, r.layer, r.scale, r.offset_x_nm as f64 / 1.0e6, r.offset_y_nm as f64 / 1.0e6, r.text.len()),
+        Cmd::ImportSchGraphics(r) => format!("import-sch-graphics --format {:?} --scale {} --offset {},{} ({} bytes of file)", r.format, r.scale, r.offset_x_nm as f64 / 1.0e6, r.offset_y_nm as f64 / 1.0e6, r.text.len()),
+        Cmd::ImportSymbolGraphics(r) => format!("import-symbol-graphics {} --unit {} --format {:?} --scale {} --offset {},{} ({} bytes of file)", r.lib_id, r.unit, r.format, r.scale, r.offset_x_nm as f64 / 1.0e6, r.offset_y_nm as f64 / 1.0e6, r.text.len()),
         Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => format!(
             "move-exact {} --by {},{} --rotate {:.3} --pivot {}",
             parts.join(" "),
@@ -1403,6 +1405,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::RepairBoard => "repair",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => "duplicate",
         Cmd::ImportGraphics(_) => "import-graphics",
+        Cmd::ImportSchGraphics(_) | Cmd::ImportSymbolGraphics(_) => "import-graphics",
         Cmd::CommitRoute { .. } => "route",
         Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
@@ -2294,6 +2297,38 @@ mod tests {
         assert!(back.drawings.as_ref().map_or(true, |d| d.shapes.is_empty() && d.groups.is_empty()), "one undo takes the whole import back");
         redo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(load(&dir).unwrap().1.drawings.as_ref().unwrap().shapes.len(), 8);
+    }
+
+    /// Import Graphics in the schematic editor and in the Symbol Editor is one command each, in its own editor's undo stack: one undo takes the whole
+    /// import back, and the other editors' histories are not touched.
+    #[test]
+    fn an_import_of_graphics_in_the_schematic_and_the_symbol_editor_is_one_undo_step() {
+        let dir = scratch("import_graphics_sch_undo");
+        setup_both(&dir);
+        let dxf = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_lines_arcs.dxf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let sch_req = eda_ops::ImportSchGraphics { format: eda_ops::GraphicsFormat::Dxf, text: dxf.clone(), dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 };
+        let counts = |dir: &Path| {
+            let (_, d, _) = load(dir).unwrap();
+            let s = d.schematic.as_ref().unwrap();
+            (s.lines.len(), s.extras.graphics.len())
+        };
+        let before = counts(&dir);
+        step(&dir, Cmd::ImportSchGraphics(sch_req), false, "test").unwrap();
+        assert_eq!(counts(&dir), (before.0 + 4, before.1 + 4));
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(counts(&dir), before, "one undo takes the whole import back");
+        redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(counts(&dir), (before.0 + 4, before.1 + 4));
+
+        step(&dir, Cmd::OpenSymbolForEdit { lib_id: "TEST:R".into() }, false, "test").unwrap();
+        let sym_req = eda_ops::ImportSymbolGraphics { lib_id: "TEST:R".into(), unit: 1, body_style: 1, format: eda_ops::GraphicsFormat::Dxf, text: dxf, dxf_units: String::new(), scale: 1.0, offset_x_nm: 0, offset_y_nm: 0, line_width_um: 0 };
+        let drawn = |dir: &Path| load(dir).unwrap().1.symbol_library.as_ref().and_then(|l| l.by_lib_id("TEST:R")).map(|s| s.graphics.len());
+        let had = drawn(&dir).unwrap();
+        step(&dir, Cmd::ImportSymbolGraphics(sym_req), false, "test").unwrap();
+        assert_eq!(drawn(&dir), Some(had + 8));
+        undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
+        assert_eq!(drawn(&dir), Some(had), "one undo in the Symbol Editor takes the whole import back");
+        assert_eq!(counts(&dir), (before.0 + 4, before.1 + 4), "and the sheet's import stands");
     }
 
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a

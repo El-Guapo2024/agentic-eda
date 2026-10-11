@@ -9,7 +9,11 @@
 //     placement puts the picture's upper left corner at the cursor and arms the Move tool, Escape takes it back; the DXF unit of the dialog is used when the file names none and the
 //     file's own wins; "Fix discontinuities" joins corners that miss; an outline imported on Edge.Cuts replaces the polygon of the board's intent; a file with nothing to import, a
 //     scale of zero and a file type no plugin handles are refused with KiCad's words;
-//   (the SVG half, the schematic and symbol editor, Append Board and the file drops are added to this script with the packages' later steps.)
+//   Import Graphics, the schematic and the Symbol Editor (DIALOG_IMPORT_GFX_SCH): the actions and the File > Import entry are wired on both tabs; the dialog has "Interactive placement" / "At" X, Y, the
+//     scale, the DXF width and units and no layer, group or discontinuities; OK with "At" puts the lines (graphic lines of the sheet, shapes for the arcs) at the origin over the scale with the
+//     sheet's default width, as ONE undo step of the schematic's own history; interactive placement puts the drawing's origin at the cursor's grid point and arms the Move tool, Escape takes it
+//     back; an SVG becomes polygons; in the Symbol Editor the items are polylines and arcs of the open symbol in mm with the Y axis up, on the unit being edited, as one undo step of that editor;
+//   (Append Board and the file drops are added to this script with the package's later steps.)
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__filesInCheck.results` (`.done` is set at the end).
 (async () => {
@@ -90,6 +94,9 @@
   const added = (st) => (st.drawings?.shapes ?? []);
 
   let applied = 0;
+  let appliedSch = 0;
+  let appliedSym = 0;
+  const firstTab = E.state().tab;
   try {
     const st0 = await board();
     const base = { shapes: added(st0).length, groups: (st0.drawings?.groups ?? []).length, outline: JSON.stringify(st0.outline), isShapes: !!st0.outline_is_shapes };
@@ -254,6 +261,178 @@
     await sleep(200);
     check("nothing is left on the board by all of this", added(await board()).length === base.shapes);
     void noItems; void garbage; void dropped;
+
+    // ============================================================================================================================ the schematic
+    const clickTab = async (name) => { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === name)?.click(); await sleep(1200); };
+    await clickTab("Schematic");
+    const sheetQuery = () => (E.state().sheetPath.length ? `?sheet=${E.state().sheetPath.join("/")}` : "");
+    const sch = () => get(`/api/schematic${sheetQuery()}`);
+    const undoDomain = async (domain, n = 1) => { for (let i = 0; i < n; i++) await post("/api/undo", { domain }); await sleep(400); };
+    const schActs = Object.fromEntries(E.actions({ all: true }).map((a) => [a.id, a]));
+    check("Import Graphics and its drop are wired on the Schematic tab", schActs["eeschema.EditorControl.importGraphics"]?.enabled && schActs["eeschema.EditorControl.ddImportGraphics"]?.enabled, JSON.stringify([schActs["eeschema.EditorControl.importGraphics"], schActs["eeschema.EditorControl.ddImportGraphics"]]));
+    const s0 = await sch();
+    const sBase = { lines: s0.lines.length, graphics: s0.graphics.length, texts: s0.texts.length, lineIds: new Set(s0.lines.map((l) => l.id)), graphicIds: new Set(s0.graphics.map((g) => g.id)) };
+    const sEntry = await fromMenu("File", "Import Graphics");
+    check("the schematic's File > Import has Import Graphics... and it is enabled", !!sEntry && sEntry.getAttribute("aria-disabled") === "false", sEntry?.outerHTML?.slice(0, 120));
+    sEntry?.click();
+    await sleep(400);
+    check("it opens the schematic's dialog: interactive placement, the scale, the DXF width and units, and no layer, group or discontinuities", dialogs().includes("Import Graphics") && field("Interactive placement")?.checked && !!field("Import scale") && !!field("Default line width") && !!field("Default units") && !field("Layer") && !field("Group imported items") && !field("Fix discontinuities"));
+    button("Cancel")?.click();
+    await sleep(200);
+    const schRefused = await E.run("eeschema.EditorControl.ddImportGraphics", { name: "notes.txt", text: "hello" });
+    check("a dropped file no plugin handles is refused on the schematic too", schRefused.toast === "There is no plugin to handle this file type." && dialogs().length === 0, JSON.stringify(schRefused));
+
+    /** Drop a file with the drop action, set the dialog (the schematic's and the symbol editor's share it), press OK. */
+    const importSch = async (file, set = {}, { ok = true } = {}) => {
+      await E.run("eeschema.EditorControl.ddImportGraphics", file);
+      await waitFor(() => root());
+      await sleep(500);
+      const { placeAt = false, ...rest } = set;
+      field(placeAt ? "At" : "Interactive placement").click();
+      await sleep(30);
+      const want = { "Import scale": "1.0", "Default units": "mm", "Default line width": "0", "At X": "0", "At Y": "0", ...rest };
+      for (const [label, v] of Object.entries(want)) {
+        const el = field(label);
+        if (el) { setNative(el, v); await sleep(30); }
+      }
+      await sleep(400);
+      const info = root()?.querySelector('[aria-label="File contents"]')?.innerText ?? "";
+      if (ok) { button("OK").click(); await sleep(1500); }
+      return { info, sch: await sch() };
+    };
+    const newLines = (s) => s.lines.filter((l) => !sBase.lineIds.has(l.id));
+    const newGraphics = (s) => s.graphics.filter((g) => !sBase.graphicIds.has(g.id));
+    const span = (pts) => [Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1])), Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))];
+
+    let q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: true, "At X": "10", "At Y": "5" });
+    appliedSch++;
+    check("the file is described as in the board's dialog", /8 items: 4 lines, 4 arcs/.test(q.info), q.info);
+    let nl = newLines(q.sch), ng = newGraphics(q.sch);
+    check("OK adds the 4 outline lines as graphic lines and the 4 corners as arc shapes", nl.length === 4 && ng.length === 4 && ng.every((g) => g.shape.type === "arc"), `${nl.length} lines, ${ng.map((g) => g.shape.type)}`);
+    const [lx0, ly0, lx1, ly1] = span(nl.flatMap((l) => l.pts));
+    check("At 10, 5 mm: the outline spans x 10 to 50 mm and y -25 to 5 mm (the DXF's Y axis points up, the sheet's down)", lx0 === 10000 && lx1 === 50000 && ly0 === -25000 && ly1 === 5000, [lx0, ly0, lx1, ly1]);
+    check("no line width in the file or the dialog is the sheet's default width (0)", nl.every((l) => l.width_um === 0) && ng.every((g) => !g.width_um));
+    check("the dialog closed and the 8 new items are selected", dialogs().length === 0 && E.state().selection.length === 8, `${E.state().selection.length} selected, ${JSON.stringify(dialogs())}`);
+    await undoDomain("schematic");
+    appliedSch--;
+    let back2 = await sch();
+    check("ONE undo of the schematic takes the whole import back", back2.lines.length === sBase.lines && back2.graphics.length === sBase.graphics, `${back2.lines.length} lines, ${back2.graphics.length} graphics`);
+
+    // the scale, the default line width and a DXF with no unit in the dialog's unit
+    q = await importSch({ name: "box.dxf", text: rect2x1(null) }, { placeAt: true, "Import scale": "2", "Default line width": "0.15", "Default units": "mm" });
+    appliedSch++;
+    nl = newLines(q.sch);
+    const [bx0, , bx1] = span(nl.flatMap((l) => l.pts));
+    check("scale 2 doubles the 2 x 1 mm box and its default line width (0.15 becomes 0.3 mm)", nl.length === 4 && bx1 - bx0 === 4000 && nl.every((l) => l.width_um === 300), `${nl.length} lines, width ${bx1 - bx0}, widths ${nl.map((l) => l.width_um)}`);
+    await undoDomain("schematic");
+    appliedSch--;
+
+    // an SVG becomes polygons with the stroke's own width
+    q = await importSch({ name: "outline.svg", text: svgRect }, { placeAt: true });
+    appliedSch++;
+    ng = newGraphics(q.sch);
+    const poly2 = ng.find((g) => g.shape.type === "polygon");
+    const [px0, py0, px1, py1] = poly2 ? span(poly2.shape.pts.map((p) => [p.x, p.y])) : [0, 0, 0, 0];
+    check("an SVG's rounded rect is one polygon of its own stroke width (0.1 mm), 40 x 30 mm, y down as it has it", ng.length === 1 && !!poly2 && poly2.width_um === 100 && px0 === 0 && py0 === 0 && px1 === 40000 && py1 === 30000, JSON.stringify(ng.map((g) => [g.shape.type, g.width_um])));
+    await undoDomain("schematic");
+    appliedSch--;
+
+    // interactive placement: the drawing's origin at the cursor
+    const rect = canvas().getBoundingClientRect();
+    const v0 = E.state().view;
+    let cx = rect.left + rect.width * 0.4, cy = rect.top + rect.height * 0.4;
+    const worldOf = (x, y) => [(x - rect.left - v0.x) / v0.scale, (y - rect.top - v0.y) / v0.scale];
+    const nearHalf = (u) => Math.abs(((u / 1270) % 1 + 1) % 1 - 0.5) < 0.05;
+    while (nearHalf(worldOf(cx, cy)[0]) || nearHalf(worldOf(cx, cy)[1])) { cx += 7; cy += 5; }
+    fire("pointermove", cx, cy);
+    await sleep(200);
+    const [cwx, cwy] = worldOf(cx, cy);
+    const gx = Math.round(cwx / 1270) * 1270, gy = Math.round(cwy / 1270) * 1270;
+    q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: false });
+    appliedSch++;
+    nl = newLines(q.sch);
+    const [qx0, , , qy1] = span(nl.flatMap((l) => l.pts));
+    check("interactive placement: the drawing's origin is at the cursor's grid point", qx0 === gx && qy1 === gy, `got ${qx0}, ${qy1}; the cursor's grid point is ${gx}, ${gy}`);
+    check("and the Move tool carries the 8 new items", E.state().tool === "move" && E.state().selection.length === 8, JSON.stringify([E.state().tool, E.state().selection.length]));
+    key("Escape");
+    await sleep(1000);
+    const gone2 = await sch();
+    check("Escape takes the placement back, one undo step of the schematic", gone2.lines.length === sBase.lines && gone2.graphics.length === sBase.graphics && E.state().tool === "select", `${gone2.lines.length} lines, tool ${E.state().tool}`);
+    appliedSch--;
+
+    // refusals
+    const sNone = await importSch({ name: "dims.dxf", text: dxf(pair(0, "DIMENSION") + pair(8, "0")) }, { placeAt: true }, { ok: false });
+    button("OK").click();
+    await sleep(900);
+    check("a file with nothing to import is refused with the reason and the dialog stays", dialogs().includes("Import Graphics") && /No graphic items found in file\./.test(root().innerText), root()?.innerText.slice(0, 160));
+    setNative(field("Import scale"), "0");
+    await sleep(100);
+    button("OK").click();
+    await sleep(300);
+    check("a scale of zero is refused in the dialog's words", /scale/i.test(root()?.querySelector('[role="alert"]')?.textContent ?? ""));
+    button("Cancel").click();
+    await sleep(200);
+    void sNone;
+    const sEnd = await sch();
+    check("nothing is left on the sheet by all of this", sEnd.lines.length === sBase.lines && sEnd.graphics.length === sBase.graphics && sEnd.texts.length === sBase.texts);
+
+    // ============================================================================================================================ the Symbol Editor
+    await clickTab("Symbol");
+    const symActs = Object.fromEntries(E.actions({ all: true }).map((a) => [a.id, a]));
+    check("Import Graphics and its drop are wired in the Symbol Editor", symActs["eeschema.EditorControl.importGraphics"]?.enabled && symActs["eeschema.EditorControl.ddImportGraphics"]?.enabled);
+    const names0 = (await get("/api/symbol_editor/names")).names;
+    await E.run("eeschema.SymbolLibraryControl.newSymbol");
+    await sleep(800);
+    appliedSym++;
+    const libId = (await get("/api/symbol_editor/names")).names.find((n) => !names0.includes(n));
+    check("a new symbol is open to import into", !!libId, JSON.stringify((await get("/api/symbol_editor/names")).names));
+    const symbol = () => get(`/api/symbol?lib_id=${encodeURIComponent(libId)}`);
+    const sym0 = await symbol();
+    const symBase = new Set((sym0.graphics ?? []).map((g) => g.id));
+    const symNew = (s) => (s.graphics ?? []).filter((g) => !symBase.has(g.id));
+    const mEntry = await fromMenu("File", "Import Graphics");
+    check("the Symbol Editor's File > Import has Import Graphics... and it is enabled", !!mEntry && mEntry.getAttribute("aria-disabled") === "false", mEntry?.outerHTML?.slice(0, 120));
+    mEntry?.click();
+    await sleep(400);
+    check("it opens the same dialog", dialogs().includes("Import Graphics") && !!field("Interactive placement"));
+    button("Cancel")?.click();
+    await sleep(200);
+
+    q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: true, "At X": "10", "At Y": "5" });
+    appliedSym++;
+    let sg = symNew(await symbol());
+    const symLines = sg.filter((g) => g.kind === "polyline"), symArcs = sg.filter((g) => g.kind === "arc");
+    check("OK adds 4 polylines and 4 arcs to the open symbol", symLines.length === 4 && symArcs.length === 4 && sg.length === 8, JSON.stringify(sg.map((g) => g.kind)));
+    const symPts = symLines.flatMap((g) => g.pts.map((p) => [p.x, p.y]));
+    const [mx0, my0, mx1, my1] = span(symPts);
+    check("in millimetres with the library's Y axis up: x 10 to 50, y -5 to 25 for the outline (At 10, 5 on the drawing)", Math.abs(mx0 - 10) < 1e-9 && Math.abs(mx1 - 50) < 1e-9 && Math.abs(my0 + 5) < 1e-9 && Math.abs(my1 - 25) < 1e-9, [mx0, my0, mx1, my1]);
+    check("they are on the unit being edited, and selected", sg.every((g) => (g.unit ?? 1) === 1) && E.state().selection.length === 8, JSON.stringify([sg.map((g) => g.unit), E.state().selection.length]));
+    await undoDomain("symbol_editor");
+    appliedSym--;
+    check("ONE undo of the Symbol Editor takes the whole import back", symNew(await symbol()).length === 0);
+
+    q = await importSch({ name: "outline.svg", text: svgRect }, { placeAt: true });
+    appliedSym++;
+    sg = symNew(await symbol());
+    check("an SVG outline is a closed polyline of its stroke width", sg.length === 1 && sg[0].kind === "polyline" && Math.abs(sg[0].stroke_mm - 0.1) < 1e-9 && sg[0].pts.length > 20, JSON.stringify(sg.map((g) => [g.kind, g.stroke_mm, g.pts?.length])));
+    await undoDomain("symbol_editor");
+    appliedSym--;
+
+    const canvas2 = canvas().getBoundingClientRect();
+    fire("pointermove", canvas2.left + canvas2.width * 0.45, canvas2.top + canvas2.height * 0.45);
+    await sleep(200);
+    q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: false });
+    appliedSym++;
+    sg = symNew(await symbol());
+    const ipts = sg.filter((g) => g.kind === "polyline").flatMap((g) => g.pts.map((p) => [p.x, p.y]));
+    const [jx0] = span(ipts);
+    check("interactive placement: the drawing's origin is at the cursor's grid point (a multiple of 1.27 mm), and the items are selected", sg.length === 8 && Math.abs(jx0 / 1.27 - Math.round(jx0 / 1.27)) < 1e-6 && E.state().selection.length === 8, JSON.stringify([sg.length, jx0, E.state().selection.length]));
+    await undoDomain("symbol_editor");
+    appliedSym--;
+    await undoDomain("symbol_editor");
+    appliedSym--;
+    check("and with the new symbol taken back too, nothing is left of this", !(await get("/api/symbol_editor/names")).names.includes(libId));
+    await clickTab(firstTab === "schematic" ? "Schematic" : firstTab === "symbol" ? "Symbol" : "PCB");
   } catch (e) {
     check("the check ran to the end", false, e && e.stack ? e.stack : e);
   } finally {
@@ -261,6 +440,9 @@
     for (let guard = 0; guard < 6 && dialogs().length > 0; guard++) { (button("Cancel") ?? { click() {} }).click(); await sleep(150); }
     if (E.state().tool !== "select") { key("Escape"); await sleep(300); }
     if (applied > 0) await undo(applied);
+    for (let i = 0; i < appliedSch; i++) await post("/api/undo", { domain: "schematic" });
+    for (let i = 0; i < appliedSym; i++) await post("/api/undo", { domain: "symbol_editor" });
+    if (E.state().tab !== firstTab) { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === (firstTab === "schematic" ? "Schematic" : firstTab === "symbol" ? "Symbol" : "PCB"))?.click(); await sleep(800); }
     // The refusals this check provokes on purpose raise an error toast each; anything else is an error.
     const meant = [/There is no plugin to handle this file type\./, /No graphic items found in file\./];
     const now = E.errors().slice(errorsBefore).filter((x) => !/Unable to preventDefault/.test(x.message) && !meant.some((re) => re.test(x.message)));

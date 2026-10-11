@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DXF_UNITS, buildImportCmd, defaultImportValues, describeInfo, graphicsFormatOf, importLayers, parseLength } from "./importGraphics";
+import { DXF_UNITS, buildImportCmd, buildSchImportCmd, defaultImportValues, defaultSchImportValues, describeInfo, graphicsFormatOf, importLayers, parseLength } from "./importGraphics";
 
 const info = { ok: true, items: 8, counts: { line: 4, arc: 4 }, bbox_um: [0, -30_000, 40_000, 0] as [number, number, number, number], fits: true };
 
@@ -111,4 +111,63 @@ test("the file's contents are described the way the dialog says them", () => {
   assert.equal(describeInfo({ ok: true, items: 1, counts: { circle: 1 } }), "1 item: 1 circle");
   assert.equal(describeInfo({ ok: true, items: 0, counts: {} }), "No graphic items found in file.");
   assert.equal(describeInfo({ ok: false, message: "This is not a DXF file" }), "This is not a DXF file");
+});
+
+// -------------------------------------------------------------------------------------------------------------------- the schematic and the Symbol Editor
+
+function buildSch(over: Partial<ReturnType<typeof defaultSchImportValues>> = {}, extra: { editor?: "schematic" | "symbol"; format?: "dxf" | "svg"; symbol?: { libId: string; unit: number; bodyStyle: number } } = {}) {
+  return buildSchImportCmd({ editor: extra.editor ?? "schematic", format: extra.format ?? "dxf", text: "0\nEOF\n", values: { ...defaultSchImportValues(), ...over }, units: "mm", symbol: extra.symbol });
+}
+
+test("the schematic's dialog opens with scale 1, interactive placement and the sheet's default line width", () => {
+  const d = defaultSchImportValues();
+  assert.deepEqual([d.scale, d.lineWidth, d.placeAt, d.x, d.y], ["1.0", "0", false, "0", "0"]);
+  assert.equal(DXF_UNITS.find((u) => u.id === d.dxfUnits)?.label, "Millimeters");
+});
+
+test("the schematic's At sets the origin over the scale, as the board's dialog does", () => {
+  const r = buildSch({ placeAt: true, x: "10", y: "-5", scale: "2", lineWidth: "0.15" });
+  assert.ok(r.ok && !r.interactive);
+  if (!r.ok) return;
+  const cmd = r.build(null);
+  assert.equal(cmd.op, "import_sch_graphics");
+  assert.deepEqual([cmd.offset_x_nm, cmd.offset_y_nm, cmd.scale, cmd.line_width_um], [5_000_000, -2_500_000, 2, 150]);
+});
+
+test("interactive placement in the schematic puts the drawing's origin at the cursor", () => {
+  const r = buildSch();
+  assert.ok(r.ok && r.interactive);
+  if (!r.ok) return;
+  const cmd = r.build({ x: 50_000, y: -20_000 });
+  assert.deepEqual([cmd.op, cmd.offset_x_nm, cmd.offset_y_nm], ["import_sch_graphics", 50_000_000, -20_000_000]);
+});
+
+test("the Symbol Editor's command names the symbol, the unit and the body style", () => {
+  const r = buildSch({}, { editor: "symbol", symbol: { libId: "eda:Untitled", unit: 2, bodyStyle: 1 } });
+  assert.ok(r.ok);
+  if (!r.ok) return;
+  const cmd = r.build({ x: 1_270, y: 2_540 });
+  assert.equal(cmd.op, "import_symbol_graphics");
+  if (cmd.op !== "import_symbol_graphics") return;
+  assert.deepEqual([cmd.lib_id, cmd.unit, cmd.body_style, cmd.offset_x_nm, cmd.offset_y_nm], ["eda:Untitled", 2, 1, 1_270_000, 2_540_000]);
+  assert.ok(!buildSch({}, { editor: "symbol" }).ok, "with no symbol open there is nowhere to import");
+});
+
+test("the schematic's dialog refuses a bad scale, width or origin with a reason, and an SVG is not held to the DXF's width and unit", () => {
+  for (const [over, why] of [
+    [{ scale: "0" }, /scale/],
+    [{ scale: "x" }, /scale/],
+    [{ lineWidth: "wide" }, /line width/],
+    [{ lineWidth: "-1" }, /line width/],
+    [{ placeAt: true, x: "a" }, /placement/],
+  ] as const) {
+    const r = buildSch(over);
+    assert.ok(!r.ok && why.test(r.error), JSON.stringify(over));
+  }
+  const svg = buildSch({ lineWidth: "wide" }, { format: "svg" });
+  assert.ok(svg.ok);
+  if (svg.ok) {
+    const c = svg.build(null);
+    assert.deepEqual([c.dxf_units, c.line_width_um], ["", 0]);
+  }
 });

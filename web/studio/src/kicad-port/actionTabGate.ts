@@ -88,6 +88,9 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   "eeschema.InteractiveDrawing.drawRectangle",
   "eeschema.InteractiveDrawing.drawCircle",
   "eeschema.InteractiveDrawing.drawArc",
+  // `SCH_DRAWING_TOOLS::ImportGraphics` and `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics` are both `SCH_ACTIONS::importGraphics` (and its drop).
+  "eeschema.EditorControl.importGraphics",
+  "eeschema.EditorControl.ddImportGraphics",
 ]);
 
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {

@@ -37,6 +37,7 @@ import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { onCurrentSheet } from "../kicad-port/schSheetCmd";
+import { newIdsAfter } from "../kicad-port/schClipboard";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { DEFAULT_ROUTER_SETTINGS, type RouterSettings } from "../kicad-port/routerSettings";
@@ -1658,6 +1659,11 @@ export interface StudioApi {
    * `carry` off only selects them (a "Place at" import is where it was told). False when the command was refused or added nothing.
    */
   placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
+  /**
+   * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point), the items it added are selected,
+   * and with `carry` the Move tool is armed on them -- a click drops them, Escape takes them back (`revertCarriedPlacement`, which undoes the schematic's last step).
+   */
+  placeNewSchItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
   /**
@@ -1695,7 +1701,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
    * reverts it (`commit.Revert()`), so Escape leaves nothing behind. Here the duplicate or the paste is a step of its own, so a cancel undoes exactly that
    * step: this notes which one (the board's version right after it) while the new items are being carried.
    */
-  const carriedPlacementRef = useRef<{ version: string } | null>(null);
+  const carriedPlacementRef = useRef<{ version: string; editor?: "schematic" } | null>(null);
   useEffect(() => {
     if (state.activeTool !== "move") carriedPlacementRef.current = null;
   }, [state.activeTool]);
@@ -2180,7 +2186,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const token = carriedPlacementRef.current;
       carriedPlacementRef.current = null;
       if (!token || (await fetchVersion().catch(() => null)) !== token.version) return false;
-      const reply = await postUndo("pcb");
+      const reply = await postUndo(token.editor === "schematic" ? "schematic" : "pcb");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
       return reply.ok;
@@ -2330,6 +2336,28 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (carry) {
         const version = await fetchVersion().catch(() => null);
         carriedPlacementRef.current = version ? { version } : null;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at });
+      }
+      return true;
+    },
+    placeNewSchItems: async (build, carry) => {
+      const st = stateRef.current;
+      const sheet = st.currentSheetPath;
+      const before = st.schematic;
+      if (!before) return false;
+      const c = st.cursorUm;
+      const at = c ? { x: Math.round(c.x / 1270) * 1270, y: Math.round(c.y / 1270) * 1270 } : { x: 0, y: 0 };
+      const ok = await runCmd(build(at));
+      if (!ok) return false;
+      const after = await fetchSchematic(sheet).catch(() => null);
+      if (!after) return true;
+      const ids = newIdsAfter(before, after);
+      if (ids.length === 0) return true;
+      dispatch({ type: "SET_SELECTION", refs: ids });
+      if (carry) {
+        const version = await fetchVersion().catch(() => null);
+        carriedPlacementRef.current = version ? { version, editor: "schematic" } : null;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }

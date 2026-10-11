@@ -1,7 +1,7 @@
 // Import Graphics (`DIALOG_IMPORT_GRAPHICS`, pcbnew/import_gfx/dialog_import_graphics.cpp, and `DRAWING_TOOL::PlaceImportedGraphics`): what the dialog asks for, and the
 // `import_graphics` command it makes of the answers. Pure: no store, no DOM; unit-tested in importGraphics.test.ts. The reader of the file and the items it
 // becomes are the server's (`crates/kicad/src/{dxf_import,svg_import}.rs`, `crates/ops/src/import_graphics.rs`).
-import type { ImportGraphicsCmd, PointXY } from "../api/types";
+import type { ImportGraphicsCmd, ImportSchGraphicsCmd, ImportSymbolGraphicsCmd, PointXY } from "../api/types";
 import { umFrom, type LengthUnit } from "../state/units";
 
 /** A length typed in the dialog ("1.5", "0.2mm", "10mil", `0.01"`), in micrometres; a bare number is in the display units. Null when it is not a length. */
@@ -177,6 +177,87 @@ export function buildImportCmd(args: {
       const top = box ? box[1] : 0;
       const to = at ?? { x: 0, y: 0 };
       return { ...base, offset_x_nm: (to.x - left) * 1000, offset_y_nm: (to.y - top) * 1000 };
+    },
+  };
+}
+
+// -------------------------------------------------------------------------------------------------------------------- the schematic and the Symbol Editor
+
+/**
+ * What the Import Graphics dialog of the schematic editor and the Symbol Editor holds (`DIALOG_IMPORT_GFX_SCH`): the scale, the DXF's default line width and units, and where it goes --
+ * "Interactive placement" (`placeAt` off) or "At" X, Y. It has no layer, no group and no discontinuities to fix.
+ */
+export interface SchImportValues {
+  scale: string;
+  lineWidth: string;
+  dxfUnits: string;
+  placeAt: boolean;
+  x: string;
+  y: string;
+}
+
+/** The dialog as it opens (`DIALOG_IMPORT_GFX_SCH`): scale 1, interactive placement, the DXF width 0 (the sheet's default width) and millimetres. */
+export function defaultSchImportValues(): SchImportValues {
+  return { scale: "1.0", lineWidth: "0", dxfUnits: "mm", placeAt: false, x: "0", y: "0" };
+}
+
+export interface BuiltSchImport {
+  ok: true;
+  /** The command, for where the picture goes: `at` is where the cursor is (the placement is interactive when "At" is off). */
+  build: (at: PointXY | null) => ImportSchGraphicsCmd | ImportSymbolGraphicsCmd;
+  /** The command asks for a placement at the cursor. */
+  interactive: boolean;
+}
+
+/**
+ * The command the dialog makes (`DIALOG_IMPORT_GFX_SCH::TransferDataFromWindow`): the same arithmetic as the board's -- the origin typed in "At" is divided by the scale. The interactive
+ * placement of `SCH_DRAWING_TOOLS::ImportGraphics` moves the items by the cursor position (`delta = cursorPos`), so the drawing's own origin lands on the cursor.
+ */
+export function buildSchImportCmd(args: {
+  editor: "schematic" | "symbol";
+  format: GraphicsFormat;
+  text: string;
+  values: SchImportValues;
+  units: LengthUnit;
+  /** The symbol being edited and the unit and body style the new items are on (the Symbol Editor's). */
+  symbol?: { libId: string; unit: number; bodyStyle: number };
+}): BuiltSchImport | { ok: false; error: string } {
+  const v = args.values;
+  const scale = Number(v.scale.trim());
+  if (!(Number.isFinite(scale) && scale > 0)) return { ok: false, error: "The import scale must be a number greater than zero." };
+  let lineWidthUm = 0;
+  if (args.format === "dxf") {
+    const w = v.lineWidth.trim() === "" ? 0 : parseLength(v.lineWidth, args.units);
+    if (w == null || w < 0) return { ok: false, error: "The DXF default line width is not a length." };
+    lineWidthUm = w;
+  }
+  if (args.editor === "symbol" && !args.symbol) return { ok: false, error: "There is no symbol open to import into." };
+  let originUm: PointXY = { x: 0, y: 0 };
+  if (v.placeAt) {
+    const x = parseLength(v.x, args.units);
+    const y = parseLength(v.y, args.units);
+    if (x == null || y == null) return { ok: false, error: "The placement coordinates are not lengths." };
+    originUm = { x, y };
+  }
+  const make = (offsetXnm: number, offsetYnm: number): ImportSchGraphicsCmd | ImportSymbolGraphicsCmd => {
+    const base = { format: args.format, text: args.text, dxf_units: args.format === "dxf" ? v.dxfUnits : "", scale: r6(scale), offset_x_nm: offsetXnm, offset_y_nm: offsetYnm, line_width_um: lineWidthUm };
+    if (args.editor === "symbol") {
+      const sym = args.symbol!;
+      return { op: "import_symbol_graphics", lib_id: sym.libId, unit: sym.unit, body_style: sym.bodyStyle, ...base };
+    }
+    return { op: "import_sch_graphics", ...base };
+  };
+  if (v.placeAt) {
+    // The importer's offset, in nanometres: the typed origin over the scale (micrometres to nanometres is a thousand).
+    const cmd = make(Math.round((originUm.x * 1000) / scale), Math.round((originUm.y * 1000) / scale));
+    return { ok: true, interactive: false, build: () => cmd };
+  }
+  return {
+    ok: true,
+    interactive: true,
+    build: (at) => {
+      const to = at ?? { x: 0, y: 0 };
+      return make(Math.round(to.x * 1000), Math.round(to.y * 1000));
     },
   };
 }

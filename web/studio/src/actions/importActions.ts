@@ -25,4 +25,14 @@ export function registerImportActions(m: Map<string, ActionHandler>, ctx: { tab:
       openImportGraphics("pcb", file);
     });
   }
+  if (ctx.tab === "schematic" || ctx.tab === "symbol") {
+    // SCH_ACTIONS::importGraphics (the schematic's and the Symbol Editor's File > Import > Graphics...) and ddImportGraphics: DIALOG_IMPORT_GFX_SCH.
+    const editor = ctx.tab === "symbol" ? "symbol" : "schematic";
+    m.set("eeschema.EditorControl.importGraphics", () => openImportGraphics(editor));
+    m.set("eeschema.EditorControl.ddImportGraphics", (param) => {
+      const file = asPickedFile(param);
+      if (file && !graphicsFormatOf(file.name)) return ctx.dispatch({ type: "TOAST", message: "There is no plugin to handle this file type.", kind: "error" });
+      openImportGraphics(editor, file);
+    });
+  }
 }

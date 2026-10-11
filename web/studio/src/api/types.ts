@@ -975,6 +975,36 @@ export interface ImportGraphicsCmd {
   replace_outline?: boolean;
 }
 
+/**
+ * `SCH_DRAWING_TOOLS::ImportGraphics` (schematic) and `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics` (Symbol Editor): the same file as graphic lines, shapes and text of the sheet in
+ * view, or as drawn items of the symbol `lib_id` on `unit` / `body_style`, in one undo step. `offset_*_nm` is the importer's offset after the scale; `line_width_um` 0 is the sheet's
+ * default width. See crates/ops/src/import_graphics_sch.rs.
+ */
+export interface ImportSchGraphicsCmd {
+  op: "import_sch_graphics";
+  format: "dxf" | "svg";
+  text: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+}
+
+export interface ImportSymbolGraphicsCmd {
+  op: "import_symbol_graphics";
+  lib_id: string;
+  unit?: number;
+  body_style?: number;
+  format: "dxf" | "svg";
+  text: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+}
+
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
@@ -1131,6 +1161,8 @@ export type Cmd =
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
   | { op: "paste_clipboard"; text: string; at: PointXY }
   | ImportGraphicsCmd
+  | ImportSchGraphicsCmd
+  | ImportSymbolGraphicsCmd
   /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
   | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
