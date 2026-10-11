@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, routerSettingsToWire, UNSUPPORTED_ROUTER_OPTIONS, type RouterSettings } from "./routerSettings";
+import { DEFAULT_ROUTER_SETTINGS, modeOptionEnabled, routerSettingsToWire, UNSUPPORTED_ROUTER_OPTIONS, withTrackSnapping, type RouterSettings } from "./routerSettings";
 
 test("the defaults are ROUTING_SETTINGS' constructor", () => {
   // pns_routing_settings.cpp: m_routingMode = RM_Walkaround, m_optimizerEffort = OE_MEDIUM, m_removeLoops = true,
@@ -16,11 +16,12 @@ test("the defaults are ROUTING_SETTINGS' constructor", () => {
     allowDrcViolations: false,
     freeAngleMode: false,
     fixAllSegments: true,
+    smoothDragged: true,
   });
 });
 
 test("every setting goes to the backend under the name crates/cli/src/route_api.rs reads", () => {
-  const s: RouterSettings = { mode: "shove", optimizerEffort: "full", shoveVias: false, jumpOverObstacles: true, removeLoops: false, smartPads: false, allowDrcViolations: true, freeAngleMode: true, fixAllSegments: false };
+  const s: RouterSettings = { mode: "shove", optimizerEffort: "full", shoveVias: false, jumpOverObstacles: true, removeLoops: false, smartPads: false, allowDrcViolations: true, freeAngleMode: true, fixAllSegments: false, smoothDragged: false };
   assert.deepEqual(routerSettingsToWire(s), {
     mode: "shove",
     optimizer_effort: "full",
@@ -31,6 +32,7 @@ test("every setting goes to the backend under the name crates/cli/src/route_api.
     allow_drc_violations: true,
     free_angle_mode: true,
     fix_all_segments: false,
+    smooth_dragged_segments: false,
   });
   // The default settings are the backend's defaults, so a start request with nothing changed behaves as it always did.
   assert.deepEqual(routerSettingsToWire(DEFAULT_ROUTER_SETTINGS), {
@@ -43,6 +45,7 @@ test("every setting goes to the backend under the name crates/cli/src/route_api.
     allow_drc_violations: false,
     free_angle_mode: false,
     fix_all_segments: true,
+    smooth_dragged_segments: true,
   });
 });
 
@@ -61,4 +64,11 @@ test("onModeChange: free angle and DRC violations belong to Highlight collisions
 
 test("the rows the router cannot honour say why", () => {
   for (const reason of Object.values(UNSUPPORTED_ROUTER_OPTIONS)) assert.match(reason, /^Not implemented: /);
+});
+
+test("the magnetic setting for tracks goes to the router as snap_to_tracks, and only when it was given", () => {
+  assert.equal("snap_to_tracks" in routerSettingsToWire(DEFAULT_ROUTER_SETTINGS), false, "left out, the router's own default (on) stands");
+  assert.equal(routerSettingsToWire(withTrackSnapping(DEFAULT_ROUTER_SETTINGS, "track-tool")).snap_to_tracks, true);
+  assert.equal(routerSettingsToWire(withTrackSnapping(DEFAULT_ROUTER_SETTINGS, "always")).snap_to_tracks, true);
+  assert.equal(routerSettingsToWire(withTrackSnapping(DEFAULT_ROUTER_SETTINGS, "never")).snap_to_tracks, false);
 });

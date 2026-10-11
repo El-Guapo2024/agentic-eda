@@ -8,8 +8,8 @@
 // Edits `state.routerSettings` (kicad-port/routerSettings.ts), which `X`/`D` send with a new session and, on OK, this dialog
 // sends to the session that is running (`routeSetSettings`), so a change applies from the next move as upstream's does.
 //
-// Three rows of KiCad's have nothing behind them in this router -- "Smooth dragged segments", "Optimize entire track being
-// dragged" and "Use mouse path to set track posture" -- and are shown disabled, unchecked, with the reason in their tool tip
+// Two rows of KiCad's have nothing behind them in this router -- "Optimize entire track being dragged" and "Use mouse path to
+// set track posture" -- and are shown disabled, unchecked, with the reason in their tool tip
 // (kicad-port/routerSettings.ts `UNSUPPORTED_ROUTER_OPTIONS`), not left out and not shown doing nothing. The optimizer effort
 // is the one row this dialog has that KiCad's does not: KiCad keeps `OptimizerEffort` in the settings file only
 // (`tools.pns.effort`).
@@ -117,7 +117,12 @@ export function RouterSettingsDialog() {
               <legend>General Options</legend>
               <Check label="Remove redundant tracks" checked={s.removeLoops} onChange={(v) => set({ removeLoops: v })} title="If the new track has the same connection as an already existing track, the old track is removed." />
               <Check label="Optimize pad connections" checked={s.smartPads} onChange={(v) => set({ smartPads: v })} title="When enabled, the router tries to break out pads/vias in a clean way, avoiding acute angles and jagged breakout tracks." />
-              <Check label="Smooth dragged segments" checked={false} disabled title={`When enabled, the router attempts to merge several jagged segments into a single straight one (dragging mode).\n${UNSUPPORTED_ROUTER_OPTIONS.smoothDragged}`} />
+              <Check
+                label="Smooth dragged segments"
+                checked={s.smoothDragged}
+                onChange={(v) => set({ smoothDragged: v })}
+                title="When enabled, the router attempts to merge several jagged segments into a single straight one (dragging mode)."
+              />
               <Check
                 label="Optimize entire track being dragged"
                 checked={false}

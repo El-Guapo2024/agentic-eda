@@ -153,7 +153,7 @@ skipped when the corpus is absent):
 | `issue22749-shove-weird-drag-track-end` (a route from a track end, Shove) | 5 tracks pushed, 11 segments | the same **5** tracks; 4 of 11 within 3 um (the wrap around the head's diagonal is ~70 um further out in KiCad's), 0 new violations, also through the `RouteCommit` |
 | `issue23449` (lone via drag), `walk_drag_seg_against_board_edge`, `simple-drag-shove-singlelayer` (drags) | no violation recorded | replayed with this port's corner drag (KiCad slides the segment; D7): no panic, 0 new violations on every accepted preview. `video-v10` is a slow-tier test (about a minute in a debug build). |
 | a scratch copy of `work/mcu30` (133 tracks, 12 vias) driven through the studio's own `POST /api/route/{start,move,finish}` in Shove mode | -- | 60 random routes from track ends; 12 of them push something (up to 7 IR tracks and a via). The studio's `--strict` gates accepted 2 of the 12 and refused 10 (`routing_clearance` measured a pad by its bounding rectangle, so a track hugging a round pad's real outline at the clearance was "too close" -- **fixed 2026-10-08: the gate measures the exact outline now** (`eda_drc::board::placed_pad_copper`, `Shape::gap_to`), and on `mcu30`, `pic_programmer` and `backspace1` every pair it fails is a pair kicad-cli reports; also `routing_pass_through_pad`, `routing_over_refdes`, `routing_via_in_pad`, workmanship gates that are not clearance and are unchanged apart from `routing_via_in_pad` measuring the exact outline too). The same gates refuse the Walkaround route for one of the two moves compared, and a refused LED5 shove committed with `strict: false` has no clearance violation in **kicad-cli's** DRC. The 2 accepted commits were one undo step each (a line on 3 IR tracks became 1 track + 2 removals, no duplicated segment), `Undo` restored the board exactly, and kicad-cli reported no copper clearance violation; what it did report is `track_dangling` (the free-hand end I chose) and `copper_edge_clearance` on a shoved track pushed toward the board edge (**fixed 2026-10-08: the board outline is a router obstacle**, see "Known gaps" below). |
-| random routes from random pads (`simple`, `pic_programmer`, `backspace1`, `dp_test`) and random corner drags in Shove mode | -- | 0 new violations: 250 routes per board while writing it, 50 per board in the committed test; Shove never failed where Walkaround succeeded. Dragging a *via* was the exception: the dragged via itself was never shoved against, so a via dropped onto a track left a violation (6 of 200 random via drags on `simple`). **Fixed 2026-10-08 (D7):** `random_via_drags_never_leave_a_new_violation`, 60 drags per board and mode on `simple` and `pic_programmer`, Shove and Walk around, leaves none. |
+| random routes from random pads (`simple`, `pic_programmer`, `backspace1`, `dp_test`) and random corner drags in Shove mode | -- | 0 new violations: 250 routes per board while writing it, 50 per board in the committed test; Shove never failed where Walkaround succeeded. Dragging a *via* was the exception: the dragged via itself was never shoved against, so a via dropped onto a track left a violation (6 of 200 random via drags on `simple`). **Fixed 2026-10-08 (D7):** `random_via_drags_never_leave_a_new_violation`, 60 drags per board and mode on `simple` and `pic_programmer`, Shove and Walk around, leaves none. **P5a (2026-10-10):** `random_segment_and_corner_drags_never_leave_a_new_violation` drags 120 grabs per board and mode (half mid-segment, `DM_SEGMENT`; half at an end, `DM_CORNER`) through the stateful `Dragger::drag`: the position it shows is legal every time, with 0 new violations, and 3 to 33 of the 360 cursor positions per run fell back to the last valid one. |
 
 Fixtures that do not need the corpus: `tests/shove_scenarios.rs` (a track
 pushed past a pad row, a via pushed just far enough and between two tracks,
@@ -239,15 +239,28 @@ displacement; `Router` gained `drag_start`/`drag_preview`/`drag_cancel`/
 /api/route/drag_{start,move,finish}` endpoints (sharing `RouteCell` with
 the route session, since a `Router` is only ever doing one or the other).
 
+**Updated 2026-10-10 (P5a, D7): the segment slide, `dragCorner45`, `SHP_REVERSED` and the
+last-valid-point restore are ported** -- `Dragger::start_with` is `startDragSegment` (within half
+the track's width of an end: that corner; anywhere else: `DM_SEGMENT`, the whole segment), the line
+is `Line::drag_segment45` / `drag_corner45_snapped` (`pns_line.cpp`, checked against KiCad's own
+functions: 80 000 random lines agree point for point; `seg_ops.rs` has the `SEG` pieces), the
+snap thresholds are `SmoothDraggedSegments() ? width / 4 : 0` (`width / 2` in Shove), and
+`Dragger::drag` / `finish` are `DRAGGER::Drag` / `FixRoute` with their memory: a position the mode
+cannot resolve shows the last valid solution again, a release over it commits the last valid
+point, a failing first position makes the drag mark obstacles only and Ctrl+click commits it.
+The shove takes the dragged line out of its world first (`Shove::dragged_away`) and reverses its
+direction test for vertex 0. Replays of KiCad's `walk_drag_seg_against_board_edge` (the three
+segments it recorded) and `simple-drag-shove-singlelayer` (116 of 134, the same 139 tracks) are in
+`tests/qa_regressions.rs`. What the original scoping list below says about "corner drag only" and
+"free-angle" is superseded; what stays out: `OptimizeEntireDraggedTrack`, springback, arcs,
+virtual vias, locked tracks.
+
 Scoped down further than `shove`/`walkaround` already are (see
 `dragger.rs`'s own doc comment for the full reasoning):
-- **Corner drag only** -- grabbing a segment always drags its *nearer*
-  endpoint (`Node::item_at`'s shape hit-test finds the segment, then the
-  closer of its two assembled-line neighbours is what follows the
-  cursor). KiCad's segment-sideways-slide (`DM_SEGMENT`, grabbing a
-  segment's middle to slide the whole run sideways) isn't implemented.
-- **Free-angle corner relocation**, not KiCad's default 45-degree-
-  constrained `dragCorner45`.
+- ~~**Corner drag only**~~ **Fixed (2026-10-10)**: a grab in the middle of a segment slides it
+  (`DM_SEGMENT`); within half its width of an end it is that corner.
+- ~~**Free-angle corner relocation**~~ **Fixed (2026-10-10)**: `dragCorner45`; free angle only for
+  `G` (`dragCornerFree`).
 - ~~`Mode::Walkaround` while dragging behaves like `Mode::MarkObstacles`~~
   **Fixed (D7, 2026-10-08).** Walk around mode walks a dragged corner around
   what it lands on (`dragWalkaround`/`tryWalkaround`), and a dragged **via** is a
@@ -258,8 +271,29 @@ Scoped down further than `shove`/`walkaround` already are (see
   (`VIA::PushoutForce`, `ViaForcePropIterationLimit` steps, then the attached
   tracks walked around what they hit). A via that may not be shoved (`ShoveVias()`
   off, locked) or whose shove fails is dragged the Walk around way, as `dragShove`
-  falls back. The attached tracks are re-solved at 45 degrees (`DragCorner`), where a
-  corner drag is still free-angle.
+  falls back. The attached tracks are re-solved at 45 degrees (`DragCorner`).
+
+## Stage 5b -- routes that start and end in the middle of a track, Route From Other End
+
+**2026-10-10 (P5a, D7/D18).** `LINE_PLACER::SplitAdjacentSegments` is `Node::split_segment`
+(`segment_to_split` is its test: nothing is done where a joint already is or the point is not on the
+segment; the IR track's later segments are renumbered so it stays one track). `Router::start` takes a
+pad, a via, a track end or -- a point on a track's centre line -- the middle of a track, and cuts it in
+the *session's own copy* of the world (`Session::world`), so a cancelled session leaves the router's world
+whole; the commit gives the IR track a vertex there (`apply_splits`: the track out, itself with the point
+in, in the same `Cmd::CommitRoute`), and nothing is committed or cut if the route placed nothing
+(`CommitRouting`: `!HasPlacedAnything()`). A route ends on a same-net track (`LinePlacer::snap_end`,
+setting `snap_to_tracks`, the magnetic setting `checkSnap` hands the router, default on) that the
+cursor is exactly on, cut where it ends, and a head that runs along that track ends where it first
+meets it (`Move`: `Collinear` and `Overlaps`). The track a route started on is never where it ends.
+`SplitAdjacentArcs` is not ported: a track that is an arc (`arc_mid_offset`) is not split.
+
+`Router::continue_from_end` is `ROUTER::ContinueFromEnd` + `GetNearestRatnestAnchor`:
+`Node::nearest_unconnected_item` / `connected_joints` are `TOPOLOGY::NearestUnconnectedItem` /
+`ConnectedJoints`, run over a node that holds what the session has fixed and the head. It says where
+to restart and what to commit; `POST /api/route/continue_from_end` commits the fixed part, builds a
+fresh `Router` from the board and starts it there (the commits are one undo step: `APPEND_UNDO`,
+`board::append_to_previous_undo`).
 
 A real bug surfaced and fixed while wiring the via-drag commit path: a via
 displaced by a drag's own shove was being removed from the board but never
@@ -375,7 +409,7 @@ Remove redundant tracks, Optimize pad connections, Fix all segments on click
 `OptimizerEffort` in its settings file only. Smooth dragged segments, Optimize
 entire track being dragged and Use mouse path to set track posture have
 nothing behind them here and are shown disabled with the reason in their tool
-tip. `POST /api/route/{start,drag_start,dp_start}` take a `settings` object
+tip (**2026-10-10: Smooth dragged segments works now**, `smooth_dragged_segments`). `POST /api/route/{start,drag_start,dp_start}` take a `settings` object
 (`route_api.rs` `settings_of`: those switches and `shove_iteration_limit`,
 `walkaround_iteration_limit`, `via_force_prop_iteration_limit`,
 `walkaround_hug_length_threshold`, which KiCad has no row for); `mode` and

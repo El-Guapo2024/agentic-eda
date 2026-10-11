@@ -394,19 +394,3 @@ export function routeStartLayer(anchor: Pick<RouteAnchor, "th" | "side">, layers
   if (active && layers.includes(active) && (anchor.th || active === sideLayer)) return active;
   return sideLayer ?? layers[0] ?? "F.Cu";
 }
-
-/**
- * `PCB_ACTIONS::routerContinueFromEnd` for a route that has not fixed
- * anything yet (`HasPlacedAnything() == false`): the route's own start
- * moves to the far end of the ratsnest line that began at the current
- * start. Returns that far end, or null if the start is not on a ratsnest
- * line (source: `ContinueFromEnd` fails, "Route From Other End" error).
- */
-export function otherEndOfStart(start: readonly [number, number], net: string, edges: readonly UnconnectedEdge[]): [number, number] | null {
-  for (const e of edges) {
-    if (e.net !== net) continue;
-    if (e.from[0] === start[0] && e.from[1] === start[1]) return [e.to[0], e.to[1]];
-    if (e.to[0] === start[0] && e.to[1] === start[1]) return [e.from[0], e.from[1]];
-  }
-  return null;
-}

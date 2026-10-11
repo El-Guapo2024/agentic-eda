@@ -39,6 +39,7 @@ import { paintSnapOverlay } from "./snapOverlayPainter";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { useGridSettings } from "../../state/gridSettings";
 import { toPcbMagnetic } from "../../kicad-port/preferences";
+import { withTrackSnapping } from "../../kicad-port/routerSettings";
 import { heldCursor } from "../../kicad-port/heldCursor";
 import { findRouteAnchor, constrainByAngleMode, startInteractiveRoute, fixInteractiveRoute, finishInteractiveRoute } from "./routing";
 import { clearRouteQueue } from "./routeQueue";
@@ -66,7 +67,7 @@ import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
-import { connectedTrackWidth, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
+import { connectedTrackWidth, trackUnder, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
 import { DRC_MARKER_HIT_UM, nearestMarker } from "../../kicad-port/markerHit";
 import { canExclude, rcMenu } from "../../kicad-port/rcItems";
@@ -449,7 +450,9 @@ export function Canvas() {
     const draw = state.drawState;
     if (tool === "route" || tool === "diffpair" || tool === "drag") {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started });
+      // what the cursor does not snap onto: the line a drag is dragging (`checkSnap`), the item a route started on (`pickSingleItem( .., { m_startItem } )`)
+      const skip = draw?.kind === "drag" && draw.lineTracks?.length ? new Set(draw.lineTracks) : draw?.kind === "route" && draw.startItem ? new Set([draw.startItem]) : undefined;
+      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};
@@ -699,10 +702,12 @@ export function Canvas() {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           // pcbnew.EditorControl.trackWidthInc/Dec's current pick (useActionRunner.ts) -- same fallback as the via preset above.
           // `autoTrackWidth`: starting from an existing track's end, that track's width wins over the current one.
-          const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM)?.from, board.routing?.tracks ?? []) : null;
+          // (a route can start in the middle of a track too: that track's width then)
+          const under = state.bcx.autoTrackWidth ? trackUnder(board.routing?.tracks ?? [], sx, sy, layer) : null;
+          const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
           const width = connected ?? state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
-          void startInteractiveRoute(sx, sy, layer, width, state.routerSettings, dispatch);
+          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked());
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);
@@ -732,7 +737,7 @@ export function Canvas() {
       // commits it -- see dragging.ts's own doc on why that's always a
       // finish, never a "fix this leg and keep going".
       if (state.activeTool === "drag") {
-        if (state.drawState?.kind === "drag") void finishInlineDrag(sx, sy, dispatch, api);
+        if (state.drawState?.kind === "drag") void finishInlineDrag(sx, sy, dispatch, api, snapMods(e).ctrl);
         else dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
         return;
       }

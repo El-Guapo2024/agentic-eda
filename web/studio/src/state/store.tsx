@@ -242,6 +242,8 @@ export type DrawState =
        * continues on `pendingViaLayer`. */
       placingVia?: boolean;
       pendingViaLayer?: string;
+      /** The pad, via or track segment the route started on: it does not end there (see kicad-port/routeTool.ts). */
+      startItem?: string;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -252,7 +254,7 @@ export type DrawState =
    * manually kept in sync, same convention as the "route" variant above). */
   | {
       kind: "drag";
-      dragKind: "corner" | "via";
+      dragKind: "corner" | "segment" | "via";
       net: string | null;
       layer: string;
       width: Um;
@@ -262,6 +264,12 @@ export type DrawState =
        * `DragPreview`'s own doc comment. */
       pts: [Um, Um][];
       colliding?: boolean;
+      /** The tracks of the line being dragged: the cursor does not snap onto them (`checkSnap`; see kicad-port/dragTool.ts). */
+      lineTracks?: string[];
+      /** The cursor is where the drag cannot be resolved: `pts` is the last position that could be (see kicad-port/dragTool.ts). */
+      restored?: boolean;
+      /** The first position failed, so the drag only marks obstacles; Ctrl+click commits a violation. */
+      forcedMark?: boolean;
       /** `shove` mode only: other tracks/vias this drag would push aside. */
       displaced?: { layer: string; pts: [Um, Um][] }[];
       displacedVias?: { source_via: string; x: Um; y: Um }[];

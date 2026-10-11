@@ -503,6 +503,11 @@ export function routeCancel(): Promise<{ ok: boolean }> {
   return postJson("/api/route/cancel", {});
 }
 
+/** Route From Other End (`ROUTER::ContinueFromEnd`, Ctrl+E): what the route has fixed is committed and a new route starts at the far end of the connection, heading for where this one's head ended. The reply is the new route's preview, with `committed` and `from`. */
+export function routeContinueFromEnd(x: Um, y: Um): Promise<RoutePreview> {
+  return postJson("/api/route/continue_from_end", { x: Math.round(x), y: Math.round(y) });
+}
+
 /** `POST /api/convert/polys` (crates/ops/src/convert.rs): the polygons `CONVERT_TOOL::CreatePolys` builds from `ids` with a strategy, and the ids that contributed. */
 export interface ConvertPolysReply {
   ok: boolean;
@@ -539,8 +544,9 @@ export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
   return postJson("/api/route/drag_move", { x: Math.round(x), y: Math.round(y) });
 }
 
-export function routeDragFinish(x: Um, y: Um): Promise<CmdReply> {
-  return postJson("/api/route/drag_finish", { x: Math.round(x), y: Math.round(y) });
+/** `forceCommit` is Ctrl+click (`DRAGGER::FixRoute( aForceCommit )`): a drag that only marks obstacles commits its violation. A position the drag cannot resolve commits the last one it could. */
+export function routeDragFinish(x: Um, y: Um, forceCommit?: boolean): Promise<CmdReply> {
+  return postJson("/api/route/drag_finish", { x: Math.round(x), y: Math.round(y), force_commit: forceCommit ? true : undefined });
 }
 
 // `6`: route a differential pair (gap #7 task item 6) -- wired into

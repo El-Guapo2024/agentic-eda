@@ -95,6 +95,14 @@ impl Direction45 {
         }
     }
 
+    /// `DIRECTION_45::Left()`: rotate by -1 octant (45 degrees the other way from [`Self::right`]).
+    pub fn left(&self) -> Self {
+        match self.index() {
+            None => *self,
+            Some(i) => OCTANTS[((i + 7) % 8) as usize],
+        }
+    }
+
     /// Unit step for this direction, `x`/`y` each in `{-1,0,1}`.
     pub fn unit(&self) -> (i64, i64) {
         match self {
@@ -186,6 +194,16 @@ mod tests {
     fn right_rotates_one_octant_and_wraps() {
         assert_eq!(Direction45::N.right(), Direction45::NE);
         assert_eq!(Direction45::NW.right(), Direction45::N);
+    }
+
+    #[test]
+    fn left_is_the_other_way_round_and_undefined_stays_undefined() {
+        assert_eq!(Direction45::N.left(), Direction45::NW);
+        assert_eq!(Direction45::E.left(), Direction45::NE);
+        for d in [Direction45::N, Direction45::SE, Direction45::W] {
+            assert_eq!(d.left().right(), d);
+        }
+        assert_eq!(Direction45::Undefined.left(), Direction45::Undefined);
     }
 
     #[test]

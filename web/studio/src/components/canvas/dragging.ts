@@ -26,8 +26,7 @@ export interface DraggableHit {
  * approximated client-side: whatever track or via is directly under
  * `(xUm, yUm)` (reusing the exact same hit-test the click-to-select tool
  * uses, restricted to the two kinds `crate::pns::dragger::Dragger` can
- * actually drag -- see that module's own doc comment on why footprints
- * and segment-sideways-slide aren't in scope), falling back to a single
+ * actually drag -- a footprint is not in scope), falling back to a single
  * already-selected track/via if nothing is directly under the cursor
  * (source's other branch: drag the existing selection when there is
  * exactly one draggable item in it). `null` either way means "nothing to
@@ -75,22 +74,31 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
   }
   const track = hit.kind === "track" ? board.routing?.tracks.find((t) => t.id === hit.id) : undefined;
   const via = hit.kind === "via" ? board.routing?.vias.find((v) => v.id === hit.id) : undefined;
+  // `DRAGGER::Start` decides: the middle of a segment slides it (`DM_SEGMENT`), within half its width of an end it is that corner
   const draw: DragDrawState = {
     kind: "drag",
-    dragKind: hit.kind === "via" ? "via" : "corner",
+    dragKind: preview.drag ?? (hit.kind === "via" ? "via" : "corner"),
     net: track?.net ?? via?.net ?? null,
     layer: track?.layer ?? hit.layer,
     width: track?.width ?? 0,
     viaDiameter: via?.d,
+    lineTracks: preview.line_tracks ?? [],
     pts: preview.pts,
     colliding: preview.colliding,
+    restored: preview.restored ?? false,
+    forcedMark: preview.forced_mark_obstacles ?? false,
     displaced: preview.displaced,
     displacedVias: preview.displaced_vias,
     fanout: preview.fanout,
   };
   dispatch({ type: "SET_DRAW_STATE", draw });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
+  // `InlineDrag`: a drag whose first position is already a violation only marks obstacles from then on
+  if (draw.forcedMark && draw.colliding) dispatch({ type: "TOAST", message: DRAG_VIOLATION_HINT, kind: "info" });
 }
+
+/** `ROUTER_STATUS_VIEW_ITEM`'s message while a drag only marks obstacles and the position violates DRC (router_tool.cpp `InlineDrag`). */
+export const DRAG_VIOLATION_HINT = "Track violates DRC. (Ctrl+click to commit anyway.)";
 
 /** A click while dragging: commit at `(x, y)` -- a drag has no multi-leg
  * concept the way a route does, so (unlike `fixInteractiveRoute`) this is
@@ -98,9 +106,12 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
  * the board so the moved item shows up without waiting for the next
  * version poll, same as `finishInteractiveRoute`, and always returns the
  * tool to Select (KiCad's own `InlineDrag` is a one-shot action, not a
- * persistently-armed tool the way the route tool's `X` is). */
-export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">): Promise<void> {
-  const reply = await routeDragFinish(x, y);
+ * persistently-armed tool the way the route tool's `X` is). A click where the
+ * drag cannot be resolved commits the last position that could be
+ * (`DRAGGER::FixRoute`); `forceCommit` (Ctrl+click) commits the violation of a
+ * drag that only marks obstacles. */
+export async function finishInlineDrag(x: number, y: number, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">, forceCommit = false): Promise<void> {
+  const reply = await routeDragFinish(x, y, forceCommit);
   if (!reply.ok) dispatch({ type: "TOAST", message: reply.message || "Can't drop it there -- still colliding.", kind: "error" });
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });

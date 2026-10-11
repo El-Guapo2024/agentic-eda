@@ -21,7 +21,10 @@
 //   mouse move     -> live preview (shove/mark-obstacles already resolved
 //                     server-side, same as the route tool)
 //   click          -> fix the drag at the cursor (one commit -- a drag has
-//                     no multi-leg concept the way a route does)
+//                     no multi-leg concept the way a route does); over a position
+//                     the drag cannot be resolved the last valid one is committed
+//                     (`DRAGGER::FixRoute`), and Ctrl+click commits a violation of
+//                     a drag that only marks obstacles
 //   Esc            -> cancel, nothing committed
 import type { DragPreview } from "../api/types";
 
@@ -31,11 +34,12 @@ import type { DragPreview } from "../api/types";
  * shape; keep this in sync with it by hand. */
 export interface DragDrawState {
   kind: "drag";
-  /** `"corner"`: `pts` is the whole stretched line, one end following the
-   * cursor (`Dragger::candidate`'s `Corner` branch). `"via"`: `pts` is just
-   * the via's own live position (one point) -- its attached tracks' live
-   * shape is `fanout`, not `pts`. */
-  dragKind: "corner" | "via";
+  /** `"corner"`: `pts` is the whole stretched line, one vertex following the
+   * cursor (`DM_CORNER`). `"segment"`: `pts` is the whole line with one segment
+   * slid sideways and its neighbours turned or stretched to follow (`DM_SEGMENT`).
+   * `"via"`: `pts` is just the via's own live position (one point) -- its attached
+   * tracks' live shape is `fanout`, not `pts`. */
+  dragKind: "corner" | "segment" | "via";
   /** Not echoed by `DragPreview` -- captured once from the board at
    * `drag_start` and kept across every subsequent preview, same as
    * `RouteDrawState.net`. */
@@ -50,6 +54,12 @@ export interface DragDrawState {
   colliding?: boolean;
   displaced?: { layer: string; pts: [number, number][] }[];
   displacedVias?: { source_via: string; x: number; y: number }[];
+  /** The board ids of the tracks of the line being dragged (`DRAGGER::GetOriginalLine`): the cursor does not snap onto them (`TOOL_BASE::checkSnap`). Captured at `drag_start`. */
+  lineTracks?: string[];
+  /** The cursor is where the drag cannot be resolved: `pts` is the last position that could be, and a click commits that one (`DRAGGER::Drag`, "Restore last solution"). */
+  restored?: boolean;
+  /** The first position failed, so the drag only marks obstacles; a violation is committed with Ctrl+click (`GetForceMarkObstaclesMode`). */
+  forcedMark?: boolean;
   /** Via drag only: the via's own directly-attached tracks, already
    * stretched to follow it live -- see `DragPreview.fanout`'s own doc. */
   fanout?: { layer: string; width: number; pts: [number, number][] }[];
@@ -64,6 +74,8 @@ export function dragStateFromPreview(current: DragDrawState, preview: DragPrevie
     ...current,
     pts: preview.pts,
     colliding: preview.colliding,
+    restored: preview.restored ?? false,
+    forcedMark: preview.forced_mark_obstacles ?? false,
     displaced: preview.displaced,
     displacedVias: preview.displaced_vias,
     fanout: preview.fanout,

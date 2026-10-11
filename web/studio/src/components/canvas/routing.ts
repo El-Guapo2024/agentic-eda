@@ -12,7 +12,7 @@
 // own, much simpler, single-segment preview.
 import type { BoardState } from "../../api/types";
 import type { RouterSettings } from "../../kicad-port/routerSettings";
-import { routeCancel, routeFinish, routeFix, routeStart } from "../../api/client";
+import { routeCancel, routeContinueFromEnd, routeFinish, routeFix, routeStart } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { drawStateFromPreview, type RouteDrawState } from "../../kicad-port/routeTool";
@@ -28,13 +28,13 @@ import { advanceRouteQueue } from "./routeQueue";
  * RouterSettingsDialog.tsx) -- read fresh at the start of every session,
  * same as every other "current pick" this app's route/via tools read
  * (track width, via preset). */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: RouterSettings, dispatch: Dispatch<Action>): Promise<boolean> {
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return false;
   }
-  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias };
+  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined };
   dispatch({ type: "SET_DRAW_STATE", draw });
   return true;
 }
@@ -73,6 +73,23 @@ export async function finishInteractiveRoute(x: number, y: number, dispatch: Dis
   await api.refresh();
   // RouteSelected's loop: the next queued connection starts once this one is done.
   await advanceRouteQueue();
+}
+
+/**
+ * Ctrl+E, Route From Other End (`ROUTER_TOOL::routerContinueFromEnd` -> `ROUTER::ContinueFromEnd`), before or after the first fix:
+ * what the route has fixed is committed (one undo step, nothing at all if nothing was fixed), a new route starts at the far end
+ * of the connection and heads for where this one's head ended. `at` is that end -- the head's last point. A refusal ("nothing is
+ * left to connect to") toasts and leaves the route as it was.
+ */
+export async function continueInteractiveRouteFromEnd(at: [number, number], draw: RouteDrawState, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">): Promise<void> {
+  const reply = await routeContinueFromEnd(at[0], at[1]);
+  if (!reply.ok) {
+    dispatch({ type: "TOAST", message: reply.message ?? "Route From Other End failed.", kind: "error" });
+    return;
+  }
+  if (reply.committed) await api.refresh();
+  // the new route starts at the far end: whatever the old one started on is no longer what it must not end on
+  dispatch({ type: "SET_DRAW_STATE", draw: { ...drawStateFromPreview(draw, reply), placingVia: false, pendingViaLayer: undefined, startItem: undefined } });
 }
 
 /** Esc while routing (or dragging -- `routeCancel`'s own doc comment:

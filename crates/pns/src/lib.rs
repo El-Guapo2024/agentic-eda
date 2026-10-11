@@ -40,6 +40,7 @@ pub mod meander;
 pub mod node;
 pub mod optimizer;
 pub mod router;
+pub mod seg_ops;
 pub mod settings;
 pub mod shove;
 pub mod line_walk;
