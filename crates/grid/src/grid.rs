@@ -508,6 +508,7 @@ impl Grid {
                     through_hole: false,
                     shape: eda_model::footprint::PadShape::Rect,
                     roundrect_ratio: None,
+                    pieces: Vec::new(),
                 };
                 self.pads_exact.push((net_id, layer, pad.clone()));
                 self.stamp_pad_exact(net_id, layer, &pad);

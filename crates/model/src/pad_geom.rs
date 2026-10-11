@@ -52,6 +52,41 @@ impl PadPiece {
         (x0 - r, y0 - r, x1 + r, y1 + r)
     }
 
+    /// The signed distance from `p` to the piece: negative inside it, the gap to its edge outside.
+    pub fn signed_distance(&self, p: P) -> f64 {
+        let dist = |a: P, b: P| {
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let len2 = dx * dx + dy * dy;
+            let t = if len2 == 0.0 { 0.0 } else { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0) };
+            (p.0 - (a.0 + t * dx)).hypot(p.1 - (a.1 + t * dy))
+        };
+        match self {
+            PadPiece::Circle { c, r } => (p.0 - c.0).hypot(p.1 - c.1) - r,
+            PadPiece::Stadium { a, b, r } => dist(*a, *b) - r,
+            PadPiece::Strokes { pts, r } => pts.windows(2).map(|w| dist(w[0], w[1])).fold(f64::INFINITY, f64::min) - r,
+            PadPiece::Polygon(pts) => {
+                let n = pts.len();
+                if n < 3 {
+                    return f64::INFINITY;
+                }
+                let edge = (0..n).map(|i| dist(pts[i], pts[(i + 1) % n])).fold(f64::INFINITY, f64::min);
+                // Even-odd ray cast to the right.
+                let mut inside = false;
+                for i in 0..n {
+                    let (a, b) = (pts[i], pts[(i + 1) % n]);
+                    if (a.1 > p.1) != (b.1 > p.1) && p.0 < a.0 + (p.1 - a.1) / (b.1 - a.1) * (b.0 - a.0) {
+                        inside = !inside;
+                    }
+                }
+                if inside {
+                    -edge
+                } else {
+                    edge
+                }
+            }
+        }
+    }
+
     /// The same piece with every point passed through `f`.
     pub fn map(&self, f: &dyn Fn(P) -> P) -> PadPiece {
         match self {
@@ -515,6 +550,44 @@ mod tests {
         assert!(pts.iter().all(|p| ((p.0 + 2975.0).hypot(p.1) - 2600.0).abs() < 1e-6));
         let disc = Shape::Circle { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, center: Point { x: 0, y: 0 }, end: Point { x: 500, y: 0 } };
         assert_eq!(primitive_pieces(&disc, (10.0, 0.0), 5.0), vec![PadPiece::Circle { c: (10.0, 0.0), r: 500.0 }]);
+    }
+
+    #[test]
+    fn a_placed_custom_pad_is_measured_to_its_copper_and_boxed_by_it() {
+        use crate::footprint::{placed_pads, Footprint};
+        use crate::ir::{LabelSide, Side};
+        use crate::{ConstraintModel, Part, Pin, PinKind};
+        // A 0.6 mm round anchor and a 0.2 mm line from it 2 mm to the right: the copper reaches x = 2100.
+        let mut p = pad(PadShape::Custom, (600, 600));
+        p.ext.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 2000, y: 0 } }, proxy: false }] });
+        let footprint = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None };
+        let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("C".into()), footprint: Some("C".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
+        let model = ConstraintModel { parts: vec![part.clone()], footprints: vec![footprint], ..Default::default() };
+        let at = |rot, side| FootprintInstance { id: "J1".into(), at: Point { x: 10_000, y: 5_000 }, rot, side, label: LabelSide::Above };
+        // Unturned: the box about the pad's position holds the arm (2.1 mm to the right, so 4.2 mm wide) and the anchor (0.6 mm high).
+        let placed = &placed_pads(&model, &part, &at(0, Side::Top)).unwrap()[0];
+        assert_eq!(placed.size, (4_200, 600));
+        assert!(placed.signed_distance(Point { x: 11_500, y: 5_000 }) < 0.0, "inside the arm");
+        assert!((placed.signed_distance(Point { x: 11_500, y: 5_400 }) - 300.0).abs() < 1e-6, "300 um beside the arm's edge (it is 100 um out of the axis)");
+        assert!((placed.signed_distance(Point { x: 12_400, y: 5_000 }) - 300.0).abs() < 1e-6, "beyond the arm's end");
+        // Turned a quarter clockwise on the screen the arm points down, on the bottom side it is mirrored to the left.
+        let down = &placed_pads(&model, &part, &at(90_000, Side::Top)).unwrap()[0];
+        assert_eq!(down.size, (600, 4_200));
+        assert!(down.signed_distance(Point { x: 10_000, y: 6_500 }) < 0.0);
+        let mirrored = &placed_pads(&model, &part, &at(0, Side::Bottom)).unwrap()[0];
+        assert!(mirrored.signed_distance(Point { x: 8_500, y: 5_000 }) < 0.0 && mirrored.signed_distance(Point { x: 11_500, y: 5_000 }) > 0.0);
+        // A plain pad has no pieces and measures as before.
+        assert!(placed_pads(&ConstraintModel { footprints: vec![Footprint { name: "C".into(), pads: vec![pad(PadShape::Rect, (600, 600))], courtyard: None, courtyard_outlines: vec![], model: None }], ..model.clone() }, &part, &at(0, Side::Top)).unwrap()[0].pieces.is_empty());
+    }
+
+    #[test]
+    fn the_footprints_pad_box_holds_a_custom_pads_shapes() {
+        use crate::footprint::Footprint;
+        let mut p = pad(PadShape::Custom, (600, 600));
+        p.ext.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 0, y: -3000 } }, proxy: false }] });
+        p.at = (1_000, 0);
+        let fp = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None };
+        assert_eq!(fp.pad_bbox(), (700, -3_100, 1_300, 300));
     }
 
     #[test]

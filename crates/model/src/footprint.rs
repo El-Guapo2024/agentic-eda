@@ -36,6 +36,10 @@ pub struct PlacedPad {
     /// Corner ratio for `PadShape::RoundRect`; `None` = KiCad's own
     /// default (0.25).
     pub roundrect_ratio: Option<f64>,
+    /// The pad's copper in board space when `shape` and `size` do not give it -- a trapezoid, a chamfered rectangle, a custom pad, a
+    /// pad whose copper is off its position ([`crate::pad_geom::pad_pieces`]); empty for the rest. [`PlacedPad::signed_distance`]
+    /// measures to it, so a connection and a clearance see the real copper and not the box round it.
+    pub pieces: Vec<crate::pad_geom::PadPiece>,
 }
 
 impl PlacedPad {
@@ -57,6 +61,9 @@ impl PlacedPad {
     /// Exact for rect/roundrect/circle; ovals use the inscribed ellipse
     /// scaled by the shorter radius (conservative).
     pub fn signed_distance(&self, p: Point) -> f64 {
+        if !self.pieces.is_empty() {
+            return self.pieces.iter().map(|q| q.signed_distance((p.x as f64, p.y as f64))).fold(f64::INFINITY, f64::min);
+        }
         let (hw, hh) = (self.size.0 as f64 / 2.0, self.size.1 as f64 / 2.0);
         let (dx, dy) = ((p.x - self.center.x) as f64, (p.y - self.center.y) as f64);
         if self.is_round() {
@@ -154,6 +161,7 @@ pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance)
             through_hole: p.kind != PadKind::Smd,
             shape: p.shape,
             roundrect_ratio: p.roundrect_ratio,
+            pieces: placed_pieces(fp, p),
         })
         .collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
@@ -164,15 +172,24 @@ pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance)
 /// chamfered rectangle, a custom pad and a pad whose copper is off its position are measured by their true outline
 /// ([`crate::pad_geom::pad_pieces`]), so the box the placer and the grid router keep clear always holds the copper.
 fn placed_extent(fp: &FootprintInstance, p: &Pad) -> (Um, Um) {
-    if !(p.has_complex_outline() || p.ext.offset.is_some()) {
+    let pieces = placed_pieces(fp, p);
+    if pieces.is_empty() {
         return rotated_extent_by(fp.rot as i64 + p.rot as i64, p.size);
     }
     let centre = to_board(fp, p.at);
-    let frame = crate::pad_geom::PadFrame::of(fp, p, centre);
-    let pieces: Vec<_> = crate::pad_geom::pad_pieces(p).iter().map(|q| q.map(&|v| frame.to_board(v))).collect();
     let Some((x0, y0, x1, y1)) = crate::pad_geom::pieces_bbox(&pieces) else { return rotated_extent_by(fp.rot as i64 + p.rot as i64, p.size) };
     let (cx, cy) = (centre.x as f64, centre.y as f64);
     (2 * (x1 - cx).max(cx - x0).ceil() as Um, 2 * (y1 - cy).max(cy - y0).ceil() as Um)
+}
+
+/// The copper of pad `p` of `fp` in board space as pieces ([`crate::pad_geom::pad_pieces`]) when its shape and size do not give it (a
+/// trapezoid, a chamfered rectangle, a custom pad, copper off the pad's position); empty for the rest.
+pub fn placed_pieces(fp: &FootprintInstance, p: &Pad) -> Vec<crate::pad_geom::PadPiece> {
+    if !(p.has_complex_outline() || p.ext.offset.is_some()) {
+        return Vec::new();
+    }
+    let frame = crate::pad_geom::PadFrame::of(fp, p, to_board(fp, p.at));
+    crate::pad_geom::pad_pieces(p).iter().map(|q| q.map(&|v| frame.to_board(v))).collect()
 }
 
 /// Board-space courtyard rectangle `(min_x, min_y, max_x, max_y)` of `fp`.
@@ -560,10 +577,17 @@ impl Footprint {
     pub fn pad_bbox(&self) -> (Um, Um, Um, Um) {
         let mut b = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
         for p in &self.pads {
-            b.0 = b.0.min(p.at.0 - p.size.0 / 2);
-            b.1 = b.1.min(p.at.1 - p.size.1 / 2);
-            b.2 = b.2.max(p.at.0 + p.size.0 / 2);
-            b.3 = b.3.max(p.at.1 + p.size.1 / 2);
+            // A trapezoid, a custom pad or copper off the pad's position reaches where its outline does, not where its size says.
+            let (x0, y0, x1, y1) = if p.has_complex_outline() || p.ext.offset.is_some() {
+                let (x0, y0, x1, y1) = p.local_bbox();
+                (p.at.0 + x0.floor() as Um, p.at.1 + y0.floor() as Um, p.at.0 + x1.ceil() as Um, p.at.1 + y1.ceil() as Um)
+            } else {
+                (p.at.0 - p.size.0 / 2, p.at.1 - p.size.1 / 2, p.at.0 + p.size.0 / 2, p.at.1 + p.size.1 / 2)
+            };
+            b.0 = b.0.min(x0);
+            b.1 = b.1.min(y0);
+            b.2 = b.2.max(x1);
+            b.3 = b.3.max(y1);
         }
         if self.pads.is_empty() {
             (0, 0, 0, 0)
