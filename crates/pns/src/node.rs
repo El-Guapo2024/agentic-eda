@@ -442,6 +442,22 @@ impl Node {
         ids
     }
 
+    /// [`Self::add_line`] for a line that descends from IR track `track` -- a shove re-made it. The segments carry the track, numbered by
+    /// their own ids (consecutive along the line, and far above the 0.. of a plain track), so a later shove in a world that has the
+    /// line in it still knows which IR track it replaces, and [`Self::uncovered_track_runs`] still sees one run per line.
+    pub fn add_line_tagged(&mut self, line: &Line, track: &str) -> Vec<ItemId> {
+        const LINEAGE_INDEX_BASE: usize = 1 << 32;
+        let mut ids = Vec::with_capacity(line.segment_count());
+        for (a, b) in line.segs() {
+            if a == b {
+                continue;
+            }
+            let seg = Item::Segment(crate::item::Segment { net: line.net.clone(), layer: line.layer, a, b, width: line.width, source_track: Some((track.to_string(), LINEAGE_INDEX_BASE + self.next_id as usize)), locked: false });
+            ids.push(self.add(seg));
+        }
+        ids
+    }
+
     // ---------------------------------------------------------------- a track in pieces
 
     /// The runs of IR track `track`'s segments that are not in `covered`, as this node has them: consecutive segments (by their index

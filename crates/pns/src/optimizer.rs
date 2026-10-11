@@ -537,6 +537,135 @@ fn fanout_cleanup(line: &mut Line, node: &Node, rules: &BoardRules, exclude: &[I
     false
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// differential pairs: `OPTIMIZER::Optimize( DIFF_PAIR* )`
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// `findCoupledVertices`: the segments of `coupled` that run beside the segment `orig_seg` (of the other line) at the pair's gap, at
+/// `vertex`.
+fn find_coupled_vertices(vertex: eda_model::ir::Point, orig_seg: crate::seg_ops::Seg2, coupled: &[eda_model::ir::Point], pair: &crate::diff_pair::DiffPair) -> Vec<usize> {
+    use crate::diff_pair::{approx_parallel, line_project, vnorm, vsub};
+    let mut out = Vec::new();
+    for (i, s) in coupled.windows(2).enumerate() {
+        let seg = (s[0], s[1]);
+        let proj_over_coupled = line_project(seg, vertex);
+        if approx_parallel(seg, orig_seg, 1) {
+            let dist = vnorm(vsub(proj_over_coupled, vertex)) - pair.width;
+            if pair.gap_constraint.matches(dist) {
+                out.push(i);
+            }
+        }
+    }
+    out
+}
+
+/// `verifyDpBypass`: the new reference line and the new coupled one keep the clearance from each other and from the world.
+fn verify_dp_bypass(node: &Node, rules: &BoardRules, pair: &crate::diff_pair::DiffPair, ref_is_p: bool, new_ref: &[eda_model::ir::Point], new_coupled: &[eda_model::ir::Point]) -> bool {
+    use crate::diff_pair::PairLine;
+    use crate::node::kind_mask;
+    let (ref_base, coupled_base) = if ref_is_p { (pair.p_pair_line(), pair.n_pair_line()) } else { (pair.n_pair_line(), pair.p_pair_line()) };
+    let ref_line = PairLine { pts: new_ref, ..ref_base };
+    let coupled_line = PairLine { pts: new_coupled, ..coupled_base };
+    !(ref_line.hits_line(&coupled_line, rules) || ref_line.hits_node(node, rules, kind_mask::ANY) || coupled_line.hits_node(node, rules, kind_mask::ANY))
+}
+
+/// `coupledBypass`: a new route for the coupled line that follows the bypass the reference line took -- from a vertex of the coupled line
+/// beside the bypass's start to another vertex of it -- picking the one that keeps the most coupled length and that is clear.
+fn coupled_bypass(node: &Node, rules: &BoardRules, pair: &crate::diff_pair::DiffPair, ref_is_p: bool, new_ref: &[eda_model::ir::Point], ref_bypass: &[eda_model::ir::Point], coupled: &[eda_model::ir::Point]) -> Option<Vec<eda_model::ir::Point>> {
+    let starts = find_coupled_vertices(ref_bypass[0], (ref_bypass[0], ref_bypass[1]), coupled, pair);
+    let dir = Direction45::from_seg(ref_bypass[0], ref_bypass[1]);
+    let mut best_length: i64 = -1;
+    let mut best: Option<Vec<eda_model::ir::Point>> = None;
+    for &si in &starts {
+        for j in 1..coupled.len().saturating_sub(1) {
+            if si.abs_diff(j) <= 1 {
+                continue;
+            }
+            let vs = coupled[si];
+            // `dir.BuildInitialTrace( vs, aCoupled.CPoint(j), dir.IsDiagonal() )`: a defined direction decides the posture itself
+            let bypass = dir.build_initial_trace(vs, coupled[j], dir.is_diagonal(), CornerMode::Mitered45);
+            let coupled_length = pair.coupled_length_of(new_ref, &bypass);
+            let mut new_coupled = coupled.to_vec();
+            if si < j {
+                crate::line::replace_points(&mut new_coupled, si, j, bypass);
+            } else {
+                let mut rev = bypass;
+                rev.reverse();
+                crate::line::replace_points(&mut new_coupled, j, si, rev);
+            }
+            if coupled_length > best_length && verify_dp_bypass(node, rules, pair, ref_is_p, new_ref, &new_coupled) {
+                best_length = coupled_length;
+                best = Some(new_coupled);
+            }
+        }
+    }
+    best
+}
+
+/// `OPTIMIZER::mergeDpStep`: a shortcut between segments `n` and `n + step` of one line of the pair (an obtuse corner pair), with the other
+/// line taking the matching shortcut if it can; the first that gives up no more than a tenth of the coupled length wins.
+fn merge_dp_step(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pair::DiffPair, try_p: bool, step: usize) -> bool {
+    let (current_path, coupled_path) = if try_p { (pair.p.clone(), pair.n.clone()) } else { (pair.n.clone(), pair.p.clone()) };
+    let n_segs = current_path.len() as i64 - 1 - 1;
+    let clen_pre = pair.coupled_length_of(&current_path, &coupled_path);
+    let budget = clen_pre / 10; // "fixme: come up with something more intelligent here..."
+    let mut n = 1usize;
+    while (n as i64) < n_segs - step as i64 {
+        let (s1, s2) = ((current_path[n], current_path[n + 1]), (current_path[n + step], current_path[n + step + 1]));
+        let (dir1, dir2) = (Direction45::from_seg(s1.0, s1.1), Direction45::from_seg(s2.0, s2.1));
+        if dir1.angle_to(&dir2) == AngleType::Obtuse {
+            let bypass = Direction45::Undefined.build_initial_trace(s1.0, s2.1, dir1.is_diagonal(), CornerMode::Mitered45);
+            let mut new_ref = current_path.clone();
+            crate::line::replace_points(&mut new_ref, n, n + step, bypass.clone());
+            let delta_uni = pair.coupled_length_of(&new_ref, &coupled_path) - clen_pre + budget;
+            if let Some(new_coup) = coupled_bypass(node, rules, pair, try_p, &new_ref, &bypass, &coupled_path) {
+                let delta_coupled = pair.coupled_length_of(&new_ref, &new_coup) - clen_pre + budget;
+                if delta_coupled >= 0 {
+                    let (mut r, mut c) = (Line::from_points(None, 0, 0, new_ref), Line::from_points(None, 0, 0, new_coup));
+                    r.simplify(); // `Simplify2`
+                    c.simplify();
+                    pair.set_shape(r.pts, c.pts, !try_p);
+                    return true;
+                }
+            } else if delta_uni >= 0 && verify_dp_bypass(node, rules, pair, try_p, &new_ref, &coupled_path) {
+                let (mut r, mut c) = (Line::from_points(None, 0, 0, new_ref), Line::from_points(None, 0, 0, coupled_path.clone()));
+                r.simplify();
+                c.simplify();
+                pair.set_shape(r.pts, c.pts, !try_p);
+                return true;
+            }
+        }
+        n += 1;
+    }
+    false
+}
+
+/// `OPTIMIZER::mergeDpSegments` / `Optimize( DIFF_PAIR* )`: shorten the pair's lines by the shortcuts [`merge_dp_step`] finds, the longest
+/// span first, as long as the pair stays clear. `node` is the world the pair is checked against (neither line is in it).
+pub fn optimize_pair(node: &Node, rules: &BoardRules, pair: &mut crate::diff_pair::DiffPair) {
+    let seg_count = |pts: &[eda_model::ir::Point]| pts.len() as i64 - 1;
+    let (mut step_p, mut step_n) = (seg_count(&pair.p) - 2, seg_count(&pair.n) - 2);
+    for _ in 0..10_000 {
+        let (max_step_p, max_step_n) = (seg_count(&pair.p) - 2, seg_count(&pair.n) - 2);
+        step_p = step_p.min(max_step_p);
+        step_n = step_n.min(max_step_n);
+        if step_p < 1 && step_n < 1 {
+            break;
+        }
+        let (mut found_p, mut found_n) = (false, false);
+        if step_p > 1 {
+            found_p = merge_dp_step(node, rules, pair, true, step_p as usize);
+        }
+        if step_n > 1 {
+            found_n = merge_dp_step(node, rules, pair, false, step_n as usize);
+        }
+        if !found_n && !found_p {
+            step_n -= 1;
+            step_p -= 1;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
