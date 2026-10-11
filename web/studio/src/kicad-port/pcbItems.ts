@@ -12,6 +12,7 @@ import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitT
 import { circumcircle } from "./trackArc";
 import { fieldAsText, fieldById } from "./fpFields";
 import { groupLeaves } from "./groupTree";
+import { artBounds, unionBox } from "./fpArt";
 
 export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field";
 
@@ -140,7 +141,8 @@ export function itemBounds(board: BoardState, id: string): [number, number, numb
     case "part": {
       const p = board.parts.find((q) => q.ref === id);
       if (!p?.at) return null;
-      if (p.courtyard) return [p.courtyard[0], p.courtyard[1], p.courtyard[2], p.courtyard[3]];
+      // The courtyard and the footprint's graphics (`FOOTPRINT::GetBoundingBox( false )` counts both).
+      if (p.courtyard) return unionBox(p.courtyard, artBounds(p));
       return [p.at[0], p.at[1], p.at[0], p.at[1]];
     }
     case "track": {

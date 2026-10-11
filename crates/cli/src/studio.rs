@@ -989,6 +989,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 // The footprint's fields as laid out on the board, and its attributes.
                 p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
+                // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
+                crate::fp_art_json::add_art(&mut p, part, fp, footprint);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
@@ -1002,7 +1004,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
-            p["body"] = json!(crate::body_api::placed_body(&body_libs, &design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            // The footprint's own fab drawings first (they are what the board draws), else the library's.
+            p["body"] = json!(resolved.as_ref().and_then(|f| crate::fp_art_json::placed_body(fp, f)).or_else(|| crate::body_api::placed_body(&body_libs, &design, part, fp)).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's 3D models with the placement its footprint gives each, and whether KiCad counts it a through-hole, SMD or virtual model: what the 3D
             // view loads (`GET /api/3dmodel`) and places. Absent when the footprint names no model: the view then draws the body box.
             if let Some(models) = resolved.as_ref().and_then(|f| crate::model3d_api::part_json(&model, part, f)) {
@@ -1216,7 +1219,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
 /// -- the same convention `outline`/`pts` already use elsewhere in this
 /// API, so a `(add|move|delete)_shape` command and this read use the same
 /// shape.
-fn shape_json(s: &Shape) -> Value {
+pub(crate) fn shape_json(s: &Shape) -> Value {
     let pt = |p: eda_model::ir::Point| json!([p.x, p.y]);
     match s {
         Shape::Segment { id, layer, stroke_width, filled, start, end } => {

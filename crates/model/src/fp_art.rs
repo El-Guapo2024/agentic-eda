@@ -233,6 +233,15 @@ impl FpShape {
     }
 }
 
+impl FpShape {
+    /// [`FpShape::bbox`] of the geometry alone, the stroke not counted: the box a body is sized from (a fab line is 0.1 mm and the part is not that much bigger).
+    pub fn geometry_bbox(&self) -> Option<(Um, Um, Um, Um)> {
+        let mut bare = self.clone();
+        bare.shape.set_stroke_width(0);
+        bare.bbox()
+    }
+}
+
 /// The four corners of the rectangle with opposite corners `a` and `b`, clockwise on the screen from the top left.
 pub fn rect_corners(a: Point, b: Point) -> [Point; 4] {
     let (x0, x1) = (a.x.min(b.x), a.x.max(b.x));
@@ -427,6 +436,11 @@ impl FpArt {
                 })
                 .collect(),
         }
+    }
+
+    /// The box of the geometry of the shapes on `layer`, the strokes not counted (see [`FpShape::geometry_bbox`]): a footprint's body is that of `F.Fab`.
+    pub fn geometry_bbox_on(&self, layer: &str) -> Option<(Um, Um, Um, Um)> {
+        self.shapes_on(layer).filter_map(FpShape::geometry_bbox).reduce(|a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3)))
     }
 
     /// The art of an editable library footprint (`LibraryFootprint::graphics` and `texts`): a shape on the courtyard or the board edge is left out

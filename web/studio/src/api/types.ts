@@ -127,6 +127,40 @@ export interface FootprintAttrsInfo {
 /** `[minX, minY, maxX, maxY]`, footprint-local, µm. */
 export type CourtyardBox = [Um, Um, Um, Um];
 
+/** `STROKE_PARAMS`' line style, the words `(stroke (type ..))` uses. A solid (or `default`) stroke has no `dash` on the wire. */
+export type FpDash = "dash" | "dot" | "dash_dot" | "dash_dot_dot";
+/** `FILL_T`'s hatched fills. */
+export type FpHatch = "hatch" | "reverse_hatch" | "cross_hatch";
+
+interface FpGraphicCommon {
+  layer: string;
+  stroke_width: Um;
+  /** Absent when false. */
+  filled?: boolean;
+  dash?: FpDash;
+  hatch?: FpHatch;
+  /** Every layer of a shape that is on several (`layer` is the first). */
+  layers?: string[];
+}
+
+/**
+ * One graphic of a placed footprint (crates/cli/src/fp_art_json.rs, `Part.graphics`): the silkscreen outline, the pin-1 mark, the fab body, an assembly drawing -- the
+ * `Shape` the board's own graphics are, in board space like the pads, without an `id` (kicad-port/fpArt.ts `graphicsOf` gives them complete).
+ */
+export type FpGraphic =
+  | (FpGraphicCommon & { kind: "segment"; start: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "arc"; start: [Um, Um]; mid: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "rect"; start: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "circle"; center: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "polygon"; pts: [Um, Um][] })
+  | (FpGraphicCommon & { kind: "bezier"; start: [Um, Um]; c1: [Um, Um]; c2: [Um, Um]; end: [Um, Um] });
+
+/** One text of a placed footprint (`fp_text user`, `Part.texts`): the keys of a field, at the absolute angle it has on the board, variables resolved. */
+export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout"> & {
+  /** Set when the text is exactly `${REFERENCE}` or `${VALUE}`: the Appearance panel's References and Values rows switch it (`PCB_TEXT::ViewGetLOD`). */
+  role?: "reference" | "value";
+};
+
 export interface Part {
   ref: string;
   value: string | null;
@@ -166,6 +200,10 @@ export interface Part {
   /** How KiCad's 3D viewer sorts the part's models: a through-hole model (`tht`), an SMD one or a virtual one (`BOARD_ADAPTER::IsFootprintShown`). */
   kind3d?: "smd" | "tht" | "virtual";
   pads?: Pad[];
+  /** The footprint's silkscreen, fab and assembly drawings, board space (absent when it has none). */
+  graphics?: FpGraphic[];
+  /** The footprint's own texts (`${REFERENCE}` on the fab layer ...), board space (absent when it has none). */
+  texts?: FpTextInfo[];
   /** Reference, Value and the user fields, as they are on the board (absent from an older backend). */
   fields?: FieldInfo[];
   /** The attributes in effect: the edit's, else derived from the pads and the schematic symbol. */
