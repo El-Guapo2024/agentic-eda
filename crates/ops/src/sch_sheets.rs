@@ -373,6 +373,18 @@ impl<'a> Board<'a> {
         }
         let anchor = eda_model::sch_clipboard::top_left_anchor(&fragment.section).unwrap_or_default();
         let (dx, dy) = (at.x - anchor.x, at.y - anchor.y);
-        self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique })
+        let units_here = |b: &Self| -> BTreeSet<(String, u32)> { b.schematic().map(|s| s.symbols.iter().map(|x| (x.id.clone(), x.unit)).collect()).unwrap_or_default() };
+        let before = units_here(self);
+        self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique })?;
+        if !keep_annotations {
+            // `placeSheetContents`: `AnnotateSymbols( ANNOTATE_SELECTION, order, algo, recursive, start, reset = true, ... SYMBOL_FILTER_NON_POWER )` over the items that came in
+            let new_refs: Vec<String> = units_here(self).difference(&before).map(|(id, _)| id.clone()).collect::<BTreeSet<_>>().into_iter().collect();
+            if !new_refs.is_empty() {
+                let opts = AnnotateOptions { scope: Some(AnnotateScope::Selection), ..options.clone() };
+                let (_, renames, _) = self.annotate_plan(true, order, Some(&new_refs), &opts);
+                self.annotate_apply(&renames, false);
+            }
+        }
+        Ok(())
     }
 }

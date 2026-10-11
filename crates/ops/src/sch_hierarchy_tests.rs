@@ -245,6 +245,36 @@ fn import_sheet_contents_goes_on_the_sheet_in_view() {
 }
 
 #[test]
+fn import_sheet_contents_are_numbered_afresh_by_the_annotate_options_unless_annotations_are_kept() {
+    let m = ConstraintModel::default();
+    let mut file = a_file();
+    // R9 is free in the design: a paste would keep it, `placeSheetContents` numbers it again (reset = true)
+    file.root.symbols.push(symbol("R9", "Device:R", "4k7", 1, pt(40, 0)));
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&on("sp", import(Some(file.clone()), false, false))).unwrap();
+    let mut refs = refs_in(b.design(), "power.kicad_sch");
+    refs.retain(|r| !["C1", "R1", "R2"].contains(&r.as_str()));
+    assert_eq!(refs, vec!["C2", "R4", "R5", "R6"], "the first free numbers, in X order: R1 -> R4, R2 -> R5, R9 -> R6");
+
+    // "First free after sheet number X 100": the Power sheet is page 2
+    let mut x100 = import(Some(file.clone()), false, false);
+    if let Cmd::ImportSheet { options, .. } = &mut x100 {
+        options.algo = eda_model::annotate::Algo::SheetX100;
+    }
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&on("sp", x100)).unwrap();
+    let mut refs = refs_in(b.design(), "power.kicad_sch");
+    refs.retain(|r| !["C1", "R1", "R2"].contains(&r.as_str()));
+    assert_eq!(refs, vec!["C201", "R201", "R202", "R203"]);
+
+    // Keep annotations: nothing is numbered again but what the design holds
+    let mut b = Board::new(power_design(), &m, 100, 300);
+    b.apply(&on("sp", import(Some(file), false, true))).unwrap();
+    let refs = refs_in(b.design(), "power.kicad_sch");
+    assert!(refs.contains(&"R9".to_string()), "{refs:?}");
+}
+
+#[test]
 fn the_checks_of_a_sheet_file_are_loadsheetfromfile_s() {
     let m = ConstraintModel::default();
     let b = Board::new(power_design(), &m, 100, 300);

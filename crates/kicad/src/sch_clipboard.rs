@@ -394,7 +394,8 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
 /// The text of `ids`' items as KiCad's clipboard has them. `Err` when the selection holds nothing a copy takes.
 ///
 /// `ids` are what the studio selects by: a symbol's reference (all its placed units), the ids of wires, labels, texts, power symbols,
-/// no-connects, bus entries, junctions, lines and drawn graphics. An id of a hierarchical sheet is left out and said so in `skipped`.
+/// no-connects, bus entries, junctions, lines and drawn graphics, and the ids of hierarchical sheets: a `(sheet ...)` goes in the text with its pins, and the file it
+/// shows is in `CopyOutput::sheet_files` (what a paste needs the screens of; `SCH_EDITOR_CONTROL::m_supplementaryClipboard`).
 pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutput, Vec<CheckResult>> {
     let sch = input.section;
     let wanted = |id: &str| ids.iter().any(|i| i == id);

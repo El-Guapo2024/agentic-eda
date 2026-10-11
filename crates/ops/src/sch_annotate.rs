@@ -226,7 +226,7 @@ impl<'a> Board<'a> {
     }
 
     /// `AnnotateSymbols` up to the point where the references are written: the references that change and the messages for them.
-    fn annotate_plan(&self, reset: bool, order: AnnotateOrder, ids: Option<&[String]>, opts: &AnnotateOptions) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
+    pub(crate) fn annotate_plan(&self, reset: bool, order: AnnotateOrder, ids: Option<&[String]>, opts: &AnnotateOptions) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
         let scope = opts.scope.unwrap_or(if ids.is_some() { AnnotateScope::Selection } else { AnnotateScope::CurrentSheet });
         let scopes = self.annotate_scopes(scope, ids, opts);
         self.annotate_plan_in(&scopes, reset, order, opts)
