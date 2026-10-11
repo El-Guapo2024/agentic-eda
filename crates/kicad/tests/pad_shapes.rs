@@ -314,25 +314,37 @@ fn plotted_copper(cli: &Path, board: &Path, layer: &str, dir: &Path, name: &str)
     let svg = dir.join(format!("{name}.svg"));
     let out = Command::new(cli).args(["pcb", "export", "svg", "--layers", layer, "--mode-single", "--exclude-drawing-sheet", "-o"]).arg(&svg).arg(board).output().expect("runs kicad-cli");
     assert!(out.status.success(), "kicad-cli: {}", String::from_utf8_lossy(&out.stderr));
-    let text = std::fs::read_to_string(&svg).expect("an svg");
-    let r = |v: f64| (v * 250.0).round() as i64;
-    let mut items = Vec::new();
-    let mut rest = text.as_str();
+    copper_shapes_of_svg(&std::fs::read_to_string(&svg).expect("an svg"), false)
+}
+
+/// The closed shapes of a kicad-cli SVG plot (see [`plotted_copper`]). A footprint's plot is as large as the footprint's own box (its text included), so
+/// `from_origin` moves every shape by the lowest x and y of them all: what the plots then have in common is the copper's own place.
+fn copper_shapes_of_svg(text: &str, from_origin: bool) -> Vec<String> {
+    let mut shapes: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut rest = text;
     while let Some(i) = rest.find("<path") {
         rest = &rest[i..];
         let end = rest.find("/>").expect("a closed element");
         let el = &rest[..end];
         let d = el.split("d=\"").nth(1).and_then(|t| t.split('"').next()).unwrap_or("");
-        let nums: Vec<i64> = d.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).map(r).collect();
+        let nums: Vec<f64> = d.split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).filter(|t| !t.is_empty()).filter_map(|t| t.parse::<f64>().ok()).collect();
         // Skip the edge cuts and any open stroke: only closed shapes (Z) are copper.
         if d.contains('Z') && !nums.is_empty() {
-            let pts: Vec<(i64, i64)> = nums.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect();
-            let first = pts.iter().enumerate().min_by_key(|(_, p)| **p).map(|(i, _)| i).unwrap_or(0);
-            let rotated: Vec<String> = pts.iter().cycle().skip(first).take(pts.len()).map(|p| format!("{},{}", p.0, p.1)).collect();
-            items.push(rotated.join(" "));
+            shapes.push(nums.chunks(2).filter(|c| c.len() == 2).map(|c| (c[0], c[1])).collect());
         }
         rest = &rest[end..];
     }
+    let low = |f: fn(&(f64, f64)) -> f64| shapes.iter().flatten().map(f).fold(f64::INFINITY, f64::min);
+    let (dx, dy) = if from_origin { (low(|p| p.0), low(|p| p.1)) } else { (0.0, 0.0) };
+    let r = |v: f64| (v * 250.0).round() as i64;
+    let mut items: Vec<String> = shapes
+        .iter()
+        .map(|pts| {
+            let pts: Vec<(i64, i64)> = pts.iter().map(|p| (r(p.0 - dx), r(p.1 - dy))).collect();
+            let first = pts.iter().enumerate().min_by_key(|(_, p)| **p).map(|(i, _)| i).unwrap_or(0);
+            pts.iter().cycle().skip(first).take(pts.len()).map(|p| format!("{},{}", p.0, p.1)).collect::<Vec<_>>().join(" ")
+        })
+        .collect();
     items.sort();
     items
 }
@@ -362,6 +374,45 @@ fn kicad_cli_plots_the_same_pad_copper_before_and_after_the_round_trip() {
         assert!(before.len() >= 3, "{layer}: kicad-cli drew {} copper shapes of the original", before.len());
         assert_eq!(before, after, "kicad-cli draws other copper on {layer} after the round trip");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A `.kicad_mod` through the footprint editor's reader and writer (`parse_library_footprint`, `export_kicad_mod`): kicad-cli plots the copper of
+/// the library footprint (`fp export svg`) the same before and after, for the trapezoid, the chamfered and rounded rectangle, the custom pad with
+/// every kind of primitive and the pad with an offset.
+#[test]
+fn kicad_cli_plots_the_same_library_footprint_copper_before_and_after_the_round_trip() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("eda_pad_shapes_mod_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch dir");
+
+    let original = format!(
+        "(footprint \"Q\" (version 20241229) (generator \"pcbnew\") (generator_version \"9.0\") (layer \"F.Cu\")\n\t(property \"Reference\" \"REF**\" (at 0 -3 0) (layer \"F.SilkS\"))\n\t(property \"Value\" \"Q\" (at 0 3 0) (layer \"F.Fab\"))\n{}\t)\n",
+        top_pads()
+    );
+    let parsed = eda_kicad::parse_library_footprint(&original).expect("the editor's reader takes it");
+    assert!(parsed.footprint.pads.len() == 4, "{} pads", parsed.footprint.pads.len());
+    let exported = eda_kicad::export_kicad_mod(&parsed.footprint);
+
+    let mut plots = Vec::new();
+    for (name, text) in [("original", &original), ("exported", &exported)] {
+        let lib = dir.join(format!("{name}.pretty"));
+        let out_dir = dir.join(format!("{name}_svg"));
+        std::fs::create_dir_all(&lib).expect("a library folder");
+        std::fs::create_dir_all(&out_dir).expect("an output folder");
+        std::fs::write(lib.join("Q.kicad_mod"), text).expect("write");
+        let out = Command::new(&cli).args(["fp", "export", "svg", "--layers", "F.Cu", "-o"]).arg(&out_dir).arg(&lib).output().expect("runs kicad-cli");
+        assert!(out.status.success(), "kicad-cli on the {name} footprint: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        plots.push(copper_shapes_of_svg(&std::fs::read_to_string(out_dir.join("Q.svg")).expect("an svg"), true));
+    }
+    assert!(plots[0].len() >= 5, "kicad-cli drew {} copper shapes of the original", plots[0].len());
+    assert_eq!(plots[0], plots[1], "kicad-cli draws other copper after the footprint went through the editor's reader and writer");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

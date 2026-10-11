@@ -21,8 +21,9 @@
 //! * a circular pad, or a square oval, or a via (default angle 45 degrees)
 //!   builds its four spokes at 0 degrees and rotates them afterwards, because
 //!   the box of a circle overshoots near a 45 degree ray;
-//! * a custom pad's proxy-segment spokes are not here: this workspace has no
-//!   custom pad shape.
+//! * a custom pad's proxy-segment spokes (`gr_vector`) are not here: its spokes
+//!   come from the box of its copper (`dummy_pad.GetBoundingBox` of
+//!   `buildThermalSpokes`) like any other pad's.
 
 use eda_clipper2::{Point64, PI};
 use eda_shape_poly_set::{LineChain, ShapePolySet};

@@ -33,9 +33,9 @@
 //! caller-supplied `net, net -> gap` callback instead, meant to be
 //! `eda_drc::constraints::clearance`; teardrop areas' special cases beyond the
 //! connection type, backdrill/post-machining knockouts, conditional pad
-//! flashing, and custom pad shapes (this workspace's pads are always
-//! `Rect`/`RoundRect`/`Circle`/`Oval`, the same simplification
-//! `eda_drc::kimath` already documents).
+//! flashing, and the proxy-segment spokes of a custom pad (its copper, though,
+//! is the whole shape: a trapezoid, a chamfered rectangle or a custom pad's
+//! anchor and primitives arrive as a [`shape::Shape::Compound`]).
 
 pub mod corner;
 pub mod hatch;
