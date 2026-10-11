@@ -85,3 +85,85 @@ pub fn pad_polygons(fp: &FootprintInstance, pad: &Pad, center: Point, max_error:
 pub fn pad_outline(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Um) -> Vec<Vec<Point>> {
     pad_polygons(fp, pad, center, max_error).polys.iter().flat_map(|poly| poly.iter().map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<_>>())).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eda_model::footprint::{PadAnchor, PadCustom, PadKind, PadPrimitive, PadShapeExt};
+    use eda_model::ir::{ChamferCorners, LabelSide, Side};
+
+    fn instance(at: (Um, Um), rot: i32, side: Side) -> FootprintInstance {
+        FootprintInstance { id: "U1".into(), at: Point { x: at.0, y: at.1 }, rot: rot as u32, side, label: LabelSide::Above }
+    }
+
+    fn pad(shape: PadShape, size: (Um, Um), ext: PadShapeExt) -> Pad {
+        Pad { number: "1".into(), at: (0, 0), size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext }
+    }
+
+    fn line(a: (Um, Um), b: (Um, Um), w: Um) -> PadPrimitive {
+        PadPrimitive { shape: eda_model::ir::Shape::Segment { id: String::new(), layer: String::new(), stroke_width: w, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }, proxy: false }
+    }
+
+    #[test]
+    fn a_trapezoids_polygon_has_the_area_of_its_two_sides_and_turns_with_the_footprint() {
+        let t = pad(PadShape::Trapezoid, (2000, 1000), PadShapeExt { trapezoid_delta: Some((0, 800)), ..Default::default() });
+        // Parallel sides 2.8 and 1.2 mm, 1 mm apart: (2.8 + 1.2) / 2 = 2 mm^2.
+        for rot in [0, 90_000, 45_000] {
+            let area = pad_polygons(&instance((10_000, 10_000), rot, Side::Top), &t, Point { x: 10_000, y: 10_000 }, 5).area();
+            assert!((area - 2_000_000.0).abs() < 2_000.0, "rot {rot}: {area}");
+        }
+        // Copper never leaves the pad's own bounding box turned the same way.
+        let shapes = pad_effective_shapes(&instance((0, 0), 0, Side::Top), &t, Point { x: 0, y: 0 });
+        assert_eq!(shapes.len(), 1);
+        assert_eq!(shapes[0].bbox(0), (-1400, -500, 1400, 500));
+    }
+
+    #[test]
+    fn a_custom_pads_copper_is_a_compound_with_a_hole_where_a_ring_leaves_one() {
+        let ring = PadPrimitive { shape: eda_model::ir::Shape::Circle { id: String::new(), layer: String::new(), stroke_width: 600, filled: false, center: Point { x: 0, y: 0 }, end: Point { x: 1500, y: 0 } }, proxy: false };
+        let p = pad(PadShape::Custom, (500, 500), PadShapeExt { custom: Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![ring] }), ..Default::default() });
+        let fp = instance((0, 0), 0, Side::Top);
+        let copper = pad_copper(&fp, &p, Point { x: 0, y: 0 });
+        assert!(matches!(copper, Shape::Compound { ref parts } if parts.len() == 2), "{copper:?}");
+        // A ring 1.2 to 1.8 mm out of the centre: the polygon has an outline and a hole, and its area is the ring's plus the anchor's disc inside it.
+        let polys = pad_polygons(&fp, &p, Point { x: 0, y: 0 }, 5);
+        let ring_area = std::f64::consts::PI * (1800.0f64.powi(2) - 1200.0f64.powi(2));
+        let disc_area = std::f64::consts::PI * 250.0f64.powi(2);
+        assert!((polys.area() - (ring_area + disc_area)).abs() / (ring_area + disc_area) < 0.01, "{}", polys.area());
+        assert_eq!(polys.polys.len(), 2, "the ring (with its hole) and the anchor inside it");
+        assert_eq!(polys.polys.iter().map(|p| p.len()).max(), Some(2), "one outline has a hole");
+        // Clearance is measured to the ring's copper, not to the middle of it.
+        let probe = Shape::Circle { c: Point { x: 0, y: 0 }, r: 100 };
+        let (gap, _) = copper.clearance_to(&probe);
+        assert_eq!(gap, 0, "the anchor is under the probe");
+        let outside = Shape::Circle { c: Point { x: 2100, y: 0 }, r: 100 };
+        let (gap, _) = copper.clearance_to(&outside);
+        assert!((gap - 200).abs() <= 1, "the ring's outer edge is at 1800: {gap}");
+        let inside = Shape::Circle { c: Point { x: 700, y: 0 }, r: 100 };
+        let (gap, _) = copper.clearance_to(&inside);
+        assert!((gap - 350).abs() <= 6, "the anchor's edge is at 250 and the ring's inner edge at 1200: 700 is 450 from the first and 500 from the second, less the probe's 100: {gap}");
+    }
+
+    #[test]
+    fn the_copper_of_a_pad_with_an_offset_sits_where_the_offset_puts_it_on_either_side() {
+        let p = pad(PadShape::Rect, (1000, 600), PadShapeExt { offset: Some((400, 0)), ..Default::default() });
+        // On top: 0.4 mm to the right of the pad's position; on the bottom the frame is mirrored: 0.4 mm to the left.
+        let top = pad_copper(&instance((5000, 5000), 0, Side::Top), &p, Point { x: 5000, y: 5000 });
+        assert_eq!(top.bbox(0), (4900, 4700, 5900, 5300));
+        let bottom = pad_copper(&instance((5000, 5000), 0, Side::Bottom), &p, Point { x: 5000, y: 5000 });
+        assert_eq!(bottom.bbox(0), (4100, 4700, 5100, 5300));
+        assert_eq!(shape_pos(&instance((5000, 5000), 0, Side::Top), &p, Point { x: 5000, y: 5000 }), Point { x: 5400, y: 5000 });
+        assert_eq!(shape_pos(&instance((5000, 5000), 90_000, Side::Top), &p, Point { x: 5000, y: 5000 }), Point { x: 5000, y: 5400 }, "turned with the footprint");
+    }
+
+    #[test]
+    fn the_spoke_box_of_a_custom_pad_is_the_box_of_all_its_copper_and_mirrors_with_the_side() {
+        let p = pad(PadShape::Custom, (800, 800), PadShapeExt { custom: Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![line((0, 0), (-2000, 0), 200)] }), ..Default::default() });
+        assert_eq!(spoke_box(&p), Some((-2100, -400, 400, 400)));
+        // A plain pad has none: the filler takes its size.
+        assert_eq!(spoke_box(&pad(PadShape::Rect, (800, 800), PadShapeExt::default())), None);
+        // The chamfered rectangle's box is its own size.
+        let c = pad(PadShape::ChamferedRect, (1000, 600), PadShapeExt { chamfer_ratio: Some(0.2), chamfer_corners: ChamferCorners { top_left: true, ..Default::default() }, ..Default::default() });
+        assert_eq!(spoke_box(&c), Some((-500, -300, 500, 300)));
+    }
+}

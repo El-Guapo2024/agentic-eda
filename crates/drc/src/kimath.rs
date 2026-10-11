@@ -647,3 +647,47 @@ mod tests {
         assert!((actual - 1621).abs() <= 1, "actual={actual}");
     }
 }
+
+#[cfg(test)]
+mod compound_tests {
+    use super::*;
+
+    fn p(x: Um, y: Um) -> Point {
+        Point { x, y }
+    }
+
+    /// A custom pad's compound: a 1 mm round anchor and a 200 um stroke 2 mm long to the right of it.
+    fn pad() -> Shape {
+        Shape::Compound { parts: vec![Shape::Circle { c: p(0, 0), r: 500 }, Shape::Stadium { a: p(0, 0), b: p(2000, 0), r: 100 }] }
+    }
+
+    #[test]
+    fn a_compound_is_as_far_from_a_shape_as_its_nearest_part() {
+        let near_the_arm = Shape::Circle { c: p(2500, 0), r: 100 };
+        // The arm ends at x = 2100: 2500 - 100 - 2100 = 300 of air, though the anchor alone would read 1900.
+        assert_eq!(pad().clearance_to(&near_the_arm).0, 300);
+        assert!((pad().gap_to(&near_the_arm) - 300.0).abs() < 1e-9);
+        assert_eq!(near_the_arm.clearance_to(&pad()).0, 300, "either way round");
+        assert!(pad().collides(&near_the_arm, 301).is_some() && pad().collides(&near_the_arm, 300).is_none());
+        // Touching any part is touching the pad.
+        let on_the_anchor = Shape::Circle { c: p(0, 400), r: 100 };
+        assert_eq!(pad().clearance_to(&on_the_anchor).0, 0);
+        assert!(pad().collides(&on_the_anchor, 0).is_some());
+    }
+
+    #[test]
+    fn a_compounds_box_holds_every_part_and_each_part_keeps_its_own_radius() {
+        assert_eq!(pad().bbox(0), (-500, -500, 2100, 500));
+        assert_eq!(pad().bbox(50), (-550, -550, 2150, 550));
+        assert_eq!(pad().radius(), 500, "the widest part: what a box has to be inflated by");
+        assert_eq!(pad().parts().len(), 2);
+        assert_eq!(Shape::Circle { c: p(0, 0), r: 5 }.parts().len(), 1, "a plain shape is its own only part");
+    }
+
+    #[test]
+    fn the_distance_to_an_edge_is_measured_from_every_part() {
+        // A board edge 2.3 mm to the right of the pad's anchor: the arm's tip is 200 from it, though the anchor is 1800.
+        let edge = [Seg::new(p(2300, -1000), p(2300, 1000))];
+        assert_eq!(distance_to_open_segments(&pad(), &edge).0, 200);
+    }
+}
