@@ -20,6 +20,7 @@ pub mod page;
 pub mod rules;
 pub mod sch_clipboard;
 pub mod sch_extras;
+pub mod sheet_file;
 pub mod sheet_list;
 pub mod symbol;
 

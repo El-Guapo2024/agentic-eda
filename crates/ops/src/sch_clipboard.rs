@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 impl<'a> Board<'a> {
     /// Every placed symbol of every sheet -- power symbols included -- as the numbering sees it (`hierarchy.GetSymbols( existingRefs, SYMBOL_FILTER_ALL )`).
-    fn used_references(&self) -> Vec<UsedRef> {
+    pub(crate) fn used_references(&self) -> Vec<UsedRef> {
         let mut out: Vec<UsedRef> = Vec::new();
         let sheets = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
         for sch in sheets {
@@ -221,6 +221,10 @@ impl<'a> Board<'a> {
             if let Some(look) = src.extras.label_looks.get(&l.id) {
                 sch.extras.label_looks.insert(new_id, *look);
             }
+        }
+        // hierarchical sheets: each a new sheet, with copies of the screens it shows (the sheet part of `SCH_EDITOR_CONTROL::Paste`)
+        if !src.sheets.is_empty() {
+            self.paste_sheets(fragment, dx, dy, mode)?;
         }
         Ok(())
     }

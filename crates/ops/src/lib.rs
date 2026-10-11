@@ -64,9 +64,11 @@ mod zone_overrides;
 mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
+mod sch_sheets;
 mod sheet_units;
 mod sheets;
 pub use sch_annotate::{AnnotateMessage, AnnotateOptions, AnnotateReport, AnnotateScope};
+pub use sch_sheets::{unique_sheet_name, SheetFileFinding};
 pub use pcb_transform::{flip_layer, FlipDirection};
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
@@ -1032,6 +1034,35 @@ pub enum Cmd {
     /// (`EditSheetProperties`' "use the existing file" case). Refused for an empty or already-used sheet name
     /// ("A sheet named ... already exists"), a name with a path separator, or a non-positive size.
     AddSheet { name: String, file: String, at: Point, size: (Um, Um) },
+    /// Import Sheet... and Draw Sheet from File (`eeschema.InteractiveDrawing.importSheet` / `drawSheetFromFile`, `SCH_DRAWING_TOOLS::ImportSheet` /
+    /// `DrawSheet`, with `SCH_EDIT_FRAME::LoadSheetFromFile`): put the schematic file `source` in the design as a sheet -- a sheet symbol `name` of `size`
+    /// at `at` showing a copy of the file under `file` (a bare name; made unique when the design has one of that name), and a copy of the screen of each sheet
+    /// inside it -- or, with `as_sheet` off, put its contents on the sheet in view (carried to `at`). The symbols are numbered anew, in the `order` and with the
+    /// numbering `options` say, unless `keep_annotations` is on, which renumbers only the references the design already holds. Refused for a file that
+    /// places itself, symbols that name no library, a name already used on the sheet.
+    ///
+    /// The verb reads no file: the studio's server reads `source` into `content` (`eda_kicad::load_sheet_file`) before the command runs, so that it replays
+    /// and undoes the same anywhere.
+    ImportSheet {
+        source: String,
+        #[serde(default)]
+        content: Option<eda_model::sheet_file::SheetFile>,
+        #[serde(default = "d_true")]
+        as_sheet: bool,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        file: String,
+        at: Point,
+        #[serde(default)]
+        size: (Um, Um),
+        #[serde(default)]
+        keep_annotations: bool,
+        #[serde(default)]
+        order: AnnotateOrder,
+        #[serde(default)]
+        options: AnnotateOptions,
+    },
     /// Alt+S (`eeschema.InteractiveEdit.swap`, `SCH_EDIT_TOOL::Swap`): exchange the positions of two schematic
     /// items -- symbols (placed or power), labels and free texts, found by id -- and, for two symbols of the
     /// same library symbol, their orientations. A selection of more than two is a Batch of these in selection
@@ -1614,6 +1645,7 @@ impl Cmd {
             | Cmd::AddSchLine { .. }
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
+            | Cmd::ImportSheet { .. }
             | Cmd::SwapSchItems { .. }
             | Cmd::PasteSch { .. }
             | Cmd::SchEdit(_)
@@ -1814,6 +1846,7 @@ impl Cmd {
             Cmd::AddJunction { .. } => vec!["junction"],
             Cmd::AddSchLine { .. } => vec!["sch_line"],
             Cmd::AddSheet { name, .. } => vec![name.as_str()],
+            Cmd::ImportSheet { source, .. } => vec![source.as_str()],
             Cmd::SwapSchItems { a, b } => vec![a, b],
             Cmd::PasteSch { .. } => vec!["paste"],
             Cmd::SchEdit(c) => c.ids(),
@@ -2341,6 +2374,10 @@ impl<'a> Board<'a> {
             Cmd::AddSchLine { pts, width_um } => self.add_sch_line(pts.clone(), *width_um),
             Cmd::DeleteSchLine { id } => self.delete_sch_line(id),
             Cmd::AddSheet { name, file, at, size } => self.add_sheet(name, file, *at, *size),
+            Cmd::ImportSheet { source, content, as_sheet, name, file, at, size, keep_annotations, order, options } => match content {
+                Some(content) => self.import_sheet(content, *as_sheet, name, file, *at, *size, *keep_annotations, *order, options),
+                None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
+            },
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),

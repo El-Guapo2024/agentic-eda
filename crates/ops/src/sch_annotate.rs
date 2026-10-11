@@ -87,23 +87,23 @@ pub(crate) enum Item {
 }
 
 #[derive(Debug, Clone)]
-struct Slot {
+pub(crate) struct Slot {
     file: String,
     item: Item,
 }
 
 /// Which items of a screen the scope takes.
 #[derive(Debug, Clone)]
-enum Take {
+pub(crate) enum Take {
     All,
     Ids(BTreeSet<String>),
 }
 
 #[derive(Debug, Clone)]
-struct ScreenScope {
-    file: String,
-    symbols: Take,
-    power: bool,
+pub(crate) struct ScreenScope {
+    pub(crate) file: String,
+    pub(crate) symbols: Take,
+    pub(crate) power: bool,
 }
 
 /// One reference to change.
@@ -227,7 +227,12 @@ impl<'a> Board<'a> {
     fn annotate_plan(&self, reset: bool, order: AnnotateOrder, ids: Option<&[String]>, opts: &AnnotateOptions) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
         let scope = opts.scope.unwrap_or(if ids.is_some() { AnnotateScope::Selection } else { AnnotateScope::CurrentSheet });
         let scopes = self.annotate_scopes(scope, ids, opts);
-        let (slots, mut list, others) = self.annotation_entries(&scopes);
+        self.annotate_plan_in(&scopes, reset, order, opts)
+    }
+
+    /// [`Self::annotate_plan`] over the screens `scopes` name.
+    pub(crate) fn annotate_plan_in(&self, scopes: &[ScreenScope], reset: bool, order: AnnotateOrder, opts: &AnnotateOptions) -> (Vec<Slot>, Vec<Rename>, Vec<AnnotateMessage>) {
+        let (slots, mut list, others) = self.annotation_entries(scopes);
         let sort = match order {
             AnnotateOrder::YThenX => SortOrder::ByY,
             AnnotateOrder::XThenY => SortOrder::ByX,
