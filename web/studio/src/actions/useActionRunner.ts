@@ -29,7 +29,7 @@ import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { snapPoint } from "../components/canvas/gridHelper";
 import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
-import { editableSelection, flipPivot, rotationPivot } from "../kicad-port/pcbTransform";
+import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
 import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
@@ -93,6 +93,7 @@ import { registerPcbMenuActions } from "./pcbMenuActions";
 import { registerAppearanceActions } from "./appearanceActions";
 import { nextContrastMode } from "../kicad-port/appearance";
 import { registerPcbFindActions } from "./pcbFindActions";
+import { registerPcbEditDetailsActions } from "./pcbEditDetailsActions";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
@@ -235,7 +236,10 @@ export function useActionRunner() {
         pivots = { pivotUm: rotationPivot(state.board, refs, snap) ?? undefined, flipPivotUm: flipPivot(state.board, refs) ?? undefined };
       }
       const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0, ...pivots };
-      const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
+      // Each press turns by the preferences' rotation step (`m_RotationAngle`); on a board viewed flipped the turn runs the other way (`EDIT_TOOL::Rotate`:
+      // `if( IsFlippedX() ) rotateAngle = -rotateAngle`). The callers pass 1 for R and 3 (a quarter turn back) for Shift+R.
+      const press = (addQuarterTurns === 3 ? -1 : addQuarterTurns) * (state.tab === "pcb" && state.bcx.boardFlipped ? -1 : 1);
+      const rotateQuarterTurns = addQuarterTurns ? wrapTurns((base.rotateQuarterTurns ?? 0) + press, state.prefs.rotationStepDeg) : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped } });
       return true;
@@ -2220,6 +2224,9 @@ export function useActionRunner() {
     registerPcbMenuActions(m, { state, dispatch, api, requestSelection });
     // Find, Find Next and Find Previous on the board (dialog_find.cpp): actions/pcbFindActions.ts.
     registerPcbFindActions(m, { state, dispatch, api, requestSelection });
+    // The details of the edit tools (Paste Special on the board, the rows of GAPS.md item 15 that are the board's own): actions/pcbEditDetailsActions.ts. After the
+    // schematic clipboard actions above, which its Paste Special hands the Schematic tab to.
+    registerPcbEditDetailsActions(m, { state, dispatch, api, requestSelection });
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });

@@ -196,11 +196,25 @@ export async function fetchBoardGlb(retry = false): Promise<BoardGlbResult> {
  * the *only* non-KiCad toggle in the whole app (see the Strict switch in
  * the status bar).
  */
-export async function postCmd(cmd: Cmd, strict: boolean): Promise<CmdReply> {
+export async function postCmd(cmd: Cmd, strict: boolean, carry?: "begin" | "commit"): Promise<CmdReply> {
   const r = await fetch("/api/cmd", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cmd, strict }),
+    // `carry`: the command starts ("begin": Duplicate, Paste) or ends ("commit": the drop) a carried placement, which the undo history keeps as one step.
+    body: JSON.stringify(carry ? { cmd, strict, carry } : { cmd, strict }),
+  });
+  return (await r.json()) as CmdReply;
+}
+
+/**
+ * The end of a carried placement without a command of its own (crates/cli/src/carry.rs): "commit" when the drop changed nothing, "cancel" for Escape --
+ * `commit.Revert()`, which takes the carried items away and leaves the undo and redo history as it was. `ok` is false when nothing was being carried.
+ */
+export async function postCarry(action: "commit" | "cancel"): Promise<CmdReply> {
+  const r = await fetch("/api/carry", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
   });
   return (await r.json()) as CmdReply;
 }

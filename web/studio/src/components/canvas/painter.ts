@@ -274,8 +274,8 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
     if (preview.rotateQuarterTurns || preview.flipped) {
       const [ax, ay] = part.at ?? [(x0 + x1) / 2, (y0 + y1) / 2];
       ctx.translate(ax, ay);
-      if (preview.rotateQuarterTurns) ctx.rotate((-preview.rotateQuarterTurns * 90 * Math.PI) / 180);
-      if (preview.flipped) ctx.scale(-1, 1);
+      if (preview.rotateQuarterTurns) ctx.rotate((-preview.rotateQuarterTurns * (preview.rotateStepDeg ?? 90) * Math.PI) / 180);
+      if (preview.flipped) ctx.scale(preview.flipDirection === "top_bottom" ? 1 : -1, preview.flipDirection === "top_bottom" ? -1 : 1);
       ctx.translate(-ax, -ay);
     }
   }

@@ -160,7 +160,10 @@ export function planRotate(board: BoardState, selection: readonly string[], quar
   return { cmds: [{ op: "rotate_items", ids, pivot: toXY(pivot), angle_millideg: Math.round(-quarterTurnsCcw * stepDeg * 1000) }], ids, lockedOut };
 }
 
-/** `EDIT_TOOL::Flip` ("Change Side / Flip", F): the selection mirrored about its flip point and put on the other side of the board. */
+/**
+ * `EDIT_TOOL::Flip` ("Change Side / Flip", F): the selection mirrored about its flip point and put on the other side of the board, across the axis
+ * `PCBNEW_SETTINGS::m_FlipDirection` says (`direction`, left/right by default).
+ */
 export function planFlip(board: BoardState, selection: readonly string[], direction: FlipDirection = "left_right"): TransformPlan {
   const { ids, lockedOut } = editableSelection(board, selection);
   if (ids.length === 0) return { ...EMPTY, lockedOut };
@@ -170,22 +173,42 @@ export function planFlip(board: BoardState, selection: readonly string[], direct
 }
 
 /**
+ * The angle `turnsCcw` presses of R (Shift+R takes one away) add up to, counter-clockwise degrees in [0, 360): `rotateAngle` of `EDIT_TOOL::Rotate` once per press,
+ * `PCBNEW_SETTINGS::m_RotationAngle` (`stepDeg`) each. A whole number of turns is nothing.
+ */
+export function carryAngleDeg(turnsCcw: number, stepDeg = 90): number {
+  const raw = turnsCcw * stepDeg;
+  const norm = ((raw % 360) + 360) % 360;
+  return norm < 1e-9 || 360 - norm < 1e-9 ? 0 : Math.round(norm * 1000) / 1000;
+}
+
+/**
+ * The count of R presses kept within one turn when whole steps make a turn (a 90 degree step: 0 to 3, a 15 degree one: 0 to 23); a step that does not divide a
+ * turn keeps counting, the angle being worked out from the count (`carryAngleDeg`).
+ */
+export function wrapTurns(count: number, stepDeg = 90): number {
+  const per = 360 / stepDeg;
+  const whole = Math.round(per);
+  return whole > 0 && Math.abs(per - whole) < 1e-9 ? ((count % whole) + whole) % whole : count;
+}
+
+/**
  * A Move that was turned or flipped on the way (R / F pressed while the selection was carried): `EDIT_TOOL::Rotate` and `::Flip` act
  * about the selection's reference point, which travels with the cursor, so the net effect is the same as turning it about where it was picked
  * up and then moving it -- one batch, in that order. `turnsCcw` counts the R presses (Shift+R takes one away).
  */
-export function planCarry(board: BoardState, selection: readonly string[], dx: number, dy: number, turnsCcw = 0, flipped = false, snap: Snap = NO_SNAP): TransformPlan {
+export function planCarry(board: BoardState, selection: readonly string[], dx: number, dy: number, turnsCcw = 0, flipped = false, snap: Snap = NO_SNAP, stepDeg = 90, direction: FlipDirection = "left_right"): TransformPlan {
   const { ids, lockedOut } = editableSelection(board, selection);
   if (ids.length === 0) return { ...EMPTY, lockedOut };
   const cmds: Cmd[] = [];
-  const turns = ((turnsCcw % 4) + 4) % 4;
-  if (turns !== 0) {
+  const turned = carryAngleDeg(turnsCcw, stepDeg);
+  if (turned !== 0) {
     const pivot = rotationPivot(board, ids, snap);
-    if (pivot) cmds.push({ op: "rotate_items", ids, pivot: toXY(pivot), angle_millideg: -turns * 90_000 });
+    if (pivot) cmds.push({ op: "rotate_items", ids, pivot: toXY(pivot), angle_millideg: -Math.round(turned * 1000) });
   }
   if (flipped) {
     const pivot = flipPivot(board, ids);
-    if (pivot) cmds.push({ op: "flip_items", ids, pivot: toXY(pivot), direction: "left_right" });
+    if (pivot) cmds.push({ op: "flip_items", ids, pivot: toXY(pivot), direction });
   }
   if (dx !== 0 || dy !== 0) cmds.push({ op: "move_items", ids, dx: Math.round(dx), dy: Math.round(dy) });
   return { cmds, ids, lockedOut };

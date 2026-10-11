@@ -1,6 +1,7 @@
 // Port of PANEL_MOUSE_SETTINGS, the "Mouse and Touchpad" page of KiCad's Preferences dialog
-// (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Magnetic Points" of
-// PANEL_PCBNEW_EDIT_OPTIONS (pcbnew/dialogs/panel_edit_options.cpp: Snap to Pads, Snap to Tracks and Vias, Snap to Graphics) below it.
+// (common/dialogs/panel_mouse_settings.cpp), opened by `common.SuiteControl.openPreferences` (Ctrl+,), with the board editor's "Step for rotate commands" and
+// "Flip board items" and its "Magnetic Points" of PANEL_PCBNEW_EDIT_OPTIONS (pcbnew/dialogs/panel_edit_options.cpp: Snap to Pads, Snap to Tracks and Vias, Snap
+// to Graphics) below it.
 // Edits `state.prefs` (kicad-port/preferences.ts), which every canvas's wheel handler and the PCB canvas's
 // auto-pan loop read -- see that file's header for exactly which settings are offered and which are not.
 //
@@ -10,7 +11,7 @@
 // `onTrackpadDefaults`). On macOS the Ctrl column reads "Cmd" and Alt reads "Option", as in the C++.
 import { useEffect, useState } from "react";
 import { useStudioDispatch, useStudioState } from "../state/store";
-import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
+import { assignScrollModifier, MOUSE_SCROLL_DEFAULTS, sanitizeRotationStep, scrollModSetValid, TRACKPAD_SCROLL_DEFAULTS, type Preferences, type ScrollModifier, type ScrollRow } from "../kicad-port/preferences";
 import { isMac } from "../platform";
 
 const COLUMNS: { value: ScrollModifier; label: string }[] = [
@@ -27,9 +28,14 @@ export function PreferencesDialog() {
   const dispatch = useStudioDispatch();
   const open = state.preferencesDialogOpen;
   const [draft, setDraft] = useState<Preferences>(state.prefs);
+  // The step is typed as text and taken when the dialog is accepted: `m_rotationAngle.GetAngleValue()` in `TransferDataFromWindow`, which keeps the old step for a value that is nothing.
+  const [rotationText, setRotationText] = useState(String(state.prefs.rotationStepDeg));
 
   useEffect(() => {
-    if (open) setDraft(state.prefs);
+    if (open) {
+      setDraft(state.prefs);
+      setRotationText(String(state.prefs.rotationStepDeg));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -39,7 +45,7 @@ export function PreferencesDialog() {
   const valid = scrollModSetValid(draft);
   const submit = () => {
     if (!valid) return;
-    dispatch({ type: "SET_PREFERENCES", prefs: draft });
+    dispatch({ type: "SET_PREFERENCES", prefs: { ...draft, rotationStepDeg: sanitizeRotationStep(Number(rotationText), state.prefs.rotationStepDeg) } });
     close();
   };
   const set = (patch: Partial<Preferences>) => setDraft((d) => ({ ...d, ...patch }));
@@ -94,6 +100,32 @@ export function PreferencesDialog() {
             <span style={{ width: 120 }}>Auto pan speed:</span>
             <input type="range" min={1} max={10} step={1} aria-label="Auto pan speed" value={draft.autoPanAcceleration} onChange={(e) => set({ autoPanAcceleration: Number(e.target.value) })} />
             <span style={{ width: 20, textAlign: "right" }}>{draft.autoPanAcceleration}</span>
+          </div>
+
+          {heading("Editing Options (PCB Editor)")}
+          <div className="filter-row" title="Set increment (in degrees) for context menu and hotkey rotation.">
+            <span style={{ width: 170 }}>Step for rotate commands:</span>
+            <input
+              type="number"
+              aria-label="Step for rotate commands"
+              data-testid="pref-rotation-step"
+              style={{ width: 70 }}
+              min={0.1}
+              max={359.9}
+              step={0.1}
+              value={rotationText}
+              onChange={(e) => setRotationText(e.target.value)}
+            />
+            <span>deg</span>
+          </div>
+          <div className="filter-row" title="Which way Change Side / Flip turns a board item over.">
+            <span style={{ width: 170 }}>Flip board items:</span>
+            <label style={{ marginRight: 12 }}>
+              <input type="radio" name="flip-direction" data-testid="pref-flip-left-right" checked={draft.flipDirection === "left_right"} onChange={() => set({ flipDirection: "left_right" })} /> Left/right
+            </label>
+            <label>
+              <input type="radio" name="flip-direction" data-testid="pref-flip-top-bottom" checked={draft.flipDirection === "top_bottom"} onChange={() => set({ flipDirection: "top_bottom" })} /> Top/bottom
+            </label>
           </div>
 
           {heading("Magnetic Points (PCB Editor)")}

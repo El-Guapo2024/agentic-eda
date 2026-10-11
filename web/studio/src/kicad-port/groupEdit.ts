@@ -4,6 +4,7 @@
 //   common/dialogs/dialog_group_properties.cpp DIALOG_GROUP_PROPERTIES::DoAddMember / OnRemoveMember / TransferDataFromWindow
 //   pcbnew/tools/pcb_group_tool.cpp           PCB_GROUP_TOOL::PickNewMember
 
+import type { Cmd } from "../api/types";
 import { groupHolds } from "./groupTree";
 
 export interface GroupLike {
@@ -60,4 +61,16 @@ export function removeMemberAt(members: readonly string[], index: number): strin
 export function newMemberFromPick(pickedId: string, groups: readonly GroupLike[], groupId?: string): string | null {
   if (groupId !== undefined && groups.some((g) => g.id === pickedId) && groupHolds(groups, pickedId, groupId)) return null;
   return pickedId;
+}
+
+/**
+ * `BOARD_COMMIT::Push`: with a group entered (`PCB_SELECTION_TOOL::GetEnteredGroup()`), whatever a command adds that is in no group yet joins it
+ * (`if( enteredGroup && boardItem->IsGroupableType() && !boardItem->GetParentGroup() ) enteredGroup->AddItem( boardItem )`; `PCB_CONTROL::placeBoardItems`
+ * does the same early for a paste). The group is the editor's state, not the design's, so the command is sent wrapped in `in_group` and the backend does the joining
+ * (`Cmd::InGroup`, crates/ops/src/pcb_groups.rs). Without an entered group, or one the board no longer has, the command is sent as it is.
+ */
+export function inEnteredGroup(cmd: Cmd, entered: string | null | undefined, groups: readonly GroupLike[] | undefined): Cmd {
+  if (!entered || !groups?.some((g) => g.id === entered)) return cmd;
+  if (cmd.op === "in_group" || cmd.op === "on_sheet") return cmd;
+  return { op: "in_group", group: entered, cmd };
 }

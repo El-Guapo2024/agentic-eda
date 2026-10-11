@@ -7,6 +7,7 @@ import {
   MOUSE_SCROLL_DEFAULTS,
   PREFERENCES_STORAGE_KEY,
   sanitizePreferences,
+  sanitizeRotationStep,
   savePreferences,
   scrollModSetValid,
   toViewControlSettings,
@@ -112,4 +113,25 @@ test("preferences round-trip through storage and survive missing or throwing sto
   assert.deepEqual(loadPreferences(throwing), DEFAULT_PREFERENCES);
   savePreferences(throwing, mine); // must not throw
   savePreferences(undefined, mine);
+});
+
+test("the rotation step and the flip direction are KiCad's settings: 90 degrees, left/right, kept in tenths of a degree, a step of nothing is no step", () => {
+  assert.equal(DEFAULT_PREFERENCES.rotationStepDeg, 90, "`m_RotationAngle( ANGLE_90 )`");
+  assert.equal(DEFAULT_PREFERENCES.flipDirection, "left_right", "the `editing.flip_left_right` default");
+  assert.equal(sanitizeRotationStep(15), 15);
+  assert.equal(sanitizeRotationStep(22.5), 22.5);
+  assert.equal(sanitizeRotationStep(22.54), 22.5, "tenths of a degree");
+  assert.equal(sanitizeRotationStep(450), 90, "one turn at most (`rot % 3600`)");
+  assert.equal(sanitizeRotationStep(0), 90, "`if( aVal )`: nothing keeps the old step");
+  assert.equal(sanitizeRotationStep(360), 90);
+  assert.equal(sanitizeRotationStep(-45), 315);
+  assert.equal(sanitizeRotationStep("x"), 90);
+  assert.equal(sanitizeRotationStep(Number.NaN, 45), 45);
+  const p = sanitizePreferences({ rotationStepDeg: 15, flipDirection: "top_bottom" });
+  assert.deepEqual([p.rotationStepDeg, p.flipDirection], [15, "top_bottom"]);
+  assert.deepEqual([sanitizePreferences({ flipDirection: "sideways" }).flipDirection, sanitizePreferences({}).rotationStepDeg], ["left_right", 90]);
+  const store = new Map<string, string>();
+  const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) };
+  savePreferences(storage, { ...DEFAULT_PREFERENCES, rotationStepDeg: 45, flipDirection: "top_bottom" });
+  assert.deepEqual([loadPreferences(storage).rotationStepDeg, loadPreferences(storage).flipDirection], [45, "top_bottom"], "they persist with the other preferences");
 });
