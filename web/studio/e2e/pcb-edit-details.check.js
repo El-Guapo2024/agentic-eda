@@ -1,7 +1,8 @@
 // PCB editing details check (GAPS.md package P6; items 8, 15, 17 and 35): Paste Special on the board (the reference-designator choices and Clear net assignments), Duplicate and
 // Paste being one undo step with the drop that ends them (and Escape leaving nothing, not even a redo entry), items made while a group is entered joining it, the rotation
 // step and the flip direction of the Preferences, the routing staying when a routed footprint is turned, flipped or deleted, Select Connection with nothing selected, Ctrl+U
-// returning to mils, Alt+` switching the net highlight off and on, and Add Corner putting the corner on the edge.
+// returning to mils, Alt+` switching the net highlight off and on, Add Corner putting the corner on the edge, and the Filter Items boxes of Cleanup Tracks & Vias, Edit Track &
+// Via Properties and Edit Text & Graphics Properties (net, width, via types, layer, selected items only; Refill zones; dimensions and the layer default values).
 // Run it in the page of a served board that has footprints placed -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY
 // of a board (it edits and undoes, and it leaves Strict off while it runs). It makes nothing that stays: every edit is undone and the board compared with how it was.
 //
@@ -61,7 +62,7 @@
     const st = await state();
     const poses = {};
     for (const p of st.parts) if (p.placed) poses[p.ref] = [p.at, p.rot, p.side, refText(p)];
-    return JSON.stringify({ poses, tracks: (st.routing?.tracks ?? []).map((t) => [t.id, t.pts]), vias: (st.routing?.vias ?? []).length, zones: (st.routing?.zones ?? []).map((z) => [z.id, z.outline]), shapes: (st.drawings?.shapes ?? []).map((s) => s.id), groups: (st.drawings?.groups ?? []).map((g) => [g.id, g.member_ids]) });
+    return JSON.stringify({ poses, tracks: (st.routing?.tracks ?? []).map((t) => [t.id, t.pts]), vias: (st.routing?.vias ?? []).length, zones: (st.routing?.zones ?? []).map((z) => [z.id, z.outline]), shapes: (st.drawings?.shapes ?? []).map((s) => s.id), texts: (st.drawings?.texts ?? []).map((s) => s.id), dims: (st.drawings?.dimensions ?? []).map((d) => d.id), groups: (st.drawings?.groups ?? []).map((g) => [g.id, g.member_ids]) });
   };
   const select = async (ids) => { await __eda.run("common.InteractiveSelection.clear"); if (ids.length > 0) await __eda.run("common.InteractiveSelection.selectItems", ids); await sleep(250); };
   const undo = async () => { await __eda.run("common.Interactive.undo"); await sleep(500); };
@@ -437,7 +438,209 @@
       t((await snapshot()) === base, "the board is as it was");
     });
 
+    // ----- Cleanup Tracks & Vias: the Filter Items box and Refill zones
+    await scenario("Cleanup Tracks & Vias: Filter Items leaves the other nets alone, Selected items only takes the selection, Refill zones refreshes the fill", async (t) => {
+      const netsOnBoard = [...new Set(placed.flatMap((p) => nets(p)).filter(Boolean))].sort();
+      const [netA, netB] = netsOnBoard;
+      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6000;
+      const stub = (net, y) => post({ op: "add_track", net, layer: "F.Cu", width: 200, pts: [{ x: 2000, y }, { x: 6000, y }] });
+      await stub(netA, y0); await stub(netB, y0 + 2000); await sleep(600);
+      const tracks = async () => ((await state()).routing?.tracks ?? []);
+      const stubA = (await tracks()).find((q) => q.net === netA && q.pts[0][1] === y0), stubB = (await tracks()).find((q) => q.net === netB && q.pts[0][1] === y0 + 2000);
+      t(!!stubA && !!stubB, `two stubs, one on ${netA} and one on ${netB}`);
+      const dlg = () => document.querySelector(".dialog");
+      const byAria = (a) => dlg().querySelector(`[aria-label="${a}"]`);
+      const labelBox = (text) => [...dlg().querySelectorAll("label")].find((l) => l.textContent.trim() === text)?.querySelector("input");
+      const changes = () => [...dlg().querySelectorAll("li")].map((l) => l.textContent.trim());
+      const primary = () => [...dlg().querySelectorAll("button")].find((b) => b.textContent.trim() === "Build Changes" || b.textContent.trim() === "Update PCB");
+
+      const r = await __eda.run("pcbnew.GlobalEdit.cleanupTracksAndVias"); await sleep(600);
+      t(r.dialog === "Cleanup Tracks & Vias", `the action opens the dialog (${r.dialog})`);
+      t(!!labelBox("Refill zones before and after cleanup") && !!byAria("Filter items by net") && !!byAria("Filter items by net class") && !!byAria("Filter items by layer") && !!byAria("Selected items only"), "it has the refill box and the four filters of KiCad's dialog");
+      t([...byAria("Net filter").options].some((o) => o.value === netA) && [...byAria("Net class filter").options].map((o) => o.value).includes("Default") && [...byAria("Layer filter").options].map((o) => o.value).join() === (await state()).layers.join(), "the lists hold the board's nets, the Default class and the copper layers");
+      t(!byAria("Filter items by net").checked && !byAria("Selected items only").checked, "every filter starts off");
+      labelBox("Delete tracks unconnected at one end").click(); await sleep(100);
+      // the net filter
+      byAria("Filter items by net").click(); await sleep(100);
+      setValue(byAria("Net filter"), netA); await sleep(100);
+      primary().click(); await sleep(1300);
+      t(changes().length >= 1 && changes().every((c) => c.includes(`(${netA})`)), `Build Changes lists dangling tracks of ${netA} only (${changes().join("; ")})`);
+      setValue(byAria("Net filter"), netB); await sleep(150);
+      t(primary().textContent.trim() === "Build Changes", "changing the filter sends the dialog back to Build Changes");
+      setValue(byAria("Net filter"), netA); await sleep(150);
+      primary().click(); await sleep(1300);
+      primary().click(); await sleep(1800);
+      let left = await tracks();
+      t(!left.some((q) => q.id === stubA.id) && left.some((q) => q.id === stubB.id), `Update PCB removed the ${netA} stub and left the ${netB} one`);
+      t(!document.querySelector(".dialog"), "and closed the dialog");
+      await undo();
+      left = await tracks();
+      t(left.some((q) => q.id === stubA.id) && left.some((q) => q.id === stubB.id), "one Undo brings it back");
+
+      // Selected items only
+      await select([stubB.id]);
+      await __eda.run("pcbnew.GlobalEdit.cleanupTracksAndVias"); await sleep(600);
+      labelBox("Delete tracks unconnected at one end").click(); await sleep(100);
+      byAria("Selected items only").click(); await sleep(100);
+      primary().click(); await sleep(1300);
+      t(changes().length === 1 && changes()[0].includes(`(${netB})`), `with ${stubB.id} selected, only it is listed (${changes().join("; ")})`);
+      primary().click(); await sleep(1800);
+      left = await tracks();
+      t(left.some((q) => q.id === stubA.id) && !left.some((q) => q.id === stubB.id), "and only it is removed");
+      await undo();
+      await select([]);
+      await __eda.run("pcbnew.GlobalEdit.cleanupTracksAndVias"); await sleep(600);
+      labelBox("Delete tracks unconnected at one end").click(); await sleep(100);
+      byAria("Selected items only").click(); await sleep(100);
+      primary().click(); await sleep(1300);
+      t(changes().length === 0 && dlg().innerText.includes("Nothing to clean up with the current options and filters."), "nothing selected, nothing to clean up");
+      buttonText(dlg(), "Cancel").click(); await sleep(300);
+
+      // Refill zones before and after cleanup: the displayed fill is asked for at Build Changes and again at Update PCB
+      // (the page's own fetch calls, counted: the resource timing buffer is full after the waits of a run)
+      let fillCalls = 0;
+      const realFetch = (window.__pcbEditDetailsRealFetch ??= window.fetch);
+      window.fetch = (...a) => { if (String(a[0]).includes("/api/fill")) fillCalls++; return realFetch.apply(window, a); };
+      const fills = () => fillCalls;
+      const f0 = fills();
+      await __eda.run("pcbnew.GlobalEdit.cleanupTracksAndVias"); await sleep(600);
+      labelBox("Delete tracks unconnected at one end").click(); await sleep(100);
+      primary().click(); await sleep(1300);
+      t(fills() === f0, "without the Refill box, Build Changes asks for no fill");
+      buttonText(dlg(), "Cancel").click(); await sleep(300);
+      await __eda.run("pcbnew.GlobalEdit.cleanupTracksAndVias"); await sleep(600);
+      labelBox("Delete tracks unconnected at one end").click(); await sleep(100);
+      labelBox("Refill zones before and after cleanup").click(); await sleep(100);
+      primary().click(); await sleep(1500);
+      const f1 = fills();
+      t(f1 > f0, `with the Refill box, Build Changes refills first (${f0} -> ${f1} fill requests)`);
+      primary().click(); await sleep(2200);
+      t(fills() > f1, `and Update PCB refills after (${f1} -> ${fills()})`);
+      window.fetch = realFetch;
+      await undo();
+      await __eda.run("pcbnew.ZoneFiller.zoneUnfillAll"); await sleep(300);
+      for (let i = 0; i < 3 && (await tracks()).length > 0; i++) await undo();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
+    // ----- Edit Track & Via Properties: scope and filters
+    await scenario("Edit Track & Via Properties: the via types, width and diameter filters, net, selected items only, and the net remembered for the session", async (t) => {
+      const netsOnBoard = [...new Set(placed.flatMap((p) => nets(p)).filter(Boolean))].sort();
+      const [netA, netB] = netsOnBoard;
+      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6000;
+      await post({ op: "add_track", net: netA, layer: "F.Cu", width: 200, pts: [{ x: 2000, y: y0 }, { x: 6000, y: y0 }] });
+      await post({ op: "add_track", net: netB, layer: "F.Cu", width: 300, pts: [{ x: 2000, y: y0 + 2000 }, { x: 6000, y: y0 + 2000 }] });
+      const layers = (await state()).layers;
+      await post({ op: "add_via", net: netA, x: 10000, y: y0, drill: 300, diameter: 600, from_layer: layers[0], to_layer: layers[layers.length - 1] });
+      await sleep(600);
+      const dlg = () => document.querySelector(".dialog");
+      const byAria = (a) => dlg().querySelector(`[aria-label="${a}"]`);
+      const summary = () => [...dlg().querySelectorAll("div")].map((d) => d.textContent).find((x) => /match the current scope/.test(x) && x.length < 140);
+      const counts = () => { const m = /(\d+) track\(s\) and (\d+) via\(s\)/.exec(summary() ?? ""); return m ? [Number(m[1]), Number(m[2])] : null; };
+      const st0 = await state();
+      const tr = st0.routing.tracks, vi = st0.routing.vias;
+      const r = await __eda.run("pcbnew.GlobalEdit.editTracksAndVias"); await sleep(600);
+      t(r.dialog === "Edit Track & Via Properties", `the action opens the dialog (${r.dialog})`);
+      t(JSON.stringify(counts()) === "[0,0]", "nothing is in scope until a scope box is ticked");
+      byAria("Tracks").click(); await sleep(100);
+      t(counts()[0] === tr.length && counts()[1] === 0, `Tracks: every track (${counts()})`);
+      byAria("Filter tracks by width").click(); await sleep(100);
+      setValue(byAria("Track width filter"), "0.3"); await sleep(150);
+      t(counts()[0] === tr.filter((q) => q.width === 300).length, `Filter tracks by width: 0.3 keeps the tracks of exactly that width (${counts()[0]})`);
+      byAria("Through vias").click(); await sleep(100);
+      t(byAria("Vias").indeterminate === true && byAria("Vias").checked === false, "one via type ticked leaves the Vias box in between");
+      t(counts()[1] === vi.filter((v) => v.from === layers[0] && v.to === layers[layers.length - 1]).length, `and through vias are in scope (${counts()[1]})`);
+      byAria("Vias").click(); await sleep(100);
+      t(byAria("Through vias").checked && byAria("Blind vias").checked && byAria("Buried vias").checked && !byAria("Vias").indeterminate, "clicking the Vias box ticks every type");
+      byAria("Filter vias by diameter").click(); await sleep(100);
+      setValue(byAria("Via diameter filter"), "0.6"); await sleep(150);
+      t(counts()[1] === vi.filter((v) => v.d === 600).length, `Filter vias by diameter: 0.6 (${counts()[1]})`);
+      setValue(byAria("Via diameter filter"), "0.9"); await sleep(150);
+      t(counts()[1] === vi.filter((v) => v.d === 900).length, `0.9 (${counts()[1]})`);
+      byAria("Filter vias by diameter").click(); await sleep(100);
+      byAria("Filter tracks by width").click(); await sleep(100);
+      byAria("Filter items by net").click(); await sleep(100);
+      setValue(byAria("Net filter"), netA); await sleep(150);
+      t(counts()[0] === tr.filter((q) => q.net === netA).length && counts()[1] === vi.filter((v) => v.net === netA).length, `Filter items by net: ${netA} (${counts()})`);
+      byAria("Filter items by layer").click(); await sleep(100);
+      setValue(byAria("Layer filter"), layers[layers.length - 1]); await sleep(150);
+      t(counts()[0] === tr.filter((q) => q.net === netA && q.layer === layers[layers.length - 1]).length, `and by layer ${layers[layers.length - 1]}: ${counts()[0]} track(s)`);
+      t(counts()[1] === 0, "a via is on the top layer of its span, so none is on the bottom one");
+      setValue(byAria("Layer filter"), layers[0]); await sleep(150);
+      t(counts()[1] === vi.filter((v) => v.net === netA).length, "and all of them on the top one");
+      byAria("Filter items by layer").click(); await sleep(100);
+      // an action on the filtered items: the width of the tracks of netA only
+      byAria("Vias").click(); await sleep(100);
+      const kv = dlg().querySelector(".kv-grid");
+      kv.querySelectorAll('input[type="checkbox"]')[1].click(); await sleep(100);
+      setValue(kv.querySelectorAll('input[type="number"]')[0], "0.5"); await sleep(100);
+      buttonText(dlg(), "Apply and Close").click(); await sleep(1500);
+      const after = (await state()).routing.tracks;
+      t(after.filter((q) => q.net === netA).every((q) => q.width === 500) && after.filter((q) => q.net !== netA).every((q) => q.width === tr.find((o) => o.id === q.id).width), `Apply and Close widened the ${netA} tracks and no others`);
+      await undo();
+      // the net of the last session is where the dialog opens next
+      await __eda.run("pcbnew.GlobalEdit.editTracksAndVias"); await sleep(600);
+      t(byAria("Net filter").value === netA, `reopened, the net filter is on ${netA}, as the last session left it (${byAria("Net filter").value})`);
+      // selected items only
+      buttonText(dlg(), "Close").click(); await sleep(300);
+      const trB = tr.find((q) => q.net === netB);
+      await select([trB.id]);
+      await __eda.run("pcbnew.GlobalEdit.editTracksAndVias"); await sleep(600);
+      byAria("Tracks").click(); await sleep(100);
+      byAria("Selected items only").click(); await sleep(100);
+      t(JSON.stringify(counts()) === "[1,0]", `Selected items only: the one selected track (${counts()})`);
+      buttonText(dlg(), "Close").click(); await sleep(300);
+      await select([]);
+      for (let i = 0; i < 4 && ((await state()).routing?.tracks ?? []).length > 0; i++) await undo();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
+    // ----- Edit Text & Graphics Properties: dimensions, the layer filter and the layer default values
+    await scenario("Edit Text & Graphics Properties: PCB dimensions are a scope, the layer filter lists every layer, Set to layer default values restyles", async (t) => {
+      const y0 = Math.max(...placed.map((p) => (p.courtyard ? p.courtyard[3] : p.at[1]))) + 6000;
+      await post({ op: "add_text", text: { content: "HELLO", at: { x: 5000, y: y0 }, angle: 0, layer: "F.SilkS", size_um: 2000, stroke_width: 500, justify: "center", mirror: false } });
+      await post({ op: "add_shape", shape: { kind: "segment", layer: "F.SilkS", stroke_width: 400, filled: false, start: { x: 2000, y: y0 + 2000 }, end: { x: 9000, y: y0 + 2000 } } });
+      await post({ op: "add_dimension", dimension: { layer: "Dwgs.User", kind: { kind: "aligned", height: 2000 }, start: { x: 2000, y: y0 + 5000 }, end: { x: 12000, y: y0 + 5000 }, prefix: "", suffix: "", units: "mm", units_format: "no_suffix", precision: 1, suppress_trailing_zeros: false, text_position: "outside", keep_text_aligned: true, text_angle: 0, text_size_um: 1500, text_thickness_um: 400, stroke_width: 300, arrow_length: 1270, extension_offset: 500, extension_height: 600, arrow_direction: "inward" } });
+      await sleep(700);
+      const dr = async () => (await state()).drawings;
+      const d0 = await dr();
+      const dlg = () => document.querySelector(".dialog");
+      const byAria = (a) => dlg().querySelector(`[aria-label="${a}"]`);
+      const summary = () => [...dlg().querySelectorAll("div")].map((d) => d.textContent).find((x) => /match the current scope/.test(x) && x.length < 160);
+      const counts = () => { const m = /(\d+) graphic item\(s\), (\d+) text\(s\) and (\d+) dimension\(s\)/.exec(summary() ?? ""); return m ? m.slice(1).map(Number) : null; };
+      const r = await __eda.run("pcbnew.GlobalEdit.editTextAndGraphics"); await sleep(600);
+      t(r.dialog === "Edit Text & Graphics Properties", `the action opens the dialog (${r.dialog})`);
+      t(JSON.stringify(counts()) === "[0,0,0]", "nothing is in scope until a scope box is ticked");
+      byAria("PCB dimensions").click(); await sleep(100);
+      t(counts()[2] === d0.dimensions.length && counts()[2] >= 1, `PCB dimensions: the board's dimensions (${counts()})`);
+      byAria("PCB graphic items").click(); byAria("PCB text items").click(); await sleep(100);
+      t(counts()[0] === d0.shapes.length && counts()[1] === d0.texts.length, `PCB graphic items and PCB text items (${counts()})`);
+      const layerOptions = [...byAria("Layer filter").options].map((o) => o.value);
+      t(["F.SilkS", "B.Fab", "Edge.Cuts", "Dwgs.User", "F.CrtYd"].every((l) => layerOptions.includes(l)), "the layer filter lists the technical layers, not only the layers that hold something");
+      byAria("Filter by layer").click(); await sleep(100);
+      setValue(byAria("Layer filter"), "Dwgs.User"); await sleep(150);
+      t(counts()[0] === d0.shapes.filter((s) => s.layer === "Dwgs.User").length && counts()[2] === d0.dimensions.filter((d) => d.layer === "Dwgs.User").length, `By layer: Dwgs.User (${counts()})`);
+      setValue(byAria("Layer filter"), "F.SilkS"); await sleep(150);
+      t(counts()[2] === 0 && counts()[1] === d0.texts.filter((x) => x.layer === "F.SilkS").length, `By layer: F.SilkS (${counts()})`);
+      byAria("Filter by layer").click(); await sleep(100);
+      t([...dlg().querySelectorAll("label")].some((l) => l.textContent.trim() === "Set to layer and dimension default values:"), "with dimensions in scope the radio says layer and dimension default values (onDimensionItemCheckbox)");
+      byAria("Set to layer default values").click(); await sleep(150);
+      buttonText(dlg(), "Apply and Close").click(); await sleep(1600);
+      const d1 = await dr();
+      const mine = { text: d1.texts.find((x) => x.content === "HELLO"), seg: d1.shapes.find((s) => s.kind === "segment" && s.start[1] === y0 + 2000), dim: d1.dimensions.find((d) => d.start[1] === y0 + 5000) };
+      t(mine.text?.size === 1000 && mine.text?.stroke_width === 100, `the silkscreen text is 1 mm with 0.1 mm lines, the silk defaults of Board Setup (${mine.text?.size}, ${mine.text?.stroke_width})`);
+      t(mine.seg?.stroke_width === 100, `the silkscreen line is 0.1 mm (${mine.seg?.stroke_width})`);
+      t(mine.dim?.stroke_width === 100 && mine.dim?.text_size_um === 1000 && mine.dim?.text_thickness_um === 150 && mine.dim?.precision === 4, `the dimension took the other-layers defaults and the dimension settings (line ${mine.dim?.stroke_width}, text ${mine.dim?.text_size_um}/${mine.dim?.text_thickness_um}, ${mine.dim?.precision} decimals)`);
+      await undo();
+      const d2 = await dr();
+      const back = { text: d2.texts.find((x) => x.content === "HELLO"), dim: d2.dimensions.find((d) => d.start[1] === y0 + 5000) };
+      t(back.text?.size === 2000 && back.dim?.stroke_width === 300, "one Undo takes the whole restyle back");
+      for (let i = 0; i < 4 && (await snapshot()) !== base; i++) await undo();
+      t((await snapshot()) === base, "undone, the board is as it was");
+    });
+
     // -------------------------------------------------------------------------------------------------------------------- the end
+    if (window.__pcbEditDetailsRealFetch) window.fetch = window.__pcbEditDetailsRealFetch;
     results.push({ name: "end: the board is as it was", ok: (await snapshot()) === base, notes: [`${(await snapshot()) === base ? "ok" : "FAIL"}: every edit was undone`] });
     if (strict && strictWas && !strict.checked) strict.click();
     check.ok = results.every((r) => r.ok);
