@@ -16,7 +16,8 @@
 //! limit as `Cmd::RenameSymbol`).
 
 use eda_model::annotate::{self, Algo, Entry, Problem, SortOrder};
-use eda_model::ir::{field_key, SchematicSection};
+use crate::sch_clipboard::LibMerge;
+use eda_model::ir::{field_key, LibrarySymbol, SchematicSection};
 use eda_model::sheet_list::{self, SheetEntry};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -244,14 +245,14 @@ impl<'a> Board<'a> {
         let mut locked: Vec<Vec<Entry>> = Vec::new();
         if !(opts.regroup_units && reset) {
             let mut by_ref: BTreeMap<String, Vec<Entry>> = BTreeMap::new();
-            for e in list.iter().filter(|e| e.unit_count > 1 && !e.original().is_empty() && !e.original().ends_with('?') && !e.power) {
+            for e in list.iter().filter(|e| e.unit_count > 1 && !annotate::is_unannotated(e.original()) && !e.power) {
                 by_ref.entry(e.original().to_string()).or_default().push(e.clone());
             }
             locked = by_ref.into_values().filter(|g| !reset || g.iter().map(|e| e.unit).collect::<BTreeSet<_>>().len() == g.len()).collect();
         }
 
         // what each one was, for the messages (`mapExistingAnnotation`)
-        let previous: BTreeMap<usize, String> = list.iter().filter(|e| !e.original().is_empty() && !e.original().ends_with('?')).map(|e| (e.key, e.original_with_unit())).collect();
+        let previous: BTreeMap<usize, String> = list.iter().filter(|e| !annotate::is_unannotated(e.original())).map(|e| (e.key, e.original_with_unit())).collect();
 
         annotate::split_all(&mut list);
         if reset {
@@ -265,6 +266,12 @@ impl<'a> Board<'a> {
             let slot = &slots[e.key];
             let new_ref = e.reference();
             if new_ref != e.original() {
+                // A symbol drawn from the generic box of its part (no library symbol: an old drawing) is drawn from the part it is named for: under
+                // another reference it would be a box with no pins. It keeps its reference.
+                if self.drawn_from_its_part(slot) {
+                    messages.push(AnnotateMessage { severity: "warning", text: format!("{} is drawn from the generic box of its part, so its reference cannot change; it keeps it.", e.original()) });
+                    continue;
+                }
                 let (id, unit) = (e.original().to_string(), e.unit);
                 renames.push(Rename { file: slot.file.clone(), item: slot.item, old: id, unit, new: new_ref });
             }
@@ -305,6 +312,48 @@ impl<'a> Board<'a> {
         }
     }
 
+    /// A symbol of the model's own part with no library symbol of its own at all: drawn from the generic box of that part (`eda:<ref>`, or no `lib_id`).
+    fn drawn_from_its_part(&self, slot: &Slot) -> bool {
+        let Item::Symbol(i) = slot.item else { return false };
+        let Some(s) = self.screen_of_file(&slot.file).and_then(|sch| sch.symbols.get(i)) else { return false };
+        (s.lib_id.is_empty() || s.lib_id.starts_with("eda:")) && self.model.part(&s.id).is_some()
+    }
+
+    /// A symbol drawn from a generated symbol (`gen:U1`, made from the pins of the part it is named for) is drawn from that part. Under another
+    /// reference there is no such part, so the drawing is kept with the design under a name of its own (a library symbol like any other, the way
+    /// a pasted generated symbol is) and the symbols named `references` point at it.
+    pub(crate) fn freeze_generated_symbols(&mut self, references: &BTreeSet<String>) {
+        let mut provided: Vec<LibrarySymbol> = Vec::new();
+        for sch in self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())) {
+            for s in sch.symbols.iter().filter(|s| references.contains(&s.id) && eda_model::gensym::is_generated_lib_id(&s.lib_id)) {
+                if provided.iter().any(|p| p.lib_id == s.lib_id) {
+                    continue;
+                }
+                let Some(engine) = self.model.part(&s.id).and_then(|part| self.model.real_symbol_of(&s.lib_id, part)) else { continue };
+                let mut rich = LibrarySymbol::from_engine_symbol(&engine);
+                rich.lib_id = s.lib_id.clone();
+                provided.push(rich);
+            }
+        }
+        if provided.is_empty() {
+            return;
+        }
+        let wanted: Vec<String> = provided.iter().map(|p| p.lib_id.clone()).collect();
+        let LibMerge { lib_name, publish, .. } = self.merge_lib_symbols(&wanted, &provided);
+        if !publish.is_empty() {
+            let lib = self.design.symbol_library.get_or_insert_with(Default::default);
+            lib.symbols.extend(publish);
+            lib.symbols.sort_by(|a, b| a.lib_id.cmp(&b.lib_id));
+        }
+        for sch in self.design.schematic.iter_mut().chain(self.design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
+            for s in sch.symbols.iter_mut().filter(|s| references.contains(&s.id)) {
+                if let Some(name) = lib_name.get(&s.lib_id).filter(|n| **n != s.lib_id) {
+                    s.lib_id = name.clone();
+                }
+            }
+        }
+    }
+
     /// Write the new references: the symbols, and everything keyed by the old ones, on every screen at once (a reset can swap two
     /// references, so the names are taken from the mapping, never one rename after another). `remap_nets` also renames the pins of the
     /// design's net list (an annotation of symbols the nets already name; a sheet that has just come in is in no net yet).
@@ -313,6 +362,8 @@ impl<'a> Board<'a> {
             return;
         }
         let base = self.design.nets.clone().unwrap_or_else(|| self.model.nets.clone());
+        // the drawing of a generated symbol stays with the design, under a name that is not its old part's
+        self.freeze_generated_symbols(&renames.iter().filter(|r| matches!(r.item, Item::Symbol(_))).map(|r| r.old.clone()).collect());
         let mut whole_all: BTreeMap<String, String> = BTreeMap::new();
         let files: BTreeSet<String> = renames.iter().map(|r| r.file.clone()).collect();
         for file in files {

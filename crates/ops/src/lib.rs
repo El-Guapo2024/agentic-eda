@@ -4756,6 +4756,8 @@ impl<'a> Board<'a> {
         if new_id == id {
             return Ok(()); // renaming to the same id is a no-op, not an error
         }
+        // a generated symbol is drawn from the part it is named for: it keeps its drawing under a name of its own
+        self.freeze_generated_symbols(&BTreeSet::from([id.to_string()]));
         let sch = self.schematic_mut()?;
         let old_prefix = format!("{id}.");
         let new_prefix = format!("{new_id}.");

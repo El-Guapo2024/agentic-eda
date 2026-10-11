@@ -42,6 +42,9 @@ mod gate_vs_kicad;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;
+mod sheet_import;
+#[cfg(test)]
+mod sch_hierarchy_tests;
 mod studio;
 mod view_api;
 mod appearance_api;

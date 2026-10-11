@@ -208,8 +208,11 @@ fn import_sheet_puts_a_copy_of_the_file_in_as_a_sheet_and_numbers_its_symbols_an
     assert_eq!(refs_in(d, "sub.kicad_sch"), vec!["R6"]);
     // the library symbols came with it: the design draws the file's symbols
     assert!(d.sheet_contents.as_ref().unwrap()["amp.kicad_sch"].symbols.iter().all(|s| !s.lib_id.is_empty()));
-    // the file's own screen keeps KiCad's frame
-    assert!(d.sheet_contents.as_ref().unwrap()["amp.kicad_sch"].imported_from_kicad);
+    // the file's screen is in this design's frame now: a symbol is placed by the corner of its box, not by its library origin
+    let amp = &d.sheet_contents.as_ref().unwrap()["amp.kicad_sch"];
+    assert!(!amp.imported_from_kicad && !d.sheet_contents.as_ref().unwrap()["sub.kicad_sch"].imported_from_kicad);
+    let moved = amp.symbols.iter().filter(|s| s.lib_id.starts_with("Device:")).any(|s| s.at != pt(s.at.x, 0) || s.at.x % 10 != 0);
+    assert!(moved, "the symbols were at their library origins (y = 0) and are at the corner of their boxes now: {:?}", amp.symbols.iter().map(|s| s.at).collect::<Vec<_>>());
     // the same name again is refused, and so is a file that was never read
     assert_eq!(b.apply(&import(Some(a_file()), true, false)).unwrap_err()[0].check, "ops_sheet_name_taken");
     assert_eq!(b.apply(&import(None, true, false)).unwrap_err()[0].check, "ops_sheet_file_not_read");

@@ -56,9 +56,14 @@ impl<'a> Board<'a> {
         let mut publish: Vec<LibrarySymbol> = Vec::new();
         for lib_id in wanted.iter().map(String::as_str) {
             if let Some(known) = self.design_symbol(lib_id) {
-                lib_name.insert(lib_id.to_string(), lib_id.to_string());
-                engine_of.insert(lib_id.to_string(), known);
-                continue;
+                // The design's own wins -- unless the definition that comes with the items draws its pins elsewhere (a file this project wrote bakes a
+                // library symbol shifted to its box's corner, under the library's name): the items' wires end where THEIR pins are, so they bring
+                // their definition, under a name the design does not use.
+                if !provided.iter().any(|t| t.lib_id == lib_id && !same_pins(t, &known)) {
+                    lib_name.insert(lib_id.to_string(), lib_id.to_string());
+                    engine_of.insert(lib_id.to_string(), known);
+                    continue;
+                }
             }
             let Some(theirs) = provided.iter().find(|s| s.lib_id == lib_id).map(|t| {
                 let mut t = t.clone();
@@ -79,14 +84,16 @@ impl<'a> Board<'a> {
             let mut n = 2;
             loop {
                 let existing = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(&name)).or_else(|| publish.iter().find(|p| p.lib_id == name));
-                match existing {
-                    None => break,
-                    Some(e) if same_drawing(e, &theirs) => break,
-                    Some(_) => {
-                        name = format!("{base}_{n}");
-                        n += 1;
-                    }
+                let clash = match existing {
+                    Some(e) => !same_drawing(e, &theirs),
+                    // a library symbol the design has but has not published (a name of an installed library): a different drawing may not take its name
+                    None => self.design_symbol(&name).is_some_and(|k| !same_pins(&theirs, &k)),
+                };
+                if !clash {
+                    break;
                 }
+                name = format!("{base}_{n}");
+                n += 1;
             }
             let already = self.design.symbol_library.as_ref().is_some_and(|l| l.by_lib_id(&name).is_some()) || publish.iter().any(|p| p.lib_id == name);
             let mut ours = theirs.clone();
@@ -239,6 +246,17 @@ pub(crate) struct LibMerge {
     pub engine_of: BTreeMap<String, LibSymbol>,
     /// The entries the design does not have yet.
     pub publish: Vec<LibrarySymbol>,
+}
+
+/// Do the two draw their pins in the same places (number, unit, place, direction, length -- the normal body style)? That, not the artwork, is what a
+/// wire that ends on a pin depends on.
+fn same_pins(a: &LibrarySymbol, b: &LibSymbol) -> bool {
+    let r = |v: f64| (v * 1000.0).round() as i64;
+    let mut pa: Vec<(String, u32, i64, i64, i64, i64)> = a.pins.iter().filter(|p| p.body_style <= 1).map(|p| (p.number.clone(), p.unit, r(p.at.x), r(p.at.y), r(p.angle_deg), r(p.length_mm))).collect();
+    let mut pb: Vec<(String, u32, i64, i64, i64, i64)> = b.pins.iter().map(|p| (p.number.clone(), p.unit, r(p.at.x), r(p.at.y), r(p.angle_deg), r(p.length_mm))).collect();
+    pa.sort();
+    pb.sort();
+    pa == pb
 }
 
 /// Two library symbols draw the same: everything but the name and whether the project has published it.

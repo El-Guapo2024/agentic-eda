@@ -93,6 +93,12 @@ pub fn split_reference(reference: &str) -> (String, Option<u32>) {
     if let Some(prefix) = reference.strip_suffix('?') {
         return (prefix.to_string(), None);
     }
+    // the placeholder the sheet importer gives a symbol it cannot tell apart (`R?1`)
+    if let Some(q) = reference.rfind('?') {
+        if reference[q + 1..].chars().all(|c| c.is_ascii_digit()) && q + 1 < reference.len() {
+            return (reference[..q].to_string(), None);
+        }
+    }
     // The run of digits and blanks at the end; `Split` needs it to end on a digit and to leave something in front of it.
     let mut start = reference.len();
     for (i, c) in reference.char_indices().rev() {

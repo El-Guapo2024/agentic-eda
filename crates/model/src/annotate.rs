@@ -63,6 +63,19 @@ impl Algo {
     }
 }
 
+/// The position of the `?` of a placeholder reference the sheet importer gives symbols it cannot tell apart (`R?1`, `R?2`): a `?` followed by
+/// digits to the end. (A reference KiCad writes never has one: its unannotated form is `R?`.)
+fn placeholder_mark(reference: &str) -> Option<usize> {
+    let q = reference.rfind('?')?;
+    let tail = &reference[q + 1..];
+    (!tail.is_empty() && tail.chars().all(|c| c.is_ascii_digit())).then_some(q)
+}
+
+/// Is this reference not annotated: empty, ending in `?` (`R?`), or a placeholder (`R?1`)?
+pub fn is_unannotated(reference: &str) -> bool {
+    reference.is_empty() || reference.ends_with('?') || placeholder_mark(reference).is_some()
+}
+
 /// `LIB_SYMBOL::LetterSubReference( unit, 'A' )`: 1 is `A`, 26 is `Z`, 27 is `AA`.
 pub fn unit_letters(unit: u32) -> String {
     let mut unit = unit as i64;
@@ -139,6 +152,11 @@ impl Entry {
         self.split_done = true;
         self.num = -1;
         self.num_str.clear();
+        if let Some(q) = placeholder_mark(&self.text) {
+            self.is_new = true;
+            self.text.truncate(q);
+            return;
+        }
         let mut chars: Vec<char> = self.text.chars().collect();
         let Some(&last) = chars.last() else {
             self.is_new = true;
@@ -560,6 +578,10 @@ mod tests {
         let mut r = e(0, "R?", (0, 0));
         r.split();
         assert_eq!((r.prefix(), r.number(), r.is_new(), r.reference().as_str()), ("R", None, true, "R?"));
+        let mut r = e(0, "R?12", (0, 0));
+        r.split();
+        assert_eq!((r.prefix(), r.number(), r.is_new()), ("R", None, true), "the importer's placeholder is not a number");
+        assert!(is_unannotated("R?") && is_unannotated("R?3") && is_unannotated("") && !is_unannotated("R3") && !is_unannotated("U1A"));
         let mut r = e(0, "U1A", (0, 0));
         r.split();
         assert!(r.is_new(), "a reference that does not end in a digit is not annotated");

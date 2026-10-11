@@ -174,6 +174,20 @@ impl<'a> Board<'a> {
         wanted.dedup();
         let LibMerge { lib_name, engine_of, publish } = self.merge_lib_symbols(&wanted, inc.lib_symbols);
         for (_, sec) in copies.iter_mut() {
+            // A screen read from a file places a symbol by its library origin (KiCad's frame); the sheets of this design place one by the corner of its box
+            // (what the writer bakes the symbol against): the symbol is moved there, so that its pins stay where the file has them.
+            if sec.imported_from_kicad {
+                let body_styles = sec.extras.body_styles.clone();
+                for s in sec.symbols.iter_mut() {
+                    let Some(engine) = engine_of.get(&s.lib_id) else { continue };
+                    let style = body_styles.get(&eda_model::ir::field_key(&s.id, s.unit)).copied().unwrap_or(1);
+                    let drawn = if style > 1 && engine.has_alternate_body() { engine.in_style(style).into_owned() } else { engine.clone() };
+                    let (x0, _, _, y1) = eda_engine::geometry::real_symbol_bbox(&drawn, s.unit);
+                    let (ox, oy) = eda_model::sch_clipboard::place_offset_um(s.rot as f64 / 1000.0, s.mirrored, s.mirror_y, (-x0, -y1));
+                    s.at = Point { x: s.at.x - ox, y: s.at.y - oy };
+                }
+                sec.imported_from_kicad = false;
+            }
             sec.symbols.iter_mut().for_each(|s| {
                 if let Some(n) = lib_name.get(&s.lib_id) {
                     s.lib_id = n.clone();

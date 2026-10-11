@@ -865,6 +865,9 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     // A symbol or footprint out of KiCad's installed libraries goes in with its definition (`crate::library_place`).
     let with_definitions = crate::library_place::with_installed_definitions(cmd, &design, &model);
     let cmd = with_definitions.as_ref().unwrap_or(cmd);
+    // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
+    let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
+    let cmd = with_file.as_ref().unwrap_or(cmd);
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
