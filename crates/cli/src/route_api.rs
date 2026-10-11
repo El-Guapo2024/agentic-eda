@@ -237,7 +237,13 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
     match board::step(dir, cmd, true, "ui") {
-        Ok(summary) => json!({ "ok": true, "message": summary }),
+        Ok(summary) => {
+            // a route restarted from the other end is one undo with the part that was committed when it restarted
+            if router.append_undo {
+                board::append_to_previous_undo(dir);
+            }
+            json!({ "ok": true, "message": summary })
+        }
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
     }
 }
@@ -250,11 +256,11 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
 pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let at = point_of(&req);
-    let (continuation, settings) = {
+    let (continuation, settings, append_undo) = {
         let guard = cell.lock().unwrap_or_else(|e| e.into_inner());
         let Some(router) = guard.as_ref() else { return err("not routing") };
         match router.continue_from_end(at) {
-            Ok(c) => (c, router.settings.clone()),
+            Ok(c) => (c, router.settings.clone(), router.append_undo),
             Err(message) => return err(message),
         }
     };
@@ -265,6 +271,10 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         if let Err(e) = board::step(dir, cmd, true, "ui") {
             return err(board::reasons(&e));
         }
+        // a chain of restarts is one undo: this commit joins the one before it
+        if append_undo {
+            board::append_to_previous_undo(dir);
+        }
     }
     // the board as it stands now, with what was fixed in it
     let (_, design, model) = match board::load(dir) {
@@ -273,6 +283,8 @@ pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let mut router = Router::new(&design, &model);
     router.settings = settings;
+    // what the new session commits is one undo step with this commit (`APPEND_UNDO`), and with the ones before it
+    router.append_undo = append_undo || committed;
     if let Err(message) = router.start(continuation.from, &continuation.layer, continuation.width) {
         *cell.lock().unwrap_or_else(|e| e.into_inner()) = None;
         return json!({ "ok": false, "committed": committed, "message": message });
@@ -801,6 +813,13 @@ mod tests {
         // a session is running again, from the far end
         let again = mv(&cell, &body(json!({ "x": 12_000, "y": 5_000 })));
         assert_eq!(again["ok"], json!(true), "{again}");
+        // the leg committed when the route restarted and the route finished from the far end are one undo step (`APPEND_UNDO`)
+        let finished = finish(&dir, &cell, &body(json!({ "x": 12_000, "y": 8_000 })));
+        assert_eq!(finished["ok"], json!(true), "{finished}");
+        assert_eq!(tracks_of(&dir).len(), 3, "the stub, the committed leg and the route from the via");
+        let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));
+        assert!(undone.is_ok(), "{undone:?}");
+        assert_eq!(tracks_of(&dir).len(), 1, "one undo took back both commits: {:?}", tracks_of(&dir));
         // nothing left to connect to is a refusal that leaves the session alone
         let nothing = continue_from_end(&dir, &Mutex::new(None), &body(json!({ "x": 0, "y": 0 })));
         assert_eq!(nothing["ok"], json!(false));

@@ -238,6 +238,8 @@ export type DrawState =
        * continues on `pendingViaLayer`. */
       placingVia?: boolean;
       pendingViaLayer?: string;
+      /** The pad, via or track segment the route started on: it does not end there (see kicad-port/routeTool.ts). */
+      startItem?: string;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's

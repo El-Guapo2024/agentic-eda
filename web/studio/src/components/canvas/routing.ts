@@ -28,13 +28,13 @@ import { advanceRouteQueue } from "./routeQueue";
  * RouterSettingsDialog.tsx) -- read fresh at the start of every session,
  * same as every other "current pick" this app's route/via tools read
  * (track width, via preset). */
-export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: RouterSettings, dispatch: Dispatch<Action>): Promise<boolean> {
+export async function startInteractiveRoute(x: number, y: number, layer: string, width: number, settings: RouterSettings, dispatch: Dispatch<Action>, startItem?: string | null): Promise<boolean> {
   const preview = await routeStart(x, y, layer, width, settings);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start a route from a pad, via, or track end.", kind: "error" });
     return false;
   }
-  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias };
+  const draw: RouteDrawState = { kind: "route", net: preview.net ?? "", layer: preview.layer, width, pts: preview.head, colliding: preview.colliding, runs: preview.runs, via: preview.via, snappedEnd: preview.snapped_end, displaced: preview.displaced, displacedVias: preview.displaced_vias, startItem: startItem ?? undefined };
   dispatch({ type: "SET_DRAW_STATE", draw });
   return true;
 }
@@ -88,7 +88,8 @@ export async function continueInteractiveRouteFromEnd(at: [number, number], draw
     return;
   }
   if (reply.committed) await api.refresh();
-  dispatch({ type: "SET_DRAW_STATE", draw: { ...drawStateFromPreview(draw, reply), placingVia: false, pendingViaLayer: undefined } });
+  // the new route starts at the far end: whatever the old one started on is no longer what it must not end on
+  dispatch({ type: "SET_DRAW_STATE", draw: { ...drawStateFromPreview(draw, reply), placingVia: false, pendingViaLayer: undefined, startItem: undefined } });
 }
 
 /** Esc while routing (or dragging -- `routeCancel`'s own doc comment:

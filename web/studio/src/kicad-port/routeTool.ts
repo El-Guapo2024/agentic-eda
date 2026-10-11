@@ -46,6 +46,8 @@ export interface RouteDrawState {
   displacedVias?: { source_via: string; x: number; y: number }[];
   placingVia?: boolean;
   pendingViaLayer?: string;
+  /** The id of the pad, via or track segment the route started on (`m_startItem`): the route does not end on it, so the cursor within a grid of it does not snap back onto it. */
+  startItem?: string;
 }
 
 /** The `DrawState` "route" patch for a successful `RoutePreview` reply,

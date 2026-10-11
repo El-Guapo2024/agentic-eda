@@ -114,13 +114,16 @@ pub struct Router {
     /// The ids of the IR tracks that are arcs (`arc_mid_offset`): the world has them as chords, so a route cannot start or end in the
     /// middle of one (`SplitAdjacentArcs` would split the arc itself).
     arc_tracks: HashSet<String>,
+    /// This session restarted from the other end of a route whose fixed part was committed (`ROUTER::ContinueFromEnd`): what it commits
+    /// is one undo step with that earlier commit (`APPEND_UNDO`). The caller that applies the commits keeps it.
+    pub append_undo: bool,
 }
 
 impl Router {
     pub fn new(design: &Design, model: &ConstraintModel) -> Self {
         let (world, layers) = crate::from_ir::build_node(design, model);
         let arc_tracks = design.routing.as_ref().map(|r| r.tracks.iter().filter(|t| t.arc_mid_offset.is_some()).map(|t| t.id.clone()).collect()).unwrap_or_default();
-        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, arc_tracks }
+        Router { world, layers, rules: model.board.clone(), settings: RoutingSettings::default(), session: None, drag: None, diff: None, arc_tracks, append_undo: false }
     }
 
     pub fn is_routing(&self) -> bool {

@@ -450,7 +450,9 @@ export function Canvas() {
     const draw = state.drawState;
     if (tool === "route" || tool === "diffpair" || tool === "drag") {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip: draw?.kind === "drag" && draw.lineTracks?.length ? new Set(draw.lineTracks) : undefined });
+      // what the cursor does not snap onto: the line a drag is dragging (`checkSnap`), the item a route started on (`pickSingleItem( .., { m_startItem } )`)
+      const skip = draw?.kind === "drag" && draw.lineTracks?.length ? new Set(draw.lineTracks) : draw?.kind === "route" && draw.startItem ? new Set([draw.startItem]) : undefined;
+      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};
@@ -705,7 +707,7 @@ export function Canvas() {
           const connected = state.bcx.autoTrackWidth ? connectedTrackWidth(findRouteAnchor(board, sx, sy, ANCHOR_SNAP_UM)?.from ?? (under ? `track ${under.id}` : undefined), board.routing?.tracks ?? []) : null;
           const width = connected ?? state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
           clearRouteQueue(); // a route the user starts by hand is no longer RouteSelected's loop
-          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch);
+          void startInteractiveRoute(sx, sy, layer, width, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks), dispatch, snap.routePicked());
           return;
         }
         void fixInteractiveRoute(sx, sy, draw, dispatch, api);

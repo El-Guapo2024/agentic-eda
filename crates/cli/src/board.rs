@@ -822,6 +822,15 @@ pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
     Ok(msg)
 }
 
+/// KiCad's `APPEND_UNDO` for the router: the edit just made becomes part of the PCB edit before it, so one undo steps back over both
+/// (`ROUTER_TOOL::routerContinueFromEnd`: "We want the next router commit to be one undo at the UI layer"). The newest PCB entry of the
+/// undo stack -- the pre-edit snapshot [`step`] pushed for the edit just made -- is dropped; the one under it, from before the first
+/// of the two, stays. Call it only after a [`step`] that succeeded.
+pub(crate) fn append_to_previous_undo(dir: &Path) {
+    let _lock = lock(dir);
+    let _ = pop_snapshot(&undo_dir(dir), Some(Domain::Pcb));
+}
+
 /// `eda board redo` / `POST /api/redo` -- see `undo`'s own doc; `scope`
 /// means the same thing here. Anything undone is invalidated the moment a
 /// new edit happens (`step` clears the whole redo stack, not just one

@@ -64,6 +64,7 @@ export class PcbSnap {
   private tool: string | null = null;
   private cachedOverlay: SnapOverlay | null = null;
   private last: Pt | null = null;
+  private lastRoutePick: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   /** Called when the overlay changed without a pointer event (a construction proposal came due). */
   onChange: (() => void) | null = null;
@@ -218,7 +219,7 @@ export class PcbSnap {
    *     for the end, only one of `net` when it is given, and only when Shift is not held and the magnetic setting allows (`checkSnap`);
    *   * a pad or via snaps to its centre; a track to the nearer end if the cursor is within half its width of one, else along the segment (`AlignToSegment`);
    *   * nothing under the cursor: `Align` to the wire grid (the via grid for a via being placed). Ctrl turns the grid off.
-   * `skip` are the tracks a drag is dragging: it never snaps to the line it moves (`checkSnap`).
+   * `skip` are the tracks a drag is dragging (it never snaps to the line it moves, `checkSnap`) or the item a route started on (which it does not end on).
    */
   routePoint(world: Pt, mods: SnapMods, opts: { net?: string | null; isEnd: boolean; placingVia?: boolean; skip?: ReadonlySet<string> }): Pt {
     if (!this.view?.board) return world;
@@ -244,7 +245,13 @@ export class PcbSnap {
     }
     out = whole(out);
     this.last = out;
+    this.lastRoutePick = item !== null && allowed ? item.id : null;
     reportSnap({ tool: "route", input: world, output: out, types: 0, anchored: item !== null && allowed });
     return out;
+  }
+
+  /** The id of the pad, via or track segment the last `routePoint` snapped onto -- what a route started there started on (`m_startItem`), which it does not end on. */
+  routePicked(): string | null {
+    return this.lastRoutePick;
   }
 }

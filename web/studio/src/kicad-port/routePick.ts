@@ -4,7 +4,8 @@
 //
 // A drag does not snap to the line it is dragging (`TOOL_BASE::checkSnap`: "if we're dragging a track segment, don't try to snap to items that are part of
 // the original line"): `skip` is the board ids of those tracks. Without it the cursor within a grid of the dragged track would stick to it and the track
-// could not be slid sideways by less than a grid.
+// could not be slid sideways by less than a grid. A route does not end on the item it started on (`pickSingleItem( mousePos, net, layer, false, { m_startItem } )`):
+// its `skip` is that item's id, so the cursor within a grid of the start pad does not snap back onto it.
 import type { BoardState } from "../api/types";
 import type { PadItem, SnapScene, TrackItem, ViaItem } from "./snapScene";
 import { dist, distanceTo, type Pt } from "./snapGeom";
@@ -24,7 +25,8 @@ export function trackNet(board: BoardState, item: TrackItem): string | null {
 
 /**
  * Pads and vias first (the nearest centre), then tracks (the nearest end); each tried at slop 0 and then within `gridSlop`. Only items of `net` when it is
- * given, only visible ones (`visible` of the item's layers), and no track whose board id is in `skip`.
+ * given, only visible ones (`visible` of the item's layers), and nothing in `skip`: an item's own id (`R1.1`, `trk_x#2`), or -- for a track -- the board id of the
+ * track it is a segment of.
  */
 export function pickRouteItem(board: BoardState, scene: SnapScene, p: Pt, gridSlop: number, net: string | null, visible: (layers: readonly string[]) => boolean, skip: ReadonlySet<string> = NONE): PadItem | ViaItem | TrackItem | null {
   for (const slop of [0, gridSlop]) {
@@ -34,7 +36,7 @@ export function pickRouteItem(board: BoardState, scene: SnapScene, p: Pt, gridSl
     let bestSegD = Infinity;
     for (const item of scene.items) {
       if (item.type !== "pad" && item.type !== "via" && item.type !== "track") continue;
-      if (!visible(item.layers)) continue;
+      if (!visible(item.layers) || skip.has(item.id)) continue;
       if (item.type === "track") {
         if (skip.has(item.owner)) continue;
         if (net !== null && trackNet(board, item) !== net) continue;

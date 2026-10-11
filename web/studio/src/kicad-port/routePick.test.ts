@@ -34,3 +34,11 @@ test("only the net's tracks when a net is given, only visible ones", () => {
   assert.equal(pickRouteItem(board, scene, [2000, 100], 1000, "SIG", visible)?.owner, "other");
   assert.equal(pickRouteItem(board, scene, [2000, 100], 1000, "SIG", () => false), null);
 });
+
+test("a route does not pick the item it started on: a skipped pad, via or one segment", () => {
+  const scene: SnapScene = { items: [track("other", [0, 0], [4000, 0]), track("other", [0, 5000], [4000, 5000])].map((t, i) => ({ ...t, id: `other#${i}` })) };
+  // the cursor is on the first segment of "other": skipping that segment (a route that started on it) leaves the second, a grid away or not
+  assert.equal(pickRouteItem(board, scene, [2000, 60], 1000, null, visible)?.id, "other#0");
+  assert.equal(pickRouteItem(board, scene, [2000, 60], 1000, null, visible, new Set(["other#0"])), null, "only that segment is skipped, not the whole track: the other one is too far");
+  assert.equal(pickRouteItem(board, scene, [2000, 4900], 1000, null, visible, new Set(["other#0"]))?.id, "other#1");
+});
