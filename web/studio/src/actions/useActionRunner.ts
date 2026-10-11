@@ -88,6 +88,7 @@ import { deleteLastPoint } from "../components/schematic/schShapeTools";
 import { openSchProperties } from "../components/schematic/schPropertiesOpen";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
+import { registerImportActions } from "./importActions";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
 import { registerPcbMenuActions } from "./pcbMenuActions";
@@ -194,6 +195,7 @@ export function useActionRunner() {
     // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
     registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
     registerAppearanceActions(m, { state, dispatch });
+    registerImportActions(m, { tab: state.tab, dispatch });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];

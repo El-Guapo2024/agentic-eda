@@ -955,6 +955,26 @@ export interface PadEditCmd {
   solder_paste_margin_ratio?: number;
 }
 
+/**
+ * File > Import > Graphics... (`DRAWING_TOOL::PlaceImportedGraphics`): a DXF or SVG file (its `text`) as the board's own lines, arcs, circles, polygons, curves and text on `layer`,
+ * one undo step. `offset_*_nm` is the importer's offset after the scale (nanometres); `fix_tolerance_um` is "Fix discontinuities" with its tolerance; `replace_outline` makes
+ * the imported Edge.Cuts shapes the board's outline. See crates/ops/src/import_graphics.rs.
+ */
+export interface ImportGraphicsCmd {
+  op: "import_graphics";
+  format: "dxf" | "svg";
+  text: string;
+  layer: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+  group?: boolean;
+  fix_tolerance_um?: Um | null;
+  replace_outline?: boolean;
+}
+
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
   | { op: "place_edge"; part: string; edge: Dir; fraction: number }
@@ -1110,6 +1130,7 @@ export type Cmd =
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
   | { op: "paste_clipboard"; text: string; at: PointXY }
+  | ImportGraphicsCmd
   /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
   | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */

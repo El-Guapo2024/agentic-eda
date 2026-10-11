@@ -1652,6 +1652,12 @@ export interface StudioApi {
   copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<void>;
   /** Cmd+V: put what is on the clipboard on the board (KiCad's text, else this session's copy, else plain text as a text item), then select it and arm Move on it, same as duplicateSelection. */
   pasteClipboard: () => Promise<void>;
+  /**
+   * A command that puts NEW items on the board (Import Graphics, Append Board), carried the way a Paste is: `build` makes the command for where the cursor is (the grid point, else the middle
+   * of the board), the items it added are selected, and with `carry` the Move tool is armed on them from that point -- a click drops them, Escape takes them back (`revertCarriedPlacement`).
+   * `carry` off only selects them (a "Place at" import is where it was told). False when the command was refused or added nothing.
+   */
+  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
   /**
@@ -2307,6 +2313,27 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at });
+    },
+    // Import Graphics (interactive placement) and Append Board: the same hand-off as `pasteClipboard` above for any command that adds items.
+    placeNewItems: async (build, carry) => {
+      const board = stateRef.current.board;
+      if (!board) return false;
+      const at = pasteAt();
+      const before = allItemIds(board);
+      const ok = await runCmd(build(at));
+      if (!ok) return false;
+      const after = await fetchState().catch(() => null);
+      if (!after) return true;
+      const newIds = newItemIds(before, after);
+      if (newIds.length === 0) return true;
+      dispatch({ type: "SET_SELECTION", refs: newIds });
+      if (carry) {
+        const version = await fetchVersion().catch(() => null);
+        carriedPlacementRef.current = version ? { version } : null;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at });
+      }
+      return true;
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
