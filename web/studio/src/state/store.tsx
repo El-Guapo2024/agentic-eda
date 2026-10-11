@@ -295,6 +295,16 @@ export type DrawState =
       runsA?: { layer: string; pts: [Um, Um][] }[];
       runsB?: { layer: string; pts: [Um, Um][] }[];
       snappedEnd?: boolean;
+      /** The edge-to-edge gap the pair is routed at. */
+      gap?: Um;
+      /** `V` is on: the head ends in `vias` (one per net), and `pendingViaLayer` is where the route goes on after them. */
+      placingVia?: boolean;
+      pendingViaLayer?: string;
+      vias?: { net: string | null; x: Um; y: Um; diameter: Um; fromLayer: string; toLayer: string }[];
+      fixedVias?: { net: string | null; x: Um; y: Um; diameter: Um; fromLayer: string; toLayer: string }[];
+      /** Shove mode: other tracks/vias the pair would push aside. */
+      displaced?: { layer: string; pts: [Um, Um][] }[];
+      displacedVias?: { source_via: string; x: Um; y: Um }[];
     }
   | { kind: "zone"; pts: [Um, Um][] }
   | {

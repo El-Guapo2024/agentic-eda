@@ -93,7 +93,7 @@ export function registerPcbRouterSweep(m: Map<string, () => void>, ctx: SweepCtx
             dispatch({ type: "PCBX", patch: { customDiffPair: v } });
             const cur = state.cursorUm;
             if (draw?.kind === "diffpair") {
-              void dpSetDims(v.widthUm, v.gapUm).then(() => cur && dpMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) })));
+              void dpSetDims(v.widthUm, v.gapUm, v.viaGapSameAsTrackGap ? v.gapUm : v.viaGapUm).then(() => cur && dpMove(cur.x, cur.y).then((preview) => preview.ok && dispatch({ type: "SET_DRAW_STATE", draw: dpStateFromPreview(draw, preview) })));
             }
           },
         }),

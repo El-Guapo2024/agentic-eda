@@ -553,21 +553,35 @@ export function routeDragFinish(x: Um, y: Um, forceCommit?: boolean): Promise<Cm
 // Canvas.tsx's own diff-pair tool, see components/canvas/diffPairRouting.ts.
 // `routeCancel` above already ends a dp session too (same backend session).
 
-export function dpStart(x: Um, y: Um, layer: string, dims?: { width: Um; gap: Um }): Promise<DiffPairPreview> {
-  return postJson("/api/route/dp_start", dims ? { x, y, layer, width: Math.round(dims.width), gap: Math.round(dims.gap) } : { x, y, layer });
+/** `dims` are the "Differential Pair Dimensions..." dialog's custom values; `settings` the router's (`mode` decides whether the pair is walked, shoved or only marked). */
+export function dpStart(x: Um, y: Um, layer: string, dims?: { width: Um; gap: Um; viaGap?: Um }, settings?: RouterSettings): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_start", {
+    x: Math.round(x),
+    y: Math.round(y),
+    layer,
+    width: dims ? Math.round(dims.width) : undefined,
+    gap: dims ? Math.round(dims.gap) : undefined,
+    via_gap: dims?.viaGap !== undefined ? Math.round(dims.viaGap) : undefined,
+    settings: settings ? routerSettingsToWire(settings) : undefined,
+  });
 }
 
-/** `ROUTER_TOOL::DpDimensionsDialog` while a pair is being routed: the new width and gap apply from the next move (`ok: false` when no pair is running). */
-export function dpSetDims(width: Um, gap: Um): Promise<{ ok: boolean }> {
-  return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap) });
+/** `ROUTER_TOOL::DpDimensionsDialog` while a pair is being routed: the new width, gap and via gap apply from the next move (`ok: false` when no pair is running). */
+export function dpSetDims(width: Um, gap: Um, viaGap?: Um): Promise<{ ok: boolean }> {
+  return postJson("/api/route/dp_dims", { width: Math.round(width), gap: Math.round(gap), via_gap: viaGap !== undefined ? Math.round(viaGap) : undefined });
 }
 
 export function dpMove(x: Um, y: Um, flipPosture?: boolean): Promise<DiffPairPreview> {
-  return postJson("/api/route/dp_move", { x, y, flip_posture: flipPosture });
+  return postJson("/api/route/dp_move", { x: Math.round(x), y: Math.round(y), flip_posture: flipPosture });
 }
 
 export function dpFix(x: Um, y: Um): Promise<DpFixReply> {
-  return postJson("/api/route/dp_fix", { x, y });
+  return postJson("/api/route/dp_fix", { x: Math.round(x), y: Math.round(y) });
+}
+
+/** `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a pair of vias, and the next fix places them and goes on from them on `toLayer`. */
+export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Um, drill?: Um): Promise<{ ok: boolean }> {
+  return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill });
 }
 
 export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
@@ -575,7 +589,7 @@ export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
 }
 
 export function dpFinish(x: Um, y: Um): Promise<CmdReply> {
-  return postJson("/api/route/dp_finish", { x, y });
+  return postJson("/api/route/dp_finish", { x: Math.round(x), y: Math.round(y) });
 }
 
 // `7`: length tuning (gap #7 task item 4) -- stateless, see
