@@ -1066,15 +1066,16 @@ mod tests {
         router.start_diff_pair(Point { x: -825, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
         let at = Point { x: 3000, y: 0 };
         let before = router.diff_pair_preview(at).expect("preview");
-        // the model's own 125 um width; its 180 um gap is under the 200 um clearance, which the pair is raised to
-        assert_eq!(before.width, 125, "the net class's own width until the dialog says otherwise");
+        // the model's own 125 um width is under the board's 200 um minimum track width, and its 180 um gap under the 200 um clearance:
+        // the pair is raised to both
+        assert_eq!(before.width, 200, "the net class's own width (raised to the minimum) until the dialog says otherwise");
         let pitch_of = |p: &crate::dp_placer::DiffPairPreview| {
             let (a, b) = (p.head_a.last().unwrap(), p.head_b.last().unwrap());
             (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt()
         };
         // the pair ends a pitch apart (the gateways' offsets are whole micrometres: within a few of it)
         let near = |actual: f64, pitch: i64| actual >= pitch as f64 - 1.0 && actual <= pitch as f64 + 3.0;
-        assert!(near(pitch_of(&before), 125 + 200), "{}", pitch_of(&before));
+        assert!(near(pitch_of(&before), 200 + 200), "{}", pitch_of(&before));
         assert!(router.set_diff_pair_dimensions(Some(200), Some(300)));
         let after = router.diff_pair_preview(at).expect("preview");
         assert_eq!(after.width, 200);

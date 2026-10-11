@@ -28,7 +28,8 @@
 //! - **Backspace** (`UnfixRoute`, which `DIFF_PAIR_PLACER` does not implement) takes back the last fixed leg: the world, the posture and
 //!   the pair it went on from are put back as they were before it.
 //! - **A gap below the clearance is raised to it** when it comes from the rules (the model's 180 um fallback is under its 200 um default
-//!   clearance, which no pair can be clean at); one the user typed in the dialog is kept.
+//!   clearance, which no pair can be clean at); one the user typed in the dialog is kept. The width is at least the board's minimum
+//!   track width, as `ImportSizes` makes it.
 
 use crate::diff_pair::{direction_of, line_project, vnorm, vsub, DiffPair, DpGateways, DpPrimitivePair, PairLine, ANG_HALF_FULL, ANG_STRAIGHT};
 use crate::direction45::Direction45;
@@ -66,12 +67,14 @@ pub struct DpSizes {
 
 impl DpSizes {
     /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a pair, from the net class of the P net (the nets of a pair are in one class): width, gap
-    /// and via gap, raised to the clearance the two nets need between them -- a pair routed at less cannot be clean (see this
-    /// module's header).
+    /// and via gap. `ImportSizes` starts the width at the board's minimum track width and takes the larger of that and the class's
+    /// (`std::max( diffPairWidth, constraint.m_Value.Opt() )`), so a pair is never narrower than the board allows (the model's 125 um
+    /// fallback is under its 200 um minimum). The gaps are raised to the clearance the two nets need between them: a pair routed at
+    /// less cannot be clean (the fallback gap is 180 um, under the 200 um default clearance).
     pub fn resolve(rules: &BoardRules, net_p: &str, net_n: &str) -> Self {
         let clearance = Node::clearance(rules, &net_of(net_p), &net_of(net_n));
         DpSizes {
-            width: rules.diff_pair_width_of(net_p),
+            width: rules.diff_pair_width_of(net_p).max(rules.track_width_min_um),
             gap: rules.diff_pair_gap_of(net_p).max(clearance),
             via_gap: rules.diff_pair_via_gap_of(net_p).max(clearance),
             via_diameter: rules.via_diameter_of(net_p),
@@ -955,9 +958,9 @@ mod tests {
         Point { x, y }
     }
 
-    /// Clearance 200, a USB class with a 150-wide pair at a gap of 250 (pitch 400).
+    /// Clearance 200, a USB class with a 200-wide pair at a gap of 250 (pitch 450).
     fn rules() -> BoardRules {
-        serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\nnet_classes:\n  - name: usb\n    nets: [\"USB_*\"]\n    diff_pair_width: 150\n    diff_pair_gap: 250\n").unwrap()
+        serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\nnet_classes:\n  - name: usb\n    nets: [\"USB_*\"]\n    diff_pair_width: 200\n    diff_pair_gap: 250\n").unwrap()
     }
 
     #[allow(dead_code)]
@@ -1041,7 +1044,7 @@ mod tests {
         let (node, start) = two_pad_pairs();
         let (rules, settings) = (rules(), mode(Mode::Walkaround));
         let mut dp = placer(&node, start);
-        assert_eq!(dp.sizes.pitch(), 400);
+        assert_eq!(dp.sizes.pitch(), 450);
         // the cursor on the far pair's P pad: the end item is found, the pair snaps onto both pads
         assert!(dp.move_to(&rules, &settings, p(10_000, 0)));
         let pv = dp.preview();
@@ -1050,7 +1053,7 @@ mod tests {
         assert_eq!((pv.head_b.first(), pv.head_b.last()), (Some(p(0, 1000)), Some(p(10_000, 1000))));
         // the two lines run side by side at the pitch for most of the way
         let mut trace = dp.current_trace.clone();
-        trace.width = 150;
+        trace.width = 200;
         trace.set_gap(250);
         assert!(trace.coupled_length() > 8_000.0, "coupled {}", trace.coupled_length());
         // fixing it there finishes the route
@@ -1141,8 +1144,8 @@ mod tests {
         let pv = dp.preview();
         assert!(!pv.colliding && pv.snapped_end);
         // the pair itself did not give way: it is the straight pair of the free-space case
-        assert_eq!(pv.head_a.pts, vec![p(0, 0), p(300, 300), p(9700, 300), p(10_000, 0)]);
-        assert_eq!(pv.head_b.pts, vec![p(0, 1000), p(300, 700), p(9700, 700), p(10_000, 1000)]);
+        assert_eq!(pv.head_a.pts, vec![p(0, 0), p(274, 274), p(9726, 274), p(10_000, 0)]);
+        assert_eq!(pv.head_b.pts, vec![p(0, 1000), p(274, 726), p(9726, 726), p(10_000, 1000)]);
         assert_coupled(&pv, 0.9);
         // the track gave way: it is one displaced IR track, replaced by a line that keeps the clearance from both lines
         assert_eq!(pv.displaced_lines.len(), 1, "{:?}", pv.displaced_lines);
@@ -1325,7 +1328,7 @@ mod tests {
         // the model's fallback gap is 180 um, under its 200 um clearance
         let plain: BoardRules = serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap();
         let sizes = DpSizes::resolve(&plain, "A_P", "A_N");
-        assert_eq!((sizes.width, sizes.gap), (125, 200));
+        assert_eq!((sizes.width, sizes.gap), (200, 200), "the 125 um fallback width is under the board's 200 um minimum track width too");
         let (node, start) = two_pad_pairs();
         let mut dp = DiffPairPlacer::start(&node, &plain, &RoutingSettings::default(), start, 0, LayerRange::new(0, 1)).unwrap();
         dp.set_dimensions(None, Some(150), None);
