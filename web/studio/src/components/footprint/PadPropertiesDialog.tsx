@@ -1,10 +1,11 @@
 // Port of pcbnew/dialogs/dialog_pad_properties.cpp (GAPS.md #8 step 3) --
-// shape/size, offset, drill, layer presets, clearance/thermal overrides,
-// roundrect ratio. Not ported: padstack mode (front/inner/back-differs --
-// this app's board has no inner-copper-layer concept to differ over),
-// the fabrication-property dropdown (BGA/fiducial/testpoint/...; cosmetic
-// metadata with no consumer anywhere in this app yet), and a true custom
-// (primitive-based) pad shape -- see `LibraryPadShape`'s own doc.
+// shape/size (the nine shape choices, a trapezoid's delta, a chamfer, a custom
+// pad's basic shapes: the rows are the board dialog's own, `PadShapeFields.tsx`),
+// offset, drill, layer presets, clearance/thermal overrides. Not ported: padstack
+// mode (front/inner/back-differs -- this app's board has no inner-copper-layer
+// concept to differ over) and the fabrication-property dropdown
+// (BGA/fiducial/testpoint/...; cosmetic metadata with no consumer anywhere in
+// this app yet).
 import { useEffect, useState } from "react";
 import type { LibraryPad, PadConnection, PadKind } from "../../api/types";
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";

@@ -2968,8 +2968,9 @@ impl LibraryPad {
     /// declared, or a real `.kicad_mod` library file) the first time the
     /// Footprint Editor opens it -- `id` is left empty (the caller backfills
     /// via `LibraryFootprint::assign_missing_ids`) and every editor-only
-    /// field (layers, overrides, trapezoid/chamfer) starts empty/`None`,
-    /// since the engine's own `Pad` never had one to read back.
+    /// field (layers, overrides) starts empty/`None`, since the engine's own
+    /// `Pad` never had one to read back (the shape's trapezoid, chamfer and
+    /// custom fields it has, and they come across whole).
     pub fn from_engine_pad(p: &crate::footprint::Pad) -> Self {
         use crate::footprint::PadShape as S;
         let shape = match p.shape {

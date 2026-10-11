@@ -198,17 +198,19 @@ pub fn resolve_library_footprints(model: &mut ConstraintModel, lib_root: &Path) 
 /// describes: no `(at ...)` (no board placement), no reference/value/net
 /// (a board instance's concern, not the definition's).
 ///
+/// A pad's shape is written as `PCB_IO_KICAD_SEXPR::format( const PAD* )`
+/// does ([`crate::pad_shape`]): a trapezoid's `rect_delta`, a chamfered
+/// rectangle's `roundrect` with `chamfer_ratio` and `chamfer`, a custom pad's
+/// `options` and `primitives`, the shape's offset inside `drill`.
+///
 /// Not a full inverse of `LibraryFootprint::from_engine_footprint`+editing:
-/// a `"trapezoid"`/`"chamfered_rect"` pad is written as its `LibraryPad::
-/// to_engine_pad` approximation (`rect`/`roundrect`) rather than KiCad's own
-/// trapezoid/chamfer pad fields, and per-pad thermal-gap/spoke-width
-/// overrides and the footprint's own clearance/attribute-adjacent fields
-/// this session could not verify an exact on-disk token for are left out
-/// rather than guessed at -- this writer only emits sub-expressions this
-/// crate's own reader (`parse_pad_geometry`/`courtyard_from`) or
-/// `crates/kicad/src/pcb.rs`'s existing, exercised board writer already
-/// round-trips (`offset`/`clearance`/`layers`/`roundrect_rratio`/`drill`).
-/// See PARITY-fpedit.md for the tracked gap.
+/// per-pad thermal-gap/spoke-width overrides and the footprint's own
+/// clearance/attribute-adjacent fields this session could not verify an exact
+/// on-disk token for are left out rather than guessed at -- this writer only
+/// emits sub-expressions this crate's own reader (`parse_pad_geometry`/
+/// `courtyard_from`) or `crates/kicad/src/pcb.rs`'s existing, exercised board
+/// writer already round-trips (`offset`/`clearance`/`layers`/
+/// `roundrect_rratio`/`drill`). See PARITY-fpedit.md for the tracked gap.
 pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
     use eda_model::ir::Shape;
     use std::fmt::Write as _;
