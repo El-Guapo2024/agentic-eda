@@ -289,10 +289,22 @@ fn slow_the_annotated_import_and_paste_leave_kicad_cli_with_no_reference_finding
         return;
     }
     let dir = mcu30_board("slow_hierarchy");
-    // mcu30 as module sheets, then a file in as a sheet, then that sheet pasted, then everything annotated again by sheet number
+    // fields the user placed and a look they gave, then mcu30 as module sheets: the places and looks are kept and the board is as clean as before
+    let (_, flat, _) = load(&dir).unwrap();
+    let r3 = flat.schematic.as_ref().unwrap().symbols.iter().find(|s| s.id == "R3").unwrap().at;
+    let edit: Cmd = serde_json::from_value(json!({ "op": "sch_edit", "verb": "edit_field", "id": "fld:R3:Reference", "at": { "x": r3.x - 12_700, "y": r3.y + 1_270 }, "h": "right", "size_um": 1778, "bold": true })).unwrap();
+    step(&dir, edit, false, "test").unwrap();
     step(&dir, Cmd::ReorganizeSheets, false, "test").unwrap();
+    let (_, sheets, _) = load(&dir).unwrap();
+    let kept = sheets.sheet_contents.iter().flatten().flat_map(|(_, s)| s.symbols.iter().map(move |x| (s, x))).find(|(_, x)| x.id == "R3").unwrap();
+    let place = kept.0.field_layout.get("R3").and_then(|f| f.iter().find(|p| p.name == "Reference")).expect("R3's Reference keeps a place of its own");
+    assert_eq!((place.dx, place.dy), (-12_700, 1_270), "the field is where the user put it from its symbol");
     assert_no_reference_findings(&dir, "reorganized");
     assert!(erc_kinds(&dir).is_empty(), "the reorganized board is clean: {:?}", erc_kinds(&dir));
+    // Replace All over the sheets: values change, nothing else
+    let replace = Cmd::ReplaceText { search: eda_ops::search::SearchData { find: "100nF".into(), replace: "220nF".into(), ..Default::default() }, items: None, all_sheets: true };
+    step(&dir, replace, false, "test").unwrap();
+    assert!(erc_kinds(&dir).is_empty(), "after Replace All over the sheets: {:?}", erc_kinds(&dir));
     write_ldo_file(&dir, "ldo_stage.kicad_sch");
     step(&dir, import_cmd("ldo_stage.kicad_sch", true, false), false, "test").unwrap();
     assert_only_flag_clashes(&dir, "after Import Sheet");
