@@ -173,6 +173,8 @@ export function verifyRows(rows: readonly TableRow[], supportsVisibility: boolea
     if (nickname === "") return { problem: { row: at, column: "nickname", message: "Library must have a nickname." } };
     const illegal = libraryNicknameIllegalChar(nickname);
     if (illegal) return { problem: { row: at, column: "nickname", message: `Illegal character '${illegal}' in nickname '${nickname}'.` } };
+    const reserved = reservedNicknameMessage(nickname);
+    if (reserved) return { problem: { row: at, column: "nickname", message: reserved } };
     kept.push({ row: { ...source, nickname, uri, visible: supportsVisibility ? source.visible : true }, at });
   }
   for (let i = 0; i < kept.length; i++) {
@@ -180,6 +182,13 @@ export function verifyRows(rows: readonly TableRow[], supportsVisibility: boolea
     if (later) return { problem: { row: later.at, column: "nickname", message: `Multiple libraries cannot share the same nickname ('${(kept[i] as { row: TableRow }).row.nickname}').` } };
   }
   return { rows: kept.map((k) => k.row) };
+}
+
+/** The nickname of the studio's own project library (`eda:Name`): a table library of that name would be shadowed by it. */
+export const RESERVED_NICKNAME = "eda";
+
+export function reservedNicknameMessage(nickname: string): string | null {
+  return nickname === RESERVED_NICKNAME ? `The nickname '${RESERVED_NICKNAME}' is the studio's own project library (the ids eda:Name): choose another.` : null;
 }
 
 /** KiCad's library table has no spelling for a double quote or a line break in a value; the server refuses them too. */

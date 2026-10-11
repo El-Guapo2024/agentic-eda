@@ -272,7 +272,8 @@ impl LibSet {
 
 /// How many footprints a library folder holds, read again only when the folder changes.
 fn footprint_count(dir: &Path) -> usize {
-    static COUNTS: OnceLock<Mutex<HashMap<PathBuf, (Option<SystemTime>, usize)>>> = OnceLock::new();
+    type Counts = Mutex<HashMap<PathBuf, (Option<SystemTime>, usize)>>;
+    static COUNTS: OnceLock<Counts> = OnceLock::new();
     let stamp = modified(dir);
     let counts = COUNTS.get_or_init(Default::default);
     if let Some((s, n)) = counts.lock().unwrap_or_else(PoisonError::into_inner).get(dir) {
@@ -521,6 +522,24 @@ fn unwritable(rows: &[lt::Row]) -> Option<(usize, &'static str, String)> {
     None
 }
 
+/// The nickname of the studio's own project library (`eda:Name`, the ids `derive_schematic` and the editors hand out): a table library of that name would be shadowed by it.
+const PROJECT_LIBRARY: &str = "eda";
+
+fn reserved_nickname(nickname: &str) -> Option<String> {
+    (nickname == PROJECT_LIBRARY).then(|| format!("The nickname '{PROJECT_LIBRARY}' is the studio's own project library (the ids eda:Name): choose another."))
+}
+
+/// The studio never writes KiCad's own configuration: a board folder that is KiCad's configuration folder (or lies inside it) has no project tables of its own to edit,
+/// and the file such an edit would write is KiCad's global table.
+fn refuse_kicads_configuration(env: &Env, dir: &Path) -> Result<(), String> {
+    let Some(config) = &env.config_dir else { return Ok(()) };
+    let (board, config) = (std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf()), std::fs::canonicalize(config).unwrap_or_else(|_| config.clone()));
+    if board.starts_with(&config) {
+        return Err(format!("{} is KiCad's own configuration folder: the studio reads KiCad's global library tables and never writes them. Open a board folder of your own to edit a project's tables.", dir.display()));
+    }
+    Ok(())
+}
+
 /// The project's table of `kind` as the file holds it, or an empty one when the board has none. A table that does not parse is an error, never overwritten blindly.
 fn project_table(dir: &Path, kind: TableKind) -> Result<Table, String> {
     let path = project_table_path(dir, kind);
@@ -538,6 +557,9 @@ pub(crate) fn set_table(dir: &Path, body: &[u8]) -> Value {
 }
 
 pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    if let Err(e) = refuse_kicads_configuration(env, dir) {
+        return bad(e);
+    }
     let req = match parse_body(body) {
         Ok(r) => r,
         Err(e) => return e,
@@ -557,6 +579,10 @@ pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
         Ok(k) => k,
         Err(p) => return json!({ "error": p.message, "row": p.row, "column": p.column }),
     };
+    if let Some((row, message)) = kept.iter().enumerate().find_map(|(i, r)| reserved_nickname(&r.nickname).map(|m| (i, m))) {
+        let shown = rows.iter().enumerate().filter(|(_, r)| !r.uri.trim().is_empty()).map(|(k, _)| k).nth(row).unwrap_or(row);
+        return json!({ "error": message, "row": shown, "column": "nickname" });
+    }
     // a row whose format was left blank takes the one its path says (`GuessPluginTypeFromLibPath`)
     let vars = env.vars(dir, &lt::read_project_variables(dir));
     let kept: Vec<lt::Row> = kept
@@ -651,6 +677,9 @@ pub(crate) fn add_library(dir: &Path, body: &[u8]) -> Value {
 }
 
 pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    if let Err(e) = refuse_kicads_configuration(env, dir) {
+        return bad(e);
+    }
     let req = match parse_body(body) {
         Ok(r) => r,
         Err(e) => return e,
@@ -688,6 +717,9 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     }
     if let Some(ch) = lt::illegal_nickname_char(&nickname) {
         return bad(format!("Illegal character '{ch}' in nickname '{nickname}'."));
+    }
+    if let Some(message) = reserved_nickname(&nickname) {
+        return bad(message);
     }
     let mut table = match project_table(dir, kind) {
         Ok(t) => t,
@@ -756,6 +788,9 @@ pub(crate) fn set_variables(dir: &Path, body: &[u8]) -> Value {
 }
 
 pub(crate) fn set_variables_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
+    if let Err(e) = refuse_kicads_configuration(env, dir) {
+        return bad(e);
+    }
     let req = match parse_body(body) {
         Ok(r) => r,
         Err(e) => return e,
@@ -1162,6 +1197,12 @@ pub(crate) mod tests {
         let under = m.share.join("symbols");
         let r = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "path": under.join("Device.kicad_sym").display().to_string(), "nickname": "DeviceCopy" })));
         assert_eq!(r["added"]["uri"], "${KICAD10_SYMBOL_DIR}/Device.kicad_sym");
+        // the studio's own library name is not for a table library
+        let reserved = add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "libs/eda" })));
+        assert!(reserved["error"].as_str().unwrap().contains("studio's own project library"), "{reserved}");
+        assert!(!m.board.join("libs").join("eda.kicad_sym").exists(), "nothing was made");
+        let table = set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": [row("A", "/a"), row("eda", "/b")] })));
+        assert_eq!((table["row"].clone(), table["column"].clone()), (json!(1), json!("nickname")), "{table}");
         // a bad nickname, an empty path
         assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "libs/x", "nickname": "a:b" })))["error"].as_str().unwrap().contains("Illegal character ':'"));
         assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "  " })))["error"].is_string());
@@ -1222,6 +1263,27 @@ pub(crate) mod tests {
         assert_eq!(res[2]["guess"], "Table");
         assert_eq!(res[0]["guess"], "KiCad");
         assert!(res[0]["path"].as_str().unwrap().ends_with("symbols/Device.kicad_sym"));
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn kicads_own_configuration_folder_is_never_written() {
+        let m = machine("neverwrite", true);
+        let env = m.env();
+        let before: Vec<String> = ["sym-lib-table", "fp-lib-table"].iter().map(|f| std::fs::read_to_string(m.config.join(f)).unwrap()).collect();
+        // a "board" that is KiCad's configuration folder, or a folder in it: every route that writes refuses
+        for dir in [m.config.clone(), m.config.join("sub")] {
+            std::fs::create_dir_all(&dir).unwrap();
+            let rows = req(json!({ "kind": "symbol", "rows": [row("Mine", "/x/Mine.kicad_sym")] }));
+            assert!(set_table_with(&env, &dir, &rows)["error"].as_str().unwrap().contains("KiCad's own configuration folder"));
+            assert!(add_library_with(&env, &dir, &req(json!({ "kind": "symbol", "create": true, "path": "New" })))["error"].is_string());
+            assert!(set_variables_with(&env, &dir, &req(json!({ "variables": [{ "name": "A", "value": "/x" }] })))["error"].is_string());
+        }
+        let after: Vec<String> = ["sym-lib-table", "fp-lib-table"].iter().map(|f| std::fs::read_to_string(m.config.join(f)).unwrap()).collect();
+        assert_eq!(before, after, "the global tables are as KiCad left them");
+        assert!(!m.config.join("sub").join("sym-lib-table").exists() && !m.config.join(lt::PATH_VARIABLES_FILE).exists());
+        // a board folder of its own is fine
+        assert_eq!(set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": [row("Mine", "/x/Mine.kicad_sym")] })))["ok"], true);
         let _ = std::fs::remove_dir_all(&m.root);
     }
 

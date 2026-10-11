@@ -100,6 +100,9 @@ test("OK drops a row with no path, trims, and stops at a missing or illegal nick
   assert.equal("problem" in illegal && illegal.problem.message, "Illegal character ':' in nickname 'A:B'.");
   const dup = verifyRows([row("A", "/a"), row("Z", ""), row("B", "/b"), row("A", "/c")], true);
   assert.deepEqual("problem" in dup && dup.problem, { row: 3, column: "nickname", message: "Multiple libraries cannot share the same nickname ('A')." });
+  // the studio's own library name is not for a table library
+  const reserved = verifyRows([row("eda", "/a")], true);
+  assert.match("problem" in reserved ? reserved.problem.message : "", /studio's own project library/);
   // a table without a Show column keeps no hidden flag
   const hidden = row("A", "/a", { visible: false });
   assert.equal("rows" in verifyRows([hidden], false) && (verifyRows([hidden], false) as { rows: TableRow[] }).rows[0]?.visible, true);
