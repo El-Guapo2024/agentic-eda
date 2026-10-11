@@ -65,7 +65,8 @@ fn mode_of(req: &Value) -> Mode {
 ///
 /// - `mode` (`"mark_obstacles" | "walkaround" | "shove"`), `optimizer_effort` (`"low" | "medium" | "full"`),
 /// - the Interactive Router Settings dialog's switches `shove_vias`, `jump_over_obstacles`, `remove_loops`, `smart_pads`,
-///   `allow_drc_violations` (`CanViolateDRC`), `free_angle_mode`, `fix_all_segments`,
+///   `allow_drc_violations` (`CanViolateDRC`), `free_angle_mode`, `fix_all_segments`, `smooth_dragged_segments`, and
+///   `snap_to_tracks` (the magnetic setting `checkSnap` hands the router, not a row of the dialog),
 /// - the limits `shove_iteration_limit`, `walkaround_iteration_limit`, `via_force_prop_iteration_limit` and
 ///   `walkaround_hug_length_threshold`, which KiCad keeps in the settings file only.
 ///
@@ -73,7 +74,14 @@ fn mode_of(req: &Value) -> Mode {
 /// own top level, where they used to be the only two. Read field by field: serde_json's `arbitrary_precision` (starlark turns
 /// it on) breaks a derived reader on numbers.
 fn settings_of(req: &Value) -> RoutingSettings {
-    let mut s = RoutingSettings::default();
+    settings_over(req, RoutingSettings::default())
+}
+
+/// [`settings_of`] over `base`: a switch or limit the request does not carry keeps `base`'s value (`mode` and `optimizer_effort`
+/// are always read, defaulting as `settings_of` does). A live session takes the dialog's OK this way, so what the dialog has no row
+/// for -- `snap_to_tracks`, the magnetic setting the studio sent at the start -- stays as it was.
+fn settings_over(req: &Value, base: RoutingSettings) -> RoutingSettings {
+    let mut s = base;
     let obj = req.get("settings").filter(|v| v.is_object()).unwrap_or(&Value::Null);
     let get = |key: &str| obj.get(key).or_else(|| req.get(key));
     let flag = |key: &str, into: &mut bool| {
@@ -99,6 +107,8 @@ fn settings_of(req: &Value) -> RoutingSettings {
     flag("allow_drc_violations", &mut s.can_violate_drc);
     flag("free_angle_mode", &mut s.free_angle_mode);
     flag("fix_all_segments", &mut s.fix_all_segments);
+    flag("smooth_dragged_segments", &mut s.smooth_dragged_segments);
+    flag("snap_to_tracks", &mut s.snap_to_tracks);
     limit("shove_iteration_limit", &mut s.shove_iteration_limit);
     limit("walkaround_iteration_limit", &mut s.walkaround_iteration_limit);
     limit("via_force_prop_iteration_limit", &mut s.via_force_prop_iteration_limit);
@@ -232,6 +242,51 @@ pub fn finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     }
 }
 
+/// `POST /api/route/continue_from_end`: `{x, y}` -- `ROUTER_TOOL::routerContinueFromEnd` (Ctrl+E, Route From Other End): what the
+/// route has fixed so far is committed (`CommitRouting()`; one `Cmd::CommitRoute`, nothing at all if nothing was fixed), and a new
+/// route starts at the far end of the connection and heads for where the old head ended (`ROUTER::ContinueFromEnd`: `StartRouting`,
+/// `Move( currentEnd )`). The reply is the new route's preview (as `start`'s), plus `committed` (the board changed) and `from`.
+/// A refusal ("nothing is left to connect to") leaves the session as it was.
+pub fn continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let at = point_of(&req);
+    let (continuation, settings) = {
+        let guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(router) = guard.as_ref() else { return err("not routing") };
+        match router.continue_from_end(at) {
+            Ok(c) => (c, router.settings.clone()),
+            Err(message) => return err(message),
+        }
+    };
+    let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
+    if committed {
+        let c = continuation.commit;
+        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias };
+        if let Err(e) = board::step(dir, cmd, true, "ui") {
+            return err(board::reasons(&e));
+        }
+    }
+    // the board as it stands now, with what was fixed in it
+    let (_, design, model) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let mut router = Router::new(&design, &model);
+    router.settings = settings;
+    if let Err(message) = router.start(continuation.from, &continuation.layer, continuation.width) {
+        *cell.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return json!({ "ok": false, "committed": committed, "message": message });
+    }
+    let reply = router.preview(continuation.to).map(|p| preview_json(&router, &p)).unwrap_or_else(|| err("internal: restarted but no preview"));
+    *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
+    let mut reply = reply;
+    if let Some(obj) = reply.as_object_mut() {
+        obj.insert("committed".into(), json!(committed));
+        obj.insert("from".into(), json!([continuation.from.x, continuation.from.y]));
+    }
+    reply
+}
+
 /// `POST /api/route/cancel`: no body. Drops whatever session is active --
 /// a route (`Router::session`) or a drag (`Router::drag`) alike, since
 /// both live on the one `Router` this cell holds -- without touching the
@@ -260,7 +315,7 @@ pub fn set_settings(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing") };
-    router.settings = settings_of(&req);
+    router.settings = settings_over(&req, router.settings.clone());
     json!({ "ok": true })
 }
 
@@ -273,10 +328,24 @@ pub fn set_settings(cell: &RouteCell, body: &[u8]) -> Value {
 // a second cell, so there is exactly one "what's this board session doing
 // right now" slot to reason about.
 
+fn drag_kind_name(kind: Option<eda_pns::dragger::DragKind>) -> &'static str {
+    match kind {
+        Some(eda_pns::dragger::DragKind::Segment) => "segment",
+        Some(eda_pns::dragger::DragKind::Via) => "via",
+        _ => "corner",
+    }
+}
+
 fn drag_preview_json(router: &Router, preview: &eda_pns::dragger::DragPreview) -> Value {
     json!({
         "ok": true,
+        // `DM_SEGMENT` (the whole segment slides), `DM_CORNER` (a vertex follows the cursor) or `DM_VIA`
+        "drag": drag_kind_name(router.drag_kind()),
         "colliding": preview.colliding,
+        // the cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last solution")
+        "restored": preview.restored,
+        // the first position failed, so the drag only marks obstacles; a violation then needs Ctrl+click (`GetForceMarkObstaclesMode`)
+        "forced_mark_obstacles": preview.forced_mark_obstacles,
         "pts": pts_json(&preview.pts),
         "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
         // See `preview_json`'s matching comment -- same previously-dropped field.
@@ -329,7 +398,9 @@ pub fn drag_move(cell: &RouteCell, body: &[u8]) -> Value {
     router.drag_preview(at).map(|p| drag_preview_json(router, &p)).unwrap_or_else(|| err("not dragging"))
 }
 
-/// `POST /api/route/drag_finish`: `{x, y}`.
+/// `POST /api/route/drag_finish`: `{x, y, force_commit?}`. `DRAGGER::FixRoute( aForceCommit )`: a position the drag cannot resolve
+/// commits the last one it could; a drag that is only marking obstacles (its first position failed) commits a violation with
+/// `force_commit` (Ctrl+click) and not otherwise.
 pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut router = match cell.lock().unwrap_or_else(|e| e.into_inner()).take() {
@@ -337,8 +408,11 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
         None => return err("not dragging"),
     };
     let at = point_of(&req);
-    let Some(commit) = router.drag_finish(at) else {
-        return json!({ "ok": false, "message": "drag target still collides; left uncommitted" });
+    let force_commit = req.get("force_commit").and_then(Value::as_bool).unwrap_or(false);
+    let marking = router.drag_forces_mark_obstacles();
+    let Some(commit) = router.drag_finish_with(at, force_commit) else {
+        let message = if marking { "Track violates DRC. Ctrl+click to commit anyway." } else { "drag target still collides; left uncommitted" };
+        return json!({ "ok": false, "message": message });
     };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
     match board::step(dir, cmd, true, "ui") {
@@ -497,11 +571,16 @@ mod tests {
 
     /// A 20 mm board with a SIG stub ending at (10000, 8000) and a GND via at (10000, 5000), right in the way of SIG going down.
     fn setup(dir: &Path) {
-        let model = ConstraintModel::default();
-        let intent_path = dir.join("intent.yaml");
-        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
         let stub = Track { id: "sig".into(), net: "SIG".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![p(10_000, 9_000), p(10_000, 8_000)], arc_mid_offset: None };
         let via = Via { id: "v_gnd".into(), net: "GND".into(), at: p(10_000, 5_000), drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() };
+        setup_board(dir, vec![stub], vec![via]);
+    }
+
+    /// A 20 mm board with these tracks and vias.
+    fn setup_board(dir: &Path, tracks: Vec<Track>, vias: Vec<Via>) {
+        let model = ConstraintModel { nets: ["SIG", "GND"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect(), ..ConstraintModel::default() };
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
         let design = Design {
             footprint_library: None,
             sheet_contents: None,
@@ -512,7 +591,7 @@ mod tests {
             schematic: None,
             nets: None,
             placement: Some(PlacementSection { outline: vec![p(0, 0), p(20_000, 0), p(20_000, 20_000), p(0, 20_000)], footprints: vec![], modules: vec![] }),
-            routing: Some(RoutingSection { tracks: vec![stub], vias: vec![via], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            routing: Some(RoutingSection { tracks, vias, zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
             drawings: None,
         };
         board::save(dir, &design).unwrap();
@@ -607,5 +686,127 @@ mod tests {
         assert_eq!(fix(&cell, &onto_the_via)["blocked"], json!(true), "a colliding head is refused by default");
         start_with(&dir, &cell, json!({ "mode": "mark_obstacles", "allow_drc_violations": true }));
         assert_eq!(fix(&cell, &onto_the_via)["blocked"], json!(false), "and fixed once violations are allowed");
+    }
+
+    fn tracks_of(dir: &Path) -> Vec<(String, Vec<Point>)> {
+        let (_, design, _) = board::load(dir).unwrap();
+        design.routing.unwrap().tracks.iter().map(|t| (t.net.clone(), t.pts.clone())).collect()
+    }
+
+    fn track(id: &str, net: &str, pts: &[Point]) -> Track {
+        Track { id: id.into(), net: net.into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: pts.to_vec(), arc_mid_offset: None }
+    }
+
+    fn pts_of(reply: &Value, key: &str) -> Vec<Point> {
+        reply[key].as_array().unwrap_or_else(|| panic!("{key} in {reply}")).iter().map(|v| p(v[0].as_i64().unwrap(), v[1].as_i64().unwrap())).collect()
+    }
+
+    /// `DRAGGER::Start`: grabbing the middle of a segment slides it (`DM_SEGMENT`), its neighbours following; the commit replaces the
+    /// track with the slid one.
+    #[test]
+    fn a_drag_grabbed_in_the_middle_of_a_segment_slides_it() {
+        let dir = scratch("drag_segment");
+        setup_board(&dir, vec![track("u", "SIG", &[p(2_000, 12_000), p(2_000, 10_000), p(12_000, 10_000), p(12_000, 12_000)])], vec![]);
+        let cell: RouteCell = Mutex::new(None);
+        let started = drag_start(&dir, &cell, &body(json!({ "x": 7_000, "y": 10_000, "layer": "F.Cu" })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        assert_eq!(started["drag"], json!("segment"), "the middle of the 10 mm segment: {started}");
+        let moved = drag_move(&cell, &body(json!({ "x": 7_000, "y": 8_000 })));
+        assert_eq!(moved["colliding"], json!(false), "{moved}");
+        assert_eq!(moved["restored"], json!(false));
+        assert_eq!(pts_of(&moved, "pts"), vec![p(2_000, 12_000), p(2_000, 8_000), p(12_000, 8_000), p(12_000, 12_000)]);
+        let done = drag_finish(&dir, &cell, &body(json!({ "x": 7_000, "y": 8_000 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        assert_eq!(tracks_of(&dir), vec![("SIG".to_string(), vec![p(2_000, 12_000), p(2_000, 8_000), p(12_000, 8_000), p(12_000, 12_000)])]);
+        // near an end it is the corner instead
+        let near_end = drag_start(&dir, &cell, &body(json!({ "x": 2_000, "y": 8_050, "layer": "F.Cu" })));
+        assert_eq!(near_end["drag"], json!("corner"), "{near_end}");
+    }
+
+    /// `DRAGGER::Drag` / `FixRoute`: the cursor goes somewhere the drag cannot be resolved and the line stays at the last valid position;
+    /// letting go there commits that one.
+    #[test]
+    fn an_illegal_position_shows_the_last_valid_one_and_a_release_commits_it() {
+        let dir = scratch("drag_restore");
+        setup(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        // the end of the SIG stub, with the GND via at (10000, 5000) below it
+        let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000, "y": 8_000, "layer": "F.Cu" })));
+        assert_eq!(started["drag"], json!("corner"), "{started}");
+        let valid = drag_move(&cell, &body(json!({ "x": 12_000, "y": 6_500 })));
+        assert_eq!((valid["colliding"].clone(), valid["restored"].clone()), (json!(false), json!(false)), "{valid}");
+        let on_the_via = drag_move(&cell, &body(json!({ "x": 10_000, "y": 5_000 })));
+        assert_eq!(on_the_via["restored"], json!(true), "{on_the_via}");
+        assert_eq!(on_the_via["colliding"], json!(false));
+        assert_eq!(on_the_via["pts"], valid["pts"], "the line is where the last valid position put it");
+        let done = drag_finish(&dir, &cell, &body(json!({ "x": 10_000, "y": 5_000 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        let tracks = tracks_of(&dir);
+        assert_eq!(tracks.len(), 1);
+        assert_eq!(tracks[0].1.last(), Some(&p(12_000, 6_500)), "committed at the last valid point: {tracks:?}");
+    }
+
+    /// `GetForceMarkObstaclesMode`: a drag whose first position is already a violation only marks obstacles; Ctrl+click commits it.
+    #[test]
+    fn a_drag_that_starts_in_violation_only_marks_and_ctrl_click_commits_it() {
+        let dir = scratch("drag_force");
+        // the stub's end sits on the GND via: it is in violation where it starts
+        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000, 9_000), p(10_000, 5_200)])], vec![Via { id: "v".into(), net: "GND".into(), at: p(10_000, 5_000), drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
+        let cell: RouteCell = Mutex::new(None);
+        let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000, "y": 5_200, "layer": "F.Cu" })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        assert_eq!((started["forced_mark_obstacles"].clone(), started["colliding"].clone()), (json!(true), json!(true)), "{started}");
+        let refused = drag_finish(&dir, &cell, &body(json!({ "x": 10_000, "y": 5_300 })));
+        assert_eq!(refused["ok"], json!(false), "{refused}");
+        assert!(refused["message"].as_str().unwrap().contains("Ctrl+click"), "{refused}");
+        let started = drag_start(&dir, &cell, &body(json!({ "x": 10_000, "y": 5_200, "layer": "F.Cu" })));
+        assert_eq!(started["forced_mark_obstacles"], json!(true));
+        let forced = drag_finish(&dir, &cell, &body(json!({ "x": 10_000, "y": 5_300, "force_commit": true })));
+        assert_eq!(forced["ok"], json!(true), "{forced}");
+    }
+
+    /// `ROUTER_TOOL::routerContinueFromEnd`: with a leg fixed, the leg is committed and the route restarts at the far end, heading for
+    /// where the old head ended.
+    #[test]
+    fn route_from_other_end_commits_what_is_fixed_and_restarts_at_the_far_end() {
+        let dir = scratch("continue");
+        // a SIG stub ending at (10000, 8000) and a SIG via at (10000, 2000) it is to be connected to
+        setup_board(&dir, vec![track("sig", "SIG", &[p(10_000, 9_000), p(10_000, 8_000)])], vec![Via { id: "far".into(), net: "SIG".into(), at: p(10_000, 2_000), drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }]);
+        let cell: RouteCell = Mutex::new(None);
+        start_with(&dir, &cell, json!({}));
+        // nothing fixed: nothing is committed, the route restarts at the via
+        let first = continue_from_end(&dir, &cell, &body(json!({ "x": 10_000, "y": 6_500 })));
+        assert_eq!(first["ok"], json!(true), "{first}");
+        assert_eq!(first["committed"], json!(false));
+        assert_eq!(first["from"], json!([10_000, 2_000]));
+        assert_eq!(pts_of(&first, "head").first(), Some(&p(10_000, 2_000)), "the new head leaves the far end");
+        assert_eq!(pts_of(&first, "head").last(), Some(&p(10_000, 6_500)), "and heads for where the old one ended");
+        assert_eq!(tracks_of(&dir).len(), 1);
+        // fix a leg of a route started again from the stub, then continue from the other end
+        start_with(&dir, &cell, json!({}));
+        let fixed = fix(&cell, &body(json!({ "x": 12_000, "y": 8_000 })));
+        assert_eq!((fixed["ok"].clone(), fixed["blocked"].clone()), (json!(true), json!(false)), "{fixed}");
+        let second = continue_from_end(&dir, &cell, &body(json!({ "x": 12_000, "y": 5_000 })));
+        assert_eq!(second["ok"], json!(true), "{second}");
+        assert_eq!(second["committed"], json!(true), "the fixed leg is on the board now");
+        let tracks = tracks_of(&dir);
+        assert_eq!(tracks.len(), 2, "{tracks:?}");
+        assert!(tracks.iter().any(|(_, pts)| pts.first() == Some(&p(10_000, 8_000)) && pts.last() == Some(&p(12_000, 8_000))), "{tracks:?}");
+        assert_eq!(pts_of(&second, "head").first(), Some(&p(10_000, 2_000)));
+        // a session is running again, from the far end
+        let again = mv(&cell, &body(json!({ "x": 12_000, "y": 5_000 })));
+        assert_eq!(again["ok"], json!(true), "{again}");
+        // nothing left to connect to is a refusal that leaves the session alone
+        let nothing = continue_from_end(&dir, &Mutex::new(None), &body(json!({ "x": 0, "y": 0 })));
+        assert_eq!(nothing["ok"], json!(false));
+    }
+
+    /// The settings the dragger and the end-of-route snapping read are in the request's `settings`.
+    #[test]
+    fn the_drag_and_snap_settings_reach_the_router() {
+        let s = settings_of(&json!({ "settings": { "smooth_dragged_segments": false, "snap_to_tracks": false } }));
+        assert_eq!((s.smooth_dragged_segments, s.snap_to_tracks), (false, false));
+        let d = settings_of(&json!({}));
+        assert_eq!((d.smooth_dragged_segments, d.snap_to_tracks), (true, true), "KiCad's defaults");
     }
 }

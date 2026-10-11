@@ -294,7 +294,9 @@ impl Dragger {
         let colliding = path_collides(node, rules, &self.net, self.layer, self.width.max(1), &pts, &exclude);
         let walked = if colliding { try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(1), &pts) } else { Some(pts) };
         let walked = walked.filter(|w| w.len() >= 2)?;
-        Some(DragPreview { pts: self.optimize_dragged(node, rules, settings, walked, &exclude, to), ..DragPreview::default() })
+        // `optimizeAndUpdateDraggedLine`: with "Optimize entire track being dragged" off -- KiCad's default, and all this port has --
+        // the walked line is kept as it is
+        Some(DragPreview { pts: walked, ..DragPreview::default() })
     }
 
     /// `DRAGGER::dragShove`: whatever the dragged shape runs into is pushed aside, a pad walked around. `None` when it cannot be
@@ -308,15 +310,7 @@ impl Dragger {
         // `m_mode == DM_CORNER && m_draggedSegmentIndex == 0`: the head is dragged by its first vertex, so its last point is the pusher
         let reversed = self.kind == DragKind::Corner && self.grabbed_index == 0;
         let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &pts, &self.net, self.layer, self.width.max(1), rules, settings, reversed)?;
-        let exclude = self.exclude();
-        let head = self.optimize_dragged(node, rules, settings, outcome.head, &exclude, to);
-        Some(DragPreview { pts: head, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, ..DragPreview::default() })
-    }
-
-    /// `DRAGGER::optimizeAndUpdateDraggedLine`: with "Optimize entire track being dragged" off -- KiCad's default -- the dragged line
-    /// stays as it is.
-    fn optimize_dragged(&self, _node: &Node, _rules: &BoardRules, _settings: &RoutingSettings, pts: Vec<Point>, _exclude: &[ItemId], _to: Point) -> Vec<Point> {
-        pts
+        Some(DragPreview { pts: outcome.head, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, ..DragPreview::default() })
     }
 
     /// One cursor position: what `dragMarkObstacles` / `dragWalkaround` / `dragShove` make of it, and whether it `ok`s -- their return

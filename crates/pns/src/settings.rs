@@ -48,8 +48,7 @@ pub enum OptEffort {
 /// `walkaround_iteration_limit` and `walkaround_hug_length_threshold` by the
 /// walkaround, `smart_pads` and `optimizer_effort` by the optimizer,
 /// `remove_loops`, `fix_all_segments`, `free_angle_mode`, `snap_to_tracks` and `can_violate_drc`
-/// by the line placer and the dragger, `smooth_dragged_segments` and
-/// `optimize_entire_dragged_track` by the dragger. The studio's HTTP API reads all of them
+/// by the line placer and the dragger, `smooth_dragged_segments` by the dragger. The studio's HTTP API reads all of them
 /// from the `settings` object of a start request
 /// (`crates/cli/src/route_api.rs`), and Interactive Router Settings sets them.
 ///
@@ -57,8 +56,9 @@ pub enum OptEffort {
 /// `m_autoPosture` (no mouse trail: the posture is the last segment's, or the
 /// `/` key's), `m_suggestFinish` (KiCad hides it: "not implemented"),
 /// `m_followMouse`, `m_snapToPads`, `m_cornerMode` (only the mitered 45-degree
-/// corner is built) and the time limits (every call branches fresh from the
-/// world, there is no springback).
+/// corner is built), `m_optimizeEntireDraggedTrack` (`DRAGGER::optimizeAndUpdateDraggedLine`
+/// needs the optimizer's `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`, which are not ported) and the time
+/// limits (every call branches fresh from the world, there is no springback).
 #[derive(Debug, Clone)]
 pub struct RoutingSettings {
     pub mode: Mode,
@@ -101,10 +101,6 @@ pub struct RoutingSettings {
     /// up with the segments around it -- within a quarter of the track width in Highlight collisions and Walk around, half of it in
     /// Shove (`DRAGGER::dragMarkObstacles`, `dragWalkaround`, `dragShove`: `SetSnapThreshhold`). Default `true`.
     pub smooth_dragged_segments: bool,
-    /// `GetOptimizeEntireDraggedTrack()` ("Optimize entire track being dragged", `optimize_dragged_track`): after a Walk around or
-    /// Shove drag the whole dragged line is optimized (`DRAGGER::optimizeAndUpdateDraggedLine`), not only where it changed.
-    /// Default `false`.
-    pub optimize_entire_dragged_track: bool,
     /// `GetSnapToTracks()` (set from the magnetic settings by `TOOL_BASE::checkSnap`, `snap_to_tracks`): a route ends on the
     /// same-net track under the cursor -- in the middle of a segment too, which is split there -- instead of in empty space beside
     /// it. The default is the magnetic settings' own, "Capture cursor in track tool". Default `true`.
@@ -140,7 +136,6 @@ impl Default for RoutingSettings {
             can_violate_drc: false,
             free_angle_mode: false,
             smooth_dragged_segments: true,
-            optimize_entire_dragged_track: false,
             snap_to_tracks: true,
         }
     }
