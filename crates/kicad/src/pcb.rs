@@ -678,6 +678,12 @@ pub(crate) fn write_footprint(
     let rot_deg = fmt_mm_f(-(fp.rot as f64) / 1000.0);
     let uuid = crate::duid_for(&format!("footprint:{}", fp.id), &fp.id);
     let lib_name = part.footprint.clone().unwrap_or_else(|| footprint.name.clone());
+    // A `#2`, `#3` ... slot is the importer's way to keep apart instances of one library footprint whose pads, models or graphics differ (`dedup_footprint_key`): in the file it is
+    // still that library's footprint.
+    let lib_name = match lib_name.rsplit_once('#') {
+        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && model.footprints.iter().any(|f| f.name == base) => base.to_string(),
+        _ => lib_name,
+    };
     let lib_id = if lib_name.contains(':') { lib_name } else { format!("eda:{lib_name}") };
 
     writeln!(out, "\t(footprint {}", sexpr_str(&lib_id)).unwrap();

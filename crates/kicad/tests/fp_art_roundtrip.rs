@@ -111,6 +111,31 @@ fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
     assert_eq!(art_lines(&export(&again, &model2)), art_lines(&text));
 }
 
+/// Two instances of one library footprint whose drawings differ (one has its pin-1 mark moved, say) are two definitions here, kept apart under `Lib:Name` and `Lib:Name#2`: in the
+/// file both are still `Lib:Name`.
+#[test]
+fn instances_of_one_library_footprint_with_different_drawings_keep_its_name_in_the_file() {
+    let fp = |reference: &str, x: &str, uuid: &str| {
+        format!(
+            r#"	(footprint "Lib:Mark" (layer "F.Cu") (uuid "{uuid}") (at {x} 10)
+		(property "Reference" "{reference}" (at 0 -3 0) (layer "F.SilkS") (effects (font (size 1 1) (thickness 0.15))))
+		(fp_line (start -1 -2) (end 1 -2) (stroke (width 0.12) (type solid)) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-0000000000f{reference}"))
+		(fp_circle (center {x_mark} -2) (end {x_end} -2) (stroke (width 0.1) (type solid)) (fill yes) (layer "F.SilkS") (uuid "00000000-0000-0000-0000-0000000000e{reference}"))
+		(pad "1" smd rect (at -1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask")))
+"#,
+            x_mark = if reference == "1" { "-1.5" } else { "1.5" },
+            x_end = if reference == "1" { "-1.2" } else { "1.8" },
+        )
+    };
+    let text = board(&format!("{}{}", fp("1", "10", "00000000-0000-0000-0000-0000000000a1"), fp("2", "20", "00000000-0000-0000-0000-0000000000a2")));
+    let (design, model, _) = import_kicad_pcb(&text).expect("imports");
+    let names: Vec<&str> = model.footprints.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec!["Lib:Mark", "Lib:Mark#2"], "two definitions");
+    let out = export(&design, &model);
+    assert_eq!(count_in(&out, "(footprint \"Lib:Mark\""), 2, "{out}");
+    assert_eq!(count_in(&out, "#2"), 0, "{out}");
+}
+
 /// The through-hole pads of an older library are on the silkscreen too (`(layers "*.Cu" "*.Mask" "F.SilkS")`): kicad-cli's silkscreen checks measure them there, so the writer keeps them
 /// there -- and on the other side's layer once the footprint is flipped.
 #[test]
