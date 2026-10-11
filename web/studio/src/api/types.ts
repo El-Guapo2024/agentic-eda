@@ -48,14 +48,37 @@ export interface Pad {
   mask_margin?: Um | null;
   paste_margin?: Um | null;
   paste_ratio?: number | null;
+  /** A trapezoid's two deltas (`PAD::GetDelta`, KiCad keeps one of them zero); null for any other shape. */
+  delta?: [Um, Um] | null;
+  /** A chamfered rectangle's ratio and corners (`PAD::GetChamferRectRatio`, `GetChamferPositions`); null for any other shape. */
+  chamfer_ratio?: number | null;
+  chamfer_corners?: ChamferCorners | null;
+  /** A custom pad's anchor, zone knockout and basic shapes (`PadCustom`); null for any other shape. */
+  custom?: PadCustom | null;
+  /**
+   * The copper of a trapezoid, a chamfered rectangle or a custom pad as the DRC measures it (`eda_drc::pad_shape::pad_outline`): contours in micrometres on the
+   * board, the outline of each piece first and then its holes. Fill them with the even-odd rule. Absent for the shapes that `w`, `h` and `shape` draw.
+   */
+  outline?: [Um, Um][][] | null;
   /** True once the pad has an edit of its own in the design. */
   edited?: boolean;
   /** The edit as stored (`PadEditCmd`), for the dialog to send back with the one change it makes. */
   edit?: PadEditCmd | null;
 }
 
-/** The engine's four pad shapes (`eda_model::PadShape`) and three pad types (`PadKind`), as the studio state names them. */
-export type PadShapeName = "rect" | "round_rect" | "circle" | "oval";
+/** The engine's pad shapes (`eda_model::PadShape`) and three pad types (`PadKind`), as the studio state names them. */
+export type PadShapeName = "rect" | "round_rect" | "circle" | "oval" | "trapezoid" | "chamfered_rect" | "custom";
+/** `eda_model::footprint::PadPrimitive`: a basic shape of a custom pad, in the pad's own frame (the pad's position is the origin). A proxy item is not copper. */
+export interface PadPrimitive {
+  shape: CmdShape;
+  proxy?: boolean;
+}
+/** `eda_model::footprint::PadCustom`: a custom pad's anchor (`PAD::GetAnchorPadShape`), what a zone keeps clear of (`CUSTOM_SHAPE_ZONE_MODE`) and its basic shapes. */
+export interface PadCustom {
+  anchor: "circle" | "rect";
+  zone: "outline" | "convex_hull";
+  primitives: PadPrimitive[];
+}
 export type PadKindName = "smd" | "through_hole" | "non_plated_hole";
 
 /**
@@ -482,8 +505,8 @@ export interface CmdDimension {
 // `Shape`/`BoardText` above are `state()`'s own hand-built `[x,y]`-pair
 // display shape, which only /api/state uses.
 
-/** `crates/model/src/ir.rs` `LibraryPadShape` (`PAD_SHAPE`, minus KiCad's custom/primitive-based shape -- see that enum's own doc on why). */
-export type LibraryPadShape = "circle" | "rect" | "oval" | "round_rect" | "trapezoid" | "chamfered_rect";
+/** `crates/model/src/ir.rs` `LibraryPadShape` (`PAD_SHAPE`); a custom pad keeps its anchor and basic shapes in `LibraryPad::custom`. */
+export type LibraryPadShape = "circle" | "rect" | "oval" | "round_rect" | "trapezoid" | "chamfered_rect" | "custom";
 
 /** `crates/model/src/footprint.rs` `PadKind`. */
 export type PadKind = "smd" | "through_hole" | "non_plated_hole";
@@ -521,6 +544,8 @@ export interface LibraryPad {
   /** Fraction of the shorter side, same shape as `roundrect_ratio`. Only meaningful for `"chamfered_rect"`. */
   chamfer_ratio: number | null;
   chamfer_corners: ChamferCorners;
+  /** A custom pad's anchor, zone knockout and basic shapes (`PAD::GetPrimitives`); absent or null for any other shape. */
+  custom?: PadCustom | null;
   /** KiCad layer names this pad occupies ("F.Cu", "F.Paste", "F.Mask", "*.Cu", ...) -- the Pad Properties dialog's layer-preset buttons fill this in; empty means "not set yet". */
   layers: string[];
   /** `None`/`null` = inherit the board/footprint default, KiCad's own 0-means-inherit convention. */
@@ -933,7 +958,7 @@ export interface PadEditCmd {
   number: string;
   nth?: number;
   kind?: "smd" | "through_hole" | "non_plated_hole";
-  shape?: "rect" | "round_rect" | "circle" | "oval";
+  shape?: PadShapeName;
   size?: [Um, Um];
   drill?: Um;
   drill_slot?: [Um, Um];
@@ -943,6 +968,13 @@ export interface PadEditCmd {
   solder_mask_margin?: Um;
   solder_paste_margin?: Um;
   solder_paste_margin_ratio?: number;
+  /** A trapezoid's deltas; `[0, 0]` takes the delta away. */
+  trapezoid_delta?: [Um, Um];
+  /** A chamfered rectangle's chamfer ratio, `0..1` of the shorter side, and the corners it cuts. */
+  chamfer_ratio?: number;
+  chamfer_corners?: ChamferCorners;
+  /** A custom pad's anchor, zone knockout and basic shapes, replaced whole. */
+  custom?: PadCustom;
 }
 
 export type Cmd =

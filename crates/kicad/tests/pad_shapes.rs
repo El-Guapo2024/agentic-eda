@@ -364,3 +364,76 @@ fn kicad_cli_plots_the_same_pad_copper_before_and_after_the_round_trip() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ----------------------------------------------------------------------------------------------------------------------
+// kicad-cli's DRC measures the same clearances to these pads
+// ----------------------------------------------------------------------------------------------------------------------
+
+/// The smallest `actual` of the clearance violations kicad-cli's DRC reports for `board`, in mm (`None`: there is none).
+fn kicad_clearance_actual_mm(cli: &Path, board: &Path, dir: &Path, name: &str) -> Option<f64> {
+    let json = dir.join(format!("{name}.drc.json"));
+    let out = Command::new(cli).args(["pcb", "drc", "--format", "json", "--severity-all", "-o"]).arg(&json).arg(board).output().expect("runs kicad-cli");
+    assert!(out.status.success(), "kicad-cli drc: {}", String::from_utf8_lossy(&out.stderr));
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&json).expect("a report")).expect("json");
+    v["violations"]
+        .as_array()?
+        .iter()
+        .filter(|x| x["type"].as_str() == Some("clearance"))
+        .filter_map(|x| x["description"].as_str()?.split("actual ").nth(1)?.split(' ').next()?.parse::<f64>().ok())
+        .reduce(f64::min)
+}
+
+/// A one-footprint board with `pads` (net B) at (10, 10) and a net-A track `width` wide from `a` to `b` (mm) on F.Cu.
+fn clearance_board(pads: &str, a: (f64, f64), b: (f64, f64)) -> String {
+    let header = HEADER.replace("(net 0 \"\")", "(net 0 \"\")\n\t(net 1 \"B\")\n\t(net 2 \"A\")");
+    let fp = footprint("Q1", "F.Cu", 10.0, 10.0, 0.0, pads);
+    let track = format!("\t(segment (start {} {}) (end {} {}) (width 0.2) (layer \"F.Cu\") (net 2) (uuid \"30000000-0000-0000-0000-000000000001\"))\n", a.0, a.1, b.0, b.1);
+    format!("{header}{fp}{track})\n")
+}
+
+#[test]
+fn kicad_cli_drc_measures_the_clearance_to_these_pads_as_the_drc_here_does() {
+    if slow_tests_off() {
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("eda_pad_shapes_drc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a scratch dir");
+
+    // The track: 200 um wide, `air` um from the pad's copper along the direction `u`, passing the point `at` on the pad's outline with the outward normal `n`.
+    let beside = |at: (f64, f64), n: (f64, f64), u: (f64, f64), air: f64| {
+        let (nl, ul) = (n.0.hypot(n.1), u.0.hypot(u.1));
+        let off = (air + 100.0) / 1000.0;
+        let c = (10.0 + at.0 + n.0 / nl * off, 10.0 + at.1 + n.1 / nl * off);
+        ((c.0 - u.0 / ul * 2.5, c.1 - u.1 / ul * 2.5), (c.0 + u.0 / ul * 2.5, c.1 + u.1 / ul * 2.5))
+    };
+    let pad = |shape_text: &str| format!("\t\t(pad \"1\" smd {shape_text} (net 1 \"B\") (layers \"F.Cu\" \"F.Mask\") (uuid \"20000000-0000-0000-0000-000000000001\"))\n");
+    let cases: Vec<(&str, String, ((f64, f64), (f64, f64)))> = vec![
+        // The slanted right side of a trapezoid, from (1.4, 0.5) to (0.6, -0.5): the track runs parallel to it.
+        ("trapezoid", pad("trapezoid (at 0 0) (size 2 1) (rect_delta 0 0.8)"), beside((1.0, 0.0), (1.0, -0.8), (-0.8, -1.0), 150.0)),
+        // The cut corner of a chamfered rectangle: the face x + y = -0.6 (mm, pad frame).
+        ("chamfered", pad("roundrect (at 0 0) (size 1 1) (roundrect_rratio 0) (chamfer_ratio 0.4) (chamfer top_left)"), beside((-0.3, -0.3), (-1.0, -1.0), (1.0, -1.0), 150.0)),
+        // A custom pad: a round anchor and a 0.2 mm line 2 mm to its right; the track is a vertical one past the line's end.
+        ("custom", pad("custom (at 0 0) (size 0.6 0.6) (options (clearance outline) (anchor circle)) (primitives (gr_line (start 0 0) (end 2 0) (width 0.2)))"), ((12.25, 7.5), (12.25, 12.5))),
+    ];
+    for (name, pad_text, (a, b)) in cases {
+        let text = clearance_board(&pad_text, a, b);
+        let path = dir.join(format!("{name}.kicad_pcb"));
+        std::fs::write(&path, &text).expect("write");
+        let theirs = kicad_clearance_actual_mm(&cli, &path, &dir, name).unwrap_or_else(|| panic!("{name}: kicad-cli reports no clearance violation:\n{text}"));
+
+        // Ours: the gap between the pad's copper and the track's stadium.
+        let (design, model, _) = import_kicad_pcb(&text).expect("imports");
+        let board = eda_drc::board::build(&design, &model);
+        let copper = &board.pads[0].copper;
+        let um = |v: f64| (v * 1000.0).round() as i64;
+        let track = eda_drc::kimath::Shape::Stadium { a: eda_model::ir::Point { x: um(a.0), y: um(a.1) }, b: eda_model::ir::Point { x: um(b.0), y: um(b.1) }, r: 100 };
+        let ours = copper.gap_to(&track) / 1000.0;
+        eprintln!("{name}: kicad-cli {theirs:.4} mm, here {ours:.4} mm");
+        assert!((ours - theirs).abs() < 0.002, "{name}: kicad-cli's DRC says {theirs} mm of air, the DRC here {ours} mm");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

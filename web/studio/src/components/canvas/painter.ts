@@ -157,10 +157,21 @@ function withAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: () => voi
   ctx.globalAlpha = prev;
 }
 
+/** The rule that fills `pathForPad`: a trapezoid, chamfered or custom pad is its outline's contours, a ring having a hole. */
+function padFillRule(pad: Pad): CanvasFillRule {
+  return pad.outline?.length ? "evenodd" : "nonzero";
+}
+
 function pathForPad(ctx: CanvasRenderingContext2D, pad: Pad) {
   const isCircle = pad.round && Math.abs(pad.w - pad.h) < 1;
   ctx.beginPath();
-  if (isCircle) {
+  if (pad.outline?.length) {
+    // The copper as the DRC measures it (`pad_outline`): a trapezoid's slanted sides, a chamfer's cut corner, a custom pad's basic shapes.
+    for (const contour of pad.outline) {
+      contour.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+      ctx.closePath();
+    }
+  } else if (isCircle) {
     ctx.arc(pad.x, pad.y, pad.w / 2, 0, Math.PI * 2);
   } else {
     // A pad that says what shape it is (`pad.shape`) is drawn as that: a rectangle has square corners, a rounded rectangle the radius of its ratio
@@ -317,7 +328,7 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.stroke();
     } else {
       ctx.fillStyle = fill;
-      ctx.fill();
+      ctx.fill(padFillRule(pad));
     }
     if (pad.th) {
       // The hole punched through the copper (the board's background shows in it), with the wall around it, when the backend says how big it is.
