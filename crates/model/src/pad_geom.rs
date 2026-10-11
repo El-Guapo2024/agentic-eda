@@ -560,7 +560,7 @@ mod tests {
         // A 0.6 mm round anchor and a 0.2 mm line from it 2 mm to the right: the copper reaches x = 2100.
         let mut p = pad(PadShape::Custom, (600, 600));
         p.ext.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 2000, y: 0 } }, proxy: false }] });
-        let footprint = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None };
+        let footprint = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] };
         let part = Part { reference: "J1".into(), mpn: None, lcsc: None, value: None, package: Some("C".into()), footprint: Some("C".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None };
         let model = ConstraintModel { parts: vec![part.clone()], footprints: vec![footprint], ..Default::default() };
         let at = |rot, side| FootprintInstance { id: "J1".into(), at: Point { x: 10_000, y: 5_000 }, rot, side, label: LabelSide::Above };
@@ -577,7 +577,7 @@ mod tests {
         let mirrored = &placed_pads(&model, &part, &at(0, Side::Bottom)).unwrap()[0];
         assert!(mirrored.signed_distance(Point { x: 8_500, y: 5_000 }) < 0.0 && mirrored.signed_distance(Point { x: 11_500, y: 5_000 }) > 0.0);
         // A plain pad has no pieces and measures as before.
-        assert!(placed_pads(&ConstraintModel { footprints: vec![Footprint { name: "C".into(), pads: vec![pad(PadShape::Rect, (600, 600))], courtyard: None, courtyard_outlines: vec![], model: None }], ..model.clone() }, &part, &at(0, Side::Top)).unwrap()[0].pieces.is_empty());
+        assert!(placed_pads(&ConstraintModel { footprints: vec![Footprint { name: "C".into(), pads: vec![pad(PadShape::Rect, (600, 600))], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] }], ..model.clone() }, &part, &at(0, Side::Top)).unwrap()[0].pieces.is_empty());
     }
 
     #[test]
@@ -586,7 +586,7 @@ mod tests {
         let mut p = pad(PadShape::Custom, (600, 600));
         p.ext.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 0, y: -3000 } }, proxy: false }] });
         p.at = (1_000, 0);
-        let fp = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None };
+        let fp = Footprint { name: "C".into(), pads: vec![p], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] };
         assert_eq!(fp.pad_bbox(), (700, -3_100, 1_300, 300));
     }
 

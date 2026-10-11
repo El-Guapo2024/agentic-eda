@@ -1270,7 +1270,7 @@ mod tests {
     #[test]
     fn pad_and_footprint_zone_overrides_are_written_and_read_back() {
         use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
-        let (mut design, mut model) = fixture();
+        let (mut design, model) = fixture();
         design.drawings = Some(eda_model::ir::DrawingsSection {
             zone_overrides: vec![FootprintZoneOverrides {
                 id: "U1".into(),
