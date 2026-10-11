@@ -852,7 +852,7 @@ fn add_shape_move_and_delete() {
 #[test]
 fn the_outline_summary_follows_the_edge_cuts_shapes_when_they_are_the_outline() {
     let m = net_model();
-    let mut b = board(&m);
+    let b = board(&m);
     let edge = |a: Point, c: Point| Shape::Segment { id: String::new(), layer: "Edge.Cuts".into(), stroke_width: 50, filled: false, start: a, end: c };
     let p = |x, y| Point { x, y };
     // An imported board whose outline is its shapes: a 10 x 10 mm square, `placement.outline` the ring that stands for it.
