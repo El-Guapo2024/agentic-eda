@@ -1,4 +1,4 @@
-// Pad shapes check (GAPS.md item 13 and PARITY-pcb.md section 17): the Pad Properties dialog of a pad on the board takes KiCad's nine shape choices -- circular, oval,
+// Pad shapes check (GAPS.md items 9, 13 and 19 and PARITY-pcb.md section 27): the Pad Properties dialog of a pad on the board takes KiCad's nine shape choices -- circular, oval,
 // rectangular, trapezoidal, rounded rectangle, chamfered rectangle, chamfered with other corners rounded, custom with a circular or a rectangular base --, the fields each
 // needs (a trapezoid's delta and axis, the corner and chamfer sizes and the chamfered corners, a custom pad's zone knockout and its list of basic shapes: add, edit, delete),
 // and what it sends is one undoable `edit_board_pad`. The state then carries the pad's shape, its delta, chamfer and basic shapes and the outline of its copper
