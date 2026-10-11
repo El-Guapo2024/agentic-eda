@@ -86,7 +86,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 2 | P2 Footprint assignment, exchange and reference rename | 26, 9 | the Footprint field of a symbol does nothing on the board; no Change Footprint; a rename leaves the footprint and its routing behind | open | L |
 | 3 | P3 Library tables and paths | 5 | libraries other than KiCad's installed ones cannot be added | engine in flight | M |
 | 4 | P4 Schematic hierarchy: the rest | 4 | Import Sheet, sheets in the clipboard, the last cross-sheet cases | in flight | M |
-| 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | dragging a segment moves its end; no start or end mid-segment; no coupled diff pair shove; no U meander | open | XL (3 parts) |
+| 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | **P5a done on `task-router-drag` (2026-10-10)**: a segment slides, an illegal drag falls back, routes start and end mid-track, Route From Other End after the first fix. Left: no coupled diff pair shove; no U meander | P5a done, P5b and P5c open | L (2 parts left) |
 | 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | open | M, ongoing |
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | in flight | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | no way to bring an outline from a DXF or another board in | open | L |
@@ -205,18 +205,20 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `eeschema/tools/sch_editor_control.cpp` (`doCopy`, `Paste`), `common/clipboard.cpp`, `eeschema/sch_io/kicad_sexpr/`.
 
 ### 7. The router
-**Partial.** Shove near pads, vias and tracks, the board edge, every setting and the via drag are done (2026-10-08, `1e4d7ea`, `03b46de`). Hit: dragging, a route that starts or ends mid-segment, differential pairs with obstacles. Blocks: partly. Package P5.
+**Partial.** Shove near pads, vias and tracks, the board edge, every setting and the via drag are done (2026-10-08, `1e4d7ea`, `03b46de`). **Dragging a segment, a route that starts or ends mid-segment and Route From Other End after the first fix are done too (P5a, 2026-10-10, branch `task-router-drag`: `68eb737`, `c1b409c`, `bae172b`, `0a9290e`, `9dbcd8e`, `77e526e`, `bc573db`).** Hit: differential pairs with obstacles. Blocks: partly. Package P5.
 - Exists: `crates/pns` ports hulls, `LINE::Walkaround`, shove of tracks and vias (a stack of lines with ranks, `onCollidingSolid`, `pushOrShoveVia`, the optimizer over every shoved line),
-  the optimizer with smart pads, loop removal, diff-pair routing, single-track and diff-pair length and skew tuning (dialog-driven), `D`/`G` drag of a corner or via; the clearance gate measures
+  the optimizer with smart pads, loop removal, diff-pair routing, single-track and diff-pair length and skew tuning (dialog-driven), `D`/`G` drag of a segment (`DM_SEGMENT`: it slides, its neighbours follow at 45 degrees),
+  a corner or a via, with the last valid position restored when the cursor is where the drag cannot be resolved; routes that start and end in the middle of a track (`SplitAdjacentSegments`) and Route From Other End
+  before and after the first fix (`ContinueFromEnd`); the clearance gate measures
   pads by their exact outline (`eda_drc::board::placed_pad_copper`); the board outline with its cutouts, arcs and a footprint's own Edge.Cuts are obstacles with the copper-to-edge clearance
   (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`, `crates/pns/src/from_ir.rs`); every `RoutingSettings` field is read and Interactive Router Settings has `dialog_pns_settings.cpp`'s rows
   (`crates/pns/PARITY.md`; `CODE-COMPARE-router.md` D1-D6, D8, D10, D12, D15, D16 fixed).
-- Missing (`CODE-COMPARE-router.md` D7, D18): a drag moves the nearer end instead of sliding the segment (`DM_SEGMENT`), at any angle (`dragCorner45`), with the `SHP_REVERSED` direction test and a
-  last-valid-point restore; a route cannot start or end mid-segment (`SplitAdjacentSegments`) and Route From Other End works only before the first fix; a diff pair has no coupled shove or
-  walkaround and no via; length tuning is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs (`ARC_T`), mouse-trail posture
-  (the dialog's "Use mouse path to set track posture", "Smooth dragged segments" and "Optimize entire track being dragged" rows are disabled), springback or `ShoveTimeLimit`; a head that ends in a
-  via is not shoved with its via; `findRedundantSegment` and locked joints (`from_ir` never sets `Segment.locked`); the generators (`PCB_GENERATOR`, 9 rows) that keep a tuning pattern editable.
-  No browser check (item 33).
+- Missing (`CODE-COMPARE-router.md` D18): a diff pair has no coupled shove or
+  walkaround and no via; length tuning is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs (`ARC_T`: a track that is an arc is not split by a route,
+  `SplitAdjacentArcs`, and `DM_ARC` is not a drag), mouse-trail posture (the dialog's "Use mouse path to set track posture" and "Optimize entire track being dragged" rows are disabled; the second needs the optimizer's
+  `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`), springback or `ShoveTimeLimit`; a head that ends in a via is not shoved with its via; `findRedundantSegment` and locked joints (`from_ir` never sets `Segment.locked`: a locked
+  track is dragged and shoved all the same); the generators (`PCB_GENERATOR`, 9 rows) that keep a tuning pattern editable.
+  Browser check of P5a done (2026-10-10, `window.__eda` on the 30-part board: segment drag, 30-degree segment, corner dropped on a pad, route started and ended mid-track, Route From Other End after a fix: item 33 for the rest).
 - Port from: `pcbnew/router/` (`pns_dragger.cpp`, `pns_multi_dragger.cpp`, `pns_line_placer.cpp`, `pns_diff_pair_placer.cpp`, `pns_meander*.cpp`, `pns_shove.cpp`, `pns_walkaround.cpp`,
   `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`, `pcbnew/tools/generator_tool.cpp`.
 
@@ -602,7 +604,7 @@ Rules that keep them apart (each is how an earlier package did it):
 Waves:
 
 - **Running now**: P3 (`task-lib-tables`), P4 (`task-sch-hierarchy`), P7 (`task-custom-pads`).
-- **Next free slot**: P1 -- P2, P14, P16, P17 and the Footprint Checker and Compare Footprint stand on a footprint that carries its graphics -- and P5 part 1, which shares no hub with anything.
+- **Next free slot**: P1 -- P2, P14, P16, P17 and the Footprint Checker and Compare Footprint stand on a footprint that carries its graphics -- and P5b/P5c (P5a is done), which share no hub with anything.
 - **After P1 has merged its IR**: P2 (its assignment overlay holds a definition with graphics). Step 1 of P2, the rename, can start sooner if P4 has merged its Annotate.
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
 - **After P7**: P13, P17, and P19's arc stub and function shape.
@@ -692,7 +694,11 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - Conflicts: P2 (`ops/lib.rs`, `board.rs`); P8 (the drop host); P10 (`SchematicView.tsx`); P18 (placing a block is Import Sheet).
 
 ### P5. Router: drag, mid-segment, diff pairs, meanders (item 7). Size XL, three parts. Rank 5. Independent of the rest.
-- **P5a, M-L**: the dragger and the mid-segment route. `crates/pns/src/{dragger,line_placer,router,node}.rs` (D7: `DM_SEGMENT`, `dragCorner45`, `SHP_REVERSED`, last-valid restore; `SplitAdjacentSegments` so a route starts and ends
+- **P5a, M-L. DONE 2026-10-10 on `task-router-drag` (7 commits, `68eb737` to `bc573db`; D7 and its rows in `CODE-COMPARE-router.md` closed).** What is there: `Line::drag_segment45`, `snapToNeighbourSegments` and `snapDraggedCorner` ported and checked against
+  KiCad's own functions (80 000 random lines, point for point); `Dragger` with `DM_SEGMENT`/`DM_CORNER`, `dragCorner45`, `SHP_REVERSED`, the last-valid-point restore and the forced Highlight-collisions mode with Ctrl+click;
+  `split_segment` and the commit that gives a track a vertex where a route starts or ends in it; `Router::continue_from_end` and `POST /api/route/continue_from_end`; replays of KiCad's `walk_drag_seg_against_board_edge`
+  (same three segments) and `simple-drag-shove-singlelayer` (116 of 134, the same 139 tracks); a browser check. Left of the original text below: nothing, except what the item 7 paragraph lists as missing.
+  The package as it was planned: `crates/pns/src/{dragger,line_placer,router,node}.rs` (D7: `DM_SEGMENT`, `dragCorner45`, `SHP_REVERSED`, last-valid restore; `SplitAdjacentSegments` so a route starts and ends
   mid-segment; Route From Other End after the first fix), `crates/cli/src/route_api.rs`, `web/studio/src/components/canvas/{routing,dragging}.ts`, `kicad-port/{routeTool,dragTool}.ts`, `actions/pcbRouterSweep.ts`.
 - **P5b, L**: differential pairs with obstacles: coupled shove and walkaround, vias (`crates/pns/src/{diff_pair,dp_tune,shove,walkaround}.rs`, `diffPairRouting.ts`, `kicad-port/dpTool.ts`).
 - **P5c, L**: the U meander and interactive tuning (`crates/pns/src/{meander,dp_tune}.rs`, `crates/cli/src/tune_api.rs`, `components/LengthTuningDialog.tsx`), arcs (`ARC_T`), mouse-trail posture, springback and `ShoveTimeLimit`,

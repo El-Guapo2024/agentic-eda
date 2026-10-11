@@ -239,15 +239,28 @@ displacement; `Router` gained `drag_start`/`drag_preview`/`drag_cancel`/
 /api/route/drag_{start,move,finish}` endpoints (sharing `RouteCell` with
 the route session, since a `Router` is only ever doing one or the other).
 
+**Updated 2026-10-10 (P5a, D7): the segment slide, `dragCorner45`, `SHP_REVERSED` and the
+last-valid-point restore are ported** -- `Dragger::start_with` is `startDragSegment` (within half
+the track's width of an end: that corner; anywhere else: `DM_SEGMENT`, the whole segment), the line
+is `Line::drag_segment45` / `drag_corner45_snapped` (`pns_line.cpp`, checked against KiCad's own
+functions: 80 000 random lines agree point for point; `seg_ops.rs` has the `SEG` pieces), the
+snap thresholds are `SmoothDraggedSegments() ? width / 4 : 0` (`width / 2` in Shove), and
+`Dragger::drag` / `finish` are `DRAGGER::Drag` / `FixRoute` with their memory: a position the mode
+cannot resolve shows the last valid solution again, a release over it commits the last valid
+point, a failing first position makes the drag mark obstacles only and Ctrl+click commits it.
+The shove takes the dragged line out of its world first (`Shove::dragged_away`) and reverses its
+direction test for vertex 0. Replays of KiCad's `walk_drag_seg_against_board_edge` (the three
+segments it recorded) and `simple-drag-shove-singlelayer` (116 of 134, the same 139 tracks) are in
+`tests/qa_regressions.rs`. What the original scoping list below says about "corner drag only" and
+"free-angle" is superseded; what stays out: `OptimizeEntireDraggedTrack`, springback, arcs,
+virtual vias, locked tracks.
+
 Scoped down further than `shove`/`walkaround` already are (see
 `dragger.rs`'s own doc comment for the full reasoning):
-- **Corner drag only** -- grabbing a segment always drags its *nearer*
-  endpoint (`Node::item_at`'s shape hit-test finds the segment, then the
-  closer of its two assembled-line neighbours is what follows the
-  cursor). KiCad's segment-sideways-slide (`DM_SEGMENT`, grabbing a
-  segment's middle to slide the whole run sideways) isn't implemented.
-- **Free-angle corner relocation**, not KiCad's default 45-degree-
-  constrained `dragCorner45`.
+- ~~**Corner drag only**~~ **Fixed (2026-10-10)**: a grab in the middle of a segment slides it
+  (`DM_SEGMENT`); within half its width of an end it is that corner.
+- ~~**Free-angle corner relocation**~~ **Fixed (2026-10-10)**: `dragCorner45`; free angle only for
+  `G` (`dragCornerFree`).
 - ~~`Mode::Walkaround` while dragging behaves like `Mode::MarkObstacles`~~
   **Fixed (D7, 2026-10-08).** Walk around mode walks a dragged corner around
   what it lands on (`dragWalkaround`/`tryWalkaround`), and a dragged **via** is a
@@ -258,8 +271,29 @@ Scoped down further than `shove`/`walkaround` already are (see
   (`VIA::PushoutForce`, `ViaForcePropIterationLimit` steps, then the attached
   tracks walked around what they hit). A via that may not be shoved (`ShoveVias()`
   off, locked) or whose shove fails is dragged the Walk around way, as `dragShove`
-  falls back. The attached tracks are re-solved at 45 degrees (`DragCorner`), where a
-  corner drag is still free-angle.
+  falls back. The attached tracks are re-solved at 45 degrees (`DragCorner`).
+
+## Stage 5b -- routes that start and end in the middle of a track, Route From Other End
+
+**2026-10-10 (P5a, D7/D18).** `LINE_PLACER::SplitAdjacentSegments` is `Node::split_segment`
+(`segment_to_split` is its test: nothing is done where a joint already is or the point is not on the
+segment; the IR track's later segments are renumbered so it stays one track). `Router::start` takes a
+pad, a via, a track end or -- a point on a track's centre line -- the middle of a track, and cuts it in
+the *session's own copy* of the world (`Session::world`), so a cancelled session leaves the router's world
+whole; the commit gives the IR track a vertex there (`apply_splits`: the track out, itself with the point
+in, in the same `Cmd::CommitRoute`), and nothing is committed or cut if the route placed nothing
+(`CommitRouting`: `!HasPlacedAnything()`). A route ends on a same-net track (`LinePlacer::snap_end`,
+setting `snap_to_tracks`, the magnetic setting `checkSnap` hands the router, default on) that the
+cursor is exactly on, cut where it ends, and a head that runs along that track ends where it first
+meets it (`Move`: `Collinear` and `Overlaps`). The track a route started on is never where it ends.
+`SplitAdjacentArcs` is not ported: a track that is an arc (`arc_mid_offset`) is not split.
+
+`Router::continue_from_end` is `ROUTER::ContinueFromEnd` + `GetNearestRatnestAnchor`:
+`Node::nearest_unconnected_item` / `connected_joints` are `TOPOLOGY::NearestUnconnectedItem` /
+`ConnectedJoints`, run over a node that holds what the session has fixed and the head. It says where
+to restart and what to commit; `POST /api/route/continue_from_end` commits the fixed part, builds a
+fresh `Router` from the board and starts it there (the commits are one undo step: `APPEND_UNDO`,
+`board::append_to_previous_undo`).
 
 A real bug surfaced and fixed while wiring the via-drag commit path: a via
 displaced by a drag's own shove was being removed from the board but never
@@ -375,7 +409,7 @@ Remove redundant tracks, Optimize pad connections, Fix all segments on click
 `OptimizerEffort` in its settings file only. Smooth dragged segments, Optimize
 entire track being dragged and Use mouse path to set track posture have
 nothing behind them here and are shown disabled with the reason in their tool
-tip. `POST /api/route/{start,drag_start,dp_start}` take a `settings` object
+tip (**2026-10-10: Smooth dragged segments works now**, `smooth_dragged_segments`). `POST /api/route/{start,drag_start,dp_start}` take a `settings` object
 (`route_api.rs` `settings_of`: those switches and `shove_iteration_limit`,
 `walkaround_iteration_limit`, `via_force_prop_iteration_limit`,
 `walkaround_hug_length_threshold`, which KiCad has no row for); `mode` and

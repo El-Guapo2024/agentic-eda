@@ -643,6 +643,29 @@ mod tests {
         assert_eq!((commit.tracks[0].net.clone(), commit.tracks[0].width), (net_of("SIG"), 200));
     }
 
+    /// `SmoothDraggedSegments`: within a quarter of the track width (Highlight collisions, Walk around) or half of it (Shove) of the line of
+    /// the parallel segment two along, the dragged segment lines up with it and the two merge. Off: nothing snaps. (Expected values:
+    /// KiCad's own `dragSegment45`, see `line.rs`.)
+    #[test]
+    fn smooth_dragged_segments_lines_the_slid_segment_up_with_the_next_parallel_one() {
+        let mut node = Node::new();
+        let pts = [p(0, 0), p(1000, 0), p(2000, 1000), p(3000, 1000), p(4000, 2000)];
+        let ids: Vec<ItemId> = pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: 250, source_track: Some(("t".into(), i)), locked: false }))).collect();
+        let rules = rules();
+        // the cursor is 70 um from the line of the last diagonal: inside the 125 of Shove (width / 2), outside the 62 of Walk around (width / 4)
+        let slid = |settings: &RoutingSettings| {
+            let mut d = Dragger::start(&node, p(1500, 500), ids[1]).unwrap();
+            assert_eq!((d.kind, d.grabbed_index), (DragKind::Segment, 1));
+            d.drag(&node, &rules, settings, p(2000, 100)).pts
+        };
+        let shove = RoutingSettings { mode: Mode::Shove, ..RoutingSettings::default() };
+        assert_eq!(slid(&shove), vec![p(0, 0), p(2000, 0), p(4000, 2000)], "merged with the next diagonal");
+        let walk = RoutingSettings { mode: Mode::Walkaround, ..RoutingSettings::default() };
+        assert_eq!(slid(&walk), vec![p(0, 0), p(1900, 0), p(2900, 1000), p(3000, 1000), p(4000, 2000)], "62 um is not enough");
+        let rough = RoutingSettings { smooth_dragged_segments: false, ..shove };
+        assert_eq!(slid(&rough), vec![p(0, 0), p(1900, 0), p(2900, 1000), p(3000, 1000), p(4000, 2000)], "with smoothing off nothing snaps");
+    }
+
     /// A 30-degree segment (imported geometry, not on KiCad's 45-degree grid) between a horizontal and a vertical leg is dragged at the
     /// 45-degree heading it quantizes to, and the legs follow: every leg of the result is on a 45-degree heading. (Expected values:
     /// KiCad's own `dragSegment45`, see `line.rs`.)

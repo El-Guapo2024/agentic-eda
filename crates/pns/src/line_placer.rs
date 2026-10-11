@@ -174,13 +174,10 @@ impl LinePlacer {
         self.runs.last().and_then(|r| r.last()).unwrap_or(self.origin)
     }
 
-    /// `ITEM::AnchorCount`-driven ids this session's own fixed runs may
-    /// have already been assembled from, when a run started life as (part
-    /// of) an existing track the user clicked into -- never the case for
-    /// freshly built runs, so always empty in this port today. Kept as its
-    /// own method (rather than inlined) because `build_head`'s exclusion
-    /// set is exactly where that would plug in if start-on-existing-track
-    /// splitting is added later.
+    /// The items `build_head`'s collision tests ignore: none. A route that starts in the middle of a track
+    /// (`SplitAdjacentSegments`, [`crate::router::Router::start`]) needs nothing here -- the two halves are on the
+    /// route's own net, which never collides with it. Kept as its own method (rather than inlined) because
+    /// that is where an exclusion set would plug in.
     fn exclude(&self) -> Vec<ItemId> {
         Vec::new()
     }
