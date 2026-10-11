@@ -885,6 +885,47 @@ pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Val
     })
 }
 
+// ------------------------------------------------------------------------------------------------ 3D model paths
+
+/// What a footprint's `(model "...")` path may name for the board in `dir`: the board's own path variables first, then KiCad's variables and the environment
+/// (`PROJECT::TextVarResolver`, then `wxGetEnv`: [`Vars::expand`], the same way a library path is read), so a variable that gives a library its folder gives the
+/// board's 3D models theirs too. `GET /api/3dmodel` asks it ([`ModelNames::get`]) before it reads a file, and may read from [`ModelNames::folders`] besides KiCad's
+/// 3D model library and the board's folder: they are folders the person named in Configure Paths, here or in KiCad, never one the environment happens to define.
+pub(crate) struct ModelNames {
+    vars: Vars,
+    pub(crate) folders: Vec<PathBuf>,
+}
+
+pub(crate) fn model_names(dir: &Path) -> ModelNames {
+    model_names_with(&Env::discover(), dir)
+}
+
+pub(crate) fn model_names_with(env: &Env, dir: &Path) -> ModelNames {
+    let project = lt::read_project_variables(dir);
+    let vars = env.vars(dir, &project);
+    let mut folders: Vec<PathBuf> = Vec::new();
+    for value in project.values().cloned().chain(env.global_vars().into_iter().map(|v| v.value)) {
+        // an existing folder, but never the whole file system
+        let folder = PathBuf::from(vars.expand(&value));
+        if folder.is_absolute() && folder.parent().is_some() && folder.is_dir() && !folders.contains(&folder) {
+            folders.push(folder);
+        }
+    }
+    ModelNames { vars, folders }
+}
+
+impl ModelNames {
+    /// What `${name}` stands for, expanded all the way (a variable whose value names another), or `None` when nothing defines it or it is not a name KiCad reads.
+    pub(crate) fn get(&self, name: &str) -> Option<String> {
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ':') {
+            return None;
+        }
+        let spelled = format!("${{{name}}}");
+        let value = self.vars.expand(&spelled);
+        (value != spelled && !value.is_empty()).then_some(value)
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1284,6 +1325,39 @@ pub(crate) mod tests {
         assert!(!m.config.join("sub").join("sym-lib-table").exists() && !m.config.join(lt::PATH_VARIABLES_FILE).exists());
         // a board folder of its own is fine
         assert_eq!(set_table_with(&env, &m.board, &req(json!({ "kind": "symbol", "rows": [row("Mine", "/x/Mine.kicad_sym")] })))["ok"], true);
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn a_board_variable_names_a_3d_models_folder_and_the_environment_does_not() {
+        let mut m = machine("models", true);
+        let team = m.root.join("team");
+        let other = m.root.join("elsewhere");
+        for d in [&team, &other] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        // KiCad's Configure Paths holds one variable of the person's, and the process environment another
+        std::fs::write(m.config.join("kicad_common.json"), format!("{{ \"environment\": {{ \"vars\": {{ \"MY_KICAD_3D\": \"{}\" }} }} }}", team.join("kicad").display())).unwrap();
+        std::fs::create_dir_all(team.join("kicad")).unwrap();
+        m.env.insert("FROM_THE_SHELL".into(), other.display().to_string());
+        let env = m.env();
+        let set = set_variables_with(&env, &m.board, &req(json!({ "variables": [{ "name": "TEAM", "value": team.display().to_string() }, { "name": "SUB", "value": "${TEAM}/parts" }, { "name": "GONE", "value": "/no/such/folder" }, { "name": "ROOT", "value": "/" }] })));
+        assert_eq!(set["ok"], true, "{set}");
+        std::fs::create_dir_all(team.join("parts")).unwrap();
+        let names = model_names_with(&env, &m.board);
+        let s = |v: Option<String>| v.map(|v| PathBuf::from(v).display().to_string());
+        assert_eq!(s(names.get("TEAM")), Some(team.display().to_string()), "a board variable");
+        assert_eq!(s(names.get("SUB")), Some(format!("{}/parts", team.display())), "its value names another");
+        assert_eq!(s(names.get("MY_KICAD_3D")), Some(team.join("kicad").display().to_string()), "a variable of KiCad's Configure Paths");
+        assert_eq!(s(names.get("KIPRJMOD")), Some(m.board.display().to_string()));
+        assert_eq!(s(names.get("FROM_THE_SHELL")), Some(other.display().to_string()), "the environment is read like any variable");
+        assert_eq!(names.get("NOBODY_DEFINES_THIS"), None);
+        assert_eq!(names.get("not a name"), None);
+        assert_eq!(names.get(""), None);
+        // the folders the person named, never the environment's, a missing folder or the whole file system
+        assert!(names.folders.contains(&team) && names.folders.contains(&team.join("kicad")) && names.folders.contains(&team.join("parts")), "{:?}", names.folders);
+        assert!(!names.folders.contains(&other), "{:?}", names.folders);
+        assert!(names.folders.iter().all(|f| f.is_dir() && f.parent().is_some()), "{:?}", names.folders);
         let _ = std::fs::remove_dir_all(&m.root);
     }
 
