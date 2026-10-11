@@ -29,6 +29,17 @@ export function defaultAnnotateSettings(): AnnotateSettings {
   return { scope: "all", recursive: true, reset: false, regroupUnits: false, sort: "x", algo: "first_free", start: "0" };
 }
 
+/** The settings the dialog last held, kept between openings as KiCad keeps them (`~DIALOG_ANNOTATE` writes them back): Annotate reopens with them, and Import Sheet numbers a new sheet's symbols the way they say. */
+let remembered: AnnotateSettings = defaultAnnotateSettings();
+
+export function rememberedAnnotateSettings(): AnnotateSettings {
+  return remembered;
+}
+
+export function rememberAnnotateSettings(settings: AnnotateSettings): void {
+  remembered = settings;
+}
+
 /** `GetStartNumber()`: the field read as a whole number; what is not one counts from 0, and a negative start is no start. */
 export function startNumber(text: string): number {
   const n = Number.parseInt(text.trim(), 10);

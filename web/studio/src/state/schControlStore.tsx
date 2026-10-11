@@ -17,7 +17,9 @@ export type SchControlDialog =
   | { kind: "legacy_bom" }
   | { kind: "symbol_check" }
   /** Compare a placed symbol (by reference) with its library symbol. */
-  | { kind: "symbol_diff"; ref: string };
+  | { kind: "symbol_diff"; ref: string }
+  /** Import Sheet... (`SCH_DRAWING_TOOLS::ImportSheet`): the file chooser; `forceSheet` is Draw Sheet from File, which only places a sheet. */
+  | { kind: "import_sheet"; forceSheet?: boolean };
 
 export interface SchControlState {
   display: SchDisplayOptions;

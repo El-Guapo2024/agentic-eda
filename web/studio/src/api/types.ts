@@ -1041,6 +1041,23 @@ export type Cmd =
   | { op: "delete_sch_line"; id: string }
   /** `S` (eeschema.InteractiveDrawing.drawSheet): a hierarchical sheet symbol; `file` is a bare `.kicad_sch` name (extension added when missing). */
   | { op: "add_sheet"; name: string; file: string; at: PointXY; size: [Um, Um] }
+  /**
+   * Import Sheet... / Draw Sheet from File (`SCH_DRAWING_TOOLS::ImportSheet` / `DrawSheet`, `LoadSheetFromFile`): the schematic file `source` (a path under the board's folder or an
+   * absolute one; the server reads it) as a sheet `name` of `size` at `at` showing a copy of it under `file`, or -- with `as_sheet` off -- its items on the sheet in view carried to `at`.
+   * The symbols are numbered anew (in `order`, by `options`) unless `keep_annotations`. Refused for a file that places itself, symbols that name no library, a name already used.
+   */
+  | {
+      op: "import_sheet";
+      source: string;
+      as_sheet?: boolean;
+      name?: string;
+      file?: string;
+      at: PointXY;
+      size?: [Um, Um];
+      keep_annotations?: boolean;
+      order?: "y_then_x" | "x_then_y";
+      options?: AnnotateOptions;
+    }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
   /** Ctrl+V / Ctrl+Shift+V / Ctrl+D (`SCH_EDITOR_CONTROL::Paste`): the `fragment` `POST /api/sch/clipboard/parse` returned, added to the sheet in view moved by (`dx`, `dy`); `mode` is Paste Special's reference-designator choice. One undo step. */

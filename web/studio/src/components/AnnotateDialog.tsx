@@ -14,11 +14,8 @@
 import { useEffect, useState } from "react";
 import { fetchAnnotateReport } from "../api/hierarchyClient";
 import type { AnnotateMessage } from "../api/hierarchyTypes";
-import { annotateCmd, annotateRequest, defaultAnnotateSettings, scopeOnOpen, type AnnotateSelection, type AnnotateSettings } from "../kicad-port/schAnnotate";
+import { annotateCmd, annotateRequest, rememberAnnotateSettings, rememberedAnnotateSettings, scopeOnOpen, type AnnotateSelection, type AnnotateSettings } from "../kicad-port/schAnnotate";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-
-/** The dialog keeps its choices between openings, as KiCad keeps them in its settings (`~DIALOG_ANNOTATE`). */
-let remembered: AnnotateSettings = defaultAnnotateSettings();
 
 const severityColor: Record<AnnotateMessage["severity"], string> = { action: "var(--chrome-text)", warning: "#d4a017", error: "#e5484d" };
 
@@ -34,13 +31,13 @@ export function AnnotateDialog() {
   };
   const hasSelection = selection.symbols.length > 0 || selection.sheets.length > 0;
 
-  const [settings, setSettings] = useState<AnnotateSettings>(remembered);
+  const [settings, setSettings] = useState<AnnotateSettings>(rememberedAnnotateSettings);
   const [messages, setMessages] = useState<AnnotateMessage[]>([]);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!open) return;
-    setSettings({ ...remembered, scope: scopeOnOpen(remembered.scope, selection) });
+    setSettings({ ...rememberedAnnotateSettings(), scope: scopeOnOpen(rememberedAnnotateSettings().scope, selection) });
     setMessages([]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -50,7 +47,7 @@ export function AnnotateDialog() {
   const update = (patch: Partial<AnnotateSettings>) =>
     setSettings((s) => {
       const next = { ...s, ...patch };
-      remembered = next;
+      rememberAnnotateSettings(next);
       return next;
     });
 

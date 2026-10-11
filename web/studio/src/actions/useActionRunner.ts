@@ -72,6 +72,7 @@ import { useCommonOptions } from "../state/commonOptions";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
 import { registerSchControlActions, schControlChecked } from "./schControlActions";
+import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
 import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
@@ -2247,6 +2248,8 @@ export function useActionRunner() {
 
     // The schematic editor's control actions (eeschema.EditorControl / NavigateTool / InspectionTool / Interactive.increment*).
     registerSchControlActions(m, { tab: state.tab, state, api, dispatch, requestSelection, symApi, symDispatch, control: schControl, controlDispatch: schControlDispatch });
+    // Import Sheet... / Draw Sheet from File (SCH_DRAWING_TOOLS::ImportSheet / DrawSheet).
+    registerSchSheetFileActions(m, { tab: state.tab, state, api, dispatch, controlDispatch: schControlDispatch });
 
     return m;
   }, [api, dispatch, state, symApi, symDispatch, fpApi, fpDispatch, schControl, schControlDispatch]);
