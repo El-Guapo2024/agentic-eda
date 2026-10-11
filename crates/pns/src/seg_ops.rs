@@ -121,6 +121,37 @@ pub fn line_distance(s: Seg2, p: Point) -> i64 {
     eda_drc::kimath::isqrt(dist_sq)
 }
 
+/// `SEG::Contains( aP )`: within `SquaredDistance <= 3` of the segment.
+pub fn contains(s: Seg2, p: Point) -> bool {
+    eda_drc::kimath::Seg::new(s.0, s.1).sq_distance_to_point(p) <= 3
+}
+
+/// `SEG::Collinear( aSeg )`: both ends of `o` are (to the cross product's `<= 1`) on the line through `s`.
+pub fn collinear(s: Seg2, o: Seg2) -> bool {
+    let (a, b) = s;
+    let qa = a.y as i128 - b.y as i128;
+    let qb = b.x as i128 - a.x as i128;
+    let qc = -qa * a.x as i128 - qb * a.y as i128;
+    let d1 = (o.0.x as i128 * qa + o.0.y as i128 * qb + qc).abs();
+    let d2 = (o.1.x as i128 * qa + o.1.y as i128 * qb + qc).abs();
+    d1 <= 1 && d2 <= 1
+}
+
+/// `SEG::Overlaps( aSeg )`: collinear, and one has an end of the other on it.
+pub fn overlaps(s: Seg2, o: Seg2) -> bool {
+    if o.0 == o.1 {
+        // single point corner case
+        if s.0 == o.0 || s.1 == o.0 {
+            return false;
+        }
+        return contains(s, o.0);
+    }
+    if !collinear(s, o) {
+        return false;
+    }
+    contains(s, o.0) || contains(s, o.1) || contains(o, s.0) || contains(o, s.1)
+}
+
 /// `SEG::Length()`: `VECTOR2I::EuclideanNorm`, rounded to the nearest unit.
 pub fn length(a: Point, b: Point) -> i64 {
     let (dx, dy) = ((b.x - a.x).abs(), (b.y - a.y).abs());
@@ -176,6 +207,19 @@ mod tests {
         assert_eq!(line_distance((p(0, 0), p(10, 0)), p(500, 7)), 7);
         assert_eq!(line_distance((p(0, 0), p(10, 10)), p(10, 0)), 7); // 10 / sqrt 2, rounded down
         assert_eq!(line_distance((p(3, 3), p(3, 3)), p(9, 9)), 0, "a point has no line");
+    }
+
+    #[test]
+    fn collinear_segments_overlap_only_when_one_has_an_end_on_the_other() {
+        let s = (p(0, 0), p(10, 0));
+        assert!(collinear(s, (p(20, 0), p(30, 0))));
+        assert!(!overlaps(s, (p(20, 0), p(30, 0))), "on the same line, apart");
+        assert!(overlaps(s, (p(5, 0), p(30, 0))));
+        assert!(overlaps(s, (p(2, 0), p(4, 0))), "inside");
+        assert!(!overlaps(s, (p(0, 5), p(10, 5))), "parallel");
+        assert!(!overlaps(s, (p(5, -5), p(5, 5))), "crossing");
+        assert!(!overlaps(s, (p(10, 0), p(10, 0))), "a point at an end does not overlap");
+        assert!(overlaps(s, (p(5, 0), p(5, 0))), "a point inside does");
     }
 
     #[test]

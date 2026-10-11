@@ -501,16 +501,7 @@ impl Node {
     /// one of the segment's own ends, or another track ends on it), or `p` is not on the segment. The IR track the segment is part of
     /// gets a vertex at `p`: the second half is the next segment of the track, and the ones after it move up by one.
     pub fn split_segment(&mut self, id: ItemId, p: Point) -> Option<(ItemId, ItemId)> {
-        let Some(Item::Segment(old)) = self.items.get(&id) else { return None };
-        let old = old.clone();
-        if p == old.a || p == old.b || old.seg().sq_distance_to_point(p) > 4 {
-            return None;
-        }
-        if let Some(j) = self.joint_at(p, &old.net) {
-            if j.links.iter().any(|l| self.items.get(l).is_some_and(|it| it.layers().overlaps_layer(old.layer))) {
-                return None;
-            }
-        }
+        let old = self.segment_to_split(id, p)?;
         if let Some((track, k)) = &old.source_track {
             for it in self.items.values_mut() {
                 if let Item::Segment(s) = it {
@@ -530,14 +521,28 @@ impl Node {
         Some((a, b))
     }
 
+    /// The segment [`Self::split_segment`] would split at `p`, if it would (the checks of `SplitAdjacentSegments`).
+    pub fn segment_to_split(&self, id: ItemId, p: Point) -> Option<crate::item::Segment> {
+        let Some(Item::Segment(old)) = self.items.get(&id) else { return None };
+        if p == old.a || p == old.b || old.seg().sq_distance_to_point(p) > 4 {
+            return None;
+        }
+        if let Some(j) = self.joint_at(p, &old.net) {
+            if j.links.iter().any(|l| self.items.get(l).is_some_and(|it| it.layers().overlaps_layer(old.layer))) {
+                return None;
+            }
+        }
+        Some(old.clone())
+    }
+
     /// The segment whose copper `pos` is on, on `layer` (of `net`, when given): the one whose centre line passes nearest. `within` is how
-    /// far off the centre line `pos` may be -- the half width when `None`.
-    pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Um>) -> Option<ItemId> {
+    /// far off the centre line `pos` may be -- the half width when `None`. The segments in `exclude` are not looked at.
+    pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Um>, exclude: &[ItemId]) -> Option<ItemId> {
         let bbox = Shape::Circle { c: pos, r: 0 }.bbox(SEGMENT_AT_REACH);
         let mut best: Option<(ItemId, i128)> = None;
         for id in self.index.query(bbox) {
             let Some(Item::Segment(s)) = self.items.get(&id) else { continue };
-            if s.layer != layer || net.is_some_and(|n| !same_net(&s.net, n)) {
+            if s.layer != layer || net.is_some_and(|n| !same_net(&s.net, n)) || exclude.contains(&id) {
                 continue;
             }
             let d2 = s.seg().sq_distance_to_point(pos);
@@ -547,6 +552,53 @@ impl Node {
             }
         }
         best.map(|(id, _)| id)
+    }
+
+    // ---------------------------------------------------------------- topology
+
+    /// `TOPOLOGY::ConnectedJoints( aStart )`: the joints reachable from the joint at `start` by walking along segments -- track to
+    /// track, through junctions, pads and vias alike -- as the set of positions.
+    fn connected_joints(&self, start: Point, net: &Net) -> std::collections::HashSet<(Um, Um)> {
+        let mut seen: std::collections::HashSet<(Um, Um)> = std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<Point> = std::collections::VecDeque::new();
+        seen.insert((start.x, start.y));
+        queue.push_back(start);
+        while let Some(pos) = queue.pop_front() {
+            let Some(joint) = self.joint_at(pos, net) else { continue };
+            for &id in &joint.links {
+                if let Some(Item::Segment(s)) = self.items.get(&id) {
+                    let next = if s.a == pos { s.b } else { s.a };
+                    if seen.insert((next.x, next.y)) {
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+        seen
+    }
+
+    /// `TOPOLOGY::NearestUnconnectedItem( aStart )`: of the items on `net` that the joint at `start` does not reach along tracks
+    /// ([`Self::connected_joints`]), the one with an anchor nearest to `start` -- `(its id, that anchor)`. The first of equals, by id.
+    pub fn nearest_unconnected_item(&self, start: Point, net: &Net) -> Option<(ItemId, Point)> {
+        let reached = self.connected_joints(start, net);
+        let mut connected: std::collections::HashSet<ItemId> = std::collections::HashSet::new();
+        for &(x, y) in &reached {
+            if let Some(j) = self.joint_at(Point { x, y }, net) {
+                connected.extend(j.links.iter().copied());
+            }
+        }
+        let mut best: Option<(i64, ItemId, Point)> = None;
+        let mut ids: Vec<ItemId> = self.items.iter().filter(|(id, it)| same_net_exact(it.net(), net) && !connected.contains(id) && !matches!(it, Item::Solid(s) if s.edge)).map(|(&id, _)| id).collect();
+        ids.sort_unstable();
+        for id in ids {
+            for a in self.items[&id].anchors() {
+                let d = crate::seg_ops::length(a, start);
+                if best.is_none_or(|(bd, _, _)| d < bd) {
+                    best = Some((d, id, a));
+                }
+            }
+        }
+        best.map(|(_, id, a)| (id, a))
     }
 
     // ---------------------------------------------------------------- collision

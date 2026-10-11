@@ -1671,6 +1671,38 @@ mod tests {
         assert!(sh.check_shove_direction(&pusher, &obs, &down));
     }
 
+    /// `SHP_REVERSED` (`DRAGGER::dragShove`: a corner dragged by the line's first vertex): `checkShoveDirection` takes the head's
+    /// *last* point as the pusher, and only for the head -- a line it pushed in turn keeps its first point.
+    #[test]
+    fn a_reversed_head_is_pushed_from_its_last_point() {
+        let node = Node::new();
+        let (rules, settings) = (rules(), RoutingSettings::default());
+        let mut sh = Shove::new(&node, &rules, &settings);
+        let p = |x, y| Point { x, y };
+        // the head, from (500, 500) to (500, -500), in the shove's node and registered as the head's root
+        let mut head = Line::from_points(None, 0, 100, vec![p(500, 500), p(500, -500)]);
+        head.segment_ids = sh.node.add_line(&head, None, false);
+        let root = sh.new_root(RootEntry { is_head: true, ..RootEntry::default() });
+        for id in &head.segment_ids {
+            sh.root_of.insert(*id, root);
+        }
+        let pusher = SLine { line: head.clone(), via: None, rank: HEAD_RANK };
+        let obs = Line::from_points(None, 0, 100, vec![p(0, 0), p(1000, 0)]);
+        let up = Line::from_points(None, 0, 100, vec![p(0, 0), p(0, 800), p(1000, 800), p(1000, 0)]);
+        let down = Line::from_points(None, 0, 100, vec![p(0, 0), p(0, -800), p(1000, -800), p(1000, 0)]);
+        // pushed from its first point (500, 500): moving the obstacle up past it is the wrong way
+        assert!(!sh.check_shove_direction(&pusher, &obs, &up));
+        assert!(sh.check_shove_direction(&pusher, &obs, &down));
+        // reversed: the pusher is (500, -500), so it is the other way round
+        sh.reversed_head = true;
+        assert!(sh.check_shove_direction(&pusher, &obs, &up));
+        assert!(!sh.check_shove_direction(&pusher, &obs, &down));
+        // a line that is not the head is never reversed
+        let other = SLine::new(Line::from_points(None, 0, 100, vec![p(500, 500), p(500, -500)]));
+        assert!(!sh.check_shove_direction(&other, &obs, &up));
+        assert!(sh.check_shove_direction(&other, &obs, &down));
+    }
+
     /// `SHOVE::onCollidingSegment`: a locked track cannot move (`SH_TRY_WALK`),
     /// so `onCollidingSolid` walks the pusher around it instead.
     #[test]
