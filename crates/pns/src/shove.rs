@@ -54,9 +54,10 @@
 //!   the via is not moved, and the loop runs into the iteration limit and
 //!   fails. This port pushes it along the pusher's normal instead (the
 //!   stitching-via case the old tests cover).
-//! - `SHP_REVERSED` (drag by the first vertex), `SHP_IGNORE`, joint locks
-//!   (`LockJoint`: nothing here shoves a line of the head's own net), arcs and
-//!   holes are not modelled.
+//! - `SHP_IGNORE`, joint locks (`LockJoint`: nothing here shoves a line of the
+//!   head's own net), arcs and holes are not modelled. `SHP_REVERSED` (a head
+//!   dragged by its first vertex, so its last point is the pusher) is:
+//!   [`shove_dragged_line`].
 
 use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
 use crate::line::Line;
@@ -487,11 +488,17 @@ struct Shove<'a> {
     via_archive: HashMap<ItemId, Via>,
     /// `m_iter`.
     iter: i32,
+    /// `SHP_REVERSED` of the head's policy: the head is dragged by its first vertex, so `checkShoveDirection` takes its *last*
+    /// point as the pusher (`DRAGGER::dragShove`: `m_mode == DM_CORNER && m_draggedSegmentIndex == 0`).
+    reversed_head: bool,
+    /// The segments of the line being dragged, taken out of the shove's node (`preShoveNode->Remove( draggedPreShove )`) and not
+    /// handed back as "the part of a track no shoved line covered".
+    dragged_away: HashSet<ItemId>,
 }
 
 impl<'a> Shove<'a> {
     fn new(world: &'a Node, rules: &'a BoardRules, settings: &'a RoutingSettings) -> Self {
-        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0 }
+        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new() }
     }
 
     fn clearance(&self, a: &Net, b: &Net) -> Um {
@@ -770,9 +777,19 @@ impl<'a> Shove<'a> {
     /// the obstacle's old and new shape.
     fn check_shove_direction(&self, cur: &SLine, obstacle: &Line, shoved: &Line) -> bool {
         let lone_via = cur.line.pts.is_empty() && cur.via.is_some();
-        let cp = if lone_via { cur.via.as_ref().map(|v| v.data.pos) } else { cur.line.first() };
+        let mut cp = if lone_via { cur.via.as_ref().map(|v| v.data.pos) } else { cur.line.first() };
+        // "head is reversed (first vertex being the pusher - as in segment endpoint dragging) take the last point as the checker
+        // instead" -- `findRootLine( aCurLine )->policy & SHP_REVERSED`, which only the head's own root carries
+        if self.reversed_head && !lone_via && self.is_head(cur) {
+            cp = cur.line.last();
+        }
         let Some(cp) = cp else { return true };
         !point_inside_swept(cp, &obstacle.pts, &shoved.pts)
+    }
+
+    /// Is `cur` the head, or what became of it (`findRootLine( aCurLine )` finding the head's root entry)?
+    fn is_head(&self, cur: &SLine) -> bool {
+        cur.line.segment_ids.iter().find_map(|id| self.root_of.get(id)).is_some_and(|&r| self.roots[r].is_head)
     }
 
     /// `SHOVE::shoveLineFromLoneVia`: push the obstacle off a via that has no
@@ -1547,27 +1564,8 @@ impl<'a> Shove<'a> {
 
     /// The runs of an IR track's segments no shoved line covered, as they were.
     fn uncovered_runs(&self, track: &str, covered: &HashSet<ItemId>) -> Vec<Line> {
-        let mut segs: Vec<(usize, ItemId, &crate::item::Segment)> = self
-            .world
-            .iter()
-            .filter_map(|(id, it)| match it {
-                Item::Segment(s) if s.source_track.as_ref().is_some_and(|(t, _)| t == track) && !covered.contains(&id) => Some((s.source_track.as_ref().unwrap().1, id, s)),
-                _ => None,
-            })
-            .collect();
-        segs.sort_by_key(|&(idx, id, _)| (idx, id));
-        let mut runs: Vec<Line> = Vec::new();
-        let mut prev_idx: Option<usize> = None;
-        for (idx, _, s) in segs {
-            let extend = prev_idx.is_some_and(|p| p + 1 == idx) && runs.last().is_some_and(|l: &Line| l.last() == Some(s.a) && l.width == s.width && l.layer == s.layer);
-            if extend {
-                runs.last_mut().unwrap().pts.push(s.b);
-            } else {
-                runs.push(Line::from_points(s.net.clone(), s.layer, s.width, vec![s.a, s.b]));
-            }
-            prev_idx = Some(idx);
-        }
-        runs
+        let covered: HashSet<ItemId> = covered.union(&self.dragged_away).copied().collect();
+        self.world.uncovered_track_runs(track, &covered)
     }
 }
 
@@ -1579,11 +1577,31 @@ impl<'a> Shove<'a> {
 /// not push, or the limit) -- the caller should fall back to walkaround,
 /// same as upstream's `rhShoveOnly`.
 pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
+    shove_head(node, &[], raw, net, layer, width, rules, settings, false)
+}
+
+/// `DRAGGER::dragShove` for a track: [`shove_line`] with a dragged head. `dragged` are the segments of the line being dragged, which
+/// are taken out of the shove's world first (`preShoveNode->Remove( draggedPreShove )`), or the line's old place would be an obstacle
+/// of its own. `reversed` is `SHP_REVERSED`, set when the head is dragged by its first vertex: the *last* point of the head is then
+/// the pusher `checkShoveDirection` tests the shoved lines against.
+#[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the dragged line and the one flag
+pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+    shove_head(node, dragged, raw, net, layer, width, rules, settings, reversed)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
         return Some(ShoveOutcome { head: raw.to_vec(), displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone() });
     }
     let head = Line::from_points(net.clone(), layer, width, raw.to_vec());
-    Shove::new(node, rules, settings).run(head)
+    let mut shove = Shove::new(node, rules, settings);
+    shove.reversed_head = reversed;
+    for &id in dragged {
+        shove.node.remove(id);
+        shove.dragged_away.insert(id);
+    }
+    shove.run(head)
 }
 
 /// `DRAGGER::dragShove` for a dragged via: shove the via at `via_id` to `to`, with the tracks attached to it, pushing whatever they

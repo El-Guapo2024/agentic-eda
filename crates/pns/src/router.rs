@@ -303,23 +303,41 @@ impl Router {
         Ok(())
     }
 
-    /// `ROUTER::Move`/`moveDragging`: the live drag preview.
-    pub fn drag_preview(&self, at: Point) -> Option<crate::dragger::DragPreview> {
-        self.drag.as_ref().map(|d| d.preview(&self.world, &self.rules, &self.settings, at))
+    /// `ROUTER::Move`/`moveDragging`: the live drag preview, `DRAGGER::Drag` at `at`. The drag remembers the last position that
+    /// worked: one that does not shows that one again (`DragPreview::restored`).
+    pub fn drag_preview(&mut self, at: Point) -> Option<crate::dragger::DragPreview> {
+        let (world, rules, settings) = (&self.world, &self.rules, &self.settings);
+        self.drag.as_mut().map(|d| d.drag(world, rules, settings, at))
+    }
+
+    /// What the drag in progress is (`DM_SEGMENT`, `DM_CORNER` or `DM_VIA`).
+    pub fn drag_kind(&self) -> Option<crate::dragger::DragKind> {
+        self.drag.as_ref().map(|d| d.kind)
+    }
+
+    /// `GetForceMarkObstaclesMode`: the drag in progress only marks obstacles because its first position failed.
+    pub fn drag_forces_mark_obstacles(&self) -> bool {
+        self.drag.as_ref().is_some_and(|d| d.force_mark_obstacles())
     }
 
     pub fn drag_cancel(&mut self) {
         self.drag = None;
     }
 
-    /// `DRAGGER::FixRoute`: commit the drag at `at`, converting its
+    /// `DRAGGER::FixRoute( false )`: [`Self::drag_finish_with`] without the Ctrl.
+    pub fn drag_finish(&mut self, at: Point) -> Option<RouteCommit> {
+        self.drag_finish_with(at, false)
+    }
+
+    /// `DRAGGER::FixRoute( aForceCommit )`: commit the drag at `at`, converting its
     /// `DragCommit` into the same [`RouteCommit`] shape a finished route
     /// produces (one `Cmd::CommitRoute` seam for both -- see that type's
-    /// own doc comment). `None` if still colliding and the mode refuses
-    /// to commit it (the drag session stays open either way, so the
-    /// caller can keep adjusting or explicitly cancel).
-    pub fn drag_finish(&mut self, at: Point) -> Option<RouteCommit> {
-        let drag_commit = self.drag.as_ref()?.finish(&self.world, &self.rules, &self.settings, at)?;
+    /// own doc comment). A position the drag cannot resolve commits the last one that
+    /// worked; `None` if there is nothing to commit -- the drag is only marking obstacles
+    /// and `force_commit` (Ctrl+click) is not set -- and the drag session stays
+    /// open, so the caller can keep adjusting or explicitly cancel.
+    pub fn drag_finish_with(&mut self, at: Point, force_commit: bool) -> Option<RouteCommit> {
+        let drag_commit = self.drag.as_mut()?.finish(&self.world, &self.rules, &self.settings, at, force_commit)?;
         let mut commit = RouteCommit { remove_track_ids: drag_commit.remove_track_ids, remove_via_ids: drag_commit.remove_via_ids, ..RouteCommit::default() };
         for line in &drag_commit.tracks {
             if line.point_count() < 2 {
@@ -530,7 +548,8 @@ mod tests {
         assert!(!router.is_dragging());
         assert_eq!(commit.remove_track_ids, vec!["trkA"]);
         assert_eq!(commit.tracks.len(), 1);
-        assert_eq!(commit.tracks[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 2000 }]);
+        // `dragCorner45`: the dragged end is at the cursor and the track reaches it by 45-degree legs, not one leg at 63 degrees
+        assert_eq!(commit.tracks[0].pts, vec![Point { x: 0, y: 0 }, Point { x: 0, y: 1000 }, Point { x: 1000, y: 2000 }]);
     }
 
     #[test]

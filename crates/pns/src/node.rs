@@ -34,6 +34,9 @@
 /// See `all_colliding`.
 pub const CLEARANCE_EPSILON: Um = 1;
 
+/// How far from a point [`Node::segment_at`] looks for a segment: half the widest track it can find (5 mm of copper).
+const SEGMENT_AT_REACH: Um = 2_500;
+
 /// `NODE::AssembleLine`'s `MaxVerts` (1024 * 16): hard cap on a followed line.
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
 
@@ -437,6 +440,113 @@ impl Node {
             ids.push(self.add(seg));
         }
         ids
+    }
+
+    // ---------------------------------------------------------------- a track in pieces
+
+    /// The runs of IR track `track`'s segments that are not in `covered`, as this node has them: consecutive segments (by their index
+    /// in the track) that join end to end, with one width and layer, are one run. What an edit left of a track it replaced only in
+    /// part has to be handed back, or the commit, which replaces whole IR tracks, would delete it.
+    pub fn uncovered_track_runs(&self, track: &str, covered: &std::collections::HashSet<ItemId>) -> Vec<Line> {
+        let mut segs: Vec<(usize, ItemId, &crate::item::Segment)> = self
+            .items
+            .iter()
+            .filter_map(|(&id, it)| match it {
+                Item::Segment(s) if s.source_track.as_ref().is_some_and(|(t, _)| t == track) && !covered.contains(&id) => Some((s.source_track.as_ref().unwrap().1, id, s)),
+                _ => None,
+            })
+            .collect();
+        segs.sort_by_key(|&(idx, id, _)| (idx, id));
+        let mut runs: Vec<Line> = Vec::new();
+        let mut prev_idx: Option<usize> = None;
+        for (idx, _, s) in segs {
+            let extend = prev_idx.is_some_and(|p| p + 1 == idx) && runs.last().is_some_and(|l: &Line| l.last() == Some(s.a) && l.width == s.width && l.layer == s.layer);
+            if extend {
+                runs.last_mut().unwrap().pts.push(s.b);
+            } else {
+                runs.push(Line::from_points(s.net.clone(), s.layer, s.width, vec![s.a, s.b]));
+            }
+            prev_idx = Some(idx);
+        }
+        runs
+    }
+
+    /// IR track `track` as the one polyline it is, its segments in order -- `None` when this node has none of it, or its segments do
+    /// not join end to end (a track a shove has since cut).
+    pub fn track_polyline(&self, track: &str) -> Option<Line> {
+        let mut segs: Vec<(usize, ItemId, &crate::item::Segment)> = self
+            .items
+            .iter()
+            .filter_map(|(&id, it)| match it {
+                Item::Segment(s) if s.source_track.as_ref().is_some_and(|(t, _)| t == track) => Some((s.source_track.as_ref().unwrap().1, id, s)),
+                _ => None,
+            })
+            .collect();
+        segs.sort_by_key(|&(idx, id, _)| (idx, id));
+        let first = segs.first()?.2;
+        let mut line = Line::from_points(first.net.clone(), first.layer, first.width, vec![first.a]);
+        for (_, id, s) in &segs {
+            if line.last() != Some(s.a) {
+                return None;
+            }
+            line.pts.push(s.b);
+            line.segment_ids.push(*id);
+        }
+        Some(line)
+    }
+
+    /// `LINE_PLACER::SplitAdjacentSegments( aNode, aSeg, aP )`: segment `id` is taken out and two put in its place, one from its start to
+    /// `p` and one from `p` to its end, both with the old one's net, layer, width and track -- so a route can start or end in the middle
+    /// of a track, where a joint is then. Not done (`None`) when something already joins at `p` (`jt && jt->LinkCount() >= 1`: `p` is
+    /// one of the segment's own ends, or another track ends on it), or `p` is not on the segment. The IR track the segment is part of
+    /// gets a vertex at `p`: the second half is the next segment of the track, and the ones after it move up by one.
+    pub fn split_segment(&mut self, id: ItemId, p: Point) -> Option<(ItemId, ItemId)> {
+        let Some(Item::Segment(old)) = self.items.get(&id) else { return None };
+        let old = old.clone();
+        if p == old.a || p == old.b || old.seg().sq_distance_to_point(p) > 4 {
+            return None;
+        }
+        if let Some(j) = self.joint_at(p, &old.net) {
+            if j.links.iter().any(|l| self.items.get(l).is_some_and(|it| it.layers().overlaps_layer(old.layer))) {
+                return None;
+            }
+        }
+        if let Some((track, k)) = &old.source_track {
+            for it in self.items.values_mut() {
+                if let Item::Segment(s) = it {
+                    if let Some((t, i)) = &mut s.source_track {
+                        if t == track && *i > *k {
+                            *i += 1;
+                        }
+                    }
+                }
+            }
+        }
+        self.remove(id);
+        let first = crate::item::Segment { b: p, ..old.clone() };
+        let second = crate::item::Segment { a: p, source_track: old.source_track.clone().map(|(t, k)| (t, k + 1)), ..old };
+        let a = self.add(Item::Segment(first));
+        let b = self.add(Item::Segment(second));
+        Some((a, b))
+    }
+
+    /// The segment whose copper `pos` is on, on `layer` (of `net`, when given): the one whose centre line passes nearest. `within` is how
+    /// far off the centre line `pos` may be -- the half width when `None`.
+    pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Um>) -> Option<ItemId> {
+        let bbox = Shape::Circle { c: pos, r: 0 }.bbox(SEGMENT_AT_REACH);
+        let mut best: Option<(ItemId, i128)> = None;
+        for id in self.index.query(bbox) {
+            let Some(Item::Segment(s)) = self.items.get(&id) else { continue };
+            if s.layer != layer || net.is_some_and(|n| !same_net(&s.net, n)) {
+                continue;
+            }
+            let d2 = s.seg().sq_distance_to_point(pos);
+            let reach = within.unwrap_or(s.width / 2) as i128;
+            if d2 <= reach * reach && best.is_none_or(|(bid, bd)| (d2, id) < (bd, bid)) {
+                best = Some((id, d2));
+            }
+        }
+        best.map(|(id, _)| id)
     }
 
     // ---------------------------------------------------------------- collision

@@ -295,7 +295,7 @@ fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
         }
     }
     match d.kind {
-        DragKind::Corner => {
+        DragKind::Corner | DragKind::Segment => {
             w.remove_line_segments(&d.original);
             w.add_line(&Line::from_points(d.net.clone(), d.layer, d.width, pv.pts.clone()), None, false);
         }
@@ -326,8 +326,7 @@ fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
     w
 }
 
-/// Replays a recorded drag with this port's `Dragger` (which drags the nearest end of a track, where KiCad
-/// slides the whole segment): no panic, and whenever the drag is accepted the board it leaves is clean.
+/// Replays a recorded drag with this port's `Dragger`: no panic, and whenever the drag is accepted the board it leaves is clean.
 fn replay_drag(case: &str, board: &str) -> (usize, usize) {
     let Some(root) = qa_root() else {
         eprintln!("KiCad QA corpus not found: skipping");
@@ -375,10 +374,91 @@ fn simple_drag_shove_singlelayer_keeps_the_board_clean() {
     eprintln!("accepted {accepted} previews, {shoved} of them shoved something");
 }
 
+/// The segments of a drag's commit: `(net, a, b)` per leg of every added track, in µm.
+fn commit_segments(commit: &eda_pns::dragger::DragCommit) -> Vec<(String, Point, Point)> {
+    commit.tracks.iter().flat_map(|l| l.pts.windows(2).map(|w| (l.net.as_deref().unwrap_or("").to_string(), w[0], w[1])).collect::<Vec<_>>()).collect()
+}
+
+/// walk_drag_seg_against_board_edge: a 1 mm track on `ultrasound` grabbed in the middle of its 73 mm horizontal segment (a `DM_SEGMENT`
+/// drag) and pulled up against the board edge in Shove mode. KiCad slides the segment as far as the copper-to-edge clearance allows
+/// (the track's centre 1 mm in from the edge: y = 51.0, where it was at 51.2), the two 45-degree legs either side giving way -- the three
+/// segments it recorded -- and the cursor going on to y = 42.2 beyond the edge changes nothing, so the release commits that.
+#[test]
+fn walk_drag_seg_against_board_edge_slides_the_segment_to_where_kicad_stopped_it() {
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    let (design, model, log, settings) = route_events(&root, "walk_drag_seg_against_board_edge", "ultrasound");
+    let (node, layers) = build_node(&design, &model);
+    let events = log["events"].as_array().unwrap();
+    let start = pt(&events[0]["position"]);
+    let layer = log["headItems"].as_array().and_then(|h| h.first()).map(|h| h["layers"][0].as_i64().unwrap() as i32).unwrap();
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300).unwrap_or_else(|| panic!("nothing to drag at {start:?} on {}", layers.name_of(layer)));
+    let mut dragger = Dragger::start_with(&node, start, id, false).expect("a track");
+    assert_eq!(dragger.kind, DragKind::Segment, "grabbed in the middle of the segment");
+    let mut last_valid = None;
+    for e in &events[1..] {
+        let pv = dragger.drag(&node, &model.board, &settings, pt(&e["position"]));
+        if !pv.restored && !pv.colliding {
+            last_valid = Some(pv.pts.clone());
+        }
+        assert!(!pv.colliding, "the shove walks the dragged segment along the edge, it never collides: {:?}", e["position"]);
+    }
+    let end = pt(&events.last().unwrap()["position"]);
+    let commit = dragger.finish(&node, &model.board, &settings, end, false).expect("the drag commits");
+    assert_eq!(commit.tracks.len(), 1, "one dragged line");
+    assert_eq!(Some(commit.tracks[0].pts.clone()), last_valid);
+    let expected = recorded_segments(&log);
+    assert_eq!(expected.len(), 3, "KiCad recorded the segment and its two legs");
+    let ours = commit_segments(&commit);
+    assert_eq!(ours.len(), expected.len(), "ours {ours:?}\nexpected {expected:?}");
+    for e in &expected {
+        assert!(ours.iter().any(|o| same_segment(e, o, 3)), "recorded segment {e:?} missing from {ours:?}");
+    }
+    assert_eq!(commit.remove_track_ids.len(), log["removedItems"].as_array().unwrap().len(), "the same three tracks are replaced");
+}
+
 #[test]
 fn walk_drag_seg_against_board_edge_keeps_the_board_clean() {
     let (accepted, shoved) = replay_drag("walk_drag_seg_against_board_edge", "ultrasound");
     eprintln!("accepted {accepted} previews, {shoved} of them shoved something");
+}
+
+/// simple-drag-shove-singlelayer: a 14 mm segment of `video-v10` grabbed in the middle (a `DM_SEGMENT` drag, Shove mode) and slid 0.9 mm
+/// across a busy part of the board. KiCad's commit replaced 139 tracks with 134. The same segment is slid, the tracks in its way
+/// pushed, and what this port commits reproduces most of what KiCad recorded (the optimizer picks other corner cuts in places).
+/// Slow tier: `video-v10.kicad_pcb` is 6 MB.
+#[test]
+fn simple_drag_shove_singlelayer_reproduces_what_kicad_recorded() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped (set EDA_SLOW_TESTS=1): video-v10.kicad_pcb takes about a minute in a debug build");
+        return;
+    }
+    let Some(root) = qa_root() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    let (design, model, log, settings) = route_events(&root, "simple-drag-shove-singlelayer", "video-v10");
+    let (node, _) = build_node(&design, &model);
+    let events = log["events"].as_array().unwrap();
+    let start = pt(&events[0]["position"]);
+    let layer = log["headItems"].as_array().and_then(|h| h.first()).map(|h| h["layers"][0].as_i64().unwrap() as i32).unwrap();
+    let id = node.item_at(start, eda_pns::layer::LayerRange::single(layer), 300).expect("the dragged track");
+    let mut dragger = Dragger::start_with(&node, start, id, false).expect("a track");
+    assert_eq!(dragger.kind, DragKind::Segment);
+    let mut restored = 0;
+    for e in &events[1..] {
+        restored += usize::from(dragger.drag(&node, &model.board, &settings, pt(&e["position"])).restored);
+    }
+    let end = pt(&events.last().unwrap()["position"]);
+    let commit = dragger.finish(&node, &model.board, &settings, end, false).expect("the drag commits");
+    let expected = recorded_segments(&log);
+    let ours = commit_segments(&commit);
+    let hit = expected.iter().filter(|e| ours.iter().any(|o| same_segment(e, o, 3))).count();
+    eprintln!("{} of {} recorded segments reproduced; ours {} segments; {} tracks removed (KiCad {}); {restored} positions restored", hit, expected.len(), ours.len(), commit.remove_track_ids.len(), log["removedItems"].as_array().unwrap().len());
+    assert!(hit * 10 >= expected.len() * 8, "{hit} of {} recorded segments reproduced within 3 um", expected.len());
+    assert_eq!(commit.remove_track_ids.len(), log["removedItems"].as_array().unwrap().len(), "the same tracks are replaced");
 }
 
 /// xorshift64: the same sequence every run.
