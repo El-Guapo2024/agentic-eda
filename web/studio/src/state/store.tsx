@@ -23,16 +23,18 @@ import { subItemIds } from "../kicad-port/pcbItems";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
 import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
+import { modificationSnapFor } from "./modificationSnap";
+import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { substituteSelection } from "../kicad-port/groupTree";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
-import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
+import { DEFAULT_BOARD_CONTROL, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
 import { reduceView, type AppearanceOp, type ViewSlice } from "../kicad-port/appearanceOps";
 import { applyAppearanceFile } from "../kicad-port/appearanceFile";
 import { netsContext } from "../kicad-port/appearanceNets";
-import { keepFilled } from "../kicad-port/boardControl";
+import { highlightedNets, keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
@@ -646,6 +648,8 @@ export interface StudioState {
   /** Independent pan/zoom for the schematic tab -- a different sheet, a different natural scale. */
   schematicView: ViewTransform;
   units: LengthUnit;
+  /** `COMMON_TOOLS::m_imperialUnit` (`system.last_imperial_units`): the imperial unit Toggle Units returns to -- inches until mils were chosen, mils after. */
+  lastImperialUnit: "in" | "mil";
   polar: boolean;
   gridUm: number;
   /** The Schematic Editor's current grid (`GRID_SETTINGS::last_size_idx` of eeschema), um: one of its grid list (state/gridSettings.ts), 50 mil to start. */
@@ -900,6 +904,7 @@ const initialState: StudioState = {
   viewInitialized: false,
   schematicView: { scale: 0, x: 0, y: 0 },
   units: "mm",
+  lastImperialUnit: "in",
   polar: false,
   gridUm: 1000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
   schGridUm: 1270, // eeschema's default grid: 50 mil
@@ -1110,6 +1115,8 @@ export type Action =
   | { type: "APPEARANCE_LOAD"; file: unknown }
   /** `highlightNetSelection`: several nets highlighted at once (the first is `netHighlight`, the rest `bcx.netHighlightMore`); empty clears. */
   | { type: "SET_NET_HIGHLIGHT_SET"; nets: string[] }
+  /** Alt+` (`toggleNetHighlight`): the highlight goes off, or the nets that were last highlighted come back (kicad-port/boardControlState.ts `toggledHighlight`). */
+  | { type: "TOGGLE_NET_HIGHLIGHT" }
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
@@ -1310,6 +1317,11 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, netHighlight: action.net, bcx: withHighlight(state.bcx, state.netHighlight, action.net ? [action.net] : []) };
     case "SET_NET_HIGHLIGHT_SET":
       return { ...state, netHighlight: action.nets[0] ?? null, bcx: withHighlight(state.bcx, state.netHighlight, action.nets) };
+    case "TOGGLE_NET_HIGHLIGHT": {
+      // What is shown changes, what is remembered does not (`m_currentlyHighlighted`), and neither does `m_lastHighlighted`.
+      const nets = toggledHighlight(highlightedNets(state.netHighlight, state.bcx.netHighlightMore), state.bcx.currentHighlight);
+      return { ...state, netHighlight: nets[0] ?? null, bcx: { ...state.bcx, netHighlightMore: nets.slice(1) } };
+    }
     case "SET_ARMED":
       return { ...state, armed: action.ref, armedFootprint: null, selection: new Set() };
     case "SET_ARMED_FOOTPRINT":
@@ -1330,7 +1342,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "MARK_VIEW_INITIALIZED":
       return { ...state, viewInitialized: true };
     case "SET_UNITS":
-      return { ...state, units: action.units };
+      // `COMMON_TOOLS::SwitchUnits` remembers the imperial unit that was picked, so that Toggle Units (Ctrl+U) comes back to it.
+      return { ...state, units: action.units, lastImperialUnit: rememberedImperial(state.lastImperialUnit, action.units) };
     case "TOGGLE_POLAR":
       return { ...state, polar: !state.polar };
     case "SET_GRID_UM":
@@ -1940,8 +1953,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }, carry);
   };
 
-  /** The grid point nearest a reference point (`PCB_GRID_HELPER::BestSnapAnchor`, its grid half): what a multi-item Rotate and Move snap their reference to. */
-  const gridSnap = () => (p: readonly [number, number]): [number, number] => snapPoint(p[0], p[1], stateRef.current.gridUm);
+  /** Where the reference point of several items goes (`EDIT_TOOL::updateModificationPoint`: `PCB_GRID_HELPER::BestSnapAnchor( centre, nullptr )`, anchors and grid): what a multi-item Rotate and Move snap their reference to. */
+  const gridSnap = () => modificationSnapFor(stateRef.current);
 
   /** Sends a transform plan (kicad-port/pcbTransform.ts) as one undo step; says so when the locks left nothing to do (`ReportFilteredLockedItems`). */
   const runPlan = async (plan: TransformPlan, carry?: "begin" | "commit"): Promise<boolean> => {

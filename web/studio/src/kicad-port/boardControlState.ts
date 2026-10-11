@@ -22,6 +22,11 @@ export interface BoardControlState {
   netHighlightMore: string[];
   /** `BOARD_INSPECTION_TOOL::m_lastHighlighted`: what `toggleLastNetHighlight` swaps back. */
   lastHighlight: string[];
+  /**
+   * `BOARD_INSPECTION_TOOL::m_currentlyHighlighted`: the nets the highlight last showed. Every highlight that is turned on sets it and every one that is cleared empties it;
+   * `toggleNetHighlight` (Alt+`) switches the display off and on without touching it, which is how it knows what to bring back.
+   */
+  currentHighlight: string[];
   /** Pads whose local-ratsnest flag differs from the global state (`pcbnew.Control.localRatsnestTool`'s clicks), as `REF.NUMBER`. */
   localRatsnestPads: string[];
   /** `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (`pcbnew.EditorControl.autoTrackWidth`). */
@@ -48,6 +53,7 @@ export const DEFAULT_BOARD_CONTROL: BoardControlState = {
   hiddenRatsnestNets: [],
   netHighlightMore: [],
   lastHighlight: [],
+  currentHighlight: [],
   localRatsnestPads: [],
   autoTrackWidth: false,
   zoneFilled: null,
@@ -66,5 +72,14 @@ export const DEFAULT_BOARD_CONTROL: BoardControlState = {
 export function withHighlight(bcx: BoardControlState, before: string | null, nets: readonly string[]): BoardControlState {
   const was = before ? [before, ...bcx.netHighlightMore.filter((n) => n !== before)] : [];
   const same = was.length === nets.length && was.every((n, i) => n === nets[i]);
-  return { ...bcx, netHighlightMore: nets.slice(1), lastHighlight: same || was.length === 0 ? bcx.lastHighlight : was };
+  return { ...bcx, netHighlightMore: nets.slice(1), lastHighlight: same || was.length === 0 ? bcx.lastHighlight : was, currentHighlight: [...nets] };
+}
+
+/**
+ * `toggleNetHighlight` (Alt+`, `BOARD_INSPECTION_TOOL::HighlightNet`): `bool turnOn = highlighted.empty() && !m_currentlyHighlighted.empty(); settings->SetHighlight(
+ * m_currentlyHighlighted, turnOn );` -- with nothing highlighted it brings back the nets that were last highlighted, else it switches the highlight off; either way the
+ * remembered nets stay (`m_lastHighlighted` is not touched). `shown` is what is highlighted now. Returns the nets to show after it.
+ */
+export function toggledHighlight(shown: readonly string[], remembered: readonly string[]): string[] {
+  return shown.length === 0 && remembered.length > 0 ? [...remembered] : [];
 }

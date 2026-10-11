@@ -34,6 +34,7 @@ import { netsContext } from "../../kicad-port/appearanceNets";
 import { isStale } from "../../kicad-port/checkRevision";
 import { layerColor } from "./layers";
 import { snapPoint } from "./gridHelper";
+import { modificationSnapFor } from "../../state/modificationSnap";
 import { PcbSnap, type PointOpts, type SnapMods } from "./pcbSnap";
 import { paintSnapOverlay } from "./snapOverlayPainter";
 import { useGridOverrides } from "../../state/gridOverrides";
@@ -986,7 +987,7 @@ export function Canvas() {
       if (DRAGGABLE_KINDS.has(hit.kind) && refs.length > 0 && board) {
         // What the drag picks up: the selection as the click leaves it (a group stands for its members, a pad for its footprint), locked items out
         // (`FilterCollectorForLockedItems`), and the points an R / F pressed on the way acts about.
-        const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), (p) => snapPoint(p[0], p[1], state.gridUm));
+        const start = carryStart(board, withGroupSubstitution(refs, board.drawings?.groups, state.enteredGroupId), modificationSnapFor(state));
         if (start.refs.length > 0) {
           dragRef.current = { kind: "move", refs: start.refs, pivotUm: start.pivotUm, flipPivotUm: start.flipPivotUm, startWorld: [wx, wy], snapOrigin: moveOrigin(wx, wy, start.refs), moved: false };
         } else if (start.lockedOut) {
@@ -1079,7 +1080,7 @@ export function Canvas() {
       // once (the first pointer move) so the points an R / F acts about stay where the selection was picked up.
       const packing = state.movePreview?.perRefOffsetUm != null;
       const held = state.movePreview?.kind === "pcb" ? state.movePreview : null;
-      const start = packing || held ? null : carryStart(board, [...state.selection], (p) => snapPoint(p[0], p[1], state.gridUm));
+      const start = packing || held ? null : carryStart(board, [...state.selection], modificationSnapFor(state));
       if (!packing && !held && start && start.refs.length === 0) {
         if (start.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });

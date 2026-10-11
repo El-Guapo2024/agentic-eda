@@ -161,7 +161,7 @@ test("planRotate: locked items stay and say so; all locked is no command at all"
 });
 
 test("planFlip: left-right by default, about the box centre; a pad flips its footprint", () => {
-  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 0, 0)]), part("U2", [9000, 2000])] });
+  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 1000, 2000)]), part("U2", [9000, 2000])] });
   assert.deepEqual(planFlip(b, ["U1", "U2"]).cmds, [{ op: "flip_items", ids: ["U1", "U2"], pivot: { x: 5000, y: 2000 }, direction: "left_right" }]);
   assert.deepEqual(planFlip(b, ["U1.1"], "top_bottom").cmds, [{ op: "flip_items", ids: ["U1"], pivot: { x: 1000, y: 2000 }, direction: "top_bottom" }]);
 });
@@ -220,7 +220,7 @@ test("a dimension and a group have a position and a box too", () => {
 });
 
 test("carryStart: the editable selection with the points a turn and a flip act about; locked items stay out", () => {
-  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 0, 2000)]), part("U2", [9000, 2000]), part("U3", [20000, 2000])], locked: ["U3"] });
+  const b = board({ parts: [part("U1", [1000, 2000], [pad("1", 500, 2000)]), part("U2", [9000, 2000]), part("U3", [20000, 2000])], locked: ["U3"] });
   const start = carryStart(b, ["U1.1", "U2", "U3"]);
   assert.deepEqual(start.refs, ["U1", "U2"], "the pad stands for its footprint, the locked footprint stays");
   assert.equal(start.lockedOut, true);
