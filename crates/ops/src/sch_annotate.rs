@@ -189,7 +189,8 @@ impl<'a> Board<'a> {
         let walk = sheet_list::walk(&self.design);
         let sheet_num = |file: &str| walk.iter().find(|e| e.file == file).map_or(0, SheetEntry::page_number_as_int);
         let mut files: Vec<String> = vec![String::new()];
-        files.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().cloned()));
+        let reachable = eda_model::sheet_list::reachable_files(&self.design);
+        files.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().filter(|f| reachable.contains(*f)).cloned()));
         let mut slots: Vec<Slot> = Vec::new();
         let (mut mine, mut others): (Vec<Entry>, Vec<Entry>) = (Vec::new(), Vec::new());
         for file in files {

@@ -40,7 +40,7 @@ fn replace_all_over_sheets_renames_references_where_asked_and_keeps_the_focus() 
 
 use super::sch_annotate_tests::{placement, section, symbol};
 use crate::sch_edit::SchCmd;
-use eda_model::ir::{LibrarySymbol, Point, SchematicSection, SheetInstance, SheetPin, Um};
+use eda_model::ir::{LibrarySymbol, Point, SchematicSection, SheetPin, Um};
 use eda_model::sch_clipboard::{PasteMode, SchFragment};
 use eda_model::sheet_file::SheetFile;
 
@@ -132,16 +132,19 @@ fn a_cut_and_paste_of_a_sheet_keeps_its_name_its_file_and_its_numbers() {
     let d = power_design();
     let fragment = power_fragment(&d);
     let mut b = Board::new(d, &m, 100, 300);
-    // Cut: the copy was taken, then the sheet deleted -- and its screens go with it
+    // Cut: the copy was taken, then the sheet deleted. Its screens stay (the files are still there) but no sheet shows them: they hold no references
     b.apply(&Cmd::SchEdit(SchCmd::DeleteSheet { id: "sp".into() })).unwrap();
     assert!(b.design().schematic.as_ref().unwrap().sheets.is_empty());
-    assert!(!b.design().sheet_contents.as_ref().is_some_and(|c| c.contains_key("power.kicad_sch") || c.contains_key("filter.kicad_sch")), "a screen no sheet shows is dropped");
+    assert!(b.design().sheet_contents.as_ref().unwrap().contains_key("power.kicad_sch"));
+    assert!(eda_model::sheet_list::reachable_files(b.design()).is_empty());
+    assert!(b.used_references().iter().all(|u| u.reference.starts_with('#')), "the references of a screen no sheet shows are free");
     b.apply(&Cmd::PasteSch { fragment, dx: 0, dy: 0, mode: PasteMode::Unique }).unwrap();
     let d = b.design();
     assert_eq!(sheet_names(d), vec!["Power"]);
     assert_eq!(d.schematic.as_ref().unwrap().sheets[0].file, "power.kicad_sch");
     assert_eq!(refs_in(d, "power.kicad_sch"), vec!["C1", "R1", "R2"], "nothing else held the numbers");
     assert_eq!(refs_in(d, "filter.kicad_sch"), vec!["R3"]);
+    assert_eq!(d.sheet_contents.as_ref().unwrap().len(), 2, "the sheet came back to the files it had: nothing is left over");
 }
 
 #[test]

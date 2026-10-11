@@ -21,7 +21,8 @@ impl<'a> Board<'a> {
     /// Every placed symbol of every sheet -- power symbols included -- as the numbering sees it (`hierarchy.GetSymbols( existingRefs, SYMBOL_FILTER_ALL )`).
     pub(crate) fn used_references(&self) -> Vec<UsedRef> {
         let mut out: Vec<UsedRef> = Vec::new();
-        let sheets = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values()));
+        let reachable = eda_model::sheet_list::reachable_files(&self.design);
+        let sheets = self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.iter().filter(|(f, _)| reachable.contains(*f)).map(|(_, s)| s)));
         for sch in sheets {
             for s in &sch.symbols {
                 let value = if s.value.is_empty() { self.model.part(&s.id).and_then(|p| p.value.clone()).unwrap_or_default() } else { s.value.clone() };

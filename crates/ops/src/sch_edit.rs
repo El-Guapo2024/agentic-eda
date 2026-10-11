@@ -243,12 +243,7 @@ impl<'a> Board<'a> {
             SchCmd::AddGraphic { graphic } => add_graphic(self.schematic_mut_or_create(), graphic.clone()),
             SchCmd::DeleteGraphic { id } => delete_graphic(self.schematic_mut()?, id),
             SchCmd::EditGraphic { id, graphic } => edit_graphic(self.schematic_mut()?, id, graphic.clone()),
-            SchCmd::DeleteSheet { id } => {
-                delete_sheet(self.schematic_mut()?, id)?;
-                // the screen it showed goes with it, unless another sheet shows it
-                self.drop_orphan_screens();
-                Ok(())
-            }
+            SchCmd::DeleteSheet { id } => delete_sheet(self.schematic_mut()?, id),
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
             SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
             SchCmd::EditSheetPin { id, name, shape, at } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at),

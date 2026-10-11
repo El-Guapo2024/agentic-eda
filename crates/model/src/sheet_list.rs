@@ -72,6 +72,24 @@ pub fn walk(design: &Design) -> Vec<SheetEntry> {
     out
 }
 
+/// The screens some sheet shows: the files of the placements reachable from the root. A screen no sheet shows any more (its sheet was deleted) is
+/// still kept in `Design::sheet_contents` -- the file is still there to be shown again -- but it is not part of the schematic: its symbols hold no
+/// reference and its pins are on no net.
+pub fn reachable_files(design: &Design) -> std::collections::BTreeSet<String> {
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let Some(root) = &design.schematic else { return seen };
+    let mut queue: Vec<&str> = root.sheets.iter().map(|s| s.file.as_str()).collect();
+    while let Some(file) = queue.pop() {
+        if !seen.insert(file.to_string()) {
+            continue;
+        }
+        if let Some(sec) = design.sheet_contents.as_ref().and_then(|c| c.get(file)) {
+            queue.extend(sec.sheets.iter().map(|s| s.file.as_str()));
+        }
+    }
+    seen
+}
+
 /// The screen of the sheet at `path` (the root's `design.schematic` for the empty path).
 pub fn screen_of<'a>(design: &'a Design, path: &[String]) -> Option<&'a SchematicSection> {
     let mut here = design.schematic.as_ref()?;
@@ -212,6 +230,13 @@ mod tests {
         assert_eq!(within(&w, &[], true).len(), 4);
         assert!(screen_of(&d, &["a".to_string(), "c".to_string()]).is_some());
         assert!(placement_at(&d, &["b".to_string()]).is_some_and(|p| p.name == "B"));
+    }
+
+    #[test]
+    fn a_screen_no_sheet_shows_is_not_reachable() {
+        let d = design(section(vec![placement("a", "A", "a.kicad_sch", "")]), vec![("a.kicad_sch", section(vec![placement("c", "C", "c.kicad_sch", "")])), ("c.kicad_sch", section(vec![])), ("gone.kicad_sch", section(vec![]))]);
+        let r: Vec<String> = reachable_files(&d).into_iter().collect();
+        assert_eq!(r, vec!["a.kicad_sch".to_string(), "c.kicad_sch".to_string()]);
     }
 
     #[test]

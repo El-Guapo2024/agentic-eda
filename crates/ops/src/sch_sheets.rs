@@ -145,7 +145,9 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_sheet_recursion", &file, format!("the sheet '{name}' shows '{file}', which has itself as a parent somewhere in the hierarchy"))]);
         }
         // a file of its own for each
-        let mut taken: BTreeSet<String> = own.keys().cloned().collect();
+        // (a screen no sheet shows any more is free to be written over: the sheet that came back from a Cut is the one it was)
+        let reachable = eda_model::sheet_list::reachable_files(&self.design);
+        let mut taken: BTreeSet<String> = own.keys().filter(|f| reachable.contains(*f)).cloned().collect();
         let mut new_of: BTreeMap<String, String> = BTreeMap::new();
         for (i, orig) in order.iter().enumerate() {
             let stem = if i == 0 { file_hint.map(|f| f.trim_end_matches(".kicad_sch").to_string()).unwrap_or_else(|| name.to_string()) } else { orig.trim_end_matches(".kicad_sch").rsplit('/').next().unwrap_or(orig).to_string() };
@@ -358,27 +360,5 @@ impl<'a> Board<'a> {
         let anchor = eda_model::sch_clipboard::top_left_anchor(&fragment.section).unwrap_or_default();
         let (dx, dy) = (at.x - anchor.x, at.y - anchor.y);
         self.paste_sch(&fragment, dx, dy, if keep_annotations { PasteMode::Keep } else { PasteMode::Unique })
-    }
-
-    /// A deleted sheet leaves its screen behind with no sheet that shows it; a design keeps only the screens a sheet shows.
-    pub(crate) fn drop_orphan_screens(&mut self) {
-        let Some(root) = self.design.schematic.as_ref() else { return };
-        let Some(contents) = self.design.sheet_contents.as_ref() else { return };
-        let mut reachable: BTreeSet<String> = BTreeSet::new();
-        let mut queue: Vec<String> = root.sheets.iter().map(|s| s.file.clone()).collect();
-        while let Some(f) = queue.pop() {
-            if !reachable.insert(f.clone()) {
-                continue;
-            }
-            if let Some(sec) = contents.get(&f) {
-                queue.extend(sec.sheets.iter().map(|s| s.file.clone()));
-            }
-        }
-        if let Some(c) = self.design.sheet_contents.as_mut() {
-            c.retain(|f, _| reachable.contains(f));
-            if c.is_empty() {
-                self.design.sheet_contents = None;
-            }
-        }
     }
 }

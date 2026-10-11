@@ -275,6 +275,8 @@ fn shown_pin_names(model: &ConstraintModel) -> std::collections::BTreeMap<String
 /// global labels and power symbols are one net across sheets. Writes what the drawing says back into the design's wires (their net and
 /// pins), power symbols and no-connect flags, and returns the nets read.
 fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, naming: &eda_engine::nets::Naming) -> Vec<eda_engine::nets::TracedNet> {
+    // a screen no sheet shows any more (its sheet was deleted) is not part of the schematic: its pins are on no net
+    let reachable = eda_model::sheet_list::reachable_files(design);
     let Some(mut root) = design.schematic.take() else { return Vec::new() };
     // Where each pin is, sheet by sheet. A schematic read from a KiCad file keeps its symbols at their library origin; one this
     // project drew places them by the corner of their box (`eda_engine::placed`), which is where the writer bakes the pins.
@@ -305,11 +307,11 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
     };
     let mut contents = design.sheet_contents.take();
     let root_pins = pins_of(&root);
-    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().map(|(f, s)| (f.clone(), pins_of(s))).collect();
+    let mut child_pins: std::collections::BTreeMap<String, std::collections::BTreeMap<String, Point>> = contents.iter().flatten().filter(|(f, _)| reachable.contains(*f)).map(|(f, s)| (f.clone(), pins_of(s))).collect();
     let traced = {
         let mut screens = vec![eda_engine::nets::ScreenIn { sch: &mut root, file: String::new(), pins: root_pins }];
         if let Some(c) = contents.as_mut() {
-            for (file, sec) in c.iter_mut() {
+            for (file, sec) in c.iter_mut().filter(|(f, _)| reachable.contains(*f)) {
                 screens.push(eda_engine::nets::ScreenIn { sch: sec, file: file.clone(), pins: child_pins.remove(file).unwrap_or_default() });
             }
         }
