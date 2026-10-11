@@ -397,6 +397,12 @@ impl Dragger {
         self.state.force_mark_obstacles
     }
 
+    /// The IR tracks the dragged line stands on (nothing for a via): the snapping must not put the cursor on them
+    /// (`TOOL_BASE::checkSnap`: "if we're dragging a track segment, don't try to snap to items that are part of the original line").
+    pub fn line_tracks(&self, node: &Node) -> Vec<String> {
+        Self::source_tracks(node, &self.original)
+    }
+
     /// The IR tracks `line` stands on.
     fn source_tracks(node: &Node, line: &Line) -> Vec<String> {
         let mut out: Vec<String> = line

@@ -82,6 +82,7 @@ export async function startInlineDrag(x: number, y: number, hit: DraggableHit, b
     layer: track?.layer ?? hit.layer,
     width: track?.width ?? 0,
     viaDiameter: via?.d,
+    lineTracks: preview.line_tracks ?? [],
     pts: preview.pts,
     colliding: preview.colliding,
     restored: preview.restored ?? false,

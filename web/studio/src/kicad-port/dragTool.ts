@@ -54,6 +54,8 @@ export interface DragDrawState {
   colliding?: boolean;
   displaced?: { layer: string; pts: [number, number][] }[];
   displacedVias?: { source_via: string; x: number; y: number }[];
+  /** The board ids of the tracks of the line being dragged (`DRAGGER::GetOriginalLine`): the cursor does not snap onto them (`TOOL_BASE::checkSnap`). Captured at `drag_start`. */
+  lineTracks?: string[];
   /** The cursor is where the drag cannot be resolved: `pts` is the last position that could be, and a click commits that one (`DRAGGER::Drag`, "Restore last solution"). */
   restored?: boolean;
   /** The first position failed, so the drag only marks obstacles; a violation is committed with Ctrl+click (`GetForceMarkObstaclesMode`). */

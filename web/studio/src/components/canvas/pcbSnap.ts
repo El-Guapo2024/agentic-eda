@@ -9,13 +9,14 @@
 // (pad or via centre, a track's end or `AlignToSegment` / `AlignToArc`), else `Align` to the wire grid (the vias' for a via). `routePoint` is that.
 import type { BoardState } from "../../api/types";
 import { PcbGridHelper, type GridEnv, type LayerSel, type SnapOverlay, type Visibility } from "../../kicad-port/pcbGridHelper";
-import { sceneOf, type PadItem, type SnapScene, type TrackItem, type ViaItem } from "../../kicad-port/snapScene";
+import { sceneOf, type SnapScene } from "../../kicad-port/snapScene";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
 import { gridSizeFor, pcbItemGrid, selectionGrid, type GridCategory, type GridOverrides, type PcbItemKind } from "../../kicad-port/gridOverrides";
 import { itemKind } from "../../kicad-port/pcbItems";
 import { reportSnap } from "../../kicad-port/snapReport";
 import type { DragFilter, PcbMagnetic } from "../../kicad-port/snapAnchors";
-import { distanceTo, dist, type Pt } from "../../kicad-port/snapGeom";
+import { dist, type Pt } from "../../kicad-port/snapGeom";
+import { pickRouteItem } from "../../kicad-port/routePick";
 import { getSnapOrigin } from "./gridHelper";
 
 /** Everything about the editor the snapping depends on; the canvas hands it over on every render. */
@@ -217,8 +218,9 @@ export class PcbSnap {
    *     for the end, only one of `net` when it is given, and only when Shift is not held and the magnetic setting allows (`checkSnap`);
    *   * a pad or via snaps to its centre; a track to the nearer end if the cursor is within half its width of one, else along the segment (`AlignToSegment`);
    *   * nothing under the cursor: `Align` to the wire grid (the via grid for a via being placed). Ctrl turns the grid off.
+   * `skip` are the tracks a drag is dragging: it never snaps to the line it moves (`checkSnap`).
    */
-  routePoint(world: Pt, mods: SnapMods, opts: { net?: string | null; isEnd: boolean; placingVia?: boolean }): Pt {
+  routePoint(world: Pt, mods: SnapMods, opts: { net?: string | null; isEnd: boolean; placingVia?: boolean; skip?: ReadonlySet<string> }): Pt {
     if (!this.view?.board) return world;
     const h = this.helperFor("route");
     h.setUseGrid(!mods.ctrl);
@@ -226,7 +228,7 @@ export class PcbSnap {
     const category: GridCategory = opts.placingVia ? "vias" : "wires";
     const align = (): Pt => h.align(world, category);
     const gridSlop = Math.max(h.gridSize("current")[0], 1);
-    const item = this.pickRouteItem(h.scene, world, gridSlop, opts.net ?? null);
+    const item = pickRouteItem(this.view.board, h.scene, world, gridSlop, opts.net ?? null, (layers) => layers.some((l) => this.view!.layerVisible[l] !== false), opts.skip);
     const { pads, tracks } = this.view.magnetic;
     // `checkSnap`: an end only snaps to an item the magnetic settings allow; a start always does.
     const allowed = !opts.isEnd || (h.getSnap() && (item?.type === "pad" ? pads !== "never" : item ? tracks !== "never" : false));
@@ -245,52 +247,4 @@ export class PcbSnap {
     reportSnap({ tool: "route", input: world, output: out, types: 0, anchored: item !== null && allowed });
     return out;
   }
-
-  /** `pickSingleItem`: pads and vias first (the nearest centre), then tracks (the nearest end); each tried at slop 0 and then within a grid. */
-  private pickRouteItem(scene: SnapScene, p: Pt, gridSlop: number, net: string | null): PadItem | ViaItem | TrackItem | null {
-    const board = this.view!.board!;
-    const visible = (layers: readonly string[]) => layers.some((l) => this.view!.layerVisible[l] !== false);
-    for (const slop of [0, gridSlop]) {
-      let best: PadItem | ViaItem | null = null;
-      let bestD = Infinity;
-      let bestSeg: TrackItem | null = null;
-      let bestSegD = Infinity;
-      for (const item of scene.items) {
-        if (item.type !== "pad" && item.type !== "via" && item.type !== "track") continue;
-        if (!visible(item.layers)) continue;
-        if (item.type === "track") {
-          if (net !== null && trackNet(board, item) !== net) continue;
-          if (distanceTo(item.geom!, p) - item.width / 2 > slop) continue;
-          const d = Math.min(dist(item.start, p), dist(item.end, p));
-          if (d < bestSegD) {
-            bestSegD = d;
-            bestSeg = item;
-          }
-        } else {
-          if (item.type === "pad" && net !== null && padNet(board, item) !== net) continue;
-          const reach = item.type === "pad" ? Math.max(item.w, item.h) / 2 : item.d / 2;
-          if (slop === 0 ? !item.hit(p) : dist(item.at, p) - reach > slop) continue;
-          const d = dist(item.at, p);
-          if (d < bestD) {
-            bestD = d;
-            best = item;
-          }
-        }
-      }
-      if (best) return best;
-      if (bestSeg) return bestSeg;
-    }
-    return null;
-  }
-}
-
-/** The net of the pad item (its footprint's pad by number). */
-function padNet(board: BoardState, pad: PadItem): string | null {
-  const part = board.parts.find((p) => p.ref === pad.footprint);
-  const num = pad.id.slice(pad.footprint.length + 1).split("#")[0];
-  return part?.pads?.find((q) => q.num === num)?.net ?? null;
-}
-
-function trackNet(board: BoardState, item: TrackItem): string | null {
-  return board.routing?.tracks.find((t) => t.id === item.owner)?.net ?? null;
 }

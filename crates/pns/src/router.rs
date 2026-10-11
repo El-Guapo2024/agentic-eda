@@ -515,6 +515,11 @@ impl Router {
         self.drag.as_mut().map(|d| d.drag(world, rules, settings, at))
     }
 
+    /// The IR tracks the dragged line stands on: what the cursor must not snap to while dragging (`checkSnap`).
+    pub fn drag_line_tracks(&self) -> Vec<String> {
+        self.drag.as_ref().map(|d| d.line_tracks(&self.world)).unwrap_or_default()
+    }
+
     /// What the drag in progress is (`DM_SEGMENT`, `DM_CORNER` or `DM_VIA`).
     pub fn drag_kind(&self) -> Option<crate::dragger::DragKind> {
         self.drag.as_ref().map(|d| d.kind)

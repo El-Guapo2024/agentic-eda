@@ -381,7 +381,11 @@ pub fn drag_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let free_angle = req.get("free_angle").and_then(Value::as_bool).unwrap_or(false);
     match router.drag_start_with(at, layer, free_angle) {
         Ok(()) => {
-            let reply = router.drag_preview(at).map(|p| drag_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            let mut reply = router.drag_preview(at).map(|p| drag_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
+            // the tracks of the line being dragged: the cursor must not snap onto them (`TOOL_BASE::checkSnap`)
+            if let Some(obj) = reply.as_object_mut() {
+                obj.insert("line_tracks".into(), json!(router.drag_line_tracks()));
+            }
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply
         }
@@ -711,6 +715,7 @@ mod tests {
         let started = drag_start(&dir, &cell, &body(json!({ "x": 7_000, "y": 10_000, "layer": "F.Cu" })));
         assert_eq!(started["ok"], json!(true), "{started}");
         assert_eq!(started["drag"], json!("segment"), "the middle of the 10 mm segment: {started}");
+        assert_eq!(started["line_tracks"], json!(["u"]), "the track the cursor must not snap onto while it is dragged: {started}");
         let moved = drag_move(&cell, &body(json!({ "x": 7_000, "y": 8_000 })));
         assert_eq!(moved["colliding"], json!(false), "{moved}");
         assert_eq!(moved["restored"], json!(false));

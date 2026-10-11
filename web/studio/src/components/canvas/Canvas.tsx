@@ -450,7 +450,7 @@ export function Canvas() {
     const draw = state.drawState;
     if (tool === "route" || tool === "diffpair" || tool === "drag") {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
-      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started });
+      const p = snap.routePoint([wx, wy], mods, { net: draw?.kind === "route" ? draw.net : null, isEnd: started, skip: draw?.kind === "drag" && draw.lineTracks?.length ? new Set(draw.lineTracks) : undefined });
       return [p[0], p[1]];
     }
     const opts: PointOpts = {};

@@ -1414,6 +1414,8 @@ export interface RouteFixReply {
 export interface DragPreview {
   ok: boolean;
   message?: string;
+  /** `drag_start` only: the board ids of the tracks of the line being dragged, which the cursor must not snap onto (`TOOL_BASE::checkSnap`). */
+  line_tracks?: string[];
   /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
    * vertex (`DM_CORNER`) or a via (`DM_VIA`). */
   drag?: "segment" | "corner" | "via";
