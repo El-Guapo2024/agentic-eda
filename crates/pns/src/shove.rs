@@ -285,6 +285,10 @@ fn circle_circle_mtv(a: Point, ra: Um, b: Point, rb: Um, clearance: Um) -> Optio
 /// to whatever shape a pad has: away from the pad's nearest boundary point
 /// (towards the inside's far side when the via is inside it).
 fn solid_via_mtv(shape: &Shape, c: Point, r: Um, clearance: Um) -> Option<(i64, i64)> {
+    // A compound (a custom pad): the via has to clear every part it is too close to, so the longest push-out is the one.
+    if let Shape::Compound { parts } = shape {
+        return parts.iter().filter_map(|p| solid_via_mtv(p, c, r, clearance)).max_by_key(|m| m.0 * m.0 + m.1 * m.1);
+    }
     // A round pad is a `SHAPE_CIRCLE` and an oval one a `SHAPE_SEGMENT` in KiCad, which have their own pushouts: the circle
     // away from the pad's centre, the segment away from its axis. (The rectangle code below pushes toward a circle's
     // centre when the via is inside the pad, because a circle's "boundary" here is one point.)

@@ -3,6 +3,7 @@
 // painters' own space -- micrometres, Y down -- so the components only fit a view to it. (A library symbol is mm, Y up in the file; the painters flip it.)
 import type { LibraryPad, LibrarySymbolGraphic, LibrarySymbolPin } from "../api/types";
 import type { Bounds } from "./view";
+import { customPadBox } from "./padShape";
 
 type Pt = [number, number];
 
@@ -95,6 +96,11 @@ export function footprintPreviewBounds(fp: { pads: readonly LibraryPad[]; graphi
   for (const pad of fp.pads) {
     const r = Math.max(pad.size[0], pad.size[1]) / 2;
     pts.push([pad.at.x - r, pad.at.y - r], [pad.at.x + r, pad.at.y + r]);
+    // A custom pad reaches as far as its basic shapes.
+    if (pad.shape === "custom") {
+      const [x0, y0, x1, y1] = customPadBox(pad);
+      pts.push([x0, y0], [x1, y1]);
+    }
   }
   for (const g of fp.graphics) pts.push(...shapeBoundsPoints(g as { kind: string; [k: string]: unknown }));
   if (fp.courtyard) pts.push([-fp.courtyard[0], -fp.courtyard[1]], [fp.courtyard[0], fp.courtyard[1]]);

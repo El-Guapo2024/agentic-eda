@@ -18,6 +18,7 @@ pub mod constraints;
 pub mod fill;
 pub mod kimath;
 pub mod outline;
+pub mod pad_shape;
 pub mod pcbexpr;
 pub mod rtree;
 pub mod stroke_font;

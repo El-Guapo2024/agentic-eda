@@ -9,6 +9,10 @@ trees, so they compare like with like.
 cutouts, and the filler clips to the outline with its holes and keeps `copper_edge_clearance` from each Edge.Cuts item. The "after" cells, the large-boards table and the
 two totals below are the numbers of that run; the "before" cells are unchanged (they are the filler of `a85c64b`).
 
+**Re-measured 2026-10-10 for custom, trapezoid and chamfered pads** (`task-custom-pads`; the first bullet of "What moved the numbers"): the IR keeps a pad's real shape and the filler knocks out, keeps clear of and relieves
+that shape. Two rows moved a lot: `stonehenge` GND on B.Cu (11.33% to 0.15% of the area) and `issue5093` `/right/GND` on F.Cu (776.56% to 1.49%); `issue14559`, with 96 custom and 32 chamfered pads, moved a little (its worst row 1.96% to 1.60%,
+its XOR area 130.9 to 106.2 mm^2). Every other row of the tables, the thirteen boards of the regression test and `issue11814` included, is the number it was to the second decimal.
+
 ## Reproduce
 
 ```
@@ -24,6 +28,10 @@ Environment variables:
   boards of the table are measured this way);
 - `PARITY_SVG_DIR=dir` writes `<board>-<layer>-<n>.svg`: kicad's fill red under ours blue, purple where they agree;
 - `PARITY_CROP=x0,y0,x1,y1` (mm) frames part of the board in the SVG; `PARITY_TMP=dir` is the work directory.
+
+Two more slow tests keep the custom-pad rows of the 2026-10-10 re-measure (section "Custom, trapezoid and chamfered pads"): `kicad_cli_zone_fill_keeps_clear_of_a_ring_shaped_custom_pad`
+(`stonehenge`, about 40 s: its GND fill on B.Cu must be within 0.5% of the area and 1% XOR) and `kicad_cli_zone_fill_knocks_out_the_shapes_of_custom_pads` (`issue5093`, two to six
+minutes in a debug build: its `/right/GND` fill on F.Cu within 2.5% of the area and 7% XOR, the hatch's share). Both need `EDA_SLOW_TESTS=1`.
 
 `... kicad_cli_zone_fill_parity -- --ignored --nocapture` is the original harness (three boards, zones picked by hand): since the work its
 eight fills read 0.20, 0.12, 0.03, 0.00, 0.04, 0.20, 0.10 and 0.01% of area, and every island count equals kicad's (the old table had
@@ -78,11 +86,11 @@ Each cell reads *area difference / XOR / islands*, area and XOR as a share of ki
 | issue17429 | AGND (prio 0) | In6.Cu | 2657.251 | 4.00% / 4.02% / 1 | 0.06% / 0.06% / 1 | 1 |
 | stonehenge | (prio 0) | B.Cu | 0.094 | 100.00% / 100.00% / 0 | 187.85% / 199.33% / 2 | 1 |
 | stonehenge | /D9 (prio 2) | B.Cu | 60.701 | 1.12% / 1.19% / 1 | 0.46% / 0.49% / 1 | 1 |
-| stonehenge | GND (prio 1) | B.Cu | 1507.492 | 17.90% / 20.46% / 9 | 11.33% / 11.74% / 3 | 3 |
+| stonehenge | GND (prio 1) | B.Cu | 1507.492 | 17.90% / 20.46% / 9 | 0.15% / 0.24% / 3 | 3 |
 | stonehenge | /D8 (prio 3) | B.Cu | 222.228 | 3.30% / 3.85% / 2 | 0.18% / 0.38% / 1 | 1 |
 
-**Over these 37 fills the area is within 0.5% of kicad's on 34 (8 before), within 1% on 35, and the island count equals kicad's on 34 (26
-before).** The two fills above 1% are both on `stonehenge`, whose ring-shaped custom pads are the known gap below. The three island counts that are not kicad's are
+**Over these 37 fills the area is within 0.5% of kicad's on 35 (8 before), within 1% on 36, and the island count equals kicad's on 34 (26
+before).** The one fill above 1% is `stonehenge`'s netless 0.09 mm^2 sliver zone (it was two until the ring-shaped custom pads were kept: the GND row, 11.33%, is 0.15% now). The three island counts that are not kicad's are
 `stonehenge`'s sliver zone and two `issue17429` fills (`AGND` prio 70 F.Cu and prio 0 B.Cu) that have a second island each, a speck under 0.001 mm^2 along the
 board's 1 mm corner arcs (the prio 0 B.Cu one is new with the real arcs: the area went from 0.33% to 0.38% and the XOR from 0.46% to 0.40%).
 
@@ -92,12 +100,12 @@ Measured one board at a time with `PARITY_BOARDS` (debug build; the times includ
 
 | board | fills | area within 0.5%: before to after | within 1% | median area difference | worst area difference | island counts equal | time |
 |---|---|---|---|---|---|---|---|
-| issue14559 | 129 | 85 to 124 | 87 to 127 | 0.19% to 0.02% | 15.05% to 1.96% (`+5V`, In2.Cu; see below) | 128 to 129 | 5.6 min (with `stonehenge`) |
+| issue14559 | 129 | 85 to 125 | 87 to 127 | 0.19% to 0.02% | 15.05% to 1.60% (`+5V`, In2.Cu; see below) | 128 to 129 | 5.6 min (with `stonehenge`); 2.8 min alone, 2026-10-10 |
 | issue11814 | 19 | 3 to 12 | 4 to 17 | 5.73% to 0.39% | 232.92% to 118.91%, a 0.005 mm^2 zone (kicad has 7 islands of it, we 11); next 1.12% | 16 to 16 | 50 s |
-| issue5093 | 23 | 3 to 17 | 6 to 18 | 3.44% to 0.19% | 1431.83% to 776.56% (`/right/GND`, hatched, F.Cu) | 17 to 19 | 17 min |
+| issue5093 | 23 | 3 to 17 | 6 to 18 | 3.44% to 0.19% | 1431.83% to 42.68% (`/left/GND`, F.Cu, a diamond inside the hatched zone: 32 islands against kicad's 5); the `/right/GND` row on F.Cu, 776.56% before the custom pads, is 1.49% | 17 to 19 | 17 min, then 2 to 6 min |
 
-**Over all 208 fills of the 17 boards the area is within 1% of kicad's on 197 (105 before), within 0.5% on 187 (99 before), and the island count equals
-kicad's on 198 (187 before).** The 11 fills above 1% are 2 on `stonehenge`, 5 on `issue5093`, 2 on `issue11814` and 2 on `issue14559`. (The machine was loaded
+**Over all 208 fills of the 17 boards the area is within 1% of kicad's on 198 (105 before), within 0.5% on 189 (99 before), and the island count equals
+kicad's on 198 (187 before).** The 10 fills above 1% are 1 on `stonehenge`, 5 on `issue5093`, 2 on `issue11814` and 2 on `issue14559`. (The machine was loaded
 by other work: the times are not a benchmark.)
 
 **The outline made one board's area count worse and its XOR better.** `issue14559` went from 125 to 124 fills within 0.5% and from 128 to 127 within 1%, and its worst row from 1.19% to 1.96%.
@@ -107,10 +115,13 @@ excess hid the copper the filler lacks elsewhere (13.7 mm^2 round each of three 
 relief holes of two card-edge plugs: both known gaps below) because the area difference nets the two. The XOR, which does not net them, is better in every row that moved: `+5V`
 In2.Cu 4.14% to 2.63%, `+3V3` In2.Cu 2.11% to 1.39%, `GND` B.Cu 1.50% to 0.38%, `GND` In1.Cu 1.32% to 0.70%; over the 129 fills the XOR area is 130.9 mm^2 against 233.7 mm^2, and
 125 fills (before) against 127 have an XOR within 1% of kicad's. The area difference is the number this file leads with; the XOR is the one that counts.
+**The pads then took it a little further (2026-10-10).** Its 96 custom pads and 32 chamfered pads are the shapes they are now: 125 fills within 0.5% (124 before), the worst row 1.60% (`+5V`, In2.Cu; 1.96%) with an XOR of 2.27%
+(2.63%), `+3V3` In2.Cu's XOR 1.20% (1.39%), `GND` B.Cu's 0.24% (0.38%), and over the 129 fills the XOR area is 106.2 mm^2 against 130.9.
 
-The misses left on `issue5093` are still the custom pads and the hatch, five rows. The 776% row (`/right/GND`, F.Cu; 1008% on a solid-filled copy of the board) is the custom pads
-of footprint `R_pads`: 16 large copper shapes of other nets that cover most of that zone, of which the importer keeps only each one's 1.5 mm anchor
-(filled solid, kicad-cli's fill keeps 374 mm^2 of the zone's 4700, and 4260 with that one footprint deleted from a copy). The 13.9% row of the 2026-10-08 run (`/left/P14`, B.Cu, a
+The misses left on `issue5093` are the hatch and the diamond zone, five rows; the custom pads were the biggest and are done. The 776% row (`/right/GND`, F.Cu; 1008% on a solid-filled copy of the board) was
+the custom pads of footprint `R_pads`: 16 large copper shapes of other nets that cover most of that zone, of which the importer kept only each one's 1.5 mm anchor. They are the shapes they are now
+(anchor, lines, arcs, rings and polygons, each knocked out by the zone's clearance): ours is 274.6 mm^2 where kicad-cli's is 278.8 (**1.49%**; the XOR, 5.60%, is the hatch's: the same layer's other
+hatched zone, `/left/GND`, has 5.07%, ours 5 islands against kicad's 35). The 13.9% row of the 2026-10-08 run (`/left/P14`, B.Cu, a
 strip along the board's arc-shaped edge) was the Edge.Cuts chord: **it is 0.23% now** (the edge clearance is kept from the arc's curve; the other fifteen `/left/P..` strips stay at 0.13 to 0.35%). The 42.7% row (`/left/GND`, a diamond zone
 inside the hatched `/left/GND`, 32 islands against kicad's 5), 8.96% (a 14.5 mm^2 `/left/GND` zone, F.Cu), 2.95% (`/left/GND`, B.Cu) and the hatched `/right/GND` on B.Cu (2.89%, 4.52% XOR) are not explained.
 
@@ -123,6 +134,14 @@ the second hatched zone's XOR (3.08%, 38 kicad islands against our 3: the hatch 
 
 A board usually mixes several of these, so each line says which features a board exercises, not a measured split.
 
+- **Custom, trapezoid and chamfered pads (2026-10-10).** The pad's copper is `PAD::GetEffectiveShape`: a trapezoid's slanted sides, a chamfered rectangle's cut corners (`TransformRoundChamferedRectToPolygon`) and a
+  custom pad's anchor and basic shapes (`EDA_SHAPE::makeEffectiveShapes`: lines and arcs at their width, rings, filled and unfilled rectangles, circles and polygons, curves; a proxy item is not copper) arrive in the filler as one
+  `Shape::Compound`, so the zone keeps its clearance from the shape and not from its box or its anchor, and a ring is relieved inside as well as out. A custom pad with `(clearance convexhull)` is knocked out as
+  the hull of its shapes (`addKnockout`, `CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`), and a pad's spokes start from the box of that copper (`buildThermalSpokes`: `dummy_pad.GetBoundingBox`; a bottom-side footprint's box is
+  mirrored as `PAD::Flip` mirrors it: that was the difference between 0.54% and 0.15% on `stonehenge`). `stonehenge` GND on B.Cu 11.33% to 0.15% (XOR 11.74% to 0.24%: its four mounting pads are rings, `(options (anchor circle))` with a
+  `gr_circle` 5 mm across), `issue5093` `/right/GND` on F.Cu 776.56% to 1.49%, and `issue14559` (96 custom and 32 chamfered pads) from 124 fills within 0.5% to 125 and its XOR area from 130.9 to 106.2 mm^2; the other boards' rows are
+  unchanged to the second decimal (the thirteen of the regression test and `issue11814`). Tests: `tests/basic.rs` (the arm of a custom pad knocks the zone out as its anchor does, the hull option clears the notch, a ring pad is cleared inside and out and bridged by its spokes), and the two
+  slow tests above.
 - **The board outline (2026-10-09).** `ZONE_FILLER` clips each fill to `GetBoardPolygonOutlines` (every outline with its cutouts, only when it is well-formed) and keeps
   `copper_edge_clearance` from each Edge.Cuts *item* (`knockoutGraphicClearance`: an arc's curve, a circle's ring, a rectangle's four sides, the inside of a solid shape), not from a polygon the importer made of them.
   The importer used to turn an arc into its chord, drop every cutout and keep the largest loop; now it keeps what the file has (`crates/drc/src/outline.rs`, `FillInput::{board_outline, board_outline_invalid, edge_cuts}`).
@@ -164,11 +183,9 @@ A board usually mixes several of these, so each line says which features a board
 
 ## Left, with the evidence
 
-- **Custom pads: the biggest gap left.** `issue5093`'s `/right/GND` (766%, above) and `stonehenge` GND on B.Cu (11.3%: its four mounting pads are rings,
-  `(options (anchor circle))` with a `gr_circle` primitive 5 mm across; the pale-blue discs of the SVG overlay are copper we have and kicad has not). The importer
-  keeps the anchor of a custom pad, so the knockout, the clearance and the spokes of the real shape are missing. The IR has no custom pad shape; adding one (the
-  primitives, written back by the exporter so that kicad-cli sees them too, and `PAD::GetEffectiveShape` for the proxy spokes) is the next step.
-  `custom_pads.kicad_pcb` is not measured.
+- **Custom pads: done 2026-10-10 (above); what is left.** The proxy spokes of a custom pad (a `gr_vector` primitive: `buildThermalSpokes` casts the spokes along it) are not used, the spokes come from the box of
+  the copper; a pad's padstack is read as its front-layer shape (`(padstack ...)` with different inner or back shapes, and `remove_unused_layers`: `issue14559`'s spacers have a 2.9 mm hole and no copper on the inner layers); a `gr_rect` primitive's
+  corner radius and the arcs inside a `gr_poly` are not in the IR. `custom_pads.kicad_pcb` has no zone, so it is not a fill row (its pads are measured in `crates/kicad/tests/pad_shapes.rs`: areas against kicad-cli's plot, clearances against its DRC).
 - **Hatch.** The area is within 0.3% but the XOR is 0.6 to 0.9% (`issue2568`, `hatch_thermal_connectivity`), and the overlay puts it inside the
   thermal rings of the hatched zone's pads: about 0.6 mm^2 per pad, where kicad-cli's nightly has bars along the axes inside a ring and the port
   has pieces of the hatch. The snapshot's `buildHatchZoneThermalRings` adds a ring and no spokes; whether the nightly changed that or the port

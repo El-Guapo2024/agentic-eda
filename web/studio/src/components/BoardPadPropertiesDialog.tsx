@@ -1,38 +1,41 @@
 // pcbnew/dialogs/dialog_pad_properties.cpp -- "Pad Properties" of a pad on the board (`pcbnew.InteractiveEdit.properties` on a selected pad, or a double-click):
-// the pad type, the shape, the size, the shape's offset from the pad's position, the pad's own rotation, the corner radius of a rounded rectangle, the hole
-// (round or oblong), the solder mask margin, solder paste margin and paste ratio (the "Clearance Overrides and Settings" panel), and the zone filler's overrides
-// of the same panel: the pad's local clearance, "Pad connection", "Relief gap", "Spoke width" and "Spoke angle" (`kicad-port/padZone.ts`).
+// the pad type, the shape (KiCad's nine choices: circular, oval, rectangular, trapezoidal, rounded rectangle, chamfered rectangle, chamfered with other corners
+// rounded, custom with a circular or a rectangular base), the size, the shape's offset from the pad's position, the pad's own rotation, the shape's own fields
+// (a trapezoid's delta and axis, the corner size, the chamfer's size and corners, a custom pad's zone knockout and its list of basic shapes), the hole (round or
+// oblong), the solder mask margin, solder paste margin and paste ratio (the "Clearance Overrides and Settings" panel), and the zone filler's overrides of the
+// same panel: the pad's local clearance, "Pad connection", "Relief gap", "Spoke width" and "Spoke angle" (`kicad-port/padZone.ts`).
+//
+// The shape rules are `kicad-port/padShape.ts`'s (what choosing a shape sets up, the corner and chamfer limits, the trapezoid's clamping, the basic shapes of a
+// custom pad: add, edit, delete and duplicate a line, an arc, a circle, a rectangle, a polygon or a curve).
 //
 // OK sends ONE batch, so one undo step (`Edit Pad Properties`): an `edit_board_pad` -- the pad's stored overrides with the ones that changed laid over them; an
 // override that is switched off is taken away, so the library's value comes back -- and, if a zone field changed, a `set_pad_zone_overrides` (a pad has one
 // clearance, and it is the zone overlay's). The zone fields are those of every pad that carries this pad's number, as the zone overlay keeps them. The checks are
 // `padValuesOK`'s (`PAD::CheckPad`), in its words.
 //
-// Not ported: the trapezoid, chamfered and custom shapes, padstack modes (front/inner/back differing), the fabrication property, the pad number and pin
-// function, the pad-to-die length and the layer checkboxes (the type picks the layers), and backdrill and post-machining. "Push Pad Properties to other pads"
-// is the footprint editor's.
+// Not ported: padstack modes (front/inner/back differing), the fabrication property, the pad number and pin function, the pad-to-die length and the layer
+// checkboxes (the type picks the layers), and backdrill and post-machining. "Push Pad Properties to other pads" is the footprint editor's.
 import { useEffect, useState } from "react";
 import type { Cmd, PadConnection, PadEditCmd } from "../api/types";
 import { checkPadValues, padEditWith } from "../kicad-port/fpFields";
+import { chooseShape, checkShape, hasSizeY, shapeFormOf, shapeNameOf, shapePatch, sizeOf, type PadShapeChoice, type PadShapeForm } from "../kicad-port/padShape";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { footprintZoneForm, padZoneForm, zoneCmds, type PadZoneForm } from "../kicad-port/padZone";
 import { padById } from "../kicad-port/pcbItems";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
+import { PadPrimitivePanel, PadShapeRows } from "./PadShapeFields";
 
-type Shape = "circle" | "rect" | "oval" | "round_rect";
 type Kind = "smd" | "through_hole" | "non_plated_hole";
 
 interface Form {
   kind: Kind;
-  shape: Shape;
-  w: number;
-  h: number;
+  /** The shape and what goes with it: the choice, the size, the corner ratio, a trapezoid's delta, the chamfer, a custom pad's knockout and basic shapes. */
+  s: PadShapeForm;
   ox: number;
   oy: number;
   rot: number;
-  ratio: number;
   hole: "round" | "oblong";
   drill: number;
   slotW: number;
@@ -43,13 +46,6 @@ interface Form {
   paste: number | null;
   pasteRatio: number | null;
 }
-
-const SHAPES: { value: Shape; label: string }[] = [
-  { value: "circle", label: "Circle" },
-  { value: "rect", label: "Rectangle" },
-  { value: "oval", label: "Oval" },
-  { value: "round_rect", label: "Rounded rectangle" },
-];
 
 const KINDS: { value: Kind; label: string }[] = [
   { value: "through_hole", label: "Through-hole" },
@@ -75,13 +71,10 @@ export function BoardPadPropertiesDialog() {
     const size = pad.size ?? [pad.w, pad.h];
     setForm({
       kind: pad.kind ?? (pad.th ? "through_hole" : "smd"),
-      shape: pad.shape ?? (pad.round ? (Math.abs(pad.w - pad.h) < 1 ? "circle" : "oval") : "rect"),
-      w: size[0],
-      h: size[1],
+      s: shapeFormOf({ ...pad, size }),
       ox: pad.offset?.[0] ?? 0,
       oy: pad.offset?.[1] ?? 0,
       rot: pad.rot ?? 0,
-      ratio: pad.ratio ?? 0.25,
       hole: pad.slot ? "oblong" : "round",
       drill: pad.drill ?? 800,
       slotW: pad.slot?.[0] ?? 600,
@@ -99,6 +92,7 @@ export function BoardPadPropertiesDialog() {
   const { part, pad } = hit;
   const close = () => dispatch({ type: "SET_BOARD_PAD_PROPERTIES_ID", id: null });
   const set = <K extends keyof Form>(key: K, value: Form[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
+  const setShapeForm = (next: PadShapeForm) => setForm((f) => (f ? { ...f, s: next } : f));
   const setZone = (patch: Partial<PadZoneForm>) => setForm((f) => (f ? { ...f, zone: { ...f.zone, ...patch } } : f));
   const fmt = (um: number) => formatLength(um, units);
 
@@ -112,31 +106,36 @@ export function BoardPadPropertiesDialog() {
       style={{ width }}
     />
   );
+  const s = form.s;
   const hasHole = form.kind !== "smd";
-  const circle = form.shape === "circle";
   // The zone overlay addresses a pad by its number: a pad with none (a mounting hole) has no zone fields, and a number several pads share is one set of fields.
   const numbered = pad.num !== "";
   const sharesNumber = numbered && (part.pads ?? []).filter((q) => q.num === pad.num).length > 1;
 
+  /** `onPadShapeSelection`: the choice, with the defaults it sets up and the spoke angle that follows a circle. */
+  const chooseShapeOf = (choice: PadShapeChoice) =>
+    setForm((f) => {
+      if (!f) return f;
+      const was = f.zone.spokeAngleMdeg;
+      const r = chooseShape(f.s, choice, was === null ? (hasSizeY(f.s.choice) ? 90 : 45) : was / 1000);
+      // An angle the user never set stays unset (the shape's default); one that was set follows the dialog's rule.
+      return { ...f, s: r.form, zone: was === null ? f.zone : { ...f.zone, spokeAngleMdeg: Math.round(r.spokeAngleDeg * 1000) } };
+    });
+
   const submit = async () => {
     setError(null);
-    const size: [number, number] = [form.w, circle ? form.w : form.h];
-    const message = checkPadValues(
-      { kind: form.kind, shape: form.shape, size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: form.shape === "round_rect" ? form.ratio : null, pasteRatio: form.pasteRatio },
-      fmt
-    );
+    const size = sizeOf(s);
+    const message =
+      checkPadValues(
+        { kind: form.kind, shape: shapeNameOf(s.choice), size, drill: form.hole === "round" ? form.drill : null, slot: form.hole === "oblong" ? [form.slotW, form.slotH] : null, ratio: s.choice === "round_rect" ? s.ratio : null, pasteRatio: form.pasteRatio },
+        fmt
+      ) ?? checkShape(s);
     if (message) return setError(message);
 
     // What differs from the pad as it is becomes a key of the pad's edit; an override that was switched off becomes `undefined` and goes.
-    const was = {
-      kind: pad.kind ?? (pad.th ? "through_hole" : "smd"),
-      shape: pad.shape ?? (pad.round ? (Math.abs(pad.w - pad.h) < 1 ? "circle" : "oval") : "rect"),
-      size: pad.size ?? [pad.w, pad.h],
-    };
-    const patch: Partial<PadEditCmd> = {};
+    const was = { kind: pad.kind ?? (pad.th ? "through_hole" : "smd") };
+    const patch: Partial<PadEditCmd> = { ...shapePatch(s, { ...pad, size: pad.size ?? [pad.w, pad.h] }) };
     if (form.kind !== was.kind) patch.kind = form.kind;
-    if (form.shape !== was.shape) patch.shape = form.shape;
-    if (size[0] !== was.size[0] || size[1] !== was.size[1]) patch.size = size;
     if (hasHole) {
       if (form.hole === "round" && (pad.slot || pad.drill !== form.drill)) patch.drill = form.drill;
       if (form.hole === "oblong" && (!pad.slot || pad.slot[0] !== form.slotW || pad.slot[1] !== form.slotH)) patch.drill_slot = [form.slotW, form.slotH];
@@ -144,7 +143,6 @@ export function BoardPadPropertiesDialog() {
     const offset = pad.offset ?? [0, 0];
     if (form.ox !== offset[0] || form.oy !== offset[1]) patch.offset = { x: form.ox, y: form.oy };
     if (Math.abs(form.rot - (pad.rot ?? 0)) > 1e-9) patch.rot = Math.round((((form.rot % 360) + 360) % 360) * 1000);
-    if (form.shape === "round_rect" && (pad.ratio ?? 0.25) !== form.ratio) patch.roundrect_ratio = form.ratio;
     const override = <T,>(key: keyof PadEditCmd, now: T | null, before: T | null | undefined) => {
       if (now === (before ?? null)) return;
       (patch as Record<string, unknown>)[key] = now === null ? undefined : now;
@@ -191,7 +189,7 @@ export function BoardPadPropertiesDialog() {
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 500 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 560 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Pad Properties</span>
           <span>
@@ -214,25 +212,7 @@ export function BoardPadPropertiesDialog() {
             </select>
             <span>Position</span>
             <span style={{ fontSize: 11 }}>{`${fmt(pad.px ?? pad.x)}, ${fmt(pad.py ?? pad.y)}`} (on the board)</span>
-            <span>Pad shape</span>
-            <select value={form.shape} onChange={(e) => set("shape", e.target.value as Shape)} data-testid="pad-shape">
-              {SHAPES.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <span>Pad size</span>
-            <span>
-              {len(form.w, (w) => set("w", w), 74, "pad-size-x")}
-              {!circle && (
-                <>
-                  {" × "}
-                  {len(form.h, (h) => set("h", h), 74, "pad-size-y")}
-                </>
-              )}{" "}
-              {units}
-            </span>
+            <PadShapeRows form={s} onForm={setShapeForm} units={units} onChoose={chooseShapeOf} />
             <span>Shape offset</span>
             <span>
               {len(form.ox, (v) => set("ox", v), 74, "pad-offset-x")} {len(form.oy, (v) => set("oy", v), 74, "pad-offset-y")} {units}
@@ -241,15 +221,6 @@ export function BoardPadPropertiesDialog() {
             <span>
               <input type="number" step="any" value={form.rot} onChange={(e) => Number.isFinite(Number(e.target.value)) && set("rot", Number(e.target.value))} style={{ width: 74 }} data-testid="pad-rot" />°
             </span>
-            {form.shape === "round_rect" && (
-              <>
-                <span>Corner radius ratio</span>
-                <span>
-                  <input type="number" step="any" min={0} max={0.5} value={form.ratio} onChange={(e) => Number.isFinite(Number(e.target.value)) && set("ratio", Number(e.target.value))} style={{ width: 74 }} data-testid="pad-ratio" />{" "}
-                  (radius {fmt(Math.round(form.ratio * Math.min(form.w, form.h)))})
-                </span>
-              </>
-            )}
             {hasHole && (
               <>
                 <span>Hole shape</span>
@@ -275,6 +246,7 @@ export function BoardPadPropertiesDialog() {
               </>
             )}
           </div>
+          <PadPrimitivePanel form={s} onForm={setShapeForm} units={units} />
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and settings (blank = the board&apos;s)</p>
           <div className="kv-grid" style={{ gridTemplateColumns: "150px 1fr" }}>
             {numbered && (
@@ -309,7 +281,7 @@ export function BoardPadPropertiesDialog() {
                 <span>Spoke width</span>
                 <OverrideInput testid="pad-zone-spoke-width" valueUm={form.zone.spokeWidth} units={units} onChange={(v) => setZone({ spokeWidth: v })} />
                 <span>Spoke angle</span>
-                <AngleOverrideInput testid="pad-zone-spoke-angle" valueMdeg={form.zone.spokeAngleMdeg} defaultDeg={circle ? 45 : 90} onChange={(v) => setZone({ spokeAngleMdeg: v })} />
+                <AngleOverrideInput testid="pad-zone-spoke-angle" valueMdeg={form.zone.spokeAngleMdeg} defaultDeg={s.choice === "circle" || s.choice === "custom_circle" ? 45 : 90} onChange={(v) => setZone({ spokeAngleMdeg: v })} />
               </div>
               {sharesNumber && <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "4px 0 0" }}>The clearance and the zone fields are those of every pad of this footprint numbered {pad.num}.</p>}
             </>

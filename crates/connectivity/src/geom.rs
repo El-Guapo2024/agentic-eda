@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn circle_pads_measure_center_distance_minus_radii() {
-        let pad = |x: Um, y: Um, d: Um| PlacedPad { number: "1".into(), center: Point { x, y }, size: (d, d), through_hole: false, shape: eda_model::footprint::PadShape::Circle, roundrect_ratio: None };
+        let pad = |x: Um, y: Um, d: Um| PlacedPad { number: "1".into(), center: Point { x, y }, size: (d, d), through_hole: false, shape: eda_model::footprint::PadShape::Circle, roundrect_ratio: None, pieces: Vec::new() };
         let a = pad(0, 0, 1000);
         let b = pad(3000, 0, 1000);
         // centers 3000 apart, radii 500 each -> gap 2000.

@@ -290,9 +290,24 @@ pub enum Shape {
     /// thickness -- see `crate::stroke_font`. Never empty (an empty/
     /// all-space string produces no `SilkItem` at all; see `board.rs`).
     Strokes { segs: Vec<Seg>, r: Um },
+    /// `SHAPE_COMPOUND`: the shapes that together make one item's copper -- a custom pad's anchor and each of its primitives
+    /// (`PAD::GetEffectiveShape`). Every distance and collision is the nearest of its parts. Never nested, never empty.
+    Compound { parts: Vec<Shape> },
 }
 
 impl Shape {
+    /// The parts of a compound, or the shape itself as the only one.
+    pub fn parts(&self) -> &[Shape] {
+        match self {
+            Shape::Compound { parts } => parts,
+            _ => std::slice::from_ref(self),
+        }
+    }
+
+    fn is_compound(&self) -> bool {
+        matches!(self, Shape::Compound { .. })
+    }
+
     fn core(&self) -> Core {
         match self {
             Shape::Circle { c, .. } => Core::Point(*c),
@@ -314,6 +329,8 @@ impl Shape {
             }
             Shape::Polygon { pts } => Core::Polygon(pts.clone()),
             Shape::Strokes { segs, .. } => Core::Segs(segs.clone()),
+            // A compound has no single core: every public method splits it into parts first.
+            Shape::Compound { parts } => Core::Segs(parts.iter().flat_map(|p| p.boundary_segs()).collect()),
         }
     }
 
@@ -329,6 +346,8 @@ impl Shape {
         match self {
             Shape::Circle { r, .. } | Shape::Stadium { r, .. } | Shape::RoundRect { r, .. } | Shape::Strokes { r, .. } => *r,
             Shape::Rect { .. } | Shape::Polygon { .. } => 0,
+            // The widest part: what a box has to be inflated by to hold the whole compound.
+            Shape::Compound { parts } => parts.iter().map(Shape::radius).max().unwrap_or(0),
         }
     }
 
@@ -357,6 +376,15 @@ impl Shape {
                 widen(s.a);
                 widen(s.b);
             }),
+            // Each part's own box, so a thin part does not borrow the widest one's radius.
+            Shape::Compound { parts } => {
+                for part in parts {
+                    let (a, b, c, d) = part.bbox(clearance);
+                    widen(Point { x: a, y: b });
+                    widen(Point { x: c, y: d });
+                }
+                return (x0, y0, x1, y1);
+            }
         }
         let r = self.radius() + clearance;
         (x0 - r, y0 - r, x1 + r, y1 + r)
@@ -380,6 +408,9 @@ impl Shape {
     /// probe point per side plus the boundary-segment scan is a complete
     /// test, the same one `SHAPE_POLY_SET::Collide` reduces to internally.
     pub fn clearance_to(&self, other: &Shape) -> (Um, Point) {
+        if self.is_compound() || other.is_compound() {
+            return pairwise(self, other).map(|(a, b)| a.clearance_to(b)).min_by_key(|(d, _)| *d).expect("a compound has parts");
+        }
         let Some((best_sq, best_pt)) = self.core_sq_distance(other) else { return (0, self.core().probe_point()) };
         let core_dist = isqrt(best_sq);
         let actual = (core_dist - self.radius() - other.radius()).max(0);
@@ -391,6 +422,9 @@ impl Shape {
     /// the router's integer geometry but 1 um off for a check that has to agree with KiCad's DRC (which takes
     /// `DRCEpsilon`, 0.5 um, off every clearance) to a fraction of a micron.
     pub fn gap_to(&self, other: &Shape) -> f64 {
+        if self.is_compound() || other.is_compound() {
+            return pairwise(self, other).map(|(a, b)| a.gap_to(b)).fold(f64::MAX, f64::min);
+        }
         match self.core_sq_distance(other) {
             None => 0.0,
             Some((best_sq, _)) => ((best_sq as f64).sqrt() - (self.radius() + other.radius()) as f64).max(0.0),
@@ -401,6 +435,9 @@ impl Shape {
     /// `SHAPE::Collide`): touching/overlapping is always a collision, and
     /// so is any positive gap smaller than `clearance`.
     pub fn collides(&self, other: &Shape, clearance: Um) -> Option<(Um, Point)> {
+        if self.is_compound() || other.is_compound() {
+            return pairwise(self, other).filter_map(|(a, b)| a.collides(b, clearance)).min_by_key(|(d, _)| *d);
+        }
         let (bx0, by0, bx1, by1) = self.bbox(clearance);
         let (ox0, oy0, ox1, oy1) = other.bbox(0);
         if bx1 < ox0 || ox1 < bx0 || by1 < oy0 || oy1 < by0 {
@@ -445,12 +482,20 @@ impl Shape {
     }
 }
 
+/// Every pairing of a part of `a` with a part of `b` (a shape that is not a compound is its own only part).
+fn pairwise<'a>(a: &'a Shape, b: &'a Shape) -> impl Iterator<Item = (&'a Shape, &'a Shape)> {
+    a.parts().iter().flat_map(move |x| b.parts().iter().map(move |y| (x, y)))
+}
+
 /// Distance from `shape` to the nearest of a set of bare edge segments
 /// (Edge.Cuts, a board margin line -- geometry with no interior, unlike
 /// [`Shape::Polygon`]'s area semantics in [`Shape::clearance_to`]). Used by
 /// the edge/silk-to-edge clearance provider, where "inside the board
 /// outline" must not be mistaken for "touching the edge".
 pub fn distance_to_open_segments(shape: &Shape, edges: &[Seg]) -> (Um, Point) {
+    if let Shape::Compound { parts } = shape {
+        return parts.iter().map(|p| distance_to_open_segments(p, edges)).min_by_key(|(d, _)| *d).expect("a compound has parts");
+    }
     let mut best_sq = i128::MAX;
     let mut best_pt = edges.first().map(|s| s.a).unwrap_or(Point { x: 0, y: 0 });
     for s1 in shape.boundary_segs() {
@@ -600,5 +645,49 @@ mod tests {
         // Inset corner centre at (500,500); distance from (2000,2000) is
         // 1500*sqrt(2) ~= 2121; minus r(500) ~= 1621.
         assert!((actual - 1621).abs() <= 1, "actual={actual}");
+    }
+}
+
+#[cfg(test)]
+mod compound_tests {
+    use super::*;
+
+    fn p(x: Um, y: Um) -> Point {
+        Point { x, y }
+    }
+
+    /// A custom pad's compound: a 1 mm round anchor and a 200 um stroke 2 mm long to the right of it.
+    fn pad() -> Shape {
+        Shape::Compound { parts: vec![Shape::Circle { c: p(0, 0), r: 500 }, Shape::Stadium { a: p(0, 0), b: p(2000, 0), r: 100 }] }
+    }
+
+    #[test]
+    fn a_compound_is_as_far_from_a_shape_as_its_nearest_part() {
+        let near_the_arm = Shape::Circle { c: p(2500, 0), r: 100 };
+        // The arm ends at x = 2100: 2500 - 100 - 2100 = 300 of air, though the anchor alone would read 1900.
+        assert_eq!(pad().clearance_to(&near_the_arm).0, 300);
+        assert!((pad().gap_to(&near_the_arm) - 300.0).abs() < 1e-9);
+        assert_eq!(near_the_arm.clearance_to(&pad()).0, 300, "either way round");
+        assert!(pad().collides(&near_the_arm, 301).is_some() && pad().collides(&near_the_arm, 300).is_none());
+        // Touching any part is touching the pad.
+        let on_the_anchor = Shape::Circle { c: p(0, 400), r: 100 };
+        assert_eq!(pad().clearance_to(&on_the_anchor).0, 0);
+        assert!(pad().collides(&on_the_anchor, 0).is_some());
+    }
+
+    #[test]
+    fn a_compounds_box_holds_every_part_and_each_part_keeps_its_own_radius() {
+        assert_eq!(pad().bbox(0), (-500, -500, 2100, 500));
+        assert_eq!(pad().bbox(50), (-550, -550, 2150, 550));
+        assert_eq!(pad().radius(), 500, "the widest part: what a box has to be inflated by");
+        assert_eq!(pad().parts().len(), 2);
+        assert_eq!(Shape::Circle { c: p(0, 0), r: 5 }.parts().len(), 1, "a plain shape is its own only part");
+    }
+
+    #[test]
+    fn the_distance_to_an_edge_is_measured_from_every_part() {
+        // A board edge 2.3 mm to the right of the pad's anchor: the arm's tip is 200 from it, though the anchor is 1800.
+        let edge = [Seg::new(p(2300, -1000), p(2300, 1000))];
+        assert_eq!(distance_to_open_segments(&pad(), &edge).0, 200);
     }
 }

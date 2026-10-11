@@ -14,7 +14,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 
 ## Status
 
-- **Actions wired: 584 of 766** (pcbnew 266/350, eeschema 168/233, common 150/183; `UI-ACTIONS.md`), up from 462 on 2026-10-07. The other 182 are
+- **Actions wired: 586 of 766** (pcbnew 266/350, eeschema 170/233, common 150/183; `UI-ACTIONS.md`, 2026-10-10), up from 462 on 2026-10-07. The other 180 are
   recorded with a reason in `web/studio/tools/ui-parity-missing.json`; none is bare. **Every reason was re-checked against main on 2026-10-10
   (`STALE-REASONS.md`): 10 are stale (what they say is missing now exists), 18 are partly stale, 154 hold** (4 of those wait for a branch in
   flight; the library tables wired five reasons). The stale ones are Find by Properties, Migrate 3D Models, the microwave gap and stub, Append Board and its drop, the Footprint Editor's
@@ -23,9 +23,15 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   8 out of scope** (was 10, 12, 0, 8 on 2026-10-07; #11 Property dialogs and #25 Align and distribute closed).
 - **Items 1 to 24** are the ranked list of 2026-10-07 with their state brought forward; **items 25 to 35 are new**: the gaps the second phase
   found, from the `PARITY-*.md` "left" notes, the merge messages and reading the code.
-- **In flight, not on main** (read with `git diff main...<branch>`): `task-sch-hierarchy` (item 4; Annotate over the whole
-  schematic with KiCad's scope and numbering options, Find and Replace across sheets, the SVG render and the schematic gates over every sheet:
-  6 commits), `task-custom-pads` (item 31; branched, no commit yet). Do not start work that touches their files without reading them first.
+- **In flight, not on main** (2026-10-10; read with `git diff main...<branch>`): `task-router-drag` (P5a), `task-pcb-edit-details` (P6), `task-files-in` (P8).
+  Do not start work that touches their files without reading them first.
+- **Trapezoid, chamfered and custom pads are KiCad's (2026-10-10; `PARITY-pcb.md` section 27, `PARITY-fpedit.md` section 10).** A pad keeps its real shape in the IR (`Pad::ext`, `LibraryPad::custom`); the `.kicad_pcb` and `.kicad_mod`
+  readers and writers are `pcb_io_kicad_sexpr`'s (kicad-cli's plot of the original and of our export is identical, for a board and for a library footprint); and the DRC, the routing gate, the router, connectivity and the zone filler
+  measure that copper (`eda_drc::pad_shape`, `PadPiece`), so the gap to a trapezoid's slanted side, a chamfered corner or a custom pad's arm is within 2 um of kicad-cli's DRC. Pad Properties, on the board and in the footprint editor,
+  takes KiCad's nine shape choices, a trapezoid's delta, a chamfer's ratio and corners and a custom pad's list of basic shapes (add, edit, delete: one undoable verb). Zone-fill parity (`crates/zone-filler/PARITY.md`): `stonehenge`
+  GND 11.33% to 0.15% of the area, `issue5093`'s `/right/GND` 776.56% to 1.49%; 198 of the 208 fills of the 17 QA boards are within 1% of kicad-cli's area and 189 within 0.5%. Left: Explode and Recombine, padstacks (a pad has one shape for all layers),
+  a custom pad's proxy spokes, and the instant 3D scene (`eda_drc::pad_shape::pad_outline` and the state's `pads[].outline` are there for it). Measured: 40 new Rust tests (five of them slow-tier, with kicad-cli) and 25 new
+  `node --test` cases; `web/studio/e2e/pad-shapes.check.js` runs 6 scenarios through `window.__eda` on a served board.
 - **Four findings change the picture.**
   1. *A wired action is not a working feature.* This was the finding of 2026-10-07 and it was fixed where it bit: the schematic edit tools act on
      every item kind (item 1, `2a8bf8f`) and so do the PCB ones (item 8, `88c8c0a`). Before closing any action, run it on every item kind.
@@ -86,7 +92,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 4 | P4 Schematic hierarchy: the rest | 4 | Import Sheet, sheets in the clipboard, the last cross-sheet cases | in flight | M |
 | 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | dragging a segment moves its end; no start or end mid-segment; no coupled diff pair shove; no U meander | open | XL (3 parts) |
 | 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | open | M, ongoing |
-| 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | in flight | L |
+| 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | no way to bring an outline from a DXF or another board in | open | L |
 | 9 | P9 Board Setup completion and the rule editor | 3 | Board Editor Layers, Text Variables, Formatting, Tuning and Component Classes pages; regex net patterns | open | L (rule editor XL) |
 | 10 | P10 Schematic details | 1, 12, 15, 17, 20 | pins cannot be selected (Swap Pins), no net-collision overlay, no schematic groups, pan and auto-pan | open | M-L |
@@ -258,8 +264,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   whose position and BOM exports honour. A field is an item of the board (`REF:Name`): selected, drawn (following the Appearance rows), moved, dragged, turned, flipped. A pad's and a footprint's zone
   connection, relief gap, spoke width and angle and clearance are the zone filler's overlay (`drawings.zone_overrides`) and the same dialogs edit them. Board-only footprints are the "not in schematic" attribute.
 - Measured: 69 new Rust tests and 39 `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 19 scenarios through `window.__eda`; real kicad-cli honoured do-not-populate and exclude-from-position-files.
-- Missing: Change Footprint(s), Update Footprints from Library that reads the library, geographical reannotate -- now item 26; per-footprint mask and paste margin overrides; trapezoid, chamfered and custom
-  pads, padstacks (item 31), fabrication property, pad number and pin function edits, pad-to-die length; Datasheet and Description fields and text variables in field text; our own placement and courtyard
+- Missing: Change Footprint(s), Update Footprints from Library that reads the library, geographical reannotate -- now item 26; per-footprint mask and paste margin overrides; padstacks (item 31; trapezoid,
+  chamfered and custom pads are done, 2026-10-10), fabrication property, pad number and pin function edits, pad-to-die length; Datasheet and Description fields and text variables in field text; our own placement and courtyard
   checks do not read a pad's offset or margins (kicad-cli does); logos; the microwave tools (their reason, "no free footprint", is stale: `STALE-REASONS.md` SR3).
 - Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_pad_properties.cpp`, `pcbnew/pcb_field.cpp`, `pcbnew/footprint.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
 
@@ -270,7 +276,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   KiCad's order, on the board and on the sheet; a selection shows the rows every item has, the value they share or `<...>`, and an edit goes out as ONE `batch` (one undo step). Every edit is an existing verb
   except four added where none fit (`crates/ops/src/pcb_props.rs`: `edit_track`, `set_item_net`, `set_zone_name`, `replace_shape`). Footprint fields, attributes and pad rows edit since item 9.
 - Measured: 87 `node --test` cases, 9 Rust tests for the four verbs; `web/studio/e2e/properties-panel.check.js` edits every editable row of every kind and undoes it.
-- Missing: what the IR has no place for is not registered: a pad's trapezoid, chamfered and custom shapes, padstacks, via tenting and backdrill, board text's fonts, bold, italic, vertical justification and
+- Missing: what the IR has no place for is not registered: a pad's trapezoid, chamfered and custom shapes (in the IR and Pad Properties since 2026-10-10, not checked in this panel), padstacks, via tenting and backdrill, board text's fonts, bold, italic, vertical justification and
   colour, a shape's line style and colour, a sheet's border and fill, symbol pin names and numbers, extra fields; a footprint's reference, value and library link text are read-only (they come from the
   schematic and the intent: item 26); a wire's end points and length are read-only; the grid is not in the Footprint and Symbol editors; a footprint's position lands on the placement grid like every pose.
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
@@ -303,13 +309,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: fill fidelity and settings
-**Partial; fill fidelity improved 2026-10-08/09 (`eabaf91`, `a46fd29`).** Hit: most boards. Blocks: no. Packages P13, and P7 for custom pads. Of 208 fills on 17 KiCad QA boards, 190 are within 1% of kicad-cli's area (105 before), 182 within 0.5%; the notch row of `issue11814` went from 23.4% to 0.2% with the outline work.
+**Partial; fill fidelity improved 2026-10-08/09 (`eabaf91`, `a46fd29`).** Hit: most boards. Blocks: no. Package P13 (P7, the custom pads, merged 2026-10-10). Of 208 fills on 17 KiCad QA boards, 198 are within 1% of kicad-cli's area (105 before 2026-10-08, 190 before the custom pads), 189 within 0.5%; the notch row of `issue11814` went from 23.4% to 0.2% with the outline work.
 - Exists: the filler (`crates/zone-filler`, `crates/drc/src/fill.rs`, `GET /api/fill`) follows `ZONE_FILLER::Fill`: zones fill from the highest priority down and are knocked out by each other's fills, islands go by
   connectivity, iterative refill, thermal spokes (`buildThermalSpokes`: turn with the pad, the pad's angle, width and gap, only the ones that reach copper stay), hatch fill with thermal rings, chamfer and
   fillet corner smoothing, the board-edge clearance from every Edge.Cuts item, and pad and footprint clearance overrides. A pad's or footprint's own connection, relief gap, spoke width, spoke angle and
   clearance beat the zone's (Footprint Properties and Pad Properties; read from and written to `.kicad_pcb` and `.kicad_mod`). The full settings dialog (`components/ZoneDialog.tsx`), keepout knockouts,
   Fill and Unfill Selected, Merge, Duplicate onto Layer, the Priority actions and the Zone Manager (`PARITY-boardctl.md`). Measured in `crates/zone-filler/PARITY.md`.
-- Missing: custom pad shapes (the importer keeps the anchor: the 16 custom pads of `issue5093` leave 766% on one of its zones and the ring pads of `stonehenge` 11%; the largest gap left; item 31); the thermal
+- Missing: a custom pad's proxy spokes (`gr_vector`; its spokes start from the box of its copper) and padstacks whose inner and back shapes differ (item 31; custom pads themselves were done on 2026-10-10: `stonehenge` GND 11.33% to 0.15%, `issue5093` `/right/GND` 776.56% to 1.49%); the thermal
   rings of a hatched zone (0.6 to 0.9% XOR); `connect_nearby_polys`; mask-only NPTH holes (`issue14559`'s plugs), courtyards and net ties as knockouts; one layer per zone and no non-copper zones
   (`fillNonCopperZone`); no zone lock in Zone Properties (the name is edited in the Properties panel); no Auto-Assign Priorities; the Zone Manager has no preview; a hatched zone with a fine pitch over a whole
   board is slow (minutes in a debug build on `issue5093`). Appendix C has the function table.
@@ -362,7 +368,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 ### 19. Footprint and symbol editor leftovers
 **Partial.** Hit: library work. Blocks: no. Packages P14, P7 and P17.
 - Exists: both editors with library trees, pad and pin tools, dialogs, tables, import and export (`PARITY-fpedit.md`, `PARITY-symedit.md`).
-- Missing: the footprint editor's 3D model panel (it edits one model path while a footprint on a board keeps every `(model ...)`: item 30); custom-shape pads (item 31); the library editor's Footprint
+- Missing: the footprint editor's 3D model panel (it edits one model path while a footprint on a board keeps every `(model ...)`: item 30); Explode and Recombine of a custom pad (item 31); the library editor's Footprint
   Properties has no fields grid (the board's has one since 10-09); derived symbols; alternate pin functions; symbol fields on the canvas; a shape properties dialog; snapping to other items' anchors in both
   editors (item 14). (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
@@ -477,10 +483,16 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/3d_cache/`.
 
 ### 31. Custom-shape pads
-**New (split out of items 9, 13 and 19), in flight: `task-custom-pads` has no commit yet.** Hit: footprints with custom pads, imported boards, the zone fill around them. Blocks: no. Package P7, size L.
-- The footprint IR models six pad shapes. A custom pad imports as its anchor, a trapezoid or chamfered pad is drawn as a rectangle (189 non-rectangular pads of the QA corpus are approximated as rectangles,
-  `REPORT.md`), so the knockout, clearance and spokes of the real shape are missing from the zone filler (766% on one zone of `issue5093`, 11% on `stonehenge`), the router and our checks. Four rows wait for it:
-  Edit Pad as Graphic Shapes, Finish Pad Edit, the microwave arc stub and function shape.
+**Done (2026-10-10, `task-custom-pads`)**, limits below. Hit: footprints with custom pads, imported boards, the zone fill around them. Blocks: no. Package P7.
+- Done (`PARITY-pcb.md` section 27, `PARITY-fpedit.md` section 10): A pad keeps its real shape in the IR (`Pad::ext`, `LibraryPad::custom`); the `.kicad_pcb` and `.kicad_mod`
+  readers and writers are `pcb_io_kicad_sexpr`'s (kicad-cli's plot of the original and of our export is identical, for a board and for a library footprint); and the DRC, the routing gate, the router, connectivity and the zone filler
+  measure that copper (`eda_drc::pad_shape`, `PadPiece`), so the gap to a trapezoid's slanted side, a chamfered corner or a custom pad's arm is within 2 um of kicad-cli's DRC. Pad Properties, on the board and in the footprint editor,
+  takes KiCad's nine shape choices, a trapezoid's delta, a chamfer's ratio and corners and a custom pad's list of basic shapes (add, edit, delete: one undoable verb). Zone-fill parity (`crates/zone-filler/PARITY.md`): `stonehenge`
+  GND 11.33% to 0.15% of the area, `issue5093`'s `/right/GND` 776.56% to 1.49%; 198 of the 208 fills of the 17 QA boards are within 1% of kicad-cli's area and 189 within 0.5%.
+- Left: Explode and Recombine (Edit Pad as Graphic Shapes, Finish Pad Edit), padstacks (a pad has one shape for all layers; no `remove_unused_layers`),
+  a custom pad's proxy spokes, `gr_rect` corner radius and arcs inside `gr_poly`, the microwave arc stub and function shape, and the instant 3D scene (`eda_drc::pad_shape::pad_outline` and the state's `pads[].outline` are there for it).
+- Measured: 40 new Rust tests (five of them slow-tier, with kicad-cli) and 25 new
+  `node --test` cases; `web/studio/e2e/pad-shapes.check.js` runs 6 scenarios through `window.__eda` on a served board.
 - Port from: `pcbnew/pad.cpp`, `pcbnew/tools/pad_tool.cpp` (`EditPad`), `pcbnew/dialogs/dialog_pad_properties.cpp`, `pcbnew/zone_filler.cpp` (`addKnockout`, custom pad parts), `pcbnew/microwave/microwave_polygon.cpp`.
 
 ### 32. Design blocks
@@ -553,7 +565,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - **Simulator, in scope and last**: 29 rows, now item 34 and package P21.
 - **Deferred until the IR has the item** (reasons in `ui-parity-missing.json`, re-checked in `STALE-REASONS.md`): design blocks (23 rows, item 32), generators (9), tables (18), PCB text boxes, barcodes, points,
   reference images and hatch fills, schematic images, the symbol text box (item 24), DXF and SVG import (4, item 28), derived symbols, alternate pin functions, design variants (3), padstacks (Remove Unused Pads),
-  embedded files (4: zstd, and no new dependency), custom pads (4, item 31, in flight). The autoplacer (2) is declined: placement runs through `eda board` behind the placement gates. The Footprint and Symbol
+  embedded files (4: zstd, and no new dependency), custom pads (item 31: Explode, Recombine and the microwave shapes are left). The autoplacer (2) is declined: placement runs through `eda board` behind the placement gates. The Footprint and Symbol
   Viewer windows (5) are not planned; the editors' library trees browse.
 - **Internal events** (13 rows) have nothing to wire.
 
@@ -568,8 +580,8 @@ Each row below is measured against kicad-cli in `crates/zone-filler/PARITY.md` (
 | `Fill` | ported (`orchestrate.rs::fill_board`): zones fill from the highest priority down (`ZONE::HigherPriority`: teardrop, priority, then the id where KiCad uses the UUID) and each is knocked out by the filled copper of the zones above it, not their outlines; the iterative refill. Not ported: the dependency waves run in parallel (one sorted pass here) and a zone on several layers (one layer per zone) |
 | `FillIsolatedIslandsMap` (`islands.rs`) | ported: an island is a fragment whose same-net copper cluster, through pads, tracks, vias and the zones of other layers, holds no pad; `ISLAND_REMOVAL_MODE` always / never / below area; islands mostly outside the board are dropped last |
 | `refillZoneFromCache` | ported (`lib.rs::refill_zone_from_cache`): the pre-knockout fill is cached, and a zone that a higher-priority zone gave space back to is refilled from the cache against the fills as they now are |
-| `addKnockout` | partial: no custom-pad convex-hull mode |
-| `knockoutThermalReliefs`, `buildThermalSpokes` (`spokes.rs`) | ported: `DRC_ENGINE::EvalZoneConnection` (a pad's own connection over its footprint's over the zone's; "PTH only" thermal-relieves plated holes), the pad's relief gap and spoke width over the zone's (the width at least the zone's minimum and at most the pad's smaller side), the spoke angle (90 degrees for oval and rectangular pads, 45 otherwise, or the pad's own), spokes turned with the pad, circles built at 0 degrees and turned, the spoke ends, the test point and the mutual overlap, so only spokes that reach copper stay. Not ported: custom pads (their proxy spokes) |
+| `addKnockout` | ported (2026-10-10): a pad is knocked out as its shape (`PAD::GetEffectiveShape`: a trapezoid, a chamfered rectangle, a custom pad's anchor and primitives) and a custom pad with `(clearance convexhull)` as the hull of its shapes (`CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`) |
+| `knockoutThermalReliefs`, `buildThermalSpokes` (`spokes.rs`) | ported: `DRC_ENGINE::EvalZoneConnection` (a pad's own connection over its footprint's over the zone's; "PTH only" thermal-relieves plated holes), the pad's relief gap and spoke width over the zone's (the width at least the zone's minimum and at most the pad's smaller side), the spoke angle (90 degrees for oval and rectangular pads, 45 otherwise, or the pad's own), spokes turned with the pad, circles built at 0 degrees and turned, the spoke ends, the test point and the mutual overlap, so only spokes that reach copper stay; they start from the box of the pad's copper (`dummy_pad.GetBoundingBox`), a custom pad's too. Not ported: a custom pad's proxy spokes (`gr_vector`) |
 | `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions; **the board edge** (`copper_edge_clearance` from every Edge.Cuts item as `knockoutGraphicClearance` takes it: an arc's curve, a circle's ring, a cutout's rim, a solid shape's inside; `FillInput::edge_cuts`); a pad's or footprint's own clearance override replaces the net class's and zone's for that pad, floored at the board minimum (`DRC_ENGINE::EvalRules`) |
 | `ZONE::BuildSmoothedPoly` (`smoothed.rs`, `corner.rs`) | ported: same-net zones merged, the board outline (`GetBoardPolygonOutlines`: every outline with its cutouts, applied only when it is well-formed, `m_brdOutlinesValid`; `crates/drc/src/outline.rs`), the minimum-width apron, and the chamfer and fillet corner smoothing |
 | `connect_nearby_polys` | missing |
@@ -616,7 +628,7 @@ Rules that keep them apart (each is how an earlier package did it):
 
 Waves:
 
-- **Running now** (2026-10-10): P7 (`task-custom-pads`), P5a (`task-router-drag`), P6 (`task-pcb-edit-details`). P3 and P4 are merged; their sections list what is left.
+- **Running now** (2026-10-10): P5a (`task-router-drag`), P6 (`task-pcb-edit-details`), P8 (`task-files-in`). P3, P4 and P7 are merged; their sections list what is left.
 - **Next free slot**: P1 -- P2, P14, P16, P17 and the Footprint Checker and Compare Footprint stand on a footprint that carries its graphics -- and P5 part 1, which shares no hub with anything.
 - **After P1 has merged its IR**: P2 (its assignment overlay holds a definition with graphics). Step 1 of P2, the rename, can start sooner if P4 has merged its Annotate.
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
@@ -636,7 +648,7 @@ Waves:
 | P4 hierarchy (in flight) |  | x | x | x | (x) | x | x |  | x |  |  |  |  |
 | P5 router |  |  |  |  |  | (x) | (x) | (x) |  |  | x |  |  |
 | P6 PCB editing details |  | x |  |  | (x) | x | x | x |  |  |  |  |  |
-| P7 custom pads (in flight) | x |  |  | (x) | x |  |  | x |  | x | (x) | x |  |
+| P7 custom pads (merged) | x |  |  | (x) | x |  |  | x |  | x | (x) | x |  |
 | P8 files in |  | x |  | x | x | x | (x) |  |  |  |  |  | (x) |
 | P9 Board Setup, rule editor | x | x |  |  | x | (x) | (x) |  |  |  |  |  |  |
 | P10 schematic details | (x) | x |  |  |  | x | x |  | x |  |  |  |  |
@@ -725,7 +737,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/tools/{edit_tool,edit_tool_move_fct,pcb_control,pcb_selection_tool,pcb_group_tool,drawing_tool}.cpp`, `common/dialogs/dialog_paste_special.cpp`, `pcbnew/dialogs/{dialog_cleanup_tracks_and_vias,dialog_global_edit_*}.cpp`.
 - Conflicts: P5 (`Canvas.tsx`), P16 (`Canvas.tsx`, `painter.ts`), P10 and P11 (`store`, `runner`: hunks).
 
-### P7. Custom-shape pads (item 31; also 13, 19). Size L. Rank 7. **In flight: `task-custom-pads`, no commit yet.**
+### P7. Custom-shape pads (item 31; also 13, 19). Size L. Rank 7. **Merged 2026-10-10 (`task-custom-pads`); item 31 lists what is left.**
 - Why: a custom pad imports as its anchor, a trapezoid or chamfered pad is a rectangle; zone fill is wrong around them (766% and 11% on two QA zones); four rows wait.
 - Files: `crates/model/src/{footprint.rs,ir.rs}` (`Pad` and `LibraryPad`: anchor, primitives, trapezoid and chamfer), `crates/kicad/src/{footprint_lib,footprint_import,import,pcb}.rs` (`(primitives ..)` both ways),
   `crates/zone-filler` (`addKnockout` custom-pad mode, thermal proxy spokes), `crates/pns/src/from_ir.rs`, `crates/drc/src/board.rs` (`placed_pad_copper`), `components/BoardPadPropertiesDialog.tsx`,

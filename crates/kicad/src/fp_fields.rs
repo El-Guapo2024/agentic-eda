@@ -123,19 +123,16 @@ pub(crate) fn write_attr(out: &mut String, a: &FootprintAttrs) {
     }
 }
 
-/// What a pad edit adds to a pad's text: the shape offset, which `format( PAD )` puts inside the `(drill ..)` token, and the
-/// margins, which follow the net.
+/// What a pad edit adds to a pad's text: the margins, which follow the net. (The shape offset is the pad's own, written inside the
+/// `(drill ..)` token by `crate::pad_shape`.)
 pub(crate) struct PadText {
-    /// `(offset x y)` in the file's pad frame (x negated on the bottom side, where the whole frame is mirrored).
-    pub offset: Option<(Um, Um)>,
     /// ` (solder_mask_margin ..) (solder_paste_margin ..) (solder_paste_margin_ratio ..)`, whichever are set. The pad's `(clearance ..)`
     /// and its zone connection are written by the caller from `Design::pad_zone_facts`.
     pub margins: String,
 }
 
-pub(crate) fn pad_text(edit: Option<&PadEdit>, side: Side) -> PadText {
-    let Some(e) = edit else { return PadText { offset: None, margins: String::new() } };
-    let offset = e.offset.filter(|o| o.x != 0 || o.y != 0).map(|o| (if side == Side::Bottom { -o.x } else { o.x }, o.y));
+pub(crate) fn pad_text(edit: Option<&PadEdit>) -> PadText {
+    let Some(e) = edit else { return PadText { margins: String::new() } };
     let mut margins = String::new();
     if let Some(m) = e.solder_mask_margin {
         write!(margins, " (solder_mask_margin {})", mm(m)).unwrap();
@@ -146,7 +143,7 @@ pub(crate) fn pad_text(edit: Option<&PadEdit>, side: Side) -> PadText {
     if let Some(r) = e.solder_paste_margin_ratio {
         write!(margins, " (solder_paste_margin_ratio {})", fmt_mm_f(r)).unwrap();
     }
-    PadText { offset, margins }
+    PadText { margins }
 }
 
 // ---------------------------------------------------------------------------------------------------------------- reading
@@ -408,22 +405,22 @@ mod tests {
     }
 
     #[test]
-    fn a_pads_offset_and_margins_are_written_and_read_back_on_either_side() {
+    fn a_pads_margins_are_written_and_read_back_and_its_offset_is_read_on_either_side() {
         let mut e = PadEdit::none("1", 1);
         e.offset = Some(Point { x: 300, y: -100 });
         e.solder_mask_margin = Some(50);
         e.solder_paste_margin = Some(-30);
         e.solder_paste_margin_ratio = Some(-0.1);
+        let t = pad_text(Some(&e));
+        assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1)");
         for side in [Side::Top, Side::Bottom] {
-            let t = pad_text(Some(&e), side);
-            let (ox, oy) = t.offset.unwrap();
-            assert_eq!((ox, oy), (if side == Side::Bottom { -300 } else { 300 }, -100));
-            assert_eq!(t.margins, " (solder_mask_margin 0.05) (solder_paste_margin -0.03) (solder_paste_margin_ratio -0.1)");
-            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(oy), t.margins));
+            // The offset in the file's frame: x negated on the bottom side, where the whole frame is mirrored.
+            let ox = if side == Side::Bottom { -300 } else { 300 };
+            let node = parse(&format!("(pad \"1\" smd rect (at 0 0) (size 1 1) (drill (offset {} {})){})", mm(ox), mm(-100), t.margins));
             let back = parse_pad_extras(&node, side, 20241229);
             assert_eq!((back.offset, back.solder_mask_margin, back.solder_paste_margin, back.solder_paste_margin_ratio), (e.offset, e.solder_mask_margin, e.solder_paste_margin, e.solder_paste_margin_ratio), "{side:?}");
         }
-        assert!(pad_text(None, Side::Top).margins.is_empty());
+        assert!(pad_text(None).margins.is_empty());
     }
 
     #[test]

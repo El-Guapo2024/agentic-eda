@@ -13,7 +13,7 @@
 // `BOARD_COMMIT::Push( "Edit Properties" )`.
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { toCmdDimension } from "./dimensionConvert";
 import { editAttrsCmd, editFieldCmd, editPadCmd, fieldById, localAngleOf } from "./fpFields";
@@ -600,14 +600,18 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
       owner: "PAD",
       name: "Pad Shape",
       kind: "enum",
+      // `ENUM_MAP<PAD_SHAPE>` of `PAD_DESC`: all seven shapes (the dialog edits the delta, the chamfer and the basic shapes they need).
       choices: () => [
         { label: "Circle", value: "circle" },
         { label: "Rectangle", value: "rect" },
         { label: "Oval", value: "oval" },
+        { label: "Trapezoid", value: "trapezoid" },
         { label: "Rounded rectangle", value: "round_rect" },
+        { label: "Chamfered rectangle", value: "chamfered_rect" },
+        { label: "Custom", value: "custom" },
       ],
       get: (i) => padShape(i.pad!),
-      set: (i, v) => (padShape(i.pad!) === v ? [] : edit(i, { shape: String(v) as "rect" | "round_rect" | "circle" | "oval" })),
+      set: (i, v) => (padShape(i.pad!) === v ? [] : edit(i, { shape: String(v) as PadShapeName })),
     },
     PAD
   );
@@ -635,8 +639,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   };
   sizeRow("Size X", 0);
   sizeRow("Size Y", 1);
-  // `hasRoundRadius`: only a rounded rectangle has a radius that means anything.
-  const hasRadius = (i: PcbItem): boolean => padShape(i.pad!) === "round_rect";
+  // `hasRoundRadius` (`PAD_UTILS::PadHasMeaningfulRoundingRadius`): a rounded rectangle and a chamfered one have a radius that means anything.
+  const hasRadius = (i: PcbItem): boolean => padShape(i.pad!) === "round_rect" || padShape(i.pad!) === "chamfered_rect";
   const ratio = (p: Pad): number => p.ratio ?? 0.25;
   add(
     {

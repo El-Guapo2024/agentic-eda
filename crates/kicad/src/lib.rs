@@ -22,6 +22,7 @@ use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
 mod fp_fields;
+mod pad_shape;
 mod pcb;
 mod pcb_items;
 mod clipboard;

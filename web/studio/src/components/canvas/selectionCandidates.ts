@@ -14,6 +14,7 @@
 // user clicked on a small item within a much larger one...").
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
 import { padIds } from "../../kicad-port/pcbItems";
+import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
@@ -101,6 +102,8 @@ export function textBoundingBoxRotated(f: FieldInfo): { x0: number; y0: number; 
 
 /** How far (um) `(x, y)` is outside a pad -- 0 or less on it: a round pad is a circle or a stadium, any other a box. */
 export function padHitDistance(pad: Pad, x: number, y: number): number {
+  // A trapezoid, a chamfered rectangle or a custom pad is the contours of its copper (`PAD::HitTest` asks the effective shape, not the box).
+  if (pad.outline?.length) return outlineDistance(pad.outline, x, y);
   const hw = pad.w / 2;
   const hh = pad.h / 2;
   if (pad.round) {

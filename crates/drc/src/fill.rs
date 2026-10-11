@@ -31,18 +31,18 @@ fn pt(p: Point) -> Point64 {
     Point64::new(p.x, p.y)
 }
 
-fn convert_shape(s: &DrcShape) -> FillShape {
+/// The DRC shape as the zone filler's.
+pub fn convert_shape(s: &DrcShape) -> FillShape {
     match s {
         DrcShape::Circle { c, r } => FillShape::Circle { c: pt(*c), r: *r },
         DrcShape::Stadium { a, b, r } => FillShape::Stadium { a: pt(*a), b: pt(*b), r: *r },
         DrcShape::Rect { x0, y0, x1, y1 } => FillShape::Rect { x0: *x0, y0: *y0, x1: *x1, y1: *y1 },
         DrcShape::RoundRect { x0, y0, x1, y1, r } => FillShape::RoundRect { x0: *x0, y0: *y0, x1: *x1, y1: *y1, r: *r },
         DrcShape::Polygon { pts } => FillShape::Polygon { pts: pts.iter().map(|&p| pt(p)).collect() },
-        // Only ever a `SilkItem` shape (stroked text) in this workspace's
-        // model -- never a pad/track/via's copper or hole -- so this arm is
-        // unreachable in practice; an empty polygon is a harmless knockout
-        // no-op if it's ever hit.
-        DrcShape::Strokes { .. } => FillShape::Polygon { pts: Vec::new() },
+        // The arc or ring of a custom pad's primitive (stroked text never reaches here: it is a `FillTrack`).
+        DrcShape::Strokes { segs, r } => FillShape::Strokes { segs: segs.iter().map(|s| (pt(s.a), pt(s.b))).collect(), r: *r },
+        // A custom pad: its anchor and each primitive.
+        DrcShape::Compound { parts } => FillShape::Compound { parts: parts.iter().map(convert_shape).collect() },
     }
 }
 
@@ -51,14 +51,19 @@ fn convert_shape(s: &DrcShape) -> FillShape {
 fn fill_pad(p: &crate::board::DrcPad) -> FillPad {
     use eda_model::{PadKind, PadShape};
     let circular = p.shape == PadShape::Circle || (p.shape == PadShape::Oval && p.size.0 == p.size.1);
-    // `PADSTACK::DefaultThermalSpokeAngleForShape`: 90 degrees for an oval or (rounded) rectangle, 45 for a circle.
-    let default_angle = if matches!(p.shape, PadShape::Oval | PadShape::Rect | PadShape::RoundRect) { 90_000 } else { 45_000 };
+    // The box the spokes are cut from (`dummy_pad.GetBoundingBox`): the pad's size, or for a trapezoid or custom pad the box of its
+    // copper, which need not be centred on the pad's shape.
+    let (size, box_offset) = match p.spoke_box {
+        Some((x0, y0, x1, y1)) => ((x1 - x0, y1 - y0), ((x0 + x1) / 2, (y0 + y1) / 2)),
+        None => (p.size, (0, 0)),
+    };
     FillPad {
         net: p.net.clone(),
         layers: p.layers.clone(),
         copper: convert_shape(&p.copper),
         hole: p.hole.as_ref().map(convert_shape),
-        geometry: Some(PadGeometry { center: pt(p.center), size: p.size, circular, default_spoke_angle_mdeg: default_angle, orientation_mdeg: p.orientation_mdeg }),
+        // Spokes start from the centre of the pad's shape (`PAD::ShapePos`), not from its hole.
+        geometry: Some(PadGeometry { center: pt(p.shape_pos), size, circular, default_spoke_angle_mdeg: p.default_spoke_angle_mdeg, orientation_mdeg: p.orientation_mdeg, box_offset }),
         clearance_override: p.zone.clearance(),
         zone_connection: p.zone.connection,
         footprint_zone_connection: p.zone.footprint_connection,
@@ -66,6 +71,7 @@ fn fill_pad(p: &crate::board::DrcPad) -> FillPad {
         spoke_width: p.zone.thermal_spoke_width,
         spoke_angle_mdeg: p.zone.thermal_spoke_angle_mdeg.map(i64::from),
         plated_through_hole: p.kind == PadKind::ThroughHole,
+        custom_convex_hull: p.custom_convex_hull,
     }
 }
 

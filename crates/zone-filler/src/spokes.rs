@@ -21,8 +21,9 @@
 //! * a circular pad, or a square oval, or a via (default angle 45 degrees)
 //!   builds its four spokes at 0 degrees and rotates them afterwards, because
 //!   the box of a circle overshoots near a 45 degree ray;
-//! * a custom pad's proxy-segment spokes are not here: this workspace has no
-//!   custom pad shape.
+//! * a custom pad's proxy-segment spokes (`gr_vector`) are not here: its spokes
+//!   come from the box of its copper (`dummy_pad.GetBoundingBox` of
+//!   `buildThermalSpokes`) like any other pad's.
 
 use eda_clipper2::{Point64, PI};
 use eda_shape_poly_set::{LineChain, ShapePolySet};
@@ -52,6 +53,9 @@ pub struct SpokeSource {
     pub thermal_gap: i64,
     /// The spoke width, already clamped to the pad and checked against the zone's minimum thickness.
     pub spoke_width: i64,
+    /// Where the `size` box is centred from `position` before the orientation is applied (`box.GetCenter()` of
+    /// `buildSpokesFromOrigin`): `(0, 0)` but for a pad whose bounding box is not centred on its shape.
+    pub box_offset: (i64, i64),
 }
 
 /// `KiROUND`: round half away from zero.
@@ -150,7 +154,7 @@ pub fn build_spokes(src: &SpokeSource, zone_half_width: i64, epsilon: i64) -> Ve
             let outline: LineChain = spoke
                 .into_iter()
                 .map(|(x, y)| {
-                    let (rx, ry) = rotate_point(x, y, src.orientation_mdeg);
+                    let (rx, ry) = rotate_point(x + src.box_offset.0, y + src.box_offset.1, src.orientation_mdeg);
                     Point64::new(src.position.x + rx, src.position.y + ry)
                 })
                 .collect();
@@ -284,7 +288,7 @@ mod tests {
     use super::*;
 
     fn src(circular: bool, angle: i64, orientation: i64) -> SpokeSource {
-        SpokeSource { position: Point64::new(1000, 2000), size: (1000, 600), circular, angle_mdeg: angle, orientation_mdeg: orientation, thermal_gap: 200, spoke_width: 300 }
+        SpokeSource { position: Point64::new(1000, 2000), size: (1000, 600), circular, angle_mdeg: angle, orientation_mdeg: orientation, thermal_gap: 200, spoke_width: 300, box_offset: (0, 0) }
     }
 
     #[test]
@@ -317,7 +321,7 @@ mod tests {
 
     #[test]
     fn a_circular_pad_defaults_to_the_x_shape() {
-        let s = SpokeSource { position: Point64::new(0, 0), size: (1000, 1000), circular: true, angle_mdeg: 45_000, orientation_mdeg: 0, thermal_gap: 200, spoke_width: 300 };
+        let s = SpokeSource { position: Point64::new(0, 0), size: (1000, 1000), circular: true, angle_mdeg: 45_000, orientation_mdeg: 0, thermal_gap: 200, spoke_width: 300, box_offset: (0, 0) };
         let spokes = build_spokes(&s, 125, 5);
         for sp in &spokes {
             let (x, y) = (sp.test_point.x, sp.test_point.y);

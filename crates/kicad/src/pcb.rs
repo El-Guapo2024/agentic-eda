@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
-use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, PadShape, Part};
+use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, Part};
 
 use crate::fp_fields::{pad_text, write_attr, write_fields, FpExtra};
 use crate::pcb_items::{write_dimension, write_groups, write_zone, DimensionArgs, ZoneArgs};
@@ -723,7 +723,7 @@ pub(crate) fn write_footprint(
             *n += 1;
             *n
         };
-        let pad_extra = pad_text(extra.edit.and_then(|e| e.pad(&pad.number, nth)), fp.side);
+        let pad_extra = pad_text(extra.edit.and_then(|e| e.pad(&pad.number, nth)));
         // Our local frame is the part seen from the top; a bottom-side
         // part's x is mirrored before it is rotated (footprint::to_board,
         // which the placer, router and gates all go through). KiCad
@@ -742,12 +742,9 @@ pub(crate) fn write_footprint(
             PadKind::ThroughHole => "thru_hole",
             PadKind::NonPlatedHole => "np_thru_hole",
         };
-        let shape = match pad.shape {
-            PadShape::Rect => "rect",
-            PadShape::RoundRect => "roundrect",
-            PadShape::Circle => "circle",
-            PadShape::Oval => "oval",
-        };
+        let shape = crate::pad_shape::shape_token(pad.shape);
+        // The delta, the offset, the corners and a custom pad's primitives (`PCB_IO_KICAD_SEXPR::format( const PAD* )`).
+        let shape_text = crate::pad_shape::write_pad_shape(pad.shape, pad.roundrect_ratio, &pad.ext, fp.side);
         // Pad numbers repeat by design (a connector's shield tab, several
         // physical pads on one pin), so the number alone cannot make a
         // unique uuid; the position can, since two pads of one footprint
@@ -759,9 +756,8 @@ pub(crate) fn write_footprint(
         let pad_rot_deg = crate::pad_file_angle(fp.side, fp.rot, pad.rot);
         write!(out, "\t\t(pad {} {kind} {shape} (at {px} {py} {pad_rot_deg})", sexpr_str(&pad.number)).unwrap();
         write!(out, " (size {wmm} {hmm})").unwrap();
-        if pad.shape == PadShape::RoundRect {
-            write!(out, " (roundrect_rratio {})", fmt_mm_f(pad.roundrect_ratio.unwrap_or(0.25))).unwrap();
-        }
+        out.push_str(&shape_text.delta);
+        out.push_str(&shape_text.corners);
         match pad.kind {
             PadKind::ThroughHole | PadKind::NonPlatedHole => {
                 // Footprint::validate guarantees a through-hole/non-plated
@@ -769,7 +765,7 @@ pub(crate) fn write_footprint(
                 // shipped a different hole than the circuit-json writer
                 // invented.
                 // `(drill D)` / `(drill oval W H)`, with the copper shape's offset inside it (`format( PAD )`).
-                let offset = pad_extra.offset.map(|(ox, oy)| format!(" (offset {} {})", mm(ox), mm(oy))).unwrap_or_default();
+                let offset = shape_text.offset.map(|(ox, oy)| format!(" (offset {} {})", mm(ox), mm(oy))).unwrap_or_default();
                 match (pad.drill, pad.drill_slot) {
                     (Some(d), _) => write!(out, " (drill {}{offset})", mm(d)).unwrap(),
                     (None, Some((w, h))) => write!(out, " (drill oval {} {}{offset})", mm(w), mm(h)).unwrap(),
@@ -778,7 +774,7 @@ pub(crate) fn write_footprint(
                 write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
             }
             PadKind::Smd => {
-                if let Some((ox, oy)) = pad_extra.offset {
+                if let Some((ox, oy)) = shape_text.offset {
                     write!(out, " (drill (offset {} {}))", mm(ox), mm(oy)).unwrap();
                 }
                 let (cu, paste, mask) = if pad.on_back(fp.side) {
@@ -812,7 +808,7 @@ pub(crate) fn write_footprint(
             write!(out, " (thermal_bridge_width {})", mm(w)).unwrap();
         }
         if let Some(a) = zf.thermal_spoke_angle_mdeg {
-            let default_mdeg: eda_model::ir::Millideg = if pad.shape == PadShape::Circle { 45_000 } else { 90_000 };
+            let default_mdeg = pad.default_spoke_angle_mdeg() as eda_model::ir::Millideg;
             if a != default_mdeg {
                 write!(out, " (thermal_bridge_angle {})", fmt_mm_f(a as f64 / 1000.0)).unwrap();
             }
@@ -820,6 +816,7 @@ pub(crate) fn write_footprint(
         if let Some(g) = zf.thermal_gap {
             write!(out, " (thermal_gap {})", mm(g)).unwrap();
         }
+        out.push_str(&shape_text.custom);
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
@@ -1111,7 +1108,7 @@ mod tests {
     #[test]
     fn the_fields_attributes_and_pad_edits_of_a_footprint_are_written_and_read_back_by_the_importer() {
         use eda_model::fp_edit::{FieldLayout, FootprintAttrs, FootprintEdit, FootprintKind, PadEdit, UserField};
-        let (mut design, model) = fixture();
+        let (mut design, mut model) = fixture();
         let mut reference = FieldLayout::new(Point { x: 1_500, y: -2_500 }, "F.Fab");
         reference.size = (1_200, 900);
         reference.thickness = 180;
@@ -1131,6 +1128,9 @@ mod tests {
         u1.fields = vec![UserField { name: "Vendor".into(), text: "ACME".into(), layout: vendor.clone() }];
         u1.attrs = Some(FootprintAttrs { kind: FootprintKind::Unspecified, board_only: false, exclude_from_pos_files: true, exclude_from_bom: true, dnp: true, allow_missing_courtyard: true });
         u1.set_pad(pad1.clone());
+        // As the board's loader folds the pad edits into the instance's own footprint (`fold_footprint_edits`).
+        let library = model.library_footprint_of(model.part("U1").unwrap()).unwrap();
+        model.instance_footprints.insert("U1".into(), eda_model::fp_edit::patched_footprint(&library, &u1.pads));
         design.drawings = Some(eda_model::ir::DrawingsSection { footprint_edits: vec![u1], ..Default::default() });
 
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -1270,7 +1270,7 @@ mod tests {
     #[test]
     fn pad_and_footprint_zone_overrides_are_written_and_read_back() {
         use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
-        let (mut design, model) = fixture();
+        let (mut design, mut model) = fixture();
         design.drawings = Some(eda_model::ir::DrawingsSection {
             zone_overrides: vec![FootprintZoneOverrides {
                 id: "U1".into(),
@@ -1299,7 +1299,7 @@ mod tests {
     fn one_pad_form_carries_the_pad_edit_and_the_zone_overrides_and_both_are_read_back() {
         use eda_model::fp_edit::{FootprintAttrs, FootprintEdit, FootprintKind, PadEdit};
         use eda_model::ir::{FootprintZoneFacts, FootprintZoneOverrides, PadConnection, PadZoneOverride};
-        let (mut design, model) = fixture();
+        let (mut design, mut model) = fixture();
         let mut pad1 = PadEdit::none("1", 1);
         pad1.offset = Some(Point { x: 200, y: 100 });
         pad1.solder_mask_margin = Some(40);
@@ -1307,6 +1307,8 @@ mod tests {
         let mut u1 = FootprintEdit::new("U1");
         u1.attrs = Some(FootprintAttrs { kind: FootprintKind::Smd, dnp: true, ..Default::default() });
         u1.set_pad(pad1.clone());
+        let library = model.library_footprint_of(model.part("U1").unwrap()).unwrap();
+        model.instance_footprints.insert("U1".into(), eda_model::fp_edit::patched_footprint(&library, &u1.pads));
         design.drawings = Some(eda_model::ir::DrawingsSection {
             footprint_edits: vec![u1],
             zone_overrides: vec![FootprintZoneOverrides {

@@ -1882,8 +1882,8 @@ mod tests {
         let fp = Footprint {
             name: "2PAD".into(),
             pads: vec![
-                Pad { opposite_side: false, number: "1".into(), at: (-1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
-                Pad { opposite_side: false, number: "2".into(), at: (1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
+                Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (-1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
+                Pad { opposite_side: false, ext: Default::default(), number: "2".into(), at: (1000, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None },
             ],
             courtyard: Some((2000, 1000)),
             model: None,
@@ -3677,6 +3677,7 @@ mod tests {
             trapezoid_delta: None,
             chamfer_ratio: None,
             chamfer_corners: eda_model::ir::ChamferCorners::default(),
+            custom: None,
             layers: vec!["F.Cu".into()],
             clearance_override: None,
             thermal_gap_override: None,

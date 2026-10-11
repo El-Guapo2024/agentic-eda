@@ -96,7 +96,7 @@ fn a_pad_turned_forty_five_degrees_turns_its_spokes_with_it() {
     // The same relief, but the pad is turned 45 degrees: its spokes run along the diagonals, so the gap is bridged
     // on the diagonal and open on the axes.
     let pad = FillPad {
-        geometry: Some(PadGeometry { center: Point64::new(1000, 1000), size: (400, 400), circular: false, default_spoke_angle_mdeg: 90_000, orientation_mdeg: 45_000 }),
+        geometry: Some(PadGeometry { center: Point64::new(1000, 1000), size: (400, 400), circular: false, default_spoke_angle_mdeg: 90_000, orientation_mdeg: 45_000, box_offset: (0, 0) }),
         ..gnd_pad()
     };
     let fill = fill_with(&relief_zone(), pad);
@@ -251,4 +251,72 @@ fn a_keepout_on_a_different_layer_does_not_affect_this_fill() {
 
     let fill = fill_zone(&zone, "F.Cu", &input, no_clearance, MAX_ERROR);
     assert!(poly_set_contains_pt(&fill, Point64::new(500, 500)), "a B.Cu keepout must not touch an F.Cu fill");
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Custom pads: a compound of the anchor and every basic shape (`PAD::GetEffectiveShape`).
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// An L-shaped custom pad of another net: a 400 um square anchor at (1000, 1000) and an arm of a 200 um line from it 1 mm to the right.
+fn l_pad(net: &str) -> FillPad {
+    let anchor = Shape::Rect { x0: 800, y0: 800, x1: 1200, y1: 1200 };
+    let arm = Shape::Stadium { a: Point64::new(1000, 1000), b: Point64::new(2000, 1000), r: 100 };
+    FillPad { net: Some(net.into()), layers: vec!["F.Cu".into()], copper: Shape::Compound { parts: vec![anchor, arm] }, ..Default::default() }
+}
+
+#[test]
+fn the_arm_of_a_custom_pad_of_another_net_knocks_the_zone_out_as_the_anchor_does() {
+    let zone = Zone { pad_connection: PadConnection::Full, ..test_zone("GND", rect_outline(0, 0, 3000, 2000)) };
+    let fill = fill_zone(&zone, "F.Cu", &FillInput { pads: vec![l_pad("SIG")], ..Default::default() }, no_clearance, MAX_ERROR);
+    assert!(!copper(&fill, 1000, 1000), "the anchor is cleared");
+    assert!(!copper(&fill, 1800, 1000), "and so is the arm, a millimetre from it");
+    assert!(!copper(&fill, 1800, 1100), "its clearance round the arm's edge (the line is 200 wide, the clearance 20)");
+    assert!(copper(&fill, 1800, 1200), "but not farther than that");
+    assert!(copper(&fill, 2200, 1000), "nor past the arm's end");
+}
+
+#[test]
+fn a_custom_pad_with_the_convex_hull_option_clears_the_notch_of_its_shape_too() {
+    let zone = Zone { pad_connection: PadConnection::Full, ..test_zone("GND", rect_outline(0, 0, 3000, 2000)) };
+    // An L: the anchor and an arm going right, and a second arm going down: the notch between the arms is where the zone can come in.
+    let down = Shape::Stadium { a: Point64::new(1000, 1000), b: Point64::new(1000, 1900), r: 100 };
+    let mut pad = l_pad("SIG");
+    if let Shape::Compound { parts } = &mut pad.copper {
+        parts.push(down);
+    }
+    let by_outline = fill_zone(&zone, "F.Cu", &FillInput { pads: vec![pad.clone()], ..Default::default() }, no_clearance, MAX_ERROR);
+    assert!(copper(&by_outline, 1500, 1500), "the notch is copper of the zone when the clearance follows the shape's outline");
+    let hull = FillPad { custom_convex_hull: true, ..pad };
+    let by_hull = fill_zone(&zone, "F.Cu", &FillInput { pads: vec![hull], ..Default::default() }, no_clearance, MAX_ERROR);
+    assert!(!copper(&by_hull, 1500, 1500), "the convex hull's clearance takes the notch with it");
+    assert!(by_hull.area() < by_outline.area());
+}
+
+#[test]
+fn a_ring_pad_is_cleared_inside_and_outside_by_the_thermal_gap_and_bridged_by_its_spokes() {
+    // A ring of 200 um stroke at radius 1000 round (1500, 1000), on the zone's own net.
+    let n = 64;
+    let segs: Vec<(Point64, Point64)> = (0..n)
+        .map(|i| {
+            let a = |k: i32| std::f64::consts::TAU * k as f64 / n as f64;
+            let p = |k: i32| Point64::new(1500 + (1000.0 * a(k).cos()).round() as i64, 1000 + (1000.0 * a(k).sin()).round() as i64);
+            (p(i), p(i + 1))
+        })
+        .collect();
+    let ring = Shape::Strokes { segs, r: 100 };
+    let zone = Zone { pad_connection: PadConnection::Thermal, ..test_zone("GND", rect_outline(0, 0, 3000, 2000)) };
+    let pad = FillPad { net: Some("GND".into()), layers: vec!["F.Cu".into()], copper: ring, ..Default::default() };
+    let fill = fill_zone(&zone, "F.Cu", &FillInput { pads: vec![pad.clone()], ..Default::default() }, no_clearance, MAX_ERROR);
+    // Off the spokes' axes (30 degrees round the ring): the ring is the pad's own copper, with the thermal gap (200 um) cut on both sides of it.
+    let at = |r: f64| ((1500.0 + r * 30f64.to_radians().cos()).round() as i64, (1000.0 + r * 30f64.to_radians().sin()).round() as i64);
+    let (x, y) = at(1000.0);
+    assert!(!copper(&fill, x, y), "the ring itself is not zone copper");
+    let (x, y) = at(1150.0);
+    assert!(!copper(&fill, x, y), "the thermal gap outside it is open");
+    let (x, y) = at(850.0);
+    assert!(!copper(&fill, x, y), "so is the gap inside the ring");
+    let (x, y) = at(1400.0);
+    assert!(copper(&fill, x, y), "the zone is there beyond the gap");
+    // The ring is bridged where a spoke crosses it.
+    assert!(copper(&fill, 1500 + 1000, 1000), "a spoke crosses the ring on the axis");
 }

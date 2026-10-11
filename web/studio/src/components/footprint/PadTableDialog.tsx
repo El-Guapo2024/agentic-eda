@@ -4,8 +4,8 @@
 // ("Edit Pads"); Cancel leaves the footprint untouched (the C++ edits live and restores on cancel; here nothing is applied until OK).
 // A row that gets focus selects its pad on the canvas (`OnSelectCell`, `SetBrightened`).
 //
-// Not ported: the Connector / Aperture pad types (the footprint IR has plated, SMD and non-plated pads), a custom pad shape, and the "Pad->Die
-// Length / Delay" columns (the IR carries no pad-to-die data).
+// Not ported: the Connector / Aperture pad types (the footprint IR has plated, SMD and non-plated pads) and the "Pad->Die Length / Delay" columns
+// (the IR carries no pad-to-die data). A row set to "Custom shape" is the anchor alone until its basic shapes are drawn in Pad Properties.
 import { useEffect, useMemo, useState } from "react";
 import type { LibraryPad, LibraryPadShape, PadKind } from "../../api/types";
 import { useFpApi, useFpDispatch, useFpState } from "../../state/footprintEditorStore";
@@ -27,6 +27,7 @@ const SHAPE_OPTIONS: { value: LibraryPadShape; label: string }[] = [
   { value: "trapezoid", label: "Trapezoid" },
   { value: "round_rect", label: "Rounded rectangle" },
   { value: "chamfered_rect", label: "Chamfered rectangle" },
+  { value: "custom", label: "Custom shape" },
 ];
 
 /** A length cell that keeps what is being typed until it is committed (so "1." and "-" survive), and shows the value again when it changes underneath. */

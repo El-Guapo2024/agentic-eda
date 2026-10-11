@@ -14,8 +14,8 @@
 //! (chamfer <corners>)] [(rect_delta dx dy)] [(clearance c)] ..)`; a chamfered rectangle is written by KiCad
 //! as `roundrect` plus the chamfer tokens.
 
-use eda_model::footprint::PadKind;
-use eda_model::ir::{ChamferCorners, FootprintAttributes, FootprintField, LibraryFootprint, LibraryPad, LibraryPadShape, Point, Shape, Side, Text, TextJustify};
+use eda_model::footprint::{PadKind, PadShape};
+use eda_model::ir::{FootprintAttributes, FootprintField, LibraryFootprint, LibraryPad, LibraryPadShape, Point, Shape, Side, Text, TextJustify};
 
 use crate::import::mm_to_um;
 use crate::sexpr::{self, Sexpr};
@@ -80,7 +80,7 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     for child in root.iter().skip(2).filter_map(Sexpr::as_list) {
         match sexpr::tag(child) {
             Some("pad") => {
-                if let Some(pad) = parse_pad(child, &mut warnings) {
+                if let Some(pad) = parse_pad(child) {
                     fp.pads.push(pad);
                 }
             }
@@ -202,7 +202,7 @@ fn parse_text(item: &[Sexpr], content: &str) -> Option<Text> {
     })
 }
 
-fn parse_pad(pad: &[Sexpr], warnings: &mut Vec<String>) -> Option<LibraryPad> {
+fn parse_pad(pad: &[Sexpr]) -> Option<LibraryPad> {
     let number = sexpr::txt(pad, 1).unwrap_or("").to_string();
     let kind = match sexpr::txt(pad, 2).unwrap_or("") {
         "np_thru_hole" => PadKind::NonPlatedHole,
@@ -211,23 +211,16 @@ fn parse_pad(pad: &[Sexpr], warnings: &mut Vec<String>) -> Option<LibraryPad> {
     };
     let at = sexpr::find(pad, "at")?;
     let size = sexpr::find(pad, "size")?;
-    let rratio = sexpr::find(pad, "roundrect_rratio").and_then(|r| sexpr::num(r, 1));
-    let chamfer_ratio = sexpr::find(pad, "chamfer_ratio").and_then(|r| sexpr::num(r, 1));
-    let corners = sexpr::find(pad, "chamfer").map(|c| {
-        let toks: Vec<&str> = c.iter().skip(1).filter_map(Sexpr::text).collect();
-        ChamferCorners { top_left: toks.contains(&"top_left"), top_right: toks.contains(&"top_right"), bottom_left: toks.contains(&"bottom_left"), bottom_right: toks.contains(&"bottom_right") }
-    });
-    let shape = match sexpr::txt(pad, 3).unwrap_or("") {
-        "circle" => LibraryPadShape::Circle,
-        "oval" => LibraryPadShape::Oval,
-        "roundrect" if corners.is_some() || chamfer_ratio.is_some() => LibraryPadShape::ChamferedRect,
-        "roundrect" => LibraryPadShape::RoundRect,
-        "trapezoid" => LibraryPadShape::Trapezoid,
-        "custom" => {
-            warnings.push("custom-shaped pads were read as their rectangular anchor (the primitives were left out)".to_string());
-            LibraryPadShape::Rect
-        }
-        _ => LibraryPadShape::Rect,
+    // The shape with its delta, chamfer, primitives and offset (`parsePAD`); a `.kicad_mod` is always seen from the top.
+    let read = crate::pad_shape::read_pad_shape(pad, Side::Top);
+    let shape = match read.shape {
+        PadShape::Circle => LibraryPadShape::Circle,
+        PadShape::Oval => LibraryPadShape::Oval,
+        PadShape::RoundRect => LibraryPadShape::RoundRect,
+        PadShape::ChamferedRect => LibraryPadShape::ChamferedRect,
+        PadShape::Trapezoid => LibraryPadShape::Trapezoid,
+        PadShape::Custom => LibraryPadShape::Custom,
+        PadShape::Rect => LibraryPadShape::Rect,
     };
     let (drill, drill_slot) = match sexpr::find(pad, "drill") {
         Some(d) => {
@@ -248,16 +241,21 @@ fn parse_pad(pad: &[Sexpr], warnings: &mut Vec<String>) -> Option<LibraryPad> {
         number,
         at: Point { x: mm_to_um(sexpr::num(at, 1)?), y: mm_to_um(sexpr::num(at, 2)?) },
         size: (mm_to_um(sexpr::num(size, 1)?), mm_to_um(sexpr::num(size, 2)?)),
-        offset: point(pad, "offset").unwrap_or_default(),
+        // The offset lives inside `(drill ..)`; an older export of this app wrote it as a token of the pad.
+        offset: read.ext.offset.map(|(x, y)| Point { x, y }).or_else(|| point(pad, "offset")).unwrap_or_default(),
         shape,
         kind,
         drill,
         drill_slot,
         rot: crate::pad_rot_from_file(Side::Top, 0, sexpr::num(at, 3).unwrap_or(0.0)),
-        roundrect_ratio: if shape == LibraryPadShape::RoundRect { Some(rratio.unwrap_or(0.25)) } else { None },
-        trapezoid_delta: if shape == LibraryPadShape::Trapezoid { sexpr::find(pad, "rect_delta").map(|d| (mm_to_um(sexpr::num(d, 1).unwrap_or(0.0)), mm_to_um(sexpr::num(d, 2).unwrap_or(0.0)))) } else { None },
-        chamfer_ratio: if shape == LibraryPadShape::ChamferedRect { Some(chamfer_ratio.or(rratio).unwrap_or(0.2)) } else { None },
-        chamfer_corners: if shape == LibraryPadShape::ChamferedRect { corners.unwrap_or_default() } else { ChamferCorners::default() },
+        roundrect_ratio: match shape {
+            LibraryPadShape::RoundRect | LibraryPadShape::ChamferedRect => Some(read.roundrect_ratio.unwrap_or(0.25)),
+            _ => None,
+        },
+        trapezoid_delta: read.ext.trapezoid_delta,
+        chamfer_ratio: if shape == LibraryPadShape::ChamferedRect { Some(read.ext.chamfer_ratio.unwrap_or(0.2)) } else { None },
+        chamfer_corners: read.ext.chamfer_corners,
+        custom: read.ext.custom,
         layers: sexpr::find(pad, "layers").map(|l| l.iter().skip(1).filter_map(Sexpr::text).map(str::to_string).collect()).unwrap_or_default(),
         clearance_override: um("clearance"),
         thermal_gap_override: um("thermal_gap"),
@@ -271,6 +269,7 @@ fn parse_pad(pad: &[Sexpr], warnings: &mut Vec<String>) -> Option<LibraryPad> {
 mod tests {
     use super::*;
     use crate::export_kicad_mod;
+    use eda_model::ir::ChamferCorners;
 
     fn pad(number: &str, kind: PadKind, shape: LibraryPadShape, at: (i64, i64), size: (i64, i64)) -> LibraryPad {
         LibraryPad {
@@ -288,6 +287,7 @@ mod tests {
             trapezoid_delta: None,
             chamfer_ratio: None,
             chamfer_corners: ChamferCorners::default(),
+            custom: None,
             layers: vec![],
             clearance_override: None,
             thermal_gap_override: None,
@@ -426,9 +426,11 @@ mod tests {
         assert_eq!(chamfered.chamfer_ratio, Some(0.2));
         assert!(chamfered.chamfer_corners.top_left && chamfered.chamfer_corners.bottom_right && !chamfered.chamfer_corners.top_right);
         assert_eq!((by("3").shape, by("3").trapezoid_delta), (LibraryPadShape::Trapezoid, Some((0, 200))));
-        assert_eq!(by("4").shape, LibraryPadShape::Rect, "a custom pad keeps its rectangular anchor");
-        assert_eq!(parsed.warnings.len(), 2, "{:?}", parsed.warnings);
-        assert!(parsed.warnings.iter().any(|w| w.contains("custom")) && parsed.warnings.iter().any(|w| w.contains("zone")));
+        assert_eq!(by("4").shape, LibraryPadShape::Custom, "a custom pad keeps its anchor and its basic shapes");
+        let custom = by("4").custom.as_ref().expect("the custom pad's primitives");
+        assert_eq!((custom.anchor, custom.primitives.len()), (eda_model::footprint::PadAnchor::Rect, 1));
+        assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
+        assert!(parsed.warnings.iter().any(|w| w.contains("zone")));
     }
 
     #[test]
