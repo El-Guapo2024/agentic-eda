@@ -31,7 +31,8 @@ fn pt(p: Point) -> Point64 {
     Point64::new(p.x, p.y)
 }
 
-fn convert_shape(s: &DrcShape) -> FillShape {
+/// The DRC shape as the zone filler's.
+pub fn convert_shape(s: &DrcShape) -> FillShape {
     match s {
         DrcShape::Circle { c, r } => FillShape::Circle { c: pt(*c), r: *r },
         DrcShape::Stadium { a, b, r } => FillShape::Stadium { a: pt(*a), b: pt(*b), r: *r },

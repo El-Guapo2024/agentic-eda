@@ -185,6 +185,18 @@ pub fn polygons_outside(shape: &Shape, clearance: i64, max_error: i64) -> Vec<Li
     }
 }
 
+/// The shape as polygons with holes: the union of its outlines (`SHAPE_POLY_SET::Simplify`). A ring is an outline with a hole.
+pub fn union_polyset(shape: &Shape, max_error: i64) -> ShapePolySet {
+    let mut set = ShapePolySet::new();
+    for poly in exact_polygons(shape, max_error) {
+        if poly.len() >= 3 {
+            set.add_outline(poly);
+        }
+    }
+    set.simplify();
+    set
+}
+
 /// `BuildConvexHull` (`libs/kimath`, Andrew's monotone chain): the convex hull of the points of `outlines`, counter-clockwise.
 pub fn convex_hull(outlines: &[LineChain]) -> LineChain {
     let mut pts: Vec<(i64, i64)> = outlines.iter().flatten().map(|p| (p.x, p.y)).collect();

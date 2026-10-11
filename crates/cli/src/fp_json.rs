@@ -106,8 +106,12 @@ fn copper_centre(pad: &Pad, offset: Option<Point>) -> (Um, Um) {
 pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintInstance, placed: &PlacedPad, pad: &Pad, nth: u32, net: Option<&str>) -> Value {
     let _ = model;
     let edit: Option<&PadEdit> = design.footprint_edit(&fp.id).and_then(|e| e.pad(&pad.number, nth));
-    let offset = edit.and_then(|e| e.offset).filter(|o| o.x != 0 || o.y != 0);
+    // The offset the pad has (the library's or the one an edit made: the engine's pad already holds the edit).
+    let offset = pad.ext.offset.map(|(x, y)| Point { x, y }).filter(|o| o.x != 0 || o.y != 0);
     let centre = if offset.is_some() { to_board(fp, copper_centre(pad, offset)) } else { placed.center };
+    // A trapezoid, a chamfered rectangle or a custom pad is not given by its size: the studio draws and hit-tests the outline the DRC measures
+    // (`eda_drc::pad_shape::pad_outline`, the contours of the copper in micrometres on the board, holes included; fill them even-odd).
+    let outline: Option<Vec<Vec<[i64; 2]>>> = pad.has_complex_outline().then(|| eda_drc::pad_shape::pad_outline(fp, pad, placed.center, 5).into_iter().map(|c| c.into_iter().map(|p| [p.x, p.y]).collect()).collect());
     json!({
         "num": placed.number,
         "net": net,
@@ -124,6 +128,13 @@ pub(crate) fn pad_json(design: &Design, model: &ConstraintModel, fp: &FootprintI
         "size": [pad.size.0, pad.size.1],
         "rot": pad.rot as f64 / 1000.0,
         "ratio": pad.roundrect_ratio,
+        // A trapezoid's two deltas, a chamfered rectangle's ratio and corners, a custom pad's anchor, clearance option and basic shapes
+        // (the shapes of `eda_model::footprint::PadPrimitive`, in the pad's own frame).
+        "delta": pad.ext.trapezoid_delta.map(|(x, y)| json!([x, y])),
+        "chamfer_ratio": (pad.shape == PadShape::ChamferedRect).then(|| pad.ext.chamfer_ratio.unwrap_or(0.2)),
+        "chamfer_corners": (pad.shape == PadShape::ChamferedRect).then(|| serde_json::to_value(pad.ext.chamfer_corners).unwrap_or(Value::Null)),
+        "custom": pad.ext.custom.as_ref().and_then(|c| serde_json::to_value(c).ok()),
+        "outline": outline,
         "drill": pad.drill,
         "slot": pad.drill_slot.map(|(w, h)| json!([w, h])),
         "px": placed.center.x,

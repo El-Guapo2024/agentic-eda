@@ -391,6 +391,26 @@ impl Footprint {
                     bad(&format!("pad {}", p.number), format!("roundrect ratio {r} is outside 0.0..=0.5 (a fraction of the shorter side)"));
                 }
             }
+            // `PAD::doCheckPad`: a chamfer cannot be negative nor cut more than the side there is; a trapezoid cannot narrow a side past nothing.
+            if p.shape == PadShape::ChamferedRect {
+                let r = p.ext.chamfer_ratio.unwrap_or(0.2);
+                let adjacent = {
+                    let c = p.ext.chamfer_corners;
+                    (c.top_left && (c.top_right || c.bottom_left)) || (c.bottom_right && (c.top_right || c.bottom_left))
+                };
+                if r < 0.0 {
+                    bad(&format!("pad {}", p.number), "negative corner chamfer is not allowed".into());
+                } else if r > if adjacent { 0.5 } else { 1.0 } {
+                    bad(&format!("pad {}", p.number), "corner chamfer is too large".into());
+                }
+            }
+            if p.shape == PadShape::Trapezoid {
+                if let Some((dx, dy)) = p.ext.trapezoid_delta {
+                    if dx.abs() > p.size.1 || dy.abs() > p.size.0 {
+                        bad(&format!("pad {}", p.number), "trapezoid delta is too large".into());
+                    }
+                }
+            }
             if matches!(p.kind, PadKind::ThroughHole | PadKind::NonPlatedHole) {
                 // A non-plated hole is normal at size == drill (no annular
                 // ring by definition -- there is no copper); only a plated

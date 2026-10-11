@@ -118,6 +118,16 @@ fn read_primitives(prims: &[Sexpr], side: Side) -> Vec<PadPrimitive> {
         };
         let Some(mut shape) = graphic_shape(item, tag, |p| mirror_x(p, side)) else { continue };
         shape.set_layer(String::new());
+        if !proxy {
+            // `parsePCB_SHAPE`: a file without a `fill` token filled the shapes that had a zero width (a rectangle, a circle) and every
+            // polygon; and only a filled shape may have no width -- any other gets the default line, 0.1 mm.
+            if sexpr::find(item, "fill").is_none() && (matches!(shape, Shape::Polygon { .. }) || (matches!(shape, Shape::Rect { .. } | Shape::Circle { .. }) && shape.stroke_width() == 0)) {
+                shape.set_filled(true);
+            }
+            if shape.stroke_width() <= 0 && !shape.is_filled() {
+                shape.set_stroke_width(100);
+            }
+        }
         out.push(PadPrimitive { shape, proxy });
     }
     out

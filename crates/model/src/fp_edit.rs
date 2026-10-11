@@ -596,7 +596,7 @@ pub fn apply_pad_edit(pad: &mut Pad, e: &PadEdit) {
         pad.ext.trapezoid_delta = Some(d).filter(|d| *d != (0, 0));
     }
     if let Some(r) = e.chamfer_ratio {
-        pad.ext.chamfer_ratio = Some(r.clamp(0.0, 0.5));
+        pad.ext.chamfer_ratio = Some(r);
     }
     if let Some(c) = e.chamfer_corners {
         pad.ext.chamfer_corners = c;

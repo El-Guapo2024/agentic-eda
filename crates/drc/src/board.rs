@@ -157,8 +157,8 @@ pub struct DrcPad {
     pub default_spoke_angle_mdeg: i64,
     /// A custom pad a zone keeps clear of by its convex hull (`CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`).
     pub custom_convex_hull: bool,
-    /// The bounding box `(x0, y0, x1, y1)` of a trapezoid, chamfered or custom pad at orientation 0, position 0 and no offset: what its thermal
-    /// spokes are cut from. `None`: the pad's `size`.
+    /// The bounding box `(x0, y0, x1, y1)` of a trapezoid, chamfered or custom pad at orientation 0, position 0 and no offset, in the frame
+    /// of `orientation_mdeg` (the file's: mirrored for a bottom-side footprint): what its thermal spokes are cut from. `None`: the pad's `size`.
     pub spoke_box: Option<(Um, Um, Um, Um)>,
 }
 
@@ -689,7 +689,9 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     shape_pos: crate::pad_shape::shape_pos(fp, pad, center),
                     default_spoke_angle_mdeg: pad.default_spoke_angle_mdeg(),
                     custom_convex_hull: crate::pad_shape::custom_convex_hull(pad),
-                    spoke_box: crate::pad_shape::spoke_box(pad),
+                    // The box is in the pad's own frame; KiCad's (the file's) is mirrored for a bottom-side footprint, and the spokes are turned by
+                    // the orientation of that frame.
+                    spoke_box: crate::pad_shape::spoke_box(pad).map(|b| if fp.side == Side::Bottom { (-b.2, b.1, -b.0, b.3) } else { b }),
                 });
             }
         }

@@ -72,3 +72,16 @@ pub fn spoke_box(pad: &Pad) -> Option<(Um, Um, Um, Um)> {
 pub fn custom_convex_hull(pad: &Pad) -> bool {
     pad.shape == PadShape::Custom && pad.ext.custom.as_ref().is_some_and(|c| c.zone == eda_model::footprint::CustomZoneMode::ConvexHull)
 }
+
+/// The pad's copper as polygons with holes in board space: the union of the outlines of its parts (`PAD::GetEffectivePolygon`, with the
+/// error inside, the outline the studio draws and the 3D view extrudes). A custom pad with a ring has an outline and a hole. The studio's
+/// painter fills the contours with the even-odd rule.
+pub fn pad_polygons(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Um) -> eda_shape_poly_set::ShapePolySet {
+    let shape = crate::fill::convert_shape(&pad_copper(fp, pad, center));
+    eda_zone_filler::shape::union_polyset(&shape, max_error)
+}
+
+/// [`pad_polygons`] as the list of its contours, the outline of each polygon first and then its holes, in micrometres.
+pub fn pad_outline(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Um) -> Vec<Vec<Point>> {
+    pad_polygons(fp, pad, center, max_error).polys.iter().flat_map(|poly| poly.iter().map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect::<Vec<_>>())).collect()
+}

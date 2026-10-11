@@ -448,7 +448,6 @@ pub fn primitive_hull(shape: &Shape, clearance: Um, walk: Um) -> Vec<Point> {
         },
         // A stroked arc (a custom pad's primitive): a segment per chord, unioned.
         Shape::Strokes { ref segs, r } => union_outline(&segs.iter().map(|s| segment_hull(s.a, s.b, 2 * r, clearance, walk)).collect::<Vec<_>>()),
-        _ => hull_of(shape, clearance, walk),
     }
 }
 
