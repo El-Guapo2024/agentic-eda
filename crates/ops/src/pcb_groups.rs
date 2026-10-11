@@ -13,6 +13,13 @@
 //! group can hold neither itself nor a group that holds it, and a group of fewer than two members dissolves
 //! (`GROUP_TOOL::RemoveFromGroup`), a nested one taking its place in the group above with it.
 //!
+//! # Items made while a group is entered
+//!
+//! `BOARD_COMMIT::Push` adds every item a command made (`CHT_ADD`) to the group the selection tool has entered, when the item can be in a group
+//! and is not in one yet (`if( enteredGroup && boardItem->IsGroupableType() && !boardItem->GetParentGroup() ) enteredGroup->AddItem( boardItem );`);
+//! `PCB_CONTROL::placeBoardItems` does the same earlier for what a Paste brings, so the preview while it is carried is right. The entered group
+//! lives in the editor, not in the design, so the editor wraps a command in [`Cmd::InGroup`] while one is entered and the new items join it.
+//!
 //! # Items that leave the board
 //!
 //! `BOARD_COMMIT::Push` takes an item that is removed out of its parent group. The delete verbs here do not know about groups, so
@@ -20,7 +27,7 @@
 //! [`Board::tidy_groups`] drops from every group the members that were on the board and no longer are, dissolving a group
 //! that is left with fewer than two. A member the board never had (a group made over ids no item answers to) stays, as it did.
 
-use super::Board;
+use super::{Board, Cmd};
 use eda_model::ir::{Design, DrawingsSection, Group};
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
@@ -168,6 +175,34 @@ impl Board<'_> {
         }
         prune_groups(dr);
         Ok(())
+    }
+
+    /// `Cmd::InGroup`: `cmd`, then every item it added that is in no group joins `group` -- the group the editor has entered
+    /// (`BOARD_COMMIT::Push`'s `enteredGroup->AddItem( boardItem )`, `placeBoardItems`' earlier copy of it). The command is the editor's
+    /// own, so it is all or nothing like it; a group that is no longer there (dissolved, deleted) is simply not joined.
+    pub(crate) fn in_group(&mut self, group: &str, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
+        let before = universe(&self.design);
+        self.apply(cmd)?;
+        self.join_group(group, &before);
+        Ok(())
+    }
+
+    /// Adds to `group` what the board has now and did not have in `before`, when it is in no group: new items, and a new group (a pasted tree joins
+    /// as its top group, its members staying in it). A group cannot join itself or one below it.
+    fn join_group(&mut self, group: &str, before: &BTreeSet<String>) {
+        let fresh: Vec<String> = universe(&self.design).difference(before).cloned().collect();
+        let Some(dr) = self.design.drawings.as_mut() else { return };
+        if !dr.is_group(group) {
+            return;
+        }
+        for id in fresh {
+            if id == group || dr.parent_group(&id).is_some() || (dr.is_group(&id) && dr.group_holds(&id, group)) {
+                continue;
+            }
+            if let Some(g) = dr.groups.iter_mut().find(|g| g.id == group) {
+                g.member_ids.push(id);
+            }
+        }
     }
 
     /// The ids on the board before a command, when there are groups to keep honest ([`Board::tidy_groups`]); `None` without any.

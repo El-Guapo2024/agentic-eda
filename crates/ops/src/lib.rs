@@ -61,12 +61,14 @@ mod library_place;
 mod outline;
 mod pcb_groups;
 mod pcb_paste;
+mod pcb_paste_special;
 mod pcb_props;
 mod pcb_transform;
 mod zone_overrides;
 mod sch_clipboard;
 pub mod sch_control;
 mod sheets;
+pub use pcb_paste_special::PasteMode;
 pub use pcb_transform::{flip_layer, FlipDirection};
 
 /// `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items
@@ -668,6 +670,18 @@ pub enum Cmd {
     /// copy made on another board or in KiCad itself, and one undo step takes the whole paste back. See [`pcb_paste`] for how
     /// nets, layers, groups and footprints land.
     PasteClipboard { text: String, at: Point },
+    /// `PCB_CONTROL::Paste` from Paste Special... (`DIALOG_PASTE_SPECIAL`): [`Cmd::PasteClipboard`] with the dialog's two answers. `mode` says what is
+    /// done with the reference designators of the pasted footprints (the default, [`PasteMode::Keep`], is what a plain Paste does: the reference the
+    /// clipboard has stays, even when another footprint has it); `clear_nets` puts the pasted copper and pads on no net instead of mapping their nets
+    /// by name. See [`pcb_paste_special`].
+    PasteSpecial {
+        text: String,
+        at: Point,
+        #[serde(default)]
+        mode: PasteMode,
+        #[serde(default)]
+        clear_nets: bool,
+    },
     /// `BOARD_EDITOR_CONTROL::PlaceFootprint` (`A`): put a footprint of a library on the board at `at`, as a footprint of its own -- a
     /// mounting hole, a fiducial, a test point, a connector nobody drew a symbol for (`DrawingsSection::board_parts`, the same kind of
     /// part a Duplicate or a Paste makes) -- unplaced pads on no net, top side, not turned. `footprint` is `Lib:Name`; `definition`
@@ -979,6 +993,11 @@ pub enum Cmd {
     /// is placed more than once shows one screen, so the edit shows in every placement (`SCH_SCREEN` is shared). Refused when the
     /// path names no sheet, or a sheet whose content was never read. One undo step, like the command it carries.
     OnSheet { sheet: String, cmd: Box<Cmd> },
+    /// Run `cmd` with the board editor in the group `group` (the one the selection tool has entered): whatever the command adds -- a drawn shape, a
+    /// text, a dimension, a routed track, a pasted or duplicated item, a footprint placed -- joins the group when it is in none yet
+    /// (`BOARD_COMMIT::Push`: `enteredGroup->AddItem( boardItem )`; `PCB_CONTROL::placeBoardItems` does it for a paste). The command is applied as
+    /// itself, one undo step; a group that is gone is not joined. See [`pcb_groups`].
+    InGroup { group: String, cmd: Box<Cmd> },
     /// Tools > Reorganize into Module Sheets: turn the current flat schematic into one sheet per functional module (an IC with the
     /// passives that serve it, repeated channels, each connector) with a sheet symbol for each on the root, nets that cross modules
     /// as sheet pins and power as power symbols. Every symbol keeps its reference, value, footprint and fields; only places change,
@@ -1502,7 +1521,7 @@ impl Cmd {
     pub fn domain(&self) -> Domain {
         match self {
             Cmd::Batch { cmds } => cmds.first().map_or(Domain::Pcb, Cmd::domain),
-            Cmd::OnSheet { cmd, .. } => cmd.domain(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.domain(),
             Cmd::ReorganizeSheets => Domain::Schematic,
             Cmd::MoveSymbol { .. }
             | Cmd::DragSymbol { .. }
@@ -1605,7 +1624,7 @@ impl Cmd {
     pub fn edits_connectivity(&self) -> bool {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
-            Cmd::OnSheet { cmd, .. } => cmd.edits_connectivity(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
             // A severity table is about the report, not the drawing.
             Cmd::SetErcSeverities { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
@@ -1653,11 +1672,11 @@ impl Cmd {
             Cmd::AddShape { shape } => vec![shape.layer()],
             Cmd::AddText { text } => vec![text.content.as_str()],
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
-            Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => vec!["paste"],
+            Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
-            Cmd::OnSheet { cmd, .. } => cmd.subjects(),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
             Cmd::MoveExact { parts, .. } => parts.iter().map(String::as_str).collect(),
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -1793,6 +1812,9 @@ impl Cmd {
         if let Cmd::Batch { cmds } = self {
             return cmds.iter().any(Cmd::clears_routing);
         }
+        if let Cmd::InGroup { cmd, .. } = self {
+            return cmd.clears_routing();
+        }
         matches!(
             self,
             Cmd::Place { .. }
@@ -1815,18 +1837,17 @@ impl Cmd {
         )
     }
 
-    /// [`Cmd::clears_routing`], told what the board holds: the commands that move, turn or flip *any* kind of item
-    /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`]) and the one that takes a footprint off the board
-    /// ([`Cmd::Rip`]) leave the routing alone unless a footprint they name (directly, or as a member of a group) has routed
-    /// copper on a pad, because only such a footprint can be moved out from under a track -- a fresh copy, or one nothing
-    /// was routed to, takes nothing with it. `board` is the board as it was before the command.
+    /// [`Cmd::clears_routing`], told what the board holds. The edit tools never clear the routing: `EDIT_TOOL::Move`, `Rotate`, `Flip`,
+    /// `DeleteItems` and the array tool act on the items they were given and leave the copper that was routed to a footprint's pads where it is
+    /// (it becomes unconnected, and the ratsnest says so). So the commands that move, turn, flip or take away *any* kind of item
+    /// ([`Cmd::MoveItems`], [`Cmd::RotateItems`], [`Cmd::FlipItems`], [`Cmd::Rip`], [`Cmd::CreateArray`]) answer `false` here, whatever the
+    /// footprints they name have routed to them; the older verbs of the CLI and the agents (`move_to`, `rotate`, `flip`, `place_at`, ...) keep their
+    /// answer, because a placement made by hand there is followed by a new routing. `board` is the board as it was before the command.
     pub fn clears_routing_in(&self, board: &Board<'_>) -> bool {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(|c| c.clears_routing_in(board)),
-            Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } => board.names_routed_part(ids),
-            Cmd::Rip { part } => board.names_routed_part(std::slice::from_ref(part)),
-            // An array leaves the selection where it was or moves it to the first point: only a footprint with copper on its pads matters.
-            Cmd::CreateArray { ids, .. } => board.names_routed_part(&board.array_selection(ids)),
+            Cmd::InGroup { cmd, .. } => cmd.clears_routing_in(board),
+            Cmd::MoveItems { .. } | Cmd::RotateItems { .. } | Cmd::FlipItems { .. } | Cmd::Rip { .. } | Cmd::CreateArray { .. } => false,
             other => other.clears_routing(),
         }
     }
@@ -2213,6 +2234,7 @@ impl<'a> Board<'a> {
 
             Cmd::Duplicate { ids } => self.duplicate_all(ids),
             Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
+            Cmd::PasteSpecial { text, at, mode, clear_nets } => self.paste_special(text, *at, *mode, *clear_nets),
             Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
@@ -2259,6 +2281,7 @@ impl<'a> Board<'a> {
             Cmd::SchEdit(c) => self.apply_sch_edit(c),
             Cmd::SchMove(c) => self.apply_sch_move(c),
             Cmd::OnSheet { sheet, cmd } => self.on_sheet(sheet, cmd),
+            Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
             Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
@@ -5087,6 +5110,8 @@ mod pcb_props_tests;
 mod pcb_paste_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
+#[cfg(test)]
+mod pcb_edit_details_tests;
 #[cfg(test)]
 mod sch_clipboard_tests;
 
