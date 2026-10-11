@@ -647,6 +647,11 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
     }
+    // The Text Variables page (`PROJECT::GetTextVars`, the project file's `text_variables`): once it has been used it is the project's whole set, and kicad-cli expands
+    // `${NAME}` in the plots, the reports and the DRC from it. Until then the board folder's variables are the project's (`library_table::derive_project`).
+    if let Some(vars) = design.drawings.as_ref().and_then(|d| d.rules.as_ref()).and_then(|r| r.text_variables.as_ref()) {
+        project["text_variables"] = serde_json::json!(vars);
+    }
     let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
     text.push('\n');
     text

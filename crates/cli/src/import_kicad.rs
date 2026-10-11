@@ -115,7 +115,7 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
     }
     if let Some(setup) = setup {
         if !setup.tables.is_empty() || setup.variables > 0 {
-            eprintln!("  library setup: {} table(s) ({}), {} path variable(s) from the project; its libraries are found where they are", setup.tables.len(), setup.tables.join(", "), setup.variables);
+            eprintln!("  library setup: {} table(s) ({}), {} text variable(s) from the project; its libraries are found where they are", setup.tables.len(), setup.tables.join(", "), setup.variables);
         }
         for note in &setup.notes {
             eprintln!("  library setup: {note}");

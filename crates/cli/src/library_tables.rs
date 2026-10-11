@@ -167,7 +167,7 @@ pub(crate) fn load(dir: &Path, kind: TableKind) -> Loaded {
 }
 
 pub(crate) fn load_with(env: Env, dir: &Path, kind: TableKind) -> Loaded {
-    let project_vars = lt::read_project_variables(dir);
+    let project_vars = crate::text_variables::project_variables(dir);
     let vars = env.vars(dir, &project_vars);
     let mut global_error = None;
     let mut global: Option<LoadedTable> = None;
@@ -490,7 +490,8 @@ pub(crate) fn view_with(env: &Env, dir: &Path) -> Value {
     for l in &loaded {
         tables.insert(l.kind.name().to_string(), kind_json(l));
     }
-    let project_vars = lt::read_project_variables(dir);
+    // Configure Paths lists the project's variables that are named like a path variable; the Text Variables page of Board Setup edits all of them.
+    let project_vars: BTreeMap<String, String> = crate::text_variables::project_variables(dir).into_iter().filter(|(name, _)| lt::is_variable_name(name)).collect();
     json!({
         "project_dir": dir.display().to_string(),
         "config_dir": env.config_dir.as_ref().map(|d| d.display().to_string()),
@@ -584,7 +585,7 @@ pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
         return json!({ "error": message, "row": shown, "column": "nickname" });
     }
     // a row whose format was left blank takes the one its path says (`GuessPluginTypeFromLibPath`)
-    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
     let kept: Vec<lt::Row> = kept
         .into_iter()
         .map(|mut r| {
@@ -628,7 +629,7 @@ pub(crate) fn check_rows_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
         Ok(r) => r,
         Err(e) => return e,
     };
-    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
     let results: Vec<Value> = rows
         .iter()
         .map(|r| {
@@ -663,7 +664,7 @@ pub(crate) fn normalize_with(env: &Env, dir: &Path, typed: &str) -> Value {
     if typed.trim().is_empty() {
         return bad("Choose a library to add.");
     }
-    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
     let path = vars.expand_uri(typed.trim(), dir);
     json!({ "uri": lt::normalize_path(&path, &normalize_vars(env, &vars, dir), Some(dir)), "path": path.display().to_string() })
 }
@@ -693,7 +694,7 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     if typed.trim().is_empty() {
         return bad(if create { "Give the new library a place and a name." } else { "Choose a library to add." });
     }
-    let project_vars = lt::read_project_variables(dir);
+    let project_vars = crate::text_variables::project_variables(dir);
     let vars = env.vars(dir, &project_vars);
     let ext = match kind {
         TableKind::Symbol => "kicad_sym",
@@ -822,7 +823,11 @@ pub(crate) fn set_variables_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
             return fail("name", format!("Two variables are named {name}."));
         }
     }
-    if let Err(e) = lt::write_project_variables(dir, &vars) {
+    // The board's variables are the project's text variables (Board Setup > Text Variables is the other view of the list): the ones this dialog does not list,
+    // those not named like a path variable, stay as they are.
+    let mut all: BTreeMap<String, String> = crate::text_variables::project_variables(dir).into_iter().filter(|(name, _)| !lt::is_variable_name(name)).collect();
+    all.extend(vars);
+    if let Err(e) = crate::text_variables::set_project_variables(dir, &all) {
         return bad(e);
     }
     let mut v = view_with(env, dir);
@@ -839,7 +844,7 @@ pub(crate) fn browse(dir: &Path, typed: &str, what: &str) -> Value {
 
 pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Value {
     const MAX: usize = 4000;
-    let vars = env.vars(dir, &lt::read_project_variables(dir));
+    let vars = env.vars(dir, &crate::text_variables::project_variables(dir));
     let mut at = if typed.trim().is_empty() { dir.to_path_buf() } else { vars.expand_uri(typed.trim(), dir) };
     if at.is_file() {
         at = at.parent().map(Path::to_path_buf).unwrap_or(at);
@@ -901,7 +906,7 @@ pub(crate) fn model_names(dir: &Path) -> ModelNames {
 }
 
 pub(crate) fn model_names_with(env: &Env, dir: &Path) -> ModelNames {
-    let project = lt::read_project_variables(dir);
+    let project = crate::text_variables::project_variables(dir);
     let vars = env.vars(dir, &project);
     let mut folders: Vec<PathBuf> = Vec::new();
     for value in project.values().cloned().chain(env.global_vars().into_iter().map(|v| v.value)) {

@@ -1144,6 +1144,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
+        Cmd::SetTextVariables { variables } => format!("board-setup text-variables ({} variables)", variables.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
@@ -1418,6 +1419,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetStackup { .. } => "stackup",
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
+        Cmd::SetTextVariables { .. } => "text-variables",
         Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
@@ -2047,6 +2049,45 @@ mod tests {
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(clearance(&dir), 0, "Undo takes the edit back, overlay and all");
         assert_eq!(load(&dir).unwrap().2.board.clearance, model.board.clearance);
+    }
+
+    /// The Text Variables page is one undo step, it replaces the board folder's `path-variables.json` as the project's variables, the derived project
+    /// carries it for kicad-cli, and Configure Paths is the same list seen through the names it can list.
+    #[test]
+    fn the_text_variables_page_is_one_undo_step_and_configure_paths_edits_the_same_list() {
+        use std::collections::BTreeMap;
+        let dir = scratch("text_variables_undo");
+        setup(&dir);
+        let rows = |r: &[(&str, &str)]| -> BTreeMap<String, String> { r.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect() };
+        let seed = rows(&[("SEED", "1")]);
+        eda_kicad::library_table::write_project_variables(&dir, &seed).unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), seed, "a board whose page was never used has its folder's variables");
+
+        let page = rows(&[("REV", "B"), ("Designer name", "Ada")]);
+        step(&dir, Cmd::SetTextVariables { variables: page.clone() }, false, "ui").unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), page, "the page replaces the seed");
+        let (_, design, model) = load(&dir).unwrap();
+        let pro: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();
+        assert_eq!(pro["text_variables"], serde_json::json!({ "REV": "B", "Designer name": "Ada" }), "the derived project carries the page, for kicad-cli");
+        assert!(step(&dir, Cmd::SetTextVariables { variables: rows(&[("A.B", "x")]) }, false, "ui").is_err());
+        assert_eq!(crate::text_variables::project_variables(&dir), page, "a refused page changes nothing");
+
+        // Configure Paths lists the names it can (REV, not "Designer name") and saves through the same verb, keeping the ones it cannot list.
+        let m = crate::library_tables::tests::machine("vars_in_board", true);
+        let env = m.env();
+        let view = crate::library_tables::view_with(&env, &dir);
+        assert_eq!(view["variables"]["project"], serde_json::json!([{ "name": "REV", "value": "B" }]));
+        let body = serde_json::to_vec(&serde_json::json!({ "variables": [{ "name": "REV", "value": "C" }, { "name": "TEAM", "value": "/srv/libs" }] })).unwrap();
+        let reply = crate::library_tables::set_variables_with(&env, &dir, &body);
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(crate::text_variables::project_variables(&dir), rows(&[("REV", "C"), ("TEAM", "/srv/libs"), ("Designer name", "Ada")]));
+
+        // Each edit is one step: Undo takes the Configure Paths edit back, then the page; the seed is the set again.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), page);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), seed, "back before the page: the folder's variables");
+        let _ = std::fs::remove_dir_all(&m.root);
     }
 
     fn track_ids(dir: &Path) -> Vec<(String, String, Vec<Point>)> {

@@ -105,6 +105,14 @@ pub(crate) fn set_severities(design: &mut Design, severities: &BTreeMap<String, 
     Ok(())
 }
 
+/// `Cmd::SetTextVariables`: the project's text variables (`PANEL_TEXT_VARIABLES::TransferDataFromWindow`), the whole set. Once stored the page is
+/// the project's variables and the board folder's `path-variables.json` is only the seed it started from ([`rules::effective_text_variables`]).
+pub(crate) fn set_text_variables(design: &mut Design, variables: &BTreeMap<String, String>) -> Done {
+    rules::validate_text_variables(variables).map_err(|c| vec![c])?;
+    overlay(design).text_variables = Some(variables.clone());
+    Ok(())
+}
+
 /// The longest `.kicad_dru` text the dialog stores (a real rules file is a few kilobytes).
 pub const MAX_CUSTOM_RULES_BYTES: usize = 256 * 1024;
 

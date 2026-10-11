@@ -169,6 +169,44 @@ fn a_stackup_edit_changes_the_layers_and_the_thickness_but_not_while_copper_woul
     assert!(b.apply(&Cmd::SetStackup { settings: StackupSettings { copper_layers: 3, ..four } }).is_err(), "a board has an even number of copper layers");
 }
 
+fn vars(rows: &[(&str, &str)]) -> BTreeMap<String, String> {
+    rows.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect()
+}
+
+#[test]
+fn text_variables_are_stored_as_a_whole_page() {
+    let base = model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    assert_eq!(overlay_of(&b).text_variables, None, "nothing is stored until the page is used");
+    let page = vars(&[("REVISION", "B"), ("Designer name", "Ada"), ("PART_NO", "${REVISION}-12")]);
+    b.apply(&Cmd::SetTextVariables { variables: page.clone() }).unwrap();
+    assert_eq!(overlay_of(&b).text_variables, Some(page), "the rows are kept as typed, a value naming another variable included");
+    b.apply(&Cmd::SetTextVariables { variables: vars(&[("REVISION", "C")]) }).unwrap();
+    assert_eq!(overlay_of(&b).text_variables, Some(vars(&[("REVISION", "C")])), "a page replaces the whole set: the rows left out are deleted");
+    b.apply(&Cmd::SetTextVariables { variables: BTreeMap::new() }).unwrap();
+    assert_eq!(overlay_of(&b).text_variables, Some(BTreeMap::new()), "every row deleted is a page too, and it is not 'no page'");
+    assert_eq!(effective(&b, &base).board, base.board, "text variables change no rule the board is judged by");
+}
+
+#[test]
+fn a_bad_text_variables_page_is_refused_with_the_variables_name_and_stores_nothing() {
+    let base = model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    let kept = vars(&[("REVISION", "B")]);
+    b.apply(&Cmd::SetTextVariables { variables: kept.clone() }).unwrap();
+    for (bad, location) in [
+        (vars(&[("", "x")]), "(unnamed)"),
+        (vars(&[("REV.ISION", "x")]), "REV.ISION"),
+        (vars(&[("A", "ok"), ("B(1)", "x")]), "B(1)"),
+        (vars(&[("KIPRJMOD", "/x")]), "KIPRJMOD"),
+        (vars(&[("NUL", "a\0b")]), "NUL"),
+    ] {
+        let e = b.apply(&Cmd::SetTextVariables { variables: bad.clone() }).unwrap_err();
+        assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_text_variables", Some(location)), "{bad:?}");
+        assert_eq!(overlay_of(&b).text_variables, Some(kept.clone()), "a refused page changes nothing");
+    }
+}
+
 #[test]
 fn the_verbs_read_from_the_json_the_studio_sends() {
     let cmd: Cmd = serde_json::from_value(serde_json::json!({
@@ -185,4 +223,8 @@ fn the_verbs_read_from_the_json_the_studio_sends() {
     assert!(matches!(cmd, Cmd::SetConstraints { .. }));
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_mask_paste", "settings": { "expansion_um": 0, "paste_margin_um": 0, "paste_margin_ratio": -0.05 } })).unwrap();
     assert!(matches!(cmd, Cmd::SetMaskPaste { settings } if settings.paste_margin_ratio == -0.05));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_text_variables", "variables": { "REVISION": "B", "Designer name": "Ada" } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetTextVariables { variables } if variables.len() == 2 && variables["REVISION"] == "B"));
+    assert_eq!(cmd.domain(), Domain::Pcb);
+    assert!(!cmd.clears_routing());
 }

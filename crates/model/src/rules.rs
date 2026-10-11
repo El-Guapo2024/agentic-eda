@@ -46,6 +46,11 @@ pub struct RulesOverlay {
     /// Design Rules > Custom Rules (`panel_setup_rules.cpp`): the text of the board's `.kicad_dru`, verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_rules: Option<String>,
+    /// Text Variables (`common/dialogs/panel_text_variables.cpp`): the project's `text_variables`, name -> value, as the page's OK leaves them
+    /// (`PROJECT::GetTextVars`). Once the page has been used this is the whole set and the board folder's `path-variables.json` (the variables an
+    /// imported project came with and Configure Paths kept before there was a page) is only the seed it started from: see [`effective_text_variables`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_variables: Option<BTreeMap<String, String>>,
 }
 
 /// Design Rules > Net Classes. The Default class's sizes and every other class with the net-name
@@ -216,6 +221,63 @@ pub fn validate_mask_paste(m: &MaskPaste) -> Vec<(&'static str, String)> {
         out.push(("solder_paste_margin_ratio", "Value must be between -1.000 and 1.000.".into()));
     }
     out
+}
+
+/// The characters `PANEL_TEXT_VARIABLES::m_nameValidator` keeps out of a variable name (`wxFILTER_EXCLUDE_CHAR_LIST`): they are the ones
+/// `${NAME}` and the other places a name is written (`NAME:field`, `NET_NAME(pin)`) give a meaning to.
+pub const TEXT_VARIABLE_NAME_EXCLUDED: &str = "{}[]()%~<>\"='`;:.,&?/\\|$";
+
+/// The name the derived project gives the board's folder (`${KIPRJMOD}`): a project variable of that name would be overwritten there, so the page refuses it.
+pub const RESERVED_TEXT_VARIABLE: &str = "KIPRJMOD";
+
+/// The most variables, the longest name and the longest value the page stores: far past anything a project has, so a runaway paste is refused and
+/// not stored in `design.json`.
+pub const MAX_TEXT_VARIABLES: usize = 1_000;
+pub const MAX_TEXT_VARIABLE_NAME: usize = 256;
+pub const MAX_TEXT_VARIABLE_VALUE: usize = 16 * 1024;
+
+/// `PANEL_TEXT_VARIABLES::TransferDataFromWindow` and its name validator, on the page as it would be stored: a name is not empty and holds none of
+/// [`TEXT_VARIABLE_NAME_EXCLUDED`]. Beyond KiCad's own checks: no control characters, not [`RESERVED_TEXT_VARIABLE`], and the size limits above.
+/// Duplicate rows are not an error here (KiCad keeps the last of them: `variables[ name ] = value`), the page's map already holds one value a name.
+/// The first problem as a refusal whose `location` is the variable's name.
+pub fn validate_text_variables(vars: &BTreeMap<String, String>) -> Result<(), CheckResult> {
+    let bad = |what: &str, why: String| Err(CheckResult::fail("ops_bad_text_variables", what, why));
+    if vars.len() > MAX_TEXT_VARIABLES {
+        return bad("text_variables", format!("{} variables; the most stored is {MAX_TEXT_VARIABLES}", vars.len()));
+    }
+    for (name, value) in vars {
+        if let Some(why) = text_variable_name_problem(name) {
+            return bad(if name.is_empty() { "(unnamed)" } else { name }, why);
+        }
+        if value.len() > MAX_TEXT_VARIABLE_VALUE {
+            return bad(name, format!("the value is {} bytes; the most stored is {MAX_TEXT_VARIABLE_VALUE}", value.len()));
+        }
+        if value.contains('\0') {
+            return bad(name, "the value has a NUL byte in it".into());
+        }
+    }
+    Ok(())
+}
+
+/// What is wrong with `name` as a variable's name, in the page's words, or `None`: the checks of [`validate_text_variables`] that are about a name alone.
+pub fn text_variable_name_problem(name: &str) -> Option<String> {
+    if name.is_empty() {
+        return Some("Variable name cannot be empty.".into());
+    }
+    if name.len() > MAX_TEXT_VARIABLE_NAME {
+        return Some(format!("a variable name is at most {MAX_TEXT_VARIABLE_NAME} bytes long"));
+    }
+    if let Some(c) = name.chars().find(|c| TEXT_VARIABLE_NAME_EXCLUDED.contains(*c) || c.is_control()) {
+        return Some(format!("a variable name cannot hold {c:?} (none of {TEXT_VARIABLE_NAME_EXCLUDED} may be in it)"));
+    }
+    (name == RESERVED_TEXT_VARIABLE).then(|| format!("the name {RESERVED_TEXT_VARIABLE} is reserved: it is the board's folder"))
+}
+
+/// The project's text variables a board is judged by: the Text Variables page when it has been used (`overlay.text_variables`), else `seed`, the variables the
+/// board folder's `path-variables.json` holds (an imported project's, or what Configure Paths kept before the page existed). The page replaces the seed as a whole,
+/// as every other page replaces what the intent says about it, so a variable deleted on the page stays deleted.
+pub fn effective_text_variables(overlay: Option<&RulesOverlay>, seed: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    overlay.and_then(|o| o.text_variables.clone()).unwrap_or_else(|| seed.clone())
 }
 
 /// One row of the Text & Graphics Defaults grid: a layer class's line thickness and, for the classes that
@@ -668,6 +730,45 @@ mod tests {
         wide_drill.via_diameter = Some(400);
         wide_drill.via_drill = Some(400);
         assert!(validate_net_classes(&settings(vec![wide_drill])).is_err(), "a drill as wide as its via leaves no annular ring");
+    }
+
+    #[test]
+    fn text_variable_names_follow_the_panels_validator() {
+        let page = |rows: &[(&str, &str)]| rows.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect::<BTreeMap<_, _>>();
+        assert!(validate_text_variables(&page(&[("REV", "B"), ("Designer name", "Ada"), ("PART_NO", "${REV}-12"), ("ü", "x"), ("a-b", "")])).is_ok(), "spaces, dashes and an empty value are KiCad's too");
+        assert!(validate_text_variables(&BTreeMap::new()).is_ok(), "no variables at all is a page too");
+        for (rows, location) in [
+            (page(&[("", "x")]), "(unnamed)"),
+            (page(&[("A.B", "x")]), "A.B"),
+            (page(&[("A{B", "x")]), "A{B"),
+            (page(&[("a$b", "x")]), "a$b"),
+            (page(&[("net/name", "x")]), "net/name"),
+            (page(&[("tab\\there", "x")]), "tab\\there"),
+            (page(&[("new\nline", "x")]), "new\nline"),
+            (page(&[("KIPRJMOD", "/x")]), "KIPRJMOD"),
+            (page(&[("OK", "nul\0byte")]), "OK"),
+        ] {
+            let e = validate_text_variables(&rows).unwrap_err();
+            assert_eq!((e.check.as_str(), e.location.as_deref()), ("ops_bad_text_variables", Some(location)), "{rows:?}");
+        }
+        let long = "x".repeat(MAX_TEXT_VARIABLE_NAME + 1);
+        assert!(validate_text_variables(&page(&[(long.as_str(), "x")])).is_err());
+        let many: BTreeMap<String, String> = (0..=MAX_TEXT_VARIABLES).map(|i| (format!("V{i}"), String::new())).collect();
+        assert_eq!(validate_text_variables(&many).unwrap_err().location.as_deref(), Some("text_variables"));
+    }
+
+    #[test]
+    fn the_text_variables_page_replaces_the_seed_as_a_whole() {
+        let seed: BTreeMap<String, String> = [("OLD".to_string(), "1".to_string()), ("KEPT".to_string(), "2".to_string())].into();
+        assert_eq!(effective_text_variables(None, &seed), seed, "a board nobody edited the page of has its folder's variables");
+        assert_eq!(effective_text_variables(Some(&RulesOverlay::default()), &seed), seed, "an overlay without the page is the same");
+        let page = RulesOverlay { text_variables: Some([("KEPT".to_string(), "3".to_string())].into()), ..Default::default() };
+        assert_eq!(effective_text_variables(Some(&page), &seed), [("KEPT".to_string(), "3".to_string())].into(), "OLD was deleted on the page and stays deleted");
+        let empty = RulesOverlay { text_variables: Some(BTreeMap::new()), ..Default::default() };
+        assert!(effective_text_variables(Some(&empty), &seed).is_empty(), "a page with every row deleted shadows the seed");
+        let json = serde_json::to_string(&RulesOverlay { text_variables: Some([("A".to_string(), "b".to_string())].into()), ..Default::default() }).unwrap();
+        assert_eq!(json, r#"{"text_variables":{"A":"b"}}"#, "an overlay without the other pages writes nothing for them");
+        assert_eq!(serde_json::from_str::<RulesOverlay>("{}").unwrap(), RulesOverlay::default(), "a design.json from before the page loads");
     }
 
     #[test]

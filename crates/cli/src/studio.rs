@@ -1202,8 +1202,11 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "layer_names": model.board.layers,
             "severities": eda_kicad::effective_rule_severities(&model),
             "custom_rules_text": model.board.custom_rules_text,
+            // Text Variables (`PROJECT::GetTextVars`): the project's variables as `${NAME}` reads them, name -> value -- the page's rows once it has been used, else the
+            // board folder's `path-variables.json` (`crate::text_variables`).
+            "text_variables": crate::text_variables::project_variables(dir),
             "overlay": design.drawings.as_ref().and_then(|d| d.rules.as_ref()).map(|r| {
-                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some())]
+                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some())]
                     .iter()
                     .filter(|(_, set)| *set)
                     .map(|(name, _)| *name)

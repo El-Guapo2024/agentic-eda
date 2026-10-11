@@ -527,6 +527,9 @@ pub enum Cmd {
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
     SetCustomRules { text: String },
+    /// Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` in a text, a field or the title
+    /// block shows the value, and the derived `.kicad_pro` carries them (`text_variables`) so kicad-cli's plots show the same.
+    SetTextVariables { variables: BTreeMap<String, String> },
 
     // ------------------------------------------------------- DRC and ERC review
     //
@@ -1746,6 +1749,7 @@ impl Cmd {
             Cmd::SetStackup { .. } => vec!["stackup"],
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
+            Cmd::SetTextVariables { .. } => vec!["text_variables"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
@@ -2182,6 +2186,7 @@ impl<'a> Board<'a> {
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
+            Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
