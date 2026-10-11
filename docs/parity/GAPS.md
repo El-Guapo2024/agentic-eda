@@ -131,7 +131,7 @@ Old #6. **Partial.** Hit: every multi-sheet design. Blocks: yes. WP2, size L.
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
 ### 5. No access to the installed libraries
-New (the old "library browsers" mention). **Partly closed on 2026-10-08: the two choosers read KiCad's installed libraries; library tables are still open.** Hit: every session that adds a part. Blocks: no longer, a part can come from any installed library. WP6, size L.
+New (the old "library browsers" mention). **Mostly closed on 2026-10-10: the choosers and the library trees read the libraries KiCad's library tables name, and the board has library tables of its own; saving into a table library is open.** Hit: every session that adds a part. Blocks: no longer, a part can come from any library of the tables. WP6, size L.
 - Done: **the Symbol Chooser is KiCad's** (`components/SymbolChooserDialog.tsx`, `components/chooser/`, `kicad-port/libChooser.ts`): a tree of "-- Recently Used --"
   (the last 8), "-- Already Placed --", the project's own libraries and all 222 installed ones (opened one at a time), a search over names, descriptions,
   keywords, library names and default footprints scored as `EDA_COMBINED_MATCHER` does (an exact term 8 times its weight, a match at the start twice, anywhere once;
@@ -146,10 +146,23 @@ New (the old "library browsers" mention). **Partly closed on 2026-10-08: the two
   `footprint_scan.rs`; 230 MB of symbols in 2.5 s in a debug build), cached against the file's modification time; a thread indexes the rest on the first search, which says
   `indexing` until it is done (`crates/cli/src/library_search.rs`, `GET /api/library/entries|search|details|project`). Only the best 400 matches leave the server, and one
   symbol's drawing is cut out of its file and sent when it is selected, never a library.
+- Done (2026-10-10): **library tables** (`PARITY-common.md` section 14). `crates/kicad/src/library_table.rs` ports KiCad's table format (a byte-for-byte round trip of KiCad's own
+  global table), `LIBRARY_MANAGER`'s way of putting the tables together (the global table, the tables it chains -- KiCad's 222 symbol and 155 footprint libraries are one such row --
+  then the board's own, a nickname defined twice being the later) and `KIwxExpandEnvVars` (`${NAME}`, the project's variables, `KIPRJMOD`, the environment, `kicad_common.json`,
+  KiCad's defaults). KiCad's global tables in `~/Library/Preferences/kicad/<version>/` are **read only**; the board's `sym-lib-table` and `fp-lib-table` are the studio's to create and
+  edit (`crates/cli/src/library_tables.rs`, `GET|POST /api/library_tables`, `/check`, `/add`, `/normalize`, `POST /api/path_variables`, `GET /api/fs/list`). The index, the choosers,
+  the editor trees, placing (`Cmd::EmbedLibSymbol`, `PlaceFootprint`), a part naming `Lib:Footprint`, the Change Symbols catalog and the 3D export all go through a `LibSource`
+  (`library_index.rs`): a library of the tables lists, searches, opens and places like an installed one. **Manage Symbol Libraries**, **Manage Footprint Libraries** (a Global tab, read
+  only, with the tables it chains in tabs of their own, and a Project tab with `VerifyTable`'s checks), **Add Library**, **New Library** (an empty `.kicad_sym` or `.pretty` and a row),
+  **Configure Paths** (KiCad's variables read only, the board's own editable) and a folder browser for the server's folders are in `components/libraryTables/`. The derived KiCad project
+  carries the tables and the variables (`derive_project`), so kicad-cli ERC (`lib_symbol_issues`), DRC (`lib_footprint_issues`) and the 3D export resolve the same libraries (slow-tier tests).
+  Tests: Rust unit tests for the format, the variables, the resolution, the routes and a place-from-table round trip; 13 web unit tests; `e2e/library-tables.check.js` (49 checks).
 - Exists besides: library trees for the project library (`components/library/`); `.kicad_sym` and `.kicad_mod` reading from one root set by `EDA_KICAD_SYMBOLS` and
-  `EDA_KICAD_FOOTPRINTS`; the Footprint and Symbol editors' trees list every installed KiCad library (`crates/cli/src/library_index.rs`,
-  `GET /api/library/index|items|all`, `components/library/LibraryTree.tsx`) and opening an installed item copies it into the project library first.
-- Missing: library tables (user and project libraries, Add and New Library, Configure Paths); KiCad's regular-expression (`/re/`) and relational (`voltage>3.3`) search words
+  `EDA_KICAD_FOOTPRINTS` (now the defaults of `${KICAD10_SYMBOL_DIR}` and `${KICAD10_FOOTPRINT_DIR}`); the Footprint and Symbol editors' trees list every library of the tables
+  (`crates/cli/src/library_index.rs`, `GET /api/library/index|items|all`, `components/library/LibraryTree.tsx`) and opening an item copies it into the project library first.
+- Missing: saving the editors' symbols and footprints into a table library's file (they write the project library of `design.json`; a library made with New Library stays empty until a file is put
+  into it), Add Library by drop (a browser drop has no path), Migrate Libraries, formats other than KiCad's (listed with a warning, kept in the table, not read), symbol folders of `.kicad_sym` files, Edit Options..., 3D model search paths (Configure Paths lists KiCad's variables, `3D Models` paths are
+  the footprint's own text); KiCad's regular-expression (`/re/`) and relational (`voltage>3.3`) search words
   (a word is searched as text); the Footprint selector's list and the 3D preview of the Footprint Chooser; an alternate (DeMorgan) body style cannot be chosen when placing --
   a placed instance has no body style in the IR, so it shows the standard one while the kept definition holds both; Change Symbols still lists only the libraries the
   design references; power symbols are placed by `P`, not offered here.
@@ -496,7 +509,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 - KiCad: `common/libraries/{library_manager,library_table}.cpp`, `common/{lib_tree_model_adapter,footprint_info}.cpp`, `eeschema/libraries/symbol_library_adapter.cpp`,
   `eeschema/{symbol_chooser_frame,symbol_library_manager}.cpp`, `pcbnew/{footprint_chooser_frame,footprint_library_adapter,pcb_field}.cpp`,
   `pcbnew/dialogs/{dialog_footprint_properties,dialog_exchange_footprints,dialog_update_pcb}.cpp`, `pcbnew/tools/{board_editor_control,footprint_editor_control,pad_tool}.cpp`.
-- Order: library tables and the chooser (5; the choosers are done, 2026-10-08, the tables are not); board footprint fields, attributes and pad selection (9); Change and Update Footprints and board-only footprints once the overlay exists; editor leftovers (19); arrays (22).
+- Order: library tables and the chooser (5; the choosers are done, 2026-10-08, the tables 2026-10-10; saving into a table library is left); board footprint fields, attributes and pad selection (9); Change and Update Footprints and board-only footprints once the overlay exists; editor leftovers (19); arrays (22).
 
 ## Appendix A. The original 30, one verdict each
 

@@ -31,6 +31,16 @@ never edited as masters.
   does not reload the scene or enter undo; the derived `.kicad/` project
   carries it (`<stem>.kicad_prl`, the project's net colours, presets and
   viewports, and a coloured net class's definition).
+- **Library tables**: the libraries a `Lib:Name` is looked up in are the ones KiCad's library
+  tables name (`crates/cli/src/library_tables.rs`, `crates/kicad/src/library_table.rs`). KiCad's
+  global `sym-lib-table` / `fp-lib-table` (in its configuration folder, chaining its own 222 and
+  155 libraries) are **read only** -- the studio never writes KiCad's configuration. The board's
+  own `sym-lib-table` / `fp-lib-table` and `path-variables.json` (its variables, which are KiCad's
+  project text variables) sit beside `design.json`; the Manage Libraries, New / Add Library and
+  Configure Paths dialogs edit them (`/api/library_tables`, `/api/path_variables`). They are inputs,
+  like the intent, not derived files, and are not part of the design or of undo; the derived
+  `.kicad/` project carries them (`<board>/.kicad/sym-lib-table`, `fp-lib-table`, and the variables
+  as `text_variables` with `KIPRJMOD` the board's folder), so kicad-cli reads the same libraries.
 - **One shared history**: `.history/undo|redo` snapshots, each tagged with
   its author (`ui`, `cli`, `agent`, ...). A direct edit of `design.json`
   (detected against `.history/head.json`) becomes its own `file` step, so
