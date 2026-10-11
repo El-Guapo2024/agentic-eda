@@ -31,6 +31,7 @@ import {
   shapeNameOf,
   shapePatch,
   sizeOf,
+  trapezoidCorners,
   trapezoidDelta,
   type PadShapeSource,
 } from "./padShape";
@@ -293,4 +294,13 @@ test("a custom pad's box on the footprint is moved by its offset and turned with
   // Turned a quarter: the arm points along +y (the canvas is y-down, so a positive angle runs clockwise on the screen).
   assert.deepEqual(customPadBox({ ...base, rot: 90_000 }).map(Math.round), [9_800, 4_800, 10_200, 7_000]);
   assert.deepEqual(customPadBox({ ...base, rot: 0, offset: { x: 100, y: -100 } }).map(Math.round), [9_900, 4_700, 12_100, 5_100]);
+});
+
+test("a trapezoid's corners are KiCad's: delta y changes the length of the horizontal sides, delta x the vertical ones", () => {
+  // 2 mm by 1 mm, delta (0, 0.8 mm): the bottom side (y +0.5) is 2.8 mm long and the top one 1.2 mm.
+  assert.deepEqual(trapezoidCorners(2000, 1000, [0, 800]), [[-1400, 500], [1400, 500], [600, -500], [-600, -500]]);
+  // delta (0.4 mm, 0): the left side (x -1) is 1.4 mm long, the right one 0.6 mm.
+  assert.deepEqual(trapezoidCorners(2000, 1000, [400, 0]), [[-1000, 700], [1000, 300], [1000, -300], [-1000, -700]]);
+  // No delta: the rectangle.
+  assert.deepEqual(trapezoidCorners(2000, 1000, [0, 0]), [[-1000, 500], [1000, 500], [1000, -500], [-1000, -500]]);
 });

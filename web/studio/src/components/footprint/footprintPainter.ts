@@ -21,6 +21,7 @@ import { drawArcPreview } from "../canvas/arcPreview";
 import { drawBezierPreview } from "../canvas/bezierPreview";
 import { BEZIER_MAX_ERROR_UM } from "../canvas/itemHitTest";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
+import { trapezoidCorners } from "../../kicad-port/padShape";
 import type { ArcGeom } from "../../kicad-port/arcGeom";
 import type { BezierGeom } from "../../kicad-port/bezierGeom";
 import { drawStrokeText } from "../text/strokeFont";
@@ -74,64 +75,47 @@ function drawAnchor(ctx: CanvasRenderingContext2D, view: ViewTransform) {
   ctx.restore();
 }
 
-/** Builds a rounded-rectangle-with-some-corners-chamfered-instead path, centered at the origin (caller translates/rotates first). `chamfer` is the cut length along each edge from the corner. */
-function chamferedRectPath(ctx: CanvasRenderingContext2D, w: Um, h: Um, chamfer: number, corners: ChamferCorners) {
+/**
+ * A rectangle centered at the origin with some corners cut and the others rounded (`TransformRoundChamferedRectToPolygon`; the caller translates and rotates first).
+ * `chamfer` is the cut along each edge from a flagged corner, `radius` the radius of the corners that are not.
+ */
+function chamferedRectPath(ctx: CanvasRenderingContext2D, w: Um, h: Um, chamfer: number, corners: ChamferCorners, radius = 0) {
   const hw = w / 2;
   const hh = h / 2;
   const c = Math.max(0, Math.min(chamfer, Math.min(w, h) / 2));
+  const r = Math.max(0, Math.min(radius, hw, hh));
+  type P = [number, number];
+  // Clockwise from the middle of the top edge: each corner is the point itself, and where a cut starts and ends.
+  const quad: { cut: boolean; at: P; from: P; to: P }[] = [
+    { cut: !!corners.top_right, at: [hw, -hh], from: [hw - c, -hh], to: [hw, -hh + c] },
+    { cut: !!corners.bottom_right, at: [hw, hh], from: [hw, hh - c], to: [hw - c, hh] },
+    { cut: !!corners.bottom_left, at: [-hw, hh], from: [-hw + c, hh], to: [-hw, hh - c] },
+    { cut: !!corners.top_left, at: [-hw, -hh], from: [-hw, -hh + c], to: [-hw + c, -hh] },
+  ];
+  const start: P = [0, -hh];
   ctx.beginPath();
-  // Clockwise from top-left, cutting a straight chamfer instead of a
-  // square corner wherever that corner's flag is set.
-  if (corners.top_left) {
-    ctx.moveTo(-hw + c, -hh);
-  } else {
-    ctx.moveTo(-hw, -hh);
-  }
-  if (corners.top_right) {
-    ctx.lineTo(hw - c, -hh);
-    ctx.lineTo(hw, -hh + c);
-  } else {
-    ctx.lineTo(hw, -hh);
-  }
-  if (corners.bottom_right) {
-    ctx.lineTo(hw, hh - c);
-    ctx.lineTo(hw - c, hh);
-  } else {
-    ctx.lineTo(hw, hh);
-  }
-  if (corners.bottom_left) {
-    ctx.lineTo(-hw + c, hh);
-    ctx.lineTo(-hw, hh - c);
-  } else {
-    ctx.lineTo(-hw, hh);
-  }
-  if (corners.top_left) {
-    ctx.lineTo(-hw, -hh + c);
-  } else {
-    ctx.lineTo(-hw, -hh);
+  ctx.moveTo(start[0], start[1]);
+  for (let i = 0; i < 4; i++) {
+    const k = quad[i]!;
+    if (k.cut) {
+      ctx.lineTo(k.from[0], k.from[1]);
+      ctx.lineTo(k.to[0], k.to[1]);
+    } else if (r > 0) {
+      // The way out of this corner is along the next side: toward the next corner (or where its cut starts), the last side toward where the path began.
+      const next = quad[i + 1];
+      const toward = next ? (next.cut ? next.from : next.at) : start;
+      ctx.arcTo(k.at[0], k.at[1], toward[0], toward[1], r);
+    } else {
+      ctx.lineTo(k.at[0], k.at[1]);
+    }
   }
   ctx.closePath();
 }
 
-/** A trapezoid centered at the origin: `delta` widens one pair of opposite edges and narrows the other by the same amount, along whichever axis is non-zero -- a reasonable, documented approximation of `PAD_SHAPE::TRAPEZOID` (see PARITY-fpedit.md) rather than a byte-exact port of source's own corner formula. */
+/** A trapezoid centered at the origin: `PAD::buildEffectiveShape`'s four corners (`trapezoidCorners`). */
 function trapezoidPath(ctx: CanvasRenderingContext2D, w: Um, h: Um, delta: [Um, Um]) {
-  const hw = w / 2;
-  const hh = h / 2;
-  const [dx, dy] = delta;
   ctx.beginPath();
-  if (dx !== 0) {
-    const d = dx / 2;
-    ctx.moveTo(-hw - d, -hh);
-    ctx.lineTo(hw + d, -hh);
-    ctx.lineTo(hw - d, hh);
-    ctx.lineTo(-hw + d, hh);
-  } else {
-    const d = dy / 2;
-    ctx.moveTo(-hw, -hh - d);
-    ctx.lineTo(hw, -hh + d);
-    ctx.lineTo(hw, hh - d);
-    ctx.lineTo(-hw, hh + d);
-  }
+  trapezoidCorners(w, h, delta).forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
   ctx.closePath();
 }
 
@@ -158,7 +142,7 @@ function tracePadPath(ctx: CanvasRenderingContext2D, pad: LibraryPad) {
       trapezoidPath(ctx, w, h, pad.trapezoid_delta ?? [0, 0]);
       return;
     case "chamfered_rect":
-      chamferedRectPath(ctx, w, h, (pad.chamfer_ratio ?? 0.2) * Math.min(w, h), pad.chamfer_corners);
+      chamferedRectPath(ctx, w, h, (pad.chamfer_ratio ?? 0.2) * Math.min(w, h), pad.chamfer_corners, (pad.roundrect_ratio ?? 0) * Math.min(w, h));
       return;
     case "custom":
       // The anchor only (`PAD::GetAnchorPadShape`: a circle of the pad's width, or its rectangle); the basic shapes follow in `paintCustomPrimitives`.

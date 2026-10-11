@@ -502,6 +502,24 @@ export function libraryFieldsOf(form: PadShapeForm): Pick<LibraryPad, "shape" | 
   };
 }
 
+/**
+ * The four corners of a trapezoid (`PAD::buildEffectiveShape`, pad frame, y down): the bottom left, bottom right, top right and top left of a `w` by `h` pad
+ * whose `delta` is `(dx, dy)`. `dx` lengthens the left side and shortens the right one by `dx` in all, `dy` the bottom side and the top one (the x of a corner
+ * moves by `dy` and its y by `dx`, as KiCad has it; the halves are integers there).
+ */
+export function trapezoidCorners(w: Um, h: Um, delta: readonly [Um, Um]): [number, number][] {
+  const hx = Math.trunc(w / 2);
+  const hy = Math.trunc(h / 2);
+  const dx = Math.trunc(delta[0] / 2);
+  const dy = Math.trunc(delta[1] / 2);
+  return [
+    [-hx - dy, hy + dx],
+    [hx + dy, hy - dx],
+    [hx - dy, -hy + dx],
+    [-hx + dy, -hy - dx],
+  ];
+}
+
 // ---------------------------------------------------------------------------------------------------------- where a custom pad's copper is
 
 /** The points that bound a basic shape's own geometry, pad frame: an arc adds the extremes of its circle that its sweep reaches, a circle its four sides, a curve its control points. */
