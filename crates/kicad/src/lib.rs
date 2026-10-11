@@ -78,6 +78,10 @@ pub mod drc_exclusions;
 pub use pcb::effective_erc_severities;
 // The Appearance panel's share: the layers, objects, colours, presets and views the person chose, in the derived `.kicad_prl` and `.kicad_pro`.
 pub mod appearance;
+// Import Graphics (`common/import_gfx`): the readers of DXF files and the shapes they hand the importers of the editors.
+pub mod dxf_import;
+pub mod graphics_import;
+pub mod svg_import;
 
 const STUB_MM: f64 = 1.27;
 

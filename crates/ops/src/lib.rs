@@ -56,7 +56,10 @@ mod review;
 pub mod library_editors;
 mod array;
 pub use array::ArrayGeometry;
+mod fix_shapes;
 mod fp_edit;
+mod import_graphics;
+pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, ImportGraphics};
 mod library_place;
 mod outline;
 mod pcb_groups;
@@ -690,6 +693,10 @@ pub enum Cmd {
         #[serde(default)]
         definition: Option<LibraryFootprint>,
     },
+    /// `DRAWING_TOOL::PlaceImportedGraphics` (File > Import > Graphics..., `pcbnew.InteractiveDrawing.placeImportedGraphics`): a DXF or SVG file as
+    /// the board's own lines, arcs, circles, polygons, curves and text on one layer, in one undo step -- see [`import_graphics`] for what is mapped
+    /// and how. The file travels with the command.
+    ImportGraphics(ImportGraphics),
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
     /// the studio's Cmd+V. Unlike `Duplicate` (which looks up existing
@@ -1698,6 +1705,7 @@ impl Cmd {
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
+            Cmd::ImportGraphics(req) => vec![req.layer.as_str()],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } => cmd.subjects(),
@@ -2257,6 +2265,7 @@ impl<'a> Board<'a> {
 
             Cmd::Duplicate { ids } => self.duplicate_all(ids),
             Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
+            Cmd::ImportGraphics(req) => self.import_graphics(req),
             Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
@@ -5104,6 +5113,8 @@ mod fp_edit_tests;
 mod pcb_props_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
+#[cfg(test)]
+mod import_graphics_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
 #[cfg(test)]

@@ -517,7 +517,8 @@ fn read_request(stream: &TcpStream) -> Result<(String, String, Vec<u8>), String>
             }
         }
     }
-    let mut body = vec![0u8; length.min(1 << 20)];
+    // A file dropped on the page (a board to append, a DXF or SVG to import) travels in the body, so it is not held to a megabyte.
+    let mut body = vec![0u8; length.min(64 << 20)];
     reader.read_exact(&mut body).map_err(|e| e.to_string())?;
     Ok((method, target, body))
 }
@@ -755,6 +756,8 @@ fn handle(
         }
         // PCB Copy: the selection as KiCad's clipboard text (a read; the browser puts it on the system clipboard). Paste is `Cmd::PasteClipboard`.
         ("POST", "/api/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::clipboard_api::copy(dir, &body).to_string().as_bytes()),
+        // Import Graphics (DXF, SVG): what a file holds, for the dialog (a read; the import is `Cmd::ImportGraphics`).
+        ("POST", "/api/import_graphics/read") => respond(stream, "200 OK", "application/json", crate::graphics_api::read(&body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);

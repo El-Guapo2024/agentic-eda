@@ -1140,6 +1140,7 @@ fn cmd_line(c: &Cmd) -> String {
             format!("paste --tracks {} --vias {} --zones {} --shapes {} --texts {}", tracks.len(), vias.len(), zones.len(), shapes.len(), texts.len())
         }
         Cmd::PasteClipboard { text, at } => format!("paste-clipboard --at {},{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), text.len()),
+        Cmd::ImportGraphics(r) => format!("import-graphics --format {:?} --layer {} --scale {} --offset {},{} ({} bytes of file)", r.format, r.layer, r.scale, r.offset_x_nm as f64 / 1.0e6, r.offset_y_nm as f64 / 1.0e6, r.text.len()),
         Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => format!(
             "move-exact {} --by {},{} --rotate {:.3} --pivot {}",
             parts.join(" "),
@@ -1401,6 +1402,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetSchematicPage { .. } => "schematic-page",
         Cmd::RepairBoard => "repair",
         Cmd::Duplicate { .. } | Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } => "duplicate",
+        Cmd::ImportGraphics(_) => "import-graphics",
         Cmd::CommitRoute { .. } => "route",
         Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
@@ -2262,6 +2264,36 @@ mod tests {
 
         // The other direction: text that is not KiCad's is refused, and the board is as it was.
         assert!(step(&b, Cmd::PasteClipboard { text: "not kicad".into(), at: Point { x: 0, y: 0 } }, false, "test").is_err());
+    }
+
+    /// Import Graphics is one command whatever the file holds: one undo step takes every item it made, and the group, away together.
+    #[test]
+    fn an_import_of_graphics_is_one_undo_step() {
+        let dir = scratch("import_graphics_undo");
+        setup(&dir);
+        let dxf = std::fs::read_to_string(format!("{}/../kicad/tests/fixtures/board_outline_lines_arcs.dxf", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let req = eda_ops::ImportGraphics {
+            format: eda_ops::GraphicsFormat::Dxf,
+            text: dxf,
+            layer: "Dwgs.User".into(),
+            dxf_units: String::new(),
+            scale: 1.0,
+            offset_x_nm: 0,
+            offset_y_nm: 0,
+            line_width_um: 200,
+            group: true,
+            fix_tolerance_um: None,
+            replace_outline: false,
+        };
+        step(&dir, Cmd::ImportGraphics(req), false, "test").unwrap();
+        let (_, d, _) = load(&dir).unwrap();
+        let dr = d.drawings.as_ref().unwrap();
+        assert_eq!((dr.shapes.len(), dr.groups.len(), dr.groups[0].member_ids.len()), (8, 1, 8));
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let (_, back, _) = load(&dir).unwrap();
+        assert!(back.drawings.as_ref().map_or(true, |d| d.shapes.is_empty() && d.groups.is_empty()), "one undo takes the whole import back");
+        redo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.drawings.as_ref().unwrap().shapes.len(), 8);
     }
 
     /// The other Board Setup pages reach kicad-cli the same way (slow tier: a dozen kicad-cli runs): a class assigned by a
