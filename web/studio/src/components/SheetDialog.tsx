@@ -15,6 +15,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import { DEFAULT_SHEET_FILE, defaultSheetFile, uniqueSheetName } from "../kicad-port/schSheet";
 import { rememberedAnnotateSettings } from "../kicad-port/schAnnotate";
 import { describeCheck, importNumbering, importSheetCmd, sheetFileOfFile, sheetNameOfFile } from "../kicad-port/schImportSheet";
+import { sendAndSelectNew } from "./schematic/schImportTool";
 
 export function SheetDialog() {
   const state = useStudioState();
@@ -64,7 +65,7 @@ export function SheetDialog() {
     if (!valid) return;
     close();
     if (source) {
-      const ok = await api.cmd(importSheetCmd(source, { name, file, at: pending.at, size: pending.size }, importNumbering(rememberedAnnotateSettings())));
+      const ok = await sendAndSelectNew(api, dispatch, importSheetCmd(source, { name, file, at: pending.at, size: pending.size }, importNumbering(rememberedAnnotateSettings())));
       // Without "Place repeated copies" the tool ends with the sheet (`PopTool`).
       if (ok && !source.repeated) dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: null });
       return;

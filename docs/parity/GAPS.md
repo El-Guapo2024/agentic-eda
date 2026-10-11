@@ -116,17 +116,26 @@ Old #9 and #10. **Mostly done (2026-10-08).** Hit: the start of every project. B
 - Port from: `pcbnew/dialogs/dialog_board_setup.cpp` and `panel_setup_*.cpp`, `common/dialogs/panel_setup_netclasses.cpp`,
   `panel_setup_severities.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`.
 
-### 4. Hierarchical sheets can be navigated but not edited
-Old #6. **Partial.** Hit: every multi-sheet design. Blocks: yes. WP2, size L.
-- Exists: the IR (`SchematicSection::sheets`, `Design::sheet_contents` in `crates/model/src/ir.rs`); tree import and
-  multi-file export (`crates/kicad/src/sch_import.rs::import_kicad_sch_tree`, `lib.rs`); the Hierarchy panel and Back/Forward
-  (`components/panels/HierarchyPanel.tsx`, `kicad-port/navHistory.ts`); Draw Sheet, sheet pins and their sync
-  (`kicad-port/schSheet.ts`, `schSheetPins.ts`); ERC per sheet through kicad-cli.
-- Missing: every schematic verb acts on the root section (`crates/ops/src/lib.rs::schematic_mut`), so a sub-sheet is
-  read-only; the drawing and sheet-pin tools refuse on a nested sheet (`actions/schEditActions.ts`, `schSheetPinActions.ts`).
-  `reconcile_schematic` (`crates/cli/src/board.rs`) retraces the root only and overwrites `design.nets` with root-only nets;
-  nothing merges nets across sheets (hierarchical and global labels, sheet pins) in the live netlist. Also missing: Import
-  Sheet, Draw Sheet from File, Next/Previous/Change Sheet, sheet page numbers, annotation across sheets, copy between sheets.
+### 4. Hierarchical sheets
+Old #6. **Mostly done (2026-10-10), limits below.** Hit: every multi-sheet design. Blocks: no. WP2, size L.
+- Done earlier: the IR (`SchematicSection::sheets`, `Design::sheet_contents` in `crates/model/src/ir.rs`); tree import and multi-file export
+  (`crates/kicad/src/sch_import.rs::import_kicad_sch_tree`, `lib.rs`); one derived schematic as module sheets (`crates/engine/src/hier/`,
+  Tools > Reorganize into Module Sheets); every schematic command acts on the sheet in view (`Cmd::OnSheet`); the nets traced across sheets
+  (`crates/engine/src/nets.rs`, `reconcile_schematic`); the Hierarchy panel, Back/Forward/Up, Draw Sheet, sheet pins and their sync, page numbers
+  (`PARITY-sch.md` section 14); ERC per sheet through kicad-cli.
+- Done 2026-10-10 (`PARITY-sch.md` sections 5, 8, 14, 15, 18): **Find and Replace over every sheet** (the sheets in page order, the match's sheet shown,
+  Replace All one undo step; "Search the current sheet only" off by default); **Annotate over the whole schematic** (`DIALOG_ANNOTATE` in full: scope,
+  recursion, X or Y order, reset or keep, regroup units, first free / sheet x 100 / x 1000, multi-unit parts, the messages and `CheckAnnotation`'s findings; a port of
+  `SCH_REFERENCE_LIST` and `REFDES_TRACKER`, `crates/model/src/annotate.rs`); **Import Sheet and Draw Sheet from File** (`LoadSheetFromFile` and its checks: loops,
+  symbols with no library link, references the design holds, missing libraries; as a sheet with its own file or as contents on the sheet in view; the symbols numbered by the
+  Annotate settings or kept); **Copy, Cut and Paste of whole sheets** (a copy of each screen under a file of its own, a name that counts up, library symbols merged, symbols numbered unique across
+  every sheet); **Reorganize into Module Sheets** keeps the places and looks of fields, the looks of labels and the body styles and takes multi-unit symbols (item 12); **Lint and
+  the SVG render walk every sheet** and name the sheet a finding is on. kicad-cli's ERC after each (`EDA_SLOW_TESTS=1`): no `unannotated`, `duplicate_reference` or `duplicate_sheet_names` finding after Import
+  Sheet, a sheet paste and Annotate over the whole schematic; none at all after Reorganize, with and without a multi-unit part; kicad-cli reads a copy of sheets beside their screens.
+- Left: a screen two sheet symbols show is traced once (KiCad makes a net per placement) and a pasted sheet is a copy, never a shared screen; buses across sheets are traced as plain wires;
+  Find does not match a sheet's name, file or pins; Clear Annotation (a design names a part by its reference, so two cannot be `R?`); "Place as group" and a ghost of the contents while they are carried;
+  a file dropped on the sheet (`DdAppendFile`, a browser has no path for it); the attribute, library-link and Update / Change Symbol tools act on the sheet in view; a footprint already placed keeps
+  the reference it had when Annotate or Rename changes the schematic's.
 - Port from: `eeschema/sch_sheet_path.cpp`, `sch_screen.cpp`, `connection_graph.cpp`, `tools/sch_navigate_tool.cpp`,
   `tools/sch_editor_control.cpp`, `dialogs/dialog_annotate.cpp`.
 
@@ -294,8 +303,8 @@ New. **Done (2026-10-09)**, limits below. Hit: every schematic cleanup. Blocks: 
 - Missing: a field's font face and colour, a free text's justification, a label's own fields (netclass, intersheet references) and a
   user-defined field's place on the sheet have no place in the IR; the fields of a symbol read from a KiCad file are not items (the
   importer keeps KiCad's origin, the fields keep theirs in the file); the fields' preference `m_AutoplaceFields.enable` is always on;
-  Reorganize into Module Sheets lays the sheets out again and loses the stored places of fields, label spins and looks, and body styles;
-  only the normal and the De Morgan body style are modelled (a symbol with named body styles draws its first two) and the symbol
+  Reorganize into Module Sheets (2026-10-10) keeps the places of the fields the user placed, the looks of fields and labels and the body styles and takes multi-unit symbols, but
+  not a label's spin (the layout turns the labels); only the normal and the De Morgan body style are modelled (a symbol with named body styles draws its first two) and the symbol
   chooser always places in the normal style; pins cannot be selected (Swap Pins, pin-level highlight).
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`,
   `dialog_symbol_properties.cpp`.
@@ -440,7 +449,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
   `eeschema/autoplace_fields.cpp`, `eeschema/dialogs/dialog_{label,field,symbol,wire_bus}_properties.cpp`, `common/view/wx_view_controls.cpp`.
 - Order: move, drag, rotate and mirror for every item kind with wire stretch (1); clipboard (6, done 2026-10-08); fields and labels (12); view controls and snap.
 
-**WP2. Schematic hierarchy and connectivity** (item 4). Size L. Go first.
+**WP2. Schematic hierarchy and connectivity** (item 4). Size L. Go first. Done 2026-10-10 apart from what item 4 lists under Left.
 - Files: `crates/ops/src/lib.rs` (add a sheet path to the schematic verbs and `schematic_mut`), `crates/cli/src/board.rs` (`reconcile_schematic`,
   the schematic undo scope), `crates/kicad/src/{sch_import.rs,lib.rs}` and `eda_kicad::reconcile`, `web/studio/src/state/store.tsx` (`currentSheetPath`),
   `components/panels/HierarchyPanel.tsx`, `kicad-port/{navHistory,schSheet,schSheetPins}.ts`, `components/AnnotateDialog.tsx`.
@@ -494,7 +503,7 @@ addressing) before WP1 adds verbs, and WP5 step 2 (the model overlay) before WP6
 | 3 | DRC precision | Out of scope | same |
 | 4 | ERC has no UI | **Closed** | `components/ErcDialog.tsx`, `GET /api/erc` to `crates/kicad-engine/src/lib.rs::erc`, exclusions `Cmd::AddErcExclusion`, pin map `SchematicSetupDialog.tsx`. Review workflow: item 11. |
 | 5 | Zone fill | Partial | `crates/zone-filler`, `crates/drc/src/fill.rs`, `ZoneDialog.tsx`, `ZoneManagerDialog.tsx`; item 13 and item 2. |
-| 6 | Hierarchical sheets | Partial | IR, import, export, panel, navigation exist (`ir.rs`, `sch_import.rs`, `HierarchyPanel.tsx`); item 4. |
+| 6 | Hierarchical sheets | Partial | IR, import, export, panel, navigation, editing on every sheet, nets across sheets, Find, Annotate, Import Sheet, sheet copy and paste, lint and render over the hierarchy (`ir.rs`, `sch_import.rs`, `HierarchyPanel.tsx`, `sch_annotate.rs`, `sch_sheets.rs`); item 4 lists what is left. |
 | 7 | Routing | Partial | `crates/pns`; item 7. |
 | 8 | Footprint editor and pad tool | Partial | editor, pad tools, dialogs, import and export (`components/footprint/`, `crates/ops/src/library_editors.rs`); item 19. |
 | 9 | Board Setup | Partial | `BoardSetupDialog.tsx`: all 10 pages edit (rules overlay and 7 verbs, item 3); 8 of KiCad's pages have no model yet. |
