@@ -1,6 +1,8 @@
 // The HTTP side of the footprint assignment tools (crates/cli/src/fp_assign_api.rs): what Update PCB from Schematic lists, and, as the tools land, the exchange, update,
 // compare and reannotate dialogs' reports.
 
+import type { Shape } from "./types";
+
 /** One footprint whose symbol names another footprint than the board has (`GET /api/update_pcb`). */
 export interface UpdatePcbChange {
   reference: string;
@@ -52,4 +54,31 @@ export async function postExchangePlan(references: readonly string[], footprint:
   const j = (await r.json()) as { ok?: boolean; entries?: ExchangePlanEntry[]; message?: string };
   if (!j.ok) throw new Error(j.message ?? "The exchange could not be planned.");
   return j.entries ?? [];
+}
+
+/** A footprint drawn for the Compare dialog, in the footprint's own frame, micrometres. */
+export interface FootprintDrawing {
+  pads: { num: string; x: number; y: number; w: number; h: number; shape: string; rot: number; ratio: number | null; drill: number | null; slot: [number, number] | null; th: boolean }[];
+  /** The graphics, as board shapes. */
+  shapes: Shape[];
+  courtyard: [number, number][][];
+}
+
+/** `GET /api/footprint_diff`: `DiffFootprint`'s summary and both drawings, or why the library copy is not there. */
+export interface FootprintDiff {
+  ok: boolean;
+  message?: string;
+  reference: string;
+  library: string;
+  item: string;
+  found: boolean;
+  reason?: string;
+  lines?: string[];
+  board?: FootprintDrawing;
+  library_copy?: FootprintDrawing;
+}
+
+export async function fetchFootprintDiff(reference: string): Promise<FootprintDiff> {
+  const r = await fetch(`/api/footprint_diff?ref=${encodeURIComponent(reference)}`);
+  return (await r.json()) as FootprintDiff;
 }

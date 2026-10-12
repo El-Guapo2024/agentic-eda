@@ -1,7 +1,8 @@
 // The Global Edit tool's rows of the UI-actions sweep (docs/parity/UI-ACTIONS.md): Global Deletions,
 // Cleanup Graphics, Change Footprint(s) and Update Footprint(s) from Library. Each cites GLOBAL_EDIT_TOOL
 // (pcbnew/tools/global_edit_tool.cpp at 8303b2ad); the logic is kicad-port/pcbGlobalEdit.ts and the
-// dialogs components/PcbGlobalEditDialogs.tsx. Called from `registerPcbEditSweep`.
+// dialogs components/PcbGlobalEditDialogs.tsx. Also the Inspect menu's Compare Footprint with Library
+// (BOARD_INSPECTION_TOOL::DiffFootprint), which ends in the update dialog. Called from `registerPcbEditSweep`.
 
 import { createElement } from "react";
 import type { Cmd } from "../api/types";
@@ -9,7 +10,8 @@ import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, planCleanupGraphics,
 import { CHANGE_OPTIONS, UPDATE_OPTIONS, exchangeCmd, exchangeReport, isLibraryId, matchingFootprints, type ReportLine } from "../kicad-port/pcbExchange";
 import { postExchangePlan } from "../api/fpAssign";
 import { CleanupGraphicsDialog, ExchangeFootprintsDialog, GlobalDeletionDialog, type ExchangeState } from "../components/PcbGlobalEditDialogs";
-import { openSweepDialog } from "./pcbSweepDialogs";
+import { FootprintDiffDialog } from "../components/FootprintDiffDialog";
+import { closeSweepDialog, openSweepDialog } from "./pcbSweepDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
 /** Remembered between invocations, like the dialogs' C++ statics (`s_defaultTolerance`, `g_matchModeForUpdate`). */
@@ -83,12 +85,13 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
   // GLOBAL_EDIT_TOOL::ExchangeFootprints -> DIALOG_EXCHANGE_FOOTPRINTS. The four actions differ in whether the dialog opens on a footprint of the selection (`updateFootprint`,
   // `changeFootprint`: always, `m_currentFootprint` the first selected one; the plural ones: when the selection holds a footprint) and in the mode (update / change).
   // The exchange is `exchange_footprints` (crates/ops/src/fp_exchange.rs), one undo step ("Change Footprint" / "Update Footprint"); the server brings the library copy.
-  const exchangeDialog = (mode: "change" | "update", alwaysCurrent: boolean) =>
+  // `only` is a footprint the dialog opens on whatever the selection (Compare Footprint with Library's "Update Footprint from Library...": the footprint is selected, then the dialog opens).
+  const exchangeDialog = (mode: "change" | "update", alwaysCurrent: boolean, only: string | null = null) =>
     pcbOnly(() => {
       if (!board) return;
       const placed = (id: string) => board.parts.some((p) => p.ref === id && p.placed);
-      const selected = new Set([...state.selection].filter(placed));
-      const current = [...state.selection].find(placed) ?? null;
+      const selected = new Set(only ? [only] : [...state.selection].filter(placed));
+      const current = only ?? [...state.selection].find(placed) ?? null;
       // `currentMode`: the singular actions are "of the current footprint" whatever the selection; the plural ones when the selection has a footprint
       const currentMode = alwaysCurrent ? true : selected.size > 0;
       const part = current ? board.parts.find((p) => p.ref === current) : undefined;
@@ -143,4 +146,30 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
   m.set("pcbnew.GlobalEdit.updateFootprints", exchangeDialog("update", false));
   m.set("pcbnew.GlobalEdit.changeFootprint", exchangeDialog("change", true));
   m.set("pcbnew.GlobalEdit.changeFootprints", exchangeDialog("change", false));
+
+  // ------------------------------------------------------------ Compare Footprint with Library
+  // BOARD_INSPECTION_TOOL::DiffFootprint( const TOOL_EVENT& ): exactly one footprint (the selection, or the one under the cursor); otherwise "Select a footprint to diff with
+  // its library equivalent." The dialog is components/FootprintDiffDialog.tsx; its "Update Footprint from Library..." selects the footprint and opens the update dialog on it.
+  m.set(
+    "pcbnew.InspectionTool.DiffFootprint",
+    pcbOnly(() => {
+      const footprints = ctx.requestSelection().filter((id) => board?.parts.some((p) => p.ref === id && p.placed));
+      if (footprints.length !== 1) {
+        toast("Select a footprint to diff with its library equivalent.", "error");
+        return;
+      }
+      const reference = footprints[0]!;
+      openSweepDialog({
+        kind: "element",
+        element: createElement(FootprintDiffDialog, {
+          reference,
+          onUpdate: () => {
+            dispatch({ type: "SET_SELECTION", refs: [reference] });
+            closeSweepDialog();
+            exchangeDialog("update", true, reference)();
+          },
+        }),
+      });
+    })
+  );
 }

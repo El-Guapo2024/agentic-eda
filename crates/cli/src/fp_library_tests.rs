@@ -1,5 +1,5 @@
-//! Update Footprints from Library (GAPS.md package P2): the library copy is read through the library tables, the board's footprint is compared with it
-//! (`FootprintNeedsUpdate`), and an update puts the library's copy on the part.
+//! Update Footprints from Library and Compare Footprint with Library (GAPS.md package P2): the library copy is read through the library tables, the board's footprint is
+//! compared with it (`FootprintNeedsUpdate`), and an update puts the library's copy on the part.
 
 use super::tests::{scratch, setup};
 use super::{derived_schematic, load, save, step, undo};
@@ -78,4 +78,31 @@ fn an_update_reads_the_library_copy_through_the_tables_and_lists_what_differs_be
     assert_eq!(e["differs"], false, "{e}");
     undo(&dir, "test", Some(Domain::Pcb)).unwrap();
     assert_eq!(pad_sizes(&dir, "U1"), [(1_000, 1_000), (1_000, 1_000)], "and Undo gives the board's copy back");
+}
+
+#[test]
+fn compare_footprint_with_library_reports_what_differs_and_why_a_library_copy_is_missing() {
+    let dir = board_with_library("compare_with_library");
+    step(&dir, Cmd::replace_footprint("U1", "Alt:WIDE"), false, "test").unwrap();
+    let diff = crate::fp_assign_api::footprint_diff(&dir, "U1");
+    assert_eq!(diff["ok"], true, "{diff}");
+    assert_eq!((diff["library"].as_str(), diff["item"].as_str(), diff["found"].as_bool()), (Some("Alt"), Some("WIDE"), Some(true)));
+    assert!(diff["lines"].as_array().unwrap().is_empty(), "no relevant differences: {diff}");
+    assert_eq!(diff["board"]["pads"].as_array().unwrap().len(), 2);
+    assert_eq!(diff["library_copy"]["pads"][0]["w"], 1_000);
+    // the library moves on
+    write_wide(&dir, 1_200);
+    let diff = crate::fp_assign_api::footprint_diff(&dir, "U1");
+    assert_eq!(diff["lines"].as_array().unwrap().len(), 2, "{diff}");
+    assert_eq!(diff["board"]["pads"][0]["w"], 1_000);
+    assert_eq!(diff["library_copy"]["pads"][0]["w"], 1_200, "the drawings are the two footprints");
+    // the library has no such item any more
+    std::fs::remove_file(dir.join("libs").join("Alt.pretty").join("WIDE.kicad_mod")).unwrap();
+    let diff = crate::fp_assign_api::footprint_diff(&dir, "U1");
+    assert_eq!((diff["found"].as_bool(), diff["reason"].as_str()), (Some(false), Some("The library no longer contains the item WIDE.")));
+    // a footprint of no library of the tables
+    let diff = crate::fp_assign_api::footprint_diff(&dir, "U2");
+    assert_eq!((diff["found"].as_bool(), diff["reason"].as_str()), (Some(false), Some("The library is not included in the current configuration.")));
+    let diff = crate::fp_assign_api::footprint_diff(&dir, "Z9");
+    assert_eq!(diff["ok"], false);
 }
