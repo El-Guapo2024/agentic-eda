@@ -26,7 +26,9 @@
 //   keys          Backspace takes the last fixed leg back; `/` flips the posture (the heads change, a second flip brings them back); Escape ends the session.
 //
 // It answers through `window.__diffPairsCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __diffPairsCheck.wait(60000)` until
-// `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop.
+// `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes one to three minutes (a debug build of the server, and a machine that is busy answers
+// slowly), longer than the Browser pane's javascript tool gives one call: start it (`(0, eval)( src )` returns at once) and poll with `wait(30000)`. A click that lands elsewhere because the page
+// was still settling is made again (`startAt`); the pointer is placed from the layout of that moment and checked against what the studio read (`state().snap.input`).
 (async () => {
   const results = [];
   const check = (window.__diffPairsCheck = { results, done: false, ok: false, wait: null });
