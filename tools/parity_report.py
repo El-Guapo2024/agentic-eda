@@ -161,12 +161,12 @@ def type_table(totals):
 REEXPORT_NOTES = """
 What the remaining differences are (read from the two kicad-cli reports of each board; every re-export parses):
 
-- `lib_footprint_issues` / `lib_footprint_mismatch` (`api_kitchen_sink`, `component_classes`): the writer names a footprint `eda:<name>` when the source
+- `lib_footprint_issues` (`api_kitchen_sink`, `complex_hierarchy`): the writer names a footprint `eda:<name>` when the source
   gave it no library (`D5`, `bornier2`), and the board's own project reports library links as warnings, so kicad-cli flags a library that does not
   exist. The studio's derived project ignores both checks unless the project sets them (`effective_rule_severities`).
-- `silk_overlap`, `silk_over_copper`, `silk_edge_clearance`, `solder_mask_bridge`, `clearance` (`complex_hierarchy`, `api_kitchen_sink`): footprint-local
-  graphics (`fp_line`, `fp_circle`: 512 and 6 on `complex_hierarchy`) are imported into `drawings.footprint_extras`, which only the in-house DRC reads,
-  and the writer does not write them back. `api_kitchen_sink` also has a barcode item, which has no IR item.
+- `clearance`, `copper_edge_clearance`, `solder_mask_bridge`, `shorting_items` (`complex_hierarchy`, `api_kitchen_sink`): not analysed. The silkscreen types
+  (`silk_overlap`, `silk_over_copper`, `silk_edge_clearance`) are the original's since a footprint's graphics, its texts and its pads' silkscreen layer are
+  written back (`web/studio/PARITY-pcb.md` section 28); `api_kitchen_sink` also has a barcode item, which has no IR item.
 - `assertion_failure` (`component_classes_drc`): its rules test `A.Component_Class`; component classes are project data this importer does not read.
 - `missing_tuning_profile` (`drc_missing_tuning_profile`): tuning profiles are not read either.
 - `connection_width_rules`: one extra `clearance` violation, not analysed.
