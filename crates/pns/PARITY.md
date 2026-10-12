@@ -36,14 +36,16 @@ exists rather than letting you rediscover it.
    line contain an arc" takes the non-arc path unconditionally here.
 4. **No component dragger, no multi-selection drag.** Single-item
    (segment/via) drag only. Diff pairs (Stage 7) and single-track length
-   tuning (Stage 8) *are* now ported, but narrower than upstream in each
-   case -- no coupled shove/walkaround for a pair, no via/layer-switch
-   mid-pair-route, no diff-pair length/skew tuning, length tuning scoped
-   to a straight axis-aligned single-segment track and driven by a
-   dialog rather than a live mouse session; see those stages' own
-   sections for exactly why and what each still is.
+   tuning (Stage 8) *are* ported, the second narrower than upstream --
+   length tuning is scoped to a straight axis-aligned single-segment track
+   and driven by a dialog rather than a live mouse session; see those
+   stages' own sections for exactly why and what each still is.
    **Status (2026-10-07):** diff-pair length and skew tuning (`8`, `9`) are
    ported since (Stage 8b below).
+   **Status (2026-10-11):** the diff pair is KiCad's `DIFF_PAIR_PLACER` now
+   (Stage 7): coupled in all three modes, walked and shoved as one unit, with
+   vias. KiCad's dragger has no pair mode, so there is nothing to port for a
+   pair drag.
 5. **Units**: integer micrometers throughout (`eda_model::ir::Um`), like
    the rest of this workspace, not KiCad's internal nanometers.
 
@@ -421,69 +423,117 @@ route or drag.
 
 ## Stage 7 -- differential pairs
 
-`pns_diff_pair_placer.{h,cpp}` -> `src/diff_pair.rs`, task item 6 (`6`
-key). See that module's own extensive header comment for the full
-design; the short version:
+**Rewritten 2026-10-11 (P5b, branch `task-diff-pairs`).** The first port was a
+spine and its offsets that only reported a collision; this is KiCad's pair
+placer. `pns_diff_pair.{h,cpp}` -> `src/diff_pair.rs`,
+`pns_diff_pair_placer.{h,cpp}` -> `src/dp_placer.rs`, plus the pair halves of
+`src/shove.rs`, `src/walkaround.rs` and `src/optimizer.rs`. The two modules'
+header comments say what differs from KiCad branch by branch; the row-by-row
+account is `docs/parity/CODE-COMPARE-router.md` section I and the DP optimizer
+row of section D. The short version:
 
 - **Pair detection**: `dp_coupled_net_name` is `BOARD::MatchDpSuffix`
   (`pcbnew/board.cpp`) ported verbatim -- walk a net name backward past
   trailing digits/underscores, swap a trailing `+`/`-`/`P`/`N` for its
-  complement (`"LVDS_P0"` -> `"LVDS_N0"`).
+  complement (`"LVDS_P0"` -> `"LVDS_N0"`); `dp_net_polarity` says which net is
+  the pair's P (`DpNetPair`).
 - **Sizing**: `BoardRules::diff_pair_width_of`/`diff_pair_gap_of`/
-  `diff_pair_via_gap_of` (new, `crates/model/src/lib.rs`) resolve the
-  net-class fields the task brief points at (`NetClass::diff_pair_*`,
-  which existed on the model already -- carried through `.kicad_pro`
-  import since an earlier session, per that field's own doc comment --
-  but nothing read them until now), falling back to upstream's own
-  `SIZES_SETTINGS` hardcoded defaults (125um width, 180um gap) when a
-  board has no diff-pair-specific class, which is every example board in
-  this workspace today.
-- **Routing itself is structurally simpler than upstream, on purpose**:
-  upstream routes a genuine new `PNS::ITEM` kind (`DIFF_PAIR_T`, not
-  modeled in this port's `Item` enum at all -- decision #3) with its own
-  dedicated hull/collision/shove/walkaround machinery, so the pair itself
-  is a first-class obstacle-resolution unit. Building that whole second
-  collision model was out of proportion to the remaining scope, so this
-  port instead builds one direct-45-trace **spine** centerline (no
-  walkaround/shove), offsets it perpendicular by `(gap + width) / 2` on
-  each side (`offset_polyline`, a standard "parallel curve of a
-  polyline" construction reusing `optimizer::intersect_lines` -- widened
-  to `pub(crate)` for this -- to miter each new corner), and snaps each
-  line's first/last point to its own real pad rather than the
-  geometrically offset point (so the pair always actually reaches the
-  pads it started from, regardless of their exact spacing relative to
-  `gap + width`). Each line is collision-checked independently; *either*
-  colliding flags the whole preview, matching `Mode::MarkObstacles`'s
-  report-only contract -- **there is no shove or walkaround for a pair in
-  this port**, and no via/layer-switch mid-pair-route either (single
-  layer only). A real, usable feature for the common case the task asks
-  for (lay a clean, gap-matched pair along an open path), just not a
-  collision-resolving one yet.
-- **Commit**: both lines' finished runs become ordinary `Track` IR
-  entries on their own nets in the *same* `RouteCommit`/`Cmd::CommitRoute`
-  a single-track finish produces -- needed no new commit shape at all,
-  just more tracks in the existing one (`Router::finish_diff_pair`).
-- **HTTP**: `POST /api/route/dp_{start,move,fix,undo_segment,finish}`
+  `diff_pair_via_gap_of` (`crates/model/src/lib.rs`) resolve the net class's
+  `diff_pair_*` fields, falling back to upstream's `SIZES_SETTINGS` defaults
+  (125 um width, 180 um gap). `dp_placer::DpSizes::resolve` is `ImportSizes` for
+  a pair: the width is at least the board's minimum track width, and a gap or
+  via gap from the rules is at least the clearance between the two nets (the
+  fallback gap is under the default clearance, which no pair can be clean at);
+  a gap typed in the Differential Pair Dimensions dialog is kept.
+- **Start** (`DiffPairPlacer::start`, `find_dp_primitive_pair`,
+  `dangling_anchor`): the item under the click and the item of the coupled net
+  nearest to it make `DP_PRIMITIVE_PAIR` -- two pads or two vias (on the same
+  layers), or two track ends nothing else joins. KiCad's refusals are
+  returned as they are worded.
+- **The pair** (`diff_pair.rs`): `DpGateways` builds the gateways of the start
+  (`BuildFromPrimitivePair`: a rectangular pad pair fans out at 45 and 90
+  degrees through entry lines, a pair of tracks continues at 22.5 degrees),
+  of the coupled pair under the cursor or of the cursor (`BuildForCursor`, with
+  `FilterByOrientation` for a cursor near the extension of the pair), and
+  `FitGateways` tries every start x end x posture and keeps the best that
+  `DiffPair::build_initial` accepts: the gap kept (`checkGap`), no crossing, no
+  self-intersection, only obtuse turns (`CheckConnectionAngle`). Units: KiCad's
+  nm tolerances are restated in um (`GAP_CHECK_SLACK` is `checkGap`'s 100 nm).
+- **The three modes** (`DiffPairPlacer::route_head`, `rh_mark_obstacles`,
+  `rh_walk_only`, `rh_shove_only`): Highlight collisions reports the pair as
+  fitted and flags it when either line collides. Walk around walks it round
+  what is in its way as one unit (`attempt_walk`: one line walked
+  round the obstacle by `Walker`, the other shoved to the gap from it by
+  `shove::shove_obstacle_line` with `ForceClearance`, roles swapping for up to
+  three rounds; `try_walk_dp` takes the better of the walks that start with P
+  and with N and runs `optimizer::optimize_pair` on it). Shove walks the pair
+  round the pads and then shoves both lines as the heads of one shove
+  (`shove::shove_heads`: several heads, each with the via it ends in), so the
+  tracks and vias in the way are pushed aside with the pair's gap kept between
+  its own lines. `propagate_dp_head_forces` first pushes the cursor off what a
+  circle of the pair's size would sit on.
+- **Vias** (`toggle_via`, `make_via`): `V` makes the head end in two vias a
+  `viaGap()` apart (`BuildGeneric` in via mode fans the lines to the via
+  centres); a fix places both and the route goes on from them on the other
+  layer (`SetLayer`), the start pair taken from the vias.
+- **Fix, Backspace, posture** (`fix_head`, `undo_last_segment`,
+  `flip_posture`): a fix makes the head a leg and the next leg starts from
+  `EndingPrimitives` (`m_initialDiagonal` carries the posture on); a head that
+  reaches the coupled pair of pads finishes the route. Backspace is an
+  extension (`DIFF_PAIR_PLACER` has no `UnfixRoute`): it puts back the world,
+  the posture and the pair the route went on from. `/` toggles the posture.
+- **Commit**: the whole route is one `Cmd::CommitRoute` -- the legs as tracks
+  on their own nets, the vias, and the tracks and vias a shove moved as
+  removals and replacements (`Router::finish_diff_pair`, `build_dp_commit`;
+  the shoved lines keep their IR track by `Node::add_line_tagged`) -- so it is
+  one undo step. `Router` keeps a pair, a route and a drag mutually exclusive.
+- **HTTP**: `POST /api/route/dp_{start,dims,move,via,fix,undo_segment,finish}`
   (`crates/cli/src/route_api.rs`), sharing `RouteCell`/`Router` with the
-  route/drag sessions (mutually exclusive, same as those two already are
-  with each other); the existing `/api/route/cancel` already ends a
-  diff-pair session too (it just drops the whole cell).
-- **Frontend**: `6` (`pcbnew.InteractiveRouter.DiffPair`) arms the tool
-  the same toggle-arm way `X` does; `components/canvas/diffPairRouting.ts`
-  + `kicad-port/dpTool.ts` mirror `routing.ts`/`routeTool.ts`'s own split
-  exactly. `/` flips the spine's posture; Backspace undoes the last leg;
-  no via/width hotkeys (not supported, see above). `painter.ts` draws
-  both lines, coloring both the violation color if *either* collides
-  (the pair reads as one unit to the user even though each line is its
-  own collision check).
-- **Test coverage note**: `diff_pair.rs`'s own algorithmic core (suffix
-  matching, polyline offsetting/mitering, pair-finding, full route/fix/
-  finish flows, collision reporting) has 8 direct unit tests; the
-  `Router`-level `*_diff_pair` methods are thin, direct delegations
-  (compiled and type-checked, same disjoint-field-borrow pattern the
-  already-tested `drag_*` methods use) without their own dedicated
-  integration test, to keep this task item's scope proportionate to the
-  remaining ones -- see the final report.
+  route and drag sessions; `/api/route/cancel` ends a pair too, and
+  `/api/route/mode` and `/api/route/settings` reach the running pair. `dp_move`'s
+  reply is the head (`head_a`, `head_b`), the fixed legs (`runs_*`), the vias
+  (`vias`, `fixed_vias`), what the shove moves (`displaced`, `displaced_vias`,
+  which also keeps the tracks an earlier leg pushed until the commit),
+  `colliding` and `snapped_end`.
+- **Frontend**: `6` (`pcbnew.InteractiveRouter.DiffPair`) arms the tool;
+  `components/canvas/diffPairRouting.ts` + `kicad-port/dpTool.ts` mirror
+  `routing.ts`/`routeTool.ts`; the mode actions (Highlight collisions, Walk
+  around, Shove, Cycle Router Mode) and Differential Pair Dimensions reach a
+  running pair; `V` is `pcbnew.Control.layerToggle`; `/` flips the posture,
+  Backspace is `UndoLastSegment`, `AttemptFinish` finishes. `painter.ts`
+  draws both lines (the violation colour if either collides), the pair of vias
+  and what the shove moves.
+- **Differences from KiCad, on purpose** (the module header of `dp_placer.rs`
+  has them, with the reasoning): no springback (every move resolves from the
+  world the last fix left); a walk that fails keeps the pair as drawn and flags
+  it, where KiCad's `tryWalkDp` ends with `if( bestScore > 0.0 )`, which is
+  always true, and so empties the pair; two walk attempts where KiCad makes
+  four (`attempt & 2` is a winding `attemptWalk` never reads, so 2 and 3 repeat
+  0 and 1); Backspace; the gap and via gap raised to the clearance. Not
+  ported because KiCad never calls it: `DP_GATEWAYS::BuildOrthoProjections` and
+  the pair's ortho mode.
+- **Not done**: Route From Other End for a pair (`ROUTER::ContinueFromEnd`
+  restarts the placer of the same mode; here only `Router::continue_from_end`,
+  for a single track), a drag of a pair (KiCad's `DRAGGER` has no pair mode:
+  `m_draggedLine` is one `LINE`), length and skew tuning of a pair beyond
+  Stage 8b's dialog.
+- **Tests**: unit tests in `diff_pair.rs` (the gateways, the pair, the
+  coupled length), `dp_placer.rs` (start, a pad pair at 45 degrees, tracks,
+  walk, shove, vias, Backspace, the posture, the gap), `optimizer.rs`
+  (`optimize_pair`, the memo's answer for a candidate that shares segments
+  with its base) and `shove.rs`; `crates/pns/tests/dp_boards.rs` on KiCad's own
+  pair board (`qa/data/pcbnew/pns_regressions/boards/dp_test.kicad_pcb`:
+  no recorded session in the QA corpus routes a pair, so these are not
+  replays) and a slow sweep of random cursors (`EDA_SLOW_TESTS=1`) that checks
+  every accepted pair leaves the board clean and keeps its gap; the HTTP tests
+  in `route_api.rs` (a routed pair is one undo step, `V` places vias, a net that
+  is not half of a pair is refused); the slow
+  `gate_vs_kicad::a_placed_pair_passes_kicad_clis_clearance_and_diff_pair_gap_checks`
+  (kicad-cli's DRC on four placed pairs: no clearance, track width or
+  diff-pair gap violation added); `kicad-port/dpTool.test.ts`; and the browser
+  check `web/studio/e2e/diff-pairs.check.js` (the tool from the canvas
+  through `window.__eda`: the three modes, a pair routed and undone, `V`, `/`,
+  Backspace, Escape).
 
 ## Stage 8 -- length tuning (single track)
 
@@ -526,10 +576,9 @@ extensive header comment for the full reasoning; short version:
   as the geometry genuinely allows, rather than always overshooting by a
   whole period or refusing outright one period early. 9 tests.
 - **Collision**: report-only, same `Mode::MarkObstacles`-style contract
-  every other scoped-down piece of this crate already uses (diff pairs,
-  Stage 7) -- no automatic rerouting around something the meander would
-  hit, just a `colliding` flag the dialog surfaces before `Apply` is
-  even enabled.
+  every other scoped-down piece of this crate uses -- no automatic
+  rerouting around something the meander would hit, just a `colliding`
+  flag the dialog surfaces before `Apply` is even enabled.
 - **Commit**: needed no new `Cmd` at all -- the generated replacement
   becomes one `Track` IR entry, removed-and-re-added via the exact same
   `Cmd::CommitRoute` a finished route/drag/diff-pair already uses
