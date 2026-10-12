@@ -1919,6 +1919,7 @@ mod tests {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         };
         let part = |r: &str| Part {
             reference: r.into(),

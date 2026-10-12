@@ -344,6 +344,7 @@ mod tests {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         });
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());

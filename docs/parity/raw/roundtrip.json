@@ -1,8 +1,8 @@
 {
   "measured_at": {
-    "corpus": "2026-10-09",
+    "corpus": "2026-10-12",
     "own": "2026-10-04",
-    "reexport": "2026-10-08"
+    "reexport": "2026-10-11"
   },
   "own_pipeline_roundtrip": [
     {
@@ -301,7 +301,7 @@
     ],
     "import_failed": 1,
     "imported_ok": 184,
-    "non_rect_pad_shapes_approximated": 189,
+    "non_rect_pad_shapes_approximated": 0,
     "outline_malformed": 2,
     "outline_malformed_boards": [
       "pcbnew/issue18839.kicad_pcb",
@@ -343,7 +343,8 @@
       "reexport_types": {
         "isolated_copper": 1,
         "lib_footprint_issues": 2,
-        "lib_footprint_mismatch": 3
+        "lib_footprint_mismatch": 3,
+        "silk_overlap": 2
       }
     },
     {
@@ -388,16 +389,16 @@
         "holes_co_located": 4,
         "lib_footprint_issues": 72,
         "shorting_items": 2,
-        "silk_edge_clearance": 2,
-        "silk_over_copper": 2,
-        "silk_overlap": 5,
+        "silk_edge_clearance": 14,
+        "silk_over_copper": 104,
+        "silk_overlap": 199,
         "solder_mask_bridge": 115
       }
     },
     {
       "board": "component_classes",
       "error": null,
-      "identical_type_counts": false,
+      "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
         "invalid_outline": 1,
@@ -408,8 +409,7 @@
       "reexport_types": {
         "invalid_outline": 1,
         "items_not_allowed": 2,
-        "lib_footprint_issues": 2,
-        "lib_footprint_mismatch": 12
+        "lib_footprint_mismatch": 14
       }
     },
     {

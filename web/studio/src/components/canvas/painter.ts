@@ -32,6 +32,7 @@ import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
 import { drcMarkerObject } from "../../kicad-port/appearance";
+import { drawFootprintArt } from "./fpArtPaint";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
 
 /**
@@ -142,13 +143,13 @@ export interface PaintOptions {
 /** How much of its colour an item outside the entered group keeps. */
 export const OUTSIDE_ENTERED_GROUP_ALPHA = 0.3;
 
-function layerAlpha(opts: PaintOptions, key: string): number {
+export function layerAlpha(opts: PaintOptions, key: string): number {
   // HIGH_CONTRAST_MODE::DIMMED mixes the inactive layers 80 % into the background; HIDDEN draws them not at all.
   if (opts.activeLayer && opts.highContrast && opts.activeLayer !== key) return opts.appearance?.contrastHidden ? 0 : 0.25;
   return opts.layerOpacity[key] ?? 1;
 }
 
-function withAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: () => void) {
+export function withAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: () => void) {
   if (alpha >= 1) return draw();
   if (alpha <= 0) return;
   const prev = ctx.globalAlpha;
@@ -371,6 +372,9 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.stroke();
     });
   }
+
+  // The footprint's own silkscreen, fab and assembly drawings and its texts (`part.graphics`, `part.texts`), each on its layer and over the pads.
+  drawFootprintArt(ctx, view, part, opts);
 
   // The Reference, the Value and the user fields are drawn by `drawFields` once the backend says where they are (`part.fields`); an older backend's footprint has
   // only its reference, drawn beside the courtyard the way it always was.
@@ -684,7 +688,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
 }
 
 /** A Shape/Text's own dotted KiCad layer name ("F.SilkS") -> colors.json's real key ("F_SilkS") -- unlike copperColorKey() (which also lowercases, fine for copper's own always-lowercase-safe names but wrong for e.g. "Edge.Cuts" -> "Edge_Cuts"), these carry a real named layer already and just need the punctuation swapped, case preserved. */
-function realLayerKey(layer: string): string {
+export function realLayerKey(layer: string): string {
   return layer.replace(/\./g, "_");
 }
 
@@ -710,7 +714,7 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
 }
 
 /** `sketch` is `pcbnew.Control.graphicOutlines` ("Sketch Graphic Items", `m_DisplayGraphicsFill` off): a filled shape is drawn as its outline only. */
-function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
+export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
   ctx.beginPath();
   switch (s.kind) {
     case "segment":

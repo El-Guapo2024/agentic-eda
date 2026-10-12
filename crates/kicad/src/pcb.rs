@@ -678,6 +678,12 @@ pub(crate) fn write_footprint(
     let rot_deg = fmt_mm_f(-(fp.rot as f64) / 1000.0);
     let uuid = crate::duid_for(&format!("footprint:{}", fp.id), &fp.id);
     let lib_name = part.footprint.clone().unwrap_or_else(|| footprint.name.clone());
+    // A `#2`, `#3` ... slot is the importer's way to keep apart instances of one library footprint whose pads, models or graphics differ (`dedup_footprint_key`): in the file it is
+    // still that library's footprint.
+    let lib_name = match lib_name.rsplit_once('#') {
+        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && model.footprints.iter().any(|f| f.name == base) => base.to_string(),
+        _ => lib_name,
+    };
     let lib_id = if lib_name.contains(':') { lib_name } else { format!("eda:{lib_name}") };
 
     writeln!(out, "\t(footprint {}", sexpr_str(&lib_id)).unwrap();
@@ -709,15 +715,24 @@ pub(crate) fn write_footprint(
         }
     }
 
+    // The footprint's silkscreen, fab drawings and texts (`fp_line`, `fp_arc`, ..., `fp_text user`), in its own frame -- a bottom-side footprint's mirrored
+    // like its pads and on the other side's layers: after the fields and before the pads, where `format( FOOTPRINT )` writes the drawings.
+    crate::fp_art_io::write_art(out, &footprint.art, fp);
+
     // Net assignment: look up which net (if any) this pad's "REF.PIN" belongs to.
     let pin_net = |number: &str| -> Option<&str> {
         let key = format!("{}.{}", fp.id, number);
         model.nets.iter().find(|n| n.pins.iter().any(|p| p == &key)).map(|n| n.name.as_str())
     };
 
+    // The layers a pad of an imported board is on besides copper, paste and mask (an older library's through-hole pads are on the silkscreen too, and kicad-cli's silkscreen checks
+    // measure them there): the importer kept them per pad, in the footprint's pad order.
+    let pad_infos = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).map(|e| e.pads.as_slice()).filter(|p| p.len() == footprint.pads.len());
+
     // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
     for &(pad_idx, pad) in &pads {
+        let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -771,7 +786,11 @@ pub(crate) fn write_footprint(
                     (None, Some((w, h))) => write!(out, " (drill oval {} {}{offset})", mm(w), mm(h)).unwrap(),
                     (None, None) => unreachable!("Footprint::validate requires a drill on a through-hole/non-plated pad"),
                 }
-                write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
+                if art_layers.is_empty() {
+                    write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
+                } else {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu", "F.Mask", "B.Mask"], art_layers, fp.side)).unwrap();
+                }
             }
             PadKind::Smd => {
                 if let Some((ox, oy)) = shape_text.offset {
@@ -782,7 +801,11 @@ pub(crate) fn write_footprint(
                 } else {
                     ("F.Cu", "F.Paste", "F.Mask")
                 };
-                write!(out, " (layers {} {} {})", sexpr_str(cu), sexpr_str(paste), sexpr_str(mask)).unwrap();
+                if art_layers.is_empty() {
+                    write!(out, " (layers {} {} {})", sexpr_str(cu), sexpr_str(paste), sexpr_str(mask)).unwrap();
+                } else {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&[cu, paste, mask], art_layers, fp.side)).unwrap();
+                }
             }
         }
         // A non-plated hole has no net by definition -- nothing to look up.
