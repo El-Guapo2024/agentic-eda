@@ -25,7 +25,8 @@ test("isActionEnabledForTab: a common.* (or any other non-pcbnew/eeschema) actio
 });
 
 test("isActionEnabledForTab: footprint-editor-frame actions (New Footprint, Place the Anchor) are enabled on the footprint tab only", () => {
-  for (const name of ["pcbnew.ModuleEditor.newFootprint", "pcbnew.InteractiveDrawing.setAnchor"]) {
+  // (the drop of a `.kicad_mod` is the Footprint Editor's frame, `m_acceptedExts` of footprint_edit_frame.cpp)
+  for (const name of ["pcbnew.ModuleEditor.newFootprint", "pcbnew.InteractiveDrawing.setAnchor", "pcbnew.Control.ddImportFootprint"]) {
     assert.equal(isActionEnabledForTab(name, "footprint", true), true, name);
     assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
     assert.equal(isActionEnabledForTab(name, "schematic", true), false, name);
@@ -116,5 +117,15 @@ test("isActionEnabledForTab: Symbol Properties, Pin Table and the shape tools ar
     assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
     assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
     assert.equal(isActionEnabledForTab(name, "footprint", true), false, name);
+  }
+});
+
+test("isActionEnabledForTab: the file drops -- Append Board is the board editor's, Import Graphics the schematic's and the Symbol Editor's", () => {
+  assert.equal(isActionEnabledForTab("pcbnew.Control.DdAppendBoard", "pcb", true), true);
+  assert.equal(isActionEnabledForTab("pcbnew.Control.DdAppendBoard", "footprint", true), false);
+  for (const name of ["eeschema.EditorControl.importGraphics", "eeschema.EditorControl.ddImportGraphics"]) {
+    assert.equal(isActionEnabledForTab(name, "schematic", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "symbol", true), true, name);
+    assert.equal(isActionEnabledForTab(name, "pcb", true), false, name);
   }
 });

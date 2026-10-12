@@ -1025,6 +1025,56 @@ export interface PadEditCmd {
   custom?: PadCustom;
 }
 
+/**
+ * File > Import > Graphics... (`DRAWING_TOOL::PlaceImportedGraphics`): a DXF or SVG file (its `text`) as the board's own lines, arcs, circles, polygons, curves and text on `layer`,
+ * one undo step. `offset_*_nm` is the importer's offset after the scale (nanometres); `fix_tolerance_um` is "Fix discontinuities" with its tolerance; `replace_outline` makes
+ * the imported Edge.Cuts shapes the board's outline. See crates/ops/src/import_graphics.rs.
+ */
+export interface ImportGraphicsCmd {
+  op: "import_graphics";
+  format: "dxf" | "svg";
+  text: string;
+  layer: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+  group?: boolean;
+  fix_tolerance_um?: Um | null;
+  replace_outline?: boolean;
+}
+
+/**
+ * `SCH_DRAWING_TOOLS::ImportGraphics` (schematic) and `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics` (Symbol Editor): the same file as graphic lines, shapes and text of the sheet in
+ * view, or as drawn items of the symbol `lib_id` on `unit` / `body_style`, in one undo step. `offset_*_nm` is the importer's offset after the scale; `line_width_um` 0 is the sheet's
+ * default width. See crates/ops/src/import_graphics_sch.rs.
+ */
+export interface ImportSchGraphicsCmd {
+  op: "import_sch_graphics";
+  format: "dxf" | "svg";
+  text: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+}
+
+export interface ImportSymbolGraphicsCmd {
+  op: "import_symbol_graphics";
+  lib_id: string;
+  unit?: number;
+  body_style?: number;
+  format: "dxf" | "svg";
+  text: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+}
+
 /** `PASTE_MODE` (`include/dialogs/dialog_paste_special.h`): the reference designators of pasted footprints are given the next free number ("unique"), left as the clipboard has them even if another footprint has them ("keep", a plain paste's default) or cleared to `REF**` ("remove"). */
 export type PcbPasteMode = "unique" | "keep" | "remove";
 
@@ -1184,6 +1234,9 @@ export type Cmd =
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
   | { op: "paste_clipboard"; text: string; at: PointXY }
+  | ImportGraphicsCmd
+  | ImportSchGraphicsCmd
+  | ImportSymbolGraphicsCmd
   /** Paste Special... (`DIALOG_PASTE_SPECIAL`, crates/ops/src/pcb_paste_special.rs): a paste with the dialog's two answers -- what happens to the reference designators of the pasted footprints (`PASTE_MODE`; "keep" is what a plain paste does) and "Clear net assignments". */
   | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
   /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */

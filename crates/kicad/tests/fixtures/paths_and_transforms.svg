@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="100mm" height="50mm" viewBox="0 0 100 50">
+  <defs><linearGradient id="g"><stop offset="0" stop-color="red"/></linearGradient></defs>
+  <!-- an open path with every kind of segment: lines, a cubic, a smooth cubic, a quadratic, an arc -->
+  <path d="M5 40 L15 40 C20 30 25 30 30 40 S40 50 45 40 Q50 30 55 40 A5 5 0 0 1 65 40" fill="none" stroke="black" stroke-width="0.2"/>
+  <!-- a closed path under a group's transform: a 10 mm square moved to (70, 10) and turned a quarter -->
+  <g transform="translate(70 10)">
+    <path d="M0 0 h10 v10 h-10 z" transform="rotate(90)" fill="none" stroke="black" stroke-width="0.2"/>
+  </g>
+  <!-- a filled shape with a hole -->
+  <path d="M10 5 h20 v20 h-20 z M15 10 v10 h10 v-10 z" fill="#333333" fill-rule="evenodd"/>
+  <polyline points="80,40 90,40 90,48" fill="none" stroke="black" stroke-width="0.2"/>
+  <text x="1" y="1">not imported</text>
+</svg>

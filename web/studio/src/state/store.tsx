@@ -40,6 +40,7 @@ import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
 import { repeatSource } from "../kicad-port/schRepeat";
 import { onCurrentSheet } from "../kicad-port/schSheetCmd";
+import { newIdsAfter } from "../kicad-port/schClipboard";
 import { samePath } from "../kicad-port/sheetPages";
 import { loadPreferences, savePreferences, type Preferences } from "../kicad-port/preferences";
 import { DEFAULT_ROUTER_SETTINGS, type RouterSettings } from "../kicad-port/routerSettings";
@@ -1687,6 +1688,18 @@ export interface StudioApi {
    * Paste Special passes the dialog's answers (`DIALOG_PASTE_SPECIAL`): what happens to the reference designators and whether the nets are cleared; a plain paste keeps the references.
    */
   pasteClipboard: (options?: { mode?: PcbPasteMode; clearNets?: boolean }) => Promise<void>;
+  /**
+   * A command that puts NEW items on the board (Import Graphics, Append Board, a dropped file), carried the way a Paste is: `build` makes the command for where the cursor is (the grid point, else the
+   * middle of the board), the items it added are selected, and with `carry` the step is held open (`carry: "begin"`, crates/cli/src/carry.rs) and the Move tool is armed on them -- the drop joins the step
+   * (one undo step for the new items and where they were dropped), Escape leaves nothing behind (`revertCarriedPlacement`), as for a Paste. `carry` off only selects them (a "Place at" import is where it
+   * was told). False when the command was refused or added nothing.
+   */
+  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
+  /**
+   * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
+   * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
+   */
+  placeNewSchItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
   /**
@@ -2087,7 +2100,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         turns: preview.turns,
         holdUm: preview.holdUm ?? holdPoint(origin, preview.dxUm, preview.dyUm),
       });
-      if (cmd) await runCmd(cmd);
+      // The drop of items an Import Graphics carried joins the step that made them (`carry: "commit"`, as the board's drop does in `commitMove`); a drop that sends nothing, or one the
+      // backend refuses, leaves the import standing as a step of its own.
+      const carrying = carriedPlacementRef.current;
+      carriedPlacementRef.current = false;
+      const ok = cmd ? await runCmd(cmd, carrying ? "commit" : undefined) : false;
+      if (carrying && !ok) await postCarry("commit");
     },
     cmd: (c) => runCmd(c),
     advanceMoveQueue: () => advanceMoveQueue(),
@@ -2235,6 +2253,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const reply = await postCarry("cancel");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
+      if (stateRef.current.tab === "schematic") await refreshSchematic(); // a schematic import was carried: the sheet is as it was
       return reply.ok;
     },
     redo: async () => {
@@ -2369,6 +2388,52 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at });
+    },
+    // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
+    // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
+    placeNewItems: async (build, carry) => {
+      const board = stateRef.current.board;
+      if (!board) return false;
+      const at = pasteAt();
+      const before = allItemIds(board);
+      const ok = await runCmd(build(at), carry ? "begin" : undefined);
+      if (!ok) return false;
+      const after = await fetchState().catch(() => null);
+      const newIds = after ? newItemIds(before, after) : [];
+      if (newIds.length === 0) {
+        if (carry) await postCarry("commit"); // nothing to carry: what the command did stands
+        return true;
+      }
+      dispatch({ type: "SET_SELECTION", refs: newIds });
+      if (carry) {
+        carriedPlacementRef.current = true;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at });
+      }
+      return true;
+    },
+    placeNewSchItems: async (build, carry) => {
+      const st = stateRef.current;
+      const sheet = st.currentSheetPath;
+      const before = st.schematic;
+      if (!before) return false;
+      const c = st.cursorUm;
+      const at = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: Math.round(c.x / 1270) * 1270, y: Math.round(c.y / 1270) * 1270 } : { x: 0, y: 0 };
+      const ok = await runCmd(build(at), carry ? "begin" : undefined);
+      if (!ok) return false;
+      const after = await fetchSchematic(sheet).catch(() => null);
+      const ids = after ? newIdsAfter(before, after) : [];
+      if (ids.length === 0) {
+        if (carry) await postCarry("commit");
+        return true;
+      }
+      dispatch({ type: "SET_SELECTION", refs: ids });
+      if (carry) {
+        carriedPlacementRef.current = true;
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
+        dispatch({ type: "SET_MOVE_ORIGIN", at });
+      }
+      return true;
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });

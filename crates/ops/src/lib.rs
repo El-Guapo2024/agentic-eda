@@ -56,7 +56,12 @@ mod review;
 pub mod library_editors;
 mod array;
 pub use array::ArrayGeometry;
+mod fix_shapes;
 mod fp_edit;
+mod import_graphics;
+pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, ImportGraphics};
+mod import_graphics_sch;
+pub use import_graphics_sch::{sch_items as graphics_sch_items, symbol_items as graphics_symbol_items, ImportSchGraphics, ImportSymbolGraphics};
 mod library_place;
 mod outline;
 mod pcb_global_edit;
@@ -705,6 +710,15 @@ pub enum Cmd {
         #[serde(default)]
         definition: Option<LibraryFootprint>,
     },
+    /// `DRAWING_TOOL::PlaceImportedGraphics` (File > Import > Graphics..., `pcbnew.InteractiveDrawing.placeImportedGraphics`): a DXF or SVG file as
+    /// the board's own lines, arcs, circles, polygons, curves and text on one layer, in one undo step -- see [`import_graphics`] for what is mapped
+    /// and how. The file travels with the command.
+    ImportGraphics(ImportGraphics),
+    /// `SCH_DRAWING_TOOLS::ImportGraphics` (File > Import > Graphics..., `eeschema.EditorControl.importGraphics`): a DXF or SVG file as graphic lines, shapes
+    /// and text of the sheet in view, in one undo step -- see [`import_graphics_sch`].
+    ImportSchGraphics(ImportSchGraphics),
+    /// `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics`: the same into the symbol `lib_id` of the Symbol Editor.
+    ImportSymbolGraphics(ImportSymbolGraphics),
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
     /// the studio's Cmd+V. Unlike `Duplicate` (which looks up existing
@@ -1581,6 +1595,7 @@ impl Cmd {
             | Cmd::AddJunction { .. }
             | Cmd::DeleteJunction { .. }
             | Cmd::AddSchLine { .. }
+            | Cmd::ImportSchGraphics(_)
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
             | Cmd::ImportSheet { .. }
@@ -1651,6 +1666,7 @@ impl Cmd {
             | Cmd::EditSymbolPin { .. }
             | Cmd::PushPinProperty { .. }
             | Cmd::AddSymbolGraphic { .. }
+            | Cmd::ImportSymbolGraphics(_)
             | Cmd::DeleteSymbolGraphic { .. }
             | Cmd::MoveSymbolGraphic { .. }
             | Cmd::EditSymbolGraphic { .. }
@@ -1676,6 +1692,8 @@ impl Cmd {
             Cmd::SchEdit(c) => c.edits_connectivity(),
             // A definition kept with the schematic changes no connection.
             Cmd::EmbedLibSymbol { .. } => false,
+            // Drawn lines, shapes and text are not wires: nothing they cross is connected to them.
+            Cmd::ImportSchGraphics(_) => false,
             _ => true,
         }
     }
@@ -1718,6 +1736,9 @@ impl Cmd {
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
+            Cmd::ImportGraphics(req) => vec![req.layer.as_str()],
+            Cmd::ImportSchGraphics(_) => vec!["sch_graphics"],
+            Cmd::ImportSymbolGraphics(req) => vec![req.lib_id.as_str()],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
@@ -2279,6 +2300,9 @@ impl<'a> Board<'a> {
 
             Cmd::Duplicate { ids } => self.duplicate_all(ids),
             Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
+            Cmd::ImportGraphics(req) => self.import_graphics(req),
+            Cmd::ImportSchGraphics(req) => self.import_sch_graphics(req),
+            Cmd::ImportSymbolGraphics(req) => self.import_symbol_graphics(req),
             Cmd::PasteSpecial { text, at, mode, clear_nets } => self.paste_special(text, *at, *mode, *clear_nets),
             Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
@@ -5073,6 +5097,10 @@ mod fp_edit_tests;
 mod pcb_props_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
+#[cfg(test)]
+mod import_graphics_tests;
+#[cfg(test)]
+mod import_graphics_sch_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
 #[cfg(test)]
