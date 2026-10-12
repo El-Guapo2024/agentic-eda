@@ -380,7 +380,6 @@ impl<'m> Scene<'m> {
     }
 
     /// The pins of a placed symbol with their numbers.
-    #[cfg(test)]
     pub(crate) fn pins_of(&self, i: usize) -> Vec<(String, Point)> {
         let s = &self.sch.symbols[i];
         let m = Matrix::of(s.rot, s.mirrored, s.mirror_y);
@@ -1002,10 +1001,15 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
             }
         }
     };
-    match lib {
+    let mut shape = match lib {
         Some(lib) => lib_shape(&lib, s.unit),
         None => SymbolShape::default(),
+    };
+    // the places Swap Pins traded: a pin sits where the pin it swapped with is in the library symbol
+    if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&s.id, s.unit)) {
+        shape.pins = eda_model::sch_extras::permute_pins(std::mem::take(&mut shape.pins), swaps);
     }
+    shape
 }
 
 fn power_shape(model: &ConstraintModel, p: &eda_model::ir::PowerSymbol) -> SymbolShape {

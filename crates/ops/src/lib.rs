@@ -5099,6 +5099,7 @@ pub mod episode;
 pub mod flash;
 pub mod sch_edit;
 pub mod sch_move;
+mod sch_pins;
 mod sch_drag;
 mod sch_props;
 mod sch_scene;
@@ -5111,3 +5112,5 @@ mod sch_fields_tests;
 mod sch_body_style_tests;
 #[cfg(test)]
 mod sch_props_tests;
+#[cfg(test)]
+mod sch_pins_tests;

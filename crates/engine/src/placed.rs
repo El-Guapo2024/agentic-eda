@@ -10,7 +10,8 @@
 //! axis first. That is `eda_kicad`'s `baked_local`, which this file reproduces for the integer-micrometre world.
 
 use eda_layout::{Node, Point as LPoint, Side};
-use eda_model::ir::{Point, SymbolInstance};
+use eda_model::ir::{field_key, Point, SchematicSection, SymbolInstance};
+use eda_model::sch_extras::permute_pins;
 use eda_model::symbol::{AlternateBody, LibPin, LibSymbol, SPoint, SymbolGraphic};
 use eda_model::{Part, PinKind};
 
@@ -78,6 +79,16 @@ pub fn pin_points(sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol
         out.push((part.pins[i].number.clone(), at(local.x, local.y)));
     }
     out
+}
+
+/// [`pin_points`] of the placed symbol `sym` of `sch`: the places Swap Pins traded (`SchExtras::pin_swaps`) are in it, so a pin that took another
+/// pin's place is at that pin's point.
+pub fn pin_points_in(sch: &SchematicSection, sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol>) -> Vec<(String, Point)> {
+    let pts = pin_points(sym, part, resolved);
+    match sch.extras.pin_swaps_of(&field_key(&sym.id, sym.unit)) {
+        Some(swaps) => permute_pins(pts, swaps),
+        None => pts,
+    }
 }
 
 /// KiCad's electrical type for a pin that no library symbol describes (`eda_kicad`'s `electrical_type`, which the writer uses).

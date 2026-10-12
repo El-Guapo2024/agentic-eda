@@ -230,6 +230,20 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     }
     writeln!(out, "\t)").unwrap();
 
+    // The symbols whose pins Swap Pins moved keep a copy of their own in the cache (`lib_name`), one per placed symbol, named `<symbol>_<n>`.
+    let mut cache_names: BTreeMap<(String, u32), String> = BTreeMap::new();
+    let mut cache_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for sym in &symbols {
+        if sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)).is_none() {
+            continue;
+        }
+        let lib_id = sym_lib_id(sym);
+        let bare = lib_id.rsplit(':').next().unwrap_or(&lib_id).to_string();
+        let n = cache_counts.entry(bare.clone()).or_insert(0);
+        *n += 1;
+        cache_names.insert((sym.id.clone(), sym.unit), format!("{bare}_{n}"));
+    }
+
     // ---- lib_symbols ----
     writeln!(out, "\t(lib_symbols").unwrap();
     for lib_id in &lib_ids {
@@ -253,6 +267,11 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
             write_power_lib_symbol(&mut out, lib_id, &resolved);
         }
     }
+    for sym in &symbols {
+        let Some(name) = cache_names.get(&(sym.id.clone(), sym.unit)) else { continue };
+        let instances: Vec<&SymbolInstance> = symbols.iter().filter(|s| s.id == sym.id).copied().collect();
+        write_lib_symbol_entry(&mut out, name, &sym_lib_id(sym), &instances, parts_by_ref[sym.id.as_str()], model, Some((sch, sym.id.as_str())));
+    }
     writeln!(out, "\t)").unwrap();
 
     // ---- symbol instances ----
@@ -272,7 +291,8 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let real_symbol = model.real_symbol_of(&lib_id, part);
         let body_style = if real_symbol.as_ref().is_some_and(|s| s.has_alternate_body()) { sch.body_style_of(sym).min(2) } else { 1 };
         let convert = if body_style > 1 { format!(" (convert {body_style})") } else { String::new() };
-        writeln!(out, "\t(symbol (lib_id {}) (at {x} {y} 0) (unit {}){convert}", sexpr_str(&lib_id), sym.unit).unwrap();
+        let lib_name = cache_names.get(&(sym.id.clone(), sym.unit)).map(|n| format!(" (lib_name {})", sexpr_str(n))).unwrap_or_default();
+        writeln!(out, "\t(symbol{lib_name} (lib_id {}) (at {x} {y} 0) (unit {}){convert}", sexpr_str(&lib_id), sym.unit).unwrap();
         // The attributes `SCH_EDIT_TOOL::SetAttribute` toggles (Do not Populate, Exclude from BOM / Board / Simulation): kicad-cli's BOM, netlist and ERC read them from here.
         let yes_no = |b: bool| if b { "yes" } else { "no" };
         writeln!(
@@ -928,6 +948,14 @@ fn baked_graphic(g: &eda_model::SymbolGraphic, sym: &SymbolInstance, width_um: f
 /// one for a single-unit part; several, one per placed unit, for a
 /// multi-unit one -- see this function's own per-unit loop below).
 fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&SymbolInstance], part: &Part, model: &ConstraintModel) {
+    write_lib_symbol_entry(out, lib_id, lib_id, instances, part, model, None);
+}
+
+/// [`write_regular_lib_symbol`] under the name `cache_name` and with the places Swap Pins traded: `swaps` is the sheet and the reference whose
+/// units' `SchExtras::pin_swaps` apply. KiCad keeps a placed symbol whose pins are not the library's as a copy of its own in the sheet's cache
+/// (`SCH_SCREEN::Append`: "the original library symbol may have changed ... a new name must be created"), named `<symbol>_<n>` with no
+/// library, and the instance points at it with `(lib_name ...)`.
+fn write_lib_symbol_entry(out: &mut String, cache_name: &str, lib_id: &str, instances: &[&SymbolInstance], part: &Part, model: &ConstraintModel, swaps: Option<(&eda_model::ir::SchematicSection, &str)>) {
     let resolved = model.real_symbol_of(lib_id, part);
     // The representative instance whose own rotation/mirror every graphic
     // and pin gets baked through (see `baked_graphic`/`baked_real_point`'s
@@ -952,8 +980,8 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
     // whichever instance happened to trigger this block (`"CIN_0_1"`)
     // parses as a name/prefix mismatch and `kicad-cli` refuses to load the
     // file at all. Confirmed empirically against real `kicad-cli sch erc`.
-    let bare_name = lib_id.rsplit(':').next().unwrap_or(lib_id);
-    writeln!(out, "\t\t(symbol {}", sexpr_str(lib_id)).unwrap();
+    let bare_name = cache_name.rsplit(':').next().unwrap_or(cache_name);
+    writeln!(out, "\t\t(symbol {}", sexpr_str(cache_name)).unwrap();
     // how this symbol draws its pins' texts (`(pin_numbers (hide yes))`, `(pin_names (offset x) (hide yes))`): without them KiCad shows
     // every number, and names inside the body at its own 0.508 mm
     if let Some(r) = &resolved {
@@ -976,16 +1004,25 @@ fn write_regular_lib_symbol(out: &mut String, lib_id: &str, instances: &[&Symbol
     let styles: &[u32] = if resolved.as_ref().is_some_and(|r| r.has_alternate_body()) { &[1, 2] } else { &[1] };
     for &style in styles {
         let in_style = resolved.as_ref().map(|r| r.in_style(style).into_owned());
-        write_body_style_blocks(out, &bare_name, style, in_style.as_ref(), instances, part, default_baker, unit_count);
+        write_body_style_blocks(out, &bare_name, style, in_style.as_ref(), instances, part, default_baker, unit_count, swaps);
     }
 
     writeln!(out, "\t\t)").unwrap();
 }
 
+/// The pin that sits where `owner` is in the library symbol once Swap Pins has traded places (`swap_map`: pin number -> the number of the pin whose place
+/// it has): the pin whose entry names `owner`, else `owner` itself.
+fn pin_wearing_place_of<'a>(part: &'a Part, swap_map: Option<&std::collections::BTreeMap<String, String>>, owner: &'a eda_model::Pin) -> &'a eda_model::Pin {
+    swap_map
+        .and_then(|m| m.iter().find(|(_, src)| **src == owner.number).map(|(n, _)| n))
+        .and_then(|n| part.pins.iter().find(|p| &p.number == n))
+        .unwrap_or(owner)
+}
+
 /// The `(symbol "<name>_0_<style>" ...)` block of the graphics every unit shares and the `(symbol "<name>_<u>_<style>" ...)` block of each unit's own graphics
 /// and pins, for body style `style` of a lib symbol: `resolved` is the symbol as that style draws it ([`eda_model::LibSymbol::in_style`]).
 #[allow(clippy::too_many_arguments)]
-fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolved: Option<&eda_model::LibSymbol>, instances: &[&SymbolInstance], part: &Part, default_baker: &SymbolInstance, unit_count: u32) {
+fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolved: Option<&eda_model::LibSymbol>, instances: &[&SymbolInstance], part: &Part, default_baker: &SymbolInstance, unit_count: u32, swaps: Option<(&eda_model::ir::SchematicSection, &str)>) {
     // ---- unit _0_<style>: the body common to every unit ----
     writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_0_{style}"))).unwrap();
     match resolved {
@@ -1031,6 +1068,8 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             }
         }
 
+        // The places Swap Pins traded in this unit: pin `n` has the place of pin `swap[n]`, so the place of pin `m` is worn by the pin whose entry names `m`.
+        let swap_map = swaps.and_then(|(sch, reference)| sch.extras.pin_swaps_of(&eda_model::ir::field_key(reference, u)));
         writeln!(out, "\t\t\t(symbol {}", sexpr_str(&format!("{bare_name}_{u}_{style}"))).unwrap();
         // This unit's own graphics (a multi-unit symbol very often draws a
         // different body outline per unit -- e.g. each gate of a logic
@@ -1068,6 +1107,8 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
                     (bx, by, 0.0, STUB_MM)
                 }
             };
+            // the pin written at this place is the one that took it (itself unless Swap Pins moved pins here)
+            let pin = pin_wearing_place_of(part, swap_map, pin);
             let etype = resolve_pin_electrical_type(pin, resolved);
             let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
             writeln!(
@@ -1094,13 +1135,14 @@ fn write_body_style_blocks(out: &mut String, bare_name: &str, style: u32, resolv
             // not pre-convert `local` here too, or every nc pin lands 1000x
             // closer to the origin than intended.
             let (bx, by) = baked_local(baker, width as f64, local.x as f64, local.y as f64);
-            let etype = resolve_pin_electrical_type(pin, resolved);
-            let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
             // a library symbol draws its no-connect pin like any other, along its own line; only a pin the symbol does not have is a point
             let (angle, length) = match resolved.and_then(|r| r.pin_by_number(&pin.number)) {
                 Some(rp) => (baked_real_angle(baker, rp.angle_deg), rp.length_mm),
                 None => (0.0, 0.0),
             };
+            let pin = pin_wearing_place_of(part, swap_map, pin);
+            let etype = resolve_pin_electrical_type(pin, resolved);
+            let name = pin.name.clone().unwrap_or_else(|| "~".to_string());
             writeln!(
                 out,
                 "\t\t\t\t(pin {etype} line (at {} {} {}) (length {})\n\t\t\t\t\t(name {} (effects (font (size 1.27 1.27))))\n\t\t\t\t\t(number {} (effects (font (size 1.27 1.27))))\n\t\t\t\t)",

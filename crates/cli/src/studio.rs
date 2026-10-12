@@ -1478,6 +1478,8 @@ fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult
 /// [`schematic_json`] of a design that is already loaded (the schematic clipboard asks it of a design a paste has just been tried on).
 pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str) -> Value {
     let (sch, breadcrumb) = resolve_sheet(design, sheet_path);
+    // The net each pin is on ("REF.PIN" -> net), for the pin highlight and the pin's description.
+    let pin_net: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
@@ -1496,7 +1498,7 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                     p.pins
                         .iter()
                         .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
-                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind }))
+                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": pin_net.get(format!("{}.{}", s.id, pin.number).as_str()) }))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1543,6 +1545,8 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),
                 "pins": pins,
+                // The places Swap Pins traded (`SchExtras::pin_swaps`): pin number -> the number of the pin whose place it has. The canvas draws the pin there.
+                "pin_swaps": sch.extras.pin_swaps_of(&owner),
                 // Do not Populate / Exclude from BOM / Board / Simulation (`setDNP` ...): the flags the painter marks and the attribute actions toggle.
                 "dnp": s.dnp,
                 "exclude_from_bom": s.exclude_from_bom,

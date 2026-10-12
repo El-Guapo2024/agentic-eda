@@ -19,6 +19,7 @@
 //! - `fields_autoplaced`: which symbols, power symbols and sheets have their fields where Autoplace Fields put them
 //!   (`SCH_ITEM::GetFieldsAutoplaced`), so a turn, a text edit or a Properties OK places them again.
 //! - `body_styles`: the body style a placed symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`; 1 is the normal one, 2 KiCad's alternate "De Morgan" one).
+//! - `pin_swaps`: which pin of a placed symbol sits where another one of its pins is in the library symbol (`SwapPinGeometry`, Swap Pins).
 
 use crate::ir::{Millideg, Point, Um};
 use serde::{Deserialize, Serialize};
@@ -74,6 +75,12 @@ pub struct SchExtras {
     /// both (`SCH_SYMBOL::SetBodyStyle`, `(body_style 2)` in the file). A symbol with no entry is drawn in style 1.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub body_styles: BTreeMap<String, u32>,
+    /// Pins of a placed symbol that Swap Pins (`SCH_EDIT_TOOL::SwapPins`, `SwapPinGeometry` of `sch_tool_utils.cpp`) moved, by `field_key`: pin number ->
+    /// the number of the pin whose place (position, orientation and length in the library symbol) it has now. KiCad swaps those in the symbol's own
+    /// copy of its library pins and writes that copy to the file; a pin keeps its number, name and type and takes the other's place. A pin with no
+    /// entry, or an entry naming itself, is where the library puts it. The entries always form a permutation of the symbol's pin numbers.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pin_swaps: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 /// `AUTOPLACE_ALGO`: which Autoplace Fields routine put an item's fields where they are. "Auto" is the minimalist one that runs when a symbol is
@@ -201,6 +208,55 @@ impl SchExtras {
 }
 
 impl SchExtras {
+    /// The number of the pin whose place pin `number` of the symbol keyed `key` has (itself when nothing moved it).
+    pub fn pin_source<'a>(&'a self, key: &str, number: &'a str) -> &'a str {
+        self.pin_swaps.get(key).and_then(|m| m.get(number)).map_or(number, String::as_str)
+    }
+
+    /// Swap the places of pins `a` and `b` of the symbol keyed `key` (`SwapPinGeometry`): each takes the place the other has now. An entry
+    /// that ends up naming its own pin is dropped, and a symbol with no entry left keeps none.
+    pub fn swap_pin_places(&mut self, key: &str, a: &str, b: &str) {
+        if a == b {
+            return;
+        }
+        let (sa, sb) = (self.pin_source(key, a).to_string(), self.pin_source(key, b).to_string());
+        let map = self.pin_swaps.entry(key.to_string()).or_default();
+        for (pin, src) in [(a, sb), (b, sa)] {
+            if src == pin {
+                map.remove(pin);
+            } else {
+                map.insert(pin.to_string(), src);
+            }
+        }
+        if map.is_empty() {
+            self.pin_swaps.remove(key);
+        }
+    }
+
+    /// The places of the pins of the symbol keyed `key`, as [`permute_pins`] takes them; `None` for a symbol whose pins are all where the library has them.
+    pub fn pin_swaps_of(&self, key: &str) -> Option<&BTreeMap<String, String>> {
+        self.pin_swaps.get(key)
+    }
+}
+
+/// `items` (a pin number and what sits at that pin's place: a point, a position-and-angle, ...) with the places traded as `swaps` says: pin `n` gets
+/// what pin `swaps[n]` had. A number the list does not have is left out of the exchange, so a stale entry (the symbol changed) does nothing.
+pub fn permute_pins<T: Clone>(items: Vec<(String, T)>, swaps: &BTreeMap<String, String>) -> Vec<(String, T)> {
+    if swaps.is_empty() {
+        return items;
+    }
+    let by_number: BTreeMap<&str, &T> = items.iter().map(|(n, t)| (n.as_str(), t)).collect();
+    let moved: Vec<(String, T)> = items
+        .iter()
+        .map(|(n, t)| match swaps.get(n).and_then(|src| by_number.get(src.as_str())) {
+            Some(other) => (n.clone(), (*other).clone()),
+            None => (n.clone(), t.clone()),
+        })
+        .collect();
+    moved
+}
+
+impl SchExtras {
     pub fn is_empty(&self) -> bool {
         self.graphics.is_empty()
             && self.locked.is_empty()
@@ -211,6 +267,7 @@ impl SchExtras {
             && self.label_looks.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
+            && self.pin_swaps.is_empty()
     }
 
     /// True when `id` is locked.

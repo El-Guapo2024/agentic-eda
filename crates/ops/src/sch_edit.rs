@@ -94,6 +94,17 @@ pub enum SchCmd {
         #[serde(default)]
         italic: Option<bool>,
     },
+    /// Swap Pins (`SCH_EDIT_TOOL::SwapPins`): the pins `pins` (item ids `pin:<reference>:<number>`, in selection order) of one symbol trade places, one after the
+    /// other (`SwapPinGeometry`: pin 1 and pin 2, then pin 2 and pin 3, ...), so each takes the place the next one had and the last the first's. The wires stay,
+    /// the junctions the moved pins need are added and the sheet is cleaned up. Refused for fewer than two pins, for pins of different symbols and for a
+    /// symbol of a sheet that is placed more than once ("Pin swaps are disabled for symbols used by multiple sheet instances").
+    SwapPins { pins: Vec<String> },
+    /// Swap Pin Labels (`SCH_EDIT_TOOL::SwapPinLabels`): the net labels on the pins `pins` trade texts in selection order. Refused unless every pin has
+    /// exactly one net label on its connection and no other pin there ("Each selected pin must have exactly one attached net label and no other pin connections.").
+    SwapPinLabels { pins: Vec<String> },
+    /// Swap Unit Labels (`SCH_EDIT_TOOL::SwapUnitLabels`): the placed units of the multi-unit reference `ids` (one reference) trade the net labels on their pins,
+    /// each unit's labels ordered by pin position. Refused unless every pin has exactly one net label and no other pin on its connection.
+    SwapUnitLabels { ids: Vec<String> },
     /// Field Properties on one field of a symbol, a power symbol or a sheet (`DIALOG_FIELD_PROPERTIES::UpdateField`, `SCH_EDIT_TOOL::editFieldText`): `id` is
     /// the field's (`fld:<owner>:<name>`, `eda_engine::fields_edit::field_id`). A member left out is unchanged. `text` renames a symbol (Reference), sets its
     /// Value, Footprint or Datasheet, the net a power symbol asserts, or a sheet's name or file; `at` is where the text's anchor goes on the sheet,
@@ -179,6 +190,8 @@ impl SchCmd {
             SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } | SchCmd::EditField { id, .. } => vec![id.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::SetStroke { ids, .. } => ids.iter().map(String::as_str).collect(),
+            SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
+            SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
         }
     }
@@ -206,6 +219,9 @@ impl SchCmd {
             SchCmd::EditText { id, .. } => format!("schematic edit-text {id}"),
             SchCmd::EditSheet { id, .. } => format!("schematic edit-sheet {id}"),
             SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
+            SchCmd::SwapPins { pins } => format!("schematic swap-pins {}", pins.join(" ")),
+            SchCmd::SwapPinLabels { pins } => format!("schematic swap-pin-labels {}", pins.join(" ")),
+            SchCmd::SwapUnitLabels { ids } => format!("schematic swap-unit-labels {}", ids.join(" ")),
         }
     }
 
@@ -220,6 +236,7 @@ impl SchCmd {
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } => "schematic-fields",
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
+            SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } => "schematic-pins",
         }
     }
 
@@ -271,6 +288,9 @@ impl<'a> Board<'a> {
             SchCmd::EditText { id, text, size_um, angle } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_um, style, color, diameter_um } => self.set_sch_stroke(ids, *width_um, *style, *color, *diameter_um),
+            SchCmd::SwapPins { pins } => self.swap_pins(pins),
+            SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins),
+            SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids),
         }
     }
 

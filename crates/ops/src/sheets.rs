@@ -5,7 +5,7 @@
 //! the user fields, the ERC exclusions and pin map, the title block), and where the netlist the new sheets must draw comes from.
 
 use eda_engine::nets::{trace_nets, ScreenIn};
-use eda_engine::placed::pin_points;
+use eda_engine::placed::pin_points_in;
 use eda_engine::{derive_hierarchy, EngineOptions};
 use eda_model::modules::infer_modules;
 use eda_model::{CheckResult, Net};
@@ -65,7 +65,7 @@ impl<'a> Board<'a> {
             for sym in &drawn.symbols {
                 let Some(part) = self.model.part(&sym.id) else { continue };
                 let resolved = self.model.real_symbol_of_instance(&drawn, sym, part);
-                for (number, at) in pin_points(sym, part, resolved.as_ref()) {
+                for (number, at) in pin_points_in(&drawn, sym, part, resolved.as_ref()) {
                     pins.insert(format!("{}.{number}", sym.id), at);
                 }
             }
@@ -200,7 +200,7 @@ mod tests {
                 let mut m = BTreeMap::new();
                 for sym in &s.symbols {
                     let part = model.part(&sym.id).unwrap();
-                    for (n, at) in pin_points(sym, part, model.real_symbol_of_instance(s, sym, part).as_ref()) {
+                    for (n, at) in eda_engine::placed::pin_points(sym, part, model.real_symbol_of_instance(s, sym, part).as_ref()) {
                         m.insert(format!("{}.{n}", sym.id), at);
                     }
                 }
