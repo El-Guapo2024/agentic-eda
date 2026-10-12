@@ -391,24 +391,7 @@ pub struct PcbField {
     pub layer: String,
 }
 
-/// `LayerName(layer)`: the name KiCad shows for a standard layer, given the name the board file writes (`F.SilkS` is `F.Silkscreen`, `Dwgs.User` is
-/// `User.Drawings`). A layer the board renames is [`PcbBoard::layer_name`]'s.
-pub fn standard_layer_name(file_name: &str) -> String {
-    match file_name {
-        "B.Adhes" => "B.Adhesive",
-        "F.Adhes" => "F.Adhesive",
-        "B.SilkS" => "B.Silkscreen",
-        "F.SilkS" => "F.Silkscreen",
-        "Dwgs.User" => "User.Drawings",
-        "Cmts.User" => "User.Comments",
-        "Eco1.User" => "User.Eco1",
-        "Eco2.User" => "User.Eco2",
-        "F.CrtYd" => "F.Courtyard",
-        "B.CrtYd" => "B.Courtyard",
-        other => other,
-    }
-    .to_string()
-}
+pub use crate::layers::standard_layer_name;
 
 /// A board as the resolvers read it (`BOARD`).
 #[derive(Debug, Clone, Default)]

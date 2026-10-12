@@ -1145,6 +1145,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
         Cmd::SetTextVariables { variables } => format!("board-setup text-variables ({} variables)", variables.len()),
+        Cmd::SetBoardLayers { settings } => format!("board-setup layers ({} enabled)", settings.enabled.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
@@ -1420,6 +1421,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
         Cmd::SetTextVariables { .. } => "text-variables",
+        Cmd::SetBoardLayers { .. } => "board-layers",
         Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
@@ -2100,6 +2102,151 @@ mod tests {
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(crate::text_variables::project_variables(&dir), seed, "back before the page: the folder's variables");
         let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// The (name, type, shown name) of every entry of a board file's `(layers ..)`, as KiCad reads or writes it.
+    fn layer_entries(pcb: &str) -> Vec<(String, String, Option<String>)> {
+        let start = pcb.find("(layers").expect("a layers section");
+        let (mut depth, mut tokens, mut entries, mut word, mut quoted) = (0, Vec::<String>::new(), Vec::new(), String::new(), false);
+        for c in pcb[start..].chars() {
+            if quoted {
+                if c == '"' { quoted = false; tokens.push(std::mem::take(&mut word)); } else { word.push(c); }
+                continue;
+            }
+            match c {
+                '"' => quoted = true,
+                '(' => depth += 1,
+                ')' | ' ' | '\n' | '\t' => {
+                    if !word.is_empty() { tokens.push(std::mem::take(&mut word)); }
+                    if c == ')' {
+                        if depth == 2 && tokens.len() >= 3 { entries.push((tokens[1].clone(), tokens[2].clone(), tokens.get(3).cloned())); }
+                        if depth == 2 { tokens.clear(); }
+                        depth -= 1;
+                        if depth == 0 { return entries; }
+                    }
+                }
+                _ => word.push(c),
+            }
+        }
+        entries
+    }
+
+    fn four_copper_layers(dir: &Path) {
+        let path = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        model.board.layers = eda_model::rules::copper_layer_names(4);
+        std::fs::write(&path, serde_yaml::to_string(&model).unwrap()).unwrap();
+    }
+
+    fn a_layers_page() -> eda_model::layers::LayerSetup {
+        use eda_model::layers::{LayerSetup, LayerType};
+        let mut page = LayerSetup::default();
+        page.enabled.extend(["User.1", "User.2", "User.3"].map(String::from));
+        page.names.extend([("User.1", "Notes"), ("In1.Cu", "GND plane"), ("F.SilkS", "Top art")].map(|(l, n)| (l.to_string(), n.to_string())));
+        page.types.extend([("In1.Cu", LayerType::Power), ("In2.Cu", LayerType::Mixed), ("User.2", LayerType::Front), ("User.3", LayerType::Back)].map(|(l, t)| (l.to_string(), t)));
+        page
+    }
+
+    /// The Board Editor Layers page is one undo step, the state carries it, the derived board file is `formatBoardLayers`'s and `${LAYER}` shows the user's name.
+    #[test]
+    fn the_board_layers_page_is_one_undo_step_and_reaches_the_state_the_board_file_and_the_shown_text() {
+        let dir = scratch("board_layers_undo");
+        setup(&dir);
+        four_copper_layers(&dir);
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let clock = crate::text_vars_json::clock_of("/api/state");
+        let before = crate::studio::state(&dir, &job, clock.clone()).unwrap();
+        assert_eq!(before["board_rules"]["layer_setup"]["enabled"].as_array().unwrap().len(), 18, "a board starts with every standard technical layer");
+        assert!(before["board_rules"]["overlay"].as_array().unwrap().iter().all(|o| o != "board_layers"));
+
+        let page = a_layers_page();
+        step(&dir, Cmd::SetBoardLayers { settings: page.clone() }, false, "ui").unwrap();
+        let after = crate::studio::state(&dir, &job, clock.clone()).unwrap();
+        let setup = &after["board_rules"]["layer_setup"];
+        assert_eq!(setup["names"], serde_json::json!({ "F.SilkS": "Top art", "In1.Cu": "GND plane", "User.1": "Notes" }));
+        assert_eq!(setup["types"], serde_json::json!({ "In1.Cu": "power", "In2.Cu": "mixed", "User.2": "front", "User.3": "back" }));
+        assert_eq!(setup["enabled"].as_array().unwrap().len(), 21);
+        assert!(after["board_rules"]["overlay"].as_array().unwrap().iter().any(|o| o == "board_layers"));
+
+        // The derived board file lists them the way KiCad writes them.
+        let (_, design, model) = load(&dir).unwrap();
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).expect("the board file");
+        let entries = layer_entries(&pcb);
+        let entry = |name: &str| entries.iter().find(|e| e.0 == name).cloned().unwrap_or_else(|| panic!("{name} in {entries:?}"));
+        assert_eq!(entry("In1.Cu"), ("In1.Cu".into(), "power".into(), Some("GND plane".into())));
+        assert_eq!(entry("In2.Cu"), ("In2.Cu".into(), "mixed".into(), None));
+        assert_eq!(entry("User.1"), ("User.1".into(), "user".into(), Some("Notes".into())));
+        assert_eq!(entry("User.2"), ("User.2".into(), "front".into(), None));
+        assert_eq!(entry("User.3"), ("User.3".into(), "back".into(), None));
+        assert_eq!(entry("F.SilkS"), ("F.SilkS".into(), "user".into(), Some("Top art".into())));
+        assert_eq!(entries.len(), 4 + 21);
+
+        // A bad page is refused naming the layer and changes nothing; Undo takes the one step back.
+        let mut bad = page.clone();
+        bad.names.insert("User.2".into(), "Notes".into());
+        let e = step(&dir, Cmd::SetBoardLayers { settings: bad }, false, "ui").unwrap_err();
+        assert!(format!("{e:?}").contains("Layer name 'Notes' already in use."), "{e:?}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let undone = crate::studio::state(&dir, &job, clock).unwrap();
+        assert_eq!(undone["board_rules"]["layer_setup"], before["board_rules"]["layer_setup"], "one Undo is the page taken back");
+        assert!(undone["board_rules"]["overlay"].as_array().unwrap().iter().all(|o| o != "board_layers"));
+    }
+
+    /// kicad-cli loads a board whose `(layers ..)` has a renamed user layer, a power plane and an off-board layer: its own rewrite of the file (`pcb upgrade`) keeps the names and
+    /// types, and a text with `${LAYER}` on the renamed layer is plotted with the user's name -- the same plot as the literal text on a board that never renamed it (slow tier).
+    #[test]
+    fn kicad_cli_loads_a_board_with_a_renamed_user_layer_and_a_changed_layer_type() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let Some(cli) = eda_kicad_engine::find_cli() else {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        };
+        let (with, plain) = (scratch("board_layers_cli_a"), scratch("board_layers_cli_b"));
+        let text = |content: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "User.1".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        for dir in [&with, &plain] {
+            setup(dir);
+            four_copper_layers(dir);
+        }
+        let mut page_without_names = a_layers_page();
+        page_without_names.names.clear();
+        step(&with, Cmd::SetBoardLayers { settings: a_layers_page() }, false, "ui").unwrap();
+        step(&with, text("on ${LAYER} / ${LAYER}"), false, "ui").unwrap();
+        step(&plain, Cmd::SetBoardLayers { settings: page_without_names }, false, "ui").unwrap();
+        step(&plain, text("on User.1 / User.1"), false, "ui").unwrap();
+
+        // The plot of the renamed layer shows the user's name where the board says LAYER; the other board has the layer's own name written out.
+        let plot = |dir: &Path| -> String {
+            let args: Vec<String> = ["--layers", "User.1,Edge.Cuts"].iter().map(|s| s.to_string()).collect();
+            let done = crate::kicad_engine::export(dir, "svg", &args).expect("kicad-cli plotted the board");
+            std::fs::read_to_string(dir.join(done["files"][0].as_str().expect("one svg"))).unwrap()
+        };
+        let body = |svg: &str| svg.lines().filter(|l| !l.contains("<title>") && !l.contains("<!--") && !l.contains("<desc>") && !l.contains("Created by") && !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        let (a, b) = (plot(&with), plot(&plain));
+        assert!(a.len() > 2_000, "a real plot: {} bytes", a.len());
+        assert_ne!(body(&a), body(&b), "the plots differ: 'Notes' is not 'User.1'");
+        step(&plain, Cmd::SetBoardLayers { settings: { let mut p = a_layers_page(); p.names.clear(); p.names.insert("User.1".into(), "Notes".into()); p } }, false, "ui").unwrap();
+        let text_id = load(&plain).unwrap().1.drawings.unwrap().texts[0].id.clone();
+        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false }, false, "ui").unwrap();
+        assert_eq!(body(&plot(&with)), body(&plot(&plain)), "the LAYER variable on a renamed layer is the user's name, as the studio shows it");
+
+        // kicad-cli's own rewrite of the derived board file keeps what the page set: the names, the types and the layers.
+        let derived = std::fs::read_dir(with.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board");
+        let copy = with.join("upgraded.kicad_pcb");
+        std::fs::copy(&derived, &copy).unwrap();
+        let out = std::process::Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+        assert!(out.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let entries = layer_entries(&std::fs::read_to_string(&copy).unwrap());
+        let entry = |name: &str| entries.iter().find(|e| e.0 == name).cloned().unwrap_or_else(|| panic!("{name} in {entries:?}"));
+        assert_eq!(entry("In1.Cu"), ("In1.Cu".into(), "power".into(), Some("GND plane".into())));
+        assert_eq!(entry("In2.Cu").1, "mixed");
+        assert_eq!(entry("User.1"), ("User.1".into(), "user".into(), Some("Notes".into())));
+        assert_eq!(entry("User.2").1, "front");
+        assert_eq!(entry("User.3").1, "back");
+        assert_eq!(entry("F.SilkS").2.as_deref(), Some("Top art"));
+        assert!(entries.iter().any(|e| e.0 == "Dwgs.User") && entries.iter().any(|e| e.0 == "Margin"), "the standard technical layers are all there");
     }
 
     /// `eda board shape add` and `text add` without a width or a size take what Text & Graphics > Defaults gives the layer's class, and follow the page.

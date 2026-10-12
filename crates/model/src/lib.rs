@@ -15,6 +15,7 @@ mod groups;
 pub mod ir;
 pub mod kicad_font;
 pub mod kicad_geom;
+pub mod layers;
 pub mod modules;
 pub mod outline;
 pub mod pad_geom;
@@ -324,6 +325,10 @@ pub struct BoardRules {
     /// `via_diameter` and `via_drill` above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_class: Option<NetClass>,
+    /// Board Editor Layers: the non-copper layers the board has, the names the user gave its layers and their types (`layers`, above, is the copper stack).
+    /// KiCad's own start (every standard technical layer, nothing renamed) when nobody opened the page.
+    #[serde(default, skip_serializing_if = "layers::LayerSetup::is_default")]
+    pub layer_setup: layers::LayerSetup,
 }
 
 fn is_zero_um(v: &ir::Um) -> bool {
@@ -780,6 +785,7 @@ impl Default for BoardRules {
             min_connection_um: 0, microvia_diameter_min_um: d_microvia_diameter_min(), microvia_drill_min_um: d_microvia_drill_min(), min_groove_width_um: 0,
             min_resolved_spokes: d_min_resolved_spokes(), max_error_um: d_max_error(), use_height_for_length_calcs: true, zones_allow_external_fillets: false,
             constraints_explicit: false, board_thickness_um: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
+            layer_setup: layers::LayerSetup::default(),
         }
     }
 }

@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
+use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, Part};
 
 use crate::fp_fields::{pad_text, write_attr, write_fields, FpExtra};
@@ -70,7 +71,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     // ---- layers ----
-    write_layers(&mut out, &model.board.layers);
+    write_layers(&mut out, &model.board.layers, &model.board.layer_setup);
 
     // ---- setup ----
     let clearance_mm = mm(model.board.clearance);
@@ -408,30 +409,51 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     Ok(out)
 }
 
-/// `(layers ..)`: the board's copper layers, outer first, then the technical and user layers this writer uses.
-pub(crate) fn write_layers(out: &mut String, copper_layers: &[String]) {
+/// The number the board file gives a non-copper layer in its `(layers ..)` entry. KiCad's parser reads layers by name and ignores these (copper by position), so
+/// they only have to be distinct; they are the ones KiCad 8 wrote (`B_Adhes` 32 .. `B_Fab` 48, `F_Fab` 49, `User_1` 50 on).
+fn layer_ordinal(layer: &str) -> i32 {
+    match layer {
+        "B.Adhes" => 32,
+        "F.Adhes" => 33,
+        "B.Paste" => 34,
+        "F.Paste" => 35,
+        "B.SilkS" => 36,
+        "F.SilkS" => 37,
+        "B.Mask" => 38,
+        "F.Mask" => 39,
+        "Dwgs.User" => 40,
+        "Cmts.User" => 41,
+        "Eco1.User" => 42,
+        "Eco2.User" => 43,
+        "Edge.Cuts" => 44,
+        "Margin" => 45,
+        "B.CrtYd" => 46,
+        "F.CrtYd" => 47,
+        "B.Fab" => 48,
+        "F.Fab" => 49,
+        other => 49 + eda_model::layers::user_layer_number(other).map_or(0, |n| n as i32),
+    }
+}
+
+/// `(layers ..)` (`PCB_IO_KICAD_SEXPR::formatBoardLayers`): the board's copper layers, outer first, each with its type; then the enabled technical and user layers in
+/// `TechAndUserUIOrder`, typed `user` unless a user layer is off-board at the front or the back. A layer the user renamed, and every layer whose standard name
+/// KiCad shows differs from the one the file writes (`F.SilkS` is `F.Silkscreen`), carries that name as the entry's last word.
+pub(crate) fn write_layers(out: &mut String, copper_layers: &[String], setup: &LayerSetup) {
+    let shown = |layer: &str| {
+        let name = setup.display_name(layer);
+        if name == layer { String::new() } else { format!(" {}", sexpr_str(&name)) }
+    };
     writeln!(out, "\t(layers").unwrap();
     for (i, name) in copper_layers.iter().enumerate() {
-        let ltype = "signal";
         let ord = if i == 0 { 0 } else if i + 1 == copper_layers.len() { 31 } else { i };
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+        writeln!(out, "\t\t({ord} {} {}{})", sexpr_str(name), setup.layer_type(name).word(), shown(name)).unwrap();
     }
-    for (ord, name, ltype) in [
-        (32, "B.Adhes", "user"),
-        (33, "F.Adhes", "user"),
-        (34, "B.Paste", "user"),
-        (35, "F.Paste", "user"),
-        (36, "B.SilkS", "user"),
-        (37, "F.SilkS", "user"),
-        (38, "B.Mask", "user"),
-        (39, "F.Mask", "user"),
-        (44, "Edge.Cuts", "user"),
-        (46, "B.CrtYd", "user"),
-        (47, "F.CrtYd", "user"),
-        (49, "F.Fab", "user"),
-        (50, "B.Fab", "user"),
-    ] {
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+    for layer in setup.enabled_in_order() {
+        let ty = match setup.layer_type(&layer) {
+            t @ (LayerType::Front | LayerType::Back) if eda_model::layers::user_layer_number(&layer).is_some() => t.word(),
+            _ => "user",
+        };
+        writeln!(out, "\t\t({} {} {ty}{})", layer_ordinal(&layer), sexpr_str(&layer), shown(&layer)).unwrap();
     }
     writeln!(out, "\t)").unwrap();
 }
@@ -1199,7 +1221,7 @@ mod tests {
         assert_eq!(out.matches("(layer \"F.CrtYd\")").count(), top, "one courtyard per top-side footprint");
         assert_eq!(out.matches("(layer \"B.CrtYd\")").count(), bottom, "a bottom-side footprint's courtyard is on B.CrtYd");
         assert!(out.contains("(fp_rect (start ") && out.contains("(fill none) (layer \"F.CrtYd\")"), "{out}");
-        assert!(out.contains("(46 \"B.CrtYd\" user)") && out.contains("(47 \"F.CrtYd\" user)"), "both courtyard layers declared");
+        assert!(out.contains("(46 \"B.CrtYd\" user \"B.Courtyard\")") && out.contains("(47 \"F.CrtYd\" user \"F.Courtyard\")"), "both courtyard layers declared, with the names KiCad shows for them (formatBoardLayers)");
     }
 
     #[test]

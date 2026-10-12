@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use eda_model::ir::Design;
+use eda_model::layers::LayerSetup;
 use eda_model::rules::{self, Constraints, MaskPaste, NetClassSettings, RulesOverlay, StackupSettings, TextGraphicsDefaults};
 use eda_model::{CheckResult, ConstraintModel};
 
@@ -53,6 +54,37 @@ pub(crate) fn set_mask_paste(design: &mut Design, settings: &MaskPaste) -> Done 
 pub(crate) fn set_text_graphics(design: &mut Design, settings: &TextGraphicsDefaults) -> Done {
     first("ops_bad_text_defaults", settings.validate())?;
     overlay(design).text_graphics = Some(*settings);
+    Ok(())
+}
+
+/// The items a layer holds that would be left on a layer the board no longer has: board-level graphics, texts and dimensions, and the footprint fields whose
+/// layout was set on it. (A footprint's Reference and Value where they have always been, on the silkscreen and fabrication layers, are not counted: KiCad
+/// asks about them and goes on, and every board with a footprint would be refused.)
+fn items_on_layer(design: &Design, layer: &str) -> usize {
+    let Some(d) = design.drawings.as_ref() else { return 0 };
+    d.shapes.iter().filter(|s| s.layer() == layer).count()
+        + d.texts.iter().filter(|t| t.layer == layer).count()
+        + d.dimensions.iter().filter(|x| x.layer == layer).count()
+        + d.footprint_edits.iter().map(|e| e.reference.iter().chain(e.value.iter()).filter(|l| l.layer == layer).count() + e.fields.iter().filter(|f| f.layout.layer == layer).count()).sum::<usize>()
+}
+
+/// `Cmd::SetBoardLayers`: Board Editor Layers (`PANEL_SETUP_LAYERS::TransferDataFromWindow`). The page is checked like the panel checks it (the names, the mandatory
+/// layers, the types); a layer turned off while items are still on it is refused with the layer's name and how many (KiCad deletes them after asking, which one
+/// Undo of a settings dialog cannot be trusted to bring back: move or delete them first).
+pub(crate) fn set_board_layers(design: &mut Design, model: &ConstraintModel, settings: &LayerSetup) -> Done {
+    settings.validate(&model.board.layers).map_err(|c| vec![c])?;
+    let next = settings.canonical();
+    for layer in model.board.layer_setup.enabled_in_order() {
+        if next.enabled.contains(&layer) {
+            continue;
+        }
+        let n = items_on_layer(design, &layer);
+        if n > 0 {
+            let shown = model.board.layer_setup.display_name(&layer);
+            return Err(vec![CheckResult::fail("ops_bad_board_layers", &layer, format!("{n} item(s) are on {shown}, which the board would no longer have; move or delete them first"))]);
+        }
+    }
+    overlay(design).board_layers = Some(next);
     Ok(())
 }
 

@@ -61,6 +61,7 @@
 use std::collections::BTreeMap;
 
 use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
+use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::outline as edge;
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
 
@@ -145,6 +146,11 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
+
+    add_layers_in_use(
+        &mut board.layer_setup,
+        shapes.iter().map(|s| s.layer().to_string()).chain(texts.iter().map(|t| t.layer.clone())).chain(dimensions.iter().map(|d| d.layer.clone())).chain(silk_texts.iter().map(|t| t.layer.clone())),
+    );
 
     // The outline override lives on `board` too (used when a downstream
     // tool re-derives placement); keep it in step with what we actually
@@ -281,6 +287,48 @@ fn default_layers() -> Vec<String> {
     vec!["F.Cu".into(), "B.Cu".into()]
 }
 
+/// The layers every board this studio wrote had listed, whatever the file says: its adhesive, paste, silkscreen, mask and fabrication layers, the courtyards and the outline.
+const ALWAYS_ENABLED: [&str; 13] = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Edge.Cuts", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
+
+/// `(layers ..)` as the Board Editor Layers page holds it (`PCB_IO_KICAD_SEXPR_PARSER::parseLayers` / `parseLayer`): the non-copper layers the file lists, the name a layer is
+/// shown by (the entry's last word) and the type of the copper layers and of the user layers off-board at the front or the back. The page's mandatory layers (the courtyards, the
+/// outline, the margin) and the ones this studio has always drawn are on whatever the file lists, so a board written before there was a page keeps its silkscreen and fabrication;
+/// a layer name the file has that is not one of KiCad's (`Rescue`, a name from before KiCad 5) is skipped. [`add_layers_in_use`] adds the layers the imported items sit on.
+fn import_layer_setup(root: &[Sexpr]) -> LayerSetup {
+    let mut setup = LayerSetup { enabled: Vec::new(), names: BTreeMap::new(), types: BTreeMap::new() };
+    for item in sexpr::find(root, "layers").map_or(&[][..], |l| &l[1..]) {
+        let Some(l) = item.as_list() else { continue };
+        let (Some(name), Some(word)) = (sexpr::txt(l, 1), sexpr::txt(l, 2)) else { continue };
+        let ty = LayerType::parse(word);
+        if eda_model::layers::is_copper_layer_name(name) {
+            if let Some(t) = ty.filter(|t| t.is_copper_type()) {
+                setup.types.insert(name.to_string(), t);
+            }
+        } else if eda_model::layers::is_optional_layer(name) {
+            setup.enabled.push(name.to_string());
+            if let Some(t) = ty.filter(|t| !t.is_copper_type() && eda_model::layers::user_layer_number(name).is_some()) {
+                setup.types.insert(name.to_string(), t);
+            }
+        } else {
+            continue;
+        }
+        if let Some(shown) = sexpr::txt(l, 3).filter(|s| *s != "hide" && !s.is_empty() && *s != eda_model::layers::standard_layer_name(name)) {
+            setup.names.insert(name.to_string(), shown.to_string());
+        }
+    }
+    setup.enabled.extend(ALWAYS_ENABLED.iter().chain(eda_model::layers::MANDATORY_LAYERS.iter()).map(|l| l.to_string()));
+    setup.canonical()
+}
+
+/// A layer an imported item is on is a layer the board has: a file that lists fewer layers than its items use (a minimal fixture, a board from another tool) does not lose them.
+fn add_layers_in_use(setup: &mut LayerSetup, layers: impl Iterator<Item = String>) {
+    let before = setup.enabled.len();
+    setup.enabled.extend(layers.filter(|l| eda_model::layers::is_optional_layer(l)));
+    if setup.enabled.len() != before {
+        *setup = setup.canonical();
+    }
+}
+
 // ------------------------------------------------------------------ nets
 
 fn import_net_names(root: &[Sexpr]) -> BTreeMap<i64, String> {
@@ -332,7 +380,7 @@ fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)]) 
 fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
     // A board file is a board somebody judged with KiCad's rules: its minimums are KiCad's (the project's, or the factory
     // ones when it has none), stated -- not the unstated ones of an intent (`BoardRules::constraints_explicit`).
-    let mut board = BoardRules { layers: layers.to_vec(), constraints_explicit: true, ..BoardRules::default() };
+    let mut board = BoardRules { layers: layers.to_vec(), constraints_explicit: true, layer_setup: import_layer_setup(root), ..BoardRules::default() };
     // Legacy boards keep the copper-to-edge clearance in `(setup (edge_clearance ..))`.
     if let Some(v) = sexpr::find(root, "setup").and_then(|st| sexpr::find(st, "edge_clearance")).and_then(|e| sexpr::num(e, 1)) {
         board.copper_edge_clearance_um = Some(mm_to_um(v));

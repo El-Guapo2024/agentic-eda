@@ -46,6 +46,9 @@ pub struct RulesOverlay {
     /// Design Rules > Custom Rules (`panel_setup_rules.cpp`): the text of the board's `.kicad_dru`, verbatim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_rules: Option<String>,
+    /// Board Stackup > Board Editor Layers (`panel_setup_layers.cpp`): the non-copper layers the board has, the names the user gave its layers and their types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub board_layers: Option<crate::layers::LayerSetup>,
     /// Text Variables (`common/dialogs/panel_text_variables.cpp`): the project's `text_variables`, name -> value, as the page's OK leaves them
     /// (`PROJECT::GetTextVars`). Once the page has been used this is the whole set and the board folder's `path-variables.json` (the variables an
     /// imported project came with and Configure Paths kept before there was a page) is only the seed it started from: see [`effective_text_variables`].
@@ -585,6 +588,9 @@ impl RulesOverlay {
             model.board.layers = copper_layer_names(s.copper_layers as usize);
             model.board.board_thickness_um = stackup_thickness_um(&s.stackup);
             model.stackup = Some(s.stackup.clone());
+        }
+        if let Some(l) = &self.board_layers {
+            model.board.layer_setup = l.canonical();
         }
         if let Some(sev) = &self.severities {
             model.board.rule_severities = sev.clone();

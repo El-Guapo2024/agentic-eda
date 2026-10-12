@@ -2,7 +2,8 @@
 //! and the overlay then changes the rules the board is judged by.
 
 use super::*;
-use eda_model::ir::{PlacementSection, Provenance, RoutingSection};
+use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Shape, Text};
+use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::rules::{self, copper_layer_names, RulesOverlay};
 use eda_model::{Net, NetClass};
 
@@ -207,6 +208,122 @@ fn a_bad_text_variables_page_is_refused_with_the_variables_name_and_stores_nothi
     }
 }
 
+fn layers_page(f: impl FnOnce(&mut LayerSetup)) -> LayerSetup {
+    let mut s = LayerSetup::default();
+    f(&mut s);
+    s
+}
+
+fn four_layer_model() -> ConstraintModel {
+    let mut m = model();
+    m.board.layers = copper_layer_names(4);
+    m
+}
+
+#[test]
+fn board_layers_are_stored_as_a_whole_page_and_laid_over_the_board() {
+    let base = four_layer_model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    assert_eq!(overlay_of(&b).board_layers, None, "nothing is stored until the page is used");
+    assert!(base.board.layer_setup.is_default(), "a board starts with every standard technical layer");
+    let page = layers_page(|s| {
+        s.enabled.push("User.2".into());
+        s.enabled.push("User.1".into());
+        s.enabled.retain(|l| l != "Eco2.User");
+        s.names.insert("User.1".into(), "Notes".into());
+        s.names.insert("In1.Cu".into(), "GND plane".into());
+        s.names.insert("F.SilkS".into(), "F.Silkscreen".into());
+        s.types.insert("In1.Cu".into(), LayerType::Power);
+        s.types.insert("In2.Cu".into(), LayerType::Signal);
+        s.types.insert("User.2".into(), LayerType::Back);
+    });
+    b.apply(&Cmd::SetBoardLayers { settings: page.clone() }).unwrap();
+    let stored = overlay_of(&b).board_layers.expect("the page is stored");
+    assert_eq!(stored, page.canonical(), "stored in KiCad's order, with a name or a type that is the default's dropped");
+    assert_eq!(stored.enabled[stored.enabled.len() - 2..], ["User.1", "User.2"]);
+    assert!(!stored.enabled.contains(&"Eco2.User".to_string()), "a technical layer can be turned off");
+    assert_eq!((stored.names.len(), stored.types.len()), (2, 2));
+
+    let m = effective(&b, &base);
+    assert_eq!(m.board.layer_setup, stored);
+    assert_eq!((m.board.layer_setup.display_name("User.1"), m.board.layer_setup.display_name("F.SilkS"), m.board.layer_setup.layer_type("In1.Cu"), m.board.layer_setup.layer_type("User.2")), ("Notes".to_string(), "F.Silkscreen".to_string(), LayerType::Power, LayerType::Back));
+    assert_eq!(m.board.layers, base.board.layers, "the copper stack is the stackup's");
+
+    b.apply(&Cmd::SetBoardLayers { settings: LayerSetup::default() }).unwrap();
+    assert_eq!(overlay_of(&b).board_layers, Some(LayerSetup::default()), "the start is a page too: it is not 'no page'");
+    assert_eq!(effective(&b, &base).board, base.board, "a page that says what the board already had changes nothing");
+}
+
+#[test]
+fn a_bad_board_layers_page_is_refused_with_the_layers_name_and_stores_nothing() {
+    let base = four_layer_model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    let kept = layers_page(|s| {
+        s.enabled.push("User.1".into());
+        s.names.insert("User.1".into(), "Notes".into());
+    });
+    b.apply(&Cmd::SetBoardLayers { settings: kept.clone() }).unwrap();
+    for (bad, location) in [
+        (layers_page(|s| s.enabled.retain(|l| l != "Edge.Cuts")), "Edge.Cuts"),
+        (layers_page(|s| s.enabled.retain(|l| l != "Margin")), "Margin"),
+        (layers_page(|s| s.enabled.push("User.46".into())), "User.46"),
+        (layers_page(|s| s.enabled.push("In1.Cu".into())), "In1.Cu"),
+        (layers_page(|s| drop(s.names.insert("F.Mask".into(), "B.Mask".into()))), "B.Mask"),
+        (layers_page(|s| drop(s.names.insert("F.Fab".into(), "".into()))), "F.Fab"),
+        (layers_page(|s| drop(s.names.insert("F.Fab".into(), "a/b".into()))), "F.Fab"),
+        (layers_page(|s| drop(s.names.insert("In2.Cu".into(), "signal".into()))), "In2.Cu"),
+        (layers_page(|s| drop(s.names.insert("User.9".into(), "Nope".into()))), "User.9"),
+        (layers_page(|s| { s.types.insert("In1.Cu".into(), LayerType::Front); }), "In1.Cu"),
+        (layers_page(|s| { s.types.insert("F.SilkS".into(), LayerType::Back); }), "F.SilkS"),
+    ] {
+        let e = b.apply(&Cmd::SetBoardLayers { settings: bad.clone() }).unwrap_err();
+        assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_board_layers", Some(location)), "{bad:?}: {e:?}");
+        assert_eq!(overlay_of(&b).board_layers, Some(kept.canonical()), "a refused page changes nothing");
+    }
+}
+
+#[test]
+fn a_layer_cannot_be_turned_off_while_items_are_on_it_and_can_once_they_are_not() {
+    let base = four_layer_model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    let text = Text { id: String::new(), content: "note".into(), at: Point { x: 5_000, y: 5_000 }, angle: 0, layer: "Eco1.User".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false };
+    b.apply(&Cmd::AddText { text }).unwrap();
+    let without_eco1 = layers_page(|s| s.enabled.retain(|l| l != "Eco1.User"));
+    let e = b.apply(&Cmd::SetBoardLayers { settings: without_eco1.clone() }).unwrap_err();
+    assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_board_layers", Some("Eco1.User")));
+    assert!(e[0].hint.as_deref().unwrap().contains("1 item(s) are on User.Eco1"), "{e:?}");
+    assert_eq!(overlay_of(&b).board_layers, None);
+    // Another layer, with nothing on it, goes; and a layer the board never had cannot be "removed" by being left out of a page again.
+    b.apply(&Cmd::SetBoardLayers { settings: layers_page(|s| s.enabled.retain(|l| l != "Eco2.User")) }).unwrap();
+    assert!(!overlay_of(&b).board_layers.unwrap().enabled.contains(&"Eco2.User".to_string()));
+    b.apply(&Cmd::SetBoardLayers { settings: layers_page(|s| s.enabled.retain(|l| l != "Eco2.User")) }).unwrap();
+}
+
+#[test]
+fn nothing_new_goes_on_a_layer_the_board_has_turned_off_and_user_layers_that_are_on_take_items() {
+    let mut base = four_layer_model();
+    base.board.layer_setup = layers_page(|s| {
+        s.enabled.retain(|l| l != "Eco1.User");
+        s.enabled.push("User.3".into());
+        s.names.insert("User.3".into(), "Notes".into());
+    })
+    .canonical();
+    let mut b = Board::new(design(), &base, 100, 300);
+    let line = |layer: &str| Shape::Segment { id: String::new(), layer: layer.into(), stroke_width: 150, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } };
+    let text = |layer: &str| Text { id: String::new(), content: "t".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: layer.into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false };
+    let e = b.apply(&Cmd::AddShape { shape: line("Eco1.User") }).unwrap_err();
+    assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_layer_off", Some("shape")));
+    assert!(e[0].hint.as_deref().unwrap().contains("User.Eco1 is not a layer this board has"), "{e:?}");
+    assert_eq!(b.apply(&Cmd::AddText { text: text("Eco1.User") }).unwrap_err()[0].check, "ops_layer_off");
+    b.apply(&Cmd::AddShape { shape: line("User.3") }).unwrap();
+    b.apply(&Cmd::AddText { text: text("User.3") }).unwrap();
+    b.apply(&Cmd::AddShape { shape: line("F.SilkS") }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().shapes[0].id().to_string();
+    let e = b.apply(&Cmd::EditShape { id, layer: "User.4".into(), stroke_width: 150, filled: false }).unwrap_err();
+    assert_eq!(e[0].check, "ops_layer_off", "a shape cannot be moved to a layer that is off either");
+    assert_eq!(b.design().drawings.as_ref().unwrap().shapes.len() + b.design().drawings.as_ref().unwrap().texts.len(), 3, "the refused ones added nothing");
+}
+
 #[test]
 fn the_verbs_read_from_the_json_the_studio_sends() {
     let cmd: Cmd = serde_json::from_value(serde_json::json!({
@@ -223,6 +340,12 @@ fn the_verbs_read_from_the_json_the_studio_sends() {
     assert!(matches!(cmd, Cmd::SetConstraints { .. }));
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_mask_paste", "settings": { "expansion_um": 0, "paste_margin_um": 0, "paste_margin_ratio": -0.05 } })).unwrap();
     assert!(matches!(cmd, Cmd::SetMaskPaste { settings } if settings.paste_margin_ratio == -0.05));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_board_layers", "settings": { "enabled": ["Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "User.1"], "names": { "User.1": "Notes" }, "types": { "In1.Cu": "power", "User.2": "front" } } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetBoardLayers { settings } if settings.enabled.len() == 5 && settings.names["User.1"] == "Notes" && settings.types["In1.Cu"] == LayerType::Power && settings.types["User.2"] == LayerType::Front));
+    assert_eq!(cmd.domain(), Domain::Pcb);
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_board_layers", "settings": {} })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetBoardLayers { settings } if settings.is_default()), "a page that says nothing is the start of a board");
+    assert!(serde_json::from_value::<Cmd>(serde_json::json!({ "op": "set_board_layers", "settings": { "enabled": [], "colour": "red" } })).is_err(), "a field the page does not have is refused");
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_text_variables", "variables": { "REVISION": "B", "Designer name": "Ada" } })).unwrap();
     assert!(matches!(&cmd, Cmd::SetTextVariables { variables } if variables.len() == 2 && variables["REVISION"] == "B"));
     assert_eq!(cmd.domain(), Domain::Pcb);

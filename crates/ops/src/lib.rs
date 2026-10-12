@@ -527,6 +527,10 @@ pub enum Cmd {
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
     SetCustomRules { text: String },
+    /// Board Stackup > Board Editor Layers (`panel_setup_layers.cpp`): the non-copper layers the board has (the technical ones and User.1 to User.45), the
+    /// names the user gave its layers and their types. The whole page; refused with the layer's name when a name or type is out of the panel's rules or
+    /// a layer is turned off while items are on it.
+    SetBoardLayers { settings: eda_model::layers::LayerSetup },
     /// Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` in a text, a field or the title
     /// block shows the value, and the derived `.kicad_pro` carries them (`text_variables`) so kicad-cli's plots show the same.
     SetTextVariables { variables: BTreeMap<String, String> },
@@ -1750,6 +1754,7 @@ impl Cmd {
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
             Cmd::SetTextVariables { .. } => vec!["text_variables"],
+            Cmd::SetBoardLayers { .. } => vec!["board_layers"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
@@ -2187,6 +2192,7 @@ impl<'a> Board<'a> {
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
+            Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
@@ -2892,6 +2898,16 @@ impl<'a> Board<'a> {
         }
     }
 
+    /// Board Editor Layers: a technical or user layer the board has turned off takes nothing new -- KiCad's tools and dialogs only offer the enabled ones.
+    /// (Copper layers are the stackup's, `known_layer`; a name that is no layer of KiCad's is the caller's business, as it always was.)
+    fn layer_is_on(&self, layer: &str, what: &str) -> Result<(), Vec<CheckResult>> {
+        if eda_model::layers::is_optional_layer(layer) && !self.model.board.layer_setup.enabled.iter().any(|l| l == layer) {
+            let shown = self.model.board.layer_setup.display_name(layer);
+            return Err(vec![CheckResult::fail("ops_layer_off", what, format!("{shown} is not a layer this board has; turn it on in Board Setup > Board Editor Layers first"))]);
+        }
+        Ok(())
+    }
+
     /// The board's routing section, creating an empty one if this is the
     /// first hand-added piece of copper. Unlike a part edit, adding copper
     /// must never clear an existing routing section -- see
@@ -3274,6 +3290,7 @@ impl<'a> Board<'a> {
         if dimension.start == dimension.end {
             return Err(vec![CheckResult::fail("ops_bad_dimension", "dimension", "a dimension needs two distinct feature points")]);
         }
+        self.layer_is_on(&dimension.layer, "dimension")?;
         dimension.id = String::new();
         let dr = self.drawings_mut();
         dr.dimensions.push(dimension);
@@ -3489,6 +3506,7 @@ impl<'a> Board<'a> {
                 return Err(vec![CheckResult::fail("ops_bad_shape", "shape", "a polygon needs at least three points")]);
             }
         }
+        self.layer_is_on(shape.layer(), "shape")?;
         shape.set_id(String::new()); // ids are ours to assign, never the caller's
         let dr = self.drawings_mut();
         dr.shapes.push(shape);
@@ -3520,6 +3538,7 @@ impl<'a> Board<'a> {
         if stroke_width <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width must be positive")]);
         }
+        self.layer_is_on(layer, id)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
         let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
         s.set_layer(layer.into());
@@ -3535,6 +3554,7 @@ impl<'a> Board<'a> {
         if text.size_um <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", "text", "text size must be positive")]);
         }
+        self.layer_is_on(&text.layer, "text")?;
         text.id = String::new();
         let dr = self.drawings_mut();
         dr.texts.push(text);
@@ -3550,6 +3570,7 @@ impl<'a> Board<'a> {
         if size_um <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
+        self.layer_is_on(&layer, id)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
         let t = dr.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
         t.content = content;
