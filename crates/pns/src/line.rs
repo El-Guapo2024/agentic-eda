@@ -442,7 +442,7 @@ fn drag_corner_internal(origin: &[Point], p: Point) -> Vec<Point> {
 
 /// `SHAPE_LINE_CHAIN::Replace( aStartIndex, aEndIndex, aLine )`: the points `start..=end` are replaced by `with`, except that a first
 /// point equal to `pts[start]` and a last one equal to `pts[end]` (when `end > 0`) are not repeated.
-fn replace_points(pts: &mut Vec<Point>, start: usize, end: usize, mut with: Vec<Point>) {
+pub(crate) fn replace_points(pts: &mut Vec<Point>, start: usize, end: usize, mut with: Vec<Point>) {
     let (mut start, mut end) = (start, end);
     if with.is_empty() {
         remove_points(pts, start, end);

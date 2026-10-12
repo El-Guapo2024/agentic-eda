@@ -447,7 +447,15 @@ pub fn drag_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
 // a diff-pair session too (it just drops the whole cell, session kind
 // notwithstanding).
 
-fn dp_preview_json(router: &Router, preview: &eda_pns::diff_pair::DiffPairPreview) -> Value {
+fn dp_via_json(router: &Router, v: &eda_pns::dp_placer::PreviewVia) -> Value {
+    json!({ "net": v.net.as_deref(), "x": v.pos.x, "y": v.pos.y, "diameter": v.diameter, "drill": v.drill, "from_layer": router.layer_name(v.layers.start()), "to_layer": router.layer_name(v.layers.end()) })
+}
+
+/// A pair's preview as the studio draws it: `net_a`/`net_b` are the P and N nets (`DpNetPair`: the one named `+` or `P` first);
+/// `head_*` the two lines of the head, `runs_*` the legs fixed so far (each with its layer); `vias` the pair of vias the head ends in
+/// while `V` is on, `fixed_vias` those of earlier legs; `displaced*` what `Shove` mode would push aside; `colliding` that the pair does
+/// not fit as drawn.
+fn dp_preview_json(router: &Router, preview: &eda_pns::dp_placer::DiffPairPreview) -> Value {
     let (net_a, net_b) = router.diff_pair_nets().unwrap_or((None, None));
     let layer_name = router.layer_name(preview.layer);
     json!({
@@ -456,17 +464,25 @@ fn dp_preview_json(router: &Router, preview: &eda_pns::diff_pair::DiffPairPrevie
         "net_b": net_b,
         "layer": layer_name,
         "width": preview.width,
+        "gap": preview.gap,
         "colliding": preview.colliding,
         "head_a": pts_json(&preview.head_a.pts),
         "head_b": pts_json(&preview.head_b.pts),
-        "runs_a": preview.runs_a.iter().map(|r| json!({ "layer": layer_name, "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
-        "runs_b": preview.runs_b.iter().map(|r| json!({ "layer": layer_name, "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
+        "runs_a": preview.runs_a.iter().map(|r| json!({ "layer": router.layer_name(r.layer), "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
+        "runs_b": preview.runs_b.iter().map(|r| json!({ "layer": router.layer_name(r.layer), "pts": pts_json(&r.pts) })).collect::<Vec<_>>(),
         "snapped_end": preview.snapped_end,
+        "placing_via": preview.placing_via,
+        "vias": preview.vias.iter().map(|v| dp_via_json(router, v)).collect::<Vec<_>>(),
+        "fixed_vias": preview.fixed_vias.iter().map(|v| dp_via_json(router, v)).collect::<Vec<_>>(),
+        "displaced": preview.displaced_lines.iter().map(|d| json!({ "source_track": d.source_track, "layer": router.layer_name(d.line.layer), "pts": pts_json(&d.line.pts) })).collect::<Vec<_>>(),
+        "displaced_vias": preview.displaced_vias.iter().map(|d| json!({ "source_via": d.source_via, "x": d.pos.x, "y": d.pos.y })).collect::<Vec<_>>(),
     })
 }
 
-/// `POST /api/route/dp_start`: `{x, y, layer, width?, gap?}` -- `width`/`gap` are the "Differential Pair Dimensions..." dialog's
-/// custom values (`BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions`); without them the pair takes the board rules' own.
+/// `POST /api/route/dp_start`: `{x, y, layer, width?, gap?, via_gap?, settings?}` -- `width`/`gap`/`via_gap` are the "Differential Pair
+/// Dimensions..." dialog's custom values (`BOARD_DESIGN_SETTINGS::UseCustomDiffPairDimensions`); without them the pair takes the net
+/// class's. `settings` is the router's ([`settings_of`]): the pair is walked, shoved or only marked per its `mode`. A refusal carries
+/// KiCad's own message (`ROUTER::SetFailureReason`).
 pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let (_, design, model) = match board::load(dir) {
@@ -479,7 +495,7 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     let layer = req.get("layer").and_then(Value::as_str).unwrap_or("F.Cu");
     match router.start_diff_pair(at, layer) {
         Ok(()) => {
-            router.set_diff_pair_dimensions(req.get("width").and_then(Value::as_i64), req.get("gap").and_then(Value::as_i64));
+            router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64), req.get("gap").and_then(Value::as_i64), req.get("via_gap").and_then(Value::as_i64));
             let reply = router.diff_pair_preview(at).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: started but no preview"));
             *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
             reply
@@ -488,12 +504,12 @@ pub fn dp_start(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     }
 }
 
-/// `POST /api/route/dp_dims`: `{width?, gap?}` -- `ROUTER_TOOL::DpDimensionsDialog` (`m_router->UpdateSizes`) for the pair being routed now.
+/// `POST /api/route/dp_dims`: `{width?, gap?, via_gap?}` -- `ROUTER_TOOL::DpDimensionsDialog` (`m_router->UpdateSizes`) for the pair being routed now.
 pub fn dp_dims(cell: &RouteCell, body: &[u8]) -> Value {
     let req = body_json(body);
     let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
     let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
-    if router.set_diff_pair_dimensions(req.get("width").and_then(Value::as_i64), req.get("gap").and_then(Value::as_i64)) {
+    if router.set_diff_pair_sizes(req.get("width").and_then(Value::as_i64), req.get("gap").and_then(Value::as_i64), req.get("via_gap").and_then(Value::as_i64)) {
         json!({ "ok": true })
     } else {
         err("not routing a diff pair")
@@ -510,6 +526,21 @@ pub fn dp_move(cell: &RouteCell, body: &[u8]) -> Value {
     }
     let at = point_of(&req);
     router.diff_pair_preview(at).map(|p| dp_preview_json(router, &p)).unwrap_or_else(|| err("not routing a diff pair"))
+}
+
+/// `POST /api/route/dp_via`: `{enabled, diameter?, drill?, to_layer?}` -- `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a
+/// pair of vias a `viaGap()` apart, and a fix places them and goes on from them on `to_layer`. No preview here; the next `dp_move` has it.
+pub fn dp_via(cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+    if !router.is_routing_diff_pair() {
+        return err("not routing a diff pair");
+    }
+    let enabled = req.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    let to_layer = req.get("to_layer").and_then(Value::as_str).and_then(|n| router.layer_index(n));
+    router.toggle_diff_pair_via(enabled, req.get("diameter").and_then(Value::as_i64), req.get("drill").and_then(Value::as_i64), to_layer);
+    json!({ "ok": true })
 }
 
 /// `POST /api/route/dp_fix`: `{x, y}`.
@@ -545,7 +576,7 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let at = point_of(&req);
     let Some(commit) = router.finish_diff_pair(at) else {
-        return json!({ "ok": false, "message": "final segment still collides; diff pair left uncommitted" });
+        return json!({ "ok": false, "message": "the pair still collides; left uncommitted" });
     };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias };
     match board::step(dir, cmd, true, "ui") {
@@ -594,7 +625,7 @@ mod tests {
 
     /// A 20 mm board with these tracks and vias.
     fn setup_board(dir: &Path, tracks: Vec<Track>, vias: Vec<Via>) {
-        let model = ConstraintModel { nets: ["SIG", "GND"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect(), ..ConstraintModel::default() };
+        let model = ConstraintModel { nets: ["SIG", "GND", "USB_DP", "USB_DN"].iter().map(|n| eda_model::Net { name: n.to_string(), pins: vec![] }).collect(), ..ConstraintModel::default() };
         let intent_path = dir.join("intent.yaml");
         std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
         let design = Design {
@@ -823,6 +854,101 @@ mod tests {
         // nothing left to connect to is a refusal that leaves the session alone
         let nothing = continue_from_end(&dir, &Mutex::new(None), &body(json!({ "x": 0, "y": 0 })));
         assert_eq!(nothing["ok"], json!(false));
+    }
+
+    fn via_at(id: &str, net: &str, x: i64, y: i64) -> Via {
+        Via { id: id.into(), net: net.into(), at: p(x, y), drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }
+    }
+
+    fn vias_of(dir: &Path) -> Vec<(String, Point)> {
+        let (_, design, _) = board::load(dir).unwrap();
+        design.routing.unwrap().vias.iter().map(|v| (v.net.clone(), v.at)).collect()
+    }
+
+    /// A pair of vias, USB_DP and USB_DN a millimetre apart, to start a pair from.
+    fn pair_board(dir: &Path) {
+        setup_board(dir, vec![], vec![via_at("dp", "USB_DP", 3_000, 5_000), via_at("dn", "USB_DN", 3_000, 6_000)]);
+    }
+
+    /// `DIFF_PAIR_PLACER` through the HTTP calls the studio makes: start on one via of a pair, move, fix, finish. Both nets are committed in
+    /// one step, P first in the reply, and one undo takes both back.
+    #[test]
+    fn a_pair_is_routed_over_http_and_committed_as_one_undo_step() {
+        let dir = scratch("dp_http");
+        pair_board(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        let started = dp_start(&dir, &cell, &body(json!({ "x": 3_000, "y": 6_000, "layer": "F.Cu", "settings": { "mode": "walkaround" } })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        assert_eq!((started["net_a"].clone(), started["net_b"].clone()), (json!("USB_DP"), json!("USB_DN")), "P is the net named P, whichever via was clicked: {started}");
+        let moved = dp_move(&cell, &body(json!({ "x": 12_000, "y": 5_500 })));
+        assert_eq!((moved["ok"].clone(), moved["colliding"].clone()), (json!(true), json!(false)), "{moved}");
+        let (a, b) = (pts_of(&moved, "head_a"), pts_of(&moved, "head_b"));
+        assert_eq!((a.first(), b.first()), (Some(&p(3_000, 5_000)), Some(&p(3_000, 6_000))), "the lines leave the vias' centres");
+        let pitch = moved["width"].as_i64().unwrap() + moved["gap"].as_i64().unwrap();
+        let (la, lb) = (a.last().unwrap(), b.last().unwrap());
+        let apart = (((la.x - lb.x).pow(2) + (la.y - lb.y).pow(2)) as f64).sqrt();
+        assert!(apart >= pitch as f64 - 1.0 && apart <= pitch as f64 + 3.0, "they end a pitch ({pitch}) apart: {apart}");
+        let fixed = dp_fix(&cell, &body(json!({ "x": 12_000, "y": 5_500 })));
+        assert_eq!((fixed["ok"].clone(), fixed["blocked"].clone(), fixed["real_end"].clone()), (json!(true), json!(false), json!(false)), "{fixed}");
+        assert_eq!(fixed["preview"]["runs_a"].as_array().unwrap().len(), 1, "one leg fixed: {fixed}");
+        let done = dp_finish(&dir, &cell, &body(json!({ "x": 12_000, "y": 5_500 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        let tracks = tracks_of(&dir);
+        assert_eq!(tracks.len(), 2, "{tracks:?}");
+        assert!(tracks.iter().any(|(net, pts)| net == "USB_DP" && pts.first() == Some(&p(3_000, 5_000))) && tracks.iter().any(|(net, pts)| net == "USB_DN" && pts.first() == Some(&p(3_000, 6_000))), "{tracks:?}");
+        let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));
+        assert!(undone.is_ok(), "{undone:?}");
+        assert!(tracks_of(&dir).is_empty(), "one undo took both lines back");
+    }
+
+    /// `V`: the head ends in a pair of vias, a click places them and the route goes on from them on the other layer; the commit has the
+    /// four tracks (two per layer) and the two new vias.
+    #[test]
+    fn v_places_a_pair_of_vias_and_the_pair_goes_on_on_the_other_layer() {
+        let dir = scratch("dp_via");
+        pair_board(&dir);
+        let cell: RouteCell = Mutex::new(None);
+        let started = dp_start(&dir, &cell, &body(json!({ "x": 3_000, "y": 5_000, "layer": "F.Cu" })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        assert_eq!(dp_via(&cell, &body(json!({ "enabled": true, "to_layer": "B.Cu" })))["ok"], json!(true));
+        let at = body(json!({ "x": 9_000, "y": 5_500 }));
+        let moved = dp_move(&cell, &at);
+        assert_eq!((moved["placing_via"].clone(), moved["colliding"].clone()), (json!(true), json!(false)), "{moved}");
+        let vias = moved["vias"].as_array().unwrap();
+        assert_eq!(vias.len(), 2, "{moved}");
+        assert_eq!((vias[0]["net"].clone(), vias[1]["net"].clone()), (json!("USB_DP"), json!("USB_DN")));
+        assert_eq!((vias[0]["from_layer"].clone(), vias[0]["to_layer"].clone()), (json!("F.Cu"), json!("B.Cu")));
+        let (la, lb) = (pts_of(&moved, "head_a").pop().unwrap(), pts_of(&moved, "head_b").pop().unwrap());
+        assert_eq!((la, lb), (p(vias[0]["x"].as_i64().unwrap(), vias[0]["y"].as_i64().unwrap()), p(vias[1]["x"].as_i64().unwrap(), vias[1]["y"].as_i64().unwrap())), "each line ends in its via");
+        let fixed = dp_fix(&cell, &at);
+        assert_eq!((fixed["ok"].clone(), fixed["blocked"].clone()), (json!(true), json!(false)), "{fixed}");
+        assert_eq!(fixed["preview"]["layer"], json!("B.Cu"), "the route goes on on the other layer: {fixed}");
+        assert_eq!(fixed["preview"]["fixed_vias"].as_array().unwrap().len(), 2);
+        assert_eq!(fixed["preview"]["placing_via"], json!(false));
+        let on = dp_move(&cell, &body(json!({ "x": 15_000, "y": 5_500 })));
+        assert_eq!((on["layer"].clone(), on["colliding"].clone()), (json!("B.Cu"), json!(false)), "{on}");
+        assert_eq!(pts_of(&on, "head_a").first().copied(), Some(p(vias[0]["x"].as_i64().unwrap(), vias[0]["y"].as_i64().unwrap())), "from the via");
+        let done = dp_finish(&dir, &cell, &body(json!({ "x": 15_000, "y": 5_500 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        let (_, design, _) = board::load(&dir).unwrap();
+        let routing = design.routing.unwrap();
+        let on_layer = |layer: &str| routing.tracks.iter().filter(|t| t.layer == layer).count();
+        assert_eq!((on_layer("F.Cu"), on_layer("B.Cu")), (2, 2), "two lines on each layer: {:?}", routing.tracks);
+        assert_eq!(vias_of(&dir).len(), 4, "the two it started from and the two it placed: {:?}", vias_of(&dir));
+    }
+
+    /// `FindDpPrimitivePair`'s refusals reach the studio in KiCad's words.
+    #[test]
+    fn a_pair_cannot_start_from_a_net_that_is_not_half_of_one() {
+        let dir = scratch("dp_refused");
+        setup_board(&dir, vec![], vec![via_at("g", "GND", 3_000, 5_000)]);
+        let cell: RouteCell = Mutex::new(None);
+        let refused = dp_start(&dir, &cell, &body(json!({ "x": 3_000, "y": 5_000, "layer": "F.Cu" })));
+        assert_eq!(refused["ok"], json!(false));
+        assert!(refused["message"].as_str().unwrap().contains("Unable to find complementary differential pair nets"), "{refused}");
+        assert!(cell.lock().unwrap().is_none(), "no session is left");
+        let nothing = dp_start(&dir, &cell, &body(json!({ "x": 15_000, "y": 15_000, "layer": "F.Cu" })));
+        assert_eq!(nothing["ok"], json!(false), "{nothing}");
     }
 
     /// The settings the dragger and the end-of-route snapping read are in the request's `settings`.

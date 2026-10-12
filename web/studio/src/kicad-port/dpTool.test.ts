@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { dpStateFromPreview, type DpDrawState } from "./dpTool";
+import { dpStateFromPreview, dpViaRequest, type DpDrawState } from "./dpTool";
 import type { DiffPairPreview } from "../api/types";
 
 function baseDraw(overrides: Partial<DpDrawState> = {}): DpDrawState {
@@ -43,4 +43,36 @@ test("dpStateFromPreview keeps the previous net names when a reply has none", ()
   const next = dpStateFromPreview(current, preview);
   assert.equal(next.netA, "USB_DP");
   assert.equal(next.netB, "USB_DN");
+});
+
+test("dpStateFromPreview carries the pair of vias, the fixed legs' vias and what a shove would push aside", () => {
+  const via = (net: string, x: number, y: number) => ({ net, x, y, diameter: 600, drill: 300, from_layer: "F.Cu", to_layer: "B.Cu" });
+  const preview = basePreview({
+    gap: 250,
+    placing_via: true,
+    vias: [via("USB_DP", 5000, 75), via("USB_DN", 5000, 925)],
+    fixed_vias: [via("USB_DP", 1000, 0)],
+    displaced: [{ source_track: "u", layer: "F.Cu", pts: [[3000, -1500], [5000, -300], [7000, -1500]] }],
+    displaced_vias: [{ source_via: "v1", x: 2000, y: 2000 }],
+  });
+  const next = dpStateFromPreview(baseDraw(), preview);
+  assert.equal(next.gap, 250);
+  assert.equal(next.placingVia, true);
+  assert.deepEqual(next.vias, [
+    { net: "USB_DP", x: 5000, y: 75, diameter: 600, fromLayer: "F.Cu", toLayer: "B.Cu" },
+    { net: "USB_DN", x: 5000, y: 925, diameter: 600, fromLayer: "F.Cu", toLayer: "B.Cu" },
+  ]);
+  assert.equal(next.fixedVias?.length, 1);
+  assert.deepEqual(next.displaced, preview.displaced);
+  assert.deepEqual(next.displacedVias, preview.displaced_vias);
+  // a later reply without them clears them (the head moved off the obstacle, V was turned off)
+  const cleared = dpStateFromPreview(next, basePreview());
+  assert.equal(cleared.placingVia, false);
+  assert.deepEqual(cleared.vias, []);
+  assert.deepEqual(cleared.displaced, []);
+});
+
+test("dpViaRequest arms the vias toward the given layer, and a second V takes them away", () => {
+  assert.deepEqual(dpViaRequest(baseDraw(), "B.Cu"), { enabled: true, toLayer: "B.Cu" });
+  assert.deepEqual(dpViaRequest(baseDraw({ placingVia: true }), "B.Cu"), { enabled: false, toLayer: "B.Cu" });
 });

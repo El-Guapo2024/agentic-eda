@@ -34,7 +34,7 @@ import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, route
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { finishDiffPairRoute } from "../components/canvas/diffPairRouting";
+import { finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
 import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
@@ -383,14 +383,21 @@ export function useActionRunner() {
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleWidth(1)));
       m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleWidth(-1)));
     } else if (state.drawState?.kind === "diffpair") {
-      // Same shape as the route branch above, scoped down to what this
-      // port's diff pair actually supports (no via/layer-switch, no width
-      // cycling -- see crates/pns/src/diff_pair.rs's own doc comment).
+      // Same shape as the route branch above (crates/pns/src/dp_placer.rs is the pair's placer): `V` places a pair of vias and the
+      // route goes on from them on the other layer; no width cycling.
       const draw = state.drawState;
       const cursor = state.cursorUm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
         pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
+      );
+      // `V` (`layerToggle`): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts)
+      m.set(
+        "pcbnew.Control.layerToggle",
+        pcbOnly(() => {
+          if (!state.board) return;
+          void toggleDiffPairVia(draw, cursor, otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer), dispatch);
+        })
       );
       m.set(
         "pcbnew.InteractiveRouter.UndoLastSegment",

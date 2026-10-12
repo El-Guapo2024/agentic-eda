@@ -857,6 +857,7 @@ fn handle(
         ("POST", "/api/route/dp_dims") => respond(stream, "200 OK", "application/json", route_api::dp_dims(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_move") => respond(stream, "200 OK", "application/json", route_api::dp_move(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
         // 7 (gap #7 task item 4): length tuning. Stateless -- no session

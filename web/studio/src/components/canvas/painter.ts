@@ -1042,16 +1042,21 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   }
 
   if (draw.kind === "diffpair") {
-    // No shove/walkaround for a pair in this port (crates/pns/src/
-    // diff_pair.rs's own doc comment) -- a collision on *either* line
-    // colors *both*, since the pair is conceptually one unit to the user
-    // even though each line is drawn/collision-checked independently.
+    // A collision on *either* line colors *both*: the pair is one unit to the user, though each line is checked on its own. The head is
+    // already coupled, walked or shoved by the router (crates/pns/src/dp_placer.rs); `displaced` is what Shove would push aside.
     const violationColor = "#ff3333";
     const color = draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer));
     for (const run of draw.runsA ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     for (const run of draw.runsB ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     strokeDashedPolyline(ctx, view, draw.ptsA, color, draw.width, false);
     strokeDashedPolyline(ctx, view, draw.ptsB, color, draw.width, false);
+    for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width || 150, false);
+    for (const v of draw.displacedVias ?? []) {
+      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600;
+      strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
+    }
+    for (const v of draw.fixedVias ?? []) strokeViaGhost(ctx, view, v.x, v.y, v.diameter, layerColor("via"));
+    for (const v of draw.vias ?? []) strokeViaGhost(ctx, view, v.x, v.y, v.diameter, draw.colliding ? violationColor : layerColor("via"));
     return;
   }
 

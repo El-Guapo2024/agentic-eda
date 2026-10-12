@@ -13,6 +13,8 @@
 //!   (the X tool): head/tail, posture, via placement, end snapping.
 //! - [`walkaround`] and [`shove`] are the two obstacle-resolution
 //!   strategies a placer (or the dragger) can call into.
+//! - [`dp_placer::DiffPairPlacer`] routes a differential pair -- both nets at once, gateway to gateway
+//!   ([`diff_pair`]), walked or shoved together in the router's mode.
 //! - [`dragger::Dragger`] drags an existing segment/via, keeping its
 //!   connections, by reusing the same shove/walkaround machinery.
 //! - [`router::Router`] is the top-level session object the HTTP API
@@ -25,6 +27,7 @@
 //! only place that imports both this crate and `eda_ops`.
 
 pub mod diff_pair;
+pub mod dp_placer;
 pub mod dp_tune;
 pub mod direction45;
 pub mod dragger;

@@ -94,11 +94,20 @@ pub struct ShoveOutcome {
     /// The head as it ended up: the input when nothing was in the way, or the
     /// input walked around a pad (`onCollidingSolid` applied to the head).
     pub head: Vec<Point>,
+    /// Every head as it ended up, in the order they were given (`GetModifiedHead( i )`): `head` is the first. A pair has two.
+    pub heads: Vec<Vec<Point>>,
     pub displaced_lines: Vec<DisplacedLine>,
     pub displaced_vias: Vec<DisplacedVia>,
     /// The world the shove left, with the head removed (`SHOVE::CurrentNode()`
     /// after `removeHeads`) -- what the head is optimized against.
     pub world: Node,
+}
+
+/// One head of a multi-head shove (`SHOVE::AddHeads( aHead )`): the line, and the via it ends in if it does (`LINE::EndsWithVia`).
+#[derive(Debug, Clone)]
+pub struct ShoveHead {
+    pub line: Line,
+    pub via: Option<Via>,
 }
 
 /// `SHOVE::SHOVE_STATUS`.
@@ -315,17 +324,20 @@ fn solid_via_mtv(shape: &Shape, c: Point, r: Um, clearance: Um) -> Option<(i64, 
     Some((m.0 as i64, m.1 as i64))
 }
 
-/// `VIA::PushoutForce( aNode, aOther, aForce )`: the displacement that takes a via at `pos` out of one obstacle, at the full
-/// clearance (no epsilon). `(0, 0)` when the via is not in it, or the obstacle's MTV is zero.
-fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> (i64, i64) {
-    let r = via.diameter / 2;
-    let clearance = Node::clearance_to(rules, &via.net, other);
+/// `SHAPE::Collide( circle, aClearance, &mtv )` of one obstacle against the circle of radius `r` at `pos`: the displacement that takes
+/// the circle out of the obstacle's clearance, `None` when it is not in it.
+pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Um, clearance: Um) -> Option<(i64, i64)> {
     match other {
         Item::Solid(s) => solid_via_mtv(&s.shape, pos, r, clearance),
         Item::Segment(sg) => circle_chain_mtv(pos, r, &[sg.a, sg.b], clearance + sg.width / 2),
         Item::Via(o) => circle_circle_mtv(o.pos, o.diameter / 2, pos, r, clearance),
     }
-    .unwrap_or((0, 0))
+}
+
+/// `VIA::PushoutForce( aNode, aOther, aForce )`: the displacement that takes a via at `pos` out of one obstacle, at the full
+/// clearance (no epsilon). `(0, 0)` when the via is not in it, or the obstacle's MTV is zero.
+fn via_pushout_from(rules: &BoardRules, via: &Via, pos: Point, other: &Item) -> (i64, i64) {
+    item_circle_mtv(other, pos, via.diameter / 2, Node::clearance_to(rules, &via.net, other)).unwrap_or((0, 0))
 }
 
 /// `VIA::PushoutForce( aNode, aDirection, aForce, aCollisionMask, aMaxIterations )`: push the via out of whatever of
@@ -498,15 +510,24 @@ struct Shove<'a> {
     /// The segments of the line being dragged, taken out of the shove's node (`preShoveNode->Remove( draggedPreShove )`) and not
     /// handed back as "the part of a track no shoved line covered".
     dragged_away: HashSet<ItemId>,
+    /// `SHOVE::ForceClearance( true, aClearance )` (`m_forceClearance`): the clearance every hull is built at, whatever the rules say.
+    /// The pair placer shoves one line of a pair away from the other at the pair's gap.
+    force_clearance: Option<Um>,
 }
 
 impl<'a> Shove<'a> {
     fn new(world: &'a Node, rules: &'a BoardRules, settings: &'a RoutingSettings) -> Self {
-        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new() }
+        Shove { world, node: world.branch(), rules, settings, ranks: HashMap::new(), head_marked: HashSet::new(), line_stack: Vec::new(), optimizer_queue: Vec::new(), roots: Vec::new(), root_of: HashMap::new(), affected: None, via_archive: HashMap::new(), iter: 0, reversed_head: false, dragged_away: HashSet::new(), force_clearance: None }
     }
 
     fn clearance(&self, a: &Net, b: &Net) -> Um {
         Node::clearance(self.rules, a, b)
+    }
+
+    /// `SHOVE::getClearance`: what a hull is built at -- the forced clearance if there is one, else the rules'. (A *collision* between
+    /// two lines is always judged at the rules' clearance: `ITEM::Collide` asks the node, not the shove.)
+    fn get_clearance(&self, a: &Net, b: &Net) -> Um {
+        self.force_clearance.unwrap_or_else(|| self.clearance(a, b))
     }
 
     fn rank_of_item(&self, id: ItemId) -> i32 {
@@ -606,8 +627,17 @@ impl<'a> Shove<'a> {
                 i
             }
         };
+        // The new line descends from the IR track the old one stood on (the first, by name, if it stood on several), so a shove run later
+        // in the world this one leaves -- a route that fixed a leg and goes on -- still maps what it moves to the IR.
+        let lineage = old.line.segment_ids.iter().filter_map(|id| match self.node.get(*id) {
+            Some(Item::Segment(s)) => s.source_track.as_ref().map(|(t, _)| t.clone()),
+            _ => None,
+        }).min();
         self.node.remove_line_segments(&old.line);
-        let ids = self.node.add_line(&new.line, None, false);
+        let ids = match lineage {
+            Some(track) => self.node.add_line_tagged(&new.line, &track),
+            None => self.node.add_line(&new.line, None, false),
+        };
         new.line.segment_ids = ids;
         // the new segments carry the line's own rank (`SEGMENT( aLine, seg )`)
         for &id in &new.line.segment_ids {
@@ -801,7 +831,7 @@ impl<'a> Shove<'a> {
     fn shove_line_from_lone_via(&self, cur: &SLine, obstacle: &SLine, result: &mut SLine) -> bool {
         let Some(lv) = &cur.via else { return false };
         let via = &lv.data;
-        let clearance = self.clearance(&via.net, &obstacle.line.net);
+        let clearance = self.get_clearance(&via.net, &obstacle.line.net);
         let hull = Item::Via(via.clone()).hull(clearance, obstacle.line.width, cur.line.layer);
         let Some(path_cw) = walkaround::walk_around_hull(&obstacle.line.pts, &hull, true) else { return false };
         let Some(path_ccw) = walkaround::walk_around_hull(&obstacle.line.pts, &hull, false) else { return false };
@@ -910,13 +940,13 @@ impl<'a> Shove<'a> {
             return ok;
         }
         let obstacle_width = obstacle_line.line.width;
-        let clearance = self.clearance(&cur.line.net, &obstacle_line.line.net);
+        let clearance = self.get_clearance(&cur.line.net, &obstacle_line.line.net);
         for attempt in 0..3 {
             // the hulls grow by `cHullFailureExpansionFactor` after each failed attempt
             let extra = attempt * HULL_FAILURE_EXPANSION;
             let mut hulls: Vec<Vec<Point>> = cur.line.segs().map(|(a, b)| crate::hull::segment_hull(a, b, cur.line.width, clearance + extra + crate::hull::HULL_ROUNDING_GUARD, obstacle_width)).filter(|h| h.len() >= 3).collect();
             if let Some(lv) = &cur.via {
-                let via_clearance = self.clearance(&lv.data.net, &obstacle_line.line.net);
+                let via_clearance = self.get_clearance(&lv.data.net, &obstacle_line.line.net);
                 hulls.push(Item::Via(lv.data.clone()).hull(via_clearance, obstacle_width, obstacle_line.line.layer));
             }
             let (adj_start, adj_end) = (attempt >= 2 && !voe_start, attempt >= 2 && !voe_end);
@@ -1042,14 +1072,14 @@ impl<'a> Shove<'a> {
         let (mut mtv, mut collided) = ((0i64, 0i64), false);
         match &cur {
             Pusher::Line(line) => {
-                let clearance = self.clearance(&line.line.net, &obstacle_via.net);
+                let clearance = self.get_clearance(&line.line.net, &obstacle_via.net);
                 let mut vtmp = obstacle_via.clone();
                 if info.max_fanout_width > 0 && info.max_fanout_width > vtmp.diameter {
                     vtmp.diameter = info.max_fanout_width;
                 }
                 let line_mtv = circle_chain_mtv(vtmp.pos, vtmp.diameter / 2, &line.line.pts, clearance + line.line.width / 2);
                 // "Check the via if present. Via takes priority."
-                let via_mtv = line.via.as_ref().and_then(|lv| circle_circle_mtv(lv.data.pos, lv.data.diameter / 2, vtmp.pos, vtmp.diameter / 2, self.clearance(&lv.data.net, &vtmp.net)));
+                let via_mtv = line.via.as_ref().and_then(|lv| circle_circle_mtv(lv.data.pos, lv.data.diameter / 2, vtmp.pos, vtmp.diameter / 2, self.get_clearance(&lv.data.net, &vtmp.net)));
                 collided = line_mtv.is_some() || via_mtv.is_some();
                 mtv = via_mtv.or(line_mtv).unwrap_or((0, 0));
             }
@@ -1176,7 +1206,7 @@ impl<'a> Shove<'a> {
     fn on_reverse_colliding_via(&mut self, cur: &SLine, via_id: ItemId, info: &ObstacleInfo) -> Status {
         let Some(obstacle_via) = self.via_item(via_id) else { return Status::Incomplete };
         if let Some(lv) = &cur.via {
-            let clearance = self.clearance(&lv.data.net, &obstacle_via.net);
+            let clearance = self.get_clearance(&lv.data.net, &obstacle_via.net);
             let hit = !same_net(&lv.data.net, &obstacle_via.net) && Shape::Circle { c: lv.data.pos, r: lv.data.diameter / 2 }.collides(&Shape::Circle { c: obstacle_via.pos, r: obstacle_via.diameter / 2 }, clearance).is_some();
             if hit {
                 let next = self.line_rank(cur) - 1;
@@ -1441,7 +1471,7 @@ impl<'a> Shove<'a> {
         let raw = head.pts.clone();
         let ids = self.node.add_line(&head, None, false);
         if ids.is_empty() {
-            return Some(ShoveOutcome { head: raw, displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: self.node });
+            return Some(ShoveOutcome { head: raw.clone(), heads: vec![raw], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: self.node });
         }
         head.segment_ids = ids.clone();
         let mut head_line = SLine::new(head);
@@ -1459,7 +1489,50 @@ impl<'a> Shove<'a> {
             return None;
         }
         self.run_optimizer();
-        Some(self.outcome(Some(head_root), raw))
+        Some(self.outcome(&[Some(head_root)], vec![raw]))
+    }
+
+    /// `SHOVE::Run` with several heads (`AddHeads` for each): the heads go into the world one after the other, each with its main loop,
+    /// so the second sees the first as a line it must not push (rank `HEAD_RANK`, like its own). A head may end in a via
+    /// (`head.EndsWithVia()`: the via goes into the node with the head's rank). `None` when a head is empty ("nothing to shove" is
+    /// `SH_INCOMPLETE` for a multi-head run) or any main loop fails.
+    fn run_heads(mut self, heads: Vec<ShoveHead>) -> Option<ShoveOutcome> {
+        let raws: Vec<Vec<Point>> = heads.iter().map(|h| h.line.pts.clone()).collect();
+        let mut roots: Vec<Option<usize>> = Vec::new();
+        for h in heads {
+            let ShoveHead { mut line, via } = h;
+            let ids = self.node.add_line(&line, None, false);
+            // "empty head? nothing to shove..."
+            if ids.is_empty() && via.is_none() {
+                return None;
+            }
+            line.segment_ids = ids.clone();
+            let mut head_line = SLine::new(line);
+            head_line.rank = HEAD_RANK;
+            let head_root = self.new_root(RootEntry { root_line: Some(head_line.clone()), is_head: true, ..RootEntry::default() });
+            for &id in &ids {
+                self.ranks.insert(id, HEAD_RANK);
+                self.head_marked.insert(id);
+                self.root_of.insert(id, head_root);
+            }
+            if let Some(v) = via {
+                // `headVia->SetRank( 100000 ); head.LinkVia( headVia.get() ); m_currentNode->Add( std::move( headVia ) )`
+                let vid = self.node.add(Item::Via(v.clone()));
+                self.ranks.insert(vid, HEAD_RANK);
+                self.head_marked.insert(vid);
+                self.root_of.insert(vid, head_root);
+                head_line.link_via(vid, v);
+            }
+            roots.push(Some(head_root));
+            if !self.push_line_stack(head_line, false) {
+                return None;
+            }
+            if self.shove_main_loop() != Status::Ok {
+                return None;
+            }
+        }
+        self.run_optimizer();
+        Some(self.outcome(&roots, raws))
     }
 
     /// `SHOVE::Run` for a via head (`AddHeads( VIA_HANDLE, aNewPos, SHP_SHOVE )`, what `DRAGGER::dragShove` adds for a dragged via):
@@ -1485,18 +1558,22 @@ impl<'a> Shove<'a> {
             (Some((id, _)), Some(new)) if *id == via_id => Some(new.pos),
             _ => None,
         });
-        Some(self.outcome(None, vec![end.unwrap_or(via.pos)]))
+        Some(self.outcome(&[None], vec![vec![end.unwrap_or(via.pos)]]))
     }
 
-    /// `reconstructHeads` + `removeHeads` + the diff against the world.
-    fn outcome(mut self, head_root: Option<usize>, raw: Vec<Point>) -> ShoveOutcome {
-        // a via head (`AddHeads( VIA_HANDLE, .. )`) has no head line to take out of the world
-        let head_entry = head_root.map(|r| self.roots[r].clone());
-        let head = head_entry.as_ref().and_then(|e| e.new_line.as_ref()).map(|l| l.line.pts.clone()).unwrap_or(raw);
+    /// `reconstructHeads` + `removeHeads` + the diff against the world. `head_roots` are the heads' root entries, one per head (`None`:
+    /// a via head, which has no line to take out of the world), `raws` their input points.
+    fn outcome(mut self, head_roots: &[Option<usize>], raws: Vec<Vec<Point>>) -> ShoveOutcome {
+        let mut heads: Vec<Vec<Point>> = Vec::new();
         let mut head_ids: Vec<ItemId> = self.head_marked.iter().copied().collect();
-        if let Some(l) = head_entry.as_ref().and_then(|e| e.new_line.as_ref()) {
-            head_ids.extend(l.line.segment_ids.iter().copied());
+        for (root, raw) in head_roots.iter().zip(raws) {
+            let entry = root.map(|r| self.roots[r].clone());
+            if let Some(l) = entry.as_ref().and_then(|e| e.new_line.as_ref()) {
+                head_ids.extend(l.line.segment_ids.iter().copied());
+            }
+            heads.push(entry.as_ref().and_then(|e| e.new_line.as_ref()).map(|l| l.line.pts.clone()).unwrap_or(raw));
         }
+        let head = heads.first().cloned().unwrap_or_default();
         for id in head_ids {
             self.node.remove(id);
         }
@@ -1549,7 +1626,7 @@ impl<'a> Shove<'a> {
                 }
             }
         }
-        ShoveOutcome { head, displaced_lines, displaced_vias, world: self.node }
+        ShoveOutcome { head, heads, displaced_lines, displaced_vias, world: self.node }
     }
 
     /// The IR tracks a set of the original world's segments belong to.
@@ -1596,7 +1673,7 @@ pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], net: &
 #[allow(clippy::too_many_arguments)]
 fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
-        return Some(ShoveOutcome { head: raw.to_vec(), displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone() });
+        return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone() });
     }
     let head = Line::from_points(net.clone(), layer, width, raw.to_vec());
     let mut shove = Shove::new(node, rules, settings);
@@ -1615,6 +1692,32 @@ fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: 
 /// `dragViaWalkaround`).
 pub fn shove_via(node: &Node, via_id: ItemId, to: Point, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
     Shove::new(node, rules, settings).run_via(via_id, to)
+}
+
+/// `SHOVE::AddHeads( .. )` for each head, then `SHOVE::Run()`: shove whatever the heads -- a pair's two lines, say -- collide with out
+/// of the way, one head after the other (the second treats the first as a line it must not push). `outcome.heads` are the heads as the
+/// shove left them (`GetModifiedHead( i )`: a pad in the way walks the head around it). `None` is `status != SH_OK`: a head that is
+/// empty, a pad it could not walk around, a track it could not push, or the iteration limit.
+pub fn shove_heads(node: &Node, heads: Vec<ShoveHead>, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
+    Shove::new(node, rules, settings).run_heads(heads)
+}
+
+/// `SHOVE::ShoveObstacleLine( aCurLine, aObstacleLine, aResultLine )` after `ForceClearance( forced.is_some(), forced )`: the line
+/// `obstacle` re-walked around the hulls of `pusher` (and the via it ends in) so it keeps the clearance -- the forced one, if given, else
+/// the rules' -- from it, its ends where they were. The pair placer uses it to put one line of a pair at the gap from the other
+/// after walking that other around an obstacle (`DIFF_PAIR_PLACER::attemptWalk`). `None` when no way of re-walking it works.
+#[allow(clippy::too_many_arguments)] // the shove's query context (node, rules, settings), the two lines with their vias, and the forced clearance
+pub fn shove_obstacle_line(node: &Node, rules: &BoardRules, settings: &RoutingSettings, pusher: &Line, pusher_via: Option<&Via>, obstacle: &Line, obstacle_via: Option<&Via>, forced_clearance: Option<Um>) -> Option<Line> {
+    let mut shove = Shove::new(node, rules, settings);
+    shove.force_clearance = forced_clearance;
+    let sline = |l: &Line, v: Option<&Via>| {
+        let mut s = SLine::new(l.clone());
+        s.via = v.map(|v| LineVia { data: v.clone(), linked: None });
+        s
+    };
+    let (cur, obs) = (sline(pusher, pusher_via), sline(obstacle, obstacle_via));
+    let mut result = obs.clone();
+    shove.shove_obstacle_line(&cur, &obs, &mut result).then_some(result.line)
 }
 
 #[cfg(test)]
