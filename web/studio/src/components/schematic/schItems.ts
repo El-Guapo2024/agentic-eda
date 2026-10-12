@@ -12,6 +12,7 @@ import { resolveLibSymbol, symbolBounds } from "./libSymbol";
 import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-port/schFieldEdit";
 import { hitPin, pinBox, pinById, pinItems } from "../../kicad-port/schPins";
 import { sheetPinBox, sheetPinById, sheetPinItems } from "../../kicad-port/schSheetPinItems";
+import { schTextBox } from "../../kicad-port/schTextItem";
 
 export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "sheet_pin" | "graphic" | "field" | "pin";
 
@@ -43,8 +44,9 @@ function textBox(text: string, at: P, sizeUm: number, justify: "left" | "center"
   return boxOfPoints(corners.map(([x, y]) => [at[0] + x * c - y * s, at[1] + x * s + y * c] as P))!;
 }
 
+/** The box a free text takes on the sheet: justified about its anchor as it is drawn (`EDA_TEXT::GetTextBox`). */
 export function textItemBounds(t: SchematicText): Box {
-  return textBox(t.content, t.at, t.size_um, "left", t.angle);
+  return schTextBox(t, measureStrokeText);
 }
 
 export function labelBounds(sch: Schematic, l: SchematicLabel): Box {

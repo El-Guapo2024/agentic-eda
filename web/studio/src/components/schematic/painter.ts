@@ -42,6 +42,7 @@ import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_UM, PIN_TEXT_SIZE_UM, pinTextPlacements
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { defaultPenUm, FIELD_SIZE_UM, textOrigin, type SchField } from "../../kicad-port/schText";
 import { shownText } from "../../kicad-port/schFieldEdit";
+import { schTextLines, textLie } from "../../kicad-port/schTextItem";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { unitLetter } from "../../kicad-port/unitLetter";
@@ -769,9 +770,18 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   }
 }
 
-/** `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields). `t.angle` is already world-space (like `SymbolInstance.rot`, not a library-local `LibGraphic.angle_deg`), so it feeds `ctx.rotate`/`angleRad` directly, no Y-flip negation -- see `drawRealSymbol`'s own `ctx.rotate((symbol.rot * Math.PI) / 180)` for the parallel case this mirrors. */
+/**
+ * `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields): justified about its anchor in
+ * its own axes (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`, left and bottom for a text that was never justified), one line after another (`FONT::getLinePositions`),
+ * and a text that runs up the sheet (`ANGLE_VERTICAL`) turned a quarter counter-clockwise about the anchor, the way `drawKicadText` sets a field.
+ */
 function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolean) {
-  drawStrokeText(ctx, t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES") });
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES");
+  ctx.save();
+  ctx.translate(t.at[0], t.at[1]);
+  if (textLie(t).vertical) ctx.rotate(-Math.PI / 2);
+  for (const line of schTextLines(t, measureStrokeText)) drawStrokeText(ctx, line.text, line.x, line.y, { sizeUm: t.size_um, justify: "left", color });
+  ctx.restore();
 }
 
 /**

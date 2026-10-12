@@ -1,6 +1,6 @@
 // The schematic editor's tool verbs and drawn items -- mirrors crates/model/src/sch_extras.rs (SchGraphic) and
 // crates/ops/src/sch_edit.rs (SchCmd, sent as `{ op: "sch_edit", verb: ..., ... }`).
-import type { LabelShape, PointXY, SchField, Um } from "./types";
+import type { CmdLabelKind, LabelShape, PointXY, SchField, Um } from "./types";
 
 /** Stroke style of a graphic (`LINE_STYLE`); `default` follows the sheet's own default. */
 export type SchLineStyle = "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
@@ -126,8 +126,18 @@ export type SchEditCmd =
   | { verb: "update_library_symbols"; lib_ids: string[] }
   /** Cycle Body Style / the body style choice of Symbol Properties (`SelectBodyStyle`): the placed units of these references are drawn in body style `style` (1 normal, 2 alternate "De Morgan"), or in the next one when it is left out. */
   | { verb: "set_body_style"; ids: string[]; style?: number }
-  /** Label Properties: a field left out is unchanged (`shape` is for global and hierarchical labels, `spin` is which way the text runs from the anchor). */
-  | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean }
+  /**
+   * Label Properties: a field left out is unchanged (`shape` is for global and hierarchical labels, `spin` is which way the text runs from the anchor). `auto_rotate` is the
+   * "Auto" check of a global or hierarchical label: while it is on the label takes the spin of what it is connected to and `spin` is not applied.
+   */
+  | { verb: "edit_label"; id: string; text?: string; shape?: LabelShape; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean; auto_rotate?: boolean }
+  /**
+   * Place Label, Global Label and Hierarchical Label (`TwoClickPlace` after `createNewLabel`) with the properties of its dialog, as one step: `spin` (absent: read off the wire
+   * the label ends at), `size_um`, `bold`, `italic`, and `auto_rotate` (global and hierarchical only; the label then takes the spin of what it is placed on).
+   */
+  | { verb: "place_label"; net: string; at: PointXY; kind: CmdLabelKind; spin?: "right" | "up" | "left" | "bottom"; size_um?: Um; bold?: boolean; italic?: boolean; auto_rotate?: boolean }
+  /** Place Text (`TwoClickPlace` after `createNewText`): a free text with its justification (absent: KiCad's last-used, centre and centre) and `angle` 0 or 90000. */
+  | { verb: "place_text"; content: string; at: PointXY; angle?: number; size_um: Um; h?: SchHAlign; v?: SchVAlign }
   /**
    * Field Properties on one field of a symbol, power symbol or sheet (`DIALOG_FIELD_PROPERTIES::UpdateField`): `id` is the field's (`fld:<owner>:<name>`); a member left out is
    * unchanged. `at` is where the text's anchor goes on the sheet, `vertical` whether it runs up the sheet, `h`/`v` how it reads there; `size_um` is 0.01 to 1000 mm.
@@ -149,8 +159,8 @@ export type SchEditCmd =
     }
   /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on these symbols, power symbols, sheets, or the item each listed field belongs to. */
   | { verb: "autoplace_fields"; ids: string[] }
-  /** Text Properties of a free text: its text, its size (um, 0.01 to 1000 mm) and its angle (millidegrees). */
-  | { verb: "edit_text"; id: string; text?: string; size_um?: Um; angle?: number }
+  /** Text Properties of a free text: its text, its size (um, 0.01 to 1000 mm), its angle (millidegrees; horizontal or vertical) and its justification about the anchor. */
+  | { verb: "edit_text"; id: string; text?: string; size_um?: Um; angle?: number; h?: SchHAlign; v?: SchVAlign }
   /** Sheet Properties: the sheet's name and the file it shows (a bare name; one the project has is linked to, a new one gets the content). */
   | { verb: "edit_sheet"; id: string; name?: string; file?: string }
   /** Wire/Bus, Line and Junction Properties: the stroke of the wires, buses, bus entries and graphic lines named, the diameter and colour of the junctions (a colour with every channel 0 is the layer's own). */
@@ -194,7 +204,7 @@ export interface SchMovePatch {
   power_symbols: Array<{ id: string; at: [number, number]; rot: number; fields?: SchField[] }>;
   wires: Array<{ id: string; net: string; pts: Array<[number, number]>; bus: boolean }>;
   labels: Array<{ id: string; at: [number, number]; spin: "right" | "up" | "left" | "bottom" | null }>;
-  texts: Array<{ id: string; at: [number, number]; angle: number }>;
+  texts: Array<{ id: string; at: [number, number]; angle: number; vertical?: boolean; h?: SchHAlign; v?: SchVAlign }>;
   no_connects: Array<{ id: string; at: [number, number] }>;
   bus_entries: Array<{ id: string; at: [number, number]; size: [number, number] }>;
   junctions: Array<{ id: string; at: [number, number] }>;

@@ -1942,9 +1942,15 @@ export interface SchematicLabel {
   size_um?: Um;
   bold?: boolean;
   italic?: boolean;
+  /** The "Auto" check of a global or hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`): the label takes the spin of what it is connected to when it is placed or moved. */
+  auto_rotate?: boolean;
 }
 
-/** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */
+/**
+ * `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, next to a PCB `BoardText` without a layer, a stroke width or a mirror flag.
+ * `h` and `v` are how it is justified about its anchor in its own axes (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`), `vertical` whether it runs up the sheet
+ * (`ANGLE_VERTICAL`); an older backend sends none of them, which reads as left, bottom and along the sheet.
+ */
 export interface SchematicText {
   /** Stable id (`txt_xxxxxxxxxxxx`) -- for `delete_sch_text`. */
   id: string;
@@ -1952,6 +1958,9 @@ export interface SchematicText {
   at: [Um, Um];
   angle: Degrees;
   size_um: Um;
+  vertical?: boolean;
+  h?: "left" | "center" | "right";
+  v?: "top" | "center" | "bottom";
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */

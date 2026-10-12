@@ -8,7 +8,8 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
-import type { SchColor, SchGraphic, SchLineStyle } from "../api/schEditTypes";
+import type { SchColor, SchGraphic, SchHAlign, SchLineStyle, SchVAlign } from "../api/schEditTypes";
+import { textLie } from "./schTextItem";
 
 export type LabelSpinName = "right" | "up" | "left" | "bottom";
 
@@ -137,15 +138,18 @@ export function sameColor(a: SchColor | null | undefined, b: SchColor | null | u
 
 /** Label Properties: only the fields that differ from the label as it is (`spin` is the label's current spin, stored or read off its wire). */
 export function labelEditCmd(
-  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic">>,
+  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic" | "auto_rotate">>,
   spin: LabelSpinName,
-  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean }
+  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean; autoRotate?: boolean }
 ): Cmd | null {
-  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean } = {};
+  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean; auto_rotate?: boolean } = {};
   const text = next.text.trim();
   if (text !== label.net) edit.text = text;
   if (label.scope !== "local" && next.shape !== label.shape) edit.shape = next.shape;
-  if (next.spin !== spin) edit.spin = next.spin;
+  // the "Auto" check (`SetAutoRotateOnPlacement`) is for global and hierarchical labels; while it is on the spin is the connection's, not the radio button's
+  const auto = label.scope !== "local" && (next.autoRotate ?? !!label.auto_rotate);
+  if (label.scope !== "local" && next.autoRotate !== undefined && next.autoRotate !== !!label.auto_rotate) edit.auto_rotate = next.autoRotate;
+  if (!auto && next.spin !== spin) edit.spin = next.spin;
   // the size, bold and italic of the text (`SetTextSize`, `SetBold`, `SetItalic`); a label that was never edited has the default size, regular
   if (next.sizeUm !== undefined && next.sizeUm !== null && next.sizeUm !== (label.size_um && label.size_um > 0 ? label.size_um : 1270)) edit.size_um = next.sizeUm;
   if (next.bold !== undefined && next.bold !== !!label.bold) edit.bold = next.bold;
@@ -154,13 +158,19 @@ export function labelEditCmd(
 }
 
 /** Text Properties of a free text: only what differs. `sizeUm` null (not a number) is left out; the backend refuses a size outside 0.01 to 1000 mm. */
-export function textEditCmd(text: Pick<SchematicText, "id" | "content" | "size_um" | "angle">, next: { content: string; sizeUm: number | null; vertical: boolean }): Cmd | null {
-  const edit: { text?: string; size_um?: number; angle?: number } = {};
+export function textEditCmd(
+  text: Pick<SchematicText, "id" | "content" | "size_um" | "angle"> & Partial<Pick<SchematicText, "h" | "v" | "vertical">>,
+  next: { content: string; sizeUm: number | null; vertical: boolean; h?: SchHAlign; v?: SchVAlign }
+): Cmd | null {
+  const edit: { text?: string; size_um?: number; angle?: number; h?: SchHAlign; v?: SchVAlign } = {};
   if (next.content !== text.content) edit.text = next.content;
   if (next.sizeUm !== null && next.sizeUm !== text.size_um) edit.size_um = next.sizeUm;
-  // KiCad offers horizontal and vertical (`m_vertical`); a text at some other angle keeps it until the user picks the other orientation.
-  const wasVertical = Math.round(text.angle) === 90;
-  if (next.vertical !== wasVertical) edit.angle = next.vertical ? 90_000 : 0;
+  // KiCad offers horizontal and vertical (`m_vertical`); a text is only ever one of the two (`KeepUpright`), so a legacy angle reads as the nearer.
+  const lie = textLie(text);
+  if (next.vertical !== lie.vertical) edit.angle = next.vertical ? 90_000 : 0;
+  // how it is justified about its anchor, in its own axes (`m_hAlign*`, `m_vAlign*`)
+  if (next.h !== undefined && next.h !== lie.h) edit.h = next.h;
+  if (next.v !== undefined && next.v !== lie.v) edit.v = next.v;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_text", id: text.id, ...edit } : null;
 }
 
