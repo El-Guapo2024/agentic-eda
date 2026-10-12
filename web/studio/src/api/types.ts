@@ -91,6 +91,8 @@ export interface FieldInfo {
   id: string;
   name: string;
   text: string;
+  /** What `${NAME}` in `text` stands for; absent when it is `text` itself. See `BoardText.shown`. */
+  shown?: string;
   x: Um;
   y: Um;
   angle: number;
@@ -368,6 +370,8 @@ export type TextJustify = "left" | "center" | "right";
 export interface BoardText {
   id: string;
   content: string;
+  /** What `${NAME}` in `content` stands for (the Text Variables page, KiCad's own variables); absent when it is `content` itself. The painter and the boxes use it; an edit starts from `content`. */
+  shown?: string;
   x: Um;
   y: Um;
   /** Millidegrees -- NOT divided down like a Part's `rot`. */
@@ -1795,6 +1799,8 @@ export interface SchField {
   /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
   name: string;
   text: string;
+  /** What `${NAME}` in `text` stands for (`SCH_FIELD::GetShownText`); absent when it is `text` itself. A Reference never has one: the painter writes it with its unit letter. */
+  shown?: string;
   /** The text's anchor on the sheet, micrometres. */
   at: [Um, Um];
   /** The text runs upward: a quarter turn counter-clockwise about the anchor. */
@@ -1848,6 +1854,8 @@ export interface SchematicSymbol {
   /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** What `${NAME}` in `value` and `footprint` stands for, for the symbols the state lists no `fields` of (a sheet read from a KiCad file); only the ones that differ. */
+  shown?: { value?: string; footprint?: string };
 }
 
 /**
@@ -1949,6 +1957,8 @@ export interface SchematicText {
   /** Stable id (`txt_xxxxxxxxxxxx`) -- for `delete_sch_text`. */
   id: string;
   content: string;
+  /** What `${NAME}` in `content` stands for (`SCH_TEXT::GetShownText`); absent when it is `content` itself. */
+  shown?: string;
   at: [Um, Um];
   angle: Degrees;
   size_um: Um;
@@ -1961,6 +1971,8 @@ export interface TitleBlock {
   rev: string;
   company: string;
   comments: string[];
+  /** The values with the project's text variables in them expanded (`TITLE_BLOCK::TextVarResolver`), when that changes any of them: the drawing sheet shows these, the Page Settings dialog edits the stored ones above. */
+  shown?: { title: string; date: string; rev: string; company: string; comments: string[] };
 }
 
 /** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_um` is the resolved width and height in its orientation. */

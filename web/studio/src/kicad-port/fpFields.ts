@@ -117,7 +117,8 @@ export function drawAngle(angleMdeg: number, upright: boolean): number {
 export function fieldAsText(f: FieldInfo): BoardText {
   return {
     id: f.id,
-    content: f.text,
+    // What `${NAME}` in the text stands for: the canvas draws, boxes and hit-tests the text as it reads (`PCB_FIELD::GetShownText`).
+    content: f.shown ?? f.text,
     x: f.x,
     y: f.y,
     angle: drawAngle(f.angle, f.upright),

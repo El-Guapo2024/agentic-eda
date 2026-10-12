@@ -4,6 +4,7 @@
 // CLI edit and a UI edit are indistinguishable in activity.jsonl beyond
 // the actor name. This module never writes files itself — it only POSTs.
 
+import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
 import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
@@ -49,7 +50,7 @@ export function fetchVersion(): Promise<string> {
 }
 
 export async function fetchState(): Promise<BoardState> {
-  const s = await getJson<BoardState & { error?: string }>("/api/state");
+  const s = await getJson<BoardState & { error?: string }>(`/api/state?clock=${encodeURIComponent(localClock())}`);
   if (s.error) throw new ApiError(s.error);
   return s;
 }
@@ -66,7 +67,7 @@ export async function fetchState(): Promise<BoardState> {
  * hierarchy support existed already did.
  */
 export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Schematic> {
-  const query = sheetPath && sheetPath.length > 0 ? `?sheet=${sheetPath.join("/")}` : "";
+  const query = `?${sheetPath && sheetPath.length > 0 ? `sheet=${sheetPath.join("/")}&` : ""}clock=${encodeURIComponent(localClock())}`;
   const s = await getJson<Schematic & { error?: string }>(`/api/schematic${query}`);
   if (s.error) throw new ApiError(s.error);
   // Defensive defaults for the lib_symbols/power_symbols/no_connects

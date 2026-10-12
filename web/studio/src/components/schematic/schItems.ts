@@ -42,7 +42,7 @@ function textBox(text: string, at: P, sizeUm: number, justify: "left" | "center"
 }
 
 export function textItemBounds(t: SchematicText): Box {
-  return textBox(t.content, t.at, t.size_um, "left", t.angle);
+  return textBox(t.shown ?? t.content, t.at, t.size_um, "left", t.angle);
 }
 
 export function labelBounds(sch: Schematic, l: SchematicLabel): Box {

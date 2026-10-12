@@ -5,6 +5,7 @@ import {
   MAX_TEXT_VARIABLES,
   MAX_TEXT_VARIABLE_NAME,
   checkTextVariables,
+  localClock,
   sameTextVariables,
   textVariableNameProblem,
   textVariableRows,
@@ -65,4 +66,9 @@ test("rows that say what the project has are nothing to apply", () => {
   assert.equal(sameTextVariables([{ name: "A", value: "1" }, { name: "B", value: "2" }], { A: "1" }), false);
   assert.equal(sameTextVariables([{ name: "A", value: "2" }], { A: "1" }), false);
   assert.equal(sameTextVariables([], undefined), true);
+});
+
+test("the clock sent with a request is the browser's local time, zero padded", () => {
+  assert.equal(localClock(new Date(2026, 9, 10, 21, 3, 5)), "2026-10-10T21:03:05");
+  assert.equal(localClock(new Date(2027, 0, 2, 0, 0, 0)), "2027-01-02T00:00:00");
 });

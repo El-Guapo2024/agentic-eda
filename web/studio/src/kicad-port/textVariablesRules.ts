@@ -98,3 +98,12 @@ export function sameTextVariables(rows: readonly TextVariableRow[], variables: R
   const keys = Object.keys(a);
   return keys.length === Object.keys(b).length && keys.every((k) => b[k] === a[k]);
 }
+
+/**
+ * The browser's local time as `YYYY-MM-DDTHH:MM:SS`, what `${CURRENT_DATE}` and `${CURRENT_TIME_*}` stand for in a text: the server has no time zone of its
+ * own, so the state and the schematic are asked with the clock of the person looking at them (`crates/cli/src/text_vars_json.rs` reads `?clock=`).
+ */
+export function localClock(now: Date = new Date()): string {
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${p(now.getFullYear(), 4)}-${p(now.getMonth() + 1)}-${p(now.getDate())}T${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())}`;
+}

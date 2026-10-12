@@ -33,6 +33,7 @@ mod library_place;
 mod library_search;
 mod library_tables;
 mod text_variables;
+mod text_vars_json;
 mod page_json;
 mod sch_api;
 mod sch_clipboard_api;

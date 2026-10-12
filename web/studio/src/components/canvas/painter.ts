@@ -791,7 +791,7 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
     // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
     const angleRad = (-t.angle / 1000) * (Math.PI / 180);
-    drawStrokeText(ctx, t.content, t.x, t.y, {
+    drawStrokeText(ctx, t.shown ?? t.content, t.x, t.y, {
       sizeUm: Math.max(t.size, hairlineUm(view, 8)),
       // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
       thicknessUm: opts.sketchText ? hairlineUm(view, 1) : t.stroke_width,

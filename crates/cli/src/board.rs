@@ -2090,6 +2090,95 @@ mod tests {
         let _ = std::fs::remove_dir_all(&m.root);
     }
 
+    fn variables_of(rows: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+        rows.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect()
+    }
+
+    /// `${NAME}` in a board text, a footprint's fields and the title block: the state carries the stored text and, where it differs, the shown one
+    /// (`crate::text_vars_json`); the derived board keeps the stored text, and the project file the variables, so kicad-cli shows the same.
+    #[test]
+    fn the_state_shows_what_a_text_variable_stands_for_and_keeps_the_stored_text() {
+        use eda_model::fp_edit::{FieldLayout, UserField};
+        let dir = scratch("text_variables_shown");
+        setup(&dir);
+        step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B"), ("Designer name", "Ada")]) }, false, "ui").unwrap();
+        let text = |content: &str, layer: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: layer.into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        for (content, layer) in [("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}", "F.SilkS"), ("plain", "F.SilkS"), ("A{slash}B", "F.Fab"), ("${PROJECTNAME}/${FILENAME} ${CURRENT_DATE} ${U1:Value}", "F.SilkS")] {
+            step(&dir, text(content, layer), false, "ui").unwrap();
+        }
+        let mut value = FieldLayout::new(Point { x: 0, y: 1_000 }, "F.Fab");
+        value.text = Some("${REV}-10k".into());
+        let user = |name: &str, text: &str| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab") };
+        step(&dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", "ERJ ${REV} ${LAYER}")]), attrs: None }, false, "ui").unwrap();
+        step(&dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", "${U1:Value}"), user("Plain", "nothing")]), attrs: None }, false, "ui").unwrap();
+        step(&dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block: eda_model::ir::TitleBlock { title: "Board ${REV}".into(), rev: "C".into(), ..Default::default() } }, false, "ui").unwrap();
+
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let clock = crate::text_vars_json::clock_of("/api/state?clock=2026-10-10T21:30:05");
+        let state = crate::studio::state(&dir, &job, clock).unwrap();
+        let texts = state["drawings"]["texts"].as_array().unwrap();
+        let by = |content: &str| texts.iter().find(|t| t["content"] == content).unwrap_or_else(|| panic!("{content}: {texts:?}"));
+        assert_eq!(by("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}")["shown"], "Rev B by Ada on F.SilkS, ${REV}", "the stored text is kept beside the shown one");
+        assert!(by("plain").get("shown").is_none(), "a text with nothing to show differently is sent as it always was");
+        assert_eq!(by("A{slash}B")["shown"], "A/B");
+        assert_eq!(by("${PROJECTNAME}/${FILENAME} ${CURRENT_DATE} ${U1:Value}")["shown"], "intent/intent.kicad_pcb 2026-10-10 B-10k", "the project's name, the derived board's file, the browser's day, another footprint's field");
+
+        let part = |r: &str| state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == r).unwrap().clone();
+        let field = |p: &serde_json::Value, name: &str| p["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap().clone();
+        let u1 = part("U1");
+        assert_eq!((field(&u1, "Value")["text"].as_str(), field(&u1, "Value")["shown"].as_str()), (Some("${REV}-10k"), Some("B-10k")));
+        assert_eq!(field(&u1, "MPN")["shown"], "ERJ B F.Fab", "a field's LAYER is its own layer");
+        assert!(field(&u1, "Reference").get("shown").is_none());
+        let u2 = part("U2");
+        assert_eq!(field(&u2, "Twin")["shown"], "B-10k");
+        assert!(field(&u2, "Plain").get("shown").is_none());
+        assert_eq!(state["title_block"]["title"], "Board ${REV}", "the Page Settings dialog edits the stored title");
+        assert_eq!(state["title_block"]["shown"], serde_json::json!({ "title": "Board B", "date": "", "rev": "C", "company": "", "comments": [] }));
+        assert_eq!(state["board_rules"]["text_variables"], serde_json::json!({ "Designer name": "Ada", "REV": "B" }));
+
+        // The derived board keeps the stored texts: kicad-cli expands them from the project file.
+        let (_, design, model) = load(&dir).unwrap();
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).expect("the board file");
+        assert!(pcb.contains("Rev ${REV} by ${Designer name} on ${LAYER}"), "the board file holds the text as stored");
+        assert!(pcb.contains("ERJ ${REV} ${LAYER}"));
+    }
+
+    /// The same on the schematic: a symbol's fields (and a field of its own), a free text and the title block, each seen from the sheet in view.
+    #[test]
+    fn the_schematic_shows_what_a_text_variable_stands_for_in_fields_texts_and_the_title_block() {
+        let dir = scratch("text_variables_sch");
+        setup_schematic(&dir);
+        // The fixture stands for a sheet read from a KiCad file, whose symbols the state lists no fields of; this test is about a sheet the studio drew.
+        let (_, mut design, _) = load(&dir).unwrap();
+        design.schematic.as_mut().unwrap().imported_from_kicad = false;
+        save(&dir, &design).unwrap();
+        step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B")]) }, false, "ui").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k ${REV}".into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("${R1:Value} twin, ${Footprint} ${FOOTPRINT_NAME}".into()), footprint: None, datasheet: None }, false, "ui").unwrap();
+        step(&dir, Cmd::AddSchText { content: "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV}".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_um: 1_270 }, false, "ui").unwrap();
+        step(&dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block: eda_model::ir::TitleBlock { title: "Main ${REV}".into(), ..Default::default() } }, false, "ui").unwrap();
+
+        let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let sym = |r: &str| sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == r).unwrap().clone();
+        let field = |s: &serde_json::Value, name: &str| s["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap_or_else(|| panic!("{name} in {}", s["fields"])).clone();
+        assert_eq!((field(&sym("R1"), "Value")["text"].as_str(), field(&sym("R1"), "Value")["shown"].as_str()), (Some("10k ${REV}"), Some("10k B")));
+        assert_eq!(field(&sym("R2"), "Value")["shown"], "10k B twin,  ", "a cross reference to another symbol's field, and R2's own empty Footprint field and FOOTPRINT_NAME");
+        assert!(field(&sym("R1"), "Reference").get("shown").is_none(), "a Reference is written by the painter with its unit letter");
+        let text = &sch["texts"][0];
+        assert_eq!(text["shown"], "Sheet 1/1 / Main B B");
+        assert_eq!(sch["title_block"]["shown"]["title"], "Main B");
+        assert_eq!(sch["title_block"]["title"], "Main ${REV}");
+
+        // A sheet read from a KiCad file lists no fields; the Value and Footprint its symbols are drawn with carry their shown form instead.
+        let (_, mut design, _) = load(&dir).unwrap();
+        design.schematic.as_mut().unwrap().imported_from_kicad = true;
+        save(&dir, &design).unwrap();
+        let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let r1 = sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap().clone();
+        assert_eq!(r1["value"], "10k ${REV}");
+        assert_eq!(r1["shown"], serde_json::json!({ "value": "10k B" }), "the footprint has no variable in it, so it has no shown form");
+    }
+
     fn track_ids(dir: &Path) -> Vec<(String, String, Vec<Point>)> {
         let (_, design, _) = load(dir).unwrap();
         design.routing.map(|r| r.tracks.iter().map(|t| (t.id.clone(), t.net.clone(), t.pts.clone())).collect()).unwrap_or_default()
