@@ -723,7 +723,9 @@ export interface BoardState {
     severities?: Record<string, RuleSeverity>;
     /** The text of the board's custom DRC rules (`.kicad_dru`); null = none. */
     custom_rules_text?: string | null;
-    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`. */
+    /** The project's text variables as `${NAME}` reads them, name -> value (`PROJECT::GetTextVars`): the Text Variables page's rows once it has been used, else the board folder's `path-variables.json`. */
+    text_variables?: Record<string, string>;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`. */
     overlay?: string[];
   };
 }
@@ -1075,6 +1077,8 @@ export type Cmd =
   | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
   /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
   | { op: "set_custom_rules"; text: string }
+  /** Board Setup > Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` shows the value; the derived `.kicad_pro` carries them for kicad-cli. */
+  | { op: "set_text_variables"; variables: Record<string, string> }
   /**
    * `dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
    * Marker): waive the DRC violations as one undo step. An exclusion whose `(check, items)` is waived already is replaced (that edits its comment).

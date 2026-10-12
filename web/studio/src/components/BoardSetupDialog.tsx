@@ -8,7 +8,7 @@
 // Undo takes it back. Pre-defined Sizes, Teardrops and Dimensions edit the design directly (`set_track_width_presets` ...), as before.
 //
 // Not ported: Board Editor Layers (the board's layers are its copper layers; the technical layers are fixed), Zone Hatch Offsets, Formatting,
-// Text Variables, Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files -- nothing in the model holds them yet.
+// Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files -- nothing in the model holds them yet.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
@@ -20,9 +20,10 @@ import { NetClassesPage } from "./boardSetup/NetClassesPage";
 import { SeveritiesPage } from "./boardSetup/SeveritiesPage";
 import { StackupPage } from "./boardSetup/StackupPage";
 import { TextGraphicsPage } from "./boardSetup/TextGraphicsPage";
+import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
 import "../styles/boardSetup.css";
 
-export type Page = "stackup" | "mask_paste" | "text_graphics" | "dimensions" | "constraints" | "tracks_vias" | "teardrops" | "classes" | "custom_rules" | "severities";
+export type Page = "stackup" | "mask_paste" | "text_graphics" | "dimensions" | "text_variables" | "constraints" | "tracks_vias" | "teardrops" | "classes" | "custom_rules" | "severities";
 
 /** KiCad's page tree (`DIALOG_BOARD_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
 const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
@@ -38,6 +39,7 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
     pages: [
       { id: "text_graphics", label: "Defaults" },
       { id: "dimensions", label: "Dimensions" },
+      { id: "text_variables", label: "Text Variables" },
     ],
   },
   {
@@ -256,6 +258,7 @@ export function BoardSetupDialog() {
           <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
           <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
           <TextGraphicsPage hidden={page !== "text_graphics"} onDirty={markers.text_graphics} />
+          <TextVariablesPage hidden={page !== "text_variables"} onDirty={markers.text_variables} />
           <ConstraintsPage hidden={page !== "constraints"} onDirty={markers.constraints} />
           <NetClassesPage hidden={page !== "classes"} onDirty={markers.classes} />
           <CustomRulesPage hidden={page !== "custom_rules"} onDirty={markers.custom_rules} />
