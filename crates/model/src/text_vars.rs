@@ -391,10 +391,31 @@ pub struct PcbField {
     pub layer: String,
 }
 
+/// `LayerName(layer)`: the name KiCad shows for a standard layer, given the name the board file writes (`F.SilkS` is `F.Silkscreen`, `Dwgs.User` is
+/// `User.Drawings`). A layer the board renames is [`PcbBoard::layer_name`]'s.
+pub fn standard_layer_name(file_name: &str) -> String {
+    match file_name {
+        "B.Adhes" => "B.Adhesive",
+        "F.Adhes" => "F.Adhesive",
+        "B.SilkS" => "B.Silkscreen",
+        "F.SilkS" => "F.Silkscreen",
+        "Dwgs.User" => "User.Drawings",
+        "Cmts.User" => "User.Comments",
+        "Eco1.User" => "User.Eco1",
+        "Eco2.User" => "User.Eco2",
+        "F.CrtYd" => "F.Courtyard",
+        "B.CrtYd" => "B.Courtyard",
+        other => other,
+    }
+    .to_string()
+}
+
 /// A board as the resolvers read it (`BOARD`).
 #[derive(Debug, Clone, Default)]
 pub struct PcbBoard {
     pub project: Project,
+    /// The names the board gives its layers where they are not KiCad's (Board Setup > Board Editor Layers): the name the file writes -> the name the user gave.
+    pub layer_names: BTreeMap<String, String>,
     /// `BOARD::GetFileName` as a name and as a path.
     pub file_name: String,
     pub file_path: String,
@@ -407,6 +428,11 @@ fn short_net_name(net: &str) -> &str {
 }
 
 impl PcbBoard {
+    /// `BOARD::GetLayerName`: the name the user gave the layer, else KiCad's standard one -- what `${LAYER}` stands for.
+    pub fn layer_name(&self, file_name: &str) -> String {
+        self.layer_names.get(file_name).filter(|n| !n.is_empty()).cloned().unwrap_or_else(|| standard_layer_name(file_name))
+    }
+
     /// `BOARD::ResolveTextVar`.
     pub fn resolve(&self, token: &str, depth: usize) -> Option<String> {
         if let Some((reference, remainder)) = token.split_once(':') {
@@ -449,7 +475,7 @@ impl PcbFootprint {
     /// `PCB_FIELD::GetShownText`: a stored text of this footprint (one of its fields, or one of its texts) on `layer`. `${LAYER}` is the text's own layer, then the
     /// footprint answers and then the board.
     pub fn shown(&self, board: &PcbBoard, raw: &str, layer: &str, depth: usize) -> String {
-        shown_text(raw, &|t: &str| (t == "LAYER").then(|| layer.to_string()).or_else(|| self.resolve(board, t, depth + 1)).or_else(|| board.resolve(t, depth + 1)), depth)
+        shown_text(raw, &|t: &str| (t == "LAYER").then(|| board.layer_name(layer)).or_else(|| self.resolve(board, t, depth + 1)).or_else(|| board.resolve(t, depth + 1)), depth)
     }
 
     /// `FOOTPRINT::ResolveTextVar`.
@@ -457,7 +483,7 @@ impl PcbFootprint {
         match token {
             "REFERENCE" => return self.field_shown(board, "Reference", depth + 1),
             "VALUE" => return self.field_shown(board, "Value", depth + 1),
-            "LAYER" => return Some(self.layer.clone()),
+            "LAYER" => return Some(board.layer_name(&self.layer)),
             "FOOTPRINT_LIBRARY" => return Some(self.lib_nickname.clone()),
             "FOOTPRINT_NAME" => return Some(self.lib_item_name.clone()),
             _ => {}
@@ -490,7 +516,7 @@ pub fn pcb_text_shown(raw: &str, layer: &str, footprint: Option<&PcbFootprint>, 
         raw,
         &|t: &str| {
             if t == "LAYER" {
-                return Some(layer.to_string());
+                return Some(board.layer_name(layer));
             }
             footprint.and_then(|fp| fp.resolve(board, t, 1)).or_else(|| board.resolve(t, 1))
         },
@@ -808,6 +834,7 @@ mod tests {
         };
         PcbBoard {
             project: project(&[("REV", "B")]),
+            layer_names: Default::default(),
             file_name: "demo.kicad_pcb".into(),
             file_path: "/work/demo/.kicad/demo.kicad_pcb".into(),
             title_block: Some(TitleBlockVars { title: "Demo".into(), revision: "C".into(), ..Default::default() }),
@@ -819,7 +846,7 @@ mod tests {
     fn a_board_text_sees_layer_the_title_block_the_project_and_other_footprints() {
         let b = board();
         let shown = |s: &str| pcb_text_shown(s, "F.SilkS", None, &b);
-        assert_eq!(shown("${LAYER}"), "F.SilkS");
+        assert_eq!(shown("${LAYER}"), "F.Silkscreen", "KiCad's name for the layer, not the one the file writes");
         assert_eq!(shown("${TITLE} ${REVISION} ${REV} ${FILENAME} ${PROJECTNAME}"), "Demo C B demo.kicad_pcb demo");
         assert_eq!(shown("${R1:VALUE} / ${r2:Value}"), "10k / B-22k", "a reference designator names a footprint, case aside, and a value is expanded in turn");
         assert_eq!(shown("${R9:VALUE}"), "<Unknown reference: R9>");
@@ -837,6 +864,7 @@ mod tests {
         let shown = |s: &str, layer: &str| pcb_text_shown(s, layer, Some(r1), &b);
         assert_eq!(shown("${REFERENCE} ${VALUE}", "F.Fab"), "R1 10k");
         assert_eq!(shown("${LAYER}", "F.Fab"), "F.Fab", "a text's own layer wins over its footprint's");
+        assert_eq!(shown("${LAYER}", "F.CrtYd"), "F.Courtyard");
         assert_eq!(shown("${FOOTPRINT_LIBRARY}:${FOOTPRINT_NAME}", "F.Fab"), "Resistor_SMD:R_0603");
         assert_eq!(shown("${MPN}", "F.Fab"), "ERJ-3 10k", "a user field, whose own text names the footprint's Value");
         assert_eq!(shown("${NET_NAME(2)} ${SHORT_NET_NAME(1)} ${NET_CLASS(1)}", "F.Fab"), "GND VCC power");
@@ -845,7 +873,22 @@ mod tests {
         // The field of a footprint, shown: its Value names a project variable.
         let r2 = &b.footprints[1];
         assert_eq!(r2.field_shown(&b, "Value", 0).as_deref(), Some("B-22k"));
-        assert_eq!(r2.shown(&b, "${LAYER} ${REFERENCE}", "B.SilkS", 0), "B.SilkS R2", "the text's own layer, then the footprint's fields");
+        assert_eq!(r2.shown(&b, "${LAYER} ${REFERENCE}", "B.SilkS", 0), "B.Silkscreen R2", "the text's own layer, then the footprint's fields");
+    }
+
+    #[test]
+    fn a_layer_the_user_renamed_shows_the_name_the_user_gave_it() {
+        let mut b = board();
+        assert_eq!(pcb_text_shown("${LAYER}", "In1.Cu", None, &b), "In1.Cu");
+        assert_eq!(pcb_text_shown("${LAYER}", "User.7", None, &b), "User.7");
+        b.layer_names.insert("F.Cu".into(), "Top".into());
+        b.layer_names.insert("User.7".into(), "Assembly notes".into());
+        b.layer_names.insert("F.SilkS".into(), String::new());
+        assert_eq!(pcb_text_shown("${LAYER}", "User.7", None, &b), "Assembly notes");
+        assert_eq!(pcb_text_shown("${LAYER}", "F.SilkS", None, &b), "F.Silkscreen", "an empty name clears the user's name (`SetLayerName`)");
+        assert_eq!(b.footprints[0].shown(&b, "${LAYER}", "F.Fab", 0), "F.Fab");
+        assert_eq!(pcb_text_shown("${R1:LAYER}", "F.SilkS", None, &b), "Top", "a footprint's own layer is its copper side, by the board's name for it");
+        assert_eq!(standard_layer_name("Edge.Cuts"), "Edge.Cuts");
     }
 
     #[test]

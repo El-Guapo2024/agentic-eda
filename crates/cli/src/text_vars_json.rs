@@ -5,7 +5,7 @@
 //! with no variable in it sends the bytes it always did. The clock is the browser's (`?clock=YYYY-MM-DDTHH:MM:SS`, its local time); without it the server's
 //! UTC day. The derived KiCad files keep the raw text and the project file carries the variables, so kicad-cli's plots show the same.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use eda_model::ir::{Design, SchematicSection, TitleBlock};
@@ -89,7 +89,7 @@ impl PcbShown {
             }
         }
         let title_block = design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(TitleBlockVars::of);
-        let board = PcbBoard { project, file_name: format!("{stem}.kicad_pcb"), file_path: dir.join(".kicad").join(format!("{stem}.kicad_pcb")).display().to_string(), title_block, footprints };
+        let board = PcbBoard { project, layer_names: BTreeMap::new(), file_name: format!("{stem}.kicad_pcb"), file_path: dir.join(".kicad").join(format!("{stem}.kicad_pcb")).display().to_string(), title_block, footprints };
         PcbShown { board, by_part }
     }
 

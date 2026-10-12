@@ -2118,7 +2118,7 @@ mod tests {
         let state = crate::studio::state(&dir, &job, clock).unwrap();
         let texts = state["drawings"]["texts"].as_array().unwrap();
         let by = |content: &str| texts.iter().find(|t| t["content"] == content).unwrap_or_else(|| panic!("{content}: {texts:?}"));
-        assert_eq!(by("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}")["shown"], "Rev B by Ada on F.SilkS, ${REV}", "the stored text is kept beside the shown one");
+        assert_eq!(by("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}")["shown"], "Rev B by Ada on F.Silkscreen, ${REV}", "the stored text is kept beside the shown one");
         assert!(by("plain").get("shown").is_none(), "a text with nothing to show differently is sent as it always was");
         assert_eq!(by("A{slash}B")["shown"], "A/B");
         assert_eq!(by("${PROJECTNAME}/${FILENAME} ${CURRENT_DATE} ${U1:Value}")["shown"], "intent/intent.kicad_pcb 2026-10-10 B-10k", "the project's name, the derived board's file, the browser's day, another footprint's field");
@@ -2177,6 +2177,160 @@ mod tests {
         let r1 = sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap().clone();
         assert_eq!(r1["value"], "10k ${REV}");
         assert_eq!(r1["shown"], serde_json::json!({ "value": "10k B" }), "the footprint has no variable in it, so it has no shown form");
+    }
+
+    /// The texts of the proof below, as stored on the board with variables in them and as the studio shows them.
+    #[derive(Clone)]
+    struct VariableTexts {
+        board_text: String,
+        value: String,
+        mpn: String,
+        twin: String,
+        title: String,
+        company: String,
+    }
+
+    impl VariableTexts {
+        fn with_variables() -> VariableTexts {
+            VariableTexts {
+                board_text: "Rev ${REV} of ${PROJECTNAME} on ${LAYER} ${U1:Value}".into(),
+                value: "${REV}-10k".into(),
+                mpn: "ERJ-${REV} ${NET_NAME(1)} ${FOOTPRINT_NAME} ${FOOTPRINT_LIBRARY} ${LAYER} \\${REV}".into(),
+                twin: "${U1:Value} ${U1:MPN} ${REFERENCE} ${U1:NET_CLASS(2)}".into(),
+                title: "Board ${REV}".into(),
+                company: "${PROJECTNAME} Inc".into(),
+            }
+        }
+    }
+
+    /// The board of the proof below: the two footprints of `setup`, a board text, fields on both footprints and the title block, with `texts` as their text.
+    /// `variables` is the project's variable list, none on the board that has what they stand for written out.
+    fn board_with_text_variables(dir: &Path, texts: &VariableTexts, variables: &[(&str, &str)]) {
+        use eda_model::fp_edit::{FieldLayout, UserField};
+        setup(dir);
+        if !variables.is_empty() {
+            step(dir, Cmd::SetTextVariables { variables: variables_of(variables) }, false, "ui").unwrap();
+        }
+        let add = Cmd::AddText { text: Text { id: String::new(), content: texts.board_text.clone(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        step(dir, add, false, "ui").unwrap();
+        let mut value = FieldLayout::new(Point { x: 0, y: 2_500 }, "F.SilkS");
+        value.text = Some(texts.value.clone());
+        let user = |name: &str, text: &str, y: Um| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y }, "F.SilkS") };
+        step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", &texts.mpn, -2_500)]), attrs: None }, false, "ui").unwrap();
+        step(dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", &texts.twin, -2_500)]), attrs: None }, false, "ui").unwrap();
+        let title_block = eda_model::ir::TitleBlock { title: texts.title.clone(), rev: "C".into(), company: texts.company.clone(), ..Default::default() };
+        step(dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block }, false, "ui").unwrap();
+    }
+
+    /// kicad-cli's plot of a board with `${NAME}` in a board text, in footprint fields and in the title block is the plot of a board that has what the studio
+    /// shows for them written out and no variable at all: the project file carries the variables (`text_variables`), the board file the stored text, and
+    /// `shown` in the state is what kicad-cli draws -- LAYER, NET_NAME(n), FOOTPRINT_NAME, `U1:Value`, PROJECTNAME and a project variable alike (slow tier).
+    #[test]
+    fn kicad_clis_plot_expands_text_variables_as_the_studio_shows_them() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let (with, without) = (scratch("text_vars_plot_a"), scratch("text_vars_plot_b"));
+        let stored = VariableTexts::with_variables();
+        board_with_text_variables(&with, &stored, &[("REV", "B7")]);
+
+        // What the studio shows for each of them.
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let state = crate::studio::state(&with, &job, crate::text_vars_json::clock_of("/api/state")).unwrap();
+        let field = |part: &str, name: &str| -> String {
+            let p = state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == part).unwrap();
+            let f = p["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap();
+            f["shown"].as_str().unwrap_or_else(|| f["text"].as_str().unwrap()).to_string()
+        };
+        let text = &state["drawings"]["texts"][0];
+        let shown = VariableTexts {
+            board_text: text["shown"].as_str().unwrap().to_string(),
+            value: field("U1", "Value"),
+            mpn: field("U1", "MPN"),
+            twin: field("U2", "Twin"),
+            title: state["title_block"]["shown"]["title"].as_str().unwrap().to_string(),
+            company: state["title_block"]["shown"]["company"].as_str().unwrap().to_string(),
+        };
+        assert_eq!(shown.board_text, "Rev B7 of intent on F.Silkscreen B7-10k");
+        assert_eq!(shown.mpn, "ERJ-B7 GND 2PAD eda F.Silkscreen ${REV}", "the studio's own reading of the variables it knows");
+        // A literal `${REV}` that comes back from another field's shown text is a variable again to the text that asked for it (KiCad's ResolveTextVars passes).
+        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD eda F.Silkscreen B7 U2 Default");
+        board_with_text_variables(&without, &shown, &[]);
+
+        let plot = |dir: &Path| -> String {
+            let args: Vec<String> = ["--layers", "F.SilkS,F.Fab,Edge.Cuts"].iter().map(|s| s.to_string()).collect();
+            let done = crate::kicad_engine::export(dir, "svg", &args).expect("kicad-cli plotted the board");
+            let file = done["files"][0].as_str().expect("one svg").to_string();
+            std::fs::read_to_string(dir.join(file)).unwrap()
+        };
+        let (a, b) = (plot(&with), plot(&without));
+        // The same plot but for what names the file: the title and the generation comment.
+        let body = |svg: &str| svg.lines().filter(|l| !l.contains("<title>") && !l.contains("<!--") && !l.contains("<desc>") && !l.contains("Created by") && !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        assert!(a.len() > 2_000, "a real plot, not an empty one: {} bytes", a.len());
+        assert_eq!(body(&a), body(&b), "the plot of the board with variables is the plot of the board with what the studio shows written out");
+
+        // The variable is read: another value is another plot, and the stored text is still what the board file holds.
+        step(&with, Cmd::SetTextVariables { variables: variables_of(&[("REV", "ZZ")]) }, false, "ui").unwrap();
+        assert_ne!(body(&plot(&with)), body(&b), "a different value is a different plot");
+    }
+
+    /// The schematic of the proof below: two symbols, a free text and the title block, with `texts` as their text (`value1`, `value2`, `text`, `title`).
+    fn schematic_with_text_variables(dir: &Path, texts: &[&str; 4], variables: &[(&str, &str)]) {
+        setup_schematic(dir);
+        if !variables.is_empty() {
+            step(dir, Cmd::SetTextVariables { variables: variables_of(variables) }, false, "ui").unwrap();
+        }
+        step(dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some(texts[0].into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
+        step(dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some(texts[1].into()), footprint: None, datasheet: None }, false, "ui").unwrap();
+        step(dir, Cmd::AddSchText { content: texts[2].into(), at: Point { x: 15_000, y: 30_000 }, angle_millideg: 0, size_um: 1_270 }, false, "ui").unwrap();
+        let title_block = eda_model::ir::TitleBlock { title: texts[3].into(), ..Default::default() };
+        step(dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block }, false, "ui").unwrap();
+    }
+
+    /// The same proof on the schematic: kicad-cli's plot of a sheet whose symbols' values, free text and title block name variables is the plot of the sheet
+    /// that has what the studio shows for them written out (slow tier).
+    #[test]
+    fn kicad_clis_schematic_plot_expands_text_variables_as_the_studio_shows_them() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let (with, without) = (scratch("text_vars_sch_plot_a"), scratch("text_vars_sch_plot_b"));
+        let stored = [
+            "10k ${REV}",
+            "${R1:Value} ${R1:Footprint} ${FOOTPRINT_NAME} ${SYMBOL_NAME} ${REFERENCE}",
+            "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV} ${PROJECTNAME} ${FILENAME} \\${REV}",
+            "Main ${REV} ${SHEETNAME}",
+        ];
+        schematic_with_text_variables(&with, &stored, &[("REV", "B7")]);
+        let sch = crate::studio::schematic_json(&with, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let sym = |r: &str| sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == r).unwrap().clone();
+        let shown_value = |r: &str, raw: &str| sym(r)["shown"]["value"].as_str().unwrap_or(raw).to_string();
+        let (v1, v2) = (shown_value("R1", stored[0]), shown_value("R2", stored[1]));
+        let text = sch["texts"][0]["shown"].as_str().unwrap().to_string();
+        let title = sch["title_block"]["shown"]["title"].as_str().unwrap().to_string();
+        assert_eq!(v1, "10k B7");
+        assert_eq!(text, "Sheet 1/1 / Main B7  B7 intent intent.kicad_sch ${REV}", "the studio's own reading: the root sheet has no name, so its name is empty");
+        schematic_with_text_variables(&without, &[v1.as_str(), v2.as_str(), text.as_str(), title.as_str()], &[]);
+
+        let plot = |dir: &Path| -> String {
+            let done = crate::kicad_engine::export_sch(dir, "svg", &[]).expect("kicad-cli plotted the schematic");
+            let file = done["files"][0].as_str().expect("one svg").to_string();
+            std::fs::read_to_string(dir.join(file)).unwrap()
+        };
+        let (a, b) = (plot(&with), plot(&without));
+        let body = |svg: &str| svg.lines().filter(|l| !l.contains("<title>") && !l.contains("<!--") && !l.contains("<desc>") && !l.contains("Created by") && !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        assert!(a.len() > 2_000, "a real plot: {} bytes", a.len());
+        assert_eq!(body(&a), body(&b), "the plot of the sheet with variables is the plot of the sheet with what the studio shows written out");
     }
 
     fn track_ids(dir: &Path) -> Vec<(String, String, Vec<Point>)> {
