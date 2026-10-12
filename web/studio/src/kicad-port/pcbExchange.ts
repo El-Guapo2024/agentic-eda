@@ -102,12 +102,18 @@ export function isLibraryId(id: string): boolean {
 /**
  * The message window after a run (`processFootprint`): one line a footprint. A change tells "Changed footprint R1 from 'A' to 'B': OK"; an update tells
  * "Updated footprint R1 (A): OK", or "(no changes)" when the library copy is the board's; a footprint whose library copy is not found is an error line in either.
+ * An update that changed a footprint lists under it what the library copy has otherwise (`FootprintNeedsUpdate`'s findings, as `DiffFootprint` words them).
  */
 export function exchangeReport(mode: "change" | "update", entries: readonly ExchangePlanEntry[]): ReportLine[] {
-  return entries.map((e): ReportLine => {
+  const out: ReportLine[] = [];
+  for (const e of entries) {
     const head = mode === "change" ? `Changed footprint ${e.reference} from '${e.from}' to '${e.to}'` : `Updated footprint ${e.reference} (${e.from})`;
-    if (!e.found) return { severity: "error", text: `${head}: *** library footprint not found ***` };
-    if (mode === "update" && e.differs === false) return { severity: "info", text: `${head}: (no changes)` };
-    return { severity: "action", text: `${head}: OK` };
-  });
+    if (!e.found) out.push({ severity: "error", text: `${head}: *** library footprint not found ***` });
+    else if (mode === "update" && e.differs === false) out.push({ severity: "info", text: `${head}: (no changes)` });
+    else {
+      out.push({ severity: "action", text: `${head}: OK` });
+      if (mode === "update") for (const line of e.lines ?? []) out.push({ severity: "info", text: `    ${line}` });
+    }
+  }
+  return out;
 }

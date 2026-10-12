@@ -54,6 +54,9 @@ mod edit_details_tests;
 #[cfg(test)]
 #[path = "fp_assign_tests.rs"]
 mod fp_assign_tests;
+#[cfg(test)]
+#[path = "fp_library_tests.rs"]
+mod fp_library_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]

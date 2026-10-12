@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { appliable, backAnnotateCommands, backAnnotateLines, changeLines, updateCommands, updatePcbMessage } from "./updatePcb";
-import { CHANGE_OPTIONS, REPLACE_OPTIONS, UPDATE_OPTIONS, isLibraryId, matchingFootprints, setAllOptions } from "./pcbExchange";
+import { CHANGE_OPTIONS, REPLACE_OPTIONS, UPDATE_OPTIONS, exchangeReport, isLibraryId, matchingFootprints, setAllOptions } from "./pcbExchange";
 import type { BoardState } from "../api/types";
 
 const change = (reference: string, from: string, to: string, extra: Partial<{ locked: boolean; found: boolean }> = {}) => ({ reference, from, to, locked: false, found: true, ...extra });
@@ -68,4 +68,20 @@ test("a library id has a nickname and an item", () => {
   assert.equal(isLibraryId("R_0603"), false);
   assert.equal(isLibraryId(":R"), false);
   assert.equal(isLibraryId("Lib:"), false);
+});
+
+test("the message window tells each footprint, and under an updated one what the library copy has otherwise", () => {
+  const entry = (reference: string, extra: Record<string, unknown> = {}) => ({ reference, from: "L:A", to: "L:A", found: true, ...extra });
+  const entries = [entry("R1", { differs: true, lines: ["Pad 1 size differs.", "Courtyard differs."] }), entry("R2", { differs: false, lines: [] }), entry("R3", { found: false })];
+  assert.deepEqual(exchangeReport("update", entries).map((l) => [l.severity, l.text]), [
+    ["action", "Updated footprint R1 (L:A): OK"],
+    ["info", "    Pad 1 size differs."],
+    ["info", "    Courtyard differs."],
+    ["info", "Updated footprint R2 (L:A): (no changes)"],
+    ["error", "Updated footprint R3 (L:A): *** library footprint not found ***"],
+  ]);
+  assert.deepEqual(
+    exchangeReport("change", [entry("R1", { to: "L:B", differs: true, lines: ["not shown in a change"] })]).map((l) => l.text),
+    ["Changed footprint R1 from 'L:A' to 'L:B': OK"],
+  );
 });

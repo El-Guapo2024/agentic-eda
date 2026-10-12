@@ -25,6 +25,7 @@
 use super::{Board, Cmd};
 use eda_model::footprint::Footprint;
 use eda_model::fp_assign::FootprintAssignment;
+use eda_model::fp_compare::{FootprintOverrides, InstanceFacts, PadOverrides};
 use eda_model::fp_edit::{default_reference_layout, default_value_layout, FootprintAttrs, FootprintEdit};
 use eda_model::fp_exchange::{carry_layout, carry_text, keep_text, match_texts, pad_alignment, TextReset};
 use eda_model::ir::{FootprintExtra, FootprintInstance, LabelSide, LibraryFootprint, Point, Side};
@@ -149,6 +150,57 @@ pub fn pending_footprint_changes(design: &eda_model::ir::Design, model: &Constra
     }
     out.sort_by(|a, b| a.reference.cmp(&b.reference));
     out
+}
+
+/// A footprint as the board has it, with what the board knows of it beyond the pads and the drawings: the thing to compare with a library's copy
+/// ([`eda_model::fp_compare::footprint_differences`]).
+#[derive(Debug, Clone)]
+pub struct BoardFootprint {
+    /// The pads with the edits laid on, the graphics, the courtyard.
+    pub footprint: Footprint,
+    pub attrs: FootprintAttrs,
+    pub overrides: FootprintOverrides,
+    pub pad_overrides: Vec<PadOverrides>,
+}
+
+impl BoardFootprint {
+    pub fn facts(&self) -> InstanceFacts<'_> {
+        InstanceFacts { footprint: &self.footprint, attrs: self.attrs, overrides: self.overrides.clone(), pad_overrides: self.pad_overrides.clone() }
+    }
+}
+
+/// The footprint of the part `reference` as the board has it: its pads (the edits of Pad Properties laid on), the attributes in effect and the overrides it carries
+/// (`footprint_extras`, `zone_overrides`, the margins of its pad edits). `None` for a part with no footprint.
+pub fn board_footprint(design: &eda_model::ir::Design, model: &ConstraintModel, reference: &str) -> Option<BoardFootprint> {
+    let part = model.part(reference)?;
+    let footprint = model.footprint_of(part)?;
+    let attrs = design.effective_attrs(reference, &footprint);
+    let name = footprint_name_of(part);
+    let dr = design.drawings.as_ref();
+    let extra = dr.and_then(|d| d.footprint_extras.iter().find(|e| e.id == reference));
+    let edit = design.footprint_edit(reference);
+    let n = footprint.pads.len();
+    let first = footprint.pads.first().map(|p| design.pad_zone_facts(reference, &name, 0, n, &p.number));
+    let overrides = FootprintOverrides { clearance: first.and_then(|f| f.footprint_clearance), solder_mask_margin: extra.and_then(|e| e.solder_mask_margin), zone_connection: first.and_then(|f| f.footprint_connection) };
+    let mut pad_overrides = Vec::new();
+    for (i, pad) in footprint.pads.iter().enumerate() {
+        let facts = design.pad_zone_facts(reference, &name, i, n, &pad.number);
+        let pad_edit = edit.and_then(|e| e.pad(&pad.number, footprint.pads[..i].iter().filter(|p| p.number == pad.number).count() as u32 + 1));
+        let o = PadOverrides {
+            number: pad.number.clone(),
+            clearance: facts.pad_clearance,
+            solder_mask_margin: pad_edit.and_then(|e| e.solder_mask_margin).or_else(|| extra.filter(|e| e.pads.len() == n).and_then(|e| e.pads[i].solder_mask_margin)),
+            solder_paste_margin: pad_edit.and_then(|e| e.solder_paste_margin),
+            solder_paste_margin_ratio: pad_edit.and_then(|e| e.solder_paste_margin_ratio),
+            zone_connection: facts.connection,
+            thermal_gap: facts.thermal_gap,
+            thermal_spoke_width: facts.thermal_spoke_width,
+        };
+        if o != (PadOverrides { number: pad.number.clone(), ..Default::default() }) {
+            pad_overrides.push(o);
+        }
+    }
+    Some(BoardFootprint { footprint, attrs, overrides, pad_overrides })
 }
 
 impl Board<'_> {

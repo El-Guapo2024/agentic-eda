@@ -58,7 +58,7 @@ mod array;
 pub use array::ArrayGeometry;
 mod fp_edit;
 mod fp_exchange;
-pub use fp_exchange::{footprint_name_of, pending_footprint_changes, ExchangeOptions, FootprintChange};
+pub use fp_exchange::{board_footprint, footprint_name_of, pending_footprint_changes, BoardFootprint, ExchangeOptions, FootprintChange};
 mod library_place;
 mod outline;
 mod part_rename;

@@ -5,10 +5,11 @@
 //!    footprint than the board has, each with whether a library has the footprint. The change itself is `Cmd::ExchangeFootprints`, one per part, which the studio sends as
 //!    one batch.
 //!  * `POST /api/exchange_plan`: `DIALOG_EXCHANGE_FOOTPRINTS::processFootprint`'s look before the change: for each footprint the dialog's choice names, whether the footprint it
-//!    is to be put on (Change) or its own library copy (Update) is found.
+//!    is to be put on (Change) or its own library copy (Update) is found and, for an update, whether the board's differs from it (`FootprintNeedsUpdate`).
 
 use crate::board;
 use crate::library_index::Kind;
+use eda_model::Footprint;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -32,7 +33,8 @@ pub fn update_pcb(dir: &Path) -> Value {
 }
 
 /// The entry of `/api/exchange_plan` for one footprint: where it stands before an exchange. `to` is the footprint it is to be put on; `None` is an update, which is
-/// from the library copy of the footprint it is on. `found` is whether that footprint is found.
+/// from the library copy of the footprint it is on. `found` is whether that footprint is found; for an update `differs` says whether the board's is not the library's
+/// (`FootprintNeedsUpdate`) and `lines` how.
 fn plan_entry(dir_libs: &dyn crate::library_index::LibSource, design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, reference: &str, to: Option<&str>) -> Value {
     let Some(part) = model.part(reference) else {
         return json!({ "reference": reference, "found": false, "from": "", "to": to.unwrap_or(""), "error": format!("no footprint {reference} on this board") });
@@ -40,11 +42,18 @@ fn plan_entry(dir_libs: &dyn crate::library_index::LibSource, design: &eda_model
     let from = eda_ops::footprint_name_of(part);
     match to {
         Some(to) => json!({ "reference": reference, "from": from, "to": to, "found": crate::library_place::footprint_found(to, reference, design, model, dir_libs), "differs": true }),
-        None => json!({ "reference": reference, "from": from, "to": from, "found": crate::library_place::library_copy(&from, design, dir_libs).is_some() }),
+        None => {
+            let copy: Option<Footprint> = crate::library_place::library_copy(&from, design, dir_libs);
+            let lines: Vec<String> = match (&copy, eda_ops::board_footprint(design, model, reference)) {
+                (Some(library), Some(board)) => eda_model::fp_compare::footprint_differences(&board.facts(), library),
+                _ => Vec::new(),
+            };
+            json!({ "reference": reference, "from": from, "to": from, "found": copy.is_some(), "differs": !lines.is_empty(), "lines": lines })
+        }
     }
 }
 
-/// `{ ok, entries: [{ reference, from, to, found }] }` for the body `{ "references": [..], "footprint": "Lib:Name" | null }`.
+/// `{ ok, entries: [{ reference, from, to, found, differs, lines? }] }` for the body `{ "references": [..], "footprint": "Lib:Name" | null }`.
 pub fn exchange_plan(dir: &Path, body: &[u8]) -> Value {
     let Ok(req) = serde_json::from_slice::<Value>(body) else { return json!({ "ok": false, "message": "the request is not JSON" }) };
     let references: Vec<String> = req["references"].as_array().map(|a| a.iter().filter_map(|r| r.as_str().map(str::to_string)).collect()).unwrap_or_default();

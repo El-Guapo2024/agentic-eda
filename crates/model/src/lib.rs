@@ -11,6 +11,7 @@ pub mod floorplan;
 pub mod footprint;
 pub mod fp_art;
 pub mod fp_assign;
+pub mod fp_compare;
 pub mod fp_edit;
 pub mod fp_exchange;
 pub mod gensym;
