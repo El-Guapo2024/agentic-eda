@@ -49,9 +49,17 @@ function contactPoints(a: ConnWire, b: ConnWire): P[] {
   return out;
 }
 
+/** A pin of a placed symbol, an item of the sheet (`kicad-port/schPins.ts`): its id and the point a wire meets it at. */
+export interface ConnPin {
+  id: string;
+  at: readonly [number, number];
+}
+
 export interface ExpandInput {
   wires: readonly ConnWire[];
   labels: readonly ConnLabel[];
+  /** The pins of the placed symbols, as items (`SCH_PIN_T`): a selected pin starts the expansion from the wires on its point. */
+  pins?: readonly ConnPin[];
   /** Every pin tip (and power-symbol anchor) on the sheet. */
   pinPoints: readonly P[];
   /** No-connect anchors (a STOP_AT_JUNCTION stop point, like labels). */
@@ -107,20 +115,31 @@ export function expandWithStop(input: ExpandInput, startWireIds: readonly string
  */
 export function selectConnection(input: ExpandInput, selected: readonly string[]): string[] {
   const wireIds = new Set(input.wires.map((w) => w.id));
-  const start = selected.filter((id) => wireIds.has(id));
-  if (start.length === 0) return [...selected];
+  // `expandConnectionWithGraph`: the items of the selection that are connectable start the walk -- a wire, and a pin by the wires that meet it
+  const start = new Set(selected.filter((id) => wireIds.has(id)));
+  for (const pin of input.pins ?? []) {
+    if (!selected.includes(pin.id)) continue;
+    for (const w of input.wires) if (wireContains(w, pin.at)) start.add(w.id);
+  }
+  if (start.size === 0) return [...selected];
   const original = new Set(selected);
   let result: { wireIds: Set<string>; labelIds: Set<string> } | null = null;
   for (const stop of ["junction", "pin", "never"] as const) {
-    result = expandWithStop(input, start, stop);
+    result = expandWithStop(input, [...start], stop);
     const grew = [...result.wireIds, ...result.labelIds].some((id) => !original.has(id));
     if (grew) break;
   }
-  return result ? [...new Set([...result.wireIds, ...result.labelIds])] : [...selected];
+  // what was selected stays selected (a pin that started the walk is still one of the items)
+  return result ? [...new Set([...selected.filter((id) => !wireIds.has(id) && !(input.labels.some((l) => l.id === id))), ...result.wireIds, ...result.labelIds])] : [...selected];
 }
 
-/** SelectNode: wires and labels sitting exactly on `p` (cursor, un-snapped in source; callers pass a tolerance-snapped point). */
+/**
+ * SelectNode: `SelectPoint( cursor, connectedTypes )` -- a pin whose end is exactly at `p` is the item (`GuessSelectionCandidates`: an exact hit on a pin wins over the wires and
+ * labels there); otherwise the wires and labels sitting exactly on `p` (cursor, un-snapped in source; callers pass a tolerance-snapped point).
+ */
 export function selectNodeAt(input: ExpandInput, p: P): string[] {
+  const pin = (input.pins ?? []).find((q) => eq(q.at, p));
+  if (pin) return [pin.id];
   const out: string[] = [];
   for (const w of input.wires) if (wireContains(w, p)) out.push(w.id);
   for (const l of input.labels) if (eq(l.at, p)) out.push(l.id);

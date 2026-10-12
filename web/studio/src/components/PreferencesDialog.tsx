@@ -128,6 +128,12 @@ export function PreferencesDialog() {
             </label>
           </div>
 
+          {heading("Editing Options (Schematic Editor)")}
+          <label className="filter-row" title="Allow swapping any two pins of a symbol, not only the pins its library declares interchangeable.">
+            <input type="checkbox" data-testid="pref-allow-pin-swaps" checked={draft.allowUnconstrainedPinSwaps} onChange={(e) => set({ allowUnconstrainedPinSwaps: e.target.checked })} />
+            Allow unconstrained pin swaps
+          </label>
+
           {heading("Magnetic Points (PCB Editor)")}
           {(
             [

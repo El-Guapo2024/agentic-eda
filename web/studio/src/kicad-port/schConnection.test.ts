@@ -43,3 +43,12 @@ test("selectNodeAt picks wires and labels at the point", () => {
   assert.deepEqual(selectNodeAt(input, [100, 0]).sort(), ["b1", "w1", "w2"]);
   assert.deepEqual(selectNodeAt(input, [50, 0]).sort(), ["l1", "w1"]);
 });
+
+test("a selected pin starts the walk from the wires on its point, and stays selected; Select Node on a pin end picks the pin", () => {
+  const withPins: ExpandInput = { ...input, pins: [{ id: "pin:U1:1", at: [0, 0] }, { id: "pin:U1:2", at: [200, 0] }] };
+  assert.deepEqual(selectConnection(withPins, ["pin:U1:1"]).sort(), ["l1", "pin:U1:1", "w1", "w2"]);
+  // a pin with no wire on it has nothing to walk
+  assert.deepEqual(selectConnection({ ...withPins, pins: [{ id: "pin:U1:3", at: [900, 900] }] }, ["pin:U1:3"]), ["pin:U1:3"]);
+  assert.deepEqual(selectNodeAt(withPins, [0, 0]), ["pin:U1:1"], "a pin wins over the wire that ends at it");
+  assert.deepEqual(selectNodeAt(withPins, [100, 0]).sort(), ["b1", "w1", "w2"]);
+});

@@ -148,6 +148,9 @@ function kindOfSelected(sch: Schematic, id: string): SchItemKind {
       return "shape";
     case "field":
       return "field";
+    case "pin":
+      // a pin is not moved (`SCH_PIN_T` is no movable item): the grid of the symbol it is on
+      return "symbol";
   }
 }
 

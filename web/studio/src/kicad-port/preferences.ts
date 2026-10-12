@@ -11,7 +11,8 @@
 //   * the board editor's magnetic points (`PCBNEW_SETTINGS::m_MagneticItems`, "Snap to Pads", "Snap to Tracks and Vias", "Snap to graphics": the board editor's
 //     Preferences > Editing Options), which decide what the drawing and move tools snap to (kicad-port/snapAnchors.ts);
 //   * the board editor's "Step for rotate commands" (`PCBNEW_SETTINGS::m_RotationAngle`, `editing.rotation_angle`) and "Flip board items" (`m_FlipDirection`,
-//     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts).
+//     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts);
+//   * the schematic editor's "Allow unconstrained pin swaps" (`EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps`), without which Swap Pins is not offered.
 // Not offered: "Center and warp cursor on zoom" (it moves the real pointer, which a page may not and this studio
 // never does), the drag gestures and "Pan on mouse movement with key" (the canvases' own drag handling is not
 // configurable), and "Pan left/right with horizontal movement" (stored by KiCad but never read by the wheel code).
@@ -50,6 +51,8 @@ export interface Preferences {
   rotationStepDeg: number;
   /** `PCBNEW_SETTINGS::m_FlipDirection` ("Flip board items"): which way F turns a board item over. Default left/right (the `editing.flip_left_right` default). */
   flipDirection: FlipDirection;
+  /** `EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps` ("Allow unconstrained pin swaps", Preferences > Schematic Editor > Editing Options): Swap Pins is offered and runs only with it on. Default off. */
+  allowUnconstrainedPinSwaps: boolean;
 }
 
 /**
@@ -80,6 +83,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   magneticGraphics: false,
   rotationStepDeg: 90,
   flipDirection: "left_right",
+  allowUnconstrainedPinSwaps: false,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH">;
@@ -174,6 +178,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     magneticGraphics: bool(o.magneticGraphics, d.magneticGraphics),
     rotationStepDeg: sanitizeRotationStep(o.rotationStepDeg, d.rotationStepDeg),
     flipDirection: o.flipDirection === "top_bottom" ? "top_bottom" : d.flipDirection,
+    allowUnconstrainedPinSwaps: bool(o.allowUnconstrainedPinSwaps, d.allowUnconstrainedPinSwaps),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

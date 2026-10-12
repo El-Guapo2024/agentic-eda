@@ -7,9 +7,10 @@ const sheet = (over: Record<string, unknown>): Schematic =>
   ({ symbols: [], wires: [], labels: [], texts: [], power_symbols: [], no_connects: [], bus_entries: [], sheets: [], junctions: [], lines: [], graphics: [], locked: [], ...over }) as unknown as Schematic;
 
 const sch = sheet({
-  symbols: [{ id: "R1" }],
+  symbols: [{ id: "R1" }, { id: "R2", lib_id: "Dev:R", at: [0, 0], rot: 0, mirror: null, unit: 1, body_style: 1, pins: [{ number: "1", name: null, kind: "passive" }] }],
+  lib_symbols: { "Dev:R": { graphics: [], pins: [{ number: "1", name: null, electrical_type: "passive", shape: "line", at: [0, 0], angle_deg: 0, length_mm: 2.54, unit: 1, body_style: 1, hidden: false }] } },
   power_symbols: [{ id: "#PWR1" }],
-  sheets: [{ id: "sh1" }],
+  sheets: [{ id: "sh1", pins: [{ id: "shpin1" }] }],
   wires: [{ id: "w1" }],
   junctions: [{ id: "j1" }],
   lines: [{ id: "ln1" }],
@@ -42,8 +43,25 @@ test("every item is filed under the category itemPassesFilter's switch gives it"
     tb1: "text",
     ra1: "ruleAreas",
     dl1: "otherItems",
+    "pin:R2:1": "pins",
+    "shpin1": "pins",
   };
   for (const [id, cat] of Object.entries(want)) assert.equal(c.get(id), cat, id);
+});
+
+test("a switched-off Pins category hides the pins of symbols and of sheets, and a pin of a locked symbol is locked with it", () => {
+  const withPins = sheet({
+    symbols: [{ id: "R2", lib_id: "Dev:R", at: [0, 0], rot: 0, mirror: null, unit: 1, body_style: 1, pins: [{ number: "1", name: null, kind: "passive" }] }],
+    lib_symbols: { "Dev:R": { graphics: [], pins: [{ number: "1", name: null, electrical_type: "passive", shape: "line", at: [0, 0], angle_deg: 0, length_mm: 2.54, unit: 1, body_style: 1, hidden: false }] } },
+    sheets: [{ id: "sh1", pins: [{ id: "shpin1" }] }],
+    locked: ["R2"],
+  });
+  const off = schSelectable(withPins, { ...DEFAULT_SCH_SELECTION_FILTER, lockedItems: true, pins: false });
+  assert.equal(off("pin:R2:1"), false);
+  assert.equal(off("shpin1"), false);
+  assert.equal(off("R2"), true);
+  assert.equal(schSelectable(withPins, DEFAULT_SCH_SELECTION_FILTER)("pin:R2:1"), false, "locked with its symbol");
+  assert.equal(schSelectable(withPins, { ...DEFAULT_SCH_SELECTION_FILTER, lockedItems: true })("pin:R2:1"), true);
 });
 
 test("a switched-off category hides exactly its items", () => {
@@ -77,7 +95,7 @@ test("All items sweeps the categories but not 'Locked items'; Only <category> le
   assert.equal(off.lockedItems, true);
   assert.equal(allCategoriesOn(setAllCategories(off, true)), true);
   const only = onlyCategory(f, "wires");
-  assert.deepEqual([only.symbols, only.text, only.wires, only.labels, only.graphics, only.ruleAreas, only.otherItems], [false, false, true, false, false, false, false]);
+  assert.deepEqual([only.symbols, only.text, only.wires, only.labels, only.pins, only.graphics, only.ruleAreas, only.otherItems], [false, false, true, false, false, false, false, false]);
   assert.equal(only.lockedItems, true);
 });
 

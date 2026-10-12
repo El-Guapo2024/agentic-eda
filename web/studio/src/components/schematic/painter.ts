@@ -52,6 +52,7 @@ import { dashPattern, drawSelectionBox, paintGraphics, rgba } from "./schGraphic
 import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
 import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
+import { isPinItemId, pinById, type PinItem } from "../../kicad-port/schPins";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -711,6 +712,21 @@ function drawPowerSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, ps:
   drawPowerSymbolText(ctx, ps, resolvedPin, on);
 }
 
+/** `SCH_PAINTER::draw( SCH_PIN )` on the selection layer: the pin line in the selection colour, wider than its pen, with its name and number written in the same colour. */
+function drawSelectedPin(ctx: CanvasRenderingContext2D, view: ViewTransform, pin: PinItem) {
+  const color = layerColor("LAYER_SELECTION_SHADOWS");
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineCap = "round";
+  ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM * 2.5, 3 / view.scale);
+  ctx.beginPath();
+  ctx.moveTo(pin.tip[0], pin.tip[1]);
+  ctx.lineTo(pin.root[0], pin.root[1]);
+  ctx.stroke();
+  ctx.restore();
+  drawPinText(ctx, { pin: { number: pin.number, name: pin.name } as ResolvedPin["pin"], tip: pin.tip, root: pin.root, dir: [0, 0] }, { name: color, number: color }, pin.texts);
+}
+
 // ------------------------------------------------------------- labels / no-connects
 
 function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: SchematicLabel, wires: SchematicWire[], on: boolean) {
@@ -1051,6 +1067,14 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     if (s.dnp || s.exclude_from_sim) {
       const all = real ? real.bbox : libSymbolBounds(s, sch.lib_symbols);
       drawSymbolMarkers(ctx, (real && bodyBoundsOf(real.graphics)) || all, all, s, display.markSimExclusions);
+    }
+  }
+
+  // A selected pin (`SCH_PIN_T`): its line and its decoration over the symbol, in the selection colour, thicker than the pin itself. Its name and number follow it.
+  if (opts.selection.size > 0) {
+    for (const id of opts.selection) {
+      const pin = isPinItemId(id) ? pinById(sch, id) : null;
+      if (pin) drawSelectedPin(ctx, view, pin);
     }
   }
 

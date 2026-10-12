@@ -44,7 +44,9 @@ import { postMovePreview } from "../api/client";
 import type { SchMovePatch } from "../api/schEditTypes";
 import { nextReference } from "../kicad-port/nextReference";
 import { wireTail } from "../kicad-port/schLineMode";
-import { boxItems, hitItems } from "./schematic/schItems";
+import { boxItems } from "./schematic/schItems";
+import { pickItem } from "./schematic/schPick";
+import { isPinItemId, promoteLonePin } from "../kicad-port/schPins";
 import { openSchProperties } from "./schematic/schPropertiesOpen";
 import { SchContextMenu } from "./schematic/SchContextMenu";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
@@ -61,9 +63,7 @@ import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } fr
 import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
 import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
 import type { MenuNode } from "../kicad/types";
-import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
-import { hitField } from "../kicad-port/schFieldEdit";
-import { measureStrokeText } from "./text/strokeFont";
+import { schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
 import { importSheetClick } from "./schematic/schImportTool";
@@ -500,7 +500,7 @@ export function SchematicView() {
         // Highlight Nets (`SCH_EDITOR_CONTROL::HighlightNetCursor`'s picker): a click is `highlightNet` at that point -- the net of the wire, label or power symbol there,
         // or, over nothing, the highlight cleared. The tool stays armed.
         if (state.activeTool === "sch_highlight_net") {
-          dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, wx, wy, state.schematicView.scale) });
+          dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, wx, wy, state.schematicView.scale, state.schGridUm) });
           return;
         }
 
@@ -651,21 +651,23 @@ export function SchematicView() {
         const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
         const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
         const tolerance = 6 / (state.schematicView.scale || 1);
-        // The item under the pointer, topmost first: a symbol, any other placed item (a label, text, power symbol, junction, no-connect, bus entry,
-        // sheet or drawn shape -- tight, screen-sized tolerance) and last a wire (`SCH_SELECTION_TOOL::selectPoint`: a click on a wire selects it;
-        // the net highlight is a tool of its own). Every kind of item is picked up and dragged the same way.
-        // A shown field (the Reference, the Value, ...) is picked before the symbol whose box it may sit over: its own text box is what a click hits.
-        const fieldId = pickable(hitField(sch, wx, wy, tolerance / 2, measureStrokeText));
-        const symId = fieldId ? null : pickable(hitSymbol(sch, wx, wy));
-        const placedItem = fieldId || symId ? null : (hitItems(sch, wx, wy, tolerance).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? null);
-        const wireId = fieldId || symId || placedItem ? null : pickable(hitWire(sch, wx, wy, tolerance));
-        const picked = fieldId ?? symId ?? placedItem ?? wireId;
+        // The item under the pointer (components/schematic/schPick.ts): a pin the pointer is on, a shown field, a symbol, any other placed item (a label, text, power symbol,
+        // junction, no-connect, bus entry, sheet or drawn shape -- tight, screen-sized tolerance) and last a wire (`SCH_SELECTION_TOOL::selectPoint`: a click on a wire
+        // selects it; the net highlight is a tool of its own). Every kind of item but a pin is picked up and dragged the same way.
+        const picked = pickItem(sch, wx, wy, state.schematicView.scale, selectable, "first");
+        const wireId = picked && sch.wires.some((w) => w.id === picked) ? picked : null;
         if (picked) {
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
           if (hasModifier(modifiers)) {
             // A modified click always applies immediately, never starts a drag -- real sch_selection_tool.cpp routes a modified drag to
             // box-select instead, even one starting on a hit item (see this file's "nothing hit" box-select branch below).
             dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, picked, modifiers) });
+            dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
+            return;
+          }
+          // A pin is selected and acted on (Swap Pins, a net highlight), never picked up: `SCH_PIN_T` is no movable item, so a drag that starts on one moves nothing.
+          if (isPinItemId(picked)) {
+            dispatch({ type: "SET_SELECTION", refs: [picked] });
             dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
             return;
           }
@@ -774,12 +776,12 @@ export function SchematicView() {
         // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
         const scale = state.schematicView.scale || 1;
-        const hit = pickable(hitField(sch, wx, wy, 3 / scale, measureStrokeText)) ?? pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
+        const hit = pickItem(sch, wx, wy, scale, selectable, "first");
         let ids = [...state.selection];
         if (hit && !state.selection.has(hit)) ids = [hit];
         else if (!hit && ids.length > 0) ids = [];
         if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale)) });
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps })) });
       }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties
@@ -792,8 +794,8 @@ export function SchematicView() {
             return;
           }
           const scale = state.schematicView.scale || 1;
-          const under = pickable(hitField(sch, wx, wy, 3 / scale, measureStrokeText)) ?? pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
-          const ids = state.selection.size > 0 ? [...state.selection] : under ? [under] : [];
+          const under = pickItem(sch, wx, wy, scale, selectable, "none");
+          const ids = promoteLonePin(state.selection.size > 0 ? [...state.selection] : under ? [under] : []);
           if (openSchProperties(sch, ids, dispatch)) return;
         }
         const draw = state.drawState;
@@ -837,7 +839,7 @@ export function SchematicView() {
             const [x1, y1] = toWorld(e.clientX, e.clientY);
             const [x0, y0] = drag.startWorld;
             const box: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-            const hits = boxItems(sch, box, marquee.crossing).filter((id) => pickable(id));
+            const hits = boxItems(sch, box, marquee.crossing, (id) => pickable(id) !== null);
             if (hits.length > 0 || hasModifier(modifiers)) {
               dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, modifiers) });
             }

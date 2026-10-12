@@ -10,8 +10,9 @@ import { measureStrokeText } from "../text/strokeFont";
 import { globalLabelOutline, hierLabelOutline, inferSpin, LABEL_TEXT_SIZE_UM, localLabelTextPlacement } from "./labelShape";
 import { resolveLibSymbol, symbolBounds } from "./libSymbol";
 import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-port/schFieldEdit";
+import { hitPin, pinBox, pinById, pinItems } from "../../kicad-port/schPins";
 
-export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "graphic" | "field";
+export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "graphic" | "field" | "pin";
 
 export interface SchItemRef {
   id: string;
@@ -93,6 +94,8 @@ export function allItems(sch: Schematic): SchItemRef[] {
     seen.add(s.id);
     out.push({ id: s.id, kind: "symbol" });
   }
+  // The pins of the symbols (`SCH_PIN_T`): each is selected and acted on (Swap Pins) on its own.
+  for (const p of pinItems(sch)) out.push({ id: p.id, kind: "pin" });
   // The shown fields (`SCH_FIELD`), on top of the item that has them: each is selected, moved and edited on its own.
   for (const f of fieldItems(sch)) if (isShownField(f.field)) out.push({ id: f.id, kind: "field" });
   return out;
@@ -158,6 +161,10 @@ export function itemBounds(sch: Schematic, ref: SchItemRef): Box | null {
       const f = fieldIndex(sch).get(ref.id);
       return f ? fieldBox(f.field, measureStrokeText) : null;
     }
+    case "pin": {
+      const pin = pinById(sch, ref.id);
+      return pin ? pinBox(pin, measureStrokeText) : null;
+    }
   }
 }
 
@@ -189,6 +196,10 @@ export function hitItem(sch: Schematic, ref: SchItemRef, p: P, tol: number): boo
       const corners: P[] = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
       return distToPolyline(p, corners, true) <= tol;
     }
+    case "pin": {
+      const pin = pinById(sch, ref.id);
+      return pin ? hitPin(pin, p, tol, measureStrokeText) : false;
+    }
     default: {
       const b = itemBounds(sch, ref);
       return b ? pointInBox(p, inflateBox(b, tol)) : false;
@@ -196,22 +207,31 @@ export function hitItem(sch: Schematic, ref: SchItemRef, p: P, tol: number): boo
   }
 }
 
-/** Every item under the point, topmost first. */
+/**
+ * Every item under the point, topmost first. The pins are not among them: a pin is picked ahead of the symbol it belongs to when the point is on it
+ * (`GuessSelectionCandidates`: "closest = pin"), by `pickPin`, and by nothing else.
+ */
 export function hitItems(sch: Schematic, x: number, y: number, tol: number): SchItemRef[] {
   const out: SchItemRef[] = [];
   const all = allItems(sch);
-  for (let i = all.length - 1; i >= 0; i--) if (hitItem(sch, all[i]!, [x, y], tol)) out.push(all[i]!);
+  for (let i = all.length - 1; i >= 0; i--) if (all[i]!.kind !== "pin" && hitItem(sch, all[i]!, [x, y], tol)) out.push(all[i]!);
   return out;
 }
 
-/** The ids a marquee selects: items overlapping the box (`crossing`) or sitting wholly inside it. */
-export function boxItems(sch: Schematic, box: [number, number, number, number], crossing: boolean): string[] {
+/**
+ * The ids a marquee selects: items overlapping the box (`crossing`) or sitting wholly inside it. The pins are collected apart and taken only when nothing else is
+ * (`SCH_SELECTION_TOOL::SelectMultiple`: "collector = pinsCollector" when the main collector is empty), so a box over a symbol selects the symbol and a box over just
+ * some of its pins selects those pins. `pick` is the selection filter: what it keeps out does not count as found.
+ */
+export function boxItems(sch: Schematic, box: [number, number, number, number], crossing: boolean, pick: (id: string) => boolean = () => true): string[] {
   const b: Box = { minX: box[0], minY: box[1], maxX: box[2], maxY: box[3] };
   const out: string[] = [];
+  const pins: string[] = [];
   for (const ref of allItems(sch)) {
+    if (!pick(ref.id)) continue;
     const ib = itemBounds(sch, ref);
     if (!ib) continue;
-    if (crossing ? boxesOverlap(ib, b) : boxEncloses(b, ib)) out.push(ref.id);
+    if (crossing ? boxesOverlap(ib, b) : boxEncloses(b, ib)) (ref.kind === "pin" ? pins : out).push(ref.id);
   }
-  return out;
+  return out.length > 0 ? out : pins;
 }

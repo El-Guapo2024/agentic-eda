@@ -152,7 +152,13 @@ export type SchEditCmd =
   /** Sheet Properties: the sheet's name and the file it shows (a bare name; one the project has is linked to, a new one gets the content). */
   | { verb: "edit_sheet"; id: string; name?: string; file?: string }
   /** Wire/Bus, Line and Junction Properties: the stroke of the wires, buses, bus entries and graphic lines named, the diameter and colour of the junctions (a colour with every channel 0 is the layer's own). */
-  | { verb: "set_stroke"; ids: string[]; width_um?: Um; style?: SchLineStyle; color?: SchColor; diameter_um?: Um };
+  | { verb: "set_stroke"; ids: string[]; width_um?: Um; style?: SchLineStyle; color?: SchColor; diameter_um?: Um }
+  /** Swap Pins: the pins (item ids `pin:<reference>:<number>`, in selection order) of one symbol trade places, one after the other. */
+  | { verb: "swap_pins"; pins: string[] }
+  /** Swap Pin Labels: the net labels on the pins trade texts in selection order. */
+  | { verb: "swap_pin_labels"; pins: string[] }
+  /** Swap Unit Labels: the placed units of one multi-unit reference trade the net labels on their pins. */
+  | { verb: "swap_unit_labels"; ids: string[] };
 
 /** One turn made while the items are held (`R`, Shift+`R`, `X`, `Y`). */
 export type SchTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";

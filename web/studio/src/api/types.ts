@@ -1717,6 +1717,8 @@ export interface SchematicPin {
   number: string;
   name: string | null;
   kind: PinKind;
+  /** The net the pin is on (the netlist: wires, labels, power symbols), absent for a pin on none. */
+  net?: string | null;
 }
 
 /** eeschema's ELECTRICAL_PINTYPE, serialized name per .kicad_sym. */
@@ -1835,6 +1837,8 @@ export interface SchematicSymbol {
   footprint: string | null;
   datasheet: string | null;
   pins: SchematicPin[];
+  /** The places Swap Pins traded (`SwapPinGeometry`): pin number -> the number of the library pin whose place (position, direction, length) it has. Absent or null: every pin is where the library puts it. */
+  pin_swaps?: Record<string, string> | null;
   /** `SCH_SYMBOL::GetDNP` (Do not Populate): the symbol is drawn with a cross over it and left out of the assembly. */
   dnp?: boolean;
   /** Exclude from Bill of Materials / from Board / from Simulation (`SetAttribute`). Absent from a backend built before they existed. */

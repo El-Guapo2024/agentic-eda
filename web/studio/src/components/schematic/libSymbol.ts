@@ -6,7 +6,7 @@
 // `lib_id` is null or isn't a key in `lib_symbols` (no real graphics
 // resolved for it yet -- see types.ts's `SchematicSymbol.lib_id` doc
 // comment).
-import type { LibFill, LibGraphic, LibSymbols, Mm, SchematicSymbol } from "../../api/types";
+import type { LibFill, LibGraphic, LibPin, LibSymbols, Mm, SchematicSymbol } from "../../api/types";
 import { resolveSymbol } from "./layout";
 import { DEFAULT_PIN_TEXTS, type PinTexts } from "./pinText";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix, type ResolvedPin } from "./transform";
@@ -32,6 +32,19 @@ const mmToUm = (v: Mm) => v * 1000;
 /** 0 = shared by every unit/body-style -- eeschema's own convention (lib_symbol.h), confirmed directly against source this session: an item with `unit`/`body_style` 0 is drawn for every instance regardless of which unit/style that instance is. */
 function visibleFor(itemUnit: number, itemBodyStyle: number, instanceUnit: number, instanceBodyStyle: number): boolean {
   return (itemUnit === 0 || itemUnit === instanceUnit) && (itemBodyStyle === 0 || itemBodyStyle === instanceBodyStyle);
+}
+
+/**
+ * The pins of one placed symbol with the places Swap Pins traded (`SwapPinGeometry`, `SchExtras::pin_swaps`): pin `n` has the position, direction and length of the library
+ * pin `swaps[n]`, and keeps its own number, name and type. A number the list does not have is left out of the exchange.
+ */
+export function withSwappedPlaces(pins: LibPin[], swaps: Record<string, string> | null | undefined): LibPin[] {
+  if (!swaps) return pins;
+  const byNumber = new Map(pins.map((p) => [p.number, p]));
+  return pins.map((p) => {
+    const other = byNumber.get(swaps[p.number] ?? p.number);
+    return other && other !== p ? { ...p, at: other.at, angle_deg: other.angle_deg, length_mm: other.length_mm } : p;
+  });
 }
 
 export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): ResolvedLibSymbol | null {
@@ -62,8 +75,7 @@ export function resolveLibSymbol(instance: SchematicSymbol, lib: LibSymbols): Re
   }
 
   const pins: ResolvedPin[] = [];
-  for (const p of sym.pins) {
-    if (!visibleFor(p.unit, p.body_style, unit, bodyStyle)) continue;
+  for (const p of withSwappedPlaces(sym.pins.filter((q) => visibleFor(q.unit, q.body_style, unit, bodyStyle)), instance.pin_swaps)) {
     const resolved = resolvePin(p, m, at);
     grow(resolved.tip);
     grow(resolved.root);

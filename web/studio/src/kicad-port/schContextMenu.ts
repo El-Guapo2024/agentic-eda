@@ -38,8 +38,10 @@ export interface SchSelectionSummary {
   sameReferenceUnits: number;
   /** The one selected symbol has more than one body style (`SCH_CONDITIONS::SingleMultiBodyStyleSymbol`). */
   multiBodyStyle: boolean;
-  /** Selected pins (pin selection is not part of this studio's schematic yet: always 0 there). */
+  /** Selected pins (`SCH_PIN_T`). */
   pins: number;
+  /** Preferences > Editing Options > "Allow unconstrained pin swaps" (`m_Input.allow_unconstrained_pin_swaps`): Swap Pins is in the menu only with it on. */
+  allowPinSwaps: boolean;
   /** The one selected polygon or rule area has its outline under the cursor (`SCH_POINT_EDITOR::addCornerCondition`). */
   canAddCorner: boolean;
   /** ... and a corner of it is under the cursor, leaving enough corners (`removeCornerCondition`). */
@@ -73,6 +75,7 @@ export function emptySummary(): SchSelectionSummary {
     sameReferenceUnits: 0,
     multiBodyStyle: false,
     pins: 0,
+    allowPinSwaps: false,
     canAddCorner: false,
     canRemoveCorner: false,
   };
@@ -144,7 +147,9 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
     add(item("eeschema.InteractiveDrawing.placeSheetPin"), item("eeschema.InteractiveDrawing.autoplaceAllSheetPins"), item("eeschema.InteractiveDrawing.syncSheetPins"));
     add(s.sheetHasUndefinedPins && item("eeschema.InteractiveEdit.cleanupSheetPins"));
   }
-  add(s.pins > 1 && item("eeschema.InteractiveEdit.swapPinLabels"), s.sameReferenceUnits > 1 && item("eeschema.InteractiveEdit.swapUnitLabels"), s.pins > 1 && item("eeschema.InteractiveEdit.swapPins"));
+  // `multiplePinsSelection` (more than one item, all pins), `multipleUnitsSelection`, and for Swap Pins `allowPinSwaps` as well
+  const onlyPins = s.pins > 1 && s.pins === s.total;
+  add(onlyPins && item("eeschema.InteractiveEdit.swapPinLabels"), s.sameReferenceUnits > 1 && item("eeschema.InteractiveEdit.swapUnitLabels"), onlyPins && s.allowPinSwaps && item("eeschema.InteractiveEdit.swapPins"));
   add(connected && item("eeschema.InteractiveEdit.assignNetclass"), connected && item("eeschema.InteractiveEdit.findNetInInspector"));
   // `SCH_POINT_EDITOR::Init`: Count( 1 ) && addCornerCondition / removeCornerCondition.
   add(single && s.canAddCorner && item("eeschema.PointEditor.addCorner"), single && s.canRemoveCorner && item("eeschema.PointEditor.removeCorner"));
