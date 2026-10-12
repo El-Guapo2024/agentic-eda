@@ -155,3 +155,119 @@ fn kicad_cli_finds_the_renamed_footprint_under_the_symbols_new_reference() {
     let sheets: String = std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "kicad_sch")).map(|p| std::fs::read_to_string(p).unwrap()).collect();
     assert!(sheets.contains("\"Reference\" \"U5\"") && !sheets.contains("\"Reference\" \"U1\""), "the derived .kicad_sch files name the renamed symbol");
 }
+
+/// A footprint library of the board's own, `Alt`, with one footprint: WIDE, a resistor with its pads at +-2 mm. (The project table names it; `${KIPRJMOD}` is the board's folder.)
+fn add_alt_library(dir: &Path) {
+    std::fs::create_dir_all(dir.join("libs").join("Alt.pretty")).unwrap();
+    std::fs::write(
+        dir.join("libs").join("Alt.pretty").join("WIDE.kicad_mod"),
+        r#"(footprint "WIDE" (version 20240108) (layer "F.Cu") (attr smd)
+            (fp_line (start -3 -1) (end 3 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+            (pad "1" smd rect (at -2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+            (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))"#,
+    )
+    .unwrap();
+    assert_eq!(crate::library_tables::add_library(dir, br#"{"kind":"footprint","path":"${KIPRJMOD}/libs/Alt.pretty"}"#)["ok"], true);
+}
+
+fn symbol_footprint(dir: &Path, reference: &str) -> String {
+    let (_, design, _) = load(dir).unwrap();
+    design.schematic.iter().chain(design.sheet_contents.iter().flat_map(|c| c.values())).flat_map(|s| s.symbols.iter()).find(|s| s.id == reference).map(|s| s.footprint.clone()).unwrap()
+}
+
+#[test]
+fn a_symbols_footprint_field_edit_changes_the_boards_footprint_and_one_undo_takes_both_back() {
+    let dir = board_with_schematic("follow_the_field");
+    add_alt_library(&dir);
+    let edit = on_its_sheet(&dir, "U1", Cmd::EditSymbolFields { id: "U1".into(), value: None, footprint: Some("Alt:WIDE".into()), datasheet: None });
+    step(&dir, edit, false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let u1 = model.part("U1").unwrap();
+    assert_eq!(u1.footprint.as_deref(), Some("Alt:WIDE"), "the board follows the symbol's Footprint field");
+    let pads: Vec<i64> = model.footprint_of(u1).unwrap().pads.iter().map(|p| p.at.0).collect();
+    assert_eq!(pads, [-2_000, 2_000], "with the library's pads");
+    assert_eq!(model.footprint_of(u1).unwrap().art.shapes.len(), 1, "and its silkscreen");
+    assert_eq!(design.footprint_assignment("U1").unwrap().footprint, "Alt:WIDE");
+    assert_eq!(model.part("U2").unwrap().footprint.as_deref(), Some("Test:2PAD"), "the other part is on its footprint");
+    assert_eq!(symbol_footprint(&dir, "U1"), "Alt:WIDE");
+    assert!(eda_ops::pending_footprint_changes(&design, &model).is_empty(), "the board and the schematic agree");
+    assert_eq!(pose_x(&dir, "U1"), Some(5_000));
+    assert_consistent(&dir);
+    // a footprint field with the text it had changes nothing on the board (the Symbol Properties dialog sends it with every edit)
+    let again = on_its_sheet(&dir, "U1", Cmd::EditSymbolFields { id: "U1".into(), value: Some("1k".into()), footprint: Some("Alt:WIDE".into()), datasheet: None });
+    step(&dir, again, false, "test").unwrap();
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Alt:WIDE"), "the value edit was the step that went: its footprint text changed no assignment");
+    // the next Ctrl+Z from the schematic tab takes the field and the board's footprint back together
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    assert_eq!(model.part("U1").unwrap().footprint.as_deref(), Some("Test:2PAD"));
+    assert!(design.footprint_assignment("U1").is_none());
+    assert_eq!(symbol_footprint(&dir, "U1"), "Test:2PAD");
+    // a footprint no library has is typed into the field and the board stays as it was
+    let typo = on_its_sheet(&dir, "U1", Cmd::EditSymbolFields { id: "U1".into(), value: None, footprint: Some("Alt:Nope".into()), datasheet: None });
+    step(&dir, typo, false, "test").unwrap();
+    assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Test:2PAD"));
+    assert_eq!(symbol_footprint(&dir, "U1"), "Alt:Nope");
+}
+
+#[test]
+fn update_pcb_lists_the_footprints_the_symbols_name_that_the_board_does_not_have_and_applies_them() {
+    let dir = board_with_schematic("update_pcb_lists");
+    add_alt_library(&dir);
+    // a symbol that names another footprint than the board has (a schematic edited outside the studio, a project imported from KiCad)
+    let (_, mut design, _) = load(&dir).unwrap();
+    for screen in design.schematic.iter_mut().chain(design.sheet_contents.iter_mut().flat_map(|c| c.values_mut())) {
+        for s in screen.symbols.iter_mut().filter(|s| s.id == "U1") {
+            s.footprint = "Alt:WIDE".into();
+        }
+        for s in screen.symbols.iter_mut().filter(|s| s.id == "U2") {
+            s.footprint = "Alt:Missing".into();
+        }
+    }
+    save(&dir, &design).unwrap();
+    let report = crate::fp_assign_api::update_pcb(&dir);
+    assert_eq!(report["ok"], true, "{report}");
+    let changes = report["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 2, "{report}");
+    assert_eq!((changes[0]["reference"].as_str(), changes[0]["from"].as_str(), changes[0]["to"].as_str(), changes[0]["found"].as_bool()), (Some("U1"), Some("Test:2PAD"), Some("Alt:WIDE"), Some(true)));
+    assert_eq!((changes[1]["reference"].as_str(), changes[1]["found"].as_bool(), changes[1]["locked"].as_bool()), (Some("U2"), Some(false), Some(false)), "a footprint no library has");
+    // applying the one that can be applied is the exchange, one undo step
+    step(&dir, Cmd::replace_footprint("U1", "Alt:WIDE"), false, "test").unwrap();
+    let report = crate::fp_assign_api::update_pcb(&dir);
+    assert_eq!(report["changes"].as_array().unwrap().len(), 1, "only U2 is left: {report}");
+    assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Alt:WIDE"));
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): after a Change Footprint -- and after the symbol's Footprint field was edited -- the derived `.kicad_pcb` and `.kicad_sch` load, and
+/// kicad-cli's DRC with `--schematic-parity` finds the footprint the symbol names on the board: no missing or extra footprint, no footprint, value or net that differs.
+#[test]
+fn kicad_cli_finds_the_footprint_the_symbol_names_after_a_change_footprint() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    }
+    let dir = board_with_schematic("change_footprint_kicad_cli");
+    add_alt_library(&dir);
+    let baseline = parity(&dir);
+    // Change Footprint from the board (the dialog's command)
+    step(&dir, Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Alt:WIDE".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default() }, false, "test").unwrap();
+    let after = parity(&dir);
+    assert_eq!(after, baseline, "the schematic names the footprint the board has: nothing new in the parity test");
+    for (kind, text) in &after {
+        assert!(!matches!(kind.as_str(), "missing_footprint" | "extra_footprint" | "duplicate_footprints"), "{kind}: {text}");
+        assert!(!text.to_lowercase().contains("footprint given by symbol"), "{kind}: {text}");
+    }
+    let pcb = std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pcb")).unwrap();
+    assert!(pcb.contains("(footprint \"Alt:WIDE\"") && pcb.contains("(footprint \"Test:2PAD\""), "U1 is on Alt:WIDE in the derived board, U2 still on Test:2PAD");
+    let sheets: String = std::fs::read_dir(dir.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "kicad_sch")).map(|p| std::fs::read_to_string(p).unwrap()).collect();
+    assert!(sheets.contains("\"Footprint\" \"Alt:WIDE\""), "and the symbol's Footprint property says so");
+    // the same through the symbol's Footprint field of the other part
+    let edit = on_its_sheet(&dir, "U2", Cmd::EditSymbolFields { id: "U2".into(), value: None, footprint: Some("Alt:WIDE".into()), datasheet: None });
+    step(&dir, edit, false, "test").unwrap();
+    assert_eq!(parity(&dir), baseline);
+}

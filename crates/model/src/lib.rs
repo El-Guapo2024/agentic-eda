@@ -12,6 +12,7 @@ pub mod footprint;
 pub mod fp_art;
 pub mod fp_assign;
 pub mod fp_edit;
+pub mod fp_exchange;
 pub mod gensym;
 mod groups;
 pub mod ir;

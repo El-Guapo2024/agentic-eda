@@ -1,30 +1,71 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { updatePcbMessage } from "./updatePcb";
+import { appliable, backAnnotateCommands, backAnnotateLines, changeLines, updateCommands, updatePcbMessage } from "./updatePcb";
+import { CHANGE_OPTIONS, REPLACE_OPTIONS, UPDATE_OPTIONS, isLibraryId, matchingFootprints, setAllOptions } from "./pcbExchange";
+import type { BoardState } from "../api/types";
 
-test("a board with every footprint placed reports up to date and the count", () => {
-  const m = updatePcbMessage([
-    { ref: "R1", placed: true },
-    { ref: "R2", placed: true },
+const change = (reference: string, from: string, to: string, extra: Partial<{ locked: boolean; found: boolean }> = {}) => ({ reference, from, to, locked: false, found: true, ...extra });
+
+test("F8 lists a footprint change as KiCad's dry run does, and tells it in the past after the update", () => {
+  const changes = [change("R1", "R_0603", "R_0805"), change("R2", "R_0603", "R_0402", { locked: true }), change("R3", "R_0603", "Nope:R", { found: false })];
+  assert.deepEqual(changeLines(changes, false).map((l) => [l.severity, l.text]), [
+    ["action", "Change R1 footprint from 'R_0603' to 'R_0805'."],
+    ["warning", "Cannot change R2 footprint from 'R_0603' to 'R_0402' (footprint is locked)."],
+    ["error", "Cannot update R3 (footprint 'Nope:R' not found)."],
   ]);
-  assert.match(m, /up to date with the schematic/);
-  assert.match(m, /2 footprints, all placed\.$/);
+  assert.equal(changeLines(changes, true)[0]!.text, "Changed R1 footprint from 'R_0603' to 'R_0805'.");
+  assert.equal(changeLines(changes, true)[1]!.text, "Could not change R2 footprint from 'R_0603' to 'R_0402' (footprint is locked).");
 });
 
-test("footprints still to place are named, singular and plural, and a long list is cut", () => {
-  assert.match(
-    updatePcbMessage([
-      { ref: "R1", placed: true },
-      { ref: "C1", placed: false },
-    ]),
-    /2 footprints: 1 placed, 1 still to place \(C1\)/
-  );
-  const many = Array.from({ length: 12 }, (_, i) => ({ ref: `R${i + 1}`, placed: false }));
-  const m = updatePcbMessage(many);
-  assert.match(m, /12 footprints: 0 placed, 12 still to place \(R1, R2, R3, R4, R5, R6, R7, R8, \.\.\.\)/);
+test("the update applies the footprints that can be changed, each with every option on", () => {
+  const changes = [change("R1", "A", "B"), change("R2", "A", "B", { locked: true }), change("R3", "A", "C", { found: false })];
+  assert.deepEqual(appliable(changes).map((c) => c.reference), ["R1"]);
+  assert.deepEqual(updateCommands(changes), [{ op: "exchange_footprints", references: ["R1"], footprint: "B", options: REPLACE_OPTIONS }]);
+  assert.deepEqual(updateCommands([]), []);
 });
 
-test("an empty board and a single footprint read naturally", () => {
-  assert.match(updatePcbMessage([]), /It has no footprints yet\.$/);
-  assert.match(updatePcbMessage([{ ref: "U1", placed: true }]), /1 footprint, all placed\.$/);
+test("the back-annotation names the board's footprint on the symbol", () => {
+  const changes = [change("R1", "Lib:A", "Lib:B"), change("R2", "", "Lib:B")];
+  assert.deepEqual(backAnnotateCommands(changes), [{ op: "edit_symbol_fields", id: "R1", footprint: "Lib:A" }]);
+  assert.deepEqual(backAnnotateLines(changes, false).map((l) => l.text), ["Change R1 footprint assignment from 'Lib:B' to 'Lib:A'."]);
+});
+
+test("the F8 summary says what is left to place", () => {
+  assert.match(updatePcbMessage([]), /no footprints yet/);
+  assert.match(updatePcbMessage([{ ref: "R1", placed: true }]), /1 footprint, all placed/);
+  assert.match(updatePcbMessage([{ ref: "R1", placed: true }, { ref: "R2", placed: false }]), /1 placed, 1 still to place \(R2\)/);
+});
+
+test("the dialog opens with KiCad's option values for a change and for an update", () => {
+  assert.equal(CHANGE_OPTIONS.remove_extra_texts, false);
+  assert.deepEqual([CHANGE_OPTIONS.reset_text_layers, CHANGE_OPTIONS.reset_text_effects, CHANGE_OPTIONS.reset_text_positions, CHANGE_OPTIONS.reset_text_content, CHANGE_OPTIONS.reset_fabrication_attrs], [true, true, true, true, true]);
+  assert.deepEqual([UPDATE_OPTIONS.reset_text_layers, UPDATE_OPTIONS.reset_text_effects, UPDATE_OPTIONS.reset_text_positions, UPDATE_OPTIONS.reset_text_content, UPDATE_OPTIONS.reset_fabrication_attrs], [false, false, false, false, false]);
+  assert.deepEqual([UPDATE_OPTIONS.reset_clearance_overrides, UPDATE_OPTIONS.reset_3d_models, UPDATE_OPTIONS.match_pad_positions], [true, true, true]);
+  assert.ok(Object.values(setAllOptions(true)).every(Boolean) && Object.values(setAllOptions(false)).every((v) => !v));
+});
+
+const board = {
+  parts: [
+    { ref: "R1", value: "10k", footprint: "Resistor_SMD:R_0603", placed: true },
+    { ref: "R2", value: "4k7", footprint: "Resistor_SMD:R_0805", placed: true },
+    { ref: "C1", value: "100n", footprint: "Capacitor_SMD:C_0603", placed: true },
+    { ref: "U9", value: "MCU", footprint: "Package_SO:SOIC-8", placed: false },
+  ],
+} as unknown as BoardState;
+
+test("a choice names the placed footprints it matches: selected, reference, value, library id, all", () => {
+  const choice = (mode: "all" | "selected" | "reference" | "value" | "footprint", extra: Partial<{ reference: string; value: string; footprint: string }> = {}) => ({ mode, reference: "", value: "", footprint: "", ...extra });
+  assert.deepEqual(matchingFootprints(board, choice("all"), new Set(), null), ["R1", "R2", "C1"], "an unplaced part has no footprint to change");
+  assert.deepEqual(matchingFootprints(board, choice("selected"), new Set(["C1"]), "R2"), ["R2", "C1"], "the one the dialog was opened on and the selection");
+  assert.deepEqual(matchingFootprints(board, choice("reference", { reference: "r*" }), new Set(), null), ["R1", "R2"]);
+  assert.deepEqual(matchingFootprints(board, choice("value", { value: "?k*" }), new Set(), null), ["R2"], "4k7");
+  assert.deepEqual(matchingFootprints(board, choice("value", { value: "??K" }), new Set(), null), ["R1"], "10k, the case ignored");
+  assert.deepEqual(matchingFootprints(board, choice("footprint", { footprint: "Resistor_SMD:R_0805" }), new Set(), null), ["R2"], "a library id is compared whole");
+});
+
+test("a library id has a nickname and an item", () => {
+  assert.equal(isLibraryId("Resistor_SMD:R_0603"), true);
+  assert.equal(isLibraryId("R_0603"), false);
+  assert.equal(isLibraryId(":R"), false);
+  assert.equal(isLibraryId("Lib:"), false);
 });

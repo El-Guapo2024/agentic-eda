@@ -57,6 +57,8 @@ pub mod library_editors;
 mod array;
 pub use array::ArrayGeometry;
 mod fp_edit;
+mod fp_exchange;
+pub use fp_exchange::{footprint_name_of, pending_footprint_changes, ExchangeOptions, FootprintChange};
 mod library_place;
 mod outline;
 mod part_rename;
@@ -705,6 +707,21 @@ pub enum Cmd {
         value: String,
         #[serde(default)]
         definition: Option<LibraryFootprint>,
+    },
+    /// Change Footprint(s) (`pcbnew.GlobalEdit.changeFootprint(s)`), Update Footprint(s) from Library (`updateFootprint(s)`) and the footprint a symbol's Footprint field names
+    /// (`BOARD_NETLIST_UPDATER::replaceFootprint`): put the parts `references` on `footprint`, or -- `footprint` absent -- each on the library copy of the footprint it is
+    /// on. The pose, lock and group stay; the pads, their nets by number, the texts, the attributes, the overrides and the models follow the dialog's `options`
+    /// (`PCB_EDIT_FRAME::ExchangeFootprint`; see `fp_exchange.rs`). The part's assignment (`DrawingsSection::footprint_assignments`) and, in a change, its symbol's Footprint
+    /// field are set; one undo step on both editors. `library` is the library copy of each footprint the command needs (`Lib:Name` -> footprint), which the studio's
+    /// server fills in from the library tables when it is left out: a command has to replay and undo the same on a machine without the libraries.
+    ExchangeFootprints {
+        references: Vec<String>,
+        #[serde(default)]
+        footprint: Option<String>,
+        #[serde(default)]
+        options: ExchangeOptions,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        library: BTreeMap<String, Footprint>,
     },
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
@@ -1691,6 +1708,8 @@ impl Cmd {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::spans_both_editors),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.spans_both_editors(),
             Cmd::RenameSymbol { .. } | Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => true,
+            // the board's footprint and the symbol's Footprint field are put right together
+            Cmd::ExchangeFootprints { .. } => true,
             // Replace All renames a reference when it is asked to look at them
             Cmd::ReplaceText { search, .. } => search.replace_references,
             // Field Properties of a Reference field renames the symbol
@@ -1737,6 +1756,7 @@ impl Cmd {
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
+            Cmd::ExchangeFootprints { references, .. } => references.iter().map(String::as_str).collect(),
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
@@ -2300,6 +2320,7 @@ impl<'a> Board<'a> {
             Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
             Cmd::PasteSpecial { text, at, mode, clear_nets } => self.paste_special(text, *at, *mode, *clear_nets),
             Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
+            Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
@@ -5119,6 +5140,8 @@ mod pcb_groups_tests;
 pub(crate) mod sch_annotate_tests;
 #[cfg(test)]
 mod part_rename_tests;
+#[cfg(test)]
+mod fp_exchange_tests;
 #[cfg(test)]
 mod sch_hierarchy_tests;
 #[cfg(test)]

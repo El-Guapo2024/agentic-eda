@@ -2329,6 +2329,12 @@ pub struct DrawingsSection {
     /// `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub renamed_parts: Vec<crate::fp_assign::PartRename>,
+    /// The footprint each part of the board is on when the board changed it (Change Footprint, Update Footprint from Library, the symbol's Footprint field
+    /// followed): the name, and the board's own copy of the footprint where it keeps one -- see [`crate::fp_assign`]. Laid over the intent's parts each time the
+    /// board is loaded. One entry per part, sorted by reference. Additive: absent in an older `design.json` reads as "every part is on the footprint the intent
+    /// gave it". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_assignments: Vec<crate::fp_assign::FootprintAssignment>,
     /// `true` when the board's outline is made of the shapes on layer `Edge.Cuts` in [`Self::shapes`] and of nothing else: an
     /// imported board whose Edge.Cuts have arcs, circles, rectangles, curves, cutouts or several loops, which a closed polygon of
     /// straight edges cannot hold. `placement.outline` is then only their summary (the outer ring of the largest outline, curves

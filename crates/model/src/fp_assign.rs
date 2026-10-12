@@ -4,12 +4,20 @@
 //! frozen `ConstraintModel` the board was started from) names the parts by the references it was written with. Renaming a part
 //! (`Edit Reference`, Annotate, Increment Annotations, Reannotate) cannot rewrite the intent, so the design keeps the answer beside the edits it
 //! already keeps there: [`PartRename`], one entry per intent part that has another reference now, laid over the model each time the board is
-//! loaded ([`apply_part_renames`], called by `crates/cli/src/board.rs::load`) the way `Design::nets` and the rules overlay are. The model the
+//! loaded ([`apply_part_renames`], called by `crates/cli/src/board.rs::build_model`) the way `Design::nets` and the rules overlay are. The model the
 //! rest of the program sees then has the part under its current reference: nothing is left under the old one.
 //!
-//! The overlay is additive: a design without it reads as "every part has the reference the intent gave it".
+//! The same goes for the footprint a part is on. The intent names one (`Part::footprint`, or the package a built-in footprint stands for), and a board
+//! changes it: Change Footprint, Update Footprints from Library, a new Footprint field on the symbol (`board_netlist_updater.cpp` `replaceFootprint`).
+//! [`FootprintAssignment`] is that answer per instance, in `DrawingsSection::footprint_assignments` beside `footprint_edits`: the name of the footprint the part
+//! is on and, when the board holds its own copy of it, the footprint itself (a KiCad board holds one for every footprint; here an instance without an
+//! assignment follows the library or the intent live). [`apply_footprint_assignments`] lays the names over the model, `board::fold_footprint_edits` the
+//! copies.
+//!
+//! Both overlays are additive: a design without them reads as "every part has the reference and the footprint the intent gave it".
 
-use crate::ir::Design;
+use crate::footprint::Footprint;
+use crate::ir::{Design, DrawingsSection};
 use crate::{ConstraintModel, PlacementRule};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -20,6 +28,48 @@ use std::collections::BTreeMap;
 pub struct PartRename {
     pub from: String,
     pub to: String,
+}
+
+/// A part's footprint on the board, when it is not the one the intent names: what `Cmd::ExchangeFootprints` leaves (Change Footprint, Update Footprint from Library,
+/// the symbol's Footprint field followed). One entry per part, sorted by `reference`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintAssignment {
+    /// The part's reference (`FootprintInstance::id`).
+    pub reference: String,
+    /// The footprint's name: `Library:Name`, or a bare name.
+    pub footprint: String,
+    /// The footprint as this instance has it, when the board keeps a copy: pads, graphics, courtyard and models, with what the exchange kept of the old footprint's
+    /// texts and models laid in. Absent: the part is on whatever the model resolves under `footprint` (the intent's, a library's, a built-in's).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<Footprint>,
+}
+
+impl Design {
+    /// The assignment of the part `reference`, if the board gave it one.
+    pub fn footprint_assignment(&self, reference: &str) -> Option<&FootprintAssignment> {
+        self.drawings.as_ref()?.footprint_assignments.iter().find(|a| a.reference == reference)
+    }
+}
+
+impl DrawingsSection {
+    /// Make `assignment` the part's (replacing its predecessor), keeping the list sorted by reference.
+    pub fn set_footprint_assignment(&mut self, assignment: FootprintAssignment) {
+        self.footprint_assignments.retain(|a| a.reference != assignment.reference);
+        self.footprint_assignments.push(assignment);
+        self.footprint_assignments.sort_by(|a, b| a.reference.cmp(&b.reference));
+    }
+}
+
+/// Lay the design's [`FootprintAssignment`]s over the model: each part named is on the footprint the board assigned it. (The copies of a footprint, where the board
+/// keeps one, are laid in by `board::fold_footprint_edits`, which also lays the pad edits over them.) A part the model lacks is skipped.
+pub fn apply_footprint_assignments(design: &Design, model: &mut ConstraintModel) {
+    let Some(dr) = design.drawings.as_ref() else { return };
+    for a in &dr.footprint_assignments {
+        if let Some(part) = model.parts.iter_mut().find(|p| p.reference == a.reference) {
+            part.footprint = Some(a.footprint.clone());
+        }
+    }
 }
 
 /// The reference an id names, when it is the id of a part or of something that belongs to one: `R1` itself, a pad (`R1.2`, `R1.2#2`) or a field

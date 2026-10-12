@@ -8,6 +8,7 @@ import { getLibraryTree } from "../state/libraryTree";
 import { saveAsTarget } from "../kicad-port/saveFootprintAs";
 import { URL_DONATE, URL_GET_INVOLVED, bugReportUrl, gettingStartedUrl, helpNameFor, helpUrl, languageOf, versionInfoText, type HelpTab } from "../kicad-port/appLinks";
 import { makeVersionEnv } from "./versionEnv";
+import { openUpdateDialog } from "./updatePcbAction";
 import { isCanvasTab } from "./editorAdapter";
 import type { ActionHandler, CommonActionContext } from "./commonActions";
 
@@ -91,14 +92,13 @@ export function registerSuiteActions(m: Map<string, ActionHandler>, ctx: CommonA
     m.set("common.Control.saveAll", () => toast("Everything is saved: each edit is written to design.json as you make it."));
   }
 
-  // ACTIONS::updateSchematicFromPCB -- PCB_EDITOR_CONTROL::UpdateSchematicFromPCB / SCH_EDITOR_CONTROL::UpdateSchematicFromPCB: the
-  // back annotation carries what was changed on the board (references, values, footprint assignments, pin and gate swaps) over to the
-  // schematic. Here the two editors are views of one design, and the PCB cannot change a footprint's reference, value or assignment on
-  // its own (FootprintPropertiesDialog shows them read-only), so there is never anything to carry over: like F8, the action refetches
-  // the design and says so.
+  // ACTIONS::updateSchematicFromPCB -- PCB_EDITOR_CONTROL::UpdateSchematicFromPCB / SCH_EDITOR_CONTROL::UpdateSchematicFromPCB: the back annotation carries what was changed on the
+  // board over to the schematic. Here the two editors are views of one design: a reference rename, Change Footprint and the symbol's Footprint field already reach the other
+  // editor in the step that makes them, so what can differ is a symbol that names another footprint than the board has (a project imported from KiCad, a schematic edited
+  // outside the studio): the dialog lists those and names the board's footprint on the symbols (components/UpdatePcbDialog.tsx).
   if (tab === "pcb" || tab === "schematic") {
     m.set("common.Control.updateSchematicFromPCB", () => {
-      void ctx.api.refresh().then(() => toast("Schematic is up to date with the PCB (references, values and footprint assignments are fields of the one design; a board edit cannot change them)."));
+      void openUpdateDialog(ctx.api, ctx.dispatch, "schematic");
     });
   }
 }

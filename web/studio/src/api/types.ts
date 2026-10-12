@@ -161,6 +161,28 @@ export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "
   role?: "reference" | "value";
 };
 
+/** The options of `DIALOG_EXCHANGE_FOOTPRINTS` (crates/ops/src/fp_exchange.rs `ExchangeOptions`; kicad-port/pcbExchange.ts has the three presets). */
+export interface ExchangeOptions {
+  /** "Match pad positions". */
+  match_pad_positions: boolean;
+  /** "Remove text items if not in library footprint". */
+  remove_extra_texts: boolean;
+  /** "Update/reset text layers and visibilities". */
+  reset_text_layers: boolean;
+  /** "Update/reset text sizes and styles". */
+  reset_text_effects: boolean;
+  /** "Update/reset text position and rotation". */
+  reset_text_positions: boolean;
+  /** "Update/reset text content". */
+  reset_text_content: boolean;
+  /** "Update/reset fabrication attributes". */
+  reset_fabrication_attrs: boolean;
+  /** "Update/reset clearance overrides". */
+  reset_clearance_overrides: boolean;
+  /** "Update/reset 3D models". */
+  reset_3d_models: boolean;
+}
+
 export interface Part {
   ref: string;
   value: string | null;
@@ -1190,6 +1212,8 @@ export type Cmd =
   | { op: "in_group"; group: string; cmd: Cmd }
   /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
   | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
+  /** Change Footprint(s) / Update Footprint(s) from Library (`DIALOG_EXCHANGE_FOOTPRINTS`) and the footprint a symbol's Footprint field names (`replaceFootprint`): put `references` on `footprint`, or -- `footprint` absent -- each on the library copy of the footprint it is on. The pose, lock and group stay; the rest follows `options`. The server brings the library copy. See crates/ops/src/fp_exchange.rs. */
+  | { op: "exchange_footprints"; references: string[]; footprint?: string | null; options?: ExchangeOptions }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */

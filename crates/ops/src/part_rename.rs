@@ -20,8 +20,9 @@ impl Board<'_> {
     ///
     /// * the pose (`placement.footprints`) and the floorplan block that names the part (`placement.modules`);
     /// * the pads the routing ends on (`Track::pins`) and the pins of the net list (`Design::nets`);
-    /// * the footprint's edits (`drawings.footprint_edits`: its Reference, Value and user fields, attributes and pad edits), the imported mask facts
-    ///   (`footprint_extras`), the zone overrides (`zone_overrides`), a footprint that exists only on the board (`board_parts`), the lock
+    /// * the footprint's edits (`drawings.footprint_edits`: its Reference, Value and user fields, attributes and pad edits), the footprint the board assigned it
+    ///   (`footprint_assignments`), the imported mask facts (`footprint_extras`), the zone overrides (`zone_overrides`), a footprint that exists only on the board
+    ///   (`board_parts`), the lock
     ///   (`locked_ids`), the groups it is a member of (`groups`) and the DRC waivers that name its pads;
     /// * the intent's part itself: the rename is recorded in `drawings.renamed_parts` (`eda_model::fp_assign`), which the loader lays over the intent,
     ///   so the model has the part, its footprint and its nets under the new reference.
@@ -96,6 +97,12 @@ impl Board<'_> {
                     e.id = n.clone();
                 }
             }
+            for a in dr.footprint_assignments.iter_mut() {
+                if let Some(n) = map.get(&a.reference) {
+                    a.reference = n.clone();
+                }
+            }
+            dr.footprint_assignments.sort_by(|a, b| a.reference.cmp(&b.reference));
             for b in dr.board_parts.iter_mut() {
                 if let Some(n) = map.get(&b.reference) {
                     b.reference = n.clone();

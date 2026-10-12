@@ -184,7 +184,7 @@ impl Board<'_> {
     pub(crate) fn edit_board_pad(&mut self, part: &str, edit: &PadEdit) -> Result<(), Vec<CheckResult>> {
         self.require_placed(part)?;
         let p = self.model.part(part).ok_or_else(|| fail("ops_unknown_part", part, "no part with this reference exists in the model"))?;
-        let lib = self.model.library_footprint_of(p).ok_or_else(|| fail("ops_no_footprint", part, "this part has no footprint geometry to edit"))?;
+        let lib = self.unedited_footprint(p).ok_or_else(|| fail("ops_no_footprint", part, "this part has no footprint geometry to edit"))?;
         let nth = edit.nth.max(1);
         let pad_ref = format!("{part}.{}", edit.number);
         let Some(_index) = pad_index(&lib, &edit.number, nth) else {
