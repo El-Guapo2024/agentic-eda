@@ -17,7 +17,7 @@ import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, 
 import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, newFieldLayout, newFieldName, parseFieldId, attrsOf, REFERENCE, VALUE } from "../kicad-port/fpFields";
 import { footprintZoneForm, padNumbers, padZoneForm, zoneCmds, type FootprintZoneForm, type PadZoneForm } from "../kicad-port/padZone";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
-import { TECH_LAYERS } from "../kicad-port/pcbProperties";
+import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
@@ -85,7 +85,9 @@ export function FootprintPropertiesDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, part?.ref]);
 
-  const layers = useMemo(() => [...(board?.layers ?? []), ...TECH_LAYERS], [board?.layers]);
+  // The layers the board has (Board Setup > Board Editor Layers).
+  const layerSetup = board?.board_rules?.layer_setup;
+  const layers = useMemo(() => boardLayerList(board?.layers ?? [], layerSetup), [board?.layers, layerSetup]);
   if (!open || !part || !attrs) return null;
   const close = () => dispatch({ type: "SET_FOOTPRINT_PROPERTIES_OPEN", open: false });
 
@@ -235,7 +237,7 @@ export function FootprintPropertiesDialog() {
                         <select value={r.layout.layer} onChange={(e) => setLayout(i, { layer: e.target.value })} style={{ width: 92 }}>
                           {(layers.includes(r.layout.layer) ? layers : [...layers, r.layout.layer]).map((l) => (
                             <option key={l} value={l}>
-                              {l}
+                              {layerDisplayName(layerSetup, l)}
                             </option>
                           ))}
                         </select>

@@ -28,6 +28,42 @@ pub const MANDATORY_LAYERS: [&str; 4] = ["F.CrtYd", "B.CrtYd", "Edge.Cuts", "Mar
 /// `User_1` .. `User_45`.
 pub const MAX_USER_LAYERS: u32 = 45;
 
+/// `PCB_LAYER_ID` (`include/layer_ids.h`): the number KiCad's `LSET` iterates a board's layers in, front and back interleaved (F.Cu 0, F.Mask 1, B.Cu 2, B.Mask 3, In1.Cu 4, F.SilkS 5 ..).
+/// The page's name test (`testLayerNames`) walks the layers in this order, so it is the later of two clashing names that is refused. `None` for a name that is no layer.
+pub fn pcb_layer_id(file_name: &str) -> Option<u32> {
+    let fixed = match file_name {
+        "F.Cu" => 0,
+        "F.Mask" => 1,
+        "B.Cu" => 2,
+        "B.Mask" => 3,
+        "F.SilkS" => 5,
+        "B.SilkS" => 7,
+        "F.Adhes" => 9,
+        "B.Adhes" => 11,
+        "F.Paste" => 13,
+        "B.Paste" => 15,
+        "Dwgs.User" => 17,
+        "Cmts.User" => 19,
+        "Eco1.User" => 21,
+        "Eco2.User" => 23,
+        "Edge.Cuts" => 25,
+        "Margin" => 27,
+        "B.CrtYd" => 29,
+        "F.CrtYd" => 31,
+        "B.Fab" => 33,
+        "F.Fab" => 35,
+        _ => 0,
+    };
+    if fixed != 0 || file_name == "F.Cu" {
+        return Some(fixed);
+    }
+    if let Some(n) = user_layer_number(file_name) {
+        return Some(37 + 2 * n);
+    }
+    let inner: u32 = file_name.strip_prefix("In")?.strip_suffix(".Cu")?.parse().ok()?;
+    is_copper_layer_name(file_name).then_some(2 + 2 * inner)
+}
+
 /// `User.7` -> 7.
 pub fn user_layer_number(file_name: &str) -> Option<u32> {
     let n: u32 = file_name.strip_prefix("User.")?.parse().ok()?;
@@ -201,10 +237,12 @@ impl LayerSetup {
                 return bad(layer, if is_copper_layer_name(layer) || user_layer_number(layer).is_some() { format!("{layer} cannot be {}: a copper layer is a signal, power, mixed or jumper layer and a user layer auxiliary or off-board front or back", t.word()) } else { format!("{layer} has no type: only copper and user layers do") });
             }
         }
-        // Names: the copper layers first, then the optional ones in the order the page lists them, each as the page would show it.
+        // Names: every layer the board has, each as the page would show it, in the order `testLayerNames` walks them (`LSET::AllLayersMask`, by `PCB_LAYER_ID`).
         let forbidden = "*?\\/:\"<>|%";
         let mut shown: Vec<(String, String)> = Vec::new();
-        for layer in copper.iter().cloned().chain(self.enabled_in_order()) {
+        let mut have: Vec<String> = copper.iter().cloned().chain(self.enabled_in_order()).collect();
+        have.sort_by_key(|l| pcb_layer_id(l).unwrap_or(u32::MAX));
+        for layer in have {
             shown.push((self.display_name(&layer), layer));
         }
         for layer in self.names.keys() {
@@ -307,7 +345,7 @@ mod tests {
         assert_eq!(err(with(&|s| drop(s.names.insert("F.SilkS".into(), "signal".into()))), 2).hint.as_deref(), Some("Layer name \"signal\" is reserved."));
         // a name already in use, by a layer that was renamed or by one that shows its standard name
         let e = err(with(&|s| drop(s.names.insert("F.Fab".into(), "B.Fab".into()))), 2);
-        assert_eq!((e.location.as_deref(), e.hint.as_deref()), (Some("B.Fab"), Some("Layer name 'B.Fab' already in use.")), "the later of the two layers is the one named");
+        assert_eq!((e.location.as_deref(), e.hint.as_deref()), (Some("F.Fab"), Some("Layer name 'B.Fab' already in use.")), "the later of the two layers in PCB_LAYER_ID order (B.Fab 33, F.Fab 35) is the one named");
         assert!(with(&|s| {
             s.names.insert("F.Fab".into(), "Assembly".into());
             s.names.insert("B.Fab".into(), "F.Fab".into());
@@ -315,6 +353,18 @@ mod tests {
         .validate(&copper(2))
         .is_ok(), "a name another layer gave up is free");
         assert_eq!(err(with(&|s| drop(s.names.insert("User.9".into(), "Nope".into()))), 2).location.as_deref(), Some("User.9"), "a layer the board does not have cannot be named");
+    }
+
+    #[test]
+    fn layers_are_numbered_as_kicads_pcb_layer_id() {
+        let id = |l: &str| pcb_layer_id(l);
+        assert_eq!((id("F.Cu"), id("F.Mask"), id("B.Cu"), id("B.Mask"), id("In1.Cu"), id("F.SilkS"), id("In2.Cu"), id("B.SilkS")), (Some(0), Some(1), Some(2), Some(3), Some(4), Some(5), Some(6), Some(7)));
+        assert_eq!((id("Edge.Cuts"), id("Margin"), id("B.CrtYd"), id("F.CrtYd"), id("B.Fab"), id("F.Fab"), id("User.1"), id("User.45"), id("In30.Cu")), (Some(25), Some(27), Some(29), Some(31), Some(33), Some(35), Some(39), Some(127), Some(62)));
+        assert_eq!((id("User.46"), id("In31.Cu"), id("Rescue"), id("")), (None, None, None, None));
+        let mut ids: Vec<u32> = TECH_LAYERS.iter().map(|l| id(l).unwrap()).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), 18, "every technical layer has a number of its own");
     }
 
     #[test]

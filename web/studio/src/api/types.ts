@@ -729,12 +729,27 @@ export interface BoardState {
     custom_rules_text?: string | null;
     /** The project's text variables as `${NAME}` reads them, name -> value (`PROJECT::GetTextVars`): the Text Variables page's rows once it has been used, else the board folder's `path-variables.json`. */
     text_variables?: Record<string, string>;
-    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`. */
+    /** Board Editor Layers (`eda_model::layers`): the non-copper layers the board has in KiCad's order, the names the user gave its layers and the types that are not the default's. Absent from an older backend (then a board has the 18 technical layers). */
+    layer_setup?: LayerSetup;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`. */
     overlay?: string[];
   };
 }
 
 export type RuleSeverity = "error" | "warning" | "ignore";
+
+/** `LAYER_T`: a copper layer is a signal, a power plane, a mixed or a jumper layer; a user layer is auxiliary (it does not flip with the board) or off-board at the front or the back (it does). */
+export type BoardLayerType = "signal" | "power" | "mixed" | "jumper" | "auxiliary" | "front" | "back";
+
+/**
+ * `eda_model::layers::LayerSetup` -- Board Setup > Board Editor Layers: the non-copper layers the board has (`enabled`: the technical layers by the names the board file writes, `F.SilkS`,
+ * and `User.1` .. `User.45`), the name the user gave a layer (else KiCad's standard name shows) and the types that are not the layer's default.
+ */
+export interface LayerSetup {
+  enabled: string[];
+  names?: Record<string, string>;
+  types?: Record<string, BoardLayerType>;
+}
 
 /** `eda_model::rules::NetClassSettings` -- Board Setup > Net Classes: the Default class and the others, with the net-name patterns that assign nets to each. */
 export interface NetClassSettings {
@@ -1083,6 +1098,8 @@ export type Cmd =
   | { op: "set_custom_rules"; text: string }
   /** Board Setup > Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` shows the value; the derived `.kicad_pro` carries them for kicad-cli. */
   | { op: "set_text_variables"; variables: Record<string, string> }
+  /** Board Setup > Board Editor Layers (`panel_setup_layers.cpp`): the whole page -- the layers the board has, their names and types. Refused with the layer's name when a name or type is out of the panel's rules or a layer is turned off while items are on it. */
+  | { op: "set_board_layers"; settings: LayerSetup }
   /**
    * `dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
    * Marker): waive the DRC violations as one undo step. An exclusion whose `(check, items)` is waived already is replaced (that edits its comment).

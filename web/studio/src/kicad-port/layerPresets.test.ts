@@ -280,3 +280,24 @@ test("a tool makes its item on the KiCad name of the active layer, which the sta
   assert.equal(activeLayerName(undefined, "Dwgs.User"), "Dwgs.User");
   for (const name of TECH_LAYER_NAMES) assert.equal(activeLayerName(layerStateKey(name), "x"), name, name);
 });
+
+test("the layers a board has (Board Editor Layers) are the panel's universe: user layers have keys, names and numbers, and a layer that is off is not in 'All Layers'", () => {
+  assert.equal(layerStateKey("User.5"), "User_5");
+  assert.equal(layerNameOfKey("User_5"), "User.5");
+  assert.equal(layerNameOfKey("User_46"), "User_46", "there is no User.46");
+  assert.equal(layerNameOfKey("User_0"), "User_0");
+  assert.equal(layerId("User.1"), 39);
+  assert.equal(layerId("User.45"), 127);
+  assert.equal(firstLayer(["User.2", "User.1", "F.Fab"]), "F.Fab", "F.Fab is 35, User.1 39");
+  assert.equal(activeLayerName("User_7", "F.SilkS"), "User.7", "an item made with a user layer active goes on it");
+  assert.deepEqual(panelLayers(["F.Cu", "B.Cu"], ["Edge.Cuts", "User.1"]), ["F.Cu", "B.Cu", "Edge.Cuts", "User.1"]);
+  assert.deepEqual(panelLayers(["F.Cu", "B.Cu"]), ["F.Cu", "B.Cu", ...TECH_LAYER_NAMES], "a caller that does not know takes the eighteen technical layers");
+  const optional = ["F.SilkS", "Edge.Cuts", "User.1"];
+  const all = builtinPresets(COPPER2, optional).find((p) => p.name === "All Layers")!;
+  assert.deepEqual(all.layers, ["F.Cu", "B.Cu", ...optional]);
+  assert.ok(presetList(COPPER2, [], optional).some((e) => e.kind === "preset" && e.preset.name === "All Layers"));
+  assert.ok(allPresets(COPPER2, [], optional).length >= 8);
+  const v = view(COPPER2, { universe: panelLayers(COPPER2, optional), visibleLayers: new Set(["F.Cu"]) });
+  const shown = menuPreset(v, "all_layers", COPPER2, optional);
+  assert.deepEqual([...shown.visibleLayers].sort(), ["B.Cu", "Edge.Cuts", "F.Cu", "F.SilkS", "User.1"], "Show All Layers shows what the board has, and no more");
+});

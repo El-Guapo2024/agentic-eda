@@ -49,7 +49,7 @@ export function useAppearanceSync(): void {
     const next = hiddenNetsOnLoad(hiddenNets, hiddenClasses, nets);
     if (next.length !== hiddenNets.length || next.some((n) => !hiddenNets.includes(n))) dispatch({ type: "BCX", patch: { hiddenRatsnestNets: next } });
     // An active layer the file names but this board does not have (a 4-layer board's In2.Cu on a 2-layer one) is not kept.
-    const known = new Set(panelLayers(board.layers).map(layerStateKey));
+    const known = new Set(panelLayers(board.layers, nets.optional).map(layerStateKey));
     if (activeLayer !== null && !known.has(activeLayer)) dispatch({ type: "SET_ACTIVE_LAYER", layer: null });
   }, [board, nets, hiddenClasses, hiddenNets, activeLayer, dispatch, loaded.current]); // eslint-disable-line react-hooks/exhaustive-deps
 

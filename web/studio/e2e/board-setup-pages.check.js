@@ -14,6 +14,9 @@
 //   drawing tools   with Text & Graphics > Defaults set for the silkscreen, copper, fab and edge classes: a new line, rectangle, circle, arc and polygon takes the line thickness
 //                    of its layer's class (the Appearance panel's row picks the layer; the state keeps its key, "f_silks", and the item is made on "F.SilkS"), incWidth steps it and arming the tool again starts over, a text from the Text tool and a
 //                    dimension take the class's size and thickness, and a text on a back layer is mirrored
+//   board layers     Board Editor Layers is a page of Board Setup, in KiCad's row order with the courtyards, the outline, the margin and the copper layers locked; Add User Defined Layer adds a row;
+//                    a name another layer has is marked and stops Apply; Apply stores the layers, the names and the types as one undo step; the Appearance panel's rows, the Text tool's layer list and
+//                    ${LAYER} follow the names; an item can be put on a user layer; a layer that holds an item cannot be turned off; one that does not is gone from the lists and takes no new item
 //   end              no console error came up while it ran, and the board is as it was (texts, variables, overlay, shapes, dimensions, title block, footprint fields)
 //
 // A scenario that throws does not stop the run: its section ends with a failed check "<section> ran to the end (stopped at: <step>)" naming the step it was at (and why), the next section
@@ -78,6 +81,12 @@
     el.dispatchEvent(new Event("input", { bubbles: true }));
     await sleep(60);
   };
+  const setSelect = async (el, value) => {
+    if (!el) throw new Error(`no list to choose "${value}" in`);
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, String(value));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+    await sleep(60);
+  };
   const dialog = () => document.querySelector(".bs-dialog");
   const page = (label) => document.querySelector(`section.bs-page[aria-label="${label}"]`);
   const button = (root, text) => (root ? [...root.querySelectorAll("button")].find((b) => b.textContent.trim() === text) : undefined);
@@ -136,6 +145,7 @@
   /** What the run must put back, as one string. */
   const fingerprint = (s) => JSON.stringify({
     variables: s.board_rules?.text_variables ?? {},
+    layers: s.board_rules?.layer_setup ?? null,
     overlay: s.board_rules?.overlay ?? [],
     texts: (s.drawings?.texts ?? []).length,
     shapes: (s.drawings?.shapes ?? []).length,
@@ -275,6 +285,98 @@
     const shapeCount = async () => ((await state()).drawings?.shapes ?? []).length;
     const dialogNumbers = () => [...document.querySelectorAll(".dialog input[type=number]")].map((i) => Number(i.value));
     const mirrorBox = () => [...document.querySelectorAll(".dialog .kv-grid > span")].find((x) => x.textContent === "Mirrored")?.nextElementSibling;
+
+    // ---------------------------------------------------------------------------------------------------------------------------------- board editor layers
+    await section("board editor layers", async () => {
+      step("opening the Board Editor Layers page");
+      const p = await openPage("Board Editor Layers");
+      const row = (layer) => p.querySelector(`tbody tr[data-layer="${layer}"]`);
+      const input = (layer, what) => row(layer)?.querySelector(`[aria-label="${layer} ${what}"]`);
+      const order = [...p.querySelectorAll("tbody tr")].map((tr) => tr.dataset.layer);
+      check("Board Editor Layers is the first page of Board Stackup", [...document.querySelectorAll(".bs-nav-group")].some((g) => g.textContent === "Board Stackup") && document.querySelector(".bs-nav-item")?.textContent.trim() === "Board Editor Layers");
+      check("the rows are in the order of KiCad's dialog: front layers, copper, back layers, outline, auxiliary layers", order.slice(0, 8).join() === "F.CrtYd,F.Fab,F.Adhes,F.Paste,F.SilkS,F.Mask,F.Cu,B.Cu" && order.slice(-5).join() === "Margin,Eco1.User,Eco2.User,Cmts.User,Dwgs.User", order.join());
+      const locked = (layer) => row(layer)?.querySelector(`input[aria-label="Enable ${layer}"]`)?.disabled;
+      check("the courtyards, the outline, the margin and the copper layers cannot be switched; the silkscreen can", locked("F.CrtYd") && locked("B.CrtYd") && locked("Edge.Cuts") && locked("Margin") && locked("F.Cu") && locked("B.Cu") && locked("F.SilkS") === false, JSON.stringify(["F.CrtYd", "Edge.Cuts", "F.Cu", "F.SilkS"].map(locked)));
+      check("the standard layers are called what KiCad calls them", input("F.SilkS", "name")?.value === "F.Silkscreen" && input("Dwgs.User", "name")?.value === "User.Drawings" && input("F.Mask", "name")?.value === "F.Mask", [input("F.SilkS", "name")?.value, input("Dwgs.User", "name")?.value].join());
+
+      step("adding a user-defined layer");
+      await setSelect(p.querySelector('select[aria-label="User-defined layer to add"]'), "User.1");
+      await press(p, "Add User Defined Layer");
+      check("Add User Defined Layer adds a checked row, auxiliary, called User.1", !!row("User.1") && row("User.1").querySelector('input[type="checkbox"]').checked && input("User.1", "type")?.value === "auxiliary" && input("User.1", "name")?.value === "User.1" && [...p.querySelectorAll('select[aria-label="User-defined layer to add"] option')].every((o) => o.value !== "User.1"));
+      step("naming and typing layers");
+      await setText(input("User.1", "name"), "Notes");
+      await setSelect(input("User.1", "type"), "back");
+      await setText(input("F.SilkS", "name"), "Top art");
+      await setSelect(input("F.Cu", "type"), "mixed");
+      await press(p, "Add User Defined Layer");
+      check("the next one added is the next free number", !!row("User.2"));
+      step("a name another layer has");
+      await setText(input("F.Fab", "name"), "B.Fab");
+      const refused = await apply(p);
+      const marked = row("F.Fab")?.querySelector("input.bs-invalid") && /already in use/.test(row("F.Fab")?.querySelector("td.bs-error")?.textContent ?? "");
+      const startLayers = JSON.stringify(start.board_rules?.layer_setup ?? null);
+      check("a name another layer has is marked (the later one in KiCad's order) and Apply stops, storing nothing", marked && /Fix the layers marked in red/.test(refused) && JSON.stringify((await state()).board_rules.layer_setup ?? null) === startLayers, `${marked} ${refused}`);
+      step("applying the page");
+      await setText(input("F.Fab", "name"), "F.Fab");
+      const saved = await apply(p);
+      if (saved === "Saved.") steps.push("pcb");
+      let st = await state();
+      const ls = st.board_rules.layer_setup;
+      check("Apply stores the layers, the names and the types as the page says, and marks the page as set", saved === "Saved." && ls.enabled.includes("User.1") && ls.names["User.1"] === "Notes" && ls.names["F.SilkS"] === "Top art" && ls.types["User.1"] === "back" && ls.types["F.Cu"] === "mixed" && st.board_rules.overlay.includes("board_layers"), `${saved} ${JSON.stringify(ls)}`);
+      await closeDialog();
+
+      step("the layer lists");
+      if (!document.querySelector(".ap-root")) document.querySelector('button[aria-label="Show Appearance"]')?.click();
+      await sleep(300);
+      document.querySelector('.ap-root [data-tab="layers"]')?.click();
+      await sleep(250);
+      const apRow = (key) => document.querySelector(`.ap-root .ap-row[data-layer="${key}"]`);
+      check("the Appearance panel lists the user layer by its name, and the renamed silkscreen", apRow("User_1")?.querySelector(".ap-name")?.textContent === "Notes" && apRow("f_silks")?.querySelector(".ap-name")?.textContent === "Top art", `${apRow("User_1")?.textContent} ${apRow("f_silks")?.textContent}`);
+
+      step("an item on the user layer");
+      const note = { id: "", content: "On ${LAYER}", at: { x: 9000, y: 33000 }, angle: 0, layer: "User.1", size_um: 1000, stroke_width: 150, justify: "left", mirror: false };
+      check("a text is added on the user layer", (await edit({ op: "add_text", text: note })).ok);
+      await sleep(900);
+      st = await state();
+      const shownNote = st.drawings.texts.find((x) => x.content === "On ${LAYER}");
+      check("${LAYER} shows the name the user gave the layer", shownNote?.shown === "On Notes", JSON.stringify(shownNote));
+
+      step("turning off a layer that holds an item");
+      const p2 = await openPage("Board Editor Layers");
+      const held = p2.querySelector('tbody tr[data-layer="User.1"] input[aria-label="Enable User.1"]');
+      held.click();
+      await sleep(150);
+      const heldMessage = await apply(p2);
+      st = await state();
+      check("a layer that holds an item cannot be turned off: the page says which and how many, and stores nothing", /1 item\(s\) are on Notes/.test(heldMessage) && st.board_rules.layer_setup.enabled.includes("User.1"), `${heldMessage}`);
+      await press(p2, "Revert");
+
+      step("turning off a layer that holds nothing");
+      p2.querySelector('tbody tr[data-layer="Eco2.User"] input[aria-label="Enable Eco2.User"]').click();
+      await sleep(150);
+      const off = await apply(p2);
+      if (off === "Saved.") steps.push("pcb");
+      st = await state();
+      check("a layer nothing is on can be turned off", off === "Saved." && !st.board_rules.layer_setup.enabled.includes("Eco2.User"), `${off}`);
+      await closeDialog();
+      await sleep(300);
+      check("the Appearance panel no longer lists it", !apRow("Eco2_User") && !!apRow("Eco1_User"));
+      const refusedItem = await edit({ op: "add_text", text: { ...note, content: "nowhere", layer: "Eco2.User" } });
+      check("nothing new goes on it: the verb refuses with the layer's name", refusedItem.ok === false && JSON.stringify(refusedItem).includes("User.Eco2"), JSON.stringify(refusedItem).slice(0, 300));
+
+      step("the Text tool's layer list");
+      await pickLayer("f_silks");
+      await cancelTool();
+      await __eda.run("pcbnew.InteractiveDrawing.text");
+      await sleep(300);
+      const toScreenForText = await screenOf();
+      if (!toScreenForText) throw new Error("no cursor readout to place the text click by");
+      const [tx, ty] = toScreenForText(3, 36);
+      fire("pointermove", tx, ty); await sleep(200); fire("pointerdown", tx, ty, { buttons: 1 }); await sleep(60); fire("pointerup", tx, ty); await sleep(800);
+      const options = [...document.querySelectorAll(".dialog .kv-grid select option")].map((o) => `${o.value}=${o.textContent}`);
+      check("the Text tool lists the layers the board has by their names: the user layer, not the one turned off", options.includes("User.1=Notes") && options.includes("F.SilkS=Top art") && !options.some((o) => o.startsWith("Eco2.User=")) && options.some((o) => o.startsWith("Dwgs.User=")), options.join(" | "));
+      await press(document.querySelector(".dialog"), "Cancel", 300);
+    });
 
     await section("drawing tools", async () => {
       step("mapping the canvas to the board");

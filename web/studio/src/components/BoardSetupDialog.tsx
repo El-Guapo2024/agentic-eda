@@ -7,12 +7,13 @@
 // `board::load` lays it over the board's description, so the router, DRC, the gates and the KiCad project kicad-cli reads all follow it, and
 // Undo takes it back. Pre-defined Sizes, Teardrops and Dimensions edit the design directly (`set_track_width_presets` ...), as before.
 //
-// Not ported: Board Editor Layers (the board's layers are its copper layers; the technical layers are fixed), Zone Hatch Offsets, Formatting,
+// Board Editor Layers (`set_board_layers`) keeps the technical and user layers a board has, their names and types. Not ported: Zone Hatch Offsets, Formatting,
 // Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files -- nothing in the model holds them yet.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Um } from "../api/types";
+import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
 import { CustomRulesPage } from "./boardSetup/CustomRulesPage";
 import { MaskPastePage } from "./boardSetup/MaskPastePage";
@@ -23,13 +24,14 @@ import { TextGraphicsPage } from "./boardSetup/TextGraphicsPage";
 import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
 import "../styles/boardSetup.css";
 
-export type Page = "stackup" | "mask_paste" | "text_graphics" | "dimensions" | "text_variables" | "constraints" | "tracks_vias" | "teardrops" | "classes" | "custom_rules" | "severities";
+export type Page = "board_layers" | "stackup" | "mask_paste" | "text_graphics" | "dimensions" | "text_variables" | "constraints" | "tracks_vias" | "teardrops" | "classes" | "custom_rules" | "severities";
 
 /** KiCad's page tree (`DIALOG_BOARD_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
 const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
   {
     title: "Board Stackup",
     pages: [
+      { id: "board_layers", label: "Board Editor Layers" },
       { id: "stackup", label: "Physical Stackup" },
       { id: "mask_paste", label: "Solder Mask/Paste" },
     ],
@@ -255,6 +257,7 @@ export function BoardSetupDialog() {
             ))}
           </nav>
 
+          <BoardLayersPage hidden={page !== "board_layers"} onDirty={markers.board_layers} />
           <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
           <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
           <TextGraphicsPage hidden={page !== "text_graphics"} onDirty={markers.text_graphics} />

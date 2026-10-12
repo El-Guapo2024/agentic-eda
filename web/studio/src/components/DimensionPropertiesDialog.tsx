@@ -17,6 +17,7 @@
 import { useEffect, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { toCmdDimension } from "../kicad-port/dimensionConvert";
+import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { umFrom, umTo, type LengthUnit } from "../state/units";
 import type { ArrowDirection, CmdDimensionKind, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat } from "../api/types";
 
@@ -145,7 +146,8 @@ export function DimensionPropertiesDialog() {
   };
 
   const kindLabel = dim.kind[0]!.toUpperCase() + dim.kind.slice(1);
-  const layers = state.board?.layers ?? [];
+  const layerSetup = state.board?.board_rules?.layer_setup;
+  const layers = boardLayerList(state.board?.layers ?? [], layerSetup);
 
   return (
     <div className="dialog-backdrop" onClick={close}>
@@ -160,7 +162,7 @@ export function DimensionPropertiesDialog() {
               {!layers.includes(layer) && <option value={layer}>{layer}</option>}
               {layers.map((l) => (
                 <option key={l} value={l}>
-                  {l}
+                  {layerDisplayName(layerSetup, l)}
                 </option>
               ))}
             </select>

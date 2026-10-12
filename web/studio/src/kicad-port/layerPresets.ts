@@ -50,7 +50,10 @@ export function layerNameOfKey(key: string): string {
   const bucket = NAME_OF_BUCKET[key];
   if (bucket) return bucket;
   const known = TECH_LAYER_NAMES.find((n) => n.replace(/\./g, "_") === key);
-  return known ?? key;
+  if (known) return known;
+  // A user layer (`User_5` -> `User.5`).
+  const user = /^User_([1-9]\d*)$/.exec(key);
+  return user && Number(user[1]) <= 45 ? `User.${user[1]}` : key;
 }
 
 /**
@@ -66,9 +69,12 @@ export function layerIsVisible(layerVisible: Readonly<Record<string, boolean>>, 
   return layerVisible[layerStateKey(name)] !== false && layerVisible[name] !== false;
 }
 
-/** Every layer the panel lists: the board's copper layers (front to back, as `board.layers` has them), then the technical layers. */
-export function panelLayers(copper: readonly string[]): string[] {
-  return [...copper, ...TECH_LAYER_NAMES];
+/**
+ * Every layer the panel lists: the board's copper layers (front to back, as `board.layers` has them), then the optional layers the board has. `optional` is what Board
+ * Editor Layers says (`enabledOptionalLayers`: the technical layers and `User.N`); a caller that does not know takes the eighteen technical layers KiCad starts a board with.
+ */
+export function panelLayers(copper: readonly string[], optional: readonly string[] = TECH_LAYER_NAMES): string[] {
+  return [...copper, ...optional];
 }
 
 /** `PCB_LAYER_ID`'s numbers for the layers a preset can name (F.Cu 0, F.Mask 1, B.Cu 2, ..., In1.Cu 4, F.SilkS 5 ...); the order "first layer of a set" means. */
@@ -100,6 +106,8 @@ export function layerId(name: string): number {
   if (fixed !== undefined) return fixed;
   const inner = /^In(\d+)\.Cu$/.exec(name);
   if (inner) return 2 + 2 * Number(inner[1]);
+  const user = /^User\.([1-9]\d*)$/.exec(name);
+  if (user && Number(user[1]) <= 45) return 37 + 2 * Number(user[1]);
   return 1000;
 }
 
@@ -124,9 +132,9 @@ export const DEFAULT_OBJECTS: readonly ObjectId[] = OBJECT_IDS.filter((id) => DE
  * The eight built-in presets (`loadDefaultLayerPresets`, all read-only), in the order the list shows them: `m_layerPresets` is a `std::map` keyed by name,
  * so alphabetical. `copper` is the board's copper layers (the masks `AllCuMask` and `InternalCuMask` cover 32 layers; a board has these).
  */
-export function builtinPresets(copper: readonly string[]): LayerPreset[] {
+export function builtinPresets(copper: readonly string[], optional: readonly string[] = TECH_LAYER_NAMES): LayerPreset[] {
   const inner = copper.filter((l) => /^In\d+\.Cu$/.test(l));
-  const all = panelLayers(copper);
+  const all = panelLayers(copper, optional);
   const mk = (name: string, layers: string[], flipBoard: boolean, activeLayer: string | null = null): LayerPreset => ({ name, layers, renderLayers: [...DEFAULT_OBJECTS], flipBoard, activeLayer, readOnly: true });
   const list = [
     mk("No Layers", [], false),
@@ -147,8 +155,8 @@ export function compareNames(a: string, b: string): number {
 }
 
 /** Every preset by name, the built-in ones and the user's, as the `std::map` iterates them (a user preset cannot take a built-in name). */
-export function allPresets(copper: readonly string[], user: readonly LayerPreset[]): LayerPreset[] {
-  const builtin = builtinPresets(copper);
+export function allPresets(copper: readonly string[], user: readonly LayerPreset[], optional: readonly string[] = TECH_LAYER_NAMES): LayerPreset[] {
+  const builtin = builtinPresets(copper, optional);
   const names = new Set(builtin.map((p) => p.name));
   const mine = user.filter((p) => !names.has(p.name) && !p.readOnly);
   return [...builtin, ...mine].sort((a, b) => compareNames(a.name, b.name));
@@ -156,8 +164,8 @@ export function allPresets(copper: readonly string[], user: readonly LayerPreset
 
 /** The entries of the preset list in `rebuildLayerPresetsWidget`: the built-in ones, a separator and the user's when there are any, a separator, then the two commands. */
 export type PresetListEntry = { kind: "preset"; preset: LayerPreset } | { kind: "separator" } | { kind: "save" } | { kind: "delete" };
-export function presetList(copper: readonly string[], user: readonly LayerPreset[]): PresetListEntry[] {
-  const all = allPresets(copper, user);
+export function presetList(copper: readonly string[], user: readonly LayerPreset[], optional: readonly string[] = TECH_LAYER_NAMES): PresetListEntry[] {
+  const all = allPresets(copper, user, optional);
   const out: PresetListEntry[] = all.filter((p) => p.readOnly).map((preset) => ({ kind: "preset", preset }));
   const mine = all.filter((p) => !p.readOnly);
   if (mine.length > 0) {
@@ -240,8 +248,8 @@ export type MenuPresetKind = "all_layers" | "no_layers" | "front" | "front_assem
  * `OnLayerContextMenu`'s presets: "Show All Layers", "Show Only Front Layers" ... apply a built-in preset's layers but keep the objects that are on and
  * the flip as they are, and leave the list on its blank entry (the temporary preset has no name).
  */
-export function menuPreset(v: PresetView, kind: MenuPresetKind, copper: readonly string[]): PresetView {
-  const find = (name: string) => builtinPresets(copper).find((p) => p.name === name)!;
+export function menuPreset(v: PresetView, kind: MenuPresetKind, copper: readonly string[], optional: readonly string[] = TECH_LAYER_NAMES): PresetView {
+  const find = (name: string) => builtinPresets(copper, optional).find((p) => p.name === name)!;
   const p = find({ all_layers: "All Layers", no_layers: "No Layers", front: "Front Layers", front_assembly: "Front Assembly View", inner_copper: "Inner Copper Layers", back: "Back Layers", back_assembly: "Back Assembly View" }[kind]);
   // Only the layers are copied from the built-in preset (`preset.layers = presetFront.layers`): its active layer is not, so the assembly entries do not pick F.SilkS.
   const applied = applyTo(v, p.layers, v.objects, v.flipBoard, null);

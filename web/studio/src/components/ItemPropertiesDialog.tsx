@@ -7,7 +7,7 @@
 // or re-spanning an existing via isn't a field edit there either, it's
 // delete-and-redraw).
 import { useEffect, useState } from "react";
-import { STANDARD_LAYERS } from "./canvas/layers";
+import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, formatXY, umFrom, umTo } from "../state/units";
 
@@ -50,7 +50,10 @@ export function ItemPropertiesDialog() {
   if (!id || (!track && !via && !shape)) return null;
 
   const title = track ? "Track Properties" : via ? "Via Properties" : "Shape Properties";
-  const layerOptions = [...(state.board?.layers ?? []), ...STANDARD_LAYERS.map((l) => l.label)];
+  // The layers the board has (Board Setup > Board Editor Layers); a shape on a layer the board has since turned off keeps its own.
+  const layerSetup = state.board?.board_rules?.layer_setup;
+  const layerOptions = boardLayerList(state.board?.layers ?? [], layerSetup);
+  if (shape && !layerOptions.includes(shapeLayer || shape.layer)) layerOptions.push(shapeLayer || shape.layer);
 
   return (
     <div className="dialog-backdrop" onClick={close}>
@@ -101,7 +104,7 @@ export function ItemPropertiesDialog() {
                   <select value={shapeLayer} onChange={(e) => setShapeLayer(e.target.value)}>
                     {layerOptions.map((l) => (
                       <option key={l} value={l}>
-                        {l}
+                        {layerDisplayName(layerSetup, l)}
                       </option>
                     ))}
                   </select>

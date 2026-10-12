@@ -10,6 +10,7 @@ import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store"
 import type { TextJustify } from "../api/types";
 import { newTextStyle } from "../kicad-port/layerDefaults";
 import { activeLayerName } from "../kicad-port/layerPresets";
+import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 
 // A new text starts as `DRAWING_TOOL::PlaceText` makes it: the size and thickness Board Setup > Text & Graphics > Defaults gives the layer's class, mirrored on a
 // back layer, left aligned (kicad-port/layerDefaults.ts `newTextStyle`).
@@ -98,9 +99,10 @@ export function TextDialog() {
                 }
               }}
             >
-              {[...new Set([...(state.board?.layers ?? []), "F.SilkS", "B.SilkS", "F.Fab", "B.Fab"])].map((l) => (
+              {/* The layers the board has (Board Setup > Board Editor Layers), by the names the user gave them. */}
+              {boardLayerList(state.board?.layers ?? [], state.board?.board_rules?.layer_setup).map((l) => (
                 <option key={l} value={l}>
-                  {l}
+                  {layerDisplayName(state.board?.board_rules?.layer_setup, l)}
                 </option>
               ))}
             </select>
