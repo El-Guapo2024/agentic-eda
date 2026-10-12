@@ -1445,13 +1445,13 @@ mod tests {
     use eda_model::ir::Millideg;
 
     fn test_pad(number: &str, at: (Um, Um), size: (Um, Um), shape: PadShape) -> Pad {
-        Pad { opposite_side: false, number: number.into(), at, size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
+        Pad { opposite_side: false, ext: Default::default(), number: number.into(), at, size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }
     }
 
     /// One part, J1, on a 20 mm board with its origin at (10000, 10000): pad 1 on net "B", pad 2 (if any) on net "C".
     /// Nothing else is on the board, so a track on net "A" is a foreign net to every pad.
     fn pad_fixture(pads: Vec<Pad>, fp_rot: Millideg, side: Side, rt: RoutingSection) -> (Design, ConstraintModel) {
-        let footprint = Footprint { name: "PADTEST".into(), pads: pads.clone(), courtyard: Some((4000, 4000)), model: None, courtyard_outlines: vec![], models3d: vec![] };
+        let footprint = Footprint { name: "PADTEST".into(), pads: pads.clone(), courtyard: Some((4000, 4000)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "J1".into(),
             mpn: None,
@@ -1589,6 +1589,87 @@ mod tests {
             let (d, m) = make(k_for(250.0));
             assert_eq!(clearance_fails(&d, &m), 1, "the track's edge is inside the bar");
         }
+    }
+
+    #[test]
+    fn a_trapezoid_pad_is_measured_by_its_slanted_sides() {
+        use eda_model::footprint::PadShapeExt;
+        // 2 x 1 mm, `rect_delta 0 0.8`: the bottom side (y = +500) is 2.8 mm long and the top one (y = -500) 1.2 mm, so the right side runs
+        // from (1400, 500) to (600, -500). Its bounding box is the 2.8 x 1 mm rectangle, which the old rectangle (2 mm wide) did not even hold.
+        let mut pad = test_pad("1", (0, 0), (2000, 1000), PadShape::Trapezoid);
+        pad.ext = PadShapeExt { trapezoid_delta: Some((0, 800)), ..Default::default() };
+        let pads = || vec![pad.clone()];
+        // A vertical track whose left edge is 200 um from the bottom right corner (1400, 500): exactly the clearance, then a micron less.
+        let vertical = |x: Um| routing_of(vec![a_track("F.Cu", &[(10000 + x, 8000), (10000 + x, 12000)])], vec![]);
+        let (d, m) = pad_fixture(pads(), 0, Side::Top, vertical(1700));
+        assert_eq!(clearance_fails(&d, &m), 0, "{:?}", fails(&d, &m, "routing_clearance"));
+        let (d, m) = pad_fixture(pads(), 0, Side::Top, vertical(1699));
+        assert_eq!(clearance_fails(&d, &m), 1, "a micron under the clearance from the wide side's corner");
+        // The narrow side: a horizontal track above the top edge (y = -500): 200 um of air, then a micron less.
+        let horizontal = |y: Um| routing_of(vec![a_track("F.Cu", &[(7000, 10000 + y), (13000, 10000 + y)])], vec![]);
+        let (d, m) = pad_fixture(pads(), 0, Side::Top, horizontal(-800));
+        assert_eq!(clearance_fails(&d, &m), 0);
+        let (d, m) = pad_fixture(pads(), 0, Side::Top, horizontal(-799));
+        assert_eq!(clearance_fails(&d, &m), 1);
+        // A track alongside the slanted side, `air` um from it: the side's outward normal is (1000, -800) / 1280.6.
+        let alongside = |air: f64| {
+            let (nx, ny) = (1000.0 / 1280.625, -800.0 / 1280.625);
+            let (ux, uy) = (-800.0 / 1280.625, -1000.0 / 1280.625);
+            let off = air + 100.0;
+            let (cx, cy) = (1000.0 + nx * off, 0.0 + ny * off);
+            let pt = |t: f64| ((10000.0 + cx + ux * t).round() as Um, (10000.0 + cy + uy * t).round() as Um);
+            routing_of(vec![a_track("F.Cu", &[pt(-2500.0), pt(2500.0)])], vec![])
+        };
+        let (d, m) = pad_fixture(pads(), 0, Side::Top, alongside(260.0));
+        assert_eq!(clearance_fails(&d, &m), 0, "260 um of air beside the slanted side: {:?}", fails(&d, &m, "routing_clearance"));
+        let (d, m) = pad_fixture(pads(), 0, Side::Top, alongside(150.0));
+        assert_eq!(clearance_fails(&d, &m), 1, "150 um of air is under the clearance");
+        // The same pad on the back of the board is the mirror image: the wide corner is at x = -1400 there.
+        let (d, m) = pad_fixture(pads(), 0, Side::Bottom, routing_of(vec![Track { layer: "B.Cu".into(), ..a_track("B.Cu", &[(10000 - 1699, 8000), (10000 - 1699, 12000)]) }], vec![]));
+        assert_eq!(clearance_fails(&d, &m), 1, "mirrored on the bottom side");
+        let (d, m) = pad_fixture(pads(), 0, Side::Bottom, routing_of(vec![Track { layer: "B.Cu".into(), ..a_track("B.Cu", &[(10000 - 1700, 8000), (10000 - 1700, 12000)]) }], vec![]));
+        assert_eq!(clearance_fails(&d, &m), 0);
+    }
+
+    #[test]
+    fn a_chamfered_pad_is_measured_by_its_cut_corner() {
+        use eda_model::footprint::PadShapeExt;
+        use eda_model::ir::ChamferCorners;
+        // 1 x 1 mm with the top left corner cut 400 um: the cut's face is the line x + y = -600 (local), from (-500, -100) to (-100, -500).
+        let mut pad = test_pad("1", (0, 0), (1000, 1000), PadShape::ChamferedRect);
+        pad.roundrect_ratio = Some(0.0);
+        pad.ext = PadShapeExt { chamfer_ratio: Some(0.4), chamfer_corners: ChamferCorners { top_left: true, ..Default::default() }, ..Default::default() };
+        // The track on x + y = c is |c - 20000 + 600| / sqrt 2 from the face: 250 um of air is 350 um from its axis.
+        let air = |a: f64| 20000.0 - 600.0 - (a + 100.0) * std::f64::consts::SQRT_2;
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(air(250.0).round() as Um)], vec![]));
+        assert_eq!(clearance_fails(&d, &m), 0, "250 um from the cut face (the square corner at (-500, -500) is 67 um nearer): {:?}", fails(&d, &m, "routing_clearance"));
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, routing_of(vec![diagonal(air(150.0).round() as Um)], vec![]));
+        assert_eq!(clearance_fails(&d, &m), 1, "150 um from the face");
+        // The corner that is not cut is square: the same track beside the bottom right corner is as close as a rectangle's.
+        let (d, m) = pad_fixture(vec![pad], 0, Side::Top, routing_of(vec![diagonal(21202)], vec![]));
+        assert_eq!(clearance_fails(&d, &m), 1, "the square corner at (500, 500): 143 um from this track's axis");
+    }
+
+    #[test]
+    fn a_custom_pad_is_measured_by_its_anchor_and_every_basic_shape() {
+        use eda_model::footprint::{PadAnchor, PadCustom, PadPrimitive, PadShapeExt};
+        use eda_model::ir::Shape;
+        // A 0.6 mm round anchor with a 200 um line from it 2 mm to the right: the copper reaches x = 2100.
+        let line = Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 2000, y: 0 } };
+        let mut pad = test_pad("1", (0, 0), (600, 600), PadShape::Custom);
+        pad.ext = PadShapeExt { custom: Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![PadPrimitive { shape: line, proxy: false }] }), ..Default::default() };
+        let vertical = |x: Um| routing_of(vec![a_track("F.Cu", &[(10000 + x, 8000), (10000 + x, 12000)])], vec![]);
+        // 100 + 200 + 2100: the track's edge is exactly the clearance from the line's end.
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, vertical(2400));
+        assert_eq!(clearance_fails(&d, &m), 0, "{:?}", fails(&d, &m, "routing_clearance"));
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, vertical(2399));
+        assert_eq!(clearance_fails(&d, &m), 1, "a micron under the clearance from the end of the basic shape, 2 mm from the anchor");
+        // Beside the line, 200 um of air from its side (y = -100 - 200 - 100).
+        let horizontal = |y: Um| routing_of(vec![a_track("F.Cu", &[(11000, 10000 + y), (13000, 10000 + y)])], vec![]);
+        let (d, m) = pad_fixture(vec![pad.clone()], 0, Side::Top, horizontal(-400));
+        assert_eq!(clearance_fails(&d, &m), 0);
+        let (d, m) = pad_fixture(vec![pad], 0, Side::Top, horizontal(-399));
+        assert_eq!(clearance_fails(&d, &m), 1);
     }
 
     #[test]

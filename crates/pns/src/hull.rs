@@ -146,6 +146,8 @@ pub fn hull_of(shape: &Shape, clearance: Um, walkaround_width: Um) -> Vec<Point>
             convex_hull(&expanded)
         }
         Shape::Strokes { .. } => Vec::new(), // never a PNS item; see item.rs.
+        // A custom pad: the convex hull of the hulls of its parts. (The router's own hull, `primitive_hull`, keeps them apart.)
+        Shape::Compound { ref parts } => convex_hull(&parts.iter().flat_map(|p| hull_of(p, clearance, walkaround_width)).collect::<Vec<_>>()),
     }
 }
 
@@ -439,7 +441,13 @@ pub fn primitive_hull(shape: &Shape, clearance: Um, walk: Um) -> Vec<Point> {
             union_outline(&hulls)
         }
         Shape::Polygon { ref pts } => convex_hull_octagon(pts, cl),
-        _ => hull_of(shape, clearance, walk),
+        // `SOLID::Hull` of a compound: the hull of each primitive, unioned (`hullSet.Simplify(); Outline( 0 )`).
+        Shape::Compound { ref parts } => match parts.as_slice() {
+            [only] => primitive_hull(only, clearance, walk),
+            _ => union_outline(&parts.iter().map(|p| primitive_hull(p, clearance, walk)).collect::<Vec<_>>()),
+        },
+        // A stroked arc (a custom pad's primitive): a segment per chord, unioned.
+        Shape::Strokes { ref segs, r } => union_outline(&segs.iter().map(|s| segment_hull(s.a, s.b, 2 * r, clearance, walk)).collect::<Vec<_>>()),
     }
 }
 
@@ -458,6 +466,24 @@ fn union_outline(hulls: &[Vec<Point>]) -> Vec<Point> {
 #[cfg(test)]
 mod kicad_hull_tests {
     use super::*;
+
+    #[test]
+    fn a_custom_pads_hull_is_the_union_of_the_hulls_of_its_parts() {
+        // A 1 mm round anchor and a 200 um arm 2 mm to the right (a custom pad): `SOLID::Hull` hulls each primitive and unions them.
+        let pad = Shape::Compound { parts: vec![Shape::Circle { c: Point { x: 0, y: 0 }, r: 500 }, Shape::Stadium { a: Point { x: 0, y: 0 }, b: Point { x: 2000, y: 0 }, r: 100 }] };
+        let hull = primitive_hull(&pad, 200, 0);
+        assert!(hull.len() >= 8, "{hull:?}");
+        let (x0, x1) = (hull.iter().map(|p| p.x).min().unwrap(), hull.iter().map(|p| p.x).max().unwrap());
+        // The arm's tip is at 2100: its hull reaches 200 past it, which the anchor's alone (to 700) does not.
+        assert!(x1 >= 2290 && x1 <= 2310, "{x1}");
+        assert!(x0 <= -690 && x0 >= -710, "{x0}");
+        // Where the arm is thin the hull is too: nothing a 700-wide anchor hull would give at x = 1500.
+        assert!(hull.iter().filter(|p| p.x > 800 && p.x < 1900).all(|p| p.y.abs() <= 310), "{hull:?}");
+        // A stroked arc's hull is a union of its chords'.
+        let arc = Shape::Strokes { segs: vec![eda_drc::kimath::Seg::new(Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }), eda_drc::kimath::Seg::new(Point { x: 1000, y: 0 }, Point { x: 1000, y: 1000 })], r: 100 };
+        let hull = primitive_hull(&arc, 100, 0);
+        assert!(hull.iter().any(|p| p.x >= 1190) && hull.iter().any(|p| p.y >= 1190), "{hull:?}");
+    }
 
     #[test]
     fn segment_hull_is_a_clockwise_octagon_at_the_right_offset() {

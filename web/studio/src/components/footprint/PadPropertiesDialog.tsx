@@ -1,25 +1,19 @@
 // Port of pcbnew/dialogs/dialog_pad_properties.cpp (GAPS.md #8 step 3) --
-// shape/size, offset, drill, layer presets, clearance/thermal overrides,
-// roundrect ratio. Not ported: padstack mode (front/inner/back-differs --
-// this app's board has no inner-copper-layer concept to differ over),
-// the fabrication-property dropdown (BGA/fiducial/testpoint/...; cosmetic
-// metadata with no consumer anywhere in this app yet), and a true custom
-// (primitive-based) pad shape -- see `LibraryPadShape`'s own doc.
+// shape/size (the nine shape choices, a trapezoid's delta, a chamfer, a custom
+// pad's basic shapes: the rows are the board dialog's own, `PadShapeFields.tsx`),
+// offset, drill, layer presets, clearance/thermal overrides. Not ported: padstack
+// mode (front/inner/back-differs -- this app's board has no inner-copper-layer
+// concept to differ over) and the fabrication-property dropdown
+// (BGA/fiducial/testpoint/...; cosmetic metadata with no consumer anywhere in
+// this app yet).
 import { useEffect, useState } from "react";
-import type { ChamferCorners, LibraryPad, LibraryPadShape, PadConnection, PadKind } from "../../api/types";
+import type { LibraryPad, PadConnection, PadKind } from "../../api/types";
 import { useFpApi, useFpState, useFpDispatch } from "../../state/footprintEditorStore";
 import { useStudioState } from "../../state/store";
-import { formatLength, umFrom, umTo } from "../../state/units";
+import { umFrom, umTo } from "../../state/units";
 import { PAD_CONNECTION_OPTIONS, defaultSpokeAngleDeg, importPadSettings, settingsOf } from "../../kicad-port/padSettings";
-
-const SHAPE_OPTIONS: { value: LibraryPadShape; label: string }[] = [
-  { value: "circle", label: "Circle" },
-  { value: "rect", label: "Rectangle" },
-  { value: "oval", label: "Oval" },
-  { value: "round_rect", label: "Rounded rectangle" },
-  { value: "trapezoid", label: "Trapezoid" },
-  { value: "chamfered_rect", label: "Chamfered rectangle" },
-];
+import { chooseShape, libraryFieldsOf, shapeFormOfLibraryPad, type PadShapeChoice, type PadShapeForm } from "../../kicad-port/padShape";
+import { PadPrimitivePanel, PadShapeRows } from "../PadShapeFields";
 
 const KIND_OPTIONS: { value: PadKind; label: string }[] = [
   { value: "smd", label: "SMD" },
@@ -35,10 +29,6 @@ const LAYER_PRESETS: { label: string; kind: PadKind; layers: string[] }[] = [
   { label: "NPTH, mechanical", kind: "non_plated_hole", layers: ["*.Cu", "*.Mask"] },
 ];
 
-function emptyCorners(): ChamferCorners {
-  return { top_left: false, top_right: false, bottom_left: false, bottom_right: false };
-}
-
 export function PadPropertiesDialog() {
   const state = useFpState();
   const dispatch = useFpDispatch();
@@ -52,17 +42,22 @@ export function PadPropertiesDialog() {
   const close = () => (defaultMode ? dispatch({ type: "SET_DEFAULT_PAD_OPEN", open: false }) : dispatch({ type: "SET_PAD_PROPERTIES_ID", id: null }));
 
   const [form, setForm] = useState<LibraryPad | null>(null);
+  /** The shape of the pad, with what goes with it (`kicad-port/padShape.ts`); laid back on the pad by OK. */
+  const [shapeForm, setShapeForm] = useState<PadShapeForm | null>(null);
 
   // Populate the editable copy only when the dialog opens on a (possibly
   // different) pad -- not every render, same convention every other
   // dialog in this app uses so a mid-edit keystroke survives the next
   // ~700ms poll.
   useEffect(() => {
-    if (pad) setForm(pad);
+    if (pad) {
+      setForm(pad);
+      setShapeForm(shapeFormOfLibraryPad(pad));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, defaultMode]);
 
-  if ((!defaultMode && !id) || !pad || !form) return null;
+  if ((!defaultMode && !id) || !pad || !form || !shapeForm) return null;
 
   const set = <K extends keyof LibraryPad>(key: K, value: LibraryPad[K]) => setForm((f) => (f ? { ...f, [key]: value } : f));
   const len = (valueUm: number, onChange: (um: number) => void, width = 80) => (
@@ -72,13 +67,23 @@ export function PadPropertiesDialog() {
   );
 
   const submit = async () => {
+    // The shape, the size and what goes with them are the shape form's.
+    const edited: LibraryPad = { ...form, ...libraryFieldsOf(shapeForm) };
     if (defaultMode) {
       // `m_Pad_Master` takes what the dialog holds (the circle / SMD fix-ups of `ImportSettingsFrom` included).
-      dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(importPadSettings(form, form)) });
+      dispatch({ type: "SET_DEFAULT_PAD", pad: settingsOf(importPadSettings(edited, edited)) });
       close();
       return;
     }
-    if (id && (await api.editPad(id, form))) close();
+    if (id && (await api.editPad(id, edited))) close();
+  };
+
+  /** `onPadShapeSelection`: the choice, with the defaults it sets up and the spoke angle that follows a circle. */
+  const chooseShapeOf = (choice: PadShapeChoice) => {
+    const was = form.thermal_spoke_angle_mdeg ?? null;
+    const r = chooseShape(shapeForm, choice, was === null ? 90 : was / 1000);
+    setShapeForm(r.form);
+    if (was !== null) set("thermal_spoke_angle_mdeg", Math.round(r.spokeAngleDeg * 1000));
   };
 
   const hasDrill = form.kind !== "smd";
@@ -121,96 +126,11 @@ export function PadPropertiesDialog() {
               <input type="number" step="any" value={form.rot / 1000} onChange={(e) => Number.isFinite(Number(e.target.value)) && set("rot", Math.round(Number(e.target.value) * 1000))} style={{ width: 80 }} />°
             </span>
 
-            <span>Shape</span>
-            <select value={form.shape} onChange={(e) => set("shape", e.target.value as LibraryPadShape)}>
-              {SHAPE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-            <span>Size</span>
-            <span>
-              {len(form.size[0], (w) => set("size", form.shape === "circle" ? [w, w] : [w, form.size[1]]))}
-              {form.shape !== "circle" && (
-                <>
-                  {" × "}
-                  {len(form.size[1], (h) => set("size", [form.size[0], h]))}
-                </>
-              )}
-            </span>
+            <PadShapeRows form={shapeForm} onForm={setShapeForm} units={units} onChoose={chooseShapeOf} />
             <span>Offset</span>
             <span>
               {len(form.offset.x, (x) => set("offset", { ...form.offset, x }))} {len(form.offset.y, (y) => set("offset", { ...form.offset, y }))}
             </span>
-
-            {form.shape === "round_rect" && (
-              <>
-                <span>Corner ratio</span>
-                <span>
-                  <input
-                    type="number"
-                    step="any"
-                    min={0}
-                    max={0.5}
-                    value={form.roundrect_ratio ?? 0.25}
-                    onChange={(e) => Number.isFinite(Number(e.target.value)) && set("roundrect_ratio", Number(e.target.value))}
-                    style={{ width: 80 }}
-                  />{" "}
-                  (radius {formatLength((form.roundrect_ratio ?? 0.25) * Math.min(...form.size), units)})
-                </span>
-              </>
-            )}
-            {form.shape === "chamfered_rect" && (
-              <>
-                <span>Chamfer ratio</span>
-                <span>
-                  <input
-                    type="number"
-                    step="any"
-                    min={0}
-                    max={0.5}
-                    value={form.chamfer_ratio ?? 0.2}
-                    onChange={(e) => Number.isFinite(Number(e.target.value)) && set("chamfer_ratio", Number(e.target.value))}
-                    style={{ width: 80 }}
-                  />
-                </span>
-                <span>Chamfered corners</span>
-                <span>
-                  {(["top_left", "top_right", "bottom_left", "bottom_right"] as const).map((c) => (
-                    <label key={c} style={{ marginRight: 10 }}>
-                      <input
-                        type="checkbox"
-                        checked={form.chamfer_corners[c]}
-                        onChange={(e) => set("chamfer_corners", { ...(form.chamfer_corners ?? emptyCorners()), [c]: e.target.checked })}
-                      />{" "}
-                      {c.replace("_", " ")}
-                    </label>
-                  ))}
-                </span>
-              </>
-            )}
-            {form.shape === "trapezoid" && (
-              <>
-                <span>Trapezoid delta</span>
-                <span>
-                  <select
-                    value={(form.trapezoid_delta?.[0] ?? 0) !== 0 ? "x" : "y"}
-                    onChange={(e) => {
-                      const mag = form.trapezoid_delta ? Math.max(Math.abs(form.trapezoid_delta[0]), Math.abs(form.trapezoid_delta[1])) : 0;
-                      set("trapezoid_delta", e.target.value === "x" ? [mag, 0] : [0, mag]);
-                    }}
-                    style={{ marginRight: 8 }}
-                  >
-                    <option value="x">X axis</option>
-                    <option value="y">Y axis</option>
-                  </select>
-                  {len(Math.abs(form.trapezoid_delta?.[0] ?? form.trapezoid_delta?.[1] ?? 0), (v) =>
-                    set("trapezoid_delta", (form.trapezoid_delta?.[0] ?? 0) !== 0 ? [v, 0] : [0, v])
-                  )}
-                </span>
-              </>
-            )}
 
             <span>Layer preset</span>
             <span>
@@ -257,6 +177,8 @@ export function PadPropertiesDialog() {
             )}
           </div>
 
+          <PadPrimitivePanel form={shapeForm} onForm={setShapeForm} units={units} />
+
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Clearance overrides and zone connection (blank = inherit)</p>
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
             <span>Clearance</span>
@@ -274,7 +196,7 @@ export function PadPropertiesDialog() {
             <span>Thermal spoke width</span>
             <OverrideInput valueUm={form.thermal_spoke_width_override} units={units} onChange={(v) => set("thermal_spoke_width_override", v)} />
             <span>Thermal spoke angle</span>
-            <AngleOverrideInput valueMdeg={form.thermal_spoke_angle_mdeg ?? null} defaultDeg={defaultSpokeAngleDeg(form.shape)} onChange={(v) => set("thermal_spoke_angle_mdeg", v)} />
+            <AngleOverrideInput valueMdeg={form.thermal_spoke_angle_mdeg ?? null} defaultDeg={defaultSpokeAngleDeg(libraryFieldsOf(shapeForm).shape, libraryFieldsOf(shapeForm).custom?.anchor)} onChange={(v) => set("thermal_spoke_angle_mdeg", v)} />
           </div>
         </div>
         <div className="dialog-footer">

@@ -157,6 +157,117 @@ fn a_pad_edit_that_cannot_be_a_pad_is_refused() {
     .unwrap();
 }
 
+/// The pad a board has after the edits of footprint `part` are laid on its library footprint (what `ConstraintModel::footprint_of` answers once the
+/// board's loader has folded them in).
+fn pad_after_edits(b: &Board<'_>, m: &ConstraintModel, part: &str, number: &str) -> eda_model::Pad {
+    let lib = m.library_footprint_of(m.part(part).unwrap()).unwrap();
+    let edits = b.design().footprint_edit(part).map(|e| e.pads.clone()).unwrap_or_default();
+    eda_model::fp_edit::patched_footprint(&lib, &edits).pads.into_iter().find(|p| p.number == number).unwrap()
+}
+
+#[test]
+fn a_pad_becomes_a_trapezoid_a_chamfered_rectangle_or_a_custom_pad_and_an_empty_edit_brings_the_rectangle_back() {
+    use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive};
+    use eda_model::ir::{ChamferCorners, Shape};
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let before = pad_after_edits(&b, &m, "U1", "1");
+    assert_eq!(before.shape, PadShape::Rect);
+
+    // A trapezoid: the shape and its delta.
+    let mut e = PadEdit::none("1", 1);
+    e.shape = Some(PadShape::Trapezoid);
+    e.size = Some((1_000, 600));
+    e.trapezoid_delta = Some((0, 300));
+    b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: e }).unwrap();
+    let p = pad_after_edits(&b, &m, "U1", "1");
+    assert_eq!((p.shape, p.size, p.ext.trapezoid_delta), (PadShape::Trapezoid, (1_000, 600), Some((0, 300))));
+
+    // A chamfered rectangle (the default ratios of a shape that has none: 0.25 for the rounded corners, 0.2 for the chamfer).
+    let mut e = PadEdit::none("1", 1);
+    e.shape = Some(PadShape::ChamferedRect);
+    e.chamfer_corners = Some(ChamferCorners { top_left: true, ..Default::default() });
+    b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: e }).unwrap();
+    let p = pad_after_edits(&b, &m, "U1", "1");
+    assert_eq!((p.shape, p.roundrect_ratio, p.ext.chamfer_ratio, p.ext.trapezoid_delta), (PadShape::ChamferedRect, Some(0.25), Some(0.2), None), "the delta went with the trapezoid");
+    assert!(p.ext.chamfer_corners.top_left && !p.ext.chamfer_corners.top_right);
+
+    // A custom pad: an anchor and a polygon, a ring and a line.
+    let polygon = PadPrimitive { shape: Shape::Polygon { id: String::new(), layer: String::new(), stroke_width: 0, filled: true, pts: vec![p0(0, 0), p0(1_500, 0), p0(0, 1_500)] }, proxy: false };
+    let custom = PadCustom { anchor: PadAnchor::Rect, zone: CustomZoneMode::ConvexHull, primitives: vec![polygon] };
+    let mut e = PadEdit::none("1", 1);
+    e.shape = Some(PadShape::Custom);
+    e.custom = Some(custom.clone());
+    b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: e }).unwrap();
+    let p = pad_after_edits(&b, &m, "U1", "1");
+    assert_eq!((p.shape, p.ext.custom.clone(), p.ext.chamfer_ratio, p.roundrect_ratio), (PadShape::Custom, Some(custom), None, None), "the chamfer went with the chamfered rectangle");
+    // The copper the DRC measures is the anchor and the polygon.
+    let fp = pose(&b, "U1");
+    let copper = eda_drc::board::placed_pad_copper(&fp, &p);
+    assert!(matches!(copper, eda_drc::kimath::Shape::Compound { .. }), "{copper:?}");
+
+    // An edit that says nothing takes the whole edit away, down to the rectangle the library has (the studio's undo restores the design
+    // as it was before each step; this is the verb's side of it).
+    b.apply(&Cmd::EditBoardPad { part: "U1".into(), edit: PadEdit::none("1", 1) }).unwrap();
+    assert_eq!(pad_after_edits(&b, &m, "U1", "1"), before);
+    assert!(edit_of(&b, "U1").is_none());
+}
+
+fn p0(x: Um, y: Um) -> Point {
+    p(x, y)
+}
+
+#[test]
+fn a_pad_whose_new_shape_is_not_a_pad_is_refused_in_kicads_words() {
+    use eda_model::footprint::{PadAnchor, PadCustom, PadPrimitive};
+    use eda_model::ir::{ChamferCorners, Shape};
+    let m = model(&["F.Cu", "B.Cu"]);
+    let mut b = board(&m);
+    let pad = |f: &dyn Fn(&mut PadEdit)| {
+        let mut e = PadEdit::none("1", 1);
+        f(&mut e);
+        Cmd::EditBoardPad { part: "U1".into(), edit: e }
+    };
+    // `PAD::doCheckPad`: "(trapezoid delta is too large)" -- the 600 um pad cannot lose more than its own width.
+    assert!(refusal(&mut b, pad(&|e| {
+        e.shape = Some(PadShape::Trapezoid);
+        e.trapezoid_delta = Some((0, 700));
+    }))
+    .contains("trapezoid delta is too large"));
+    assert!(refusal(&mut b, pad(&|e| {
+        e.shape = Some(PadShape::ChamferedRect);
+        e.chamfer_ratio = Some(1.5);
+    }))
+    .contains("chamfer"));
+    // Two neighbouring corners cannot each lose more than half the side.
+    assert!(refusal(&mut b, pad(&|e| {
+        e.shape = Some(PadShape::ChamferedRect);
+        e.chamfer_ratio = Some(0.7);
+        e.chamfer_corners = Some(ChamferCorners { top_left: true, top_right: true, ..Default::default() });
+    }))
+    .contains("corner chamfer is too large"));
+    let line = |a: Point, z: Point| PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100, filled: false, start: a, end: z }, proxy: false };
+    // A zero-length line is no shape.
+    assert!(refusal(&mut b, pad(&|e| {
+        e.shape = Some(PadShape::Custom);
+        e.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(0, 0), p(0, 0))] });
+    }))
+    .contains("Basic shape 1"));
+    // Shapes far from the anchor make two pieces of copper: "(custom pad shape must resolve to a single polygon)".
+    assert!(refusal(&mut b, pad(&|e| {
+        e.shape = Some(PadShape::Custom);
+        e.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(5_000, 5_000), p(6_000, 5_000))] });
+    }))
+    .contains("single polygon"));
+    assert!(edit_of(&b, "U1").is_none(), "nothing was stored");
+    // The same line touching the anchor is fine.
+    b.apply(&pad(&|e| {
+        e.shape = Some(PadShape::Custom);
+        e.custom = Some(PadCustom { anchor: PadAnchor::Circle, zone: Default::default(), primitives: vec![line(p(0, 0), p(2_000, 0))] });
+    }))
+    .unwrap();
+}
+
 #[test]
 fn a_field_moves_on_its_own_by_the_board_delta_whatever_the_footprints_frame() {
     let m = model(&["F.Cu", "B.Cu"]);

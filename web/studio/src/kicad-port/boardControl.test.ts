@@ -4,6 +4,7 @@ import {
   afterFill,
   afterUnfill,
   connectedTrackWidth,
+  trackUnder,
   displayedRatsnest,
   duplicatedZoneOutline,
   filledNow,
@@ -207,6 +208,19 @@ test("filterZones: by name and/or net text, case-insensitive, and by layer", () 
   assert.deepEqual(filterZones(zones, "zon", false, true, null), [], "the name box is off");
   assert.deepEqual(filterZones(zones, "gnd", true, true, "B.Cu").map((z) => z.id), ["pwr"]);
   assert.deepEqual(filterZones(zones, "  ", true, true, "F.Cu").map((z) => z.id), ["zon_1", "zon_2"], "blank text filters nothing");
+});
+
+test("trackUnder: the track whose copper the point is in on the layer, the nearest centre line first", () => {
+  const tracks = [
+    { id: "a", layer: "F.Cu", width: 400, pts: [[0, 0], [10000, 0]] as [number, number][] },
+    { id: "b", layer: "F.Cu", width: 200, pts: [[0, 150], [10000, 150]] as [number, number][] },
+    { id: "c", layer: "B.Cu", width: 800, pts: [[0, 0], [10000, 0]] as [number, number][] },
+  ];
+  assert.deepEqual(trackUnder(tracks, 5000, 10, "F.Cu"), { id: "a", width: 400 }, "inside a's copper (200 off its centre line at most) and nearest to its centre line");
+  assert.deepEqual(trackUnder(tracks, 5000, 140, "F.Cu"), { id: "b", width: 200 }, "nearer to b's centre line");
+  assert.deepEqual(trackUnder(tracks, 5000, 100, "B.Cu"), { id: "c", width: 800 }, "only the layer's own");
+  assert.equal(trackUnder(tracks, 5000, 700, "F.Cu"), null, "outside the copper");
+  assert.equal(trackUnder(tracks, 20000, 0, "F.Cu"), null, "beyond the end");
 });
 
 test("connectedTrackWidth: a route that starts at a track's end takes that track's width; a pad or via start leaves the current width", () => {

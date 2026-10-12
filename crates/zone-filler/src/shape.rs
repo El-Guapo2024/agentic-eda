@@ -25,6 +25,11 @@ pub enum Shape {
     Rect { x0: i64, y0: i64, x1: i64, y1: i64 },
     RoundRect { x0: i64, y0: i64, x1: i64, y1: i64, r: i64 },
     Polygon { pts: Vec<Point64> },
+    /// A run of stroked segments of half width `r` (`SHAPE_ARC` with a width): a custom pad's arc, or the ring of a circle drawn
+    /// without fill. Each segment is a stadium.
+    Strokes { segs: Vec<(Point64, Point64)>, r: i64 },
+    /// `SHAPE_COMPOUND`: the parts that make one item's copper -- a custom pad's anchor and primitives. The shape of the union.
+    Compound { parts: Vec<Shape> },
 }
 
 /// The exact (zero-clearance) boundary polygon for a shape, same
@@ -37,6 +42,25 @@ pub fn exact_polygon(shape: &Shape, max_error: i64) -> LineChain {
         Shape::RoundRect { x0, y0, x1, y1, r } => round_rect_polygon(*x0, *y0, *x1, *y1, *r, max_error),
         Shape::Stadium { a, b, r } => stadium_polygon(*a, *b, *r, max_error),
         Shape::Polygon { pts } => pts.clone(),
+        // A shape of several outlines has no single one: the first stands in (use [`exact_polygons`] for all of them).
+        Shape::Strokes { .. } | Shape::Compound { .. } => exact_polygons(shape, max_error).into_iter().next().unwrap_or_default(),
+    }
+}
+
+/// Every outline the shape is made of: the shape's own for a simple one, a stadium per segment of a stroke, the outlines of each part
+/// of a compound. Their union is the shape.
+pub fn exact_polygons(shape: &Shape, max_error: i64) -> Vec<LineChain> {
+    match shape {
+        Shape::Strokes { segs, r } => segs.iter().map(|&(a, b)| stadium_polygon(a, b, *r, max_error)).collect(),
+        Shape::Compound { parts } => parts.iter().flat_map(|p| exact_polygons(p, max_error)).collect(),
+        _ => {
+            let poly = exact_polygon(shape, max_error);
+            if poly.is_empty() {
+                Vec::new()
+            } else {
+                vec![poly]
+            }
+        }
     }
 }
 
@@ -140,7 +164,64 @@ pub fn shape_to_polygon_outside(shape: &Shape, clearance: i64, max_error: i64) -
         Shape::Rect { .. } => exact_polygon(shape, max_error),
         Shape::RoundRect { x0, y0, x1, y1, r } => exact_polygon(&Shape::RoundRect { x0: x0 - grow, y0: y0 - grow, x1: x1 + grow, y1: y1 + grow, r: r + grow }, max_error),
         Shape::Polygon { .. } => shape_to_polygon(shape, c + max_error, max_error),
+        Shape::Strokes { .. } | Shape::Compound { .. } => polygons_outside(shape, clearance, max_error).into_iter().next().unwrap_or_default(),
     }
+}
+
+/// [`shape_to_polygon_outside`] for a shape of several outlines: one per segment of a stroke and per part of a compound. Growing a
+/// union by a clearance is the union of the parts grown by it, so the knockout of a custom pad is these outlines together.
+pub fn polygons_outside(shape: &Shape, clearance: i64, max_error: i64) -> Vec<LineChain> {
+    match shape {
+        Shape::Strokes { segs, r } => segs.iter().map(|&(a, b)| shape_to_polygon_outside(&Shape::Stadium { a, b, r: *r }, clearance, max_error)).collect(),
+        Shape::Compound { parts } => parts.iter().flat_map(|p| polygons_outside(p, clearance, max_error)).collect(),
+        _ => {
+            let poly = shape_to_polygon_outside(shape, clearance, max_error);
+            if poly.len() >= 3 {
+                vec![poly]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+}
+
+/// The shape as polygons with holes: the union of its outlines (`SHAPE_POLY_SET::Simplify`). A ring is an outline with a hole.
+pub fn union_polyset(shape: &Shape, max_error: i64) -> ShapePolySet {
+    let mut set = ShapePolySet::new();
+    for poly in exact_polygons(shape, max_error) {
+        if poly.len() >= 3 {
+            set.add_outline(poly);
+        }
+    }
+    set.simplify();
+    set
+}
+
+/// `BuildConvexHull` (`libs/kimath`, Andrew's monotone chain): the convex hull of the points of `outlines`, counter-clockwise.
+pub fn convex_hull(outlines: &[LineChain]) -> LineChain {
+    let mut pts: Vec<(i64, i64)> = outlines.iter().flatten().map(|p| (p.x, p.y)).collect();
+    pts.sort_unstable();
+    pts.dedup();
+    if pts.len() < 3 {
+        return pts.into_iter().map(|(x, y)| Point64::new(x, y)).collect();
+    }
+    let cross = |o: (i64, i64), a: (i64, i64), b: (i64, i64)| (a.0 - o.0) as i128 * (b.1 - o.1) as i128 - (a.1 - o.1) as i128 * (b.0 - o.0) as i128;
+    let mut hull: Vec<(i64, i64)> = Vec::with_capacity(pts.len() * 2);
+    for &p in &pts {
+        while hull.len() >= 2 && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    let lower = hull.len() + 1;
+    for &p in pts.iter().rev().skip(1) {
+        while hull.len() >= lower && cross(hull[hull.len() - 2], hull[hull.len() - 1], p) <= 0 {
+            hull.pop();
+        }
+        hull.push(p);
+    }
+    hull.pop();
+    hull.into_iter().map(|(x, y)| Point64::new(x, y)).collect()
 }
 
 /// The shape's axis-aligned bounding box, `(x0, y0, x1, y1)`.
@@ -159,5 +240,16 @@ pub fn bounds(shape: &Shape) -> (i64, i64, i64, i64) {
             }
             (x0, y0, x1, y1)
         }
+        Shape::Strokes { segs, r } => {
+            let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
+            for &(a, b) in segs {
+                x0 = x0.min(a.x).min(b.x);
+                y0 = y0.min(a.y).min(b.y);
+                x1 = x1.max(a.x).max(b.x);
+                y1 = y1.max(a.y).max(b.y);
+            }
+            (x0 - r, y0 - r, x1 + r, y1 + r)
+        }
+        Shape::Compound { parts } => parts.iter().map(bounds).fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |a, b| (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3))),
     }
 }

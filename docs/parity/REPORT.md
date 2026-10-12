@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-09T22:44:53.309308+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-12T02:51:52.139006+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -23,7 +23,7 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_qa_pcb_import_success_rate` | 99.5% | 99.5% |
 | `roundtrip_qa_sch_import_success_rate` | 100.0% | 100.0% |
-| `roundtrip_reexport_fidelity_rate` | 50.0% | 50.0% |
+| `roundtrip_reexport_fidelity_rate` | 58.3% | 58.3% |
 
 ## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
 
@@ -68,13 +68,13 @@ _Measured 2026-10-04._
 
 ### KiCad QA corpus: `import_kicad_pcb` on all 185 real boards
 
-_Measured 2026-10-09._
+_Measured 2026-10-12._
 
 - imported ok: 184/185
 - zones skipped (no polygon, or no copper layer): 12
 - track arcs kept as arcs: 10946
 - Edge.Cuts items kept as shapes (arcs, circles, rectangles, curves, cutouts; none turned into chords): 513
-- non-rect pad shapes approximated as rect: 189
+- non-rect pad shapes approximated as rect: 0
 - boards whose outline didn't close into a loop: 1
 - boards whose Edge.Cuts are malformed by KiCad's own test (`invalid_outline`): 2 ['pcbnew/issue18839.kicad_pcb', 'pcbnew/issue24078/issue24078.kicad_pcb']
 - outline source breakdown: {'lines': 36, 'none': 37, 'shapes': 111}
@@ -91,14 +91,14 @@ Import failures (1):
 
 ### Re-export fidelity on 12 real QA boards (import -> our export -> kicad-cli DRC, vs kicad-cli DRC on the original)
 
-_Measured 2026-10-08._
+_Measured 2026-10-11._
 
 | board | original parses | re-export parses | identical violation-type counts | where kicad-cli's counts differ (type: original -> re-export) |
 |---|---|---|---|---|
-| api_kitchen_sink | True | True | False | `clearance`: 1 -> 0, `lib_footprint_issues`: 0 -> 2, `silk_overlap`: 2 -> 0 |
+| api_kitchen_sink | True | True | False | `clearance`: 1 -> 0, `lib_footprint_issues`: 0 -> 2 |
 | bad_triangulation_case | True | True | True |  |
-| complex_hierarchy | True | True | False | `clearance`: 112 -> 117, `copper_edge_clearance`: 14 -> 15, `lib_footprint_issues`: 0 -> 72, `shorting_items`: 0 -> 2, `silk_edge_clearance`: 14 -> 2, `silk_over_copper`: 104 -> 2, `silk_overlap`: 199 -> 5, `solder_mask_bridge`: 112 -> 115 |
-| component_classes | True | True | False | `lib_footprint_issues`: 0 -> 2, `lib_footprint_mismatch`: 14 -> 12 |
+| complex_hierarchy | True | True | False | `clearance`: 112 -> 117, `copper_edge_clearance`: 14 -> 15, `lib_footprint_issues`: 0 -> 72, `shorting_items`: 0 -> 2, `solder_mask_bridge`: 112 -> 115 |
+| component_classes | True | True | True |  |
 | component_classes_drc | True | True | False | `assertion_failure`: 2 -> 4 |
 | connection_width_rules | True | True | False | `clearance`: 0 -> 1 |
 | custom_fields | True | True | True |  |
@@ -110,12 +110,12 @@ _Measured 2026-10-08._
 
 What the remaining differences are (read from the two kicad-cli reports of each board; every re-export parses):
 
-- `lib_footprint_issues` / `lib_footprint_mismatch` (`api_kitchen_sink`, `component_classes`): the writer names a footprint `eda:<name>` when the source
+- `lib_footprint_issues` (`api_kitchen_sink`, `complex_hierarchy`): the writer names a footprint `eda:<name>` when the source
   gave it no library (`D5`, `bornier2`), and the board's own project reports library links as warnings, so kicad-cli flags a library that does not
   exist. The studio's derived project ignores both checks unless the project sets them (`effective_rule_severities`).
-- `silk_overlap`, `silk_over_copper`, `silk_edge_clearance`, `solder_mask_bridge`, `clearance` (`complex_hierarchy`, `api_kitchen_sink`): footprint-local
-  graphics (`fp_line`, `fp_circle`: 512 and 6 on `complex_hierarchy`) are imported into `drawings.footprint_extras`, which only the in-house DRC reads,
-  and the writer does not write them back. `api_kitchen_sink` also has a barcode item, which has no IR item.
+- `clearance`, `copper_edge_clearance`, `solder_mask_bridge`, `shorting_items` (`complex_hierarchy`, `api_kitchen_sink`): not analysed. The silkscreen types
+  (`silk_overlap`, `silk_over_copper`, `silk_edge_clearance`) are the original's since a footprint's graphics, its texts and its pads' silkscreen layer are
+  written back (`web/studio/PARITY-pcb.md` section 28); `api_kitchen_sink` also has a barcode item, which has no IR item.
 - `assertion_failure` (`component_classes_drc`): its rules test `A.Component_Class`; component classes are project data this importer does not read.
 - `missing_tuning_profile` (`drc_missing_tuning_profile`): tuning profiles are not read either.
 - `connection_width_rules`: one extra `clearance` violation, not analysed.
@@ -132,9 +132,9 @@ Every KiCad action in `web/studio/src/kicad/actions.json` is classified against 
 
 | editor | actions | handled | referenced | missing | missing with a reason | hotkeyed & not handled |
 |---|---:|---:|---:|---:|---:|---:|
-| pcbnew | 350 | 265 | 0 | 0 | 85 | 5 |
-| eeschema | 233 | 165 | 0 | 0 | 68 | 10 |
-| common | 183 | 144 | 0 | 0 | 39 | 3 |
+| pcbnew | 350 | 266 | 0 | 0 | 84 | 5 |
+| eeschema | 233 | 170 | 0 | 0 | 63 | 9 |
+| common | 183 | 150 | 0 | 0 | 33 | 2 |
 
 Behavior (not just the presence of an action) is tracked per feature in `web/studio/PARITY-pcb.md` and the ranked, actionable gaps in `docs/parity/GAPS.md`.
 

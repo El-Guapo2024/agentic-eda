@@ -2238,12 +2238,13 @@ pub struct DrawingsSection {
     /// re-applied automatically, matching source).
     #[serde(default)]
     pub dimension_settings: DimensionSettings,
-    /// Per-placed-footprint solder-mask/silk facts an imported board needs
-    /// but a library [`crate::Footprint`] + [`FootprintInstance`] cannot
-    /// carry (pad layer sets and mask margins, footprint graphics on the
-    /// silk/mask layers, net-tie groups, `allow_soldermask_bridges`). Read
-    /// only by `eda_drc`'s silk/solder-mask providers; empty for a design
-    /// that did not come from a `.kicad_pcb`.
+    /// Per-placed-footprint solder-mask facts an imported board needs but a
+    /// library [`crate::Footprint`] + [`FootprintInstance`] cannot carry (pad
+    /// layer sets and mask margins, mask-only pads, net-tie groups,
+    /// `allow_soldermask_bridges`, the zone facts). The footprint's silkscreen,
+    /// fab and mask graphics and its texts are not here any more: they are the
+    /// footprint's own ([`crate::fp_art::FpArt`], [`crate::Footprint::art`]).
+    /// Empty for a design that did not come from a `.kicad_pcb`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_extras: Vec<FootprintExtra>,
     /// Zone-connection edits made on the board to placed footprints and their pads (Footprint Properties and Pad Properties:
@@ -2364,6 +2365,12 @@ pub struct PadMaskInfo {
     /// (`*.Cu` -> every copper layer, `*.Mask` -> `F.Mask`+`B.Mask`).
     #[serde(default)]
     pub layers: Vec<String>,
+    /// The layers of the pad besides copper, paste and mask: the silkscreen, fab, courtyard and adhesive layers and the user ones (the
+    /// through-hole pads of an older library are on `F.SilkS`, and kicad-cli's silkscreen checks measure them there). Named as for a
+    /// top-side footprint, like [`crate::fp_art::FpArt`] (a back-side footprint's `B.SilkS` is `F.SilkS` here), so a footprint that is
+    /// flipped takes them to the other side; the writer puts them back into the pad's `(layers ..)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub art_layers: Vec<String>,
     /// `(solder_mask_margin ..)`: the pad's own margin override
     /// (`PADSTACK::SolderMaskMargin`); `None` inherits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2597,10 +2604,14 @@ pub struct FootprintExtra {
     pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
-    /// Footprint graphics on silk/mask layers, board space.
+    /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
+    /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
+    /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them
+    /// only for a footprint that has no art.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<FootprintGraphic>,
-    /// Visible footprint text (reference/value/user) on silk layers.
+    /// Visible footprint texts on silk layers, board space: likewise only in a design imported before footprints had texts of
+    /// their own ([`crate::fp_art::FpArt::texts`], and the Reference, Value and user fields of [`crate::fp_edit`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<FootprintText>,
 }
@@ -2838,6 +2849,9 @@ pub struct LibraryPad {
     /// `PAD::SetChamferPositions` -- which corners are cut.
     #[serde(default)]
     pub chamfer_corners: ChamferCorners,
+    /// A custom pad's anchor, clearance option and primitives (`PAD::GetPrimitives`); `Some` for `LibraryPadShape::Custom`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<crate::footprint::PadCustom>,
     /// KiCad layer names this pad occupies ("F.Cu", "F.Paste", "F.Mask",
     /// "*.Cu", ...) -- see this type's own doc on why the engine's `Pad`
     /// has nothing equivalent. Empty means "not set yet"; the Pad
@@ -2866,12 +2880,10 @@ pub struct LibraryPad {
 
 /// `PAD_SHAPE` (`pcbnew/padstack.h`) as the Footprint Editor exposes it --
 /// see `LibraryPad`'s own doc for why this is a distinct enum from
-/// `crate::footprint::PadShape` rather than an extension of it. Custom
-/// (primitive-based) pad shapes are not modeled -- KiCad's own Explode/
-/// Recombine editing mode for them is a substantial separate subsystem
-/// (see PARITY-fpedit.md); a `.kicad_mod` with a custom-shape pad can
-/// still be *opened* (the pad's anchor shape/size loads, the custom
-/// primitives are dropped with a warning), just not authored here.
+/// `crate::footprint::PadShape` rather than an extension of it. A custom
+/// pad keeps its primitives (`LibraryPad::custom`), so a `.kicad_mod` with
+/// one is opened and written back whole; KiCad's Explode/Recombine editing
+/// mode for them is a separate subsystem (see PARITY-fpedit.md).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LibraryPadShape {
@@ -2882,6 +2894,8 @@ pub enum LibraryPadShape {
     RoundRect,
     Trapezoid,
     ChamferedRect,
+    /// `PAD_SHAPE::CUSTOM`: an anchor (a circle or a rectangle of `size`) and `LibraryPad::custom`'s primitives.
+    Custom,
 }
 
 /// `PAD::SetChamferPositions`' four corner flags (`RECT_CHAMFER_TOP_LEFT`
@@ -2899,32 +2913,55 @@ pub struct ChamferCorners {
     pub bottom_right: bool,
 }
 
+impl ChamferCorners {
+    /// `RECT_CHAMFER_POSITIONS` (`convert_basic_shapes_to_polygon.h`): top left 1, top right 2, bottom left 4, bottom right 8.
+    pub fn bits(&self) -> u8 {
+        (self.top_left as u8) | (self.top_right as u8) << 1 | (self.bottom_left as u8) << 2 | (self.bottom_right as u8) << 3
+    }
+    pub fn from_bits(bits: u8) -> Self {
+        ChamferCorners { top_left: bits & 1 != 0, top_right: bits & 2 != 0, bottom_left: bits & 4 != 0, bottom_right: bits & 8 != 0 }
+    }
+    /// `RECT_NO_CHAMFER`.
+    pub fn is_none(&self) -> bool {
+        self.bits() == 0
+    }
+    /// The same corners seen in a mirror across the vertical axis (a left-right flip, `PAD::Flip`): left and right swap.
+    pub fn mirrored_x(&self) -> Self {
+        ChamferCorners { top_left: self.top_right, top_right: self.top_left, bottom_left: self.bottom_right, bottom_right: self.bottom_left }
+    }
+}
+
 impl LibraryPad {
     fn id_seed(&self) -> String {
         format!("{}|{},{}|{}x{}|{:?}|{:?}", self.number, self.at.x, self.at.y, self.size.0, self.size.1, self.shape, self.kind)
     }
 
     /// The same pad, as the engine's `crate::footprint::Pad` -- drops
-    /// `id`, `layers`, and the override fields (see this type's own doc),
-    /// and maps the two shapes the engine doesn't have down to the
-    /// closest one it does, so placement/routing/DRC still see a sane
-    /// bounding shape even though they can't draw the true outline:
-    /// `Trapezoid` -> `Rect` (its own bounding box -- `size` already is
-    /// the trapezoid's full bounding width/height, same convention
-    /// `PAD_SHAPE::TRAPEZOID`'s own `GetBoundingBox` uses), `ChamferedRect`
-    /// -> `RoundRect` (reuses `chamfer_ratio` as the roundrect ratio --
-    /// both express "fraction of the shorter side cut from the corner",
-    /// so the clearance-relevant corner inset is the same order of
-    /// magnitude even though one cuts a chamfer and the other a fillet).
+    /// `id`, `layers`, and the override fields (see this type's own doc).
+    /// Every shape has its engine twin, so the engine sees the pad's true
+    /// copper: a trapezoid with its deltas, a chamfered rectangle with its
+    /// ratio and corners, a custom pad with its anchor and primitives.
     pub fn to_engine_pad(&self) -> crate::footprint::Pad {
-        let (shape, roundrect_ratio) = match self.shape {
-            LibraryPadShape::Circle => (crate::footprint::PadShape::Circle, None),
-            LibraryPadShape::Rect | LibraryPadShape::Trapezoid => (crate::footprint::PadShape::Rect, None),
-            LibraryPadShape::Oval => (crate::footprint::PadShape::Oval, None),
-            LibraryPadShape::RoundRect => (crate::footprint::PadShape::RoundRect, self.roundrect_ratio),
-            LibraryPadShape::ChamferedRect => (crate::footprint::PadShape::RoundRect, self.chamfer_ratio),
+        use crate::footprint::PadShape as S;
+        let shape = match self.shape {
+            LibraryPadShape::Circle => S::Circle,
+            LibraryPadShape::Rect => S::Rect,
+            LibraryPadShape::Oval => S::Oval,
+            LibraryPadShape::RoundRect => S::RoundRect,
+            LibraryPadShape::Trapezoid => S::Trapezoid,
+            LibraryPadShape::ChamferedRect => S::ChamferedRect,
+            LibraryPadShape::Custom => S::Custom,
         };
-        crate::footprint::Pad { opposite_side: false,
+        // A rounded corner ratio belongs to a rounded or chamfered rectangle only.
+        let roundrect_ratio = if matches!(shape, S::RoundRect | S::ChamferedRect) { self.roundrect_ratio } else { None };
+        let ext = crate::footprint::PadShapeExt {
+            offset: (self.offset.x != 0 || self.offset.y != 0).then_some((self.offset.x, self.offset.y)),
+            trapezoid_delta: if shape == S::Trapezoid { self.trapezoid_delta.filter(|d| *d != (0, 0)) } else { None },
+            chamfer_ratio: if shape == S::ChamferedRect { self.chamfer_ratio } else { None },
+            chamfer_corners: if shape == S::ChamferedRect { self.chamfer_corners } else { ChamferCorners::default() },
+            custom: if shape == S::Custom { Some(self.custom.clone().unwrap_or_default()) } else { None },
+        };
+        crate::footprint::Pad { opposite_side: false, ext,
             number: self.number.clone(),
             at: (self.at.x, self.at.y),
             size: self.size,
@@ -2942,30 +2979,36 @@ impl LibraryPad {
     /// declared, or a real `.kicad_mod` library file) the first time the
     /// Footprint Editor opens it -- `id` is left empty (the caller backfills
     /// via `LibraryFootprint::assign_missing_ids`) and every editor-only
-    /// field (layers, overrides, trapezoid/chamfer) starts empty/`None`,
-    /// since the engine's own `Pad` never had one to read back.
+    /// field (layers, overrides) starts empty/`None`, since the engine's own
+    /// `Pad` never had one to read back (the shape's trapezoid, chamfer and
+    /// custom fields it has, and they come across whole).
     pub fn from_engine_pad(p: &crate::footprint::Pad) -> Self {
+        use crate::footprint::PadShape as S;
         let shape = match p.shape {
-            crate::footprint::PadShape::Rect => LibraryPadShape::Rect,
-            crate::footprint::PadShape::RoundRect => LibraryPadShape::RoundRect,
-            crate::footprint::PadShape::Circle => LibraryPadShape::Circle,
-            crate::footprint::PadShape::Oval => LibraryPadShape::Oval,
+            S::Rect => LibraryPadShape::Rect,
+            S::RoundRect => LibraryPadShape::RoundRect,
+            S::Circle => LibraryPadShape::Circle,
+            S::Oval => LibraryPadShape::Oval,
+            S::Trapezoid => LibraryPadShape::Trapezoid,
+            S::ChamferedRect => LibraryPadShape::ChamferedRect,
+            S::Custom => LibraryPadShape::Custom,
         };
         LibraryPad {
             id: String::new(),
             number: p.number.clone(),
             at: Point { x: p.at.0, y: p.at.1 },
             size: p.size,
-            offset: Point::default(),
+            offset: p.ext.offset.map(|(x, y)| Point { x, y }).unwrap_or_default(),
             shape,
             kind: p.kind,
             drill: p.drill,
             drill_slot: p.drill_slot,
             rot: p.rot,
             roundrect_ratio: p.roundrect_ratio,
-            trapezoid_delta: None,
-            chamfer_ratio: None,
-            chamfer_corners: ChamferCorners::default(),
+            trapezoid_delta: p.ext.trapezoid_delta,
+            chamfer_ratio: p.ext.chamfer_ratio,
+            chamfer_corners: p.ext.chamfer_corners,
+            custom: p.ext.custom.clone(),
             layers: Vec::new(),
             clearance_override: None,
             thermal_gap_override: None,
@@ -3098,9 +3141,13 @@ impl LibraryFootprint {
     /// at their defaults since `crate::footprint::Footprint` has no
     /// concept of any of them yet.
     pub fn from_engine_footprint(fp: &crate::footprint::Footprint) -> Self {
+        // The footprint's silkscreen, fab drawings and texts come across as the editor's graphics and texts (ids are backfilled by the caller).
+        let (graphics, texts) = fp.art.to_library();
         LibraryFootprint {
             name: fp.name.clone(),
             pads: fp.pads.iter().map(LibraryPad::from_engine_pad).collect(),
+            graphics,
+            texts,
             courtyard: fp.courtyard,
             model: fp.model.clone(),
             ..Default::default()
@@ -3108,13 +3155,23 @@ impl LibraryFootprint {
     }
 
     /// The reverse of `from_engine_footprint`/the basis for exporting a
-    /// derived `.kicad_mod` (GAPS.md #8 step 6): this footprint's pads
-    /// and courtyard/model as the engine's own `Footprint` -- graphics/
-    /// text/fields/attributes stay editor-only (the engine has no use for
-    /// silkscreen art or a BOM-exclude flag), same split `LibraryPad::
-    /// to_engine_pad`'s doc explains.
+    /// derived `.kicad_mod` (GAPS.md #8 step 6): this footprint's pads,
+    /// courtyard, model and its graphics and texts ([`crate::fp_art`]: the
+    /// silkscreen, the fab body and the texts a board shows) as the engine's own
+    /// `Footprint` -- fields/attributes stay editor-only (the engine has no use
+    /// for a BOM-exclude flag), same split `LibraryPad::to_engine_pad`'s doc
+    /// explains. A graphic on the courtyard or the board edge is not art (the
+    /// footprint's courtyard is the `courtyard` field).
     pub fn to_engine_footprint(&self) -> crate::footprint::Footprint {
-        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone(), courtyard_outlines: vec![], models3d: vec![] }
+        crate::footprint::Footprint {
+            name: self.name.clone(),
+            pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(),
+            courtyard: self.courtyard,
+            model: self.model.clone(),
+            courtyard_outlines: vec![],
+            models3d: vec![],
+            art: crate::fp_art::FpArt::from_library(&self.graphics, &self.texts),
+        }
     }
 
     /// Assign a deterministic id to every pad/graphic/text whose `id` is
@@ -4165,6 +4222,7 @@ mod tests {
             trapezoid_delta: None,
             chamfer_ratio: None,
             chamfer_corners: ChamferCorners::default(),
+            custom: None,
             layers: vec!["F.Cu".into()],
             clearance_override: None,
             thermal_gap_override: None,
@@ -4219,19 +4277,35 @@ mod tests {
     }
 
     #[test]
-    fn trapezoid_and_chamfered_pads_approximate_down_for_the_engine() {
+    fn trapezoid_chamfered_and_custom_pads_keep_their_shape_in_the_engine_and_come_back() {
+        use crate::footprint::{PadAnchor, PadCustom, PadPrimitive, PadShape};
         let mut trap = lib_pad("1", 0, 0);
         trap.shape = LibraryPadShape::Trapezoid;
+        trap.roundrect_ratio = None;
         trap.trapezoid_delta = Some((200, 0));
-        assert_eq!(trap.to_engine_pad().shape, crate::footprint::PadShape::Rect);
+        trap.offset = Point { x: 100, y: -50 };
+        let engine = trap.to_engine_pad();
+        assert_eq!((engine.shape, engine.ext.trapezoid_delta, engine.ext.offset), (PadShape::Trapezoid, Some((200, 0)), Some((100, -50))));
+        assert_eq!(LibraryPad::from_engine_pad(&engine).trapezoid_delta, Some((200, 0)));
 
         let mut chf = lib_pad("1", 0, 0);
         chf.shape = LibraryPadShape::ChamferedRect;
         chf.chamfer_ratio = Some(0.2);
-        chf.roundrect_ratio = None;
+        chf.chamfer_corners = ChamferCorners { top_left: true, ..Default::default() };
         let engine = chf.to_engine_pad();
-        assert_eq!(engine.shape, crate::footprint::PadShape::RoundRect);
-        assert_eq!(engine.roundrect_ratio, Some(0.2), "chamfer ratio stands in for roundrect ratio in the engine approximation");
+        assert_eq!((engine.shape, engine.roundrect_ratio, engine.ext.chamfer_ratio), (PadShape::ChamferedRect, Some(0.25), Some(0.2)), "the rounded corners keep their own ratio");
+        let back = LibraryPad::from_engine_pad(&engine);
+        assert_eq!((back.shape, back.chamfer_ratio, back.chamfer_corners, back.roundrect_ratio), (LibraryPadShape::ChamferedRect, Some(0.2), chf.chamfer_corners, Some(0.25)));
+
+        let mut custom = lib_pad("1", 0, 0);
+        custom.shape = LibraryPadShape::Custom;
+        custom.roundrect_ratio = None;
+        let prim = PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 100, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1000, y: 0 } }, proxy: false };
+        custom.custom = Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![prim] });
+        let engine = custom.to_engine_pad();
+        assert_eq!(engine.shape, PadShape::Custom);
+        assert_eq!(engine.ext.custom, custom.custom);
+        assert_eq!(LibraryPad::from_engine_pad(&engine).custom, custom.custom);
     }
 
     #[test]

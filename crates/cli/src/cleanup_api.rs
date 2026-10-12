@@ -2,8 +2,8 @@
 //! honorable mention): `POST /api/cleanup_tracks/{preview,apply}`.
 //!
 //! Stateless, same shape as `tune_api.rs`: every call reads `design.json`
-//! fresh, computes `eda_connectivity::cleanup::compute_cleanup` (the real
-//! `TRACKS_CLEANER` port) against it, and `apply` commits the result
+//! fresh, computes `eda_connectivity::cleanup::compute_cleanup_filtered` (the real
+//! `TRACKS_CLEANER` port, with the dialog's "Filter Items" box) against it, and `apply` commits the result
 //! through the existing `Cmd::CommitRoute` (no new `Cmd` variant needed --
 //! "remove these track/via ids, add these tracks" is exactly what a
 //! cleanup pass does). `apply` recomputes rather than trusting a client-
@@ -11,7 +11,8 @@
 //! browser tab, the CLI) can't apply stale removals.
 
 use crate::board;
-use eda_connectivity::cleanup::{compute_cleanup, CleanupChange, CleanupKind, CleanupOptions};
+use eda_connectivity::cleanup::{compute_cleanup_filtered, CleanupChange, CleanupKind, CleanupOptions};
+use eda_connectivity::cleanup_filter::CleanupFilter;
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -28,6 +29,18 @@ fn opts_of(req: &Value) -> CleanupOptions {
         merge_segments: b("merge_segments"),
         delete_dangling_tracks: b("delete_dangling_tracks"),
         delete_tracks_in_pads: b("delete_tracks_in_pads"),
+    }
+}
+
+/// The dialog's "Filter Items" box (`DIALOG_CLEANUP_TRACKS_AND_VIAS::doCleanup`'s `SetFilter`): a filter that is off has no key; `selected_ids` present --
+/// even when empty -- is "Selected items only".
+fn filter_of(req: &Value) -> CleanupFilter {
+    let name = |key: &str| req.get(key).and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
+    CleanupFilter {
+        net: name("filter_net"),
+        netclass: name("filter_netclass"),
+        layer: name("filter_layer"),
+        selected: req.get("selected_ids").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()),
     }
 }
 
@@ -63,7 +76,7 @@ pub fn preview(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
-    let report = compute_cleanup(&design, &model, opts_of(&req));
+    let report = compute_cleanup_filtered(&design, &model, opts_of(&req), &filter_of(&req));
     json!({
         "ok": true,
         "changes": report.changes.iter().map(change_json).collect::<Vec<_>>(),
@@ -81,7 +94,7 @@ pub fn apply(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
-    let report = compute_cleanup(&design, &model, opts_of(&req));
+    let report = compute_cleanup_filtered(&design, &model, opts_of(&req), &filter_of(&req));
     if report.changes.is_empty() {
         return json!({ "ok": true, "message": "nothing to clean up", "changes": [] });
     }

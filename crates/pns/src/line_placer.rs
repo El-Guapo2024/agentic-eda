@@ -75,6 +75,10 @@ use std::collections::{BTreeMap, HashMap};
 /// caller), so the two tools feel consistent.
 pub const SNAP_UM: Um = 500;
 
+/// How far off a point may be and still be the point: the studio's own snapping (`PcbSnap.routePoint`) has put the cursor exactly on a
+/// pad, a via, a track end or a track's centre line, and the rounding to whole micrometres moves it at most this much.
+pub const EXACT_UM: Um = 2;
+
 #[derive(Debug, Clone)]
 pub struct Preview {
     /// Already-fixed runs from earlier in this session, unchanged.
@@ -92,6 +96,9 @@ pub struct Preview {
     /// A same-net anchor near the cursor the route would snap onto and
     /// finish at, if committed now (`Move()`'s end-item snapping).
     pub snapped_end: Option<Point>,
+    /// `snapped_end` is in the middle of this same-net track (`SplitAdjacentSegments( m_lastNode, aEndItem, splitPoint )`): the route
+    /// ends on it, and finishing splits it there.
+    pub snapped_segment: Option<ItemId>,
     /// Other tracks/vias `Mode::Shove` would displace if this preview were
     /// accepted right now -- empty in every other mode. Transient, exactly
     /// like `head`: nothing here is real until `fix`/`finish` absorbs it.
@@ -141,6 +148,11 @@ pub struct LinePlacer {
     // ordered, so the commit a session produces does not depend on hash order
     displaced_tracks: BTreeMap<String, Vec<Line>>,
     displaced_vias: BTreeMap<String, Point>,
+    /// The segments the route cannot end on, even where the cursor is on them: the one it started in the middle of
+    /// (`pickSingleItem( mousePos, net, layer, false, { m_startItem } )`), and its two halves.
+    pub exclude_end: Vec<ItemId>,
+    /// Where the route ended, in the middle of a same-net track: that track is split there when the route is committed.
+    pub end_split: Option<(ItemId, Point)>,
 }
 
 impl LinePlacer {
@@ -155,20 +167,17 @@ impl LinePlacer {
             Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
             _ => Direction45::N,
         };
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new() }
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None }
     }
 
     pub fn fixed_start(&self) -> Point {
         self.runs.last().and_then(|r| r.last()).unwrap_or(self.origin)
     }
 
-    /// `ITEM::AnchorCount`-driven ids this session's own fixed runs may
-    /// have already been assembled from, when a run started life as (part
-    /// of) an existing track the user clicked into -- never the case for
-    /// freshly built runs, so always empty in this port today. Kept as its
-    /// own method (rather than inlined) because `build_head`'s exclusion
-    /// set is exactly where that would plug in if start-on-existing-track
-    /// splitting is added later.
+    /// The items `build_head`'s collision tests ignore: none. A route that starts in the middle of a track
+    /// (`SplitAdjacentSegments`, [`crate::router::Router::start`]) needs nothing here -- the two halves are on the
+    /// route's own net, which never collides with it. Kept as its own method (rather than inlined) because
+    /// that is where an exclusion set would plug in.
     fn exclude(&self) -> Vec<ItemId> {
         Vec::new()
     }
@@ -259,12 +268,26 @@ impl LinePlacer {
     /// disposable until [`Self::fix`]/[`Self::finish`] actually accepts it
     /// (see the module doc comment).
     pub fn preview(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Preview {
-        let snapped_end = node.nearest_anchor(p, LayerRange::single(self.current_layer), SNAP_UM, Some(&self.net)).map(|(_, a)| a);
+        let (mut snapped_end, snapped_segment) = self.snap_end(node, settings, p);
         let target = snapped_end.unwrap_or(p);
         let head_result = self.build_head(node, rules, settings, target);
         let mut colliding = head_result.colliding;
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
         head.simplify();
+        // `Move`: a route that ends on a track it runs along (its last segment collinear with the track's and overlapping it) ends
+        // where it first touches the track, not at the cursor further along it
+        if let (Some(seg), true) = (snapped_segment, head.segment_count() > 0) {
+            if let Some(Item::Segment(target_seg)) = node.get(seg) {
+                let n = head.pts.len();
+                let (last_seg, track) = ((head.pts[n - 2], head.pts[n - 1]), (target_seg.a, target_seg.b));
+                if crate::seg_ops::collinear(track, last_seg) && crate::seg_ops::overlaps(track, last_seg) {
+                    let split_point = eda_drc::kimath::Seg::new(track.0, track.1).nearest_point(last_seg.0);
+                    head.pts[n - 1] = split_point;
+                    head.simplify();
+                    snapped_end = Some(split_point);
+                }
+            }
+        }
         let via = if self.placing_via {
             let via_pos = head.last().unwrap_or(target);
             let placed = self.place_via(node, rules, settings, via_pos, self.current_layer);
@@ -276,7 +299,31 @@ impl LinePlacer {
         } else {
             None
         };
-        Preview { runs: self.runs.clone(), head, colliding, via, snapped_end, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
+        Preview { runs: self.runs.clone(), head, colliding, via, snapped_end, snapped_segment, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
+    }
+
+    /// Where a cursor at `p` ends the route, if it does (`TOOL_BASE::updateEndItem`, `pickSingleItem` for the net, `snapToItem`): on
+    /// the same-net pad, via or track end it is on or near; or, with "snap to tracks" (the magnetic setting), in the middle of the
+    /// same-net track it is on -- the studio's own snapping has put it exactly on the centre line -- which is then split there. The
+    /// track the route started in the middle of is not an end. `(the point, the track when it is in the middle of one)`.
+    fn snap_end(&self, node: &Node, settings: &RoutingSettings, p: Point) -> (Option<Point>, Option<ItemId>) {
+        let layers = LayerRange::single(self.current_layer);
+        if let Some((_, a)) = node.nearest_anchor(p, layers, EXACT_UM, Some(&self.net)) {
+            return (Some(a), None);
+        }
+        if settings.snap_to_tracks {
+            if let Some(id) = node.segment_at(p, self.current_layer, Some(&self.net), Some(EXACT_UM), &self.exclude_end) {
+                if let Some(Item::Segment(s)) = node.get(id) {
+                    let seg = eda_drc::kimath::Seg::new(s.a, s.b);
+                    let on = if seg.sq_distance_to_point(p) == 0 { p } else { seg.nearest_point(p) };
+                    return (Some(on), Some(id));
+                }
+            }
+        }
+        match node.nearest_anchor(p, layers, SNAP_UM, Some(&self.net)) {
+            Some((_, a)) => (Some(a), None),
+            None => (None, None),
+        }
     }
 
     /// `LINE_PLACER::FixRoute`'s own `!Settings().AllowDRCViolations()`
@@ -332,6 +379,9 @@ impl LinePlacer {
             return if preview.snapped_end.is_some() { FixOutcome::Fixed { real_end: true } } else { FixOutcome::Blocked };
         }
         let real_end = preview.snapped_end.is_some();
+        if real_end {
+            self.record_end_split(&preview);
+        }
         // `FixRoute`: with "Fix all segments on click" off, a click that does not end the route fixes every segment but
         // the last, which stays free and follows the cursor; the next leg starts where the last one began
         // (`m_currentStart = p_pre_last`) and continues in the direction of the one before it (`lastDirSeg = CSegment( -2 )`).
@@ -345,6 +395,16 @@ impl LinePlacer {
         self.runs.push(head);
         self.placement_correct = true;
         FixOutcome::Fixed { real_end }
+    }
+
+    /// A route that ends in the middle of a track splits it where it ends (`Move`: `SplitAdjacentSegments( m_lastNode, aEndItem,
+    /// splitPoint )`, when the head `reachesEnd`): remember where, for the commit.
+    fn record_end_split(&mut self, preview: &Preview) {
+        if let (Some(seg), Some(end)) = (preview.snapped_segment, preview.snapped_end) {
+            if preview.head.last() == Some(end) {
+                self.end_split = Some((seg, end));
+            }
+        }
     }
 
     /// `LINE_PLACER::ToggleViaPlacement` + the layer-switch half of the
@@ -416,6 +476,9 @@ impl LinePlacer {
         }
         self.absorb_displacement(&preview);
         let real_end = preview.snapped_end.is_some();
+        if real_end {
+            self.record_end_split(&preview);
+        }
         if preview.head.point_count() >= 2 {
             self.runs.push(preview.head);
         }

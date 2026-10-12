@@ -26,6 +26,7 @@ mod bom_plugins;
 mod cleanup_api;
 mod convert_api;
 mod fab_api;
+mod fp_art_json;
 mod fp_json;
 mod append_api;
 mod graphics_api;

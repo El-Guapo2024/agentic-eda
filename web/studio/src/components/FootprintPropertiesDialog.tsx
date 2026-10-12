@@ -149,7 +149,8 @@ export function FootprintPropertiesDialog() {
       const pivot = { x: Math.round(x), y: Math.round(y) };
       cmds.push({ op: "rotate_items", ids: [part.ref], pivot, angle_millideg: Math.round(-turn * 1000) });
     }
-    if (bottom !== (part.side === "bottom")) cmds.push({ op: "flip_items", ids: [part.ref], pivot: { x: Math.round(x), y: Math.round(y) }, direction: "left_right" });
+    // A change of side flips the footprint across the axis the preferences say (`m_FlipDirection`, `DIALOG_FOOTPRINT_PROPERTIES::TransferDataFromWindow`).
+    if (bottom !== (part.side === "bottom")) cmds.push({ op: "flip_items", ids: [part.ref], pivot: { x: Math.round(x), y: Math.round(y) }, direction: state.prefs.flipDirection });
     if (locked !== (board?.locked ?? []).includes(part.ref)) cmds.push({ op: "set_locked", ids: [part.ref], locked });
 
     // The zone connection of the footprint, and of every pad whose fields were changed: the overlay the zone filler reads.

@@ -15,6 +15,7 @@
 //! `placement.footprints`. A pasted footprint whose reference is a part of this board that is not placed (one that was
 //! deleted, or cut) is placed again instead, the way an undo of the delete would.
 
+use super::pcb_paste_special::{PasteMode, DEFAULT_REFERENCE};
 use super::Board;
 use eda_kicad::{ClipRef, Clipboard};
 use eda_model::fp_edit::FootprintEdit;
@@ -60,6 +61,23 @@ pub(crate) struct FootprintCopy {
     pub(crate) zone_overrides: Option<FootprintZoneOverrides>,
     /// A paste puts a part of this board that is not placed back, rather than making a second one.
     pub(crate) reuse_unplaced: bool,
+    /// What the reference text of the copy says when its id is not the reference it came with (`PASTE_MODE`, [`PasteMode`]). A Duplicate and
+    /// an array make unique references; Paste's default is KiCad's (keep).
+    pub(crate) annotation: PasteMode,
+}
+
+impl FootprintCopy {
+    /// The text the copy's Reference field shows, given the id (the reference) it ends up under: nothing special when it is the id.
+    /// `shown_reference` is an array's "Keep original reference designators"; otherwise it is the mode's
+    /// (`PCB_CONTROL::Paste`: `KEEP_ANNOTATIONS` leaves the reference the clipboard had, even if another footprint has it;
+    /// `REMOVE_ANNOTATIONS` sets `REF**`; `UNIQUE_ANNOTATIONS` renumbered it, so the text is the id).
+    pub(crate) fn shown_text(&self, id: &str) -> Option<String> {
+        self.shown_reference.clone().or_else(|| match self.annotation {
+            PasteMode::Unique => None,
+            PasteMode::Keep => (id != self.reference).then(|| self.reference.clone()),
+            PasteMode::Remove => Some(DEFAULT_REFERENCE.to_string()),
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -307,6 +325,7 @@ impl Board<'_> {
                 shown_reference: None,
                 zone_overrides,
                 reuse_unplaced: false,
+                annotation: PasteMode::Unique,
             });
             return Some(Member::Footprint(copies.footprints.len() - 1));
         }
@@ -358,22 +377,22 @@ impl Board<'_> {
     // ----------------------------------------------------------------- paste
 
     /// `Cmd::PasteClipboard`: the KiCad clipboard `text`, put on the board with the clipboard's origin (the copy's reference
-    /// point) at `at`.
+    /// point) at `at`. A plain Paste is `PASTE_MODE::KEEP_ANNOTATIONS` with the nets kept (`PCB_CONTROL::Paste`); Paste Special
+    /// is [`Board::paste_special`].
     pub(crate) fn paste_clipboard(&mut self, text: &str, at: Point) -> Result<(), Vec<CheckResult>> {
-        let clip = eda_kicad::parse_pcb_clipboard(text).map_err(|e| vec![CheckResult::fail("ops_bad_clipboard", "paste", e.iter().map(|c| c.hint.clone().unwrap_or_else(|| c.check.clone())).collect::<Vec<_>>().join("; "))])?;
-        let copies = self.copies_from_clipboard(&clip, at);
-        if copies.is_empty() {
-            return Err(vec![CheckResult::fail("ops_bad_clipboard", "paste", "nothing on the clipboard fits this board: its copper is on layers the board does not have")]);
-        }
-        self.insert_copies_all(copies)
+        self.paste_special(text, at, PasteMode::default(), false)
     }
 
-    fn copies_from_clipboard(&self, clip: &Clipboard, at: Point) -> Copies {
+    pub(super) fn copies_from_clipboard(&self, clip: &Clipboard, at: Point, mode: PasteMode, clear_nets: bool) -> Copies {
         let mv = |p: Point| Point { x: p.x + at.x, y: p.y + at.y };
         let layers = &self.model.board.layers;
         let copper_ok = |l: &str| !is_copper_layer(l) || layers.iter().any(|b| b == l);
         // The nets a pasted footprint brings with it count as the board's own for the copper pasted alongside.
         let new_nets: BTreeSet<String> = clip.footprints.iter().flat_map(|f| f.pad_nets.iter().map(|(_, n)| n.clone())).collect();
+        // "Clear net assignments" (`item->SetNet( NETINFO_LIST::OrphanedItem() )` for every connected item of a pasted board; the dialog does
+        // not offer it for a lone footprint, whose copy has no nets anyway).
+        let clear = clear_nets && !clip.bare_footprint;
+        let net_of = |net: &str| -> String { if clear { String::new() } else { self.net_or_none(net, &new_nets) } };
 
         let mut copies = Copies::default();
         let mut track_ix: Vec<Option<usize>> = Vec::new();
@@ -383,7 +402,7 @@ impl Board<'_> {
                 continue;
             }
             let mut c = t.clone();
-            c.net = self.net_or_none(&t.net, &new_nets);
+            c.net = net_of(&t.net);
             c.pins.clear();
             c.pts = t.pts.iter().map(|p| mv(*p)).collect();
             track_ix.push(Some(copies.tracks.len()));
@@ -396,7 +415,7 @@ impl Board<'_> {
                 continue;
             }
             let mut c = v.clone();
-            c.net = self.net_or_none(&v.net, &new_nets);
+            c.net = net_of(&v.net);
             c.at = mv(v.at);
             via_ix.push(Some(copies.vias.len()));
             copies.vias.push(c);
@@ -408,7 +427,7 @@ impl Board<'_> {
                 continue;
             }
             let mut c = z.clone();
-            c.net = if z.is_rule_area { String::new() } else { self.net_or_none(&z.net, &new_nets) };
+            c.net = if z.is_rule_area { String::new() } else { net_of(&z.net) };
             c.parent_footprint = None;
             c.outline = z.outline.iter().map(|p| mv(*p)).collect();
             zone_ix.push(Some(copies.zones.len()));
@@ -448,11 +467,12 @@ impl Board<'_> {
                 side: f.side,
                 label: f.label,
                 // KiCad's single-footprint clipboard has no nets: its pads stay on none.
-                pad_nets: f.pad_nets.clone(),
+                pad_nets: if clear { vec![] } else { f.pad_nets.clone() },
                 edit: self.clip_edit(f),
                 shown_reference: None,
                 zone_overrides: f.zone_overrides.clone(),
                 reuse_unplaced: true,
+                annotation: mode,
             });
         }
         for g in &clip.groups {
@@ -533,12 +553,13 @@ impl Board<'_> {
         let own_edit = |f: &FootprintCopy, reference: &str, pose: &FootprintInstance| -> Option<FootprintEdit> {
             let mut e = f.edit.clone().unwrap_or_else(|| FootprintEdit::new(reference));
             e.id = reference.to_string();
+            let shown = f.shown_text(reference);
             if let Some(l) = e.reference.as_mut() {
-                l.text = f.shown_reference.clone();
-            } else if let Some(shown) = f.shown_reference.as_ref() {
+                l.text = shown;
+            } else if let Some(shown) = shown.as_ref() {
                 // Keeping the original's reference text: the layout the Reference had by default, with that text.
                 let part = self.model.part(&f.reference);
-                let footprint = part.and_then(|p| self.model.footprint_of(p)).or_else(|| f.definition.clone()).unwrap_or(Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] });
+                let footprint = part.and_then(|p| self.model.footprint_of(p)).or_else(|| f.definition.clone()).unwrap_or(Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() });
                 let mut l = eda_model::fp_edit::default_reference_layout(pose, &footprint);
                 l.text = Some(shown.clone());
                 e.reference = Some(l);

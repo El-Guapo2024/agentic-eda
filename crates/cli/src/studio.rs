@@ -763,12 +763,28 @@ fn handle(
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
+            // `"carry": "begin"` / `"commit"`: the command starts or ends a carried placement (Duplicate and Paste and the drop are one undo step; `carry.rs`).
+            let carry = req.get("carry").and_then(Value::as_str).and_then(board::carry::Carry::parse);
             let reply = match serde_json::from_value::<eda_ops::Cmd>(req.get("cmd").cloned().unwrap_or(Value::Null)) {
                 Err(e) => json!({ "ok": false, "message": format!("not a board command: {e}") }),
-                Ok(cmd) => match board::step(dir, cmd, strict, "ui") {
+                Ok(cmd) => match board::step_carrying(dir, cmd, if strict { board::Strictness::Gates } else { board::Strictness::Off }, "ui", carry) {
                     Ok(summary) => json!({ "ok": true, "message": summary }),
                     Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
                 },
+            };
+            respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
+        }
+        // The end of a carried placement without a command of its own: `{"action": "commit"}` (a drop where the items already were) or `{"action": "cancel"}` (Escape).
+        ("POST", "/api/carry") => {
+            let req: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let done = match req.get("action").and_then(Value::as_str) {
+                Some("commit") => board::carry::commit(dir),
+                Some("cancel") => board::carry::cancel(dir, "ui"),
+                _ => Err(vec![eda_model::CheckResult::fail("board_bad_carry", "carry", "the action is commit or cancel")]),
+            };
+            let reply = match done {
+                Ok(summary) => json!({ "ok": true, "message": summary }),
+                Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
             };
             respond(stream, "200 OK", "application/json", reply.to_string().as_bytes())
         }
@@ -823,6 +839,7 @@ fn handle(
         ("POST", "/api/route/undo_segment") => respond(stream, "200 OK", "application/json", route_api::undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/via") => respond(stream, "200 OK", "application/json", route_api::via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/finish") => respond(stream, "200 OK", "application/json", route_api::finish(dir, route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/continue_from_end") => respond(stream, "200 OK", "application/json", route_api::continue_from_end(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/cancel") => respond(stream, "200 OK", "application/json", route_api::cancel(route_session).to_string().as_bytes()),
         ("POST", "/api/route/mode") => respond(stream, "200 OK", "application/json", route_api::set_mode(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/settings") => respond(stream, "200 OK", "application/json", route_api::set_settings(route_session, &body).to_string().as_bytes()),
@@ -994,6 +1011,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                 // The footprint's fields as laid out on the board, and its attributes.
                 p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
+                // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
+                crate::fp_art_json::add_art(&mut p, part, fp, footprint);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
@@ -1007,7 +1026,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
-            p["body"] = json!(crate::body_api::placed_body(&body_libs, &design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            // The footprint's own fab drawings first (they are what the board draws), else the library's.
+            p["body"] = json!(resolved.as_ref().and_then(|f| crate::fp_art_json::placed_body(fp, f)).or_else(|| crate::body_api::placed_body(&body_libs, &design, part, fp)).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's 3D models with the placement its footprint gives each, and whether KiCad counts it a through-hole, SMD or virtual model: what the 3D
             // view loads (`GET /api/3dmodel`) and places. Absent when the footprint names no model: the view then draws the body box.
             if let Some(models) = resolved.as_ref().and_then(|f| crate::model3d_api::part_json(&model, part, f)) {
@@ -1221,7 +1241,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
 /// -- the same convention `outline`/`pts` already use elsewhere in this
 /// API, so a `(add|move|delete)_shape` command and this read use the same
 /// shape.
-fn shape_json(s: &Shape) -> Value {
+pub(crate) fn shape_json(s: &Shape) -> Value {
     let pt = |p: eda_model::ir::Point| json!([p.x, p.y]);
     match s {
         Shape::Segment { id, layer, stroke_width, filled, start, end } => {

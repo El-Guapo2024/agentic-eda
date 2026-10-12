@@ -19,7 +19,8 @@ import { toCmdDimension } from "../kicad-port/dimensionConvert";
 import type { Cmd, CmdDimensionKind } from "../api/types";
 import { isActionEnabledForTab } from "../kicad-port/actionTabGate";
 import { zoomAbout, fitTransform, boundsOfPoints, worldToScreen, panByWorldDelta, screenToWorld } from "../components/canvas/view";
-import { finishInteractiveRoute, cancelInteractiveRoute, startInteractiveRoute } from "../components/canvas/routing";
+import { finishInteractiveRoute, cancelInteractiveRoute, continueInteractiveRouteFromEnd, startInteractiveRoute } from "../components/canvas/routing";
+import { withTrackSnapping } from "../kicad-port/routerSettings";
 import { clearRouteQueue, startRouteQueue, type QueueOutcome } from "../components/canvas/routeQueue";
 import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fetchErc, routeStart, routeFinish, routeCancel, downloadKicadPcb, downloadKicadSchematic } from "../api/client";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
@@ -27,11 +28,9 @@ import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, t
 import { nextMarker } from "../kicad-port/markerNav";
 import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
-import { snapPoint } from "../components/canvas/gridHelper";
-import { findNearestEdgeInsertionIndex, insertCorner } from "../kicad-port/zonePointEditor";
-import { editableSelection, flipPivot, rotationPivot } from "../kicad-port/pcbTransform";
+import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
-import { grabNearestUnconnectedFootprints, movableItem, otherEndOfStart, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
+import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
@@ -39,7 +38,7 @@ import { finishDiffPairRoute } from "../components/canvas/diffPairRouting";
 import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
-import { expandConnection, type ConnTrack, type ConnVia, type StartPoint } from "../kicad-port/expandConnection";
+import { connectedStartCount, expandedSelection, planSelectConnection } from "../kicad-port/pcbConnection";
 import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
 import type { SchTurn } from "../api/schEditTypes";
@@ -95,6 +94,9 @@ import { registerPcbMenuActions } from "./pcbMenuActions";
 import { registerAppearanceActions } from "./appearanceActions";
 import { nextContrastMode } from "../kicad-port/appearance";
 import { registerPcbFindActions } from "./pcbFindActions";
+import { registerPcbEditDetailsActions } from "./pcbEditDetailsActions";
+import { modificationSnapFor } from "../state/modificationSnap";
+import { toggledUnits } from "../kicad-port/unitToggle";
 import { layerPairsOf } from "./pcbRouterSweep";
 import { picker } from "./pcbPicker";
 import { otherLayerOfPair } from "../kicad-port/layerPairs";
@@ -234,11 +236,13 @@ export function useActionRunner() {
       if (kind === "pcb" && state.board && !state.movePreview) {
         refs = editableSelection(state.board, refs).ids;
         if (refs.length === 0) return false;
-        const snap = (p: readonly [number, number]): [number, number] => snapPoint(p[0], p[1], state.gridUm);
-        pivots = { pivotUm: rotationPivot(state.board, refs, snap) ?? undefined, flipPivotUm: flipPivot(state.board, refs) ?? undefined };
+        pivots = { pivotUm: rotationPivot(state.board, refs, modificationSnapFor(state)) ?? undefined, flipPivotUm: flipPivot(state.board, refs) ?? undefined };
       }
       const base = state.movePreview ?? { refs, kind, dxUm: 0, dyUm: 0, ...pivots };
-      const rotateQuarterTurns = addQuarterTurns ? (((base.rotateQuarterTurns ?? 0) + addQuarterTurns) % 4 + 4) % 4 : base.rotateQuarterTurns;
+      // Each press turns by the preferences' rotation step (`m_RotationAngle`); on a board viewed flipped the turn runs the other way (`EDIT_TOOL::Rotate`:
+      // `if( IsFlippedX() ) rotateAngle = -rotateAngle`). The callers pass 1 for R and 3 (a quarter turn back) for Shift+R.
+      const press = (addQuarterTurns === 3 ? -1 : addQuarterTurns) * (state.tab === "pcb" && state.bcx.boardFlipped ? -1 : 1);
+      const rotateQuarterTurns = addQuarterTurns ? wrapTurns((base.rotateQuarterTurns ?? 0) + press, state.prefs.rotationStepDeg) : base.rotateQuarterTurns;
       const flipped = toggleFlip ? !base.flipped : base.flipped;
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { ...base, rotateQuarterTurns, flipped } });
       return true;
@@ -622,15 +626,9 @@ export function useActionRunner() {
       })
     );
 
-    m.set(
-      "pcbnew.EditorControl.toggleNetHighlight",
-      pcbOnly(() => {
-        const ref = [...state.selection][0];
-        const part = ref ? api.partByRef(ref) : undefined;
-        const net = part?.pads?.[0]?.net ?? null;
-        dispatch({ type: "SET_NET_HIGHLIGHT", net: state.netHighlight ? null : net });
-      })
-    );
+    // board_inspection_tool.cpp HighlightNet( toggleNetHighlight ), Alt+`: not selection-driven -- the highlight goes off, or the nets that were last highlighted
+    // come back (`turnOn = highlighted.empty() && !m_currentlyHighlighted.empty()`).
+    m.set("pcbnew.EditorControl.toggleNetHighlight", pcbOnly(() => dispatch({ type: "TOGGLE_NET_HIGHLIGHT" })));
     // board_inspection_tool.cpp BOARD_INSPECTION_TOOL::highlightNet, the
     // real "`" key (cursor-driven, NOT selection-driven -- a different
     // action, `highlightNetSelection`, is the selection-based one, and
@@ -651,52 +649,30 @@ export function useActionRunner() {
     // board_inspection_tool.cpp BOARD_INSPECTION_TOOL::ClearHighlight ("~").
     m.set("pcbnew.EditorControl.clearHighlight", pcbOnly(() => dispatch({ type: "SET_NET_HIGHLIGHT", net: null })));
 
-    // pcb_selection_tool.cpp expandConnection ("U" -- Select/Expand
-    // Connection): seed points from every currently-selected track/via's
-    // own endpoints plus every pad of a selected footprint, each on its
-    // own net, and flood outward (kicad-port/expandConnection.ts).
+    // pcb_selection_tool.cpp expandConnection ("U" -- Select/Expand Connection): seed points from every currently-selected track/via's
+    // own endpoints, every selected pad and every pad of a selected footprint, each on its own net, and flood outward (kicad-port/expandConnection.ts).
+    // With no footprint or connected item selected it takes the one under the cursor first (`selectCursor( true, connectedItemFilter )`,
+    // kicad-port/pcbConnection.ts).
     m.set(
       "pcbnew.InteractiveSelection.SelectConnection",
       pcbOnly(() => {
-        const refs = computeConnectionRefs(state.selection);
-        if (refs) dispatch({ type: "SET_SELECTION", refs });
+        const board = state.board;
+        if (!board) return;
+        const cursor = state.cursorUm;
+        const candidates =
+          cursor && connectedStartCount(board, state.selection) === 0
+            ? pickSelectionCandidates(board, cursor.x, cursor.y, Math.max(150, 6 / state.view.scale), 1 / state.view.scale, state.selectionFilter, state.layerVisible, state.activeLayer, state.highContrast, state.selection, false, false)
+            : [];
+        const plan = planSelectConnection(board, state.selection, candidates);
+        if (plan) dispatch({ type: "SET_SELECTION", refs: plan.refs });
       })
     );
     /**
-     * The body of `SelectConnection` above, factored out so `deleteFull`
-     * (`pcbnew.InteractiveEdit.deleteFull`, whose `REMOVE_FLAGS::ALT` runs
-     * `PCB_ACTIONS::selectConnection` before deleting) expands exactly the
-     * same way: `selection` plus everything `expandConnection` adds, or null
-     * when nothing in it can seed a flood.
+     * `deleteFull` (`pcbnew.InteractiveEdit.deleteFull`, whose `REMOVE_FLAGS::ALT` runs `PCB_ACTIONS::selectConnection` before deleting) expands exactly the same way:
+     * `selection` plus everything `expandConnection` adds, or null when nothing in it can seed a flood.
      */
     function computeConnectionRefs(selection: ReadonlySet<string>): string[] | null {
-      const board = state.board;
-      if (!board) return null;
-      const tracks: ConnTrack[] = (board.routing?.tracks ?? []).map((t) => ({ id: t.id, net: t.net, start: t.pts[0]!, end: t.pts[t.pts.length - 1]! })).filter((t) => t.start && t.end);
-      const vias: ConnVia[] = (board.routing?.vias ?? []).map((v) => ({ id: v.id, net: v.net, at: [v.x, v.y] }));
-      const startPoints: StartPoint[] = [];
-      const selectedTrackIds: string[] = [];
-      const selectedViaIds: string[] = [];
-      for (const id of selection) {
-        const t = api.trackById(id);
-        const v = api.viaById(id);
-        const p = api.partByRef(id);
-        if (t) {
-          selectedTrackIds.push(id);
-          startPoints.push({ point: t.pts[0]!, net: t.net }, { point: t.pts[t.pts.length - 1]!, net: t.net });
-        } else if (v) {
-          selectedViaIds.push(id);
-          startPoints.push({ point: [v.x, v.y], net: v.net });
-        } else if (p?.placed) {
-          for (const pad of p.pads ?? []) if (pad.net) startPoints.push({ point: [pad.x, pad.y], net: pad.net });
-        }
-      }
-      if (startPoints.length === 0) return null;
-      const result = expandConnection(tracks, vias, startPoints, { trackIds: selectedTrackIds, viaIds: selectedViaIds });
-      const refs = new Set(selection);
-      for (const id of result.trackIds) refs.add(id);
-      for (const id of result.viaIds) refs.add(id);
-      return [...refs];
+      return state.board ? expandedSelection(state.board, selection) : null;
     }
 
     const fitToBoard = viewTab(() => {
@@ -879,9 +855,9 @@ export function useActionRunner() {
     m.set("common.Control.metricUnits", () => dispatch({ type: "SET_UNITS", units: "mm" }));
     m.set("common.Control.imperialUnits", () => dispatch({ type: "SET_UNITS", units: "in" }));
     m.set("common.Control.mils", () => dispatch({ type: "SET_UNITS", units: "mil" }));
-    // Real KiCad toggles between its last-used metric/imperial unit; this
-    // app has a third (mil), folded into "imperial" for this one action.
-    m.set("common.Control.toggleUnits", () => dispatch({ type: "SET_UNITS", units: state.units === "mm" ? "in" : "mm" }));
+    // COMMON_TOOLS::ToggleUnits: `IsImperialUnit( units ) ? m_metricUnit : m_imperialUnit` -- from inches or mils to millimetres, and from millimetres to the
+    // imperial unit that was last chosen (`SwitchUnits` remembers it: `lastImperialUnit`), so Ctrl+U returns to mils after mils were picked.
+    m.set("common.Control.toggleUnits", () => dispatch({ type: "SET_UNITS", units: toggledUnits(state.units, state.lastImperialUnit) }));
 
     m.set("pcbnew.Control.padDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_PADS" }));
     m.set("pcbnew.Control.trackDisplayMode", () => dispatch({ type: "TOGGLE_SKETCH_TRACKS" }));
@@ -1916,22 +1892,7 @@ export function useActionRunner() {
       m.set("pcbnew.EditorControl.lineMode45", pcbOnly(() => dispatch({ type: "PCBX", patch: { angleSnapMode: "45" } })));
       m.set("pcbnew.EditorControl.lineModeOrthonal", pcbOnly(() => dispatch({ type: "PCBX", patch: { angleSnapMode: "90" } })));
 
-      // ---- addCorner (Insert; the extractor kept only macOS's F1) -- pcb_point_editor.cpp PCB_POINT_EDITOR::addCorner: a new corner on the single selected zone's outline, at the point of the nearest edge under the cursor.
-      if (state.selection.size === 1 && state.cursorUm) {
-        const zone = api.zoneById([...state.selection][0]!);
-        const at = state.cursorUm;
-        if (zone) {
-          m.set(
-            "pcbnew.PointEditor.addCorner",
-            pcbOnly(() => {
-              const idx = findNearestEdgeInsertionIndex(zone.outline, at.x, at.y, Math.max(300, 10 / state.view.scale));
-              if (idx == null) return;
-              const [sx, sy] = snapPoint(at.x, at.y, board?.snap ?? state.gridUm);
-              void api.cmd({ op: "set_zone_outline", id: zone.id, outline: insertCorner(zone.outline, idx, sx, sy).map(([x, y]) => ({ x, y })) });
-            })
-          );
-        }
-      }
+      // ---- addCorner (Insert): pcb_point_editor.cpp PCB_POINT_EDITOR::addCorner -- actions/pcbEditDetailsActions.ts.
 
       // ---- EditFpInFpEditor (Ctrl+E) / EditLibFpInFpEditor (Ctrl+Shift+E) -- board_editor_control.cpp BOARD_EDITOR_CONTROL::EditFpInFpEditor / EditLibFpInFpEditor.
       // The Footprint Editor is its own store; useFootprintEditHotkey.ts performs the request. This model's board footprint IS its library footprint (by name), so both open that name.
@@ -1989,7 +1950,7 @@ export function useActionRunner() {
           }
           dispatch({ type: "SET_SELECTION", refs: [] });
           const width = state.currentTrackWidthUm ?? board.board_rules?.track_width ?? 250;
-          const settings = state.routerSettings;
+          const settings = withTrackSnapping(state.routerSettings, state.prefs.magneticTracks);
           const handOver = async (at: [number, number], layer: string): Promise<QueueOutcome> => {
             dispatch({ type: "SET_ACTIVE_TOOL", tool: "route" });
             return (await startInteractiveRoute(at[0], at[1], layer, width, settings, dispatch)) ? "live" : "done";
@@ -2026,24 +1987,17 @@ export function useActionRunner() {
       m.set("pcbnew.InteractiveRouter.RouteSelectedFromEnd", routeSelected("fromEnd"));
       m.set("pcbnew.InteractiveRouter.Autoroute", routeSelected("auto"));
 
-      // ---- ContinueFromEnd (Ctrl+E while routing) -- router_tool.cpp `routerContinueFromEnd` -> pns_router.cpp ROUTER::ContinueFromEnd: restart the route from the far end of its
-      // ratsnest line. Only before anything was fixed (source's `HasPlacedAnything()` false case: nothing to carry over); the live session is replaced.
+      // ---- ContinueFromEnd (Ctrl+E while routing) -- router_tool.cpp `routerContinueFromEnd` -> pns_router.cpp ROUTER::ContinueFromEnd: what the route has fixed is committed (nothing, if nothing was)
+      // and a new route starts at the far end of the connection, heading for where this one's head ended. Before the first fix and after it alike; the router finds the far end
+      // (`GetNearestRatnestAnchor`: the nearest unconnected pad, via or track of the net, the fixed segments counting as connected) and `committed` says whether the board changed.
       if (routing && state.drawState?.kind === "route") {
         const live = state.drawState;
         m.set(
           "pcbnew.InteractiveRouter.ContinueFromEnd",
           pcbOnly(async () => {
-            if ((live.runs?.length ?? 0) > 0 || live.via || live.pts.length === 0) {
-              dispatch({ type: "TOAST", message: "Route From Other End: only available before the first segment is fixed.", kind: "error" });
-              return;
-            }
-            const far = otherEndOfStart(live.pts[0]!, live.net, ratsnestEdges);
-            if (!far) {
-              dispatch({ type: "TOAST", message: "Route From Other End: this route does not start on an unrouted connection.", kind: "error" });
-              return;
-            }
-            cancelInteractiveRoute(dispatch);
-            await startInteractiveRoute(far[0], far[1], live.layer, live.width, state.routerSettings, dispatch);
+            const end = live.pts[live.pts.length - 1] ?? (state.cursorUm ? ([state.cursorUm.x, state.cursorUm.y] as [number, number]) : null);
+            if (!end) return;
+            await continueInteractiveRouteFromEnd(end, live, dispatch, api);
           })
         );
       }
@@ -2223,6 +2177,9 @@ export function useActionRunner() {
     registerPcbMenuActions(m, { state, dispatch, api, requestSelection });
     // Find, Find Next and Find Previous on the board (dialog_find.cpp): actions/pcbFindActions.ts.
     registerPcbFindActions(m, { state, dispatch, api, requestSelection });
+    // The details of the edit tools (Paste Special on the board, the rows of GAPS.md item 15 that are the board's own): actions/pcbEditDetailsActions.ts. After the
+    // schematic clipboard actions above, which its Paste Special hands the Schematic tab to.
+    registerPcbEditDetailsActions(m, { state, dispatch, api, requestSelection });
 
     // The two library editors' own actions (pcbnew.ModuleEditor.*, pcbnew.PadTool.*, eeschema.SymbolLibraryControl.*, SymbolDrawing.*, PinEditing.*).
     registerLibraryEditorActions(m, { tab: state.tab, studioDispatch: dispatch, boardParts: (state.board?.parts ?? []).map((p) => ({ ref: p.ref, footprint: p.footprint })), fpApi, fpDispatch, symApi, symDispatch });

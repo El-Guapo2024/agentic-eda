@@ -213,6 +213,19 @@ impl Board<'_> {
                 return Err(fail("ops_bad_pad", &pad_ref, "The corner radius ratio must be between 0 and 50% of the shorter side."));
             }
         }
+        if let Some(r) = edit.chamfer_ratio {
+            if !(0.0..=1.0).contains(&r) {
+                return Err(fail("ops_bad_pad", &pad_ref, "The chamfer ratio must be between 0 and 100% of the shorter side."));
+            }
+        }
+        if let Some(c) = &edit.custom {
+            // Every basic shape must be one KiCad can draw: a polygon of at least three points, a circle with a radius, a stroke with a width.
+            for (i, prim) in c.primitives.iter().enumerate() {
+                if let Some(why) = primitive_problem(prim) {
+                    return Err(fail("ops_bad_pad", &pad_ref, format!("Basic shape {}: {why}", i + 1)));
+                }
+            }
+        }
         if let Some(r) = edit.solder_paste_margin_ratio {
             // `padValuesOK`: the paste ratio is limited to -50% .. +100%.
             if !(-0.5..=1.0).contains(&r) {
@@ -232,6 +245,12 @@ impl Board<'_> {
         let trial = patched_footprint(&lib, &all);
         if let Some(new) = trial.validate().into_iter().filter(|c| c.hint.as_ref().is_some_and(|h| !was.contains(h))).find(|c| c.location.as_deref().is_some_and(|l| l.ends_with(&format!("pad {}", edit.number)))) {
             return Err(fail("ops_bad_pad", &pad_ref, new.hint.unwrap_or_default()));
+        }
+        // `PAD::doCheckPad`: "(custom pad shape must resolve to a single polygon)" -- the anchor and the basic shapes make one piece of copper.
+        if let Some(pad) = trial.pads.get(pad_index(&trial, &edit.number, nth).unwrap_or(usize::MAX)) {
+            if pad.shape == eda_model::PadShape::Custom && custom_outline_count(pad) > 1 {
+                return Err(fail("ops_bad_pad", &pad_ref, "The custom pad shape must resolve to a single polygon."));
+            }
         }
         self.edit_slot(part).set_pad(edit);
         self.tidy_edit(part);
@@ -272,7 +291,7 @@ impl Board<'_> {
                 let footprint = self.model.part(reference).and_then(|p| self.model.footprint_of(p));
                 match footprint {
                     Some(f) => default_reference_layout(fp, &f),
-                    None => default_reference_layout(fp, &eda_model::Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![] }),
+                    None => default_reference_layout(fp, &eda_model::Footprint { name: String::new(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: None, models3d: vec![], art: Default::default() }),
                 }
             })),
             VALUE => Some(edit.and_then(|e| e.value.clone()).unwrap_or_else(|| default_value_layout(fp))),
@@ -344,4 +363,23 @@ impl Board<'_> {
             turn(&mut f.layout);
         }
     }
+}
+
+/// Why a basic shape of a custom pad cannot be drawn (`None`: it can).
+fn primitive_problem(prim: &eda_model::footprint::PadPrimitive) -> Option<String> {
+    use eda_model::ir::Shape;
+    match &prim.shape {
+        Shape::Polygon { pts, .. } if pts.len() < 3 => Some("a polygon needs at least three points".into()),
+        Shape::Circle { center, end, .. } if center == end => Some("a circle needs a radius".into()),
+        Shape::Segment { start, end, .. } if start == end => Some("a line needs a length".into()),
+        Shape::Arc { start, mid, end, .. } if start == end || mid == start || mid == end => Some("an arc needs three different points".into()),
+        s if !prim.proxy && s.stroke_width() < 0 => Some("the line width cannot be negative".into()),
+        _ => None,
+    }
+}
+
+/// How many separate pieces of copper a custom pad is: its anchor and basic shapes merged (`PAD::MergePrimitivesAsPolygon`).
+fn custom_outline_count(pad: &eda_model::Pad) -> usize {
+    let fp = eda_model::ir::FootprintInstance { id: String::new(), at: eda_model::ir::Point { x: 0, y: 0 }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() };
+    eda_drc::pad_shape::pad_polygons(&fp, pad, eda_model::ir::Point { x: 0, y: 0 }, 5).polys.len()
 }

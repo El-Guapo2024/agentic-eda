@@ -513,7 +513,8 @@ fn kicad_cli_zone_fill_parity() {
 
 /// `qa/data/pcbnew`-relative boards of the result table in `PARITY.md`: the ones a debug build fills in about half a minute.
 /// (`stonehenge` and the three large boards `issue5093`, `issue11814` and `issue14559` are in the table too, but are measured
-/// with `PARITY_BOARDS`: the first has ring-shaped custom pads, a known gap, and the others take many minutes in debug.)
+/// with `PARITY_BOARDS`: the first has a 0.09 mm^2 netless sliver zone that no fill matches, and the others take minutes in debug.
+/// The custom pads of the first two have their own tests below.)
 const FEATURE_BOARDS: &[&str] = &[
     "issue7086.kicad_pcb",
     "solder_mask_bridge_test.kicad_pcb",
@@ -677,4 +678,50 @@ fn kicad_cli_zone_fill_keeps_the_edge_clearance_from_an_arc() {
     assert!(rows.len() >= 15, "the board's fills were not compared: {} rows", rows.len());
     let off: Vec<ParityRow> = rows.iter().filter(|r| r.kicad_area_mm2 > 0.1 && !r.net.contains("hatch") && r.area_pct_diff > 1.2).cloned().collect();
     assert!(off.is_empty(), "a fill follows the notch's chord, not its arc, or drops a cutout:\n{}", parity_table(&off));
+}
+
+/// A custom pad is copper where its primitives are, not only at its anchor: `stonehenge`'s four mounting pads are rings (`(options (anchor circle))` and a `gr_circle`
+/// primitive 5 mm across), and kicad-cli's `GND` fill on B.Cu keeps clear of the whole ring, the ring's inside as a thermal relief. Before the IR kept custom pads this fill was
+/// 11.3% off (the rings were their 1 mm anchors, so their discs were copper we kept and kicad did not); now it is within 0.5% of the area and 1% XOR. Slow tier: kicad-cli fills the
+/// board too.
+#[test]
+fn kicad_cli_zone_fill_keeps_clear_of_a_ring_shaped_custom_pad() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let rows = check_board_imported(&cli, "stonehenge.kicad_pcb");
+    println!("\n{}", parity_table(&rows));
+    let gnd: Vec<&ParityRow> = rows.iter().filter(|r| r.net.starts_with("GND") && r.layer == "B.Cu").collect();
+    assert_eq!(gnd.len(), 1, "the GND fill of B.Cu was not compared: {} rows", rows.len());
+    let r = gnd[0];
+    let xor_pct = 100.0 * r.xor_area_mm2 / r.kicad_area_mm2;
+    assert!(r.area_pct_diff <= 0.5 && xor_pct <= 1.0, "the GND fill drifts from kicad's by {:.2}% of the area and {xor_pct:.2}% XOR (a ring-shaped custom pad is its anchor again?):\n{}", r.area_pct_diff, parity_table(&rows));
+    assert_eq!(r.our_islands, r.kicad_islands, "the island count of the GND fill");
+}
+
+/// `issue5093`'s `/right/GND` (hatched, F.Cu) is covered by the custom pads of footprint `R_pads`: 16 large copper shapes of other nets, of which the importer used to keep each
+/// one's 1.5 mm anchor. kicad-cli's fill keeps 278.8 mm^2 of the zone's 4700; ours was 776.56% over that and is 1.49% now (the XOR, 5.6%, is the hatch's: its bars are a known gap, `PARITY.md`).
+/// Slow tier (kicad-cli fills the whole board, and a debug build ours: two minutes).
+#[test]
+fn kicad_cli_zone_fill_knocks_out_the_shapes_of_custom_pads() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let rows = check_board_imported(&cli, "issue5093.kicad_pcb");
+    println!("\n{}", parity_table(&rows));
+    let right: Vec<&ParityRow> = rows.iter().filter(|r| r.net.starts_with("/right/GND") && r.layer == "F.Cu").collect();
+    assert_eq!(right.len(), 1, "the /right/GND fill of F.Cu was not compared: {} rows", rows.len());
+    let r = right[0];
+    let xor_pct = 100.0 * r.xor_area_mm2 / r.kicad_area_mm2;
+    assert!(r.area_pct_diff <= 2.5 && xor_pct <= 7.0, "the /right/GND fill drifts from kicad's by {:.2}% of the area and {xor_pct:.2}% XOR (the custom pads are their anchors again?):\n{}", r.area_pct_diff, parity_table(&rows));
 }

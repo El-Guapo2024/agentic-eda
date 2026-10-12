@@ -196,11 +196,25 @@ export async function fetchBoardGlb(retry = false): Promise<BoardGlbResult> {
  * the *only* non-KiCad toggle in the whole app (see the Strict switch in
  * the status bar).
  */
-export async function postCmd(cmd: Cmd, strict: boolean): Promise<CmdReply> {
+export async function postCmd(cmd: Cmd, strict: boolean, carry?: "begin" | "commit"): Promise<CmdReply> {
   const r = await fetch("/api/cmd", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ cmd, strict }),
+    // `carry`: the command starts ("begin": Duplicate, Paste) or ends ("commit": the drop) a carried placement, which the undo history keeps as one step.
+    body: JSON.stringify(carry ? { cmd, strict, carry } : { cmd, strict }),
+  });
+  return (await r.json()) as CmdReply;
+}
+
+/**
+ * The end of a carried placement without a command of its own (crates/cli/src/carry.rs): "commit" when the drop changed nothing, "cancel" for Escape --
+ * `commit.Revert()`, which takes the carried items away and leaves the undo and redo history as it was. `ok` is false when nothing was being carried.
+ */
+export async function postCarry(action: "commit" | "cancel"): Promise<CmdReply> {
+  const r = await fetch("/api/carry", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action }),
   });
   return (await r.json()) as CmdReply;
 }
@@ -503,6 +517,11 @@ export function routeCancel(): Promise<{ ok: boolean }> {
   return postJson("/api/route/cancel", {});
 }
 
+/** Route From Other End (`ROUTER::ContinueFromEnd`, Ctrl+E): what the route has fixed is committed and a new route starts at the far end of the connection, heading for where this one's head ended. The reply is the new route's preview, with `committed` and `from`. */
+export function routeContinueFromEnd(x: Um, y: Um): Promise<RoutePreview> {
+  return postJson("/api/route/continue_from_end", { x: Math.round(x), y: Math.round(y) });
+}
+
 /** `POST /api/convert/polys` (crates/ops/src/convert.rs): the polygons `CONVERT_TOOL::CreatePolys` builds from `ids` with a strategy, and the ids that contributed. */
 export interface ConvertPolysReply {
   ok: boolean;
@@ -539,8 +558,9 @@ export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
   return postJson("/api/route/drag_move", { x: Math.round(x), y: Math.round(y) });
 }
 
-export function routeDragFinish(x: Um, y: Um): Promise<CmdReply> {
-  return postJson("/api/route/drag_finish", { x: Math.round(x), y: Math.round(y) });
+/** `forceCommit` is Ctrl+click (`DRAGGER::FixRoute( aForceCommit )`): a drag that only marks obstacles commits its violation. A position the drag cannot resolve commits the last one it could. */
+export function routeDragFinish(x: Um, y: Um, forceCommit?: boolean): Promise<CmdReply> {
+  return postJson("/api/route/drag_finish", { x: Math.round(x), y: Math.round(y), force_commit: forceCommit ? true : undefined });
 }
 
 // `6`: route a differential pair (gap #7 task item 6) -- wired into

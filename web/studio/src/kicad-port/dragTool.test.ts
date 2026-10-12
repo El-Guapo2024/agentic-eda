@@ -39,3 +39,17 @@ test("dragStateFromPreview carries displaced lines/vias and via fanout through u
   // The via's own size, captured at drag-start, is untouched by a preview reply.
   assert.equal(next.viaDiameter, 600);
 });
+
+test("a position the drag cannot resolve shows the last valid line, flagged; a drag that only marks obstacles says so", () => {
+  const slid = baseDraw({ dragKind: "segment", pts: [[0, 0], [0, 800], [4000, 800], [4000, 0]] });
+  const restored = dragStateFromPreview(slid, basePreview({ drag: "segment", pts: [[0, 0], [0, 500], [4000, 500], [4000, 0]], restored: true }));
+  assert.equal(restored.restored, true);
+  assert.equal(restored.forcedMark, false);
+  assert.equal(restored.dragKind, "segment", "what was grabbed is the session's, captured at drag start");
+  const marking = dragStateFromPreview(slid, basePreview({ colliding: true, forced_mark_obstacles: true }));
+  assert.equal(marking.forcedMark, true);
+  assert.equal(marking.restored, false);
+  // a legal position clears both flags again
+  const legal = dragStateFromPreview({ ...marking, restored: true }, basePreview());
+  assert.equal(legal.restored, false);
+});

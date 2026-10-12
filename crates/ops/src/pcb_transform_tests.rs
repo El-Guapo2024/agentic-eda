@@ -16,8 +16,8 @@ pub(super) fn id(s: &str) -> String {
 
 /// Three pads, none on an axis of symmetry, so a mirror image cannot be mistaken for the original.
 pub(super) fn lopsided() -> Footprint {
-    let pad = |n: &str, at: (Um, Um)| Pad { opposite_side: false, number: n.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-    Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (-1500, -600)), pad("2", (1500, 0)), pad("3", (-1500, 700))], courtyard: Some((4000, 2400)), model: None, courtyard_outlines: vec![], models3d: vec![] }
+    let pad = |n: &str, at: (Um, Um)| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at, size: (600, 600), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+    Footprint { name: "LOPSIDED".into(), pads: vec![pad("1", (-1500, -600)), pad("2", (1500, 0)), pad("3", (-1500, 700))], courtyard: Some((4000, 2400)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 pub(super) fn part(r: &str) -> Part {
@@ -445,82 +445,48 @@ fn flipping_a_footprint_twice_gives_it_back_and_swaps_its_label_side_both_ways()
 
 // ------------------------------------------------------------ the routing
 
+/// `EDIT_TOOL::Move` / `Rotate` / `Flip` / `DeleteItems` act on the items they were given: the copper routed to a footprint's pads stays where
+/// it is (GAPS.md item 8, "a footprint with copper routed to its pads still clears the routing when edited" -- no longer). The older verbs of the
+/// CLI and the agents keep their answer.
 #[test]
-fn only_a_footprint_with_copper_on_its_pads_clears_the_routing() {
+fn the_edit_tools_never_clear_the_routing_even_of_a_footprint_with_copper_on_its_pads() {
     let m = model(&["F.Cu", "B.Cu"]);
-    // U1's pad 2 sits at (31 500, 20 000): a track runs into it. U2 has nothing routed to it.
+    // U1's pad 2 sits at (31 500, 20 000): a track runs into it, and a via sits on it.
     let mut routed = design();
     routed.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(31_500, 20_000), (40_000, 20_000)]));
+    routed.routing.as_mut().unwrap().vias.push(via("via_u1", (31_500, 20_000), "F.Cu", "B.Cu"));
     let b = Board::new(routed.clone(), &m, 100, 300);
 
-    let copper = Cmd::MoveItems { ids: ids(&["trk_a", "via_a", "zone_a", "shp_seg", "txt_a", "dim_a", "trk_u1"]), dx: 1, dy: 1 };
-    assert!(!copper.clears_routing_in(&b), "copper and graphics alone cannot be moved out from under a track");
-    assert!(!Cmd::RotateItems { ids: ids(&["trk_a"]), pivot: p(0, 0), angle_millideg: 90_000 }.clears_routing_in(&b));
-    assert!(Cmd::MoveItems { ids: ids(&["trk_a", "U1"]), dx: 1, dy: 1 }.clears_routing_in(&b), "U1 has a track on its pad");
-    assert!(Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(0, 0), direction: FlipDirection::LeftRight }.clears_routing_in(&b));
-    assert!(!Cmd::MoveItems { ids: ids(&["U2"]), dx: 1, dy: 1 }.clears_routing_in(&b), "nothing was routed to U2");
-    assert!(!Cmd::FlipItems { ids: ids(&["U2"]), pivot: p(0, 0), direction: FlipDirection::LeftRight }.clears_routing_in(&b));
-    assert!(Cmd::Rip { part: id("U1") }.clears_routing_in(&b));
-    assert!(!Cmd::Rip { part: id("U2") }.clears_routing_in(&b), "taking away a footprint nothing was routed to leaves the routing be");
-
-    // a group counts through its footprint members
-    let mut with_group = routed.clone();
-    let groups = &mut with_group.drawings.as_mut().unwrap().groups;
-    groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "U1"]) });
-    groups.push(Group { id: "grp_b".into(), name: String::new(), member_ids: ids(&["trk_a", "U2"]) });
-    let g = Board::new(with_group, &m, 100, 300);
-    assert!(Cmd::MoveItems { ids: ids(&["grp_a"]), dx: 1, dy: 1 }.clears_routing_in(&g), "a group's routed footprint member counts");
-    assert!(!Cmd::MoveItems { ids: ids(&["grp_b"]), dx: 1, dy: 1 }.clears_routing_in(&g), "a group's unrouted footprint member does not");
-    assert!(Cmd::Batch { cmds: vec![copper.clone(), Cmd::MoveItems { ids: ids(&["U1"]), dx: 1, dy: 1 }] }.clears_routing_in(&b));
-    assert!(!Cmd::Batch { cmds: vec![copper] }.clears_routing_in(&b));
-    // The old verbs keep their old answer.
+    let move_u1 = Cmd::MoveItems { ids: ids(&["trk_a", "U1"]), dx: 1, dy: 1 };
+    assert!(!move_u1.clears_routing_in(&b), "a footprint with a track on its pad moves without the routing");
+    assert!(!Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(0, 0), angle_millideg: 15_000 }.clears_routing_in(&b));
+    assert!(!Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(0, 0), direction: FlipDirection::TopBottom }.clears_routing_in(&b));
+    assert!(!Cmd::Rip { part: id("U1") }.clears_routing_in(&b), "deleting a routed footprint leaves its copper");
+    assert!(!Cmd::Batch { cmds: vec![move_u1.clone()] }.clears_routing_in(&b));
+    assert!(!Cmd::InGroup { group: id("grp_a"), cmd: Box::new(move_u1) }.clears_routing_in(&b));
+    // A group moves its footprint members the same way.
+    let mut with_group = routed;
+    with_group.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "U1"]) });
+    assert!(!Cmd::MoveItems { ids: ids(&["grp_a"]), dx: 1, dy: 1 }.clears_routing_in(&Board::new(with_group, &m, 100, 300)));
+    // The old verbs keep their old answer: a placement made there is followed by a new routing.
     assert!(Cmd::MoveTo { part: id("U2"), x: 0, y: 0 }.clears_routing_in(&b));
+    assert!(Cmd::Rotate { part: id("U2"), quarter_turns: 1 }.clears_routing_in(&b));
+    assert!(Cmd::Flip { part: id("U2") }.clears_routing_in(&b));
 }
 
 #[test]
-fn a_copy_sitting_on_its_original_holds_the_copper_so_moving_either_one_leaves_nothing_behind() {
-    let mut m = model(&["F.Cu", "B.Cu"]);
-    m.parts.push(part("U3"));
-    // U3 is a copy of U1, in place; a track runs into the pad they share.
+fn moving_turning_flipping_and_deleting_a_routed_footprint_leave_every_track_and_via_as_they_were() {
+    let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     d.routing.as_mut().unwrap().tracks.push(track("trk_u1", "F.Cu", &[(31_500, 20_000), (40_000, 20_000)]));
-    let u1 = d.placement.as_ref().unwrap().footprints[0].clone();
-    d.placement.as_mut().unwrap().footprints.push(FootprintInstance { id: "U3".into(), ..u1 });
-    let move_of = |ids: &[&str]| Cmd::MoveItems { ids: ids.iter().map(|s| s.to_string()).collect(), dx: 1, dy: 1 };
-
-    let together = Board::new(d.clone(), &m, 100, 300);
-    assert!(!move_of(&["U3"]).clears_routing_in(&together), "the copy leaves the track with the original");
-    assert!(!move_of(&["U1"]).clears_routing_in(&together), "and the original leaves it with the copy");
-    assert!(!Cmd::Rip { part: id("U3") }.clears_routing_in(&together));
-    assert!(move_of(&["U1", "U3"]).clears_routing_in(&together), "both going takes the spot away");
-
-    // Once the copy has been moved off, only the original holds the track.
-    let mut apart = d;
-    apart.placement.as_mut().unwrap().footprints[2].at = p(30_000, 60_000);
-    let apart = Board::new(apart, &m, 100, 300);
-    assert!(!move_of(&["U3"]).clears_routing_in(&apart), "nothing is routed to the copy");
-    assert!(move_of(&["U1"]).clears_routing_in(&apart), "the original is the one the track is routed to");
-}
-
-#[test]
-fn copper_is_routed_to_a_footprint_when_a_track_ends_on_a_pad_or_a_via_sits_on_it() {
-    let m = model(&["F.Cu", "B.Cu"]);
-    let moved = |d: Design| Cmd::MoveItems { ids: ids(&["U2"]), dx: 1, dy: 1 }.clears_routing_in(&Board::new(d, &m, 100, 300));
-    // U2 at (60 000, 20 000) turned 90 degrees: its pads are at (60 000 + local y, 20 000 + local x)
-    let pads = pads_of(&board(&m), &m, "U2");
-    let at = pads[0].center;
-    let mut with_via = design();
-    with_via.routing.as_mut().unwrap().vias.push(via("via_pad", (at.x, at.y), "F.Cu", "B.Cu"));
-    assert!(moved(with_via), "a via on a pad");
-    let mut ending = design();
-    ending.routing.as_mut().unwrap().tracks.push(track("trk_end", "F.Cu", &[(at.x + 100, at.y - 100), (at.x + 9_000, at.y - 100)]));
-    assert!(moved(ending), "a track that ends on a pad is routed to it");
-    let mut across = design();
-    across.routing.as_mut().unwrap().tracks.push(track("trk_over", "F.Cu", &[(at.x - 5_000, at.y), (at.x + 5_000, at.y)]));
-    assert!(!moved(across), "a track merely passing over a pad is not routed to it");
-    let mut beside = design();
-    beside.routing.as_mut().unwrap().tracks.push(track("trk_beside", "F.Cu", &[(at.x - 5_000, at.y + 8_000), (at.x + 5_000, at.y + 8_000)]));
-    assert!(!moved(beside), "a track 8 mm away from every pad is not either");
+    let mut b = Board::new(d, &m, 100, 300);
+    let copper = |b: &Board<'_>| (routing(b).tracks.clone(), routing(b).vias.clone(), routing(b).zones.clone());
+    let before = copper(&b);
+    b.apply(&Cmd::MoveItems { ids: ids(&["U1"]), dx: 5_000, dy: 3_000 }).unwrap();
+    b.apply(&Cmd::RotateItems { ids: ids(&["U1"]), pivot: p(35_000, 23_000), angle_millideg: -15_000 }).unwrap();
+    b.apply(&Cmd::FlipItems { ids: ids(&["U1"]), pivot: p(35_000, 23_000), direction: FlipDirection::TopBottom }).unwrap();
+    assert_eq!(copper(&b), before, "the footprint went; the copper did not follow it");
+    assert_ne!(pose(&b, "U1").at, p(30_000, 20_000));
 }
 
 #[test]

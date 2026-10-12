@@ -24,6 +24,8 @@ import { nextPadNumber } from "../../kicad-port/padNumbering";
 import { padCanHaveNumber } from "../../kicad-port/fpEditActions";
 import { newPadFromMaster, settingsOf } from "../../kicad-port/padSettings";
 import { enumerateHit, enumerateShownNumber, padsUnderSweep, sweepPoints } from "../../kicad-port/padEnumeration";
+import { padContains } from "../../kicad-port/libEditorHit";
+import { padBox } from "../../kicad-port/itemBoxes";
 import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { arcClick, arcMotion, arcRemoveLastPoint } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion, bezierRemoveLastPoint } from "../../kicad-port/bezierGeom";
@@ -58,29 +60,6 @@ export function padLayersForKind(kind: PadKind): string[] {
     default:
       return ["F.Cu", "F.Paste", "F.Mask"];
   }
-}
-
-function padLocalPoint(pad: LibraryPad, wx: number, wy: number): { x: number; y: number } {
-  const dx = wx - pad.at.x;
-  const dy = wy - pad.at.y;
-  const rad = -(pad.rot / 1000) * (Math.PI / 180);
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
-}
-
-/** Approximate pad hit test: an ellipse for circle/oval, an axis-aligned (pad-local) box otherwise -- good enough to click a visibly-under-the-cursor pad; not pixel-exact for a chamfered/trapezoid corner (documented simplification, see PARITY-fpedit.md). */
-function padContains(pad: LibraryPad, wx: number, wy: number): boolean {
-  const local = padLocalPoint(pad, wx, wy);
-  const x = local.x - pad.offset.x;
-  const y = local.y - pad.offset.y;
-  const [w, h] = pad.size;
-  const hw = w / 2,
-    hh = h / 2;
-  if (pad.shape === "circle" || pad.shape === "oval") {
-    return (x / hw) ** 2 + (y / hh) ** 2 <= 1;
-  }
-  return Math.abs(x) <= hw && Math.abs(y) <= hh;
 }
 
 function shapePoints(s: CmdShape): [number, number][] {
@@ -250,6 +229,11 @@ export function FootprintCanvas() {
     for (const p of fp.pads) {
       const [w, h] = p.size;
       pts.push([p.at.x - w, p.at.y - h], [p.at.x + w, p.at.y + h]);
+      // A custom pad reaches as far as its basic shapes.
+      if (p.shape === "custom") {
+        const [x0, y0, x1, y1] = padBox(p);
+        pts.push([x0, y0], [x1, y1]);
+      }
     }
     for (const g of fp.graphics) for (const [x, y] of shapePoints(g)) pts.push([x, y]);
     for (const t of fp.texts) pts.push([t.at.x, t.at.y]);

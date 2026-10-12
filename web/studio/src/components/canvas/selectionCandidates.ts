@@ -14,6 +14,8 @@
 // user clicked on a small item within a much larger one...").
 import type { BoardState, Dimension, FieldInfo, Pad, Part } from "../../api/types";
 import { padIds } from "../../kicad-port/pcbItems";
+import { artBounds, artHitDistance, unionBox } from "../../kicad-port/fpArt";
+import { outlineDistance } from "../../kicad-port/padOutline";
 import { fieldAsText, fieldShownByObjects } from "../../kicad-port/fpFields";
 import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, shapeBoundingBox, shapeHitDistance, textBoundingBox } from "./itemHitTest";
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
@@ -101,6 +103,8 @@ export function textBoundingBoxRotated(f: FieldInfo): { x0: number; y0: number; 
 
 /** How far (um) `(x, y)` is outside a pad -- 0 or less on it: a round pad is a circle or a stadium, any other a box. */
 export function padHitDistance(pad: Pad, x: number, y: number): number {
+  // A trapezoid, a chamfered rectangle or a custom pad is the contours of its copper (`PAD::HitTest` asks the effective shape, not the box).
+  if (pad.outline?.length) return outlineDistance(pad.outline, x, y);
   const hw = pad.w / 2;
   const hh = pad.h / 2;
   if (pad.round) {
@@ -192,8 +196,11 @@ export function collectSelectionCandidates(
   for (const p of board.parts as Part[]) {
     if (!p.placed || !p.courtyard || !sideShown(layerVisible, p)) continue;
     const [x0, y0, x1, y1] = p.courtyard;
-    if (xUm < x0 || xUm > x1 || yUm < y0 || yUm > y1) continue;
-    consider("part", p.ref, 0, Math.max((x1 - x0) * (y1 - y0), 1), null);
+    // A click on a stroke of the footprint's own silkscreen or fab drawing picks the footprint too, wherever the stroke is (`FOOTPRINT::HitTest` counts its graphics).
+    const inside = xUm >= x0 && xUm <= x1 && yUm >= y0 && yUm <= y1;
+    const slop = inside ? 0 : artHitDistance(p, xUm, yUm, layerVisible);
+    if (slop > toleranceUm) continue;
+    consider("part", p.ref, slop, Math.max((x1 - x0) * (y1 - y0), 1), null);
   }
 
   // Pads: `PAD::IsLocked()` is the footprint's. A pad is a copper item on its footprint's side (a through-hole one is on every layer); its area is the
@@ -339,7 +346,8 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
 
   for (const p of board.parts as Part[]) {
     if (!p.placed || !p.courtyard || !sideShown(layerVisible, p)) continue;
-    consider("part", p.ref, p.courtyard, null);
+    // The footprint's box holds its graphics (`FOOTPRINT::GetBoundingBox( false )`).
+    consider("part", p.ref, unionBox(p.courtyard, artBounds(p)) ?? p.courtyard, null);
   }
   for (const t of board.routing?.tracks ?? []) {
     const [x0, y0, x1, y1] = boxOf(t.pts);

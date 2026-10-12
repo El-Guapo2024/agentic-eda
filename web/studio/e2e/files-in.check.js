@@ -6,7 +6,7 @@
 //   Import Graphics, the board: the actions are wired and open the dialog; a file dropped on it (the drop action's parameter is `{ name, text }`: a browser gives the page a file's
 //     text, not its path) is read by the server and described ("8 items: 4 lines, 4 arcs", what it could not handle); the dialog's defaults are KiCad's; OK with "Place at" puts the
 //     items on the layer asked for, at the origin over the scale (KiCad's own arithmetic), with its default line width scaled, grouped, selected, as ONE undo step; interactive
-//     placement puts the picture's upper left corner at the cursor and arms the Move tool, Escape takes it back; the DXF unit of the dialog is used when the file names none and the
+//     placement puts the picture's upper left corner at the cursor and arms the Move tool, Escape takes it back and leaves nothing behind (main's carry: the step is held open) and a click drops it, the import and the drop being ONE undo step; the DXF unit of the dialog is used when the file names none and the
 //     file's own wins; "Fix discontinuities" joins corners that miss; an outline imported on Edge.Cuts replaces the polygon of the board's intent; a file with nothing to import, a
 //     scale of zero and a file type no plugin handles are refused with KiCad's words;
 //   Import Graphics, the schematic and the Symbol Editor (DIALOG_IMPORT_GFX_SCH): the actions and the File > Import entry are wired on both tabs; the dialog has "Interactive placement" / "At" X, Y, the
@@ -219,8 +219,20 @@
     key("Escape");
     await sleep(1000);
     const gone = await board();
-    check("Escape takes the placement back, one undo step", added(gone).length === base.shapes && E.state().tool === "select", `${added(gone).length} shapes, tool ${E.state().tool}`);
+    check("Escape takes the placement back and leaves nothing behind", added(gone).length === base.shapes && E.state().tool === "select", `${added(gone).length} shapes, tool ${E.state().tool}`);
     applied--;
+    // and a click drops it where the pointer went: the import and the drop are one undo step
+    await hover(...C);
+    r = await importFile({ name: "board.dxf", text: boardDxf }, { Layer: "Dwgs.User", "Place at": false, "Group imported items": true });
+    applied++;
+    await hover(...D);
+    { const [px, py] = w2c(...D); fire("pointerdown", px, py, 1); fire("pointerup", px, py); }
+    await sleep(1200);
+    const [drx0, dry0] = extent(added(await board()));
+    check("a click drops the carried import where the pointer went: its upper left corner is at the second place", drx0 === D[0] && dry0 === D[1] && E.state().tool === "select", `${drx0}, ${dry0}, tool ${E.state().tool}`);
+    await undo();
+    applied--;
+    check("and ONE undo takes the import and its drop away", added(await board()).length === base.shapes && ((await board()).drawings?.groups ?? []).length === base.groups, `${added(await board()).length} shapes`);
 
     // ============================================================================================================================ the DXF's units
     r = await importFile({ name: "box.dxf", text: rect2x1(null) }, { "DXF default units": "inch", "Place at": true });
@@ -329,7 +341,7 @@
     key("Escape");
     await sleep(1000);
     const gone3 = await board();
-    check("Escape takes the whole append back, one undo step: no part ZZ1, no new shapes", !gone3.parts.some((p) => p.ref === "ZZ1") && gone3.parts.length === partsBefore && added(gone3).length === base.shapes && E.state().tool === "select", `${gone3.parts.length} parts, ${added(gone3).length} shapes, tool ${E.state().tool}`);
+    check("Escape takes the whole append back and leaves nothing behind: no part ZZ1, no new shapes, no undo step", !gone3.parts.some((p) => p.ref === "ZZ1") && gone3.parts.length === partsBefore && added(gone3).length === base.shapes && E.state().tool === "select", `${gone3.parts.length} parts, ${added(gone3).length} shapes, tool ${E.state().tool}`);
     applied--;
     // again, and this time a click drops it where the pointer went
     await hover(...C);
@@ -341,14 +353,13 @@
     fire("pointerdown", dx, dy, 1);
     fire("pointerup", dx, dy);
     await sleep(1200);
-    applied++;
     const dropped2 = await board();
     const line2 = added(dropped2).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.end[0] === D[0] + 30000);
     check("a click drops the carried board where the pointer went: the line's start is at the second place", !!line2 && line2.start[0] === D[0] && line2.start[1] === D[1] && E.state().tool === "select", JSON.stringify(line2 && [line2.start, line2.end]) + " tool " + E.state().tool);
-    await undo(2);
-    applied -= 2;
+    await undo();
+    applied--;
     const clean = await board();
-    check("two undos (the move, then the append) leave the board as it was", clean.parts.length === partsBefore && added(clean).length === base.shapes && !clean.parts.some((p) => p.ref === "ZZ1"));
+    check("ONE undo takes the append and its drop away (the carried step is held open until the drop: carry.rs)", clean.parts.length === partsBefore && added(clean).length === base.shapes && !clean.parts.some((p) => p.ref === "ZZ1"), `${clean.parts.length} parts, ${added(clean).length} shapes`);
     if (wasStrict && !strictBox()?.checked) { strictBox().click(); await sleep(300); }
     void appended;
 
@@ -537,8 +548,27 @@
     key("Escape");
     await sleep(1000);
     const gone2 = await sch();
-    check("Escape takes the placement back, one undo step of the schematic", gone2.lines.length === sBase.lines && gone2.graphics.length === sBase.graphics && E.state().tool === "select", `${gone2.lines.length} lines, tool ${E.state().tool}`);
+    check("Escape takes the placement back and leaves nothing behind on the sheet", gone2.lines.length === sBase.lines && gone2.graphics.length === sBase.graphics && E.state().tool === "select", `${gone2.lines.length} lines, tool ${E.state().tool}`);
     appliedSch--;
+    // and a click drops it where the pointer went: the import and the drop are one undo step of the schematic
+    fire("pointermove", cx, cy);
+    await sleep(200);
+    q = await importSch({ name: "board.dxf", text: boardDxf }, { placeAt: false });
+    appliedSch++;
+    const dropAt = [cx + 120, cy + 90];
+    fire("pointermove", ...dropAt);
+    await sleep(300);
+    fire("pointerdown", ...dropAt, 1);
+    fire("pointerup", ...dropAt);
+    await sleep(1200);
+    const dropped4 = await sch();
+    const movedLines = newLines(dropped4);
+    const [dx0] = span(movedLines.flatMap((l) => l.pts));
+    check("a click drops the carried drawing where the pointer went (it moved right of where it was put) and the tool is left", movedLines.length === 4 && dx0 > gx && E.state().tool === "select", `${movedLines.length} lines, x ${dx0} (was ${gx}), tool ${E.state().tool}`);
+    await undoDomain("schematic");
+    appliedSch--;
+    const afterDrop = await sch();
+    check("and ONE undo of the schematic takes the import and its drop away", afterDrop.lines.length === sBase.lines && afterDrop.graphics.length === sBase.graphics, `${afterDrop.lines.length} lines, ${afterDrop.graphics.length} graphics`);
 
     // refusals
     const sNone = await importSch({ name: "dims.dxf", text: dxf(pair(0, "DIMENSION") + pair(8, "0")) }, { placeAt: true }, { ok: false });

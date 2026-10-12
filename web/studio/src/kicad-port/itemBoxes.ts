@@ -14,6 +14,7 @@ import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitT
 import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { padIds } from "./pcbItems";
 import { groupLeaves } from "./groupTree";
+import { customPadBox } from "./padShape";
 
 /** `[minX, minY, maxX, maxY]`. */
 export type Box = readonly [number, number, number, number];
@@ -116,6 +117,8 @@ export function pcbContentBox(board: BoardState, boxes: ItemBoxes = pcbItemBoxes
 
 /** A pad's box: its copper size around `at + offset`, turned by its rotation (a pad is small, so the box of the rotated rectangle is what matters). */
 export function padBox(pad: LibraryPad): Box {
+  // A custom pad reaches as far as its basic shapes.
+  if (pad.shape === "custom") return customPadBox(pad);
   const rad = (pad.rot / 1000) * (Math.PI / 180);
   const cos = Math.abs(Math.cos(rad));
   const sin = Math.abs(Math.sin(rad));

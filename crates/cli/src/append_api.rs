@@ -13,8 +13,9 @@
 //! # Where this differs from KiCad
 //!
 //! * The paste's rules apply to what comes in, where `LoadBoard` appends everything: copper on a layer this board does not have is dropped (KiCad adds the layer to the
-//!   board), an item on a net this board does not have and no appended footprint brings is added with no net, and a footprint whose reference is taken gets the next free
-//!   number (KiCad: "Don't reannotate dupes on Append Board": the references stay as they are, and may repeat -- a part exists once here). The notes say how many.
+//!   board), and an item on a net this board does not have and no appended footprint brings is added with no net. A footprint whose reference is taken keeps the reference
+//!   it shows in the file, as KiCad's append leaves it ("Don't reannotate dupes on Append Board": `PASTE_MODE::KEEP_ANNOTATIONS`), but is filed under the next free reference,
+//!   a part existing once here (`pcb_paste_special.rs`). The notes say how many.
 //! * A group's position is the middle of the box of its members' positions (`PCB_GROUP::GetPosition` is the middle of the group's own box); the items of a group are not
 //!   candidates for the top left one, as the selection holds the group and not them.
 
@@ -78,9 +79,10 @@ pub fn read(dir: &Path, body: &[u8]) -> Value {
             let (items, be, nets) = if netless == 1 { ("item is", "is", "a net") } else { ("items are", "are", "nets") };
             notes.push(format!("{netless} copper {items} on {nets} this board does not have and {be} added with no net."));
         }
-        let renamed = clip.footprints.iter().filter(|f| model.part(&f.reference).is_some()).count();
-        if renamed > 0 {
-            notes.push(format!("{renamed} footprint{} {} a reference this board already uses and {} numbered on.", if renamed == 1 { "" } else { "s" }, if renamed == 1 { "has" } else { "have" }, if renamed == 1 { "is" } else { "are" }));
+        let repeated = clip.footprints.iter().filter(|f| model.part(&f.reference).is_some()).count();
+        if repeated > 0 {
+            let (s, has, is) = if repeated == 1 { ("", "has", "is") } else { ("s", "have", "are") };
+            notes.push(format!("{repeated} footprint{s} {has} a reference this board already uses: {} the reference the file gives (as KiCad's Append Board leaves it) and {is} filed under the next free one here.", if repeated == 1 { "it shows" } else { "they show" }));
         }
     }
     json!({
@@ -313,8 +315,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("eda_append_api_board_{}_{tag}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let pad = |n: &str, x: i64| Pad { opposite_side: false, number: n.into(), at: (x, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
-        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800), pad("2", 800)], courtyard: Some((3000, 1500)), model: None, courtyard_outlines: vec![], models3d: vec![] };
+        let pad = |n: &str, x: i64| Pad { opposite_side: false, ext: Default::default(), number: n.into(), at: (x, 0), size: (800, 800), shape: PadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None };
+        let fp = Footprint { name: "R0603".into(), pads: vec![pad("1", -800), pad("2", 800)], courtyard: Some((3000, 1500)), model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let part = Part {
             reference: "R1".into(),
             mpn: None,
@@ -367,7 +369,7 @@ mod tests {
         let notes: Vec<String> = r["notes"].as_array().unwrap().iter().map(|n| n.as_str().unwrap().to_string()).collect();
         assert!(notes.iter().any(|n| n == "Copper on In1.Cu is left out: this board has no such layer."), "{notes:?}");
         assert!(notes.iter().any(|n| n == "1 copper item is on a net this board does not have and is added with no net."), "{notes:?}");
-        assert!(notes.iter().any(|n| n == "1 footprint has a reference this board already uses and is numbered on."), "{notes:?}");
+        assert!(notes.iter().any(|n| n == "1 footprint has a reference this board already uses: it shows the reference the file gives (as KiCad's Append Board leaves it) and is filed under the next free one here."), "{notes:?}");
         // The reference is still the leftmost item's position: the new segments at x = 11 sit right of the line at 10.
         assert_eq!(r["reference"], json!({ "x": 10_000, "y": 10_000 }));
         let _ = std::fs::remove_dir_all(&dir);
@@ -387,12 +389,60 @@ mod tests {
         let line = dr.shapes.iter().find(|s| s.layer() == "Edge.Cuts").expect("the file's Edge.Cuts line came in");
         assert_eq!(line.points()[0], cursor, "the top left item of the file is where the cursor was");
         assert_eq!(line.points()[1], p(cursor.x + 80_000, cursor.y), "and the rest keeps its place relative to it");
-        // The file's footprint R1 met this board's R1: it is a part of its own now, numbered on.
+        // The file's footprint R1 met this board's R1: it is a part of its own now, filed under the next free reference.
         assert_eq!(d.placement.as_ref().unwrap().footprints.len(), 2);
         assert_eq!(model.parts.len(), 2, "{:?}", model.parts.iter().map(|p| p.reference.clone()).collect::<Vec<_>>());
         board::undo(&dir, "test", Some(eda_ops::Domain::Pcb)).unwrap();
         let (_, back, model) = board::load(&dir).unwrap();
         assert!(back.drawings.as_ref().map_or(true, |d| d.shapes.is_empty()) && back.placement.as_ref().unwrap().footprints.len() == 1 && model.parts.len() == 1, "one undo takes the whole append back");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A footprint's lines and texts are its own (`Footprint::art`): an appended board keeps the silkscreen and the fab drawings of its footprints, in the model
+    /// and in the `.kicad_pcb` written from it, which kicad-cli plots.
+    #[test]
+    fn an_appended_footprint_keeps_its_silkscreen_and_fab_art() {
+        let dir = board_dir("art");
+        let art = "(fp_line (start -1.5 -0.9) (end 1.5 -0.9) (stroke (width 0.12) (type solid)) (layer \"F.SilkS\") (uuid \"b0000000-0000-0000-0000-000000000001\"))\n    \
+                   (fp_rect (start -1 -0.5) (end 1 0.5) (stroke (width 0.1) (type solid)) (fill no) (layer \"F.Fab\") (uuid \"b0000000-0000-0000-0000-000000000002\"))\n    \
+                   (fp_text user \"${REFERENCE}\" (at 0 0 0) (layer \"F.Fab\") (uuid \"b0000000-0000-0000-0000-000000000003\") (effects (font (size 0.5 0.5) (thickness 0.08))))\n    \
+                   (pad \"1\" smd rect (at -0.8 0)";
+        // A footprint this board's model does not know by its name keeps the definition the file gives (the art with it); one it knows is the model's own.
+        let text = board_file().replacen("(pad \"1\" smd rect (at -0.8 0)", art, 1).replace("Lib:R0603", "Custom:Widget_9x9");
+        let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{r}");
+        let at = p(60_000, 70_000);
+        let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(at.x - rx, at.y - ry) }, false, "test").unwrap();
+        let (_, d, model) = board::load(&dir).unwrap();
+        let new_part = model.parts.iter().find(|p| p.reference != "R1").expect("the appended footprint is a part of its own");
+        let fp = model.footprint_of(new_part).expect("and has its own definition");
+        assert_eq!(fp.art.shapes.iter().filter(|s| s.on_layer("F.SilkS")).count(), 1, "{:?}", fp.art);
+        assert_eq!(fp.art.shapes.iter().filter(|s| s.on_layer("F.Fab")).count(), 1, "{:?}", fp.art);
+        assert_eq!(fp.art.texts.len(), 1, "{:?}", fp.art);
+        let pcb = eda_kicad::export_kicad_pcb(&d, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        assert!(pcb.contains("(fp_line") && pcb.contains("(fp_rect") && pcb.contains("${REFERENCE}"), "the written board has the art");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same for a footprint of a common package, which the built-in table resolves by its name: the file's drawings are still the appended footprint's.
+    #[test]
+    fn an_appended_footprint_of_a_common_package_keeps_its_art_too() {
+        let dir = board_dir("art_builtin");
+        let art = "(fp_line (start -1.5 -0.9) (end 1.5 -0.9) (stroke (width 0.12) (type solid)) (layer \"F.SilkS\") (uuid \"b0000000-0000-0000-0000-000000000011\"))\n    \
+                   (fp_rect (start -1 -0.5) (end 1 0.5) (stroke (width 0.1) (type solid)) (fill no) (layer \"F.Fab\") (uuid \"b0000000-0000-0000-0000-000000000012\"))\n    \
+                   (pad \"1\" smd rect (at -0.8 0)";
+        let text = board_file().replacen("(pad \"1\" smd rect (at -0.8 0)", art, 1).replace("Lib:R0603", "Resistor_SMD:R_0603_1608Metric");
+        let r = read(&dir, json!({ "text": text, "name": "other.kicad_pcb" }).to_string().as_bytes());
+        assert_eq!(r["ok"], true, "{r}");
+        let (rx, ry) = (r["reference"]["x"].as_i64().unwrap(), r["reference"]["y"].as_i64().unwrap());
+        board::step(&dir, eda_ops::Cmd::PasteClipboard { text, at: p(60_000 - rx, 70_000 - ry) }, false, "test").unwrap();
+        let (_, d, model) = board::load(&dir).unwrap();
+        let new_part = model.parts.iter().find(|p| p.reference != "R1").expect("the appended footprint is a part of its own");
+        let fp = model.footprint_of(new_part).expect("and resolves");
+        assert!(fp.art.shapes.iter().any(|s| s.on_layer("F.SilkS")) && fp.art.shapes.iter().any(|s| s.on_layer("F.Fab")), "the file's silkscreen and fab drawings: {:?}", fp.art);
+        let pcb = eda_kicad::export_kicad_pcb(&d, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        assert!(pcb.contains("(fp_line") && pcb.contains("(fp_rect"), "the written board has them");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

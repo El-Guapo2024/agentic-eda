@@ -9,6 +9,7 @@
 // Pure: no store, no DOM. Unit-tested in pcbCarry.test.ts.
 
 import type { BoardState, FieldInfo, Part } from "../api/types";
+import { carryAngleDeg, type FlipDirection } from "./pcbTransform";
 import { padParent } from "./pcbItems";
 import { groupAndDescendants, groupLeaves } from "./groupTree";
 
@@ -19,9 +20,15 @@ export interface CarryPreview {
   refs: readonly string[];
   dxUm: number;
   dyUm: number;
-  /** R presses, counter-clockwise quarter turns (Shift+R takes one away). */
+  /**
+   * R presses (Shift+R takes one away); each turns the carried items counter-clockwise by `rotateStepDeg`, the rotation step of the preferences
+   * (`PCBNEW_SETTINGS::m_RotationAngle`, 90 degrees by default -- hence the name: a quarter turn each).
+   */
   rotateQuarterTurns?: number;
+  rotateStepDeg?: number;
   flipped?: boolean;
+  /** Which axis a flip mirrors across (`PCBNEW_SETTINGS::m_FlipDirection`); left/right when left out. */
+  flipDirection?: FlipDirection;
   /** Where the selection was picked up: the point a turn is about, and the point a flip mirrors about. */
   pivotUm?: readonly [number, number];
   flipPivotUm?: readonly [number, number];
@@ -34,27 +41,35 @@ function after(a: Matrix, b: Matrix): Matrix {
   return [a[0] * b[0] + a[2] * b[1], a[1] * b[0] + a[3] * b[1], a[0] * b[2] + a[2] * b[3], a[1] * b[2] + a[3] * b[3], a[0] * b[4] + a[2] * b[5] + a[4], a[1] * b[4] + a[3] * b[5] + a[5]];
 }
 
-/** `quarterTurnsCcw` turns counter-clockwise on the screen about `(px, py)` (the canvas' `rotate` runs clockwise on a Y-down screen, hence the sign). */
-function turnMatrix(quarterTurnsCcw: number, px: number, py: number): Matrix {
-  const q = ((Math.round(quarterTurnsCcw) % 4) + 4) % 4;
-  // cos and sin of -q * 90 degrees, exactly
-  const [cos, sin] = q === 0 ? [1, 0] : q === 1 ? [0, -1] : q === 2 ? [-1, 0] : [0, 1];
-  return [cos, sin, -sin, cos, px - cos * px + sin * py, py - sin * px - cos * py];
+/**
+ * `degCcw` degrees counter-clockwise on the screen about `(px, py)` (the canvas' `rotate` runs clockwise on a Y-down screen, hence the sign). A multiple of a
+ * quarter turn has its exact cosine and sine, so the usual 90 degree step draws exactly where the verb puts the items.
+ */
+function turnMatrix(degCcw: number, px: number, py: number): Matrix {
+  const quarter = degCcw / 90;
+  const [cos, sin] = Number.isInteger(quarter)
+    ? ((q) => (q === 0 ? [1, 0] : q === 1 ? [0, -1] : q === 2 ? [-1, 0] : [0, 1]))((((quarter % 4) + 4) % 4) as 0 | 1 | 2 | 3)
+    : [Math.cos((-degCcw * Math.PI) / 180), Math.sin((-degCcw * Math.PI) / 180)];
+  return [cos!, sin!, -sin!, cos!, px - cos! * px + sin! * py, py - sin! * px - cos! * py];
 }
 
-/** The mirror about the vertical line through `fx` (`FLIP_DIRECTION::LEFT_RIGHT`). */
-function flipMatrix(fx: number): Matrix {
-  return [-1, 0, 0, 1, 2 * fx, 0];
+/** The mirror about the vertical line through `fx` (`FLIP_DIRECTION::LEFT_RIGHT`) or the horizontal one through `fy` (`TOP_BOTTOM`). */
+function flipMatrix(fx: number, fy: number, direction: FlipDirection): Matrix {
+  return direction === "top_bottom" ? [1, 0, 0, -1, 0, 2 * fy] : [-1, 0, 0, 1, 2 * fx, 0];
 }
 
 /** The transform from where the carried items are to where they are drawn: turned, then flipped, then moved. */
 export function carryMatrix(p: CarryPreview): Matrix {
   let m: Matrix = IDENTITY;
-  if (p.rotateQuarterTurns && p.rotateQuarterTurns % 4 !== 0) {
+  const turned = carryAngleDeg(p.rotateQuarterTurns ?? 0, p.rotateStepDeg ?? 90);
+  if (turned !== 0) {
     const [px, py] = p.pivotUm ?? [0, 0];
-    m = after(turnMatrix(p.rotateQuarterTurns, px, py), m);
+    m = after(turnMatrix(turned, px, py), m);
   }
-  if (p.flipped) m = after(flipMatrix((p.flipPivotUm ?? [0, 0])[0]), m);
+  if (p.flipped) {
+    const [fx, fy] = p.flipPivotUm ?? [0, 0];
+    m = after(flipMatrix(fx, fy, p.flipDirection ?? "left_right"), m);
+  }
   return after([1, 0, 0, 1, p.dxUm, p.dyUm], m);
 }
 

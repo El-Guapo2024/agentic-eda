@@ -9,6 +9,7 @@ mod drc_checks;
 pub mod erc_checks;
 pub mod floorplan;
 pub mod footprint;
+pub mod fp_art;
 pub mod fp_edit;
 pub mod gensym;
 mod groups;
@@ -17,6 +18,7 @@ pub mod kicad_font;
 pub mod kicad_geom;
 pub mod modules;
 pub mod outline;
+pub mod pad_geom;
 pub mod page;
 pub mod rules;
 pub mod sch_clipboard;
@@ -56,6 +58,12 @@ pub struct ConstraintModel {
     /// answers with it first, so the gates, the router and the exports all see the edited pad. Never part of an intent.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub instance_footprints: BTreeMap<String, Footprint>,
+    /// The silkscreen, fab body and texts of the installed KiCad footprint a part's *built-in* package stands for, fitted onto the built-in pads
+    /// (reference -> [`fp_art::FpArt`]): `0603` on an `R` is `Resistor_SMD:R_0603_1608Metric`, and the built-in pads have no outline of their own. Filled by the
+    /// library loader (`eda_kicad::resolve_library_footprints_with`), the way the 3D model of such a part is found; [`ConstraintModel::library_footprint_of`]
+    /// puts it on the built-in footprint it returns. Never part of an intent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub installed_art: BTreeMap<String, fp_art::FpArt>,
     /// Resolved library symbols, keyed by their own `lib_id`: filled in by
     /// `eda-kicad`'s symbol-library loader (real installed `.kicad_sym`
     /// files, falling back to `symbol::builtin`) before the schematic is
@@ -1130,6 +1138,9 @@ impl ConstraintModel {
         for key in [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten() {
             if let Some(mut fp) = footprint::builtin(key) {
                 fp.model = footprint::kicad_footprint_for(&footprint::normalize_name(key), &part.reference, part.value.as_deref()).map(|f| f.model_path());
+                if let Some(art) = self.installed_art.get(&part.reference) {
+                    fp.art = art.clone();
+                }
                 return Some(fp);
             }
         }

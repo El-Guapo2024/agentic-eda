@@ -95,5 +95,10 @@ test("the pad connection choices are KiCad's four, and the default spoke angle f
   assert.equal(defaultSpokeAngleDeg("oval"), 90);
   assert.equal(defaultSpokeAngleDeg("round_rect"), 90);
   assert.equal(defaultSpokeAngleDeg("circle"), 45);
-  assert.equal(defaultSpokeAngleDeg("trapezoid"), 45);
+  // As the file is read and written (`parsePAD`, `format( PAD )`): every shape but a circle and a custom pad with a circular base is 90.
+  assert.equal(defaultSpokeAngleDeg("trapezoid"), 90);
+  assert.equal(defaultSpokeAngleDeg("chamfered_rect"), 90);
+  assert.equal(defaultSpokeAngleDeg("custom"), 45, "a custom pad's base is a circle unless it says rect");
+  assert.equal(defaultSpokeAngleDeg("custom", "circle"), 45);
+  assert.equal(defaultSpokeAngleDeg("custom", "rect"), 90);
 });

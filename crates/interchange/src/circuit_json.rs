@@ -605,7 +605,7 @@ mod tests {
             footprints: vec![eda_model::Footprint {
                 name: "0603".into(),
                 pads: vec![
-                    eda_model::Pad { opposite_side: false,
+                    eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "1".into(),
                         at: (-800_000 / 1000, 0),
                         size: (900, 900),
@@ -616,7 +616,7 @@ mod tests {
                         rot: 0,
                         roundrect_ratio: None,
                     },
-                    eda_model::Pad { opposite_side: false,
+                    eda_model::Pad { opposite_side: false, ext: Default::default(),
                         number: "2".into(),
                         at: (800_000 / 1000, 0),
                         size: (900, 900),
@@ -632,6 +632,7 @@ mod tests {
                 model: None,
                 courtyard_outlines: vec![],
                 models3d: vec![],
+                art: Default::default(),
             }],
             ..model()
         };

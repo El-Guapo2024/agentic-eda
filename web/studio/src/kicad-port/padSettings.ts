@@ -28,6 +28,7 @@ export const DEFAULT_PAD_MASTER: PadSettings = {
   trapezoid_delta: null,
   chamfer_ratio: null,
   chamfer_corners: { top_left: false, top_right: false, bottom_left: false, bottom_right: false },
+  custom: null,
   layers: ["*.Cu", "*.Mask"],
   clearance_override: null,
   thermal_gap_override: null,
@@ -50,6 +51,7 @@ export function settingsOf(pad: LibraryPad): PadSettings {
     trapezoid_delta: pad.trapezoid_delta,
     chamfer_ratio: pad.chamfer_ratio,
     chamfer_corners: pad.chamfer_corners,
+    custom: pad.custom ?? null,
     layers: [...pad.layers],
     clearance_override: pad.clearance_override,
     thermal_gap_override: pad.thermal_gap_override,
@@ -92,7 +94,10 @@ export const PAD_CONNECTION_OPTIONS: { value: PadConnection | ""; label: string 
   { value: "None", label: "None" },
 ];
 
-/** `PADSTACK::DefaultThermalSpokeAngleForShape`, degrees: a + for an oval or (rounded) rectangle, an X for everything else. */
-export function defaultSpokeAngleDeg(shape: LibraryPadShape): number {
-  return shape === "oval" || shape === "rect" || shape === "round_rect" || shape === "chamfered_rect" ? 90 : 45;
+/**
+ * The spoke angle of a pad that sets none, degrees, as `PCB_IO_KICAD_SEXPR` reads and writes it: 45 for a circle and for a custom pad with a circular base, 90 for every
+ * other shape (a + for an oval or (rounded) rectangle, a trapezoid, a chamfered rectangle or a rectangular base).
+ */
+export function defaultSpokeAngleDeg(shape: LibraryPadShape, anchor?: "circle" | "rect" | null): number {
+  return shape === "circle" || (shape === "custom" && anchor !== "rect") ? 45 : 90;
 }

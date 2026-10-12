@@ -15,7 +15,7 @@ import { dpMove, routeMove, routeSetMode } from "../api/client";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { snapPoint } from "../components/canvas/gridHelper";
+import { modificationSnapFor } from "../state/modificationSnap";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { registerPcbRouterSweep } from "./pcbRouterSweep";
 import { registerPcbSelectionSync } from "./pcbSelectionSync";
@@ -168,8 +168,8 @@ export function registerPcbEditSweep(m: Map<string, () => void>, ctx: SweepCtx):
       if (items.length === 0) return;
       let centre = mirrorReferencePoint(board, ids);
       if (!centre) return;
-      // `updateModificationPoint`: several items mirror about the grid-snapped centre of the selection.
-      if (ids.length > 1) centre = snapPoint(centre[0], centre[1], board.snap ?? state.gridUm);
+      // `updateModificationPoint`: several items mirror about the centre of the selection moved to the best snap anchor (anchors, else the grid).
+      if (ids.length > 1) centre = modificationSnapFor(state)(centre);
       const plan = planMirror(board, items, centre, direction);
       void applyEdit(plan.cmds, plan.removed);
     });

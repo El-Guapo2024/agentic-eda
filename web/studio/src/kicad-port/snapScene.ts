@@ -9,6 +9,8 @@
 // Built from `BoardState` (api/types.ts, the type only: this module has no runtime dependency on the app) and cached per board object by `sceneOf`.
 import type { BoardState, BoardText, Dimension, Pad, Part, Shape, Track, Via, Zone } from "../api/types";
 import { arcThrough, box, circle, seg, type ArcG, type Box, type Geom, type Pt } from "./snapGeom";
+import { outlineContains } from "./padOutline";
+import { footprintBox } from "./footprintBox";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 
 export type SnapItemType = "footprint" | "pad" | "track" | "via" | "shape" | "zone" | "dimension" | "text";
@@ -94,7 +96,7 @@ export interface SnapScene {
 /** The part of the board state the scene reads (a test builds one by hand; a `BoardState` is one). */
 export interface SceneBoard {
   layers?: readonly string[];
-  parts: ReadonlyArray<Pick<Part, "ref" | "placed"> & Partial<Pick<Part, "at" | "side" | "pads" | "courtyard">>>;
+  parts: ReadonlyArray<Pick<Part, "ref" | "placed"> & Partial<Pick<Part, "at" | "side" | "pads" | "courtyard" | "body">>>;
   routing?: { tracks: readonly Track[]; vias: readonly Via[]; zones: readonly Zone[] } | null;
   drawings?: { shapes: readonly Shape[]; texts: readonly BoardText[]; dimensions: readonly Dimension[] } | null;
 }
@@ -144,7 +146,9 @@ function distToArc(p: Pt, a: ArcG): number {
 const padHalf = (w: number, h: number) => [w / 2, h / 2] as const;
 
 /** `PAD::HitTest( pos, 0 )`: the point is inside the pad's shape. */
-export function padHit(pad: Pick<Pad, "x" | "y" | "w" | "h" | "round">, p: Pt): boolean {
+export function padHit(pad: Pick<Pad, "x" | "y" | "w" | "h" | "round" | "outline">, p: Pt): boolean {
+  // A trapezoid, a chamfered rectangle or a custom pad is the contours of its copper.
+  if (pad.outline?.length) return outlineContains(pad.outline, p[0], p[1]);
   const [hx, hy] = padHalf(pad.w, pad.h);
   const dx = p[0] - pad.x;
   const dy = p[1] - pad.y;
@@ -272,7 +276,9 @@ export function buildScene(board: SceneBoard): SnapScene {
       counts.set(pad.num, n);
       pads.push(padItem(part, pad, n === 1 ? `${part.ref}.${pad.num}` : `${part.ref}.${pad.num}#${n}`, copper));
     }
-    const fpBox = part.courtyard ? boxOf([part.courtyard[0], part.courtyard[1], part.courtyard[2], part.courtyard[3]]) : pads.length > 0 ? boxOf([Math.min(...pads.map((q) => q.bbox.x0)), Math.min(...pads.map((q) => q.bbox.y0)), Math.max(...pads.map((q) => q.bbox.x1)), Math.max(...pads.map((q) => q.bbox.y1))]) : box(at[0], at[1], at[0], at[1]);
+    // `footprint->GetBoundingBox( false )` (`.Centre()` is the second footprint anchor): kicad-port/footprintBox.ts -- the courtyard and the pads, with the 0.25 mm square round the origin.
+    const own = footprintBox(part, false);
+    const fpBox = own ? boxOf([own[0], own[1], own[2], own[3]]) : box(at[0], at[1], at[0], at[1]);
     const fp: FootprintItem = {
       id: part.ref,
       owner: part.ref,

@@ -1394,7 +1394,7 @@ mod tests {
     use eda_model::footprint::PadShape as ModelPadShape;
 
     fn pad(x: i64, y: i64, shape: ModelPadShape) -> PlacedPad {
-        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1000, 1000), through_hole: false, shape, roundrect_ratio: None }
+        PlacedPad { number: "1".into(), center: IrPoint { x, y }, size: (1000, 1000), through_hole: false, shape, roundrect_ratio: None, pieces: Vec::new() }
     }
 
     fn track(pts: &[(i64, i64)]) -> Track {
@@ -1447,11 +1447,12 @@ mod tests {
 
         let pad1 = Footprint {
             name: "PAD1".into(),
-            pads: vec![Pad { opposite_side: false, number: "1".into(), at: (0, 0), size: (1000, 1000), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1000, 1000), shape: ModelPadShape::Rect, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         };
         let part = |r: &str| Part {
             reference: r.into(),

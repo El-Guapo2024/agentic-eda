@@ -38,6 +38,23 @@ test("carryMatrix: F mirrors left-right about the flip point, then the move", ()
   near(carryPoint({ refs: [], dxUm: 100, dyUm: 200, flipped: true, flipPivotUm: [5000, 0] }, [4000, 700]), [6100, 900]);
 });
 
+test("carryMatrix: R turns by the rotation step of the preferences, not always a quarter", () => {
+  // 45 degrees counter-clockwise about the origin takes (1000, 0) to (707.1, -707.1) on the screen (y down)
+  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 1, rotateStepDeg: 45, pivotUm: [0, 0] }, [1000, 0]), [1000 * Math.SQRT1_2, -1000 * Math.SQRT1_2]);
+  // two presses of 45 are one quarter, exactly
+  assert.deepEqual(carryPoint({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 2, rotateStepDeg: 45, pivotUm: [0, 0] }, [1000, 0]).map(Math.round), [0, -1000]);
+  // 24 presses of 15 are a full turn: the identity
+  near(carryMatrix({ refs: [], dxUm: 0, dyUm: 0, rotateQuarterTurns: 24, rotateStepDeg: 15, pivotUm: [3, 4] }), [1, 0, 0, 1, 0, 0]);
+});
+
+test("carryMatrix: F mirrors across the flip direction of the preferences", () => {
+  // top/bottom mirrors y about the horizontal line through the flip point, x stays
+  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, flipped: true, flipDirection: "top_bottom", flipPivotUm: [0, 5000] }, [4000, 4000]), [4000, 6000]);
+  near(carryPoint({ refs: [], dxUm: 10, dyUm: 20, flipped: true, flipDirection: "top_bottom", flipPivotUm: [0, 5000] }, [4000, 4000]), [4010, 6020]);
+  // left/right is the default
+  near(carryPoint({ refs: [], dxUm: 0, dyUm: 0, flipped: true, flipPivotUm: [5000, 0] }, [4000, 700]), [6000, 700]);
+});
+
 test("carryMatrix: turn first, then flip, then move -- the order planCarry sends them in", () => {
   const p = { refs: [], dxUm: 300, dyUm: 400, rotateQuarterTurns: 1, flipped: true, pivotUm: [0, 0] as [number, number], flipPivotUm: [1000, 0] as [number, number] };
   // (1000, 0) -> turned about (0,0): (0, -1000) -> mirrored about x = 1000: (2000, -1000) -> moved: (2300, -600)

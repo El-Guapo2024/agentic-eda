@@ -36,6 +36,10 @@ pub struct PlacedPad {
     /// Corner ratio for `PadShape::RoundRect`; `None` = KiCad's own
     /// default (0.25).
     pub roundrect_ratio: Option<f64>,
+    /// The pad's copper in board space when `shape` and `size` do not give it -- a trapezoid, a chamfered rectangle, a custom pad, a
+    /// pad whose copper is off its position ([`crate::pad_geom::pad_pieces`]); empty for the rest. [`PlacedPad::signed_distance`]
+    /// measures to it, so a connection and a clearance see the real copper and not the box round it.
+    pub pieces: Vec<crate::pad_geom::PadPiece>,
 }
 
 impl PlacedPad {
@@ -57,6 +61,9 @@ impl PlacedPad {
     /// Exact for rect/roundrect/circle; ovals use the inscribed ellipse
     /// scaled by the shorter radius (conservative).
     pub fn signed_distance(&self, p: Point) -> f64 {
+        if !self.pieces.is_empty() {
+            return self.pieces.iter().map(|q| q.signed_distance((p.x as f64, p.y as f64))).fold(f64::INFINITY, f64::min);
+        }
         let (hw, hh) = (self.size.0 as f64 / 2.0, self.size.1 as f64 / 2.0);
         let (dx, dy) = ((p.x - self.center.x) as f64, (p.y - self.center.y) as f64);
         if self.is_round() {
@@ -150,14 +157,39 @@ pub fn placed_pads(model: &ConstraintModel, part: &Part, fp: &FootprintInstance)
             center: to_board(fp, p.at),
             // The pad's own rotation is relative to the footprint, applied
             // before the footprint's own rotation/mirror -- see `Pad::rot`.
-            size: rotated_extent_by(fp.rot as i64 + p.rot as i64, p.size),
+            size: placed_extent(fp, p),
             through_hole: p.kind != PadKind::Smd,
             shape: p.shape,
             roundrect_ratio: p.roundrect_ratio,
+            pieces: placed_pieces(fp, p),
         })
         .collect();
     pads.sort_by(|a, b| a.number.cmp(&b.number));
     Some(pads)
+}
+
+/// The extents of pad `p` of `fp` about the pad's position: its size turned by the pad's and the footprint's rotation. A trapezoid, a
+/// chamfered rectangle, a custom pad and a pad whose copper is off its position are measured by their true outline
+/// ([`crate::pad_geom::pad_pieces`]), so the box the placer and the grid router keep clear always holds the copper.
+fn placed_extent(fp: &FootprintInstance, p: &Pad) -> (Um, Um) {
+    let pieces = placed_pieces(fp, p);
+    if pieces.is_empty() {
+        return rotated_extent_by(fp.rot as i64 + p.rot as i64, p.size);
+    }
+    let centre = to_board(fp, p.at);
+    let Some((x0, y0, x1, y1)) = crate::pad_geom::pieces_bbox(&pieces) else { return rotated_extent_by(fp.rot as i64 + p.rot as i64, p.size) };
+    let (cx, cy) = (centre.x as f64, centre.y as f64);
+    (2 * (x1 - cx).max(cx - x0).ceil() as Um, 2 * (y1 - cy).max(cy - y0).ceil() as Um)
+}
+
+/// The copper of pad `p` of `fp` in board space as pieces ([`crate::pad_geom::pad_pieces`]) when its shape and size do not give it (a
+/// trapezoid, a chamfered rectangle, a custom pad, copper off the pad's position); empty for the rest.
+pub fn placed_pieces(fp: &FootprintInstance, p: &Pad) -> Vec<crate::pad_geom::PadPiece> {
+    if !(p.has_complex_outline() || p.ext.offset.is_some()) {
+        return Vec::new();
+    }
+    let frame = crate::pad_geom::PadFrame::of(fp, p, to_board(fp, p.at));
+    crate::pad_geom::pad_pieces(p).iter().map(|q| q.map(&|v| frame.to_board(v))).collect()
 }
 
 /// Board-space courtyard rectangle `(min_x, min_y, max_x, max_y)` of `fp`.
@@ -259,7 +291,7 @@ pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInst
     Some((fp.at.x - w / 2, fp.at.y - h / 2, fp.at.x + w / 2, fp.at.y + h / 2))
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Footprint {
     pub name: String,
@@ -294,6 +326,10 @@ pub struct Footprint {
     /// table entry. When it is not empty it is the whole list and `model` is only its first path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models3d: Vec<Model3d>,
+    /// The silkscreen, the fab body, the assembly drawings and the texts of the footprint (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve`,
+    /// `fp_text user`), in the footprint's frame: [`crate::fp_art`]. Empty for a built-in footprint, and for a design from before this existed.
+    #[serde(default, skip_serializing_if = "crate::fp_art::FpArt::is_empty")]
+    pub art: crate::fp_art::FpArt,
 }
 
 /// One `(model "path" (offset (xyz ..)) (scale (xyz ..)) (rotate (xyz ..)))` of a footprint: KiCad's `FP_3DMODEL` (`pcbnew/footprint.h`).
@@ -415,6 +451,9 @@ pub struct Pad {
     /// connector). `false` -- the usual case -- means the footprint's side.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub opposite_side: bool,
+    /// The offset of the copper, a trapezoid's deltas, a chamfered rectangle's corners and a custom pad's primitives.
+    #[serde(default, skip_serializing_if = "PadShapeExt::is_default")]
+    pub ext: PadShapeExt,
 }
 
 impl Pad {
@@ -457,6 +496,26 @@ impl Footprint {
                     bad(&format!("pad {}", p.number), format!("roundrect ratio {r} is outside 0.0..=0.5 (a fraction of the shorter side)"));
                 }
             }
+            // `PAD::doCheckPad`: a chamfer cannot be negative nor cut more than the side there is; a trapezoid cannot narrow a side past nothing.
+            if p.shape == PadShape::ChamferedRect {
+                let r = p.ext.chamfer_ratio.unwrap_or(0.2);
+                let adjacent = {
+                    let c = p.ext.chamfer_corners;
+                    (c.top_left && (c.top_right || c.bottom_left)) || (c.bottom_right && (c.top_right || c.bottom_left))
+                };
+                if r < 0.0 {
+                    bad(&format!("pad {}", p.number), "negative corner chamfer is not allowed".into());
+                } else if r > if adjacent { 0.5 } else { 1.0 } {
+                    bad(&format!("pad {}", p.number), "corner chamfer is too large".into());
+                }
+            }
+            if p.shape == PadShape::Trapezoid {
+                if let Some((dx, dy)) = p.ext.trapezoid_delta {
+                    if dx.abs() > p.size.1 || dy.abs() > p.size.0 {
+                        bad(&format!("pad {}", p.number), "trapezoid delta is too large".into());
+                    }
+                }
+            }
             if matches!(p.kind, PadKind::ThroughHole | PadKind::NonPlatedHole) {
                 // A non-plated hole is normal at size == drill (no annular
                 // ring by definition -- there is no copper); only a plated
@@ -491,6 +550,8 @@ impl Footprint {
     }
 }
 
+/// `PAD_SHAPE` (`pcbnew/padstack.h`). A pad's size is its bounding box before the pad's own rotation: for a trapezoid or a chamfered
+/// rectangle that is the rectangle the shape is cut from, for a custom pad the size of its anchor (the primitives are laid over it).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PadShape {
@@ -499,6 +560,90 @@ pub enum PadShape {
     RoundRect,
     Circle,
     Oval,
+    /// `PAD_SHAPE::TRAPEZOID`: a rectangle whose opposite sides differ in length by [`PadShapeExt::trapezoid_delta`].
+    Trapezoid,
+    /// `PAD_SHAPE::CHAMFERED_RECT`: a rectangle with the corners of [`PadShapeExt::chamfer_corners`] cut off (by
+    /// [`PadShapeExt::chamfer_ratio`] of the shorter side) and the others rounded by `roundrect_ratio`. The file writes it as `roundrect`.
+    ChamferedRect,
+    /// `PAD_SHAPE::CUSTOM`: an anchor (a circle or a rectangle of the pad's size) and the primitives of [`PadCustom`].
+    Custom,
+}
+
+/// `PAD::GetAnchorPadShape`: a custom pad's anchor is one of the two basic shapes (`(options (anchor circle|rect))`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadAnchor {
+    #[default]
+    Circle,
+    Rect,
+}
+
+/// `CUSTOM_SHAPE_ZONE_MODE`: what a zone keeps clear of for a custom pad -- the pad's shape, or the convex hull of it
+/// (`(options (clearance outline|convexhull))`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomZoneMode {
+    #[default]
+    Outline,
+    ConvexHull,
+}
+
+/// One basic shape of a custom pad (a `PCB_SHAPE` in `PAD::GetPrimitives`): `gr_line`, `gr_arc`, `gr_circle`, `gr_rect`, `gr_poly` or
+/// `gr_curve`, in the pad's own frame (the pad's position is the origin, its rotation not applied). Stroked at `stroke_width`, and
+/// filled for a circle, a rectangle or a polygon when `filled`. Reuses [`crate::ir::Shape`]: its `layer` and `id` mean nothing here
+/// and stay empty.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadPrimitive {
+    pub shape: crate::ir::Shape,
+    /// `PCB_SHAPE::IsProxyItem`: a `gr_bbox` (the box the pad's number is placed in) or a `gr_vector` (a thermal spoke template).
+    /// Not copper.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub proxy: bool,
+}
+
+/// What a custom pad adds to its anchor (`PADSTACK` of a `CUSTOM` pad, `(options ..)` and `(primitives ..)`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadCustom {
+    #[serde(default)]
+    pub anchor: PadAnchor,
+    #[serde(default)]
+    pub zone: CustomZoneMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primitives: Vec<PadPrimitive>,
+}
+
+/// The rest of one layer of a pad's `PADSTACK` (`padstack.h`, `COPPER_LAYER_PROPS`) beyond the shape, the size and the corner
+/// ratio the pad has fields for: the offset of the copper from the pad's position, a trapezoid's deltas, a chamfered rectangle's
+/// ratio and corners, and a custom pad's anchor and primitives. All of it in the footprint's frame as seen from the top, like
+/// `Pad::at` (a bottom-side footprint mirrors x when it is placed, and the file mirrors it back).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PadShapeExt {
+    /// `PAD::GetOffset`: where the copper's centre is from the pad's position (where the hole is), in the pad's own frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<(Um, Um)>,
+    /// `PAD::GetDelta` (`(rect_delta dx dy)`): a trapezoid's difference between its two parallel sides, KiCad keeps one of the two
+    /// zero. `dx` narrows the sides left and right (the top and bottom ones differ), `dy` the top and bottom.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trapezoid_delta: Option<(Um, Um)>,
+    /// `PAD::GetChamferRectRatio` (`(chamfer_ratio r)`): the size of the cut as a fraction of the shorter side.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chamfer_ratio: Option<f64>,
+    /// `PAD::GetChamferPositions` (`(chamfer top_left ..)`).
+    #[serde(default, skip_serializing_if = "crate::ir::ChamferCorners::is_none")]
+    pub chamfer_corners: crate::ir::ChamferCorners,
+    /// The anchor and primitives of a custom pad.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom: Option<PadCustom>,
+}
+
+impl PadShapeExt {
+    /// Nothing beyond the plain shape (the field is then not written).
+    pub fn is_default(&self) -> bool {
+        *self == PadShapeExt::default()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -520,10 +665,17 @@ impl Footprint {
     pub fn pad_bbox(&self) -> (Um, Um, Um, Um) {
         let mut b = (Um::MAX, Um::MAX, Um::MIN, Um::MIN);
         for p in &self.pads {
-            b.0 = b.0.min(p.at.0 - p.size.0 / 2);
-            b.1 = b.1.min(p.at.1 - p.size.1 / 2);
-            b.2 = b.2.max(p.at.0 + p.size.0 / 2);
-            b.3 = b.3.max(p.at.1 + p.size.1 / 2);
+            // A trapezoid, a custom pad or copper off the pad's position reaches where its outline does, not where its size says.
+            let (x0, y0, x1, y1) = if p.has_complex_outline() || p.ext.offset.is_some() {
+                let (x0, y0, x1, y1) = p.local_bbox();
+                (p.at.0 + x0.floor() as Um, p.at.1 + y0.floor() as Um, p.at.0 + x1.ceil() as Um, p.at.1 + y1.ceil() as Um)
+            } else {
+                (p.at.0 - p.size.0 / 2, p.at.1 - p.size.1 / 2, p.at.0 + p.size.0 / 2, p.at.1 + p.size.1 / 2)
+            };
+            b.0 = b.0.min(x0);
+            b.1 = b.1.min(y0);
+            b.2 = b.2.max(x1);
+            b.3 = b.3.max(y1);
         }
         if self.pads.is_empty() {
             (0, 0, 0, 0)
@@ -581,7 +733,7 @@ impl Pad {
     /// A pad with no per-pad rotation, no slot drill, and KiCad's default
     /// roundrect ratio -- what every built-in package uses.
     fn simple(number: impl Into<String>, at: (Um, Um), size: (Um, Um), shape: PadShape, kind: PadKind, drill: Option<Um>) -> Self {
-        Pad { opposite_side: false, number: number.into(), at, size, shape, kind, drill, drill_slot: None, rot: 0, roundrect_ratio: None }
+        Pad { opposite_side: false, ext: Default::default(), number: number.into(), at, size, shape, kind, drill, drill_slot: None, rot: 0, roundrect_ratio: None }
     }
 }
 
@@ -596,6 +748,7 @@ fn two_pad(name: &str, pitch: Um, pw: Um, ph: Um) -> Footprint {
         model: None,
         courtyard_outlines: vec![],
         models3d: vec![],
+        art: Default::default(),
     }
 }
 
@@ -614,7 +767,7 @@ fn dual_row(name: &str, n: usize, pitch: Um, col_x: Um, pw: Um, ph: Um) -> Footp
     for i in 0..per_col {
         pads.push(Pad::simple((per_col + i + 1).to_string(), (col_x, y0 + (per_col - 1 - i) as Um * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
-    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![] }
+    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 /// Single-row 2.54 mm through-hole header, `n` pins along +x, centred.
@@ -623,7 +776,7 @@ fn pin_header(name: &str, n: usize) -> Footprint {
     let pads = (0..n)
         .map(|i| Pad::simple((i + 1).to_string(), (x0 + i as Um * 2540, 0), (1700, 1700), if i == 0 { PadShape::Rect } else { PadShape::Circle }, PadKind::ThroughHole, Some(1000)))
         .collect();
-    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![] }
+    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 /// All fixed-key built-ins (excludes the generic `PINHEADER-N` family, which
@@ -665,6 +818,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         },
         // Package_TO_SOT_SMD.pretty/SOT-23-5.kicad_mod / SOT-23-6.kicad_mod:
         // both columns at x = ∓1.1375mm, pitch 0.95mm. SOT-23-5 omits the
@@ -700,6 +854,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         },
         // Package_SO.pretty SOIC-8/14/16_3.9x*mm_P1.27mm.
         "SOIC-8" => dual_row(&key, 8, 1270, 2475, 1950, 600),
@@ -978,7 +1133,7 @@ mod tests {
         // footprint, must present the same board-space extent as an
         // unrotated pad inside a footprint rotated 90 degrees: rotation
         // composes additively regardless of which side contributes it.
-        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![] };
+        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         fp.pads[0].rot = 90_000;
         let (model, part) = part_with("T", fp.clone());
         let via_pad_rot = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -1008,6 +1163,7 @@ mod tests {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         };
         let (model, part) = part_with("CONN", shield);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -1030,6 +1186,7 @@ mod tests {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         };
         let (model, part) = part_with("T", fp);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();

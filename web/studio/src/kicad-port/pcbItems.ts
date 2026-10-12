@@ -11,6 +11,7 @@ import type { BoardState, BoardText, Pad, Part, Shape } from "../api/types";
 import { shapeBoundingBox, textBoundingBox } from "../components/canvas/itemHitTest";
 import { circumcircle } from "./trackArc";
 import { fieldAsText, fieldById } from "./fpFields";
+import { footprintBox } from "./footprintBox";
 import { groupLeaves } from "./groupTree";
 
 export type ItemKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "group" | "pad" | "field";
@@ -133,15 +134,19 @@ export function itemPosition(board: BoardState, id: string): [number, number] | 
   }
 }
 
-/** The item's bounding box `[x0, y0, x1, y1]` (copper and strokes include half their width, like `GetBoundingBox`). */
-export function itemBounds(board: BoardState, id: string): [number, number, number, number] | null {
+/**
+ * The item's bounding box `[x0, y0, x1, y1]` (copper and strokes include half their width, like `GetBoundingBox`). A footprint's is
+ * `FOOTPRINT::GetBoundingBox( aIncludeText )` (kicad-port/footprintBox.ts): the text-included one by default, which is what `EDA_ITEM::GetBoundingBox()` answers
+ * and so what a selection's centre, a group's box and Zoom to Selection join; Align and Distribute ask for `{ includeText: false }`.
+ */
+export function itemBounds(board: BoardState, id: string, opts: { includeText?: boolean } = {}): [number, number, number, number] | null {
   const kind = itemKind(board, id);
   switch (kind) {
     case "part": {
       const p = board.parts.find((q) => q.ref === id);
       if (!p?.at) return null;
-      if (p.courtyard) return [p.courtyard[0], p.courtyard[1], p.courtyard[2], p.courtyard[3]];
-      return [p.at[0], p.at[1], p.at[0], p.at[1]];
+      const box = footprintBox(p, opts.includeText ?? true, (f) => (f.text === "" ? null : textBounds(fieldAsText(f))));
+      return box ? [box[0], box[1], box[2], box[3]] : null;
     }
     case "track": {
       const t = board.routing?.tracks.find((q) => q.id === id);

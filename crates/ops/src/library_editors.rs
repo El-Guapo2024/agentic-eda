@@ -89,6 +89,7 @@ pub fn import_pad_settings(dst: &mut LibraryPad, master: &LibraryPad) {
     dst.trapezoid_delta = master.trapezoid_delta;
     dst.chamfer_ratio = master.chamfer_ratio;
     dst.chamfer_corners = master.chamfer_corners;
+    dst.custom = master.custom.clone();
     dst.clearance_override = master.clearance_override;
     dst.thermal_gap_override = master.thermal_gap_override;
     dst.thermal_spoke_width_override = master.thermal_spoke_width_override;
@@ -381,6 +382,7 @@ mod verb_tests {
             trapezoid_delta: None,
             chamfer_ratio: None,
             chamfer_corners: eda_model::ir::ChamferCorners::default(),
+            custom: None,
             layers: vec![],
             clearance_override: None,
             thermal_gap_override: None,
@@ -439,6 +441,29 @@ mod verb_tests {
         assert_eq!(dst.kind, eda_model::footprint::PadKind::ThroughHole);
         assert_eq!(dst.layers, vec!["*.Cu".to_string(), "*.Mask".to_string()]);
         assert_eq!(dst.clearance_override, Some(250));
+    }
+
+    #[test]
+    fn import_pad_settings_carries_a_trapezoids_delta_a_chamfers_corners_and_a_custom_pads_shapes() {
+        use eda_model::footprint::{CustomZoneMode, PadAnchor, PadCustom, PadPrimitive};
+        use eda_model::ir::{ChamferCorners, Point, Shape};
+        let mut master = pad("M", 0);
+        master.shape = eda_model::ir::LibraryPadShape::Custom;
+        master.trapezoid_delta = Some((0, 200));
+        master.chamfer_ratio = Some(0.3);
+        master.chamfer_corners = ChamferCorners { top_left: true, bottom_right: true, ..Default::default() };
+        master.custom = Some(PadCustom {
+            anchor: PadAnchor::Rect,
+            zone: CustomZoneMode::ConvexHull,
+            primitives: vec![PadPrimitive { shape: Shape::Segment { id: String::new(), layer: String::new(), stroke_width: 200, filled: false, start: Point { x: 0, y: 0 }, end: Point { x: 1500, y: 0 } }, proxy: false }],
+        });
+        let mut dst = pad("7", 5000);
+        assert_eq!(dst.custom, None);
+        import_pad_settings(&mut dst, &master);
+        // What `PAD::ImportSettingsFrom` copies is the pad's whole shape, whatever kind it is; the number and position stay.
+        assert_eq!(dst.custom, master.custom);
+        assert_eq!((dst.shape, dst.trapezoid_delta, dst.chamfer_ratio, dst.chamfer_corners), (master.shape, master.trapezoid_delta, master.chamfer_ratio, master.chamfer_corners));
+        assert_eq!((dst.number.as_str(), dst.at.x), ("7", 5000));
     }
 
     #[test]

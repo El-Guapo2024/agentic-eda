@@ -29,6 +29,10 @@ export interface RouterSettings {
   freeAngleMode: boolean;
   /** `GetFixAllSegments()` -- "Fix all segments on click". */
   fixAllSegments: boolean;
+  /** `SmoothDraggedSegments()` -- "Smooth dragged segments": a dragged segment or corner snaps to line up with the segments around it. */
+  smoothDragged: boolean;
+  /** `GetSnapToTracks()`: not a row of the dialog but the magnetic setting for tracks (`TOOL_BASE::checkSnap`) -- a route ends on the same-net track under the cursor. Set by the canvas ([`withTrackSnapping`]); left out, the router's own default (on). */
+  snapToTracks?: boolean;
 }
 
 /** `ROUTING_SETTINGS`' constructor (pns_routing_settings.cpp): Walk around, medium effort, shove vias, remove loops, smart pads, fix all segments. */
@@ -42,11 +46,13 @@ export const DEFAULT_ROUTER_SETTINGS: RouterSettings = {
   allowDrcViolations: false,
   freeAngleMode: false,
   fixAllSegments: true,
+  smoothDragged: true,
 };
 
 /** The `settings` object of the router's start requests (`settings_of` in crates/cli/src/route_api.rs). */
 export function routerSettingsToWire(s: RouterSettings): Record<string, string | boolean> {
   return {
+    ...(s.snapToTracks === undefined ? {} : { snap_to_tracks: s.snapToTracks }),
     mode: s.mode,
     optimizer_effort: s.optimizerEffort,
     shove_vias: s.shoveVias,
@@ -56,7 +62,13 @@ export function routerSettingsToWire(s: RouterSettings): Record<string, string |
     allow_drc_violations: s.allowDrcViolations,
     free_angle_mode: s.freeAngleMode,
     fix_all_segments: s.fixAllSegments,
+    smooth_dragged_segments: s.smoothDragged,
   };
+}
+
+/** `TOOL_BASE::checkSnap`: the router snaps a route's end onto a same-net track only when the magnetic setting for tracks allows it (its default captures the cursor in the track tool). The canvas's own snapping (`PcbSnap.routePoint`) has already put the cursor on the track; this tells the router to take it as the end. */
+export function withTrackSnapping(s: RouterSettings, magneticTracks: "never" | "track-tool" | "always"): RouterSettings {
+  return { ...s, snapToTracks: magneticTracks !== "never" };
 }
 
 /** The options `DIALOG_PNS_SETTINGS::onModeChange` switches with the mode: the two under Highlight collisions, the two under Shove. */
@@ -72,7 +84,6 @@ export function modeOptionEnabled(option: ModeOption, mode: RouteMode): boolean 
  * (the same convention the Board Setup and zone dialogs use for a field with nothing behind it).
  */
 export const UNSUPPORTED_ROUTER_OPTIONS = {
-  smoothDragged: "Not implemented: the corner drag moves a vertex and does not snap or merge segments (DRAGGER::dragCorner45 and the segment slide are not ported).",
-  optimizeEntireDraggedTrack: "Not implemented: a drag is not optimized afterwards (DRAGGER::optimizeAndUpdateDraggedLine is not ported).",
+  optimizeEntireDraggedTrack: "Not implemented: a drag is not optimized afterwards (DRAGGER::optimizeAndUpdateDraggedLine needs the optimizer's KEEP_TOPOLOGY and PRESERVE_VERTEX, which are not ported).",
   autoPosture: "Not implemented: the posture follows the last segment and the / key. The router is asked one cursor position at a time, with no mouse trail to read it from (MOUSE_TRAIL_TRACER is not ported).",
 } as const;

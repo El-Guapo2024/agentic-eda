@@ -49,14 +49,37 @@ export interface Pad {
   mask_margin?: Um | null;
   paste_margin?: Um | null;
   paste_ratio?: number | null;
+  /** A trapezoid's two deltas (`PAD::GetDelta`, KiCad keeps one of them zero); null for any other shape. */
+  delta?: [Um, Um] | null;
+  /** A chamfered rectangle's ratio and corners (`PAD::GetChamferRectRatio`, `GetChamferPositions`); null for any other shape. */
+  chamfer_ratio?: number | null;
+  chamfer_corners?: ChamferCorners | null;
+  /** A custom pad's anchor, zone knockout and basic shapes (`PadCustom`); null for any other shape. */
+  custom?: PadCustom | null;
+  /**
+   * The copper of a trapezoid, a chamfered rectangle or a custom pad as the DRC measures it (`eda_drc::pad_shape::pad_outline`): contours in micrometres on the
+   * board, the outline of each piece first and then its holes. Fill them with the even-odd rule. Absent for the shapes that `w`, `h` and `shape` draw.
+   */
+  outline?: [Um, Um][][] | null;
   /** True once the pad has an edit of its own in the design. */
   edited?: boolean;
   /** The edit as stored (`PadEditCmd`), for the dialog to send back with the one change it makes. */
   edit?: PadEditCmd | null;
 }
 
-/** The engine's four pad shapes (`eda_model::PadShape`) and three pad types (`PadKind`), as the studio state names them. */
-export type PadShapeName = "rect" | "round_rect" | "circle" | "oval";
+/** The engine's pad shapes (`eda_model::PadShape`) and three pad types (`PadKind`), as the studio state names them. */
+export type PadShapeName = "rect" | "round_rect" | "circle" | "oval" | "trapezoid" | "chamfered_rect" | "custom";
+/** `eda_model::footprint::PadPrimitive`: a basic shape of a custom pad, in the pad's own frame (the pad's position is the origin). A proxy item is not copper. */
+export interface PadPrimitive {
+  shape: CmdShape;
+  proxy?: boolean;
+}
+/** `eda_model::footprint::PadCustom`: a custom pad's anchor (`PAD::GetAnchorPadShape`), what a zone keeps clear of (`CUSTOM_SHAPE_ZONE_MODE`) and its basic shapes. */
+export interface PadCustom {
+  anchor: "circle" | "rect";
+  zone: "outline" | "convex_hull";
+  primitives: PadPrimitive[];
+}
 export type PadKindName = "smd" | "through_hole" | "non_plated_hole";
 
 /**
@@ -104,6 +127,40 @@ export interface FootprintAttrsInfo {
 /** `[minX, minY, maxX, maxY]`, footprint-local, µm. */
 export type CourtyardBox = [Um, Um, Um, Um];
 
+/** `STROKE_PARAMS`' line style, the words `(stroke (type ..))` uses. A solid (or `default`) stroke has no `dash` on the wire. */
+export type FpDash = "dash" | "dot" | "dash_dot" | "dash_dot_dot";
+/** `FILL_T`'s hatched fills. */
+export type FpHatch = "hatch" | "reverse_hatch" | "cross_hatch";
+
+interface FpGraphicCommon {
+  layer: string;
+  stroke_width: Um;
+  /** Absent when false. */
+  filled?: boolean;
+  dash?: FpDash;
+  hatch?: FpHatch;
+  /** Every layer of a shape that is on several (`layer` is the first). */
+  layers?: string[];
+}
+
+/**
+ * One graphic of a placed footprint (crates/cli/src/fp_art_json.rs, `Part.graphics`): the silkscreen outline, the pin-1 mark, the fab body, an assembly drawing -- the
+ * `Shape` the board's own graphics are, in board space like the pads, without an `id` (kicad-port/fpArt.ts `graphicsOf` gives them complete).
+ */
+export type FpGraphic =
+  | (FpGraphicCommon & { kind: "segment"; start: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "arc"; start: [Um, Um]; mid: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "rect"; start: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "circle"; center: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "polygon"; pts: [Um, Um][] })
+  | (FpGraphicCommon & { kind: "bezier"; start: [Um, Um]; c1: [Um, Um]; c2: [Um, Um]; end: [Um, Um] });
+
+/** One text of a placed footprint (`fp_text user`, `Part.texts`): the keys of a field, at the absolute angle it has on the board, variables resolved. */
+export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout"> & {
+  /** Set when the text is exactly `${REFERENCE}` or `${VALUE}`: the Appearance panel's References and Values rows switch it (`PCB_TEXT::ViewGetLOD`). */
+  role?: "reference" | "value";
+};
+
 export interface Part {
   ref: string;
   value: string | null;
@@ -143,6 +200,10 @@ export interface Part {
   /** How KiCad's 3D viewer sorts the part's models: a through-hole model (`tht`), an SMD one or a virtual one (`BOARD_ADAPTER::IsFootprintShown`). */
   kind3d?: "smd" | "tht" | "virtual";
   pads?: Pad[];
+  /** The footprint's silkscreen, fab and assembly drawings, board space (absent when it has none). */
+  graphics?: FpGraphic[];
+  /** The footprint's own texts (`${REFERENCE}` on the fab layer ...), board space (absent when it has none). */
+  texts?: FpTextInfo[];
   /** Reference, Value and the user fields, as they are on the board (absent from an older backend). */
   fields?: FieldInfo[];
   /** The attributes in effect: the edit's, else derived from the pads and the schematic symbol. */
@@ -490,8 +551,8 @@ export interface CmdDimension {
 // `Shape`/`BoardText` above are `state()`'s own hand-built `[x,y]`-pair
 // display shape, which only /api/state uses.
 
-/** `crates/model/src/ir.rs` `LibraryPadShape` (`PAD_SHAPE`, minus KiCad's custom/primitive-based shape -- see that enum's own doc on why). */
-export type LibraryPadShape = "circle" | "rect" | "oval" | "round_rect" | "trapezoid" | "chamfered_rect";
+/** `crates/model/src/ir.rs` `LibraryPadShape` (`PAD_SHAPE`); a custom pad keeps its anchor and basic shapes in `LibraryPad::custom`. */
+export type LibraryPadShape = "circle" | "rect" | "oval" | "round_rect" | "trapezoid" | "chamfered_rect" | "custom";
 
 /** `crates/model/src/footprint.rs` `PadKind`. */
 export type PadKind = "smd" | "through_hole" | "non_plated_hole";
@@ -529,6 +590,8 @@ export interface LibraryPad {
   /** Fraction of the shorter side, same shape as `roundrect_ratio`. Only meaningful for `"chamfered_rect"`. */
   chamfer_ratio: number | null;
   chamfer_corners: ChamferCorners;
+  /** A custom pad's anchor, zone knockout and basic shapes (`PAD::GetPrimitives`); absent or null for any other shape. */
+  custom?: PadCustom | null;
   /** KiCad layer names this pad occupies ("F.Cu", "F.Paste", "F.Mask", "*.Cu", ...) -- the Pad Properties dialog's layer-preset buttons fill this in; empty means "not set yet". */
   layers: string[];
   /** `None`/`null` = inherit the board/footprint default, KiCad's own 0-means-inherit convention. */
@@ -943,7 +1006,7 @@ export interface PadEditCmd {
   number: string;
   nth?: number;
   kind?: "smd" | "through_hole" | "non_plated_hole";
-  shape?: "rect" | "round_rect" | "circle" | "oval";
+  shape?: PadShapeName;
   size?: [Um, Um];
   drill?: Um;
   drill_slot?: [Um, Um];
@@ -953,6 +1016,13 @@ export interface PadEditCmd {
   solder_mask_margin?: Um;
   solder_paste_margin?: Um;
   solder_paste_margin_ratio?: number;
+  /** A trapezoid's deltas; `[0, 0]` takes the delta away. */
+  trapezoid_delta?: [Um, Um];
+  /** A chamfered rectangle's chamfer ratio, `0..1` of the shorter side, and the corners it cuts. */
+  chamfer_ratio?: number;
+  chamfer_corners?: ChamferCorners;
+  /** A custom pad's anchor, zone knockout and basic shapes, replaced whole. */
+  custom?: PadCustom;
 }
 
 /**
@@ -1004,6 +1074,9 @@ export interface ImportSymbolGraphicsCmd {
   offset_y_nm?: number;
   line_width_um?: Um;
 }
+
+/** `PASTE_MODE` (`include/dialogs/dialog_paste_special.h`): the reference designators of pasted footprints are given the next free number ("unique"), left as the clipboard has them even if another footprint has them ("keep", a plain paste's default) or cleared to `REF**` ("remove"). */
+export type PcbPasteMode = "unique" | "keep" | "remove";
 
 export type Cmd =
   | { op: "place"; part: string; anchor: string; side: Dir }
@@ -1148,14 +1221,15 @@ export type Cmd =
   | { op: "move_text"; id: string; x: Um; y: Um }
   /**
    * `dialog_global_edit_text_and_graphics.cpp`'s "Apply and Close",
-   * scoped to this model's two free-standing board drawing kinds (no
-   * footprint reference/value fields, dimensions, tables or barcodes
-   * exist as editable board items here -- see PARITY-pcb.md). Every
-   * field omitted (or `null`) leaves that property alone; filtering
-   * (item type/layer/"selected only") is `GlobalEditTextAndGraphicsDialog.tsx`'s
-   * own client-side job.
+   * scoped to the free-standing board items this model has: graphics,
+   * text and dimensions (no footprint reference/value fields, tables or
+   * barcodes exist as editable board items here -- see PARITY-pcb.md).
+   * Every field omitted (or `null`) leaves that property alone;
+   * `layer_defaults` is "Set to layer default values:" and ignores the
+   * fields. Filtering (scope, layer, "selected only") is
+   * `kicad-port/globalEditTextGraphics.ts`'s client-side job.
    */
-  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
+  | { op: "edit_text_and_graphics"; shape_ids?: string[]; text_ids?: string[]; dimension_ids?: string[]; layer_defaults?: boolean; layer?: string | null; line_width?: Um | null; text_size?: Um | null; text_thickness?: Um | null }
   /** Cmd+D (`EDIT_TOOL::Duplicate`): exact copies of the named items in place, under fresh ids -- footprints (as new parts), tracks, vias, zones, shapes, texts, dimensions, groups (with copies of their members). See crates/ops/src/lib.rs `Cmd::Duplicate`. */
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
@@ -1163,6 +1237,10 @@ export type Cmd =
   | ImportGraphicsCmd
   | ImportSchGraphicsCmd
   | ImportSymbolGraphicsCmd
+  /** Paste Special... (`DIALOG_PASTE_SPECIAL`, crates/ops/src/pcb_paste_special.rs): a paste with the dialog's two answers -- what happens to the reference designators of the pasted footprints (`PASTE_MODE`; "keep" is what a plain paste does) and "Clear net assignments". */
+  | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
+  /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
+  | { op: "in_group"; group: string; cmd: Cmd }
   /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
   | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
@@ -1457,6 +1535,10 @@ export interface RoutePreview {
   displaced: RouteDisplacedLine[];
   /** `Mode::Shove` only: other vias this preview would push out of the way. */
   displaced_vias: RouteDisplacedVia[];
+  /** `POST /api/route/continue_from_end` only (Route From Other End): the route fixed so far was committed, so the board changed. */
+  committed?: boolean;
+  /** `POST /api/route/continue_from_end` only: the far end of the connection, where the new route starts. */
+  from?: [Um, Um];
 }
 
 export interface RouteFixReply {
@@ -1482,9 +1564,19 @@ export interface RouteFixReply {
 export interface DragPreview {
   ok: boolean;
   message?: string;
+  /** `drag_start` only: the board ids of the tracks of the line being dragged, which the cursor must not snap onto (`TOOL_BASE::checkSnap`). */
+  line_tracks?: string[];
+  /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
+   * vertex (`DM_CORNER`) or a via (`DM_VIA`). */
+  drag?: "segment" | "corner" | "via";
   colliding: boolean;
+  /** The cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last
+   * solution"), and letting go commits that one. */
+  restored?: boolean;
+  /** The first position failed, so the drag only marks obstacles (`GetForceMarkObstaclesMode`): a violation is committed with Ctrl+click only. */
+  forced_mark_obstacles?: boolean;
   /** The dragged item's own new shape: just its live position (1 point)
-   * for a via, or N points for a stretched track corner drag. */
+   * for a via, or N points for the whole stretched track (a corner or a segment drag). */
   pts: [Um, Um][];
   /** `shove` mode only: other tracks this drag would push out of the way. */
   displaced: RouteDisplacedLine[];
@@ -1580,13 +1672,22 @@ export type TuneMode = "single" | "diffpair" | "skew";
  * `POST /api/cleanup_tracks/{preview,apply}` and
  * `components/CleanupTracksDialog.tsx`. Every field defaults `false`,
  * matching the base dialog's own ctor (no checkbox starts checked). */
-export interface CleanupOptions {
+export interface CleanupActions {
   delete_shorting: boolean;
   delete_redundant_vias: boolean;
   delete_dangling_vias: boolean;
   merge_segments: boolean;
   delete_dangling_tracks: boolean;
   delete_tracks_in_pads: boolean;
+}
+
+/** The checkboxes and the dialog's "Filter Items" box (kicad-port/cleanupFilters.ts; crates/connectivity/src/cleanup_filter.rs). A filter that is off has no key. */
+export interface CleanupOptions extends CleanupActions {
+  filter_net?: string;
+  filter_netclass?: string;
+  filter_layer?: string;
+  /** "Selected items only": the selected ids, groups among them (the backend opens them). Present -- even empty -- is on. */
+  selected_ids?: string[];
 }
 
 /** `crates/connectivity/src/cleanup.rs`'s `CleanupKind`, wire names. */

@@ -25,7 +25,14 @@ function padLocal(pad: LibraryPad, x: number, y: number): { x: number; y: number
   return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
 }
 
-/** The footprint editor's pad hit test: an ellipse for a circle or an oval, the (rotated) rectangle for every other shape. */
+/** A custom pad's copper under a point of its own frame: the anchor, or any basic shape within half its width (`PAD::HitTest` asks the effective shape, which holds them all). */
+function customPadContains(pad: LibraryPad, px: number, py: number): boolean {
+  const [w, h] = pad.size;
+  const onAnchor = pad.custom?.anchor === "rect" ? Math.abs(px) <= w / 2 && Math.abs(py) <= h / 2 : Math.hypot(px, py) <= w / 2;
+  return onAnchor || (pad.custom?.primitives ?? []).some((prim) => !prim.proxy && footprintGraphicDistance(prim.shape, px, py) <= Math.max(prim.shape.stroke_width, 0) / 2);
+}
+
+/** The footprint editor's pad hit test: an ellipse for a circle or an oval, the (rotated) rectangle for every other shape, a custom pad's anchor and shapes. */
 export function padContains(pad: LibraryPad, x: number, y: number): boolean {
   const local = padLocal(pad, x, y);
   const px = local.x - pad.offset.x;
@@ -33,6 +40,7 @@ export function padContains(pad: LibraryPad, x: number, y: number): boolean {
   const [w, h] = pad.size;
   const hw = w / 2;
   const hh = h / 2;
+  if (pad.shape === "custom") return customPadContains(pad, px, py);
   if (pad.shape === "circle" || pad.shape === "oval") return (px / hw) ** 2 + (py / hh) ** 2 <= 1;
   return Math.abs(px) <= hw && Math.abs(py) <= hh;
 }

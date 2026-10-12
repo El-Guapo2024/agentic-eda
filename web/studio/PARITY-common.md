@@ -158,7 +158,7 @@ dialogs on screen, the open dialog and panel flags) and `errors()` the errors si
 extension with `{ name, text }` (KiCad's takes the path; a browser has none). The tables are `kicad-port/fileDrops.ts` (unit tested), taken from the frames: the board editor `.kicad_pcb` and `.brd` (`pcbnew.Control.DdAppendBoard`), `.dxf` and `.svg` (`pcbnew.InteractiveDrawing.ddImportGraphics`); the Footprint Editor `.kicad_mod`
 (`pcbnew.Control.ddImportFootprint`); the schematic editor `.kicad_sch` (`eeschema.EditorControl.ddAppendFile`, not available: Import Sheet reads by path), `.png`, `.jpg`, `.jpeg` (`ddAddImage`, not available: no bitmap item), `.dxf` and `.svg` (`eeschema.EditorControl.ddImportGraphics`); the Symbol Editor and the 3D viewer none.
 `kicad-port/actionTabGate.ts` keeps each of these actions to its own tab. A file the frame does not take is ignored by KiCad and said so here; one it takes but the studio cannot open is said so; several files open the first and say the rest were skipped (KiCad runs each in turn). While a dialog is open a drop is ignored, except on Import Graphics,
-which takes the graphic into its File: field. `e2e/files-in.check.js` drives the drops with a `DataTransfer`. See PARITY-pcb.md section 27.
+which takes the graphic into its File: field. `e2e/files-in.check.js` drives the drops with a `DataTransfer`. See PARITY-pcb.md section 29.
 
 ## 14. Library tables (Manage Symbol Libraries, Manage Footprint Libraries, Configure Paths, New Library, Add Library)
 

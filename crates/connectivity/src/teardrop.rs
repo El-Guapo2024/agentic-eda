@@ -339,11 +339,12 @@ mod tests {
         let (mut design, mut model) = two_pad_model();
         model.footprints.push(Footprint {
             name: "THPAD".into(),
-            pads: vec![Pad { opposite_side: false, number: "1".into(), at: (0, 0), size: (1000, 1000), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1000, 1000), shape: PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         });
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());

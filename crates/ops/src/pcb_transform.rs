@@ -17,13 +17,16 @@
 //! * An item keeps its id: ids are assigned once, never recomputed from the new geometry (see `Track::id`).
 //! * A group moves, turns and flips as its members do; the members that are footprints included.
 //! * Placed parts land on the placement grid like every other pose here (`Board::set_pose`).
+//! * **The routing stays where it is** (`EDIT_TOOL::Move` / `Rotate` / `Flip` and `DeleteItems` touch the items they name, never the copper
+//!   routed to a footprint's pads, which is left unconnected for the ratsnest to show). A footprint moved away from its tracks is judged by
+//!   the studio's Strict switch like any other edit that opens a connection (`routing_connectivity`); the older part verbs (`move_to`,
+//!   `rotate`, `flip`, ... of the CLI and the agents) still clear a routing they make stale (`Cmd::clears_routing`).
 //! * Locks are the caller's business, as they are in source: `FilterCollectorForLockedItems` keeps locked items out
 //!   of the selection the tool then works on; the item's own `Move`/`Rotate`/`Flip` never look at them.
 
 use super::{rotate_point_about, Board};
-use eda_model::footprint::PlacedPad;
 use eda_model::fp_edit::parse_field_id;
-use eda_model::ir::{tessellate_arc, Design, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, RoutingSection, Shape, Side, Text, Track, Um, Via, Zone, TRACK_ARC_SEGMENTS};
+use eda_model::ir::{tessellate_arc, Dimension, DimensionKind, FootprintInstance, LabelSide, Millideg, Point, Shape, Side, Text, Track, Um, Via, Zone, TRACK_ARC_SEGMENTS};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -125,86 +128,6 @@ struct Targets {
 impl Targets {
     fn is_empty(&self) -> bool {
         self.parts.is_empty() && self.tracks.is_empty() && self.vias.is_empty() && self.zones.is_empty() && self.shapes.is_empty() && self.texts.is_empty() && self.dimensions.is_empty() && self.fields.is_empty()
-    }
-}
-
-/// The placed footprints `ids` name, directly or as members of a group they name (nested groups opened).
-fn named_footprints<'d>(design: &'d Design, ids: &[String]) -> Vec<&'d FootprintInstance> {
-    let Some(placement) = design.placement.as_ref() else { return vec![] };
-    let expanded: Vec<String> = match design.drawings.as_ref() {
-        Some(d) => d.expand_groups(ids),
-        None => ids.to_vec(),
-    };
-    let named: BTreeSet<&str> = expanded.iter().map(String::as_str).collect();
-    placement.footprints.iter().filter(|f| named.contains(f.id.as_str())).collect()
-}
-
-/// Whether `p` lies in the box `(x0, y0, x1, y1)`.
-fn in_box(p: Point, (x0, y0, x1, y1): (f64, f64, f64, f64)) -> bool {
-    (x0..=x1).contains(&(p.x as f64)) && (y0..=y1).contains(&(p.y as f64))
-}
-
-/// A piece of routed copper, by where it is in the routing.
-#[derive(PartialEq, Clone, Copy)]
-enum Copper {
-    Track(usize),
-    Via(usize),
-}
-
-/// The routed copper held by `pad`: a track that starts or ends on it (a router's track runs from pad to pad) and a via on it. A track
-/// that merely passes over a pad is not routed to it.
-fn copper_on(routing: &RoutingSection, pad: &PlacedPad) -> Vec<Copper> {
-    let (hw, hh) = (pad.size.0 as f64 / 2.0, pad.size.1 as f64 / 2.0);
-    let (cx, cy) = (pad.center.x as f64, pad.center.y as f64);
-    let reaches = |half_width: Um| (cx - hw - half_width as f64, cy - hh - half_width as f64, cx + hw + half_width as f64, cy + hh + half_width as f64);
-    let mut out = vec![];
-    for (i, t) in routing.tracks.iter().enumerate() {
-        let near = reaches(t.width / 2);
-        if [t.pts.first(), t.pts.last()].into_iter().flatten().any(|&p| in_box(p, near)) {
-            out.push(Copper::Track(i));
-        }
-    }
-    for (i, v) in routing.vias.iter().enumerate() {
-        if in_box(v.at, reaches(v.diameter / 2)) {
-            out.push(Copper::Via(i));
-        }
-    }
-    out
-}
-
-/// Whether two pads' boxes overlap (pads of a footprint and of the copy that sits on it).
-fn pads_overlap(a: &PlacedPad, b: &PlacedPad) -> bool {
-    (a.center.x - b.center.x).abs() * 2 < a.size.0 + b.size.0 && (a.center.y - b.center.y).abs() * 2 < a.size.1 + b.size.1
-}
-
-impl Board<'_> {
-    /// Whether moving, turning, flipping or taking away the footprints `ids` name (directly, or as members of a group) would leave routed
-    /// copper behind: a track that ends on, or a via that sits on, a pad of theirs and is not still held by a pad of a footprint that stays where it
-    /// is *at that very spot* (the original under a fresh copy of it). This model answers it by clearing the routing
-    /// (`Cmd::clears_routing`); copper, graphics and text on their own never do, and neither does a footprint nothing was routed to.
-    /// A footprint whose pads cannot be worked out counts as routed -- the safe answer.
-    pub(crate) fn names_routed_part(&self, ids: &[String]) -> bool {
-        let Some(routing) = self.design.routing.as_ref() else { return false };
-        let named = named_footprints(&self.design, ids);
-        if named.is_empty() {
-            return false;
-        }
-        let pads_of = |fp: &FootprintInstance| self.model.part(&fp.id).and_then(|part| eda_model::footprint::placed_pads(self.model, part, fp));
-        let mut moving: Vec<PlacedPad> = vec![];
-        for fp in &named {
-            match pads_of(fp) {
-                Some(pads) => moving.extend(pads),
-                None => return true,
-            }
-        }
-        let staying: Vec<PlacedPad> = self.design.placement.iter().flat_map(|p| p.footprints.iter()).filter(|f| !named.iter().any(|n| n.id == f.id)).filter_map(|f| pads_of(f)).flatten().collect();
-        for pad in &moving {
-            let held_by: Vec<Vec<Copper>> = staying.iter().filter(|q| pads_overlap(pad, q)).map(|q| copper_on(routing, q)).collect();
-            if copper_on(routing, pad).iter().any(|c| !held_by.iter().any(|h| h.contains(c))) {
-                return true;
-            }
-        }
-        false
     }
 }
 

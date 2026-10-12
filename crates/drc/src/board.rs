@@ -150,6 +150,16 @@ pub struct DrcPad {
     pub orientation_mdeg: i64,
     /// The pad's and footprint's zone-connection overrides, thermal gap / spoke width / spoke angle.
     pub zone: PadZoneFacts,
+    /// `PAD::ShapePos`: where the copper's centre is (`center` moved by the pad's shape offset).
+    pub shape_pos: Point,
+    /// `PADSTACK::DefaultThermalSpokeAngleForShape` as the reader applies it, millidegrees: 45 for a circle and for a custom pad with a
+    /// circular anchor, 90 otherwise ([`eda_model::Pad::default_spoke_angle_mdeg`]).
+    pub default_spoke_angle_mdeg: i64,
+    /// A custom pad a zone keeps clear of by its convex hull (`CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`).
+    pub custom_convex_hull: bool,
+    /// The bounding box `(x0, y0, x1, y1)` of a trapezoid, chamfered or custom pad at orientation 0, position 0 and no offset, in the frame
+    /// of `orientation_mdeg` (the file's: mirrored for a bottom-side footprint): what its thermal spokes are cut from. `None`: the pad's `size`.
+    pub spoke_box: Option<(Um, Um, Um, Um)>,
 }
 
 pub struct DrcTrackSeg {
@@ -394,7 +404,8 @@ fn shape_of(center: Point, size: (Um, Um), shape: PadShape, roundrect_ratio: Opt
     let (w, h) = size;
     match shape {
         PadShape::Circle => Shape::Circle { c: center, r: w.max(h) / 2 },
-        PadShape::Rect => Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 },
+        // A trapezoid, a chamfered rectangle and a custom pad are built from their pieces (`pad_shape::pad_copper`); the box is the stand-in.
+        PadShape::Rect | PadShape::Trapezoid | PadShape::ChamferedRect | PadShape::Custom => Shape::Rect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2 },
         PadShape::RoundRect => {
             let r = (roundrect_ratio.unwrap_or(0.25) * w.min(h) as f64).round() as Um;
             Shape::RoundRect { x0: center.x - w / 2, y0: center.y - h / 2, x1: center.x + w / 2, y1: center.y + h / 2, r }
@@ -491,7 +502,7 @@ fn rotated_pad_shape(fp: &eda_model::ir::FootprintInstance, pad: &Pad, center: P
             let axis = if w >= h { (f, 0.0) } else { (0.0, f) };
             Shape::Stadium { a: to_pt((-axis.0, -axis.1)), b: to_pt(axis), r }
         }
-        PadShape::Rect => Shape::Polygon { pts: [(-w / 2.0, -h / 2.0), (w / 2.0, -h / 2.0), (w / 2.0, h / 2.0), (-w / 2.0, h / 2.0)].into_iter().map(to_pt).collect() },
+        PadShape::Rect | PadShape::Trapezoid | PadShape::ChamferedRect | PadShape::Custom => Shape::Polygon { pts: [(-w / 2.0, -h / 2.0), (w / 2.0, -h / 2.0), (w / 2.0, h / 2.0), (-w / 2.0, h / 2.0)].into_iter().map(to_pt).collect() },
         PadShape::RoundRect => {
             let r = pad.roundrect_ratio.unwrap_or(0.25) * w.min(h);
             let (ix, iy) = (w / 2.0 - r, h / 2.0 - r);
@@ -509,10 +520,15 @@ fn rotated_pad_shape(fp: &eda_model::ir::FootprintInstance, pad: &Pad, center: P
 
 /// The copper outline of `pad` on the footprint instance `fp`, in board space (`PAD::GetEffectiveShape` of its copper):
 /// exact for a circle, an oval, a rectangle or a rounded rectangle at any rotation (a multiple of 90 degrees reduces to the
-/// axis-aligned shape, anything else to the true rotated outline). The router's world, the DRC board and the routing gates
+/// axis-aligned shape, anything else to the true rotated outline), and for a trapezoid, a chamfered rectangle and a custom pad
+/// (a [`Shape::Compound`] of its anchor and primitives). The router's world, the DRC board and the routing gates
 /// all measure a pad by this one function.
 pub fn placed_pad_copper(fp: &eda_model::ir::FootprintInstance, pad: &Pad) -> Shape {
     let center = pad_center(fp, pad.at);
+    // A trapezoid, a chamfered rectangle, a custom pad and a pad with its copper off its position: `PAD::buildEffectiveShape`.
+    if pad.has_complex_outline() || pad.ext.offset.is_some() {
+        return crate::pad_shape::pad_copper(fp, pad, center);
+    }
     let pad_rot = fp.rot as i64 + pad.rot as i64;
     if pad_rot.rem_euclid(90_000) == 0 {
         shape_of(center, rotated_extent_by(pad_rot, pad.size), pad.shape, pad.roundrect_ratio)
@@ -532,14 +548,9 @@ fn pad_hole_shape(center: Point, pad: &Pad, board_rot: i64) -> Option<Shape> {
     None
 }
 
-fn shape_anchor(s: &Shape) -> Point {
-    let (x0, y0, x1, y1) = s.bbox(0);
-    Point { x: (x0 + x1) / 2, y: (y0 + y1) / 2 }
-}
-
 /// A footprint text's `GetEffectiveShape`: its stroke-font glyph segments,
 /// inflated by half the effective pen width.
-fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
+pub(crate) fn footprint_text_shape(t: &eda_model::ir::FootprintText) -> Option<Shape> {
     // `PCB_TEXT::GetDrawRotation`: footprint text that keeps itself upright is
     // folded into (-90, 90] degrees, any other text is normalised.
     let mut rot = t.angle_file_mdeg as f64 / 1000.0;
@@ -577,6 +588,8 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
 
     let mut pads = Vec::new();
     let mut footprints = Vec::new();
+    // The netless copper the footprints' own graphics are (a PCB antenna, a logo): a zone keeps clear of it.
+    let mut footprint_copper: Vec<DrcCopperGraphic> = Vec::new();
     let mut mask = MaskData { rules: model.board.solder_mask.clone(), ..Default::default() };
     let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
     if let Some(pl) = &design.placement {
@@ -591,40 +604,8 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 allow_bridges: extra.is_some_and(|e| e.allow_soldermask_bridges),
                 net_tie_groups: extra.map(|e| e.net_tie_pad_groups.clone()).unwrap_or_default(),
             });
-            if let Some(e) = extra {
-                mask.has_footprint_silk = true;
-                for t in &e.texts {
-                    let shape = footprint_text_shape(t);
-                    if let Some(shape) = shape {
-                        let pos = t.at;
-                        mask.silk.push(DrcSilk { fp: Some(fp_mask_idx), id: format!("{}.t{}", fp.id, mask.silk.len()), desc: format!("Footprint text '{}' of {}", t.text, fp.id), pos, layer: t.layer.clone(), shapes: vec![shape], is_shape: false });
-                    }
-                }
-                for g in &e.graphics {
-                    let (layer, pos) = (g.shape.layer().to_string(), g.shape.points().first().copied().unwrap_or(Point { x: 0, y: 0 }));
-                    let pad = g.pad_number.as_ref().map(|n| DrcGraphicPad { number: n.clone(), net: if g.net.is_empty() { None } else { Some(g.net.clone()) }, pin_type: g.pin_type.clone() });
-                    let desc = match &g.pad_number {
-                        Some(n) => format!("Pad {} of {}", n, fp.id),
-                        None => format!("Graphic on {} of {}", layer, fp.id),
-                    };
-                    if layer.ends_with(".SilkS") {
-                        mask.silk.push(DrcSilk { fp: Some(fp_mask_idx), id: format!("{}.s{}", fp.id, mask.silk.len()), desc: format!("Graphic on {} of {}", layer, fp.id), pos, layer, shapes: effective_shapes(&g.shape), is_shape: true });
-                        continue;
-                    }
-                    mask.graphics.push(DrcGraphic {
-                        fp: Some(fp_mask_idx),
-                        id: format!("{}.g{}", fp.id, mask.graphics.len()),
-                        desc,
-                        pos,
-                        layer,
-                        shapes: effective_shapes(&g.shape),
-                        margin: g.solder_mask_margin,
-                        filled: g.shape.is_filled(),
-                        width: g.shape.stroke_width(),
-                        pad,
-                    });
-                }
-            }
+            // The footprint's silkscreen, mask and copper graphics and its texts (its fields and its own): from its art, put where it is (`crate::fp_art`).
+            crate::fp_art::add_footprint_art(design, part, fp, &footprint, extra, fp_mask_idx, &mut mask, &mut footprint_copper);
             if let Some(c) = placed_courtyard(model, part, fp) {
                 let outlines = footprint.courtyard_outlines.iter().map(|o| o.iter().map(|&p| pad_center(fp, p)).collect()).collect();
                 footprints.push(DrcFootprint { id: fp.id.clone(), side: fp.side, courtyard: c, outlines });
@@ -670,6 +651,12 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     // `pad_file_angle`: the footprint's rotation plus the pad's own (whose sense flips on the bottom), negated.
                     orientation_mdeg: (-(board_rot + if fp.side == Side::Bottom { -(pad.rot as i64) } else { pad.rot as i64 })).rem_euclid(360_000),
                     zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number),
+                    shape_pos: crate::pad_shape::shape_pos(fp, pad, center),
+                    default_spoke_angle_mdeg: pad.default_spoke_angle_mdeg(),
+                    custom_convex_hull: crate::pad_shape::custom_convex_hull(pad),
+                    // The box is in the pad's own frame; KiCad's (the file's) is mirrored for a bottom-side footprint, and the spokes are turned by
+                    // the orientation of that frame.
+                    spoke_box: crate::pad_shape::spoke_box(pad).map(|b| if fp.side == Side::Bottom { (-b.2, b.1, -b.0, b.3) } else { b }),
                 });
             }
         }
@@ -827,18 +814,14 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             let Some(part) = model.part(&fp.id) else { continue };
             if let Some(shape) = exported_refdes_shape(model, part, fp) {
                 let layer = if fp.side == Side::Bottom { "B.SilkS" } else { "F.SilkS" };
-                // A footprint that came from a `.kicad_pcb` has its real silk text (see
-                // `FootprintExtra::texts`); only this workspace's own footprints fall back
-                // to the exported-label approximation.
-                if !extras.contains_key(fp.id.as_str()) {
-                    mask.silk.push(DrcSilk { fp: None, id: format!("{}.ref", fp.id), desc: format!("Reference of {}", fp.id), pos: shape_anchor(&shape), layer: layer.to_string(), shapes: vec![shape.clone()], is_shape: false });
-                }
+                // The footprint's silk text -- its Reference, Value and fields, and its own texts -- is in `mask.silk` already, laid out in the stroke font
+                // (`crate::fp_art`); this is the approximation the other silk list has always held.
                 silk_items.push(SilkItem { id: format!("{}.ref", fp.id), desc: format!("Reference of {}", fp.id), layer: layer.to_string(), shape });
             }
         }
     }
 
-    let copper_graphics = design
+    let mut copper_graphics: Vec<DrcCopperGraphic> = design
         .drawings
         .as_ref()
         .map(|d| d.copper_texts.as_slice())
@@ -847,6 +830,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         .enumerate()
         .filter_map(|(i, t)| footprint_text_shape(t).map(|shape| DrcCopperGraphic { id: format!("ctxt{i}"), desc: format!("Text '{}' on {}", t.text.replace('\n', " "), t.layer), layer: t.layer.clone(), pos: t.at, shape }))
         .collect();
+    copper_graphics.extend(footprint_copper);
     DrcBoard { layers, outline, board_outline, edge_cuts, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
 }
 

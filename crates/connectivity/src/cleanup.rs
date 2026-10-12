@@ -8,6 +8,10 @@
 //! [`CleanupOptions::default()`] matches that literally rather than
 //! guessing at a "sensible" default.
 //!
+//! Every pass leaves alone what is locked and what the dialog's "Filter Items" box skips (`track->IsLocked() || filterItem( track )`, see
+//! [`crate::cleanup_filter`]): those tracks and vias are never removed and never merged, but they still count as copper to the passes (a protected track
+//! is what a dangling end is connected to, what a merge may not swallow, what a duplicate duplicates).
+//!
 //! Adaptations forced by this model's shape (documented once here, not
 //! repeated at each call site below):
 //! - KiCad's `PCB_TRACK` is always a single two-point segment (or arc);
@@ -51,6 +55,7 @@ use eda_model::footprint::PlacedPad;
 use eda_model::{ConstraintModel, PadKind};
 
 use crate::algo::build_graph;
+use crate::cleanup_filter::{CleanupFilter, Protected};
 use crate::dangling::{dangling_tracks_and_vias, DanglingKind};
 use crate::geom::point_in_polygon;
 use crate::items::ItemRef;
@@ -211,11 +216,16 @@ fn same_endpoints(a: &Track, b: &Track) -> bool {
 /// `TRACKS_CLEANER::cleanup`'s via/null-segment half: redundant vias
 /// (same position + layer span, or sharing a position with a through-hole
 /// pad spanning every copper layer) and zero-length tracks.
-fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, full_stack_pad_centers: &[Point], opts: &CleanupOptions, changes: &mut Vec<CleanupChange>) {
+fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, full_stack_pad_centers: &[Point], opts: &CleanupOptions, prot: &Protected, changes: &mut Vec<CleanupChange>) {
     if opts.delete_redundant_vias {
-        let mut seen: Vec<(Point, String, String)> = Vec::new();
+        // A protected via is never flagged as processed in source, so a candidate on top of one collides with it whichever of the two comes first.
+        let mut seen: Vec<(Point, String, String)> = vias.iter().filter(|v| prot.via(&v.id)).map(|v| (v.at, v.from_layer.clone(), v.to_layer.clone())).collect();
         let mut kept = Vec::with_capacity(vias.len());
         for v in std::mem::take(vias) {
+            if prot.via(&v.id) {
+                kept.push(v);
+                continue;
+            }
             let key = (v.at, v.from_layer.clone(), v.to_layer.clone());
             if seen.contains(&key) || full_stack_pad_centers.contains(&v.at) {
                 changes.push(CleanupChange { kind: CleanupKind::RedundantVia, net: v.net.clone(), remove_track_ids: vec![], remove_via_ids: vec![v.id.clone()], add_track: None });
@@ -231,7 +241,7 @@ fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, full_stack_pad
     if remove_null {
         let mut kept = Vec::with_capacity(tracks.len());
         for t in std::mem::take(tracks) {
-            if is_zero_length(&t) {
+            if is_zero_length(&t) && !prot.track(&t.id) {
                 changes.push(CleanupChange { kind: CleanupKind::ZeroLengthTrack, net: t.net.clone(), remove_track_ids: vec![t.id.clone()], remove_via_ids: vec![], add_track: None });
             } else {
                 kept.push(t);
@@ -240,7 +250,7 @@ fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, full_stack_pad
         *tracks = kept;
     }
 
-    remove_duplicates(tracks, changes);
+    remove_duplicates(tracks, prot, changes);
 }
 
 /// `TRACKS_CLEANER::cleanup`'s `aDeleteDuplicateSegments` pass -- run
@@ -248,27 +258,34 @@ fn remove_redundant(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, full_stack_pad
 /// doc: it runs `cleanup(..., true, ...)` either as part of the merge-
 /// gated first call, or as its own explicit always-on second call when
 /// merging is off).
-fn remove_duplicates(tracks: &mut Vec<Track>, changes: &mut Vec<CleanupChange>) {
-    let mut kept: Vec<Track> = Vec::with_capacity(tracks.len());
+fn remove_duplicates(tracks: &mut Vec<Track>, prot: &Protected, changes: &mut Vec<CleanupChange>) {
+    // What a candidate can duplicate: the protected tracks, wherever they sit in the list (source never flags them as processed), and the candidates already kept.
+    let mut twins: Vec<Track> = tracks.iter().filter(|t| prot.track(&t.id)).cloned().collect();
+    let mut out: Vec<Track> = Vec::with_capacity(tracks.len());
     'outer: for t in std::mem::take(tracks) {
-        for k in &kept {
+        if prot.track(&t.id) {
+            out.push(t);
+            continue;
+        }
+        for k in &twins {
             if k.layer == t.layer && k.width == t.width && same_endpoints(k, &t) {
                 changes.push(CleanupChange { kind: CleanupKind::DuplicateTrack, net: t.net.clone(), remove_track_ids: vec![t.id.clone()], remove_via_ids: vec![], add_track: None });
                 continue 'outer;
             }
         }
-        kept.push(t);
+        twins.push(t.clone());
+        out.push(t);
     }
-    *tracks = kept;
+    *tracks = out;
 }
 
 /// `TRACKS_CLEANER::deleteTracksInPads`: a straight 2-point track whose
 /// both endpoints sit inside the same pad's copper (see module docs for
 /// the containment-vs-boolean-subtract adaptation).
-fn remove_tracks_in_pads(tracks: &mut Vec<Track>, pads: &[PadGeom], changes: &mut Vec<CleanupChange>) {
+fn remove_tracks_in_pads(tracks: &mut Vec<Track>, pads: &[PadGeom], prot: &Protected, changes: &mut Vec<CleanupChange>) {
     let mut kept = Vec::with_capacity(tracks.len());
     'outer: for t in std::mem::take(tracks) {
-        if t.pts.len() == 2 {
+        if t.pts.len() == 2 && !prot.track(&t.id) {
             for p in pads {
                 if !pad_covers_layer(p, &t.layer) {
                     continue;
@@ -289,7 +306,7 @@ fn remove_tracks_in_pads(tracks: &mut Vec<Track>, pads: &[PadGeom], changes: &mu
 /// non-empty net. Needs the real connectivity graph (`build_graph`),
 /// since "touching" is a geometry question this function has no cheaper
 /// shortcut for.
-fn remove_shorting(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, model: &ConstraintModel, changes: &mut Vec<CleanupChange>) {
+fn remove_shorting(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, model: &ConstraintModel, prot: &Protected, changes: &mut Vec<CleanupChange>) {
     let wd = working_design(base, tracks, vias);
     let graph = build_graph(&wd, model);
     let mut bad_tracks = BTreeSet::new();
@@ -305,10 +322,10 @@ fn remove_shorting(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
                 continue;
             }
             match &it.item {
-                ItemRef::TrackSeg { track_id, .. } => {
+                ItemRef::TrackSeg { track_id, .. } if !prot.track(track_id) => {
                     bad_tracks.insert(track_id.clone());
                 }
-                ItemRef::Via { via_id } => {
+                ItemRef::Via { via_id } if !prot.via(via_id) => {
                     bad_vias.insert(via_id.clone());
                 }
                 _ => {}
@@ -335,7 +352,7 @@ fn remove_shorting(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
 /// vias` (already the exact port of `TestTrackEndpointDangling` DRC uses)
 /// to a fixed point, since removing one dangling stub can dangle whatever
 /// it was attached to.
-fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, model: &ConstraintModel, want_tracks: bool, want_vias: bool, changes: &mut Vec<CleanupChange>) -> bool {
+fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, model: &ConstraintModel, want_tracks: bool, want_vias: bool, prot: &Protected, changes: &mut Vec<CleanupChange>) -> bool {
     let mut deleted_any = false;
     let max_iters = tracks.len() + vias.len() + 2;
     for _ in 0..max_iters {
@@ -348,9 +365,12 @@ fn remove_dangling(tracks: &mut Vec<Track>, vias: &mut Vec<Via>, base: &Design, 
         for d in &dangling {
             match d.kind {
                 DanglingKind::Track if want_tracks => {
-                    track_ids.insert(d.id.split('#').next().unwrap_or(&d.id).to_string());
+                    let id = d.id.split('#').next().unwrap_or(&d.id);
+                    if !prot.track(id) {
+                        track_ids.insert(id.to_string());
+                    }
                 }
-                DanglingKind::Via if want_vias => {
+                DanglingKind::Via if want_vias && !prot.via(&d.id) => {
                     via_ids.insert(d.id.clone());
                 }
                 _ => {}
@@ -420,12 +440,19 @@ fn is_node(p: Point, layer: &str, exclude: (&str, &str), tracks: &[Track], vias:
 
 /// `TRACKS_CLEANER::cleanup`'s merge pass, run to a fixed point (matches
 /// source's own `do { ... } while (mergeSegments(...))`).
-fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], changes: &mut Vec<CleanupChange>) -> bool {
+fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zones: &[Zone], prot: &Protected, changes: &mut Vec<CleanupChange>) -> bool {
     let mut changed_any = false;
     loop {
         let mut found: Option<(usize, usize, Point, Point)> = None;
         'outer: for i in 0..tracks.len() {
+            // `filterItem( segment )` and `filterItem( candidate )`, and `testMergeCollinearSegments`'s `IsLocked()` for both
+            if prot.track(&tracks[i].id) {
+                continue;
+            }
             for j in (i + 1)..tracks.len() {
+                if prot.track(&tracks[j].id) {
+                    continue;
+                }
                 if tracks[i].net != tracks[j].net || tracks[i].layer != tracks[j].layer || tracks[i].width != tracks[j].width {
                     continue;
                 }
@@ -469,6 +496,13 @@ fn merge_collinear(tracks: &mut Vec<Track>, vias: &[Via], pads: &[PadGeom], zone
 /// then shorting, then tracks-in-pads, then dangling, then a final merge
 /// pass if dangling-removal actually deleted anything.
 pub fn compute_cleanup(design: &Design, model: &ConstraintModel, opts: CleanupOptions) -> CleanupReport {
+    compute_cleanup_filtered(design, model, opts, &CleanupFilter::default())
+}
+
+/// [`compute_cleanup`] with the dialog's "Filter Items" box (`TRACKS_CLEANER::SetFilter`): tracks and vias the filter skips are left alone like the locked
+/// ones (which every cleanup leaves alone, `IsLocked()`), though they still count as copper to the passes.
+pub fn compute_cleanup_filtered(design: &Design, model: &ConstraintModel, opts: CleanupOptions, filter: &CleanupFilter) -> CleanupReport {
+    let prot = filter.protected(design, model);
     let mut tracks: Vec<Track> = design.routing.as_ref().map(|r| r.tracks.clone()).unwrap_or_default();
     let mut vias: Vec<Via> = design.routing.as_ref().map(|r| r.vias.clone()).unwrap_or_default();
     let zones: Vec<Zone> = design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default();
@@ -477,28 +511,28 @@ pub fn compute_cleanup(design: &Design, model: &ConstraintModel, opts: CleanupOp
 
     let mut changes = Vec::new();
 
-    remove_redundant(&mut tracks, &mut vias, &full_stack_centers, &opts, &mut changes);
+    remove_redundant(&mut tracks, &mut vias, &full_stack_centers, &opts, &prot, &mut changes);
 
     if opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut changes);
     }
 
     if opts.delete_shorting {
-        remove_shorting(&mut tracks, &mut vias, design, model, &mut changes);
+        remove_shorting(&mut tracks, &mut vias, design, model, &prot, &mut changes);
     }
 
     if opts.delete_tracks_in_pads {
-        remove_tracks_in_pads(&mut tracks, &pads, &mut changes);
+        remove_tracks_in_pads(&mut tracks, &pads, &prot, &mut changes);
     }
 
     let deleted_any = if opts.delete_dangling_tracks || opts.delete_dangling_vias {
-        remove_dangling(&mut tracks, &mut vias, design, model, opts.delete_dangling_tracks, opts.delete_dangling_vias, &mut changes)
+        remove_dangling(&mut tracks, &mut vias, design, model, opts.delete_dangling_tracks, opts.delete_dangling_vias, &prot, &mut changes)
     } else {
         false
     };
 
     if deleted_any && opts.merge_segments {
-        merge_collinear(&mut tracks, &vias, &pads, &zones, &mut changes);
+        merge_collinear(&mut tracks, &vias, &pads, &zones, &prot, &mut changes);
     }
 
     CleanupReport { changes }
@@ -557,11 +591,12 @@ mod tests {
         let (mut design, mut model) = two_pad_model();
         model.footprints.push(eda_model::Footprint {
             name: "THPAD".into(),
-            pads: vec![eda_model::Pad { opposite_side: false, number: "1".into(), at: (0, 0), size: (1000, 1000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
+            pads: vec![eda_model::Pad { opposite_side: false, ext: Default::default(), number: "1".into(), at: (0, 0), size: (1000, 1000), shape: eda_model::PadShape::Circle, kind: PadKind::ThroughHole, drill: Some(500), drill_slot: None, rot: 0, roundrect_ratio: None }],
             courtyard: None,
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         });
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());

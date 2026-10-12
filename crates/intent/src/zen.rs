@@ -190,6 +190,7 @@ pub fn import_zen(path: &Path) -> Result<ConstraintModel, Vec<CheckResult>> {
         impedance_targets: Vec::new(),
         footprints: Vec::new(),
         instance_footprints: Default::default(),
+        installed_art: Default::default(),
         symbols: Vec::new(),
         board: Default::default(),
         allow: Default::default(),

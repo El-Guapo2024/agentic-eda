@@ -1001,7 +1001,7 @@ fn edit_text_and_graphics_touches_only_the_fields_given() {
     let text_id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
 
     // Only a line-width change for the shape -- its layer must be untouched.
-    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![], layer: None, line_width: Some(250), text_size: None, text_thickness: None }).unwrap();
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: Some(250), text_size: None, text_thickness: None }).unwrap();
     let dr = b.design().drawings.as_ref().unwrap();
     assert_eq!(dr.shapes[0].layer(), "F.SilkS");
     assert_eq!(dr.shapes[0].id(), shape_id, "a style edit must not move the id");
@@ -1011,7 +1011,7 @@ fn edit_text_and_graphics_touches_only_the_fields_given() {
     }
 
     // Layer + text size/thickness for the text, same command touching both kinds at once.
-    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![text_id.clone()], layer: Some("F.Fab".into()), line_width: None, text_size: Some(1200), text_thickness: Some(200) })
+    b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![shape_id.clone()], text_ids: vec![text_id.clone()], dimension_ids: vec![], layer_defaults: false, layer: Some("F.Fab".into()), line_width: None, text_size: Some(1200), text_thickness: Some(200) })
         .unwrap();
     let dr = b.design().drawings.as_ref().unwrap();
     assert_eq!(dr.shapes[0].layer(), "F.Fab", "the shared `layer` field must still reach the shape on a mixed call");
@@ -1026,13 +1026,13 @@ fn edit_text_and_graphics_touches_only_the_fields_given() {
 fn edit_text_and_graphics_refuses_empty_input_and_bad_values() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], layer: None, line_width: None, text_size: None, text_thickness: None }).unwrap_err();
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec![], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: None, text_size: None, text_thickness: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_global_edit");
 
-    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], layer: None, line_width: Some(0), text_size: None, text_thickness: None }).unwrap_err();
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: Some(0), text_size: None, text_thickness: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_shape");
 
-    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec!["x".into()], layer: None, line_width: None, text_size: Some(-5), text_thickness: None }).unwrap_err();
+    let e = b.apply(&Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: vec!["x".into()], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: None, text_size: Some(-5), text_thickness: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_text");
 }
 
@@ -1200,7 +1200,7 @@ fn only_part_edits_and_flip_clear_routing() {
         Cmd::Duplicate { ids: vec!["x".into()] },
         Cmd::PasteItems { tracks: vec![], vias: vec![], zones: vec![], shapes: vec![], texts: vec![] },
         Cmd::EditTracksAndVias { ids: vec!["x".into()], track_width: None, via_size: None, layer: None },
-        Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], layer: None, line_width: None, text_size: None, text_thickness: None },
+        Cmd::EditTextAndGraphics { shape_ids: vec!["x".into()], text_ids: vec![], dimension_ids: vec![], layer_defaults: false, layer: None, line_width: None, text_size: None, text_thickness: None },
     ];
     for c in &copper_and_drawing_cmds {
         assert!(!c.clears_routing(), "{c:?} must not clear routing -- only part edits do");
@@ -1463,6 +1463,7 @@ fn fp_pad(number: &str, x: Um, y: Um) -> LibraryPad {
         trapezoid_delta: None,
         chamfer_ratio: None,
         chamfer_corners: eda_model::ir::ChamferCorners::default(),
+        custom: None,
         layers: vec!["F.Cu".into(), "F.Paste".into(), "F.Mask".into()],
         clearance_override: None,
         thermal_gap_override: None,

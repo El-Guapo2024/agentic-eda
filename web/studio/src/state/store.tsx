@@ -7,13 +7,13 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
-import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
+import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
 import { patchDrcExcluded, patchDrcSeverity, patchErcSeverity } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -21,17 +21,20 @@ import { DEFAULT_SELECTION_FILTER, type SelectionFilter } from "../components/ca
 import { allItemIds, isKicadPcbText, newItemIds, type ClipboardContents } from "../components/canvas/clipboard";
 import { subItemIds } from "../kicad-port/pcbItems";
 import { planAlignSelection, planDistributeSelection } from "../kicad-port/alignDistribute";
-import { editableSelection, planCarry, planFlip, planRotate, type TransformPlan } from "../kicad-port/pcbTransform";
+import { carryAngleDeg, editableSelection, planCarry, planFlip, planRotate, type FlipDirection, type TransformPlan } from "../kicad-port/pcbTransform";
 import { snapPoint } from "../components/canvas/gridHelper";
+import { modificationSnapFor } from "./modificationSnap";
+import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { substituteSelection } from "../kicad-port/groupTree";
-import { DEFAULT_BOARD_CONTROL, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
+import { inEnteredGroup } from "../kicad-port/groupEdit";
+import { DEFAULT_BOARD_CONTROL, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
 import { reduceView, type AppearanceOp, type ViewSlice } from "../kicad-port/appearanceOps";
 import { applyAppearanceFile } from "../kicad-port/appearanceFile";
 import { netsContext } from "../kicad-port/appearanceNets";
-import { keepFilled } from "../kicad-port/boardControl";
+import { highlightedNets, keepFilled } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
@@ -243,6 +246,8 @@ export type DrawState =
        * continues on `pendingViaLayer`. */
       placingVia?: boolean;
       pendingViaLayer?: string;
+      /** The pad, via or track segment the route started on: it does not end there (see kicad-port/routeTool.ts). */
+      startItem?: string;
     }
   /** `D` (gap #7 stage 5, `pcbnew.InteractiveRouter.Drag45Degree` ->
    * `eda_pns::dragger::Dragger`, driven through crates/cli/src/route_api.rs's
@@ -253,7 +258,7 @@ export type DrawState =
    * manually kept in sync, same convention as the "route" variant above). */
   | {
       kind: "drag";
-      dragKind: "corner" | "via";
+      dragKind: "corner" | "segment" | "via";
       net: string | null;
       layer: string;
       width: Um;
@@ -263,6 +268,12 @@ export type DrawState =
        * `DragPreview`'s own doc comment. */
       pts: [Um, Um][];
       colliding?: boolean;
+      /** The tracks of the line being dragged: the cursor does not snap onto them (`checkSnap`; see kicad-port/dragTool.ts). */
+      lineTracks?: string[];
+      /** The cursor is where the drag cannot be resolved: `pts` is the last position that could be (see kicad-port/dragTool.ts). */
+      restored?: boolean;
+      /** The first position failed, so the drag only marks obstacles; Ctrl+click commits a violation. */
+      forcedMark?: boolean;
       /** `shove` mode only: other tracks/vias this drag would push aside. */
       displaced?: { layer: string; pts: [Um, Um][] }[];
       displacedVias?: { source_via: string; x: Um; y: Um }[];
@@ -345,10 +356,15 @@ export interface MovePreview {
    * pushed to the board yet, so there's nothing to commit to). On the PCB
    * it is the number of R presses, counter-clockwise quarter turns 0-3
    * (Shift+R takes one away); the schematic's kinds (`sch_move`, `sch_drag`)
-   * carry `turns` instead.
+   * carry `turns` instead. Each press turns by the rotation step of the preferences
+   * (`rotateStepDeg`, 90 degrees by default), and F flips across the preferred
+   * axis (`flipDirection`): the reducer stamps both on every board preview, so a
+   * preview built from the pointer position keeps them.
    */
   rotateQuarterTurns?: number;
+  rotateStepDeg?: number;
   flipped?: boolean;
+  flipDirection?: FlipDirection;
   /**
    * `P` (`EDIT_TOOL::PackAndMoveFootprints`): SpreadFootprints has already moved every selected footprint
    * to its packed place *before* the move tool picks the group up, so each ref carries its own extra shift
@@ -647,6 +663,8 @@ export interface StudioState {
   /** Independent pan/zoom for the schematic tab -- a different sheet, a different natural scale. */
   schematicView: ViewTransform;
   units: LengthUnit;
+  /** `COMMON_TOOLS::m_imperialUnit` (`system.last_imperial_units`): the imperial unit Toggle Units returns to -- inches until mils were chosen, mils after. */
+  lastImperialUnit: "in" | "mil";
   polar: boolean;
   gridUm: number;
   /** The Schematic Editor's current grid (`GRID_SETTINGS::last_size_idx` of eeschema), um: one of its grid list (state/gridSettings.ts), 50 mil to start. */
@@ -902,6 +920,7 @@ const initialState: StudioState = {
   viewInitialized: false,
   schematicView: { scale: 0, x: 0, y: 0 },
   units: "mm",
+  lastImperialUnit: "in",
   polar: false,
   gridUm: 1000, // 1.0 mm; a placeholder until src/kicad/layers.json-adjacent grid defaults are extracted (KiCad's own default grid list is source-derived, see report)
   schGridUm: 1270, // eeschema's default grid: 50 mil
@@ -1114,6 +1133,8 @@ export type Action =
   | { type: "APPEARANCE_LOAD"; file: unknown }
   /** `highlightNetSelection`: several nets highlighted at once (the first is `netHighlight`, the rest `bcx.netHighlightMore`); empty clears. */
   | { type: "SET_NET_HIGHLIGHT_SET"; nets: string[] }
+  /** Alt+` (`toggleNetHighlight`): the highlight goes off, or the nets that were last highlighted come back (kicad-port/boardControlState.ts `toggledHighlight`). */
+  | { type: "TOGGLE_NET_HIGHLIGHT" }
   | { type: "SET_NEXT_ZONE_IS_RULE_AREA"; value: boolean }
   | { type: "SET_CLEANUP_TRACKS_DIALOG_OPEN"; open: boolean }
   | { type: "SET_EDIT_TRACKS_AND_VIAS_DIALOG_OPEN"; open: boolean }
@@ -1316,12 +1337,22 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, netHighlight: action.net, bcx: withHighlight(state.bcx, state.netHighlight, action.net ? [action.net] : []) };
     case "SET_NET_HIGHLIGHT_SET":
       return { ...state, netHighlight: action.nets[0] ?? null, bcx: withHighlight(state.bcx, state.netHighlight, action.nets) };
+    case "TOGGLE_NET_HIGHLIGHT": {
+      // What is shown changes, what is remembered does not (`m_currentlyHighlighted`), and neither does `m_lastHighlighted`.
+      const nets = toggledHighlight(highlightedNets(state.netHighlight, state.bcx.netHighlightMore), state.bcx.currentHighlight);
+      return { ...state, netHighlight: nets[0] ?? null, bcx: { ...state.bcx, netHighlightMore: nets.slice(1) } };
+    }
     case "SET_ARMED":
       return { ...state, armed: action.ref, armedFootprint: null, selection: new Set() };
     case "SET_ARMED_FOOTPRINT":
       return { ...state, armedFootprint: action.name, armed: null, selection: new Set() };
-    case "SET_MOVE_PREVIEW":
-      return { ...state, movePreview: action.preview };
+    case "SET_MOVE_PREVIEW": {
+      // The board's previews carry the rotation step and the flip direction of the preferences (`PCBNEW_SETTINGS::m_RotationAngle`, `m_FlipDirection`), which
+      // the painter draws and the drop commits with; the schematic's kinds turn by quarters only.
+      const p = action.preview;
+      const board = p != null && p.kind !== "sch_move" && p.kind !== "sch_drag";
+      return { ...state, movePreview: board ? { ...p, rotateStepDeg: state.prefs.rotationStepDeg, flipDirection: state.prefs.flipDirection } : p };
+    }
     case "SET_ACTIVE_TOOL":
       return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null };
     case "SET_VIEW":
@@ -1331,7 +1362,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "MARK_VIEW_INITIALIZED":
       return { ...state, viewInitialized: true };
     case "SET_UNITS":
-      return { ...state, units: action.units };
+      // `COMMON_TOOLS::SwitchUnits` remembers the imperial unit that was picked, so that Toggle Units (Ctrl+U) comes back to it.
+      return { ...state, units: action.units, lastImperialUnit: rememberedImperial(state.lastImperialUnit, action.units) };
     case "TOGGLE_POLAR":
       return { ...state, polar: !state.polar };
     case "SET_GRID_UM":
@@ -1651,17 +1683,21 @@ export interface StudioApi {
   ungroupSelection: () => Promise<void>;
   /** Cmd+C: the selection as KiCad's clipboard text, on the system clipboard and in `state.clipboard`. `refs` (default: the selection) lets Cut/Copy honour RequestSelection's hover fallback; `reference` is the point Copy with Reference Point picked. */
   copySelection: (refs?: readonly string[], reference?: { x: number; y: number }) => Promise<void>;
-  /** Cmd+V: put what is on the clipboard on the board (KiCad's text, else this session's copy, else plain text as a text item), then select it and arm Move on it, same as duplicateSelection. */
-  pasteClipboard: () => Promise<void>;
   /**
-   * A command that puts NEW items on the board (Import Graphics, Append Board), carried the way a Paste is: `build` makes the command for where the cursor is (the grid point, else the middle
-   * of the board), the items it added are selected, and with `carry` the Move tool is armed on them from that point -- a click drops them, Escape takes them back (`revertCarriedPlacement`).
-   * `carry` off only selects them (a "Place at" import is where it was told). False when the command was refused or added nothing.
+   * Cmd+V: put what is on the clipboard on the board (KiCad's text, else this session's copy, else plain text as a text item), then select it and arm Move on it, same as duplicateSelection.
+   * Paste Special passes the dialog's answers (`DIALOG_PASTE_SPECIAL`): what happens to the reference designators and whether the nets are cleared; a plain paste keeps the references.
+   */
+  pasteClipboard: (options?: { mode?: PcbPasteMode; clearNets?: boolean }) => Promise<void>;
+  /**
+   * A command that puts NEW items on the board (Import Graphics, Append Board, a dropped file), carried the way a Paste is: `build` makes the command for where the cursor is (the grid point, else the
+   * middle of the board), the items it added are selected, and with `carry` the step is held open (`carry: "begin"`, crates/cli/src/carry.rs) and the Move tool is armed on them -- the drop joins the step
+   * (one undo step for the new items and where they were dropped), Escape leaves nothing behind (`revertCarriedPlacement`), as for a Paste. `carry` off only selects them (a "Place at" import is where it
+   * was told). False when the command was refused or added nothing.
    */
   placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
   /**
-   * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point), the items it added are selected,
-   * and with `carry` the Move tool is armed on them -- a click drops them, Escape takes them back (`revertCarriedPlacement`, which undoes the schematic's last step).
+   * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
+   * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
    */
   placeNewSchItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
@@ -1697,13 +1733,18 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const stateRef = useRef(state);
   stateRef.current = state;
   /**
-   * `EDIT_TOOL::Duplicate` and `PCB_CONTROL::Paste` hand their new items to the Move tool inside the one commit the move finishes: cancelling the move
-   * reverts it (`commit.Revert()`), so Escape leaves nothing behind. Here the duplicate or the paste is a step of its own, so a cancel undoes exactly that
-   * step: this notes which one (the board's version right after it) while the new items are being carried.
+   * `EDIT_TOOL::Duplicate` and `PCB_CONTROL::Paste` hand their new items to the Move tool inside the one commit the move finishes: the duplicate and the drop are
+   * one undo step, and cancelling the move reverts the commit (`commit.Revert()`), so Escape leaves nothing behind. Here the new items are on the board at once, so
+   * the backend holds the step open (`carry: "begin"`, crates/cli/src/carry.rs): the drop is sent as `carry: "commit"` and joins it, Escape is `POST /api/carry`
+   * `cancel`. This notes that a step is being held while the new items are carried.
    */
-  const carriedPlacementRef = useRef<{ version: string; editor?: "schematic" } | null>(null);
+  const carriedPlacementRef = useRef(false);
   useEffect(() => {
-    if (state.activeTool !== "move") carriedPlacementRef.current = null;
+    // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
+    if (state.activeTool !== "move" && carriedPlacementRef.current) {
+      carriedPlacementRef.current = false;
+      void postCarry("commit");
+    }
   }, [state.activeTool]);
 
   const refresh = useCallback(async () => {
@@ -1919,9 +1960,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   }, [refresh, refreshSchematic, refreshRatsnest, refreshLint, refreshFill, applyRemoteView]);
 
   const runCmd = useCallback(
-    async (cmd: Parameters<typeof postCmd>[0]) => {
+    async (cmd: Parameters<typeof postCmd>[0], carry?: "begin" | "commit") => {
       // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
-      const reply = await postCmd(onCurrentSheet(cmd, stateRef.current.tab === "schematic" ? stateRef.current.currentSheetPath : []), stateRef.current.strict);
+      // With a group entered on the board, what a command adds joins it (`BOARD_COMMIT::Push`: `Cmd::InGroup`).
+      const st = stateRef.current;
+      const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : cmd;
+      const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
       if (reply.ok && stateRef.current.tab === "schematic") {
@@ -1938,21 +1982,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   );
 
   /** One undo step for N Cmds (`Cmd::Batch`); a lone Cmd is sent as itself. */
-  const runBatch = async (cmds: Cmd[]): Promise<boolean> => {
+  const runBatch = async (cmds: Cmd[], carry?: "begin" | "commit"): Promise<boolean> => {
     if (cmds.length === 0) return true;
-    return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds });
+    return runCmd(cmds.length === 1 ? cmds[0]! : { op: "batch", cmds }, carry);
   };
 
-  /** The grid point nearest a reference point (`PCB_GRID_HELPER::BestSnapAnchor`, its grid half): what a multi-item Rotate and Move snap their reference to. */
-  const gridSnap = () => (p: readonly [number, number]): [number, number] => snapPoint(p[0], p[1], stateRef.current.gridUm);
+  /** Where the reference point of several items goes (`EDIT_TOOL::updateModificationPoint`: `PCB_GRID_HELPER::BestSnapAnchor( centre, nullptr )`, anchors and grid): what a multi-item Rotate and Move snap their reference to. */
+  const gridSnap = () => modificationSnapFor(stateRef.current);
 
   /** Sends a transform plan (kicad-port/pcbTransform.ts) as one undo step; says so when the locks left nothing to do (`ReportFilteredLockedItems`). */
-  const runPlan = async (plan: TransformPlan): Promise<boolean> => {
+  const runPlan = async (plan: TransformPlan, carry?: "begin" | "commit"): Promise<boolean> => {
     if (plan.cmds.length === 0) {
       if (plan.lockedOut) dispatch({ type: "TOAST", message: "Selection contains locked items.", kind: "info" });
       return false;
     }
-    return runBatch(plan.cmds);
+    return runBatch(plan.cmds, carry);
   };
 
   /** Where a Paste lands the clipboard's origin: the cursor's grid point, else the middle of the board. */
@@ -2056,7 +2100,12 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         turns: preview.turns,
         holdUm: preview.holdUm ?? holdPoint(origin, preview.dxUm, preview.dyUm),
       });
-      if (cmd) await runCmd(cmd);
+      // The drop of items an Import Graphics carried joins the step that made them (`carry: "commit"`, as the board's drop does in `commitMove`); a drop that sends nothing, or one the
+      // backend refuses, leaves the import standing as a step of its own.
+      const carrying = carriedPlacementRef.current;
+      carriedPlacementRef.current = false;
+      const ok = cmd ? await runCmd(cmd, carrying ? "commit" : undefined) : false;
+      if (carrying && !ok) await postCarry("commit");
     },
     cmd: (c) => runCmd(c),
     advanceMoveQueue: () => advanceMoveQueue(),
@@ -2067,7 +2116,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const st = stateRef.current;
       if (!st.board) return;
       const q = ((quarterTurns % 4) + 4) % 4;
-      await runPlan(planRotate(st.board, explicit ?? [...st.selection], q === 3 ? -1 : q, gridSnap()));
+      // `rotateAngle` of `EDIT_TOOL::Rotate`: the preferences' step (`m_RotationAngle`), mirrored when the board is viewed flipped ("IsFlippedX()").
+      const presses = (q === 3 ? -1 : q) * (st.bcx.boardFlipped ? -1 : 1);
+      await runPlan(planRotate(st.board, explicit ?? [...st.selection], presses, gridSnap(), st.prefs.rotationStepDeg));
     },
     cmdBatch: (cmds) => runBatch(cmds),
     ripSelection: async () => {
@@ -2081,7 +2132,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     flipSelection: async (explicit) => {
       const st = stateRef.current;
       if (!st.board) return;
-      await runPlan(planFlip(st.board, explicit ?? [...st.selection]));
+      await runPlan(planFlip(st.board, explicit ?? [...st.selection], st.prefs.flipDirection));
     },
     // align_distribute_tool.cpp (kicad-port/alignDistribute.ts): every kind of item, a locked item is the target and never moves, the cursor can
     // pick the target; one move per item, one undo step.
@@ -2100,11 +2151,21 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     commitMove: async (refs, dxUm, dyUm, kind = "part", rotateQuarterTurns, flipped, perRefOffsetUm) => {
       dispatch({ type: "SET_MOVE_PREVIEW", preview: null });
-      carriedPlacementRef.current = null; // dropped: the duplicate or paste stands
+      // The drop ends a carried Duplicate or Paste: it joins the step the duplicate or the paste began (`carry: "commit"`), so both are one undo step. A drop that
+      // sends nothing, or one the backend refuses, leaves the duplicate or the paste standing as a step of its own.
+      const carrying = carriedPlacementRef.current;
+      carriedPlacementRef.current = false;
+      const carry = carrying ? ("commit" as const) : undefined;
+      const settle = async (sent: boolean, ok: boolean) => {
+        if (carrying && (!sent || !ok)) await postCarry("commit");
+      };
       // Any mix of PCB items: turned and flipped about where it was picked up, then moved, as one batch (`planCarry`).
       if (kind === "pcb") {
         const board = stateRef.current.board;
-        if (board) await runPlan(planCarry(board, refs, dxUm, dyUm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap()));
+        const prefs = stateRef.current.prefs;
+        const plan = board ? planCarry(board, refs, dxUm, dyUm, rotateQuarterTurns ?? 0, flipped ?? false, gridSnap(), prefs.rotationStepDeg, prefs.flipDirection) : null;
+        const ok = plan ? await runPlan(plan, carry) : false;
+        await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
         return;
       }
@@ -2114,15 +2175,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           const p = api.partByRef(ref);
           // Pack and Move: this ref's own SpreadFootprints shift rides along with the shared drag delta.
           const own = perRefOffsetUm?.[ref];
-          if (p?.placed && p.at) cmds.push({ op: "move_to", part: ref, x: p.at[0] + dxUm + (own?.[0] ?? 0), y: p.at[1] + dyUm + (own?.[1] ?? 0) });
-          // Rotating/flipping about the part's own (already-moved) anchor
-          // is exactly what the backend's Rotate/Flip ops do regardless of
-          // when they're called, so applying them after the move lands on
-          // the same final pose as KiCad's live in-place spin during a
-          // single-item drag -- see MovePreview's own doc comment.
-          // (R presses count counter-clockwise; `Cmd::Rotate` turns clockwise.)
-          if (rotateQuarterTurns) cmds.push({ op: "rotate", part: ref, quarter_turns: (4 - (((rotateQuarterTurns % 4) + 4) % 4)) % 4 });
-          if (flipped) cmds.push({ op: "flip", part: ref });
+          const to = p?.placed && p.at ? { x: Math.round(p.at[0] + dxUm + (own?.[0] ?? 0)), y: Math.round(p.at[1] + dyUm + (own?.[1] ?? 0)) } : null;
+          if (to) cmds.push({ op: "move_to", part: ref, x: to.x, y: to.y });
+          // Rotating/flipping about the part's own (already-moved) anchor is the same final pose as KiCad's live in-place spin during a single-item
+          // drag -- see MovePreview's own doc comment. R presses count counter-clockwise by the preferences' rotation step, and the item verbs turn
+          // clockwise-positive; F flips across the preferred axis.
+          if (to) {
+            const prefs = stateRef.current.prefs;
+            const turned = carryAngleDeg(rotateQuarterTurns ?? 0, prefs.rotationStepDeg);
+            if (turned !== 0) cmds.push({ op: "rotate_items", ids: [ref], pivot: to, angle_millideg: -Math.round(turned * 1000) });
+            if (flipped) cmds.push({ op: "flip_items", ids: [ref], pivot: to, direction: prefs.flipDirection });
+          }
         } else if (kind === "via") {
           const v = api.viaById(ref);
           if (v) cmds.push({ op: "move_via", id: ref, x: v.x + dxUm, y: v.y + dyUm });
@@ -2136,7 +2199,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         }
       }
       // One undo step for the whole drop (BOARD_COMMIT::Push once).
-      await runBatch(cmds);
+      const ok = await runBatch(cmds, carry);
+      await settle(cmds.length > 0, ok);
       advanceMoveQueue();
     },
     placeLibraryFootprintAt: async (xUm, yUm) => {
@@ -2183,12 +2247,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       await refresh();
     },
     revertCarriedPlacement: async () => {
-      const token = carriedPlacementRef.current;
-      carriedPlacementRef.current = null;
-      if (!token || (await fetchVersion().catch(() => null)) !== token.version) return false;
-      const reply = await postUndo(token.editor === "schematic" ? "schematic" : "pcb");
+      if (!carriedPlacementRef.current) return false;
+      carriedPlacementRef.current = false;
+      // `commit.Revert()`: the carried items are gone and the history is as it was (crates/cli/src/carry.rs).
+      const reply = await postCarry("cancel");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
       await refresh();
+      if (stateRef.current.tab === "schematic") await refreshSchematic(); // a schematic import was carried: the sheet is as it was
       return reply.ok;
     },
     redo: async () => {
@@ -2209,16 +2274,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const { ids } = editableSelection(board, [...stateRef.current.selection], { respectLocks: false });
       if (ids.length === 0) return;
       const before = allItemIds(board);
-      const ok = await runCmd({ op: "duplicate", ids });
+      const ok = await runCmd({ op: "duplicate", ids }, "begin");
       if (!ok) return;
       // The board as the backend has it now: `stateRef` only catches up on the next render, so the copies would not be in it yet
       // and the Move tool would never pick them up.
       const after = await fetchState().catch(() => null);
-      if (!after) return;
-      const newIds = newItemIds(before, after);
-      if (newIds.length === 0) return;
-      const version = await fetchVersion().catch(() => null);
-      carriedPlacementRef.current = version ? { version } : null;
+      const newIds = after ? newItemIds(before, after) : [];
+      if (newIds.length === 0) {
+        await postCarry("commit"); // nothing to carry: the duplicate stands
+        return;
+      }
+      carriedPlacementRef.current = true;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at: stateRef.current.cursorUm });
@@ -2290,52 +2356,57 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     // pcb_control.cpp Paste: whatever KiCad text is on the system clipboard (a copy made in KiCad, or on another board), else this session's own copy
     // where the browser will not hand the system clipboard over; text that is not KiCad's is pasted as a text item on the active layer ("If it wasn't
     // content, then paste as a text object"). The items land with the clipboard's origin on the cursor and are selected, the Move tool armed on them.
-    pasteClipboard: async () => {
+    pasteClipboard: async (options) => {
       const st = stateRef.current;
       const board = st.board;
       if (!board) return;
       const system = await readClipboardText();
       const at = pasteAt();
+      // A plain Paste is `PASTE_MODE::KEEP_ANNOTATIONS` with the nets kept; Paste Special brings the dialog's two answers.
+      const paste = (text: string): Cmd => (options ? { op: "paste_special", text, at, mode: options.mode ?? "keep", clear_nets: options.clearNets ?? false } : { op: "paste_clipboard", text, at });
       let cmd: Cmd;
       if (system != null && isKicadPcbText(system)) {
-        cmd = { op: "paste_clipboard", text: system, at };
+        cmd = paste(system);
       } else if (system != null && system.trim() !== "") {
         cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: st.activeLayer ?? "F.SilkS", size_um: 1000, stroke_width: 150, justify: "center", mirror: false } };
       } else if (st.clipboard) {
-        cmd = { op: "paste_clipboard", text: st.clipboard.text, at };
+        cmd = paste(st.clipboard.text);
       } else {
         return;
       }
       const before = allItemIds(board);
-      const ok = await runCmd(cmd);
+      const ok = await runCmd(cmd, "begin");
       if (!ok) return;
       // As in `duplicateSelection`: read the board from the backend, `stateRef` is still the one from before the paste.
       const after = await fetchState().catch(() => null);
-      if (!after) return;
-      const newIds = newItemIds(before, after);
-      if (newIds.length === 0) return;
-      const version = await fetchVersion().catch(() => null);
-      carriedPlacementRef.current = version ? { version } : null;
+      const newIds = after ? newItemIds(before, after) : [];
+      if (newIds.length === 0) {
+        await postCarry("commit");
+        return;
+      }
+      carriedPlacementRef.current = true;
       dispatch({ type: "SET_SELECTION", refs: newIds });
       dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
       dispatch({ type: "SET_MOVE_ORIGIN", at });
     },
-    // Import Graphics (interactive placement) and Append Board: the same hand-off as `pasteClipboard` above for any command that adds items.
+    // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
+    // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
     placeNewItems: async (build, carry) => {
       const board = stateRef.current.board;
       if (!board) return false;
       const at = pasteAt();
       const before = allItemIds(board);
-      const ok = await runCmd(build(at));
+      const ok = await runCmd(build(at), carry ? "begin" : undefined);
       if (!ok) return false;
       const after = await fetchState().catch(() => null);
-      if (!after) return true;
-      const newIds = newItemIds(before, after);
-      if (newIds.length === 0) return true;
+      const newIds = after ? newItemIds(before, after) : [];
+      if (newIds.length === 0) {
+        if (carry) await postCarry("commit"); // nothing to carry: what the command did stands
+        return true;
+      }
       dispatch({ type: "SET_SELECTION", refs: newIds });
       if (carry) {
-        const version = await fetchVersion().catch(() => null);
-        carriedPlacementRef.current = version ? { version } : null;
+        carriedPlacementRef.current = true;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }
@@ -2348,16 +2419,17 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!before) return false;
       const c = st.cursorUm;
       const at = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: Math.round(c.x / 1270) * 1270, y: Math.round(c.y / 1270) * 1270 } : { x: 0, y: 0 };
-      const ok = await runCmd(build(at));
+      const ok = await runCmd(build(at), carry ? "begin" : undefined);
       if (!ok) return false;
       const after = await fetchSchematic(sheet).catch(() => null);
-      if (!after) return true;
-      const ids = newIdsAfter(before, after);
-      if (ids.length === 0) return true;
+      const ids = after ? newIdsAfter(before, after) : [];
+      if (ids.length === 0) {
+        if (carry) await postCarry("commit");
+        return true;
+      }
       dispatch({ type: "SET_SELECTION", refs: ids });
       if (carry) {
-        const version = await fetchVersion().catch(() => null);
-        carriedPlacementRef.current = version ? { version, editor: "schematic" } : null;
+        carriedPlacementRef.current = true;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }
