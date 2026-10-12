@@ -446,20 +446,18 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // below.
     let mut texts: Vec<SchematicText> = Vec::new();
     let mut text_locked: Vec<bool> = Vec::new();
+    // each text's justification, parallel to `texts` (`SchExtras::text_justify`)
+    let mut text_lie: Vec<eda_model::sch_extras::SchTextJustify> = Vec::new();
     for t in sexpr::find_all(root, "text") {
         let Some(content) = sexpr::txt(t, 1).map(String::from) else { continue };
         let Some(at) = sexpr::find(t, "at") else { continue };
         let (Some(x_mm), Some(y_mm)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
-        let angle_deg = sexpr::num(at, 3).unwrap_or(0.0);
         let size_mm = sexpr::find(t, "effects").and_then(|e| sexpr::find(e, "font")).and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).unwrap_or(1.27);
-        texts.push(SchematicText {
-            id: String::new(),
-            content,
-            at: mm_point_to_um(SPoint::new(x_mm, y_mm)),
-            angle: import_rot_millideg_sch(angle_deg),
-            size_um: crate::import::mm_to_um(size_mm),
-        });
+        // `parseSchText`: the angle is kept upright (`KeepUpright`); `parseEDA_TEXT`: the justification is centre, centre unless the file says otherwise
+        let (angle, justify) = crate::sch_extras_io::read_text_lie(t, &crate::sch_extras_io::read_effects(t));
+        texts.push(SchematicText { id: String::new(), content, at: mm_point_to_um(SPoint::new(x_mm, y_mm)), angle, size_um: crate::import::mm_to_um(size_mm) });
         text_locked.push(is_locked(t));
+        text_lie.push(justify);
     }
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
@@ -538,9 +536,15 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             }
             sch.extras.label_spins.insert(id.clone(), spin);
             let size_um = if look.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { look.size_um };
-            let label_look = eda_model::sch_extras::LabelLook { size_um, bold: look.bold, italic: look.italic };
+            let label_look = eda_model::sch_extras::LabelLook { size_um, bold: look.bold, italic: look.italic, auto_rotate: false };
             if !label_look.is_default() {
                 sch.extras.label_looks.insert(id, label_look);
+            }
+        }
+        // A text's justification, as the file has it (`SchExtras::text_justify`); the default keeps no entry.
+        for (id, justify) in sch.texts.iter().map(|t| t.id.clone()).zip(text_lie) {
+            if !id.is_empty() {
+                sch.extras.set_text_justify(&id, justify);
             }
         }
         // Strokes and junction looks that are not KiCad's defaults (`SchExtras::strokes`, `junction_looks`).

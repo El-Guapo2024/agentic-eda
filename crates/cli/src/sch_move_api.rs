@@ -65,7 +65,7 @@ pub(crate) fn patch_json(sch: &SchematicSection, model: &eda_model::ConstraintMo
         "power_symbols": sch.power_symbols.iter().map(|p| json!({ "id": p.id, "at": pt(p.at), "rot": p.rot as f64 / 1000.0, "fields": eda_engine::fields::power_fields(sch, p).iter().map(|f| page_field_json(&p.id, f)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "wires": sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pts": w.pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "bus": w.bus })).collect::<Vec<_>>(),
         "labels": labels,
-        "texts": sch.texts.iter().map(|t| json!({ "id": t.id, "at": pt(t.at), "angle": t.angle as f64 / 1000.0 })).collect::<Vec<_>>(),
+        "texts": sch.texts.iter().map(|t| crate::studio::text_json(sch, t)).collect::<Vec<_>>(),
         "no_connects": sch.no_connects.iter().map(|n| json!({ "id": n.id, "at": pt(n.at) })).collect::<Vec<_>>(),
         "bus_entries": sch.bus_entries.iter().map(|b| json!({ "id": b.id, "at": pt(b.at), "size": pt(b.size) })).collect::<Vec<_>>(),
         "junctions": sch.junctions.iter().map(|j| json!({ "id": j.id, "at": pt(j.at) })).collect::<Vec<_>>(),

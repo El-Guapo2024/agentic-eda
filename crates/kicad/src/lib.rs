@@ -546,12 +546,12 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     for t in &texts {
         let x = mm(t.at.x);
         let y = mm(t.at.y);
-        let angle_deg = t.angle as f64 / 1000.0;
-        let size_mm = t.size_um as f64 / 1000.0;
+        // KiCad keeps a text's angle upright (0 or 90, `KeepUpright`) and says which end of the text sits on the anchor with the justification
+        let angle_deg = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90 } else { 0 };
         let uuid = duid_for(&format!("text:{}:{}:{}", t.content, t.at.x, t.at.y), &t.id);
         writeln!(out, "\t(text {}", sexpr_str(&t.content)).unwrap();
         writeln!(out, "\t\t(at {x} {y} {angle_deg})").unwrap();
-        writeln!(out, "\t\t(effects (font (size {size_mm} {size_mm})))").unwrap();
+        writeln!(out, "\t\t{}", sch_extras_io::text_effects_str(t.size_um, sch.extras.text_justify_of(&t.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         if sch.extras.is_locked(&t.id) {
             writeln!(out, "\t\t(locked yes)").unwrap();

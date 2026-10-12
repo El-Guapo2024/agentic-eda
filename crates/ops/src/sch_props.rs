@@ -12,7 +12,7 @@
 //! its exclusion flags, a label's fields (netclass, intersheet references).
 
 use crate::{empty_schematic_section, Board};
-use eda_model::ir::{LabelKind, LabelShape, Millideg, SchematicSection, Um};
+use eda_model::ir::{LabelKind, LabelShape, Millideg, SchematicSection, TextJustify, TextVAlign, Um};
 use eda_model::sch_extras::{JunctionLook, LabelLook, LabelSpin, SchColor, SchLineStyle, SchStroke};
 use eda_model::CheckResult;
 use std::collections::{BTreeMap, BTreeSet};
@@ -59,6 +59,8 @@ pub(crate) struct LabelLookEdit {
     pub size_um: Option<Um>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
+    /// The "Auto" check of a global or hierarchical label (`SetAutoRotateOnPlacement`).
+    pub auto_rotate: Option<bool>,
 }
 
 impl<'a> Board<'a> {
@@ -75,6 +77,7 @@ impl<'a> Board<'a> {
                 return Err(fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm."));
             }
         }
+        let model = self.model;
         let sch = self.schematic_mut()?;
         let Some(label) = sch.labels.iter_mut().find(|l| l.id == id) else {
             return Err(fail("ops_unknown_item", id, "no label with this id"));
@@ -83,6 +86,11 @@ impl<'a> Board<'a> {
         if shape.is_some() && label.kind == LabelKind::Local {
             return Err(fail("ops_bad_label_shape", id, "a local label has no shape"));
         }
+        // the "Auto" check is hidden for a plain label (`AutoRotateOnPlacementSupported`)
+        if look.auto_rotate == Some(true) && !crate::sch_labels::auto_rotate_supported(&label.kind) {
+            return Err(fail("ops_label_no_auto_rotate", id, "only a global or a hierarchical label can rotate itself on placement"));
+        }
+        let auto_supported = crate::sch_labels::auto_rotate_supported(&label.kind);
         let mut changed = false;
         if let Some(t) = text {
             if label.net != t {
@@ -96,32 +104,43 @@ impl<'a> Board<'a> {
                 changed = true;
             }
         }
-        if let Some(new_spin) = spin {
-            // `if( m_currentLabel->GetSpinStyle() != selectedSpinStyle ) SetSpinStyle( selectedSpinStyle )`
-            if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
-                changed = true;
+        // `SetTextSize`, then `SetBold` and `SetItalic` ("Must come after SetTextSize()") and `SetAutoRotateOnPlacement`; a look equal to the default keeps no entry
+        let before: LabelLook = sch.extras.label_looks.get(id).copied().unwrap_or_default();
+        let mut now = before;
+        if let Some(size) = look.size_um {
+            now.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
+        }
+        if let Some(b) = look.bold {
+            now.bold = b;
+        }
+        if let Some(i) = look.italic {
+            now.italic = i;
+        }
+        if let Some(auto) = look.auto_rotate {
+            now.auto_rotate = auto && auto_supported;
+        }
+        if now != before {
+            changed = true;
+            if now.is_default() {
+                sch.extras.label_looks.remove(id);
+            } else {
+                sch.extras.label_looks.insert(id.to_string(), now);
             }
         }
-        if look.size_um.is_some() || look.bold.is_some() || look.italic.is_some() {
-            // `SetTextSize`, then `SetBold` and `SetItalic` ("Must come after SetTextSize()"); a look equal to the default keeps no entry
-            let before: LabelLook = sch.extras.label_looks.get(id).copied().unwrap_or_default();
-            let mut now = before;
-            if let Some(size) = look.size_um {
-                now.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
-            }
-            if let Some(b) = look.bold {
-                now.bold = b;
-            }
-            if let Some(i) = look.italic {
-                now.italic = i;
-            }
-            if now != before {
-                changed = true;
-                if now.is_default() {
-                    sch.extras.label_looks.remove(id);
-                } else {
-                    sch.extras.label_looks.insert(id.to_string(), now);
+        // "frame->AutoRotateItem( frame->GetScreen(), m_currentLabel )" while the check is on, else "if( !AutoRotateOnPlacement() && GetSpinStyle() != selected ) SetSpinStyle( selected )"
+        if now.auto_rotate {
+            let mut scene = crate::sch_scene::Scene::new(sch, model);
+            let index = scene.sch.labels.iter().position(|l| l.id == id).unwrap_or(0);
+            let before_spin = crate::sch_move::effective_spin(&scene, index);
+            if scene.auto_rotate_item(crate::sch_scene::Item::Label(index)) {
+                let new_spin = scene.sch.extras.label_spins.get(id).copied().unwrap_or(before_spin);
+                if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
+                    changed = true;
                 }
+            }
+        } else if let Some(new_spin) = spin {
+            if sch.extras.label_spins.insert(id.to_string(), new_spin) != Some(new_spin) {
+                changed = true;
             }
         }
         if !changed {
@@ -131,7 +150,7 @@ impl<'a> Board<'a> {
     }
 
     /// Text Properties: see [`SchCmd::EditText`](crate::sch_edit::SchCmd::EditText).
-    pub(crate) fn edit_sch_text(&mut self, id: &str, text: Option<&str>, size_um: Option<Um>, angle: Option<Millideg>) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn edit_sch_text(&mut self, id: &str, text: Option<&str>, size_um: Option<Um>, angle: Option<Millideg>, h: Option<TextJustify>, v: Option<TextVAlign>) -> Result<(), Vec<CheckResult>> {
         if text == Some("") {
             return Err(fail("ops_bad_text", id, "Text can not be empty."));
         }
@@ -147,19 +166,29 @@ impl<'a> Board<'a> {
         let Some(t) = sch.texts.iter_mut().find(|t| t.id == id) else {
             return Err(fail("ops_unknown_item", id, "no text with this id"));
         };
-        let before = (t.content.clone(), t.size_um, t.angle);
+        // a text is only ever along the sheet or up it (`m_vertical->IsChecked() ? ANGLE_VERTICAL : ANGLE_HORIZONTAL`); a legacy angle in between reads as the nearer
+        let upright = |a: Millideg| if eda_model::kicad_geom::keep_upright_is_vertical(a as f64 / 1000.0) { 90_000 } else { 0 };
+        let before = (t.content.clone(), t.size_um, upright(t.angle), sch.extras.text_justify_of(id));
         if let Some(text) = text {
             t.content = text.to_string();
         }
         if let Some(size) = size_um {
             t.size_um = size;
         }
-        if let Some(angle) = angle {
-            t.angle = angle;
+        t.angle = upright(angle.unwrap_or(t.angle));
+        let mut justify = before.3;
+        if let Some(h) = h {
+            justify.h = h;
         }
-        if before == (t.content.clone(), t.size_um, t.angle) {
+        if let Some(v) = v {
+            justify.v = v;
+        }
+        let after = (t.content.clone(), t.size_um, t.angle, justify);
+        if before == after {
+            // a legacy angle that was not upright is still made so, but that alone is no edit
             return Err(fail("ops_text_unchanged", id, "the text already has these properties"));
         }
+        sch.extras.set_text_justify(id, justify);
         Ok(())
     }
 

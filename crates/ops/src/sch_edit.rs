@@ -7,7 +7,7 @@
 //! cites the KiCad function it ports (eeschema at 8303b2ad).
 
 use crate::{Board, Cmd};
-use eda_model::ir::{LabelShape, Millideg, Point, SchematicSection, SheetInstance, SheetPin, Um};
+use eda_model::ir::{LabelKind, LabelShape, Millideg, Point, SchematicSection, SheetInstance, SheetPin, TextJustify, TextVAlign, Um};
 use eda_model::sch_extras::{LabelSpin, SchColor, SchGraphic, SchGraphicKind, SchLineStyle};
 use eda_model::CheckResult;
 use serde::{Deserialize, Serialize};
@@ -79,6 +79,10 @@ pub enum SchCmd {
     ///
     /// `size_um` (0.01 to 1000 mm, as the dialog validates it), `bold` and `italic` set how the text is drawn (`SetTextSize`, `SetBold`, `SetItalic`); an
     /// item that has them all at their defaults keeps no entry (`SchExtras::label_looks`).
+    ///
+    /// `auto_rotate` is the "Auto" check of a global or hierarchical label (`SetAutoRotateOnPlacement`, then `AutoRotateItem`): while it is on the label takes
+    /// the spin of what it is connected to and `spin` is not applied (`if( !AutoRotateOnPlacement() && spin != selected ) SetSpinStyle( selected )`). Refused
+    /// for a local label, which has no such check.
     EditLabel {
         id: String,
         #[serde(default)]
@@ -93,6 +97,41 @@ pub enum SchCmd {
         bold: Option<bool>,
         #[serde(default)]
         italic: Option<bool>,
+        #[serde(default)]
+        auto_rotate: Option<bool>,
+    },
+    /// Place Label, Global Label and Hierarchical Label (`SCH_DRAWING_TOOLS::TwoClickPlace` after `createNewLabel`): a label named `net` of `kind` at `at`, with the
+    /// properties the dialog gave it, as one step. `spin` is which way the text runs from the anchor (the usual label with none given reads off the wire it ends
+    /// at), `size_um` (0.01 to 1000 mm), `bold` and `italic` set the text, and `auto_rotate` is the dialog's "Auto" check of a global or hierarchical label
+    /// (`SCH_LABEL_BASE::SetAutoRotateOnPlacement`): the label then takes the spin of what it is placed on (`AutoRotateItem`) and `spin` is ignored. Refused for
+    /// an empty name, and for "Auto" on a local label.
+    PlaceLabel {
+        net: String,
+        at: Point,
+        kind: LabelKind,
+        #[serde(default)]
+        spin: Option<LabelSpin>,
+        #[serde(default)]
+        size_um: Option<Um>,
+        #[serde(default)]
+        bold: Option<bool>,
+        #[serde(default)]
+        italic: Option<bool>,
+        #[serde(default)]
+        auto_rotate: Option<bool>,
+    },
+    /// Place Text (`SCH_DRAWING_TOOLS::TwoClickPlace` after `createNewText`): a free text at `at` running along the sheet or, with `angle` 90000, up it, justified
+    /// `h` and `v` about its anchor (KiCad's last-used justification is centre and centre, which a text placed without one has). Refused for an empty text.
+    PlaceText {
+        content: String,
+        at: Point,
+        #[serde(default)]
+        angle: Millideg,
+        size_um: Um,
+        #[serde(default)]
+        h: Option<TextJustify>,
+        #[serde(default)]
+        v: Option<TextVAlign>,
     },
     /// Swap Pins (`SCH_EDIT_TOOL::SwapPins`): the pins `pins` (item ids `pin:<reference>:<number>`, in selection order) of one symbol trade places, one after the
     /// other (`SwapPinGeometry`: pin 1 and pin 2, then pin 2 and pin 3, ...), so each takes the place the next one had and the last the first's. The wires stay,
@@ -141,7 +180,8 @@ pub enum SchCmd {
     /// autoplaced, so a later turn of the symbol places them again. Refused when every field is already where it would put them.
     AutoplaceFields { ids: Vec<String> },
     /// Text Properties on a free-standing text (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`): its text, its size (0.01 to 1000 mm, "don't
-    /// allow text to disappear") and its angle (KiCad offers horizontal and vertical).
+    /// allow text to disappear"), its angle (KiCad offers horizontal and vertical: any angle is made upright) and how it is justified about its anchor,
+    /// `h` (left, centre, right) and `v` (top, centre, bottom) in the text's own axes.
     EditText {
         id: String,
         #[serde(default)]
@@ -150,6 +190,10 @@ pub enum SchCmd {
         size_um: Option<Um>,
         #[serde(default)]
         angle: Option<Millideg>,
+        #[serde(default)]
+        h: Option<TextJustify>,
+        #[serde(default)]
+        v: Option<TextVAlign>,
     },
     /// Sheet Properties (`DIALOG_SHEET_PROPERTIES::TransferDataFromWindow`): the sheet's name and the file it shows (`SCH_EDIT_FRAME::ChangeSheetFile`:
     /// a file the project already has is linked to; a new name moves the content when this sheet is its only user and copies it when another
@@ -188,6 +232,8 @@ impl SchCmd {
             SchCmd::SetBodyStyle { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::DeleteGraphic { id } | SchCmd::EditGraphic { id, .. } | SchCmd::DeleteSheet { id } | SchCmd::DeleteSheetPin { id } | SchCmd::EditSheetPin { id, .. } | SchCmd::ChangeSymbol { id, .. } => vec![id.as_str()],
             SchCmd::EditLabel { id, .. } | SchCmd::EditText { id, .. } | SchCmd::EditSheet { id, .. } | SchCmd::EditField { id, .. } => vec![id.as_str()],
+            SchCmd::PlaceLabel { net, .. } => vec![net.as_str()],
+            SchCmd::PlaceText { content, .. } => vec![content.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::SetStroke { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
@@ -213,6 +259,8 @@ impl SchCmd {
                 Some(n) => format!("schematic body-style {} {n}", ids.join(" ")),
                 None => format!("schematic body-style {} next", ids.join(" ")),
             },
+            SchCmd::PlaceLabel { net, at, .. } => format!("schematic label {net} --at {:.2},{:.2}", at.x as f64 / 1000.0, at.y as f64 / 1000.0),
+            SchCmd::PlaceText { content, at, .. } => format!("schematic text add --content {content:?} --at {:.2},{:.2}", at.x as f64 / 1000.0, at.y as f64 / 1000.0),
             SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
             SchCmd::EditField { id, .. } => format!("schematic edit-field {id}"),
             SchCmd::AutoplaceFields { ids } => format!("schematic autoplace-fields {}", ids.join(" ")),
@@ -232,7 +280,8 @@ impl SchCmd {
             SchCmd::AddGraphic { .. } | SchCmd::DeleteGraphic { .. } | SchCmd::EditGraphic { .. } => "schematic-graphic",
             SchCmd::DeleteSheet { .. } | SchCmd::AddSheetPin { .. } | SchCmd::DeleteSheetPin { .. } | SchCmd::EditSheetPin { .. } => "schematic-sheet",
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
-            SchCmd::EditLabel { .. } | SchCmd::EditText { .. } => "schematic-text",
+            SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
+            SchCmd::PlaceLabel { .. } => "schematic-label",
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } => "schematic-fields",
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
@@ -244,7 +293,7 @@ impl SchCmd {
     /// of the names of the nets drawn inside it, so those are read from the drawing like any other edit (`Cmd::edits_connectivity`).
     pub fn edits_connectivity(&self) -> bool {
         match self {
-            SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::AutoplaceFields { .. } => false,
+            SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
             SchCmd::EditField { text, .. } => text.is_some(),
             _ => true,
@@ -267,7 +316,13 @@ impl<'a> Board<'a> {
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
             SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style),
-            SchCmd::EditLabel { id, text, shape, spin, size_um, bold, italic } => self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_um: *size_um, bold: *bold, italic: *italic }),
+            SchCmd::EditLabel { id, text, shape, spin, size_um, bold, italic, auto_rotate } => {
+                self.edit_sch_label(id, text.as_deref(), *shape, *spin, crate::sch_props::LabelLookEdit { size_um: *size_um, bold: *bold, italic: *italic, auto_rotate: *auto_rotate })
+            }
+            SchCmd::PlaceLabel { net, at, kind, spin, size_um, bold, italic, auto_rotate } => {
+                self.place_label(net, *at, kind, &crate::sch_labels::PlacedLabel { spin: *spin, size_um: *size_um, bold: *bold, italic: *italic, auto_rotate: *auto_rotate })
+            }
+            SchCmd::PlaceText { content, at, angle, size_um, h, v } => self.place_text(content, *at, *angle, *size_um, *h, *v),
             SchCmd::EditField { id, text, at, vertical, h, v, size_um, bold, italic, visible, name_shown, allow_autoplace } => self.edit_sch_field(
                 id,
                 &crate::sch_fields::FieldEdit {
@@ -285,7 +340,7 @@ impl<'a> Board<'a> {
                 },
             ),
             SchCmd::AutoplaceFields { ids } => self.autoplace_sch_fields(ids),
-            SchCmd::EditText { id, text, size_um, angle } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle),
+            SchCmd::EditText { id, text, size_um, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle, *h, *v),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_um, style, color, diameter_um } => self.set_sch_stroke(ids, *width_um, *style, *color, *diameter_um),
             SchCmd::SwapPins { pins } => self.swap_pins(pins),

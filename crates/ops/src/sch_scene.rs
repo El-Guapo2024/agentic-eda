@@ -262,6 +262,9 @@ pub(crate) struct PointInfo {
 pub(crate) struct SymbolShape {
     pub pins: Vec<(String, (i64, i64))>,
     pub bbox: Option<(i64, i64, i64, i64)>,
+    /// For each pin, in the same order, the way its line runs from its connection point towards the symbol's body (`PIN_ORIENTATION`), as a unit step on the
+    /// sheet's axes (y down) before the orientation. Empty for a shape that knows no pin direction.
+    pub dirs: Vec<(i64, i64)>,
 }
 
 pub(crate) struct Scene<'m> {
@@ -1007,7 +1010,15 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
     };
     // the places Swap Pins traded: a pin sits where the pin it swapped with is in the library symbol
     if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&s.id, s.unit)) {
-        shape.pins = eda_model::sch_extras::permute_pins(std::mem::take(&mut shape.pins), swaps);
+        // a pin takes the other's place with its direction (`SwapPinGeometry` swaps position, orientation and length)
+        let dirs = std::mem::take(&mut shape.dirs);
+        let dir_of = |k: usize| dirs.get(k).copied().unwrap_or((0, 0));
+        let paired: Vec<(String, ((i64, i64), (i64, i64)))> = std::mem::take(&mut shape.pins).into_iter().enumerate().map(|(k, (n, at))| (n, (at, dir_of(k)))).collect();
+        let paired = eda_model::sch_extras::permute_pins(paired, swaps);
+        shape.pins = paired.iter().map(|(n, (at, _))| (n.clone(), *at)).collect();
+        if !dirs.is_empty() {
+            shape.dirs = paired.iter().map(|(_, (_, d))| *d).collect();
+        }
     }
     shape
 }
@@ -1015,7 +1026,7 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
 fn power_shape(model: &ConstraintModel, p: &eda_model::ir::PowerSymbol) -> SymbolShape {
     match model.symbol_of(&p.lib_id) {
         Some(lib) => lib_shape(&lib, 1),
-        None => SymbolShape { pins: vec![(String::new(), (0, 0))], bbox: Some((-300, -300, 300, 300)) },
+        None => SymbolShape { pins: vec![(String::new(), (0, 0))], bbox: Some((-300, -300, 300, 300)), dirs: Vec::new() },
     }
 }
 
@@ -1024,10 +1035,22 @@ fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
     // a library point (mm, y up) to the sheet's frame (micrometres, y down)
     let um = |x: f64, y: f64| ((x * 1000.0).round() as i64, (-y * 1000.0).round() as i64);
     let mut pins = Vec::new();
+    let mut dirs = Vec::new();
     let mut pts: Vec<(i64, i64)> = Vec::new();
     for p in lib.pins.iter().filter(|p| on_unit(p.unit)) {
         let tip = um(p.at.x, p.at.y);
         pins.push((p.number.clone(), tip));
+        // the pin's angle is the way it runs from its connection point to the body, in the library's y-up frame
+        let a = p.angle_deg.rem_euclid(360.0);
+        dirs.push(if a < 45.0 || a >= 315.0 {
+            (1, 0)
+        } else if a < 135.0 {
+            (0, -1)
+        } else if a < 225.0 {
+            (-1, 0)
+        } else {
+            (0, 1)
+        });
         pts.push(tip);
     }
     for g in lib.graphics.iter().filter(|g| on_unit(g.unit())) {
@@ -1053,7 +1076,7 @@ fn lib_shape(lib: &LibSymbol, unit: u32) -> SymbolShape {
         None => Some((x, y, x, y)),
         Some((x0, y0, x1, y1)) => Some((x0.min(x), y0.min(y), x1.max(x), y1.max(y))),
     });
-    SymbolShape { pins, bbox }
+    SymbolShape { pins, bbox, dirs }
 }
 
 /// The spin a label has when nothing set one: read off the wire that ends at its anchor (`labelShape.ts::inferSpin`, which draws labels

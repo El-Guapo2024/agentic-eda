@@ -800,6 +800,10 @@ impl<'m> Scene<'m> {
         if let Some(st) = st {
             self.trim_dangling_lines(st);
         }
+        // "Auto-rotate any moved labels"
+        for it in self.in_selection() {
+            self.auto_rotate_item(it);
+        }
         // "Clear SELECTED_BY_DRAG and other temp flags before CleanUp so that cleanup can properly process all items"
         self.by_drag.clear();
         for s in self.segs.iter_mut() {

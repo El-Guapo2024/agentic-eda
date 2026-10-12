@@ -7,10 +7,11 @@
 //!
 //! Differences from the C++, all of them from there being no event loop here:
 //! - the move arrives as one offset, not as a stream of mouse positions, so it is applied once (an `x` move, then a `y` move);
-//! - a text keeps its anchor side as an angle (the IR has no justification), so a text turned twice is upside down where KiCad
-//!   would keep it upright and flip its justification;
-//! - `AutoRotateItem` (a placed label picking a spin from the wire) needs the label's "auto rotate on placement" flag, which the IR
-//!   does not hold, so it is not run;
+//! - a text is kept upright as KiCad keeps it (`SCH_TEXT::Rotate90`, `MirrorSpinStyle`, `MirrorHorizontally`, `MirrorVertically`): its angle is
+//!   0 or 90 degrees and a turn or a mirror flips its justification (`SchExtras::text_justify`), so a text turned twice lies along the sheet again
+//!   with the other end on its anchor;
+//! - `AutoRotateItem` (a global or hierarchical label with its "Auto" check on takes the spin of what it is connected to) runs after a move or a
+//!   drag, on every moved label (`sch_labels.rs`);
 //! - a symbol's box for the centre of a selection is its body and pins, without its fields.
 
 use crate::sch_drag::{constrain_on_edge, Drag};
@@ -573,8 +574,14 @@ fn rotate_single(scene: &mut Scene, head: Item, reference: Option<Point>, ccw: b
         })
     };
     match head {
-        // text and every kind of label turn about their own anchor
-        Item::Text(_) | Item::Label(_) => {
+        // "textItem->Rotate90( clockwise )": a text turns about its own anchor, the angle toggling between along and up the sheet
+        Item::Text(i) => {
+            let pivot = default_pivot(scene);
+            rotate_text90(scene, i, !ccw);
+            pivot
+        }
+        // every kind of label turns about its own anchor
+        Item::Label(_) => {
             let pivot = default_pivot(scene);
             let at = scene.position(head);
             rotate_item(scene, head, at, ccw, grid);
@@ -683,9 +690,10 @@ fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Um) {
             scene.sch.extras.label_spins.insert(id, spin.rotated(ccw));
         }
         Item::Text(i) => {
+            // `SCH_TEXT::Rotate( aCenter, aRotateCCW )`: the anchor about the centre, then "Rotate90( false )" whichever way the anchor went
             let t = &mut scene.sch.texts[i];
             t.at = rotate_point(t.at, c, ccw);
-            t.angle = ((t.angle as i64 + if ccw { 90_000 } else { 270_000 }) % 360_000) as u32;
+            rotate_text90(scene, i, false);
         }
         Item::Graphic(i) => rotate_graphic(&mut scene.sch.extras.graphics[i], c, ccw),
         Item::Sheet(i) => {
@@ -703,7 +711,32 @@ fn rotate_item(scene: &mut Scene, it: Item, c: Point, ccw: bool, grid: Um) {
     }
 }
 
-fn effective_spin(scene: &Scene, label: usize) -> LabelSpin {
+/// `SCH_TEXT::Rotate90( aClockwise )` on the text `i`: along the sheet becomes up it and back, and the justification is flipped when the anchor is then on
+/// the other end of the text (see `SchTextJustify::rotated90`).
+fn rotate_text90(scene: &mut Scene, i: usize, clockwise: bool) {
+    let t = &mut scene.sch.texts[i];
+    let vertical = eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0);
+    let id = t.id.clone();
+    let (vertical, justify) = scene.sch.extras.text_justify_of(&id).rotated90(vertical, clockwise);
+    scene.sch.texts[i].angle = if vertical { 90_000 } else { 0 };
+    scene.sch.extras.set_text_justify(&id, justify);
+}
+
+/// Whether the text `i` runs up the sheet (`GetTextAngle() == ANGLE_VERTICAL`, the angle having been made upright).
+fn text_is_vertical(scene: &Scene, i: usize) -> bool {
+    eda_model::kicad_geom::keep_upright_is_vertical(scene.sch.texts[i].angle as f64 / 1000.0)
+}
+
+/// Mirror the justification of the text `i` and make its angle upright, with `flip` choosing the rule.
+fn set_text_lie(scene: &mut Scene, i: usize, flip: impl Fn(eda_model::sch_extras::SchTextJustify, bool) -> eda_model::sch_extras::SchTextJustify) {
+    let vertical = text_is_vertical(scene, i);
+    let id = scene.sch.texts[i].id.clone();
+    let justify = flip(scene.sch.extras.text_justify_of(&id), vertical);
+    scene.sch.texts[i].angle = if vertical { 90_000 } else { 0 };
+    scene.sch.extras.set_text_justify(&id, justify);
+}
+
+pub(crate) fn effective_spin(scene: &Scene, label: usize) -> LabelSpin {
     let l = &scene.sch.labels[label];
     scene.sch.extras.label_spins.get(&l.id).copied().unwrap_or_else(|| inferred_spin(&scene.segs, l.at))
 }
@@ -718,7 +751,8 @@ fn mirror_single(scene: &mut Scene, head: Item, vertical: bool, about: Option<Po
             let key = eda_model::ir::field_key(&s.id, s.unit);
             scene.sch.extras.fields_autoplaced.remove(&key);
         }
-        Item::Text(_) => {}
+        // "textItem->MirrorSpinStyle( !vertical )": the anchor stays, the justification flips along the text
+        Item::Text(i) => set_text_lie(scene, i, |j, text_vertical| j.mirrored_spin(text_vertical, !vertical)),
         Item::Label(i) => {
             let spin = effective_spin(scene, i);
             let id = scene.sch.labels[i].id.clone();
@@ -826,7 +860,11 @@ fn mirror_item(scene: &mut Scene, it: Item, c: Point, vertical: bool, grid: Um) 
             scene.sch.extras.label_spins.insert(id, spin.mirrored(!vertical));
             scene.sch.labels[i].at = flip(scene.sch.labels[i].at);
         }
-        Item::Text(i) => scene.sch.texts[i].at = flip(scene.sch.texts[i].at),
+        Item::Text(i) => {
+            // `SCH_TEXT::MirrorHorizontally` / `MirrorVertically`: "FlipHJustify" for a text that lies along the mirror, then the anchor about the axis
+            scene.sch.texts[i].at = flip(scene.sch.texts[i].at);
+            set_text_lie(scene, i, |j, text_vertical| if vertical { j.mirrored_vertically(text_vertical) } else { j.mirrored_horizontally(text_vertical) });
+        }
         Item::Graphic(i) => mirror_graphic(&mut scene.sch.extras.graphics[i], c, vertical),
         Item::Sheet(i) => {
             let old = scene.sch.sheets[i].clone();

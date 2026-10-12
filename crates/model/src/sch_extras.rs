@@ -15,13 +15,14 @@
 //! - `label_spins`: which way a label's text runs from its anchor (`SCH_LABEL_BASE::GetSpinStyle`), once Rotate or Mirror has set it.
 //! - `strokes`, `junction_looks`: the width, line style and colour of a wire, bus, bus entry or graphic line and the diameter and colour
 //!   of an explicit junction (`STROKE_PARAMS`, `SCH_JUNCTION::m_diameter`), once Wire/Bus Properties has set them.
-//! - `label_looks`: the size, bold and italic of a label's text (`EDA_TEXT`), once Label Properties has set them.
+//! - `label_looks`: the size, bold and italic of a label's text (`EDA_TEXT`) and whether it rotates itself when placed (`AutoRotateOnPlacement`), once Label Properties has set them.
 //! - `fields_autoplaced`: which symbols, power symbols and sheets have their fields where Autoplace Fields put them
 //!   (`SCH_ITEM::GetFieldsAutoplaced`), so a turn, a text edit or a Properties OK places them again.
 //! - `body_styles`: the body style a placed symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`; 1 is the normal one, 2 KiCad's alternate "De Morgan" one).
 //! - `pin_swaps`: which pin of a placed symbol sits where another one of its pins is in the library symbol (`SwapPinGeometry`, Swap Pins).
+//! - `text_justify`: how a free-standing text is justified about its anchor (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`), once Text Properties, a turn or a mirror set it.
 
-use crate::ir::{Millideg, Point, Um};
+use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,6 +82,93 @@ pub struct SchExtras {
     /// entry, or an entry naming itself, is where the library puts it. The entries always form a permutation of the symbol's pin numbers.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pin_swaps: BTreeMap<String, BTreeMap<String, String>>,
+    /// How a free-standing text (`SchematicText`) is justified about its anchor (`EDA_TEXT::GetHorizJustify`, `GetVertJustify`), by text id, once
+    /// Text Properties, a turn (`SCH_TEXT::Rotate90`) or a mirror (`MirrorHorizontally`, `MirrorVertically`, `MirrorSpinStyle`) set it. A text with no
+    /// entry is [`SchTextJustify::default`], left and bottom -- the way the studio has always set a text on its anchor; an entry equal to that is never
+    /// stored. The writer says it in `(effects ... (justify ...))` and the importer reads it back, so KiCad draws the text where the studio does.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub text_justify: BTreeMap<String, SchTextJustify>,
+}
+
+/// How a free-standing text sits on its anchor: the horizontal and the vertical justification of its `EDA_TEXT`, in the text's own axes (a text turned
+/// to run up the sheet keeps them, the way KiCad's file does). The default is left and bottom, what the studio drew before a text could be justified;
+/// KiCad's own file default is centre and centre, which a text read from a file without `(justify ...)` is given explicitly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchTextJustify {
+    #[serde(default = "legacy_h")]
+    pub h: TextJustify,
+    #[serde(default = "legacy_v")]
+    pub v: TextVAlign,
+}
+
+fn legacy_h() -> TextJustify {
+    TextJustify::Left
+}
+
+fn legacy_v() -> TextVAlign {
+    TextVAlign::Bottom
+}
+
+impl Default for SchTextJustify {
+    fn default() -> Self {
+        SchTextJustify { h: TextJustify::Left, v: TextVAlign::Bottom }
+    }
+}
+
+impl SchTextJustify {
+    /// KiCad's file default, `{center,center}` (`parseEDA_TEXT`: "the file format default is {center,center}").
+    pub const FILE_DEFAULT: SchTextJustify = SchTextJustify { h: TextJustify::Center, v: TextVAlign::Center };
+
+    pub fn is_default(&self) -> bool {
+        *self == SchTextJustify::default()
+    }
+
+    /// `EDA_TEXT::FlipHJustify`: left and right trade places, centre stays.
+    pub fn flip_h(self) -> SchTextJustify {
+        let h = match self.h {
+            TextJustify::Left => TextJustify::Right,
+            TextJustify::Right => TextJustify::Left,
+            TextJustify::Center => TextJustify::Center,
+        };
+        SchTextJustify { h, v: self.v }
+    }
+
+    /// `SCH_TEXT::Rotate90( aClockwise )` for a text that runs up the sheet (`vertical`, `ANGLE_VERTICAL`) or along it: the angle toggles between the two,
+    /// and a horizontal text turned clockwise or a vertical one turned counter-clockwise has its horizontal justification flipped (its anchor stays on
+    /// the same end of the text as the text lies the other way).
+    pub fn rotated90(self, vertical: bool, clockwise: bool) -> (bool, SchTextJustify) {
+        let flip = (!vertical && clockwise) || (vertical && !clockwise);
+        (!vertical, if flip { self.flip_h() } else { self })
+    }
+
+    /// `SCH_TEXT::MirrorSpinStyle( aLeftRight )`, what `SCH_EDIT_TOOL::Mirror` runs on a lone text (`MirrorSpinStyle( !vertical )`): the angle stays,
+    /// the horizontal justification flips for a left-right mirror of a horizontal text and a top-bottom mirror of a vertical one.
+    pub fn mirrored_spin(self, vertical: bool, left_right: bool) -> SchTextJustify {
+        if (!vertical && left_right) || (vertical && !left_right) {
+            self.flip_h()
+        } else {
+            self
+        }
+    }
+
+    /// The justification part of `SCH_TEXT::MirrorHorizontally( aCenter )`, what a mirror of several items runs on a text: only a horizontal text flips.
+    pub fn mirrored_horizontally(self, vertical: bool) -> SchTextJustify {
+        if vertical {
+            self
+        } else {
+            self.flip_h()
+        }
+    }
+
+    /// The justification part of `SCH_TEXT::MirrorVertically( aCenter )`: only a vertical text flips.
+    pub fn mirrored_vertically(self, vertical: bool) -> SchTextJustify {
+        if vertical {
+            self.flip_h()
+        } else {
+            self
+        }
+    }
 }
 
 /// `AUTOPLACE_ALGO`: which Autoplace Fields routine put an item's fields where they are. "Auto" is the minimalist one that runs when a symbol is
@@ -104,6 +192,10 @@ pub struct LabelLook {
     pub bold: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub italic: bool,
+    /// `SCH_LABEL_BASE::AutoRotateOnPlacement` (the "Auto" check of Label Properties; only a global or a hierarchical label has it): the label takes its spin from what it
+    /// is connected to when it is placed, moved or edited (`SCH_EDIT_FRAME::AutoRotateItem`). KiCad does not write it to the file.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_rotate: bool,
 }
 
 impl LabelLook {
@@ -237,6 +329,24 @@ impl SchExtras {
     pub fn pin_swaps_of(&self, key: &str) -> Option<&BTreeMap<String, String>> {
         self.pin_swaps.get(key)
     }
+
+    /// How the text `id` is justified about its anchor (the default when nothing set it).
+    pub fn text_justify_of(&self, id: &str) -> SchTextJustify {
+        self.text_justify.get(id).copied().unwrap_or_default()
+    }
+
+    /// Set how the text `id` is justified; the default is kept as no entry. Returns whether anything changed.
+    pub fn set_text_justify(&mut self, id: &str, j: SchTextJustify) -> bool {
+        if self.text_justify_of(id) == j {
+            return false;
+        }
+        if j.is_default() {
+            self.text_justify.remove(id);
+        } else {
+            self.text_justify.insert(id.to_string(), j);
+        }
+        true
+    }
 }
 
 /// `items` (a pin number and what sits at that pin's place: a point, a position-and-angle, ...) with the places traded as `swaps` says: pin `n` gets
@@ -268,6 +378,7 @@ impl SchExtras {
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()
+            && self.text_justify.is_empty()
     }
 
     /// True when `id` is locked.
@@ -646,5 +757,75 @@ mod tests {
         let mut again = back.clone();
         again.assign_missing_ids(&mut BTreeSet::new());
         assert_eq!(again, back);
+    }
+
+    fn j(h: TextJustify, v: TextVAlign) -> SchTextJustify {
+        SchTextJustify { h, v }
+    }
+
+    /// `SCH_TEXT::Rotate90`: counter-clockwise from a horizontal text keeps the justification, clockwise flips it; the next turn undoes it.
+    #[test]
+    fn a_text_turn_flips_its_justification_as_rotate90_does() {
+        use TextJustify::*;
+        let left = j(Left, TextVAlign::Bottom);
+        // ccw: horizontal -> vertical, no flip
+        assert_eq!(left.rotated90(false, false), (true, left));
+        // cw: horizontal -> vertical, flipped (it ends at the anchor now, as the text lies the other way)
+        assert_eq!(left.rotated90(false, true), (true, j(Right, TextVAlign::Bottom)));
+        // vertical -> horizontal: cw keeps it, ccw flips it
+        assert_eq!(left.rotated90(true, true), (false, left));
+        assert_eq!(left.rotated90(true, false), (false, j(Right, TextVAlign::Bottom)));
+        // two counter-clockwise turns make a half turn: horizontal again, the other end on the anchor
+        let (v, once) = left.rotated90(false, false);
+        let (v2, twice) = once.rotated90(v, false);
+        assert_eq!((v2, twice), (false, j(Right, TextVAlign::Bottom)));
+        // four turns are the identity
+        let mut state = (false, left);
+        for _ in 0..4 {
+            state = state.1.rotated90(state.0, false);
+        }
+        assert_eq!(state, (false, left));
+        // a centred text has nothing to flip
+        assert_eq!(SchTextJustify::FILE_DEFAULT.rotated90(false, true), (true, SchTextJustify::FILE_DEFAULT));
+    }
+
+    /// `SCH_TEXT::MirrorSpinStyle`, `MirrorHorizontally` and `MirrorVertically`: the horizontal justification flips only when the mirror is along the text.
+    #[test]
+    fn a_text_mirror_flips_its_justification_only_along_the_text() {
+        use TextJustify::*;
+        let left = j(Left, TextVAlign::Bottom);
+        let right = j(Right, TextVAlign::Bottom);
+        // X (left-right) on a horizontal text, Y (top-bottom) on a vertical one
+        assert_eq!(left.mirrored_spin(false, true), right);
+        assert_eq!(left.mirrored_spin(true, false), right);
+        // the other axis leaves it
+        assert_eq!(left.mirrored_spin(false, false), left);
+        assert_eq!(left.mirrored_spin(true, true), left);
+        // the several-items versions
+        assert_eq!(left.mirrored_horizontally(false), right);
+        assert_eq!(left.mirrored_horizontally(true), left);
+        assert_eq!(left.mirrored_vertically(true), right);
+        assert_eq!(left.mirrored_vertically(false), left);
+        // twice is the identity
+        assert_eq!(left.mirrored_spin(false, true).mirrored_spin(false, true), left);
+    }
+
+    #[test]
+    fn a_text_justification_is_stored_only_when_it_differs_from_the_default() {
+        use TextJustify::*;
+        let mut e = SchExtras::default();
+        assert!(e.text_justify_of("txt_a").is_default());
+        assert!(!e.set_text_justify("txt_a", SchTextJustify::default()), "the default is no change");
+        assert!(e.is_empty());
+        assert!(e.set_text_justify("txt_a", j(Center, TextVAlign::Center)));
+        assert!(!e.is_empty());
+        assert!(!e.set_text_justify("txt_a", j(Center, TextVAlign::Center)));
+        assert!(e.set_text_justify("txt_a", SchTextJustify::default()));
+        assert!(e.is_empty(), "back to the default drops the entry");
+        // a design from before the overlay has none and reads back unchanged; an entry with one member missing takes the default for it
+        let back: SchExtras = serde_json::from_str(r#"{"text_justify": {"txt_a": {"h": "right"}}}"#).unwrap();
+        assert_eq!(back.text_justify_of("txt_a"), j(Right, TextVAlign::Bottom));
+        let json = serde_json::to_string(&back).unwrap();
+        assert_eq!(serde_json::from_str::<SchExtras>(&json).unwrap(), back);
     }
 }

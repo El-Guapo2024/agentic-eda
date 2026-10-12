@@ -1591,13 +1591,13 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
             };
             // The look Label Properties set (size, bold, italic); the defaults when it never did.
             let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic })
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate })
         })
         .collect();
     let texts: Vec<Value> = sch
         .texts
         .iter()
-        .map(|t| json!({ "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_um": t.size_um }))
+        .map(|t| text_json(&sch, t))
         .collect();
     let power_symbols: Vec<Value> = sch
         .power_symbols
@@ -1868,6 +1868,19 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
         alternate: None,
     }
+}
+
+/// A free-standing schematic text as the studio draws it: its angle (0 or 90 once it has been through KiCad's rules, whatever an older design says), whether it runs up the
+/// sheet, and how it is justified about its anchor (`SchExtras::text_justify`: left and bottom unless something set it).
+pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir::SchematicText) -> Value {
+    use eda_model::ir::{TextJustify, TextVAlign};
+    let j = sch.extras.text_justify_of(&t.id);
+    let vertical = eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0);
+    json!({
+        "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_um": t.size_um, "vertical": vertical,
+        "h": match j.h { TextJustify::Left => "left", TextJustify::Center => "center", TextJustify::Right => "right" },
+        "v": match j.v { TextVAlign::Top => "top", TextVAlign::Center => "center", TextVAlign::Bottom => "bottom" },
+    })
 }
 
 /// A field on the sheet as the painter reads it: the text, its anchor in micrometres, whether it runs vertically, how it is justified

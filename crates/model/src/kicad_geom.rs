@@ -195,6 +195,13 @@ pub fn upright_quarter_turns(angle_deg: f64) -> i32 {
     ((angle_deg / 90.0).round() as i32).rem_euclid(4) % 2
 }
 
+/// `EDA_ANGLE::KeepUpright` for the angle of a schematic text (`parseSchText`: `SetTextAngle( EDA_ANGLE( deg ).KeepUpright() )`): the angle is made 0 for
+/// [-45, 45], (135, 225] and [315, 360) and 90 for the rest, so a text runs along the sheet or up it and is never upside down. True for the 90 degree case.
+pub fn keep_upright_is_vertical(angle_deg: f64) -> bool {
+    let a = angle_deg.rem_euclid(360.0);
+    !(a <= 45.0 || a >= 315.0 || (a > 135.0 && a <= 225.0))
+}
+
 pub fn spin_of(angle_deg: f64, h: HJustify) -> Spin {
     let vertical = upright_quarter_turns(angle_deg) == 1;
     match (vertical, h == HJustify::Right) {
@@ -521,6 +528,17 @@ mod tests {
         near(pin_number_rect((0.0, 0.0), PinOrient::Right, 2540.0, "1", &style, true).center(), 1270.0, off);
         near(pin_name_rect((0.0, 0.0), PinOrient::Up, 2540.0, "IN", &style, &outside).center(), -off, -1270.0);
         near(pin_number_rect((0.0, 0.0), PinOrient::Up, 2540.0, "1", &style, true).center(), off, -1270.0);
+    }
+
+    /// `EDA_ANGLE::KeepUpright`: the boundaries are the ones the C++ has (45 and 315 horizontal, 135 vertical, 225 horizontal).
+    #[test]
+    fn keep_upright_is_kicads_rule_for_a_text_angle() {
+        let vertical = |a: f64| keep_upright_is_vertical(a);
+        assert!(!vertical(0.0) && !vertical(45.0) && !vertical(315.0) && !vertical(359.0));
+        assert!(vertical(46.0) && vertical(90.0) && vertical(135.0));
+        assert!(!vertical(136.0) && !vertical(180.0) && !vertical(225.0));
+        assert!(vertical(226.0) && vertical(270.0) && vertical(314.0));
+        assert!(vertical(-90.0) && !vertical(-180.0) && !vertical(360.0) && vertical(450.0));
     }
 
     #[test]

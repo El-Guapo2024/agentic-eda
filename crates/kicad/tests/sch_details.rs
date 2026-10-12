@@ -98,6 +98,66 @@ fn swapped_pins_are_written_as_the_cached_copy_of_the_symbol_with_a_lib_name() {
     assert!(swapped.contains("(pin \"1\" (uuid") && swapped.contains("(pin \"2\" (uuid"));
 }
 
+/// The sheet of `gate_sheet` plus four texts: the legacy one (left, bottom), a centred one, a right-justified one turned to run up the sheet, and a mirrored one.
+fn text_sheet(m: &ConstraintModel) -> SchematicSection {
+    use eda_model::ir::{SchematicText, TextJustify as H, TextVAlign as V};
+    use eda_model::sch_extras::SchTextJustify as J;
+    let mut sch = gate_sheet(m, false);
+    let text = |id: &str, content: &str, x: i64, angle: u32| SchematicText { id: id.into(), content: content.into(), at: Point { x, y: 40_000 }, angle, size_um: 1_270 };
+    sch.texts = vec![text("txt_legacy", "legacy", 10_000, 0), text("txt_centre", "centred", 40_000, 0), text("txt_up", "runs up", 70_000, 90_000), text("txt_mirror", "mirrored", 100_000, 0)];
+    sch.extras.set_text_justify("txt_centre", J::FILE_DEFAULT);
+    sch.extras.set_text_justify("txt_up", J { h: H::Right, v: V::Top });
+    // what `X` on a left-justified horizontal text leaves: the text ends at its anchor (`SCH_TEXT::MirrorSpinStyle`)
+    sch.extras.set_text_justify("txt_mirror", J::default().mirrored_spin(false, true));
+    sch
+}
+
+/// The `(text ...)` form of `content` in `file`, on one line.
+fn text_form(file: &str, content: &str) -> String {
+    let start = file.find(&format!("(text \"{content}\"")).unwrap_or_else(|| panic!("no text {content:?}"));
+    let end = start + file[start..].find("(uuid").unwrap();
+    file[start..end].split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn a_justified_text_is_written_as_kicad_writes_it_and_read_back_the_same() {
+    let m = model();
+    let sch = text_sheet(&m);
+    let file = export_kicad_sch(&design_with(sch.clone()), &m, &META).expect("the sheet exports");
+    // left and bottom is said, not left to KiCad's own default (centre and centre); a centred text says nothing; angle 90 for the one that runs up
+    assert!(text_form(&file, "legacy").contains("(at 10 40 0) (effects (font (size 1.27 1.27)) (justify left bottom))"), "{}", text_form(&file, "legacy"));
+    assert!(text_form(&file, "centred").ends_with("(effects (font (size 1.27 1.27)))"), "{}", text_form(&file, "centred"));
+    assert!(text_form(&file, "runs up").contains("(at 70 40 90) (effects (font (size 1.27 1.27)) (justify right top))"), "{}", text_form(&file, "runs up"));
+    assert!(text_form(&file, "mirrored").contains("(justify right bottom)"), "{}", text_form(&file, "mirrored"));
+
+    // and the importer gives back the same angle and justification (`parseSchText`, `parseEDA_TEXT`)
+    let (design, _, _) = eda_kicad::import_kicad_sch(&file).expect("the file reads back");
+    let back = design.schematic.expect("a schematic");
+    let by_content = |c: &str| back.texts.iter().find(|t| t.content == c).unwrap_or_else(|| panic!("no text {c:?} after the import"));
+    for (content, id) in [("legacy", "txt_legacy"), ("centred", "txt_centre"), ("runs up", "txt_up"), ("mirrored", "txt_mirror")] {
+        let (before, after) = (sch.texts.iter().find(|t| t.id == id).unwrap(), by_content(content));
+        assert_eq!((after.angle, back.extras.text_justify_of(&after.id)), (before.angle, sch.extras.text_justify_of(id)), "{content}");
+        assert_eq!(after.at, before.at, "{content}");
+    }
+    // a text read from a file with no `(justify ...)` is KiCad's centre and centre, which this model keeps as an entry
+    let bare = file.replace(" (justify left bottom)", "");
+    let (design, _, _) = eda_kicad::import_kicad_sch(&bare).unwrap();
+    let back = design.schematic.unwrap();
+    let id = back.texts.iter().find(|t| t.content == "legacy").unwrap().id.clone();
+    assert_eq!(back.extras.text_justify_of(&id), eda_model::sch_extras::SchTextJustify::FILE_DEFAULT);
+}
+
+#[test]
+fn a_text_angle_in_a_file_is_made_upright_as_kicad_does() {
+    let m = model();
+    let file = export_kicad_sch(&design_with(text_sheet(&m)), &m, &META).unwrap();
+    // 180 and 270 are not angles KiCad keeps (`KeepUpright`): they read as 0 and 90
+    let turned = file.replace("(at 10 40 0)", "(at 10 40 180)").replace("(at 70 40 90)", "(at 70 40 270)");
+    let (design, _, _) = eda_kicad::import_kicad_sch(&turned).unwrap();
+    let angles: Vec<(String, u32)> = design.schematic.unwrap().texts.iter().map(|t| (t.content.clone(), t.angle)).collect();
+    assert!(angles.contains(&("legacy".to_string(), 0)) && angles.contains(&("runs up".to_string(), 90_000)), "{angles:?}");
+}
+
 fn find_kicad_cli() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("EDA_KICAD_CLI").map(PathBuf::from).filter(|p| p.exists()) {
         return Some(p);

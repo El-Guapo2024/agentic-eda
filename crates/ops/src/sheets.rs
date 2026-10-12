@@ -307,7 +307,7 @@ mod tests {
             // (one the new sheets draw a label for: a net between two modules)
             let l = root.labels.iter().find(|l| l.kind.is_local() && labelled_on_new_sheets.contains(&l.net)).expect("the flat design has a local label of a net the new sheets label").clone();
             label_net = l.net.clone();
-            root.extras.label_looks.insert(l.id.clone(), LabelLook { size_um: 2_032, bold: true, italic: false });
+            root.extras.label_looks.insert(l.id.clone(), LabelLook { size_um: 2_032, bold: true, italic: false, auto_rotate: false });
         });
         b.apply(&Cmd::ReorganizeSheets).unwrap();
         let d = b.design();

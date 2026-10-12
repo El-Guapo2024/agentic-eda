@@ -80,6 +80,47 @@ fn angle_str(m: Millideg) -> String {
     }
 }
 
+/// The `(effects ...)` of a free-standing schematic text: its size and how `j` justifies it, written as `EDA_TEXT::Format` does (centre is not named, so a
+/// centred text has no `(justify ...)`).
+pub(crate) fn text_effects_str(size_um: Um, j: eda_model::sch_extras::SchTextJustify) -> String {
+    use eda_model::ir::{TextJustify, TextVAlign};
+    let h = match j.h {
+        TextJustify::Left => SchHAlign::Left,
+        TextJustify::Center => SchHAlign::Center,
+        TextJustify::Right => SchHAlign::Right,
+    };
+    let v = match j.v {
+        TextVAlign::Top => SchVAlign::Top,
+        TextVAlign::Center => SchVAlign::Center,
+        TextVAlign::Bottom => SchVAlign::Bottom,
+    };
+    effects_str(size_um, false, false, h, v)
+}
+
+/// What a free-standing text's `(effects ...)` and `(at x y angle)` say about how it lies: the text's angle made upright (`KeepUpright`: along the sheet or up
+/// it) and its justification, which a file without `(justify ...)` gives as centre, centre (`parseEDA_TEXT`).
+pub(crate) fn read_text_lie(item: &[Sexpr], look: &EffectsLook) -> (Millideg, eda_model::sch_extras::SchTextJustify) {
+    use eda_model::ir::{TextJustify, TextVAlign};
+    let angle_deg = sexpr::find(item, "at").and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0);
+    let angle = if eda_model::kicad_geom::keep_upright_is_vertical(angle_deg) { 90_000 } else { 0 };
+    let has = |w: &str| look.justify.iter().any(|j| j == w);
+    let h = if has("left") {
+        TextJustify::Left
+    } else if has("right") {
+        TextJustify::Right
+    } else {
+        TextJustify::Center
+    };
+    let v = if has("top") {
+        TextVAlign::Top
+    } else if has("bottom") {
+        TextVAlign::Bottom
+    } else {
+        TextVAlign::Center
+    };
+    (angle, eda_model::sch_extras::SchTextJustify { h, v })
+}
+
 /// The `(effects ...)` of a text box: font size, bold/italic and the justification (a box defaults to left/top).
 fn effects_str(size_um: Um, bold: bool, italic: bool, h: SchHAlign, v: SchVAlign) -> String {
     let mut f = format!("(font (size {0} {0})", mm(size_um));

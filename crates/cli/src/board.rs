@@ -4064,9 +4064,9 @@ mod tests {
         let start = sheet_of(&load(&dir).unwrap().1);
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let commands = vec![
-            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None },
-            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None },
-            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000) },
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None, auto_rotate: None },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None, auto_rotate: None },
+            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000), h: None, v: None },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
             V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
         ];
@@ -4102,7 +4102,7 @@ mod tests {
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
-            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true) }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None }),
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
@@ -4850,6 +4850,83 @@ mod tests {
         let e = step(&dir, on_sheet(V::SwapPins { pins: ids(&["pin:R1:1"]) }), false, "test").unwrap_err();
         assert!(reasons(&e).contains("at least two pins"), "{}", reasons(&e));
         assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Placing a label (with "Auto"), placing a text, Label Properties, Text Properties, and turning and mirroring a text each make exactly one undo step, and one Undo puts the
+    /// sheet back exactly.
+    #[test]
+    fn placing_and_editing_labels_and_texts_are_one_undo_step_each() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_label_text_undo");
+        setup_pin_swap_board(&dir);
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let pt = |x: Um, y: Um| Point { x, y };
+        // one step that changes the sheet in the way `after` says, and one Undo that puts it back
+        let check = |cmd: Cmd, after: &dyn Fn(&Design)| {
+            let start = sheet_of(&load(&dir).unwrap().1);
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let d = load(&dir).unwrap().1;
+            assert_ne!(sheet_of(&d), start, "{cmd:?} changed nothing");
+            after(&d);
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        };
+        let global = eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Output };
+        // wire A runs from R1's top pin up to (20, 7.46) mm, where the local label A is
+        let place = V::PlaceLabel { net: "CLK".into(), at: pt(20_000, 7_460), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(true) };
+        check(Cmd::SchEdit(place.clone()), &|d| {
+            let sch = d.schematic.as_ref().unwrap();
+            let l = sch.labels.iter().find(|l| l.net == "CLK").expect("the label is on the sheet");
+            // "Auto" is on: the wire that ends there decides, not the spin the dialog was left on
+            assert_eq!(sch.extras.label_spins.get(&l.id), Some(&eda_model::sch_extras::LabelSpin::Up));
+            assert!(sch.extras.label_looks[&l.id].auto_rotate);
+        });
+        check(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_um: 1_270, h: None, v: None }), &|d| {
+            let sch = d.schematic.as_ref().unwrap();
+            let t = sch.texts.iter().find(|t| t.content == "note").expect("the text is on the sheet");
+            assert_eq!(sch.extras.text_justify_of(&t.id), eda_model::sch_extras::SchTextJustify::FILE_DEFAULT);
+        });
+        // a refused one is no step at all
+        let before = sheet_of(&load(&dir).unwrap().1);
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PlaceLabel { net: "X".into(), at: pt(0, 0), kind: eda_model::ir::LabelKind::Local, spin: None, size_um: None, bold: None, italic: None, auto_rotate: Some(true) })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("rotate itself"), "{}", reasons(&e));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), before);
+
+        // keep a label and a text on the sheet to edit
+        step(&dir, on_sheet(Cmd::SchEdit(place)), false, "test").unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_um: 1_270, h: Some(eda_model::ir::TextJustify::Left), v: Some(eda_model::ir::TextVAlign::Bottom) })), false, "test").unwrap();
+        let (label, text) = {
+            let d = load(&dir).unwrap().1;
+            let sch = d.schematic.unwrap();
+            (sch.labels.iter().find(|l| l.net == "CLK").unwrap().id.clone(), sch.texts[0].id.clone())
+        };
+        // Label Properties with "Auto" off: the spin chosen is kept
+        let l2 = label.clone();
+        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(false) }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            assert_eq!(sch.extras.label_spins.get(&l2), Some(&eda_model::sch_extras::LabelSpin::Left));
+            assert!(!sch.extras.label_looks.contains_key(&l2));
+        });
+        let t2 = text.clone();
+        check(Cmd::SchEdit(V::EditText { id: text.clone(), text: None, size_um: None, angle: None, h: Some(eda_model::ir::TextJustify::Right), v: Some(eda_model::ir::TextVAlign::Top) }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            assert_eq!(sch.extras.text_justify_of(&t2), eda_model::sch_extras::SchTextJustify { h: eda_model::ir::TextJustify::Right, v: eda_model::ir::TextVAlign::Top });
+        });
+        // Rotate (counter-clockwise: runs up the sheet, the justification kept) and Mirror (the text ends at its anchor)
+        let t3 = text.clone();
+        check(Cmd::SchMove(M::Rotate { ids: vec![text.clone()], vertices: Default::default(), ccw: true, about: None, grid: 0 }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            let t = sch.texts.iter().find(|t| t.id == t3).unwrap();
+            assert_eq!((t.angle, sch.extras.text_justify_of(&t3)), (90_000, eda_model::sch_extras::SchTextJustify::default()));
+        });
+        let t4 = text.clone();
+        check(Cmd::SchMove(M::Mirror { ids: vec![text.clone()], vertices: Default::default(), vertical: false, about: None, grid: 0 }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            assert_eq!(sch.extras.text_justify_of(&t4), eda_model::sch_extras::SchTextJustify { h: eda_model::ir::TextJustify::Right, v: eda_model::ir::TextVAlign::Bottom });
+        });
         let _ = std::fs::remove_dir_all(&dir);
     }
 
