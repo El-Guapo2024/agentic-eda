@@ -947,4 +947,105 @@ mod tests {
         assert_eq!(result, pts, "the blocked merge must be refused outright, not silently applied anyway");
         assert!(!collides(&node, &result, 0, 200, &net, &rules, &[]));
     }
+
+    // ---- the pair optimizer
+
+    fn pair_rules() -> BoardRules {
+        serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap()
+    }
+
+    /// A pair between pads, with a few GND pads and a track about, as the walk leaves it: a staircase detour whose two lines are a pitch (450) apart all along, with GND copper that blocks some of the shortcuts.
+    fn pair_world() -> (Node, crate::diff_pair::DiffPair) {
+        use crate::item::{Item, Segment, Solid};
+        use crate::layer::LayerRange;
+        let mut node = Node::new();
+        for (x, y) in [(2000, 400), (6000, -700), (9000, 900)] {
+            node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x, y }, shape: Shape::Circle { c: Point { x, y }, r: 300 }, source: "U1.1".into(), edge: false }));
+        }
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 4000, y: -2000 }, b: Point { x: 4000, y: -750 }, width: 200, source_track: None, locked: false }));
+        let mut dp = crate::diff_pair::DiffPair::default();
+        dp.set_nets(net_of("P"), net_of("N"));
+        dp.width = 200;
+        dp.set_gap(250);
+        let centre = [Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1500, y: -500 }, Point { x: 2500, y: -500 }, Point { x: 3000, y: 0 }, Point { x: 4500, y: 0 }, Point { x: 5000, y: 500 }, Point { x: 7000, y: 500 }, Point { x: 7500, y: 0 }, Point { x: 10_000, y: 0 }];
+        dp.p = crate::diff_pair::offset_polyline(&centre, 225);
+        dp.n = crate::diff_pair::offset_polyline(&centre, -225);
+        (node, dp)
+    }
+
+    /// `HitCache::hits_with_base`: for a line that shares its start and end with the base, the answer is the world's, segment by segment.
+    #[test]
+    fn a_candidate_that_shares_segments_with_its_base_gets_the_worlds_answer_for_the_whole_line() {
+        use crate::diff_pair::PairLine;
+        let (node, dp) = pair_world();
+        let rules = pair_rules();
+        let cache = HitCache::new(&node, &rules);
+        let base = cache.chain_hits(&dp.p_pair_line());
+        let direct = |pts: &[Point]| PairLine { pts, ..dp.p_pair_line() }.hits_node(&node, &rules, crate::node::kind_mask::ANY);
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = |m: i64| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            (rng % m as u64) as i64
+        };
+        let (mut hit, mut clear) = (0, 0);
+        for _ in 0..400 {
+            // a candidate: the base with a stretch replaced by 0..3 random points (the start and the end kept)
+            let mut cand = dp.p.clone();
+            let a = next(cand.len() as i64 - 2) as usize;
+            let b = a + 1 + next((cand.len() - a - 1) as i64) as usize;
+            let extra: Vec<Point> = (0..next(4)).map(|_| Point { x: next(10_000), y: next(2_000) - 1_000 }).collect();
+            cand.splice(a + 1..b, extra);
+            let want = direct(&cand);
+            assert_eq!(cache.hits_with_base(&base, &PairLine { pts: &cand, ..dp.p_pair_line() }), want, "candidate {cand:?}");
+            if want {
+                hit += 1
+            } else {
+                clear += 1
+            }
+        }
+        assert!(hit > 20 && clear > 20, "the test must see both answers: {hit} hits, {clear} clear");
+        // and a candidate that is the base itself
+        assert_eq!(cache.hits_with_base(&base, &dp.p_pair_line()), direct(&dp.p));
+    }
+
+    /// `mergeDpSegments`: a diagonal, a flat stretch and a diagonal that the pair could cover with one diagonal are merged -- same length, fewer corners -- and what comes out is still clear of the world and of itself, and as coupled as it was.
+    #[test]
+    fn the_pair_optimizer_merges_equal_length_corners_and_keeps_the_pair_clear_and_coupled() {
+        let (node, mut dp) = pair_world();
+        let rules = pair_rules();
+        let before = dp.clone();
+        let world_hit = |dp: &crate::diff_pair::DiffPair| dp.p_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY) || dp.n_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY);
+        assert!(!world_hit(&before) && !before.p_pair_line().hits_line(&before.n_pair_line(), &rules), "test setup: the pair as walked is clear");
+        optimize_pair(&node, &rules, &mut dp);
+        // the ends stay
+        assert_eq!((dp.p.first(), dp.p.last()), (before.p.first(), before.p.last()));
+        assert_eq!((dp.n.first(), dp.n.last()), (before.n.first(), before.n.last()));
+        // the two diagonals and the flat stretch between them became one diagonal, on both lines
+        assert!(dp.p.len() < before.p.len() && dp.n.len() < before.n.len(), "{dp:?}");
+        // never longer (a micrometre of rounding aside), clear of the world, clear of each other
+        assert!(crate::diff_pair::chain_length(&dp.p) <= crate::diff_pair::chain_length(&before.p) + 1);
+        assert!(crate::diff_pair::chain_length(&dp.n) <= crate::diff_pair::chain_length(&before.n) + 1);
+        assert!(!dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
+        assert!(!world_hit(&dp), "{dp:?}");
+        // and no less coupled than it was: `mergeDpStep` only accepts a merge that keeps the coupled length
+        assert!(dp.coupled_length() + 2.0 >= before.coupled_length(), "{} < {}", dp.coupled_length(), before.coupled_length());
+    }
+
+    /// The same pair with a GND pad where the merged diagonal would sweep, outside the pair as it is: the merge is refused and the pair is what it was.
+    #[test]
+    fn a_pair_whose_shortcut_is_blocked_by_copper_is_left_as_it_was() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let (mut node, mut dp) = pair_world();
+        node.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(0, 1), pos: Point { x: 3500, y: 900 }, shape: Shape::Circle { c: Point { x: 3500, y: 900 }, r: 300 }, source: "U1.2".into(), edge: false }));
+        let rules = pair_rules();
+        let before = dp.clone();
+        let world_hit = |dp: &crate::diff_pair::DiffPair| dp.p_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY) || dp.n_pair_line().hits_node(&node, &rules, crate::node::kind_mask::ANY);
+        assert!(!world_hit(&before), "test setup: the pad is clear of the pair as walked");
+        optimize_pair(&node, &rules, &mut dp);
+        assert!(!world_hit(&dp) && !dp.p_pair_line().hits_line(&dp.n_pair_line(), &rules), "{dp:?}");
+        assert_eq!((dp.p, dp.n), (before.p, before.n));
+    }
 }
