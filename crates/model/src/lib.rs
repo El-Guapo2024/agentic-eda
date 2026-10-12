@@ -25,6 +25,7 @@ pub mod sch_extras;
 pub mod sheet_file;
 pub mod sheet_list;
 pub mod symbol;
+pub mod text_vars;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};
 pub use symbol::{is_synthetic_lib_id, resolve_lib_id, LibPin, LibSymbol, SymbolGraphic};
