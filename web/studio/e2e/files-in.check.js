@@ -16,7 +16,11 @@
 //   Append Board (PCB_CONTROL::AppendBoard): the action, its drop and the File menu entry are wired; a dropped `.kicad_pcb` is read by the server (what is in it and the point it is held by:
 //     its top left item), its items are pasted with that item at the cursor's grid point, selected and carried by the Move tool as ONE undo step (Escape takes them back, a click drops them where
 //     the pointer went), the footprint it brings is a part of this board and the copper keeps its place relative to the line; a file that is not a KiCad board is refused in KiCad's words;
-//   (the file drops are added to this script with the package's last step.)
+//   The file drops (EDA_BASE_FRAME::OnDropFiles, FileDropHost.tsx): a file dropped on the window (a DataTransfer with the File, the events a browser sends) is kept from the browser's own use of
+//     it (dragover and drop are default-prevented) and runs the action its editor's accepted extensions name -- board: .dxf opens Import Graphics with the file, .kicad_pcb is appended; Footprint
+//     Editor: .kicad_mod is imported and opened; schematic: .dxf opens its Import Graphics, a .kicad_sch is said not to be openable by a drop; Symbol Editor: nothing is accepted. A drop of several
+//     files opens the first and says the rest were skipped; one the editor does not take is said not to be a file it opens; while Import Graphics is open a graphic dropped outside it replaces
+//     the file in it and anything else is ignored.
 //
 // It returns { ok, failed, results: [{ name, ok, detail }, ...] }. The results also pile up in `window.__filesInCheck.results` (`.done` is set at the end).
 (async () => {
@@ -50,6 +54,9 @@
   const fire = (type, x, y, buttons = 0) => { const el = document.elementFromPoint(x, y) ?? canvas(); el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, pointerId: 7, pointerType: "mouse", isPrimary: true, button: 0, buttons })); };
   const hover = async (wx, wy) => { const [x, y] = w2c(wx, wy); fire("pointermove", x, y); await sleep(150); };
   const key = (k) => document.dispatchEvent(new KeyboardEvent("keydown", { key: k, bubbles: true }));
+  /** Two places for the cursor, in the part of the board the fitted view shows (x 0 to 35 mm, y 0 to 35 mm and a little past): the first is where things are carried to, the second where a click drops them. */
+  const C = [30000, 20000];
+  const D = [20000, 10000];
 
   // ---- the DXFs: an ASCII DXF is pairs of lines
   const pair = (c, v) => `${c}\n${v}\n`;
@@ -118,6 +125,8 @@
   let appliedSym = 0;
   const firstTab = E.state().tab;
   try {
+    // A pane that is not on screen never fits the board to its canvas (no animation frames run): do it, so the pointer has a view to work in.
+    if (!(E.state().view?.scale > 0)) { await E.run("common.Control.zoomFitScreen"); await sleep(300); }
     const st0 = await board();
     const base = { shapes: added(st0).length, groups: (st0.drawings?.groups ?? []).length, outline: JSON.stringify(st0.outline), isShapes: !!st0.outline_is_shapes };
 
@@ -200,12 +209,12 @@
     applied--;
 
     // ============================================================================================================================ interactive placement
-    await hover(50000, 20000);
+    await hover(...C);
     r = await importFile({ name: "board.dxf", text: boardDxf }, { Layer: "Dwgs.User", "Place at": false, "Group imported items": true });
     applied++;
     sh = added(r.st);
     const [ix0, iy0] = extent(sh);
-    check("interactive placement: the picture's upper left corner is at the cursor's grid point", ix0 === 50000 && iy0 === 20000, [ix0, iy0]);
+    check("interactive placement: the picture's upper left corner is at the cursor's grid point", ix0 === C[0] && iy0 === C[1], [ix0, iy0]);
     check("and the Move tool carries the group", E.state().tool === "move" && E.state().selection.length === 1 && E.state().selection[0].kind === "group", JSON.stringify(E.state()));
     key("Escape");
     await sleep(1000);
@@ -296,25 +305,25 @@
     check("nothing came of the refusals", (await board()).parts.length === partsBefore && added(await board()).length === base.shapes);
 
     // Under strict (the default) a command that makes the board worse is refused, as any other is: the part would land outside this 35 x 35 mm board.
-    await hover(50000, 20000);
+    await hover(...C);
     const strictRefusal = await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
     const afterStrict = await board();
     check("in strict mode an append that makes the board worse is refused with the reason, and nothing is added or carried", /refused because --strict/.test(strictRefusal.toast ?? "") && afterStrict.parts.length === partsBefore && added(afterStrict).length === base.shapes && E.state().tool === "select", JSON.stringify([strictRefusal.toast, E.state().tool]));
     const strictBox = () => [...document.querySelectorAll("label")].find((l) => l.textContent.trim() === "strict")?.querySelector("input");
     const wasStrict = strictBox()?.checked;
     if (wasStrict) { strictBox().click(); await sleep(300); }
-    await hover(50000, 20000);
+    await hover(...C);
     const appended = await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
     applied++;
     await sleep(800);
     const after = await board();
     const zz = after.parts.find((p) => p.ref === "ZZ1");
     check("the file's part is a part of this board, placed", !!zz && zz.placed && after.parts.length === partsBefore + 1, JSON.stringify(zz && { ref: zz.ref, at: zz.at }));
-    const newLine = added(after).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.start[0] === 50000 && x.start[1] === 20000);
-    check("the line that was the file's top left item is at the cursor's grid point, 30 mm long as it was", !!newLine && newLine.end[0] === 80000 && newLine.end[1] === 20000, JSON.stringify(newLine && [newLine.start, newLine.end]));
-    check("the part keeps its place relative to the line: the file's (30, 20) against (15, 5) is 15, 15 mm on", !!zz && zz.at[0] === 65000 && zz.at[1] === 35000, JSON.stringify(zz?.at));
-    const trk = (after.routing?.tracks ?? []).find((t) => t.pts?.[0]?.[0] === 55000 && t.pts?.[0]?.[1] === 25000);
-    check("and the track starts at (55, 25): the file's (20, 10) less (15, 5), on the cursor", !!trk && trk.net === "GND", JSON.stringify(trk && { net: trk.net, pts: trk.pts }));
+    const newLine = added(after).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.start[0] === C[0] && x.start[1] === C[1]);
+    check("the line that was the file's top left item is at the cursor's grid point, 30 mm long as it was", !!newLine && newLine.end[0] === C[0] + 30000 && newLine.end[1] === C[1], JSON.stringify(newLine && [newLine.start, newLine.end]));
+    check("the part keeps its place relative to the line: the file's (30, 20) against (15, 5) is 15, 15 mm on", !!zz && zz.at[0] === C[0] + 15000 && zz.at[1] === C[1] + 15000, JSON.stringify(zz?.at));
+    const trk = (after.routing?.tracks ?? []).find((t) => t.pts?.[0]?.[0] === C[0] + 5000 && t.pts?.[0]?.[1] === C[1] + 5000);
+    check("and the track starts 5, 5 mm from the cursor: the file's (20, 10) less (15, 5)", !!trk && trk.net === "GND", JSON.stringify(trk && { net: trk.net, pts: trk.pts }));
     check("the Move tool carries what came in, and it is what is selected", E.state().tool === "move" && E.state().selection.length >= 4, JSON.stringify([E.state().tool, E.state().selection.map((x) => x.kind)]));
     check("the toast says what was appended", /Appended 1 footprint, 1 track, 1 graphic, 1 text\./.test(appended.toast ?? ""), JSON.stringify(appended.toast));
     key("Escape");
@@ -323,19 +332,19 @@
     check("Escape takes the whole append back, one undo step: no part ZZ1, no new shapes", !gone3.parts.some((p) => p.ref === "ZZ1") && gone3.parts.length === partsBefore && added(gone3).length === base.shapes && E.state().tool === "select", `${gone3.parts.length} parts, ${added(gone3).length} shapes, tool ${E.state().tool}`);
     applied--;
     // again, and this time a click drops it where the pointer went
-    await hover(50000, 20000);
+    await hover(...C);
     await E.run("pcbnew.Control.DdAppendBoard", { name: "other.kicad_pcb", text: otherBoard });
     applied++;
     await sleep(800);
-    await hover(60000, 30000);
-    const [dx, dy] = w2c(60000, 30000);
+    await hover(...D);
+    const [dx, dy] = w2c(...D);
     fire("pointerdown", dx, dy, 1);
     fire("pointerup", dx, dy);
     await sleep(1200);
     applied++;
     const dropped2 = await board();
-    const line2 = added(dropped2).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.end[0] === 90000);
-    check("a click drops the carried board where the pointer went: the line's start is at (60, 30)", !!line2 && line2.start[0] === 60000 && line2.start[1] === 30000 && E.state().tool === "select", JSON.stringify(line2 && [line2.start, line2.end]) + " tool " + E.state().tool);
+    const line2 = added(dropped2).find((x) => x.layer === "Dwgs.User" && x.kind === "segment" && x.end[0] === D[0] + 30000);
+    check("a click drops the carried board where the pointer went: the line's start is at the second place", !!line2 && line2.start[0] === D[0] && line2.start[1] === D[1] && E.state().tool === "select", JSON.stringify(line2 && [line2.start, line2.end]) + " tool " + E.state().tool);
     await undo(2);
     applied -= 2;
     const clean = await board();
@@ -343,12 +352,102 @@
     if (wasStrict && !strictBox()?.checked) { strictBox().click(); await sleep(300); }
     void appended;
 
-    // ============================================================================================================================ the schematic
+    // ============================================================================================================================ file drops
     const clickTab = async (name) => { [...document.querySelectorAll("button, [role=tab]")].find((e) => e.textContent.trim() === name)?.click(); await sleep(1200); };
+    const undoDomain = async (domain, n = 1) => { for (let i = 0; i < n; i++) await post("/api/undo", { domain }); await sleep(400); };
+    /** A file dropped on the window: a DataTransfer holding the File and the events a browser sends for it. */
+    const dropFiles = async (files, target = document.body) => {
+      const dt = new DataTransfer();
+      for (const f of files) dt.items.add(new File([f.text], f.name, { type: "text/plain" }));
+      const mk = (type) => new DragEvent(type, { bubbles: true, cancelable: true, composed: true, dataTransfer: dt });
+      target.dispatchEvent(mk("dragenter"));
+      const over = mk("dragover");
+      target.dispatchEvent(over);
+      await sleep(150); // React draws the outline
+      const outline = !!document.querySelector('[data-testid="file-drop-outline"]');
+      const drop = mk("drop");
+      target.dispatchEvent(drop);
+      await sleep(900);
+      return { prevented: over.defaultPrevented && drop.defaultPrevented, outline };
+    };
+    const lastToast = () => [...document.querySelectorAll("div")].find((el) => el.style.zIndex === "3000" && el.style.position === "absolute")?.textContent ?? ""; // the page's toast: a div with no class
+    let d = await dropFiles([{ name: "board.dxf", text: boardDxf }]);
+    await waitFor(() => root());
+    await sleep(500);
+    check("a DXF dropped on the board editor opens Import Graphics with the file in File:", d.prevented && d.outline && dialogs().includes("Import Graphics") && field("File")?.value === "board.dxf" && /8 items/.test(root()?.innerText ?? ""), JSON.stringify([d, field("File")?.value]));
+    // a graphic dropped outside the open dialog replaces the file in it; anything else is ignored while it is open
+    d = await dropFiles([{ name: "box.dxf", text: rect2x1(4) }]);
+    await waitFor(() => field("File")?.value === "box.dxf");
+    check("while Import Graphics is open another graphic dropped on the window takes its place in File:", field("File")?.value === "box.dxf" && /4 items/.test(root()?.innerText ?? ""), field("File")?.value);
+    const partsNow = (await board()).parts.length;
+    d = await dropFiles([{ name: "other.kicad_pcb", text: otherBoard }]);
+    check("and a board dropped then is ignored, as a modal dialog blocks KiCad's frame", dialogs().includes("Import Graphics") && (await board()).parts.length === partsNow);
+    button("Cancel").click();
+    await sleep(200);
+
+    d = await dropFiles([{ name: "a.dxf", text: boardDxf }, { name: "b.dxf", text: boardDxf }]);
+    await waitFor(() => root());
+    await sleep(400);
+    check("two files dropped: the first opens and the toast says the other was skipped", field("File")?.value === "a.dxf" && /Only a\.dxf was opened; b\.dxf was skipped/.test(lastToast()), `${field("File")?.value} / ${lastToast()}`);
+    button("Cancel").click();
+    await sleep(200);
+    d = await dropFiles([{ name: "notes.txt", text: "hello" }]);
+    check("a file the editor does not take is said not to be one, and the browser did not take it either", d.prevented && dialogs().length === 0 && /notes\.txt is not a file this editor opens \(it takes \.kicad_pcb, \.brd, \.dxf, \.svg\)\./.test(lastToast()), lastToast());
+
+    // a board dropped on the board editor is appended (strict off, as the Append Board checks have it)
+    if (strictBox()?.checked) { strictBox().click(); await sleep(300); }
+    await hover(...C);
+    await dropFiles([{ name: "other.kicad_pcb", text: otherBoard }]);
+    applied++;
+    await sleep(500);
+    const dropped3 = await board();
+    check("a .kicad_pcb dropped on the board editor is appended: its part is on the board and carried by the Move tool", dropped3.parts.some((p) => p.ref === "ZZ1") && E.state().tool === "move", `${dropped3.parts.length} parts, tool ${E.state().tool}`);
+    key("Escape");
+    await sleep(1000);
+    applied--;
+    check("and Escape takes it back", !(await board()).parts.some((p) => p.ref === "ZZ1") && E.state().tool === "select");
+    if (wasStrict && !strictBox()?.checked) { strictBox().click(); await sleep(300); }
+
+    // the Footprint Editor takes a .kicad_mod
+    await clickTab("Footprint");
+    const kicadMod = `(footprint "DropTest" (version 20240108) (generator "pcbnew") (layer "F.Cu")
+  (descr "dropped")
+  (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste"))
+  (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste"))
+  (fp_line (start -2 -1) (end 2 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS")))`;
+    const fpNames = async () => (await get("/api/footprint_library")).names;
+    const fpBefore = await fpNames();
+    d = await dropFiles([{ name: "DropTest.kicad_mod", text: kicadMod }]);
+    await sleep(800);
+    check("a .kicad_mod dropped on the Footprint Editor is imported into the library", d.prevented && (await fpNames()).some((n) => n.endsWith("DropTest")) && !fpBefore.some((n) => n.endsWith("DropTest")), JSON.stringify([d, (await fpNames()).filter((n) => /DropTest/.test(n))]));
+    check("and it is the selected, opened footprint of the editor", [...document.querySelectorAll('[aria-selected="true"]')].some((e) => e.textContent.trim() === "DropTest"));
+    for (let i = 0; i < 4 && (await fpNames()).some((n) => n.endsWith("DropTest")); i++) await undoDomain("footprint_editor");
+    check("one undo of the Footprint Editor takes the import away", !(await fpNames()).some((n) => n.endsWith("DropTest")));
+    d = await dropFiles([{ name: "x.dxf", text: boardDxf }]);
+    check("a DXF dropped on the Footprint Editor is not taken (its frame accepts footprints only)", dialogs().length === 0 && /x\.dxf is not a file this editor opens \(it takes \.kicad_mod\)\./.test(lastToast()), lastToast());
+
+    // the schematic editor
     await clickTab("Schematic");
+    d = await dropFiles([{ name: "board.dxf", text: boardDxf }]);
+    await waitFor(() => root());
+    await sleep(500);
+    check("a DXF dropped on the schematic editor opens its Import Graphics (interactive placement, no layer) with the file", dialogs().includes("Import Graphics") && field("File")?.value === "board.dxf" && !!field("Interactive placement") && !field("Layer"));
+    button("Cancel").click();
+    await sleep(200);
+    d = await dropFiles([{ name: "part.kicad_sch", text: "(kicad_sch)" }]);
+    check("a schematic dropped on it is said to be beyond a drop (Import Sheet reads files by their path on the server)", d.prevented && dialogs().length === 0 && /part\.kicad_sch cannot be opened by a drop in the studio\./.test(lastToast()), lastToast());
+
+    // the Symbol Editor accepts no file
+    await clickTab("Symbol");
+    d = await dropFiles([{ name: "a.dxf", text: boardDxf }]);
+    check("nothing dropped on the Symbol Editor is taken, and the browser did not take it either", d.prevented && dialogs().length === 0 && /a\.dxf is not a file this editor opens\./.test(lastToast()), lastToast());
+    await clickTab("PCB");
+
+    // ============================================================================================================================ the schematic
+    await clickTab("Schematic");
+    if (!(E.state().view?.scale > 0)) { await E.run("common.Control.zoomFitScreen"); await sleep(300); } // (a pane that is not on screen has not fitted the sheet either)
     const sheetQuery = () => (E.state().sheetPath.length ? `?sheet=${E.state().sheetPath.join("/")}` : "");
     const sch = () => get(`/api/schematic${sheetQuery()}`);
-    const undoDomain = async (domain, n = 1) => { for (let i = 0; i < n; i++) await post("/api/undo", { domain }); await sleep(400); };
     const schActs = Object.fromEntries(E.actions({ all: true }).map((a) => [a.id, a]));
     check("Import Graphics and its drop are wired on the Schematic tab", schActs["eeschema.EditorControl.importGraphics"]?.enabled && schActs["eeschema.EditorControl.ddImportGraphics"]?.enabled, JSON.stringify([schActs["eeschema.EditorControl.importGraphics"], schActs["eeschema.EditorControl.ddImportGraphics"]]));
     const s0 = await sch();

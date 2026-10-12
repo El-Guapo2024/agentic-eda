@@ -30,6 +30,7 @@ import { CommonToolHost } from "./components/CommonToolHost";
 import { CommonDialogs } from "./components/CommonDialogs";
 import { LibraryTableDialogs } from "./components/libraryTables/LibraryTableDialogs";
 import { ImportGraphicsDialog } from "./components/ImportGraphicsDialog";
+import { FileDropHost } from "./components/FileDropHost";
 import { BoardPadPropertiesDialog } from "./components/BoardPadPropertiesDialog";
 import { FootprintPropertiesDialog } from "./components/FootprintPropertiesDialog";
 import { NetInspectorDialog } from "./components/NetInspectorDialog";
@@ -280,6 +281,7 @@ function StudioFrame() {
       <CommonDialogs />
       <LibraryTableDialogs />
       <ImportGraphicsDialog />
+      <FileDropHost />
     </div>
   );
 }

@@ -160,11 +160,12 @@ export async function renameFootprint(c: FpCtx): Promise<void> {
 /**
  * `FOOTPRINT_EDIT_FRAME::ImportFootprint`: choose a `.kicad_mod`, read it and load it. KiCad loads it into the editor unsaved under the
  * name in the file; here every edit is stored at once, so it is stored in the target's library under that name, `_1`, `_2`... if the
- * name is taken (an import never replaces a footprint), and loaded.
+ * name is taken (an import never replaces a footprint), and loaded. `dropped` is the file a drop handed over (`DdImportFootprint`:
+ * `ImportFootprint( aName )` with the name given, no chooser): its name and text, a browser having no path to give.
  */
-export async function importFootprint(c: FpCtx): Promise<void> {
+export async function importFootprint(c: FpCtx, dropped?: { name: string; text: string }): Promise<void> {
   try {
-    const file = await pickTextFile(".kicad_mod");
+    const file = dropped ?? (await pickTextFile(".kicad_mod"));
     if (!file) return;
     const parsed = await parseFootprintText(file.text);
     const { all } = await names();

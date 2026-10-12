@@ -14,6 +14,7 @@ import type { Action as StudioAction } from "../state/store";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
+import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
 
 export interface LibraryActionContext {
@@ -59,6 +60,11 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   m.set("pcbnew.ModuleEditor.deleteFootprint", fpTab(() => fpLib.deleteFootprint(fpc)));
   // Import Footprint... / Export Current Footprint... -- ImportFootprint, ExportFootprint (the loaded footprint, `GetFirstFootprint()`).
   m.set("pcbnew.ModuleEditor.importFootprint", fpTab(() => fpLib.importFootprint(fpc)));
+  // A `.kicad_mod` dropped on the editor -- FOOTPRINT_EDITOR_CONTROL::DdImportFootprint (`ImportFootprint( *aEvent.Parameter<wxString*>() )`); the parameter is `{ name, text }`.
+  m.set("pcbnew.Control.ddImportFootprint", (param?: unknown) => {
+    const file = asPickedFile(param);
+    if (ctx.tab === "footprint" && file) void fpLib.importFootprint(fpc, file);
+  });
   m.set("pcbnew.ModuleEditor.exportFootprint", fpTab(() => (ctx.fpApi.getState().name ? ctx.fpApi.exportKicadMod() : fpToast("There is no footprint to export."))));
   // Footprint Properties... -- Properties (`pcbnew.ModuleEditor.footprintProperties`).
   m.set("pcbnew.ModuleEditor.footprintProperties", fpTab(() => fpLib.footprintProperties(fpc)));

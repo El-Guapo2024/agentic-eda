@@ -2347,7 +2347,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       const before = st.schematic;
       if (!before) return false;
       const c = st.cursorUm;
-      const at = c ? { x: Math.round(c.x / 1270) * 1270, y: Math.round(c.y / 1270) * 1270 } : { x: 0, y: 0 };
+      const at = c && Number.isFinite(c.x) && Number.isFinite(c.y) ? { x: Math.round(c.x / 1270) * 1270, y: Math.round(c.y / 1270) * 1270 } : { x: 0, y: 0 };
       const ok = await runCmd(build(at));
       if (!ok) return false;
       const after = await fetchSchematic(sheet).catch(() => null);
