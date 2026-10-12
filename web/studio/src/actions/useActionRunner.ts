@@ -31,7 +31,8 @@ import { pickSelectionCandidates } from "../components/canvas/selectionCandidate
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
-import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
+import { amplitudeStep, nextAngleSnapMode, spacingStep } from "../kicad-port/pcbParityState";
+import { steppedDrawStroke } from "../kicad-port/layerDefaults";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
 import { finishDiffPairRoute } from "../components/canvas/diffPairRouting";
@@ -544,26 +545,17 @@ export function useActionRunner() {
         }
       })
     );
-    m.set(
-      "pcbnew.InteractiveDrawing.line",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_segment" ? "select" : "draw_segment" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.arc",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_arc" ? "select" : "draw_arc" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.rectangle",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_rect" ? "select" : "draw_rect" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.circle",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_circle" ? "select" : "draw_circle" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.graphicPolygon",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_polygon" ? "select" : "draw_polygon" }))
-    );
+    // Arming a graphic tool starts it at the line thickness of its layer's class again (`m_stroke.SetWidth( bds.GetLineThickness( m_layer ) )`): a step of incWidth / decWidth is gone.
+    const armGraphicTool = (tool: "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon") =>
+      pcbOnly(() => {
+        dispatch({ type: "PCBX", patch: { drawStrokeStep: null } });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
+      });
+    m.set("pcbnew.InteractiveDrawing.line", armGraphicTool("draw_segment"));
+    m.set("pcbnew.InteractiveDrawing.arc", armGraphicTool("draw_arc"));
+    m.set("pcbnew.InteractiveDrawing.rectangle", armGraphicTool("draw_rect"));
+    m.set("pcbnew.InteractiveDrawing.circle", armGraphicTool("draw_circle"));
+    m.set("pcbnew.InteractiveDrawing.graphicPolygon", armGraphicTool("draw_polygon"));
     m.set(
       "pcbnew.InteractiveDrawing.text",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "text" ? "select" : "text" }))
@@ -1880,8 +1872,8 @@ export function useActionRunner() {
 
       // ---- incWidth / decWidth (Ctrl++ / Ctrl+-) -- drawing_tool.cpp DRAWING_TOOL::DrawSegment: `m_stroke.SetWidth( width +/- WIDTH_STEP )` while a graphic tool is armed.
       if (shapeToolActive) {
-        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeWidthUm: stepStrokeWidth(state.pcbx.drawStrokeWidthUm, 1) } })));
-        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeWidthUm: stepStrokeWidth(state.pcbx.drawStrokeWidthUm, -1) } })));
+        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeStep: steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, 1) } })));
+        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeStep: steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, -1) } })));
       }
 
       // ---- lineModeNext (Shift+Space) and the explicit modes -- pcb_viewer_tools.cpp PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT.

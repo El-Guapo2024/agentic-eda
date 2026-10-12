@@ -1768,7 +1768,11 @@ pub fn run(
             "add" => {
                 let kind = flag(rest, "--kind").ok_or_else(|| fail("board_usage", "shape add", "needs --kind segment|arc|rect|circle|polygon"))?;
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "shape add", "needs --layer L"))?;
-                let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
+                // No --width: the line thickness Board Setup > Text & Graphics > Defaults gives the layer's class (`BOARD_DESIGN_SETTINGS::GetLineThickness`).
+                let stroke_width = match flag(rest, "--width") {
+                    Some(w) => mm_arg(&w)?,
+                    None => load(&dir)?.2.board.text_graphics.line_thickness_um(&layer),
+                };
                 let filled = has(rest, "--filled");
                 let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "shape add", "needs --pts \"x,y ...\", mm"))?)?;
                 let shape = parse_shape(&kind, layer, stroke_width, filled, pts)?;
@@ -1792,8 +1796,16 @@ pub fn run(
                 let at = parse_point_mm(&flag(rest, "--at").ok_or_else(|| fail("board_usage", "text add", "needs --at x,y, mm"))?)?;
                 let angle = parse_angle(flag(rest, "--angle").as_deref())?;
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "text add", "needs --layer L"))?;
-                let size_um = mm_arg(&flag(rest, "--size").ok_or_else(|| fail("board_usage", "text add", "needs --size, mm"))?)?;
-                let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
+                // No --size or --width: what Board Setup > Text & Graphics > Defaults gives the layer's class (`GetTextSize`, `GetTextThickness`).
+                let defaults = load(&dir)?.2.board.text_graphics;
+                let size_um = match flag(rest, "--size") {
+                    Some(v) => mm_arg(&v)?,
+                    None => defaults.text_size_um(&layer).1,
+                };
+                let stroke_width = match flag(rest, "--width") {
+                    Some(v) => mm_arg(&v)?,
+                    None => defaults.text_thickness_um(&layer),
+                };
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
                 let text = Text { id: String::new(), content, at, angle, layer, size_um, stroke_width, justify, mirror };
@@ -2088,6 +2100,43 @@ mod tests {
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(crate::text_variables::project_variables(&dir), seed, "back before the page: the folder's variables");
         let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// `eda board shape add` and `text add` without a width or a size take what Text & Graphics > Defaults gives the layer's class, and follow the page.
+    #[test]
+    fn the_cli_starts_a_new_shape_and_text_from_the_defaults_of_the_layers_class() {
+        let dir = scratch("cli_text_graphics_defaults");
+        setup(&dir);
+        let cli = |args: &[&str]| {
+            let mut rest: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            rest.extend(["-C".to_string(), dir.display().to_string()]);
+            super::run(&rest, |_| Err(vec![])).unwrap_or_else(|e| panic!("{args:?}: {e:?}"));
+        };
+        cli(&["shape", "add", "--kind", "segment", "--layer", "F.SilkS", "--pts", "1,1 5,1"]);
+        cli(&["shape", "add", "--kind", "segment", "--layer", "F.Cu", "--pts", "1,2 5,2"]);
+        cli(&["shape", "add", "--kind", "segment", "--layer", "Edge.Cuts", "--pts", "1,3 5,3"]);
+        cli(&["shape", "add", "--kind", "segment", "--layer", "F.Fab", "--width", "0.4", "--pts", "1,4 5,4"]);
+        cli(&["text", "add", "--content", "hello", "--at", "3,6", "--layer", "F.SilkS"]);
+        cli(&["text", "add", "--content", "copper", "--at", "3,8", "--layer", "F.Cu"]);
+        let (_, design, _) = load(&dir).unwrap();
+        let d = design.drawings.as_ref().unwrap();
+        let widths: Vec<(String, Um)> = d.shapes.iter().map(|s| match s { Shape::Segment { layer, stroke_width, .. } => (layer.clone(), *stroke_width), _ => unreachable!() }).collect();
+        assert_eq!(widths, vec![("F.SilkS".into(), 100), ("F.Cu".into(), 200), ("Edge.Cuts".into(), 50), ("F.Fab".into(), 400)], "KiCad's line thickness of each class; an explicit --width wins");
+        assert_eq!(d.texts.iter().map(|t| (t.size_um, t.stroke_width)).collect::<Vec<_>>(), vec![(1_000, 100), (1_500, 300)]);
+
+        // The page changes what the next item starts with.
+        let mut defaults = eda_model::rules::TextGraphicsDefaults::default();
+        defaults.silk.line_width_um = 180;
+        defaults.silk.text_width_um = 1_200;
+        defaults.silk.text_height_um = 1_200;
+        defaults.silk.text_thickness_um = 200;
+        step(&dir, Cmd::SetTextGraphicsDefaults { settings: defaults }, false, "ui").unwrap();
+        cli(&["shape", "add", "--kind", "segment", "--layer", "B.SilkS", "--pts", "1,5 5,5"]);
+        cli(&["text", "add", "--content", "again", "--at", "3,10", "--layer", "B.SilkS"]);
+        let (_, design, _) = load(&dir).unwrap();
+        let d = design.drawings.as_ref().unwrap();
+        assert!(matches!(d.shapes.last(), Some(Shape::Segment { stroke_width: 180, .. })));
+        assert_eq!((d.texts.last().unwrap().size_um, d.texts.last().unwrap().stroke_width), (1_200, 200));
     }
 
     fn variables_of(rows: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {

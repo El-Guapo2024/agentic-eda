@@ -331,7 +331,73 @@ impl Default for TextGraphicsDefaults {
     }
 }
 
+/// `BOARD_DESIGN_SETTINGS::GetLayerClass` (`LAYER_CLASS_*`): which row of the Text & Graphics grid a layer belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerClass {
+    Silk,
+    Copper,
+    Edges,
+    Courtyard,
+    Fab,
+    Others,
+}
+
+/// `BOARD_DESIGN_SETTINGS::GetLayerClass( aLayer )`, by the layer's name in the board file.
+pub fn layer_class(layer: &str) -> LayerClass {
+    match layer {
+        "F.SilkS" | "B.SilkS" => LayerClass::Silk,
+        "Edge.Cuts" => LayerClass::Edges,
+        "F.CrtYd" | "B.CrtYd" => LayerClass::Courtyard,
+        "F.Fab" | "B.Fab" => LayerClass::Fab,
+        l if l.ends_with(".Cu") => LayerClass::Copper,
+        _ => LayerClass::Others,
+    }
+}
+
+/// `DEFAULT_TEXT_SIZE` and `DEFAULT_TEXT_WIDTH` (`include/board_design_settings.h`), in µm: the text of the edges and courtyard classes, which have a line
+/// thickness in Board Setup but no text cells.
+pub const DEFAULT_TEXT_SIZE_UM: Um = 1_000;
+pub const DEFAULT_TEXT_WIDTH_UM: Um = 150;
+
 impl TextGraphicsDefaults {
+    /// The text row of a class, `None` for the two classes that have only a line thickness.
+    fn text_row(&self, class: LayerClass) -> Option<&LayerClassDefaults> {
+        match class {
+            LayerClass::Silk => Some(&self.silk),
+            LayerClass::Copper => Some(&self.copper),
+            LayerClass::Fab => Some(&self.fab),
+            LayerClass::Others => Some(&self.others),
+            LayerClass::Edges | LayerClass::Courtyard => None,
+        }
+    }
+
+    /// `BOARD_DESIGN_SETTINGS::GetLineThickness( aLayer )`: what a new line, rectangle, circle, arc, polygon or dimension on `layer` starts with.
+    pub fn line_thickness_um(&self, layer: &str) -> Um {
+        match layer_class(layer) {
+            LayerClass::Silk => self.silk.line_width_um,
+            LayerClass::Copper => self.copper.line_width_um,
+            LayerClass::Edges => self.edge_cuts_line_width_um,
+            LayerClass::Courtyard => self.courtyard_line_width_um,
+            LayerClass::Fab => self.fab.line_width_um,
+            LayerClass::Others => self.others.line_width_um,
+        }
+    }
+
+    /// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )` as `(width, height)`.
+    pub fn text_size_um(&self, layer: &str) -> (Um, Um) {
+        self.text_row(layer_class(layer)).map_or((DEFAULT_TEXT_SIZE_UM, DEFAULT_TEXT_SIZE_UM), |c| (c.text_width_um, c.text_height_um))
+    }
+
+    /// `BOARD_DESIGN_SETTINGS::GetTextThickness( aLayer )`.
+    pub fn text_thickness_um(&self, layer: &str) -> Um {
+        self.text_row(layer_class(layer)).map_or(DEFAULT_TEXT_WIDTH_UM, |c| c.text_thickness_um)
+    }
+
+    /// `BOARD_DESIGN_SETTINGS::GetTextItalic( aLayer )` and `GetTextUpright( aLayer )`.
+    pub fn text_italic_upright(&self, layer: &str) -> (bool, bool) {
+        self.text_row(layer_class(layer)).map_or((false, false), |c| (c.italic, c.upright))
+    }
+
     /// Whether this is the factory set (nothing to write to a project file).
     pub fn is_default(&self) -> bool {
         *self == TextGraphicsDefaults::default()
@@ -699,6 +765,22 @@ mod tests {
         assert_eq!(names, vec!["min_clearance", "max_error", "min_resolved_spokes"]);
         assert!(bad.validate()[0].1.contains("between 0 and 25"), "{:?}", bad.validate()[0]);
         assert!(Constraints { min_silk_clearance_um: -5_000, ..ok }.validate().is_empty(), "the silk clearance may be negative, down to -10 mm");
+    }
+
+    #[test]
+    fn a_new_item_takes_the_default_of_its_layer_class() {
+        let mut t = TextGraphicsDefaults::default();
+        t.silk = LayerClassDefaults { line_width_um: 120, text_width_um: 1_200, text_height_um: 1_300, text_thickness_um: 180, italic: true, upright: false };
+        t.edge_cuts_line_width_um = 70;
+        t.courtyard_line_width_um = 60;
+        for (layer, class) in [("F.SilkS", LayerClass::Silk), ("B.SilkS", LayerClass::Silk), ("F.Cu", LayerClass::Copper), ("In3.Cu", LayerClass::Copper), ("Edge.Cuts", LayerClass::Edges), ("B.CrtYd", LayerClass::Courtyard), ("F.Fab", LayerClass::Fab), ("Dwgs.User", LayerClass::Others), ("User.7", LayerClass::Others), ("F.Mask", LayerClass::Others)] {
+            assert_eq!(layer_class(layer), class, "{layer}");
+        }
+        assert_eq!((t.line_thickness_um("F.SilkS"), t.line_thickness_um("B.SilkS")), (120, 120));
+        assert_eq!((t.line_thickness_um("Edge.Cuts"), t.line_thickness_um("F.CrtYd"), t.line_thickness_um("F.Cu"), t.line_thickness_um("Dwgs.User")), (70, 60, 200, 100));
+        assert_eq!((t.text_size_um("F.SilkS"), t.text_thickness_um("F.SilkS"), t.text_italic_upright("F.SilkS")), ((1_200, 1_300), 180, (true, false)));
+        assert_eq!((t.text_size_um("B.Cu"), t.text_thickness_um("In1.Cu")), ((1_500, 1_500), 300));
+        assert_eq!((t.text_size_um("Edge.Cuts"), t.text_thickness_um("F.CrtYd")), ((DEFAULT_TEXT_SIZE_UM, DEFAULT_TEXT_SIZE_UM), DEFAULT_TEXT_WIDTH_UM), "the classes that have no text cells keep KiCad's own constants");
     }
 
     #[test]

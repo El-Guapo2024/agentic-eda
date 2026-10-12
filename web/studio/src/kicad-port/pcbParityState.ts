@@ -6,8 +6,14 @@ import type { Cmd } from "../api/types";
 import type { LayerPairSettings } from "./layerPairs";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 
-/** The line width a freshly armed graphic tool starts at (Canvas.tsx's pre-existing constant, hoisted here so `incWidth`/`decWidth` can step it). */
-export const DEFAULT_STROKE_WIDTH_UM = 150;
+/**
+ * `DRAWING_TOOL::m_stroke`'s width once `incWidth`/`decWidth` have stepped it on `layer`. A graphic starts at the line thickness of its layer's class (Board Setup >
+ * Text & Graphics > Defaults, `kicad-port/layerDefaults.ts`); a step is kept only while the active layer is `layer` and until a drawing tool is armed again.
+ */
+export interface DrawStrokeStep {
+  layer: string;
+  um: number;
+}
 
 /** `ZONE_MODE` (drawing_tool.h) for the two source-zone-driven draws: `CUTOUT` subtracts the drawn polygon from `sourceId`, `SIMILAR` makes a new zone with `sourceId`'s settings and never opens the properties dialog (`ZONE_CREATE_HELPER::createZoneFromExisting`). Plain `ADD` is `null` (the dialog path, unchanged). */
 export interface ZoneDrawMode {
@@ -35,8 +41,8 @@ export interface PcbParityState {
   pcbDialog: PcbDialog;
   /** `PCBNEW_SETTINGS::m_AngleSnapMode` -- starts at 45 deg, what the segment/rect tools always did before this became switchable. */
   angleSnapMode: AngleSnapMode;
-  /** `DRAWING_TOOL::m_stroke`'s width: `incWidth`/`decWidth` step it by `WIDTH_STEP` while a graphic is being drawn. */
-  drawStrokeWidthUm: number;
+  /** `DRAWING_TOOL::m_stroke`'s width, once `incWidth`/`decWidth` have stepped it by `WIDTH_STEP` while a graphic is being drawn; null = the layer class's default. */
+  drawStrokeStep: DrawStrokeStep | null;
   /** A footprint name waiting to be opened in the Footprint Editor tab (`EditFpInFpEditor`): the Footprint Editor lives in its own store, so the action only records the request and `useFootprintEditHotkey` (mounted where both providers are in scope) performs it. */
   fpEditRequest: string | null;
   /** `MEANDER_SETTINGS` amplitude/spacing the length-tuning dialog edits (`lengthTuner.Ampl*`/`Spacing*` step them). */
@@ -76,7 +82,7 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   zoneDrawMode: null,
   pcbDialog: null,
   angleSnapMode: "45",
-  drawStrokeWidthUm: DEFAULT_STROKE_WIDTH_UM,
+  drawStrokeStep: null,
   fpEditRequest: null,
   lengthTuner: { amplitudeUm: 200, spacingUm: 400 },
   drawFinishRequest: 0,

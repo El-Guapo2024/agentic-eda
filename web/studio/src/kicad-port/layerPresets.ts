@@ -53,6 +53,14 @@ export function layerNameOfKey(key: string): string {
   return known ?? key;
 }
 
+/**
+ * The KiCad name of the active layer, for a tool that makes an item on it. `StudioState.activeLayer` holds the layer's state key (the Appearance panel's row sets
+ * "f_silks", not "F.SilkS"), so a new item is put on `layerNameOfKey( activeLayer )`; `fallback` is the layer when none is active.
+ */
+export function activeLayerName(activeLayer: string | null | undefined, fallback: string): string {
+  return activeLayer ? layerNameOfKey(activeLayer) : fallback;
+}
+
 /** True unless the layer is switched off (a layer nobody has set is on). Accepts the KiCad name of any layer an item can be on. */
 export function layerIsVisible(layerVisible: Readonly<Record<string, boolean>>, name: string): boolean {
   return layerVisible[layerStateKey(name)] !== false && layerVisible[name] !== false;

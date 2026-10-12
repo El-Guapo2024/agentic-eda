@@ -93,3 +93,14 @@ test("defaultDimensionPayload builds a bare kind object for leader/center (no ex
   assert.deepEqual(defaultDimensionPayload("leader", [0, 0], [1000, 0], "Dwgs.User", SETTINGS).kind, { kind: "leader" });
   assert.deepEqual(defaultDimensionPayload("center", [0, 0], [1000, 0], "Dwgs.User", SETTINGS).kind, { kind: "center" });
 });
+
+test("defaultDimensionPayload takes the text size and line thickness of the layer's class when the board has the table", () => {
+  const defaults = { silk: { line_width_um: 120, text_width_um: 1200, text_height_um: 1300, text_thickness_um: 180, italic: false, upright: true }, copper: { line_width_um: 200, text_width_um: 1500, text_height_um: 1500, text_thickness_um: 300, italic: false, upright: true }, edge_cuts_line_width_um: 50, courtyard_line_width_um: 50, fab: { line_width_um: 90, text_width_um: 800, text_height_um: 800, text_thickness_um: 120, italic: false, upright: true }, others: { line_width_um: 110, text_width_um: 900, text_height_um: 900, text_thickness_um: 140, italic: false, upright: true } };
+  const onSilk = defaultDimensionPayload("aligned", [0, 0], [1000, 0], "F.SilkS", SETTINGS, defaults);
+  assert.deepEqual([onSilk.text_size_um, onSilk.stroke_width], [1300, 120]);
+  const onFab = defaultDimensionPayload("aligned", [0, 0], [1000, 0], "F.Fab", SETTINGS, defaults);
+  assert.deepEqual([onFab.text_size_um, onFab.stroke_width], [800, 90]);
+  const without = defaultDimensionPayload("aligned", [0, 0], [1000, 0], "F.Fab", SETTINGS);
+  assert.deepEqual([without.text_size_um, without.stroke_width], [SETTINGS.text_size_um, SETTINGS.stroke_width], "no table from the backend: the Dimensions page's own");
+  assert.equal(onSilk.arrow_length, SETTINGS.arrow_length, "the arrows and extension lines are still the Dimensions page's");
+});

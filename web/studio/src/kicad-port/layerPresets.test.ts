@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   TECH_LAYER_NAMES,
+  activeLayerName,
   allPresets,
   builtinPresets,
   currentViewport,
@@ -267,4 +268,15 @@ test("saving a viewport under an existing name replaces it; they are listed by n
   assert.equal(v.length, 2);
   assert.deepEqual(v[0], { name: "a", x: 5, y: 5, w: 6, h: 6 });
   assert.deepEqual(withoutViewport(v, "a").map((x) => x.name), ["b"]);
+});
+
+test("a tool makes its item on the KiCad name of the active layer, which the state holds as a key", () => {
+  assert.equal(activeLayerName("f_silks", "F.SilkS"), "F.SilkS");
+  assert.equal(activeLayerName("b_fab", "F.SilkS"), "B.Fab");
+  assert.equal(activeLayerName("Dwgs_User", "F.SilkS"), "Dwgs.User");
+  assert.equal(activeLayerName("In2.Cu", "F.SilkS"), "In2.Cu", "a copper layer's key is its name");
+  assert.equal(activeLayerName("board_edge", "F.SilkS"), "Edge.Cuts");
+  assert.equal(activeLayerName(null, "F.SilkS"), "F.SilkS", "no active layer: the tool's own");
+  assert.equal(activeLayerName(undefined, "Dwgs.User"), "Dwgs.User");
+  for (const name of TECH_LAYER_NAMES) assert.equal(activeLayerName(layerStateKey(name), "x"), name, name);
 });

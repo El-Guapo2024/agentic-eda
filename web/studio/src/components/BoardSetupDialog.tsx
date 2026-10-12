@@ -442,15 +442,10 @@ export function BoardSetupDialog() {
               </label>
 
               <p style={{ fontWeight: 600, fontSize: 11, color: "var(--chrome-text-dim)", marginTop: 10 }}>Style</p>
+              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11 }}>
+                A new dimension's text size and line thickness are those of its layer's class in Text &amp; Graphics &gt; Defaults (`PCB_DIMENSION_BASE::StyleFromSettings`), not set here.
+              </p>
               <div className="kv-grid" style={{ gridTemplateColumns: "220px 1fr" }}>
-                <span>Text size</span>
-                <span>
-                  <input type="number" step="any" value={umTo(dimSettings.text_size_um, units)} onChange={(e) => setDimField("text_size_um", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
-                </span>
-                <span>Line thickness</span>
-                <span>
-                  <input type="number" step="any" value={umTo(dimSettings.stroke_width, units)} onChange={(e) => setDimField("stroke_width", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}
-                </span>
                 <span>Arrow length</span>
                 <span>
                   <input type="number" step="any" value={umTo(dimSettings.arrow_length, units)} onChange={(e) => setDimField("arrow_length", Math.round(umFrom(Number(e.target.value), units)))} style={{ width: 90 }} /> {units}

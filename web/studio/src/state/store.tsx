@@ -7,6 +7,7 @@
 // studio.html's `send()`.
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
+import { activeLayerName } from "../kicad-port/layerPresets";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
@@ -2349,7 +2350,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (system != null && isKicadPcbText(system)) {
         cmd = paste(system);
       } else if (system != null && system.trim() !== "") {
-        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: st.activeLayer ?? "F.SilkS", size_um: 1000, stroke_width: 150, justify: "center", mirror: false } };
+        cmd = { op: "add_text", text: { content: system.trim(), at, angle: 0, layer: activeLayerName(st.activeLayer, "F.SilkS"), size_um: 1000, stroke_width: 150, justify: "center", mirror: false } };
       } else if (st.clipboard) {
         cmd = paste(st.clipboard.text);
       } else {
