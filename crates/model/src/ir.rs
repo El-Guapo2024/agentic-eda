@@ -2322,6 +2322,13 @@ pub struct DrawingsSection {
     /// library has it". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_edits: Vec<crate::fp_edit::FootprintEdit>,
+    /// The intent's parts that have another reference now (Edit Reference, Annotate, Increment Annotations, Reannotate): laid over the intent's
+    /// model each time the board is loaded ([`crate::fp_assign::apply_part_renames`]), so the part, its nets and everything keyed by it are
+    /// under the new reference and nothing is left under the old one. One entry per renamed intent part, `from` the intent's reference, sorted by
+    /// it. Additive: absent in an older `design.json` reads as "every part has the reference the intent gave it". Lives here for the reason
+    /// `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renamed_parts: Vec<crate::fp_assign::PartRename>,
     /// `true` when the board's outline is made of the shapes on layer `Edge.Cuts` in [`Self::shapes`] and of nothing else: an
     /// imported board whose Edge.Cuts have arcs, circles, rectangles, curves, cutouts or several loops, which a closed polygon of
     /// straight edges cannot hold. `placement.outline` is then only their summary (the outer ring of the largest outline, curves

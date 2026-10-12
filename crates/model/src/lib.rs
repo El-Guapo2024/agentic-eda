@@ -10,6 +10,7 @@ pub mod erc_checks;
 pub mod floorplan;
 pub mod footprint;
 pub mod fp_art;
+pub mod fp_assign;
 pub mod fp_edit;
 pub mod gensym;
 mod groups;

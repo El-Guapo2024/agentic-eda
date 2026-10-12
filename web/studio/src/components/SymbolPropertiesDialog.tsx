@@ -195,7 +195,7 @@ export function SymbolPropertiesDialog() {
             <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }}>{error}</p>
           )}
           <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>
-            Renaming only relabels this schematic symbol and the wires/power-symbols/no-connects already on this sheet that name it -- it does not retarget anything already placed on the PCB tab under the old reference.
+            Renaming a symbol renames its footprint on the board with it (the pose, the copper on its pads, its fields and edits stay with the part), and one Undo takes both back.
           </p>
         </div>
         <div className="dialog-footer">
