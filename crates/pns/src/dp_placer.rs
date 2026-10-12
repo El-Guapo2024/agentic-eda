@@ -759,6 +759,21 @@ impl DiffPairPlacer {
         }
         let fixed_vias = self.legs.iter().filter_map(|l| l.vias.as_ref()).flat_map(|(a, b)| [PreviewVia::from(a), PreviewVia::from(b)]).collect();
         let leg_lines = |p: bool| self.legs.iter().map(|l| Line::from_points(if p { self.net_p.clone() } else { self.net_n.clone() }, l.layer, l.width, if p { l.p.clone() } else { l.n.clone() })).collect::<Vec<_>>();
+        // what the head shoves now, and what the legs fixed so far shoved (a fix puts the shoved track in the world, where it stays pushed
+        // until the commit): the head's answer wins for a track both have moved
+        let mut displaced_lines = self.shoved_lines.clone();
+        let moving: HashSet<&str> = self.shoved_lines.iter().filter_map(|d| d.source_track.as_deref()).collect();
+        for (id, lines) in &self.displaced_tracks {
+            if !moving.contains(id.as_str()) {
+                displaced_lines.extend(lines.iter().filter(|l| l.point_count() >= 2).map(|l| DisplacedLine { source_track: Some(id.clone()), line: l.clone() }));
+            }
+        }
+        let mut displaced_vias = self.shoved_vias.clone();
+        for (id, pos) in &self.displaced_vias {
+            if !self.shoved_vias.iter().any(|d| &d.source_via == id) {
+                displaced_vias.push(DisplacedVia { source_via: id.clone(), pos: *pos });
+            }
+        }
         DiffPairPreview {
             layer: self.current_layer,
             width: self.sizes.width,
@@ -771,8 +786,8 @@ impl DiffPairPlacer {
             snapped_end: self.snap_on_target,
             vias,
             fixed_vias,
-            displaced_lines: self.shoved_lines.clone(),
-            displaced_vias: self.shoved_vias.clone(),
+            displaced_lines,
+            displaced_vias,
             placing_via: self.placing_via,
         }
     }
@@ -1162,6 +1177,32 @@ mod tests {
         assert_eq!(commit.displaced_tracks.len(), 1);
         assert_eq!(commit.displaced_tracks[0].0, "u");
         assert_eq!(commit.displaced_tracks[0].1.len(), 1);
+    }
+
+    #[test]
+    fn a_fixed_leg_keeps_showing_the_track_it_shoved() {
+        // a GND track in a short U whose bottom dips into the pair's lane only between x = 3000 and 4000
+        let (mut node, start) = two_pad_pairs();
+        for (i, w) in [p(3000, -1500), p(3000, 150), p(4000, 150), p(4000, -1500)].windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some(("u".into(), i)), locked: false }));
+        }
+        let (rules, settings) = (rules(), mode(Mode::Shove));
+        let mut dp = placer(&node, start);
+        assert!(dp.move_to(&rules, &settings, p(5000, 500)));
+        let shoved = dp.preview().displaced_lines.iter().map(|d| (d.source_track.clone(), d.line.pts.clone())).collect::<Vec<_>>();
+        assert_eq!(shoved.len(), 1, "{shoved:?}");
+        assert!(matches!(dp.fix_route(&rules, &settings, p(5000, 500), false), Some(FixOutcome::Fixed { real_end: false })));
+        // the next head is on from there and clear of the track: it pushes nothing, the leg before it has moved the track, and it is still drawn pushed, once
+        assert!(dp.move_to(&rules, &settings, p(9000, 500)));
+        assert!(dp.shoved_lines.is_empty(), "this head pushes nothing itself: the track is in the world where the fixed leg left it");
+        let pv = dp.preview();
+        assert_eq!(pv.displaced_lines.len(), 1, "{:?}", pv.displaced_lines);
+        assert_eq!(pv.displaced_lines[0].source_track.as_deref(), Some("u"));
+        assert_eq!(pv.displaced_lines[0].line.pts, shoved[0].1, "the pushed track is where the fixed leg left it");
+        // and what the commit takes is the same track
+        let commit = dp.finish(&rules, &settings, p(9000, 500)).unwrap();
+        assert_eq!(commit.displaced_tracks.len(), 1);
+        assert_eq!((commit.displaced_tracks[0].0.as_str(), commit.displaced_tracks[0].1[0].pts.clone()), ("u", shoved[0].1.clone()));
     }
 
     #[test]
