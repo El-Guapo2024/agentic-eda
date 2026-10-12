@@ -5,6 +5,7 @@
 // Pure functions over the studio's board state, units micrometres; the commands they build go to the server as one undo step.
 
 import type { BoardState, Cmd, ExchangeOptions } from "../api/types";
+import type { ExchangePlanEntry } from "../api/fpAssign";
 import { wildMatch } from "./pcbGlobalEdit";
 
 /** What `BOARD_NETLIST_UPDATER::replaceFootprint` asks of `ExchangeFootprint`: every option on (the symbol's Footprint field, Update PCB from Schematic). */
@@ -96,4 +97,17 @@ export interface ReportLine {
 export function isLibraryId(id: string): boolean {
   const colon = id.indexOf(":");
   return colon > 0 && colon < id.length - 1;
+}
+
+/**
+ * The message window after a run (`processFootprint`): one line a footprint. A change tells "Changed footprint R1 from 'A' to 'B': OK"; an update tells
+ * "Updated footprint R1 (A): OK", or "(no changes)" when the library copy is the board's; a footprint whose library copy is not found is an error line in either.
+ */
+export function exchangeReport(mode: "change" | "update", entries: readonly ExchangePlanEntry[]): ReportLine[] {
+  return entries.map((e): ReportLine => {
+    const head = mode === "change" ? `Changed footprint ${e.reference} from '${e.from}' to '${e.to}'` : `Updated footprint ${e.reference} (${e.from})`;
+    if (!e.found) return { severity: "error", text: `${head}: *** library footprint not found ***` };
+    if (mode === "update" && e.differs === false) return { severity: "info", text: `${head}: (no changes)` };
+    return { severity: "action", text: `${head}: OK` };
+  });
 }

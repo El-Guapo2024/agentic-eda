@@ -14,7 +14,8 @@ import { ReportWindow } from "./ReportWindow";
 
 export type UpdateDirection = "pcb" | "schematic";
 
-export function UpdatePcbDialog({ direction, initial, parts, apply }: { direction: UpdateDirection; initial: UpdatePcbChange[]; parts: readonly UpdatePart[]; apply: (cmds: Cmd[]) => Promise<boolean> }) {
+/** `apply` sends the commands as one undo step and answers why not (the server's reason) when it was refused, `null` when it was done. */
+export function UpdatePcbDialog({ direction, initial, parts, apply }: { direction: UpdateDirection; initial: UpdatePcbChange[]; parts: readonly UpdatePart[]; apply: (cmds: Cmd[]) => Promise<string | null> }) {
   useEscape();
   const [changes, setChanges] = useState<UpdatePcbChange[]>(initial);
   const [told, setTold] = useState<ReportLine[] | null>(null);
@@ -28,12 +29,13 @@ export function UpdatePcbDialog({ direction, initial, parts, apply }: { directio
     setBusy(true);
     try {
       const lines: ReportLine[] = pcb ? changeLines(changes, true) : backAnnotateLines(changes, true);
-      if (await apply(cmds)) {
+      const refused = await apply(cmds);
+      if (refused === null) {
         setTold(lines);
         const fresh = await fetchUpdatePcb();
         if (fresh.ok) setChanges(fresh.changes);
       } else {
-        setTold([{ severity: "error", text: "The update was refused." }]);
+        setTold([{ severity: "error", text: refused }]);
       }
     } finally {
       setBusy(false);

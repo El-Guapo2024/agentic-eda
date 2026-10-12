@@ -155,17 +155,32 @@ fn find_footprint<F: LibSource + ?Sized>(wanted: &str, id: &str, design: &Design
     (model.footprint_of(&probe).is_some() || in_editor).then_some(None)
 }
 
+/// The library copy of footprint `name`: the Footprint Editor's entry for it where the project edited one (the newest copy there is), else the file of the library tables.
+pub(crate) fn library_copy<F: LibSource + ?Sized>(name: &str, design: &Design, footprints: &F) -> Option<eda_model::Footprint> {
+    let edited = design.footprint_library.as_ref().and_then(|l| l.by_name(name)).map(|entry| {
+        let mut copy = entry.to_engine_footprint();
+        copy.name = name.to_string();
+        copy
+    });
+    edited.or_else(|| crate::library_search::installed_engine_footprint(footprints, name))
+}
+
 /// Is the footprint `wanted` one the studio can put on the part `id` (Update PCB from Schematic: "Cannot update %s (footprint '%s' not found).")?
 pub(crate) fn footprint_found<F: LibSource + ?Sized>(wanted: &str, id: &str, design: &Design, model: &ConstraintModel, footprints: &F) -> bool {
     find_footprint(wanted, id, design, model, footprints).is_some()
 }
 
 /// The exchange that puts the board's part `id` on the footprint `wanted`, the one its symbol's Footprint field now names -- `None` when the board is on it already, when
-/// there is no such part, or when no library has the footprint (the schematic keeps what was typed and the board stays as it was: Update PCB from Schematic lists it).
+/// there is no such part, when its footprint is locked, or when no library has the footprint (the schematic keeps what was typed and the board stays as it was: Update PCB
+/// from Schematic lists it).
 fn exchange_for_field<F: LibSource + ?Sized>(id: &str, wanted: &str, design: &Design, model: &ConstraintModel, footprints: &F) -> Option<Cmd> {
     let wanted = wanted.trim();
     let part = model.part(id)?;
     if wanted.is_empty() || footprint_name_of(part) == wanted {
+        return None;
+    }
+    // `replaceFootprint` does not change a locked footprint ("Could not change %s footprint from '%s' to '%s' (footprint is locked)."): Update PCB lists it
+    if design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id)) {
         return None;
     }
     let mut library = BTreeMap::new();

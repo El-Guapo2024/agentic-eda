@@ -1,29 +1,22 @@
 // The Global Edit tool's rows of the UI-actions sweep (docs/parity/UI-ACTIONS.md): Global Deletions,
-// Cleanup Graphics, and Update Footprint(s) from Library. Each cites GLOBAL_EDIT_TOOL
+// Cleanup Graphics, Change Footprint(s) and Update Footprint(s) from Library. Each cites GLOBAL_EDIT_TOOL
 // (pcbnew/tools/global_edit_tool.cpp at 8303b2ad); the logic is kicad-port/pcbGlobalEdit.ts and the
 // dialogs components/PcbGlobalEditDialogs.tsx. Called from `registerPcbEditSweep`.
 
 import { createElement } from "react";
 import type { Cmd } from "../api/types";
-import { fetchFootprint } from "../api/client";
-import {
-  DEFAULT_CLEANUP_GRAPHICS,
-  DEFAULT_GLOBAL_DELETION,
-  exchangeTargets,
-  footprintNamesOf,
-  planCleanupGraphics,
-  planGlobalDeletions,
-  type CleanupGraphicsOptions,
-  type GlobalDeletionOptions,
-} from "../kicad-port/pcbGlobalEdit";
-import { CleanupGraphicsDialog, ExchangeFootprintsDialog, GlobalDeletionDialog, type ExchangeChoice } from "../components/PcbGlobalEditDialogs";
+import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, planCleanupGraphics, planGlobalDeletions, type CleanupGraphicsOptions, type GlobalDeletionOptions } from "../kicad-port/pcbGlobalEdit";
+import { CHANGE_OPTIONS, UPDATE_OPTIONS, exchangeCmd, exchangeReport, isLibraryId, matchingFootprints, type ReportLine } from "../kicad-port/pcbExchange";
+import { postExchangePlan } from "../api/fpAssign";
+import { CleanupGraphicsDialog, ExchangeFootprintsDialog, GlobalDeletionDialog, type ExchangeState } from "../components/PcbGlobalEditDialogs";
 import { openSweepDialog } from "./pcbSweepDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
 /** Remembered between invocations, like the dialogs' C++ statics (`s_defaultTolerance`, `g_matchModeForUpdate`). */
-const last: { cleanup: CleanupGraphicsOptions; exchange: ExchangeChoice | null } = {
+const last: { cleanup: CleanupGraphicsOptions; change: ExchangeState | null; update: ExchangeState | null } = {
   cleanup: { ...DEFAULT_CLEANUP_GRAPHICS },
-  exchange: null,
+  change: null,
+  update: null,
 };
 
 export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: SweepCtx): void {
@@ -86,67 +79,68 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
     })
   );
 
-  // ------------------------------------------------- Update Footprint(s) from Library
-  // GLOBAL_EDIT_TOOL::ExchangeFootprints (update mode) -> DIALOG_EXCHANGE_FOOTPRINTS. A placed footprint takes its pads and courtyard
-  // from its library entry once the entry is "updated on the board" (`Cmd::UpdateFootprintOnBoard`), so this publishes the entries of
-  // the matching footprints. (Change Footprint(s) would give a footprint another library footprint; the board's footprints come from
-  // the intent and design.json holds no per-footprint override, so that one is recorded as not wired.)
-  const runUpdate = async (choice: ExchangeChoice, selected: string | null): Promise<void> => {
-    if (!board) return;
-    const refs = exchangeTargets(board, choice.scope, { selectedRef: selected, reference: choice.reference, value: choice.value, footprint: choice.footprint });
-    if (refs.length === 0) {
-      toast("No footprint matches.");
-      return;
-    }
-    // Publish every library entry the matching footprints use that has not been yet.
-    const names = footprintNamesOf(board, refs);
-    const publish: string[] = [];
-    let upToDate = 0;
-    let noEntry = 0;
-    for (const name of names) {
-      try {
-        const entry = await fetchFootprint(name);
-        if (entry.published) upToDate++;
-        else publish.push(name);
-      } catch {
-        noEntry++; // never opened in the Footprint Editor: the board already has the library's own geometry
-      }
-    }
-    if (publish.length > 0) {
-      const ok = await api.cmdBatch(publish.map((name): Cmd => ({ op: "update_footprint_on_board", name })));
-      if (!ok) return;
-    }
-    const parts = [`Updated ${publish.length} footprint${publish.length === 1 ? "" : "s"} from the library`];
-    if (upToDate > 0) parts.push(`${upToDate} already up to date`);
-    if (noEntry > 0) parts.push(`${noEntry} with no edited library entry`);
-    toast(`${parts.join("; ")}.`);
-  };
-
-  const updateFootprints = pcbOnly(() => {
-    if (!board) return;
-    const selected = [...state.selection].find((id) => board.parts.some((p) => p.ref === id && p.placed)) ?? null;
-    const part = selected ? board.parts.find((p) => p.ref === selected) : undefined;
-    const initial: ExchangeChoice = last.exchange ?? { scope: "all", reference: "*", value: "*", footprint: "*" };
-    const start: ExchangeChoice = {
-      ...initial,
-      scope: selected ? "selected" : initial.scope === "selected" ? "all" : initial.scope,
-      // `m_specifiedRef->ChangeValue( m_currentFootprint->GetReference() )` and the same for the value and library id
-      reference: part?.ref ?? initial.reference,
-      value: part?.value ?? initial.value,
-      footprint: part?.footprint ?? initial.footprint,
-    };
-    openSweepDialog({
-      kind: "element",
-      element: createElement(ExchangeFootprintsDialog, {
-        selectedRef: selected,
-        initial: start,
-        onOk: (choice: ExchangeChoice) => {
-          last.exchange = choice;
-          void runUpdate(choice, selected);
+  // ------------------------------------------------ Change / Update Footprint(s) (from Library)
+  // GLOBAL_EDIT_TOOL::ExchangeFootprints -> DIALOG_EXCHANGE_FOOTPRINTS. The four actions differ in whether the dialog opens on a footprint of the selection (`updateFootprint`,
+  // `changeFootprint`: always, `m_currentFootprint` the first selected one; the plural ones: when the selection holds a footprint) and in the mode (update / change).
+  // The exchange is `exchange_footprints` (crates/ops/src/fp_exchange.rs), one undo step ("Change Footprint" / "Update Footprint"); the server brings the library copy.
+  const exchangeDialog = (mode: "change" | "update", alwaysCurrent: boolean) =>
+    pcbOnly(() => {
+      if (!board) return;
+      const placed = (id: string) => board.parts.some((p) => p.ref === id && p.placed);
+      const selected = new Set([...state.selection].filter(placed));
+      const current = [...state.selection].find(placed) ?? null;
+      // `currentMode`: the singular actions are "of the current footprint" whatever the selection; the plural ones when the selection has a footprint
+      const currentMode = alwaysCurrent ? true : selected.size > 0;
+      const part = current ? board.parts.find((p) => p.ref === current) : undefined;
+      const saved = mode === "update" ? last.update : last.change;
+      const base: ExchangeState = saved ?? { choice: { mode: mode === "update" ? "all" : "reference", reference: "", value: "", footprint: "" }, newId: "", options: mode === "update" ? UPDATE_OPTIONS : CHANGE_OPTIONS };
+      // `TransferDataToWindow`: the text rows start from the current footprint's own reference, value and id (an update's new id is its own)
+      const start: ExchangeState = {
+        choice: {
+          // g_matchModeForExchangeSelected / g_matchModeForUpdateSelected when opened on a footprint, the other pair when not
+          mode: currentMode && current ? "selected" : base.choice.mode === "selected" ? (mode === "update" ? "all" : "reference") : base.choice.mode,
+          reference: part?.ref ?? base.choice.reference,
+          value: part?.value ?? base.choice.value,
+          footprint: part?.footprint ?? base.choice.footprint,
         },
-      }),
+        newId: mode === "update" ? (part?.footprint ?? base.newId) : base.newId,
+        options: base.options,
+      };
+      openSweepDialog({
+        kind: "element",
+        element: createElement(ExchangeFootprintsDialog, {
+          mode,
+          hasCurrent: currentMode && current !== null,
+          initial: start,
+          onRun: async (st: ExchangeState): Promise<ReportLine[]> => {
+            if (mode === "update") last.update = st;
+            else last.change = st;
+            const refs = matchingFootprints(board, st.choice, selected, current);
+            if (mode === "change" && !isLibraryId(st.newId.trim())) return [{ severity: "error", text: `'${st.newId.trim()}' is not a library id: a footprint is Library:Name.` }];
+            if (refs.length === 0) return [{ severity: "info", text: "No footprint matches." }];
+            const target = mode === "change" ? st.newId.trim() : null;
+            let entries;
+            try {
+              entries = await postExchangePlan(refs, target);
+            } catch (e) {
+              return [{ severity: "error", text: e instanceof Error ? e.message : String(e) }];
+            }
+            // The footprints whose library copy is found are exchanged in one step; the others are told, as KiCad does
+            const found = entries.filter((e) => e.found).map((e) => e.reference);
+            let applied = true;
+            if (found.length > 0) {
+              applied = await api.cmdBatch([exchangeCmd(found, target, st.options)]);
+              if (applied) dispatch({ type: "SET_SELECTION", refs: found });
+            }
+            // the server says why in a toast (the Strict switch refuses a change that adds a gate failure)
+            if (!applied) return [{ severity: "error", text: api.getState().toast?.message ?? "The footprints could not be changed." }];
+            return exchangeReport(mode, entries);
+          },
+        }),
+      });
     });
-  });
-  m.set("pcbnew.GlobalEdit.updateFootprint", updateFootprints);
-  m.set("pcbnew.GlobalEdit.updateFootprints", updateFootprints);
+  m.set("pcbnew.GlobalEdit.updateFootprint", exchangeDialog("update", true));
+  m.set("pcbnew.GlobalEdit.updateFootprints", exchangeDialog("update", false));
+  m.set("pcbnew.GlobalEdit.changeFootprint", exchangeDialog("change", true));
+  m.set("pcbnew.GlobalEdit.changeFootprints", exchangeDialog("change", false));
 }

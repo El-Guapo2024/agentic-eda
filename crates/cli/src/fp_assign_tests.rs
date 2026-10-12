@@ -271,3 +271,69 @@ fn kicad_cli_finds_the_footprint_the_symbol_names_after_a_change_footprint() {
     step(&dir, edit, false, "test").unwrap();
     assert_eq!(parity(&dir), baseline);
 }
+
+fn plan(dir: &Path, references: &[&str], to: Option<&str>) -> serde_json::Value {
+    crate::fp_assign_api::exchange_plan(dir, serde_json::json!({ "references": references, "footprint": to }).to_string().as_bytes())
+}
+
+#[test]
+fn the_exchange_plan_tells_which_footprints_are_found_before_a_change() {
+    let dir = board_with_schematic("exchange_plan_change");
+    add_alt_library(&dir);
+    let report = plan(&dir, &["U1", "U2", "U9"], Some("Alt:WIDE"));
+    assert_eq!(report["ok"], true, "{report}");
+    let entries = report["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    assert_eq!((entries[0]["reference"].as_str(), entries[0]["from"].as_str(), entries[0]["to"].as_str(), entries[0]["found"].as_bool()), (Some("U1"), Some("Test:2PAD"), Some("Alt:WIDE"), Some(true)));
+    assert_eq!(entries[1]["found"], true);
+    assert_eq!(entries[2]["found"], false, "no footprint U9 on the board: {}", entries[2]);
+    // a footprint no library has
+    let report = plan(&dir, &["U1"], Some("Alt:Nope"));
+    assert_eq!(report["entries"][0]["found"], false);
+    // a footprint another part is on needs no library (the board knows it)
+    let report = plan(&dir, &["U1"], Some("Test:2PAD"));
+    assert_eq!(report["entries"][0]["found"], true);
+}
+
+#[test]
+fn change_footprint_for_several_parts_is_one_undo_step_and_selects_nothing_it_cannot_find() {
+    let dir = board_with_schematic("change_two");
+    add_alt_library(&dir);
+    let both = Cmd::ExchangeFootprints { references: vec!["U1".into(), "U2".into()], footprint: Some("Alt:WIDE".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default() };
+    step(&dir, both, false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    for r in ["U1", "U2"] {
+        assert_eq!(model.part(r).unwrap().footprint.as_deref(), Some("Alt:WIDE"), "{r}");
+        assert_eq!(model.footprint_of(model.part(r).unwrap()).unwrap().pads.len(), 2);
+        assert_eq!(symbol_footprint(&dir, r), "Alt:WIDE");
+    }
+    assert_eq!(design.drawings.as_ref().unwrap().footprint_assignments.len(), 2);
+    assert_consistent(&dir);
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    assert_eq!((model.part("U1").unwrap().footprint.as_deref(), model.part("U2").unwrap().footprint.as_deref()), (Some("Test:2PAD"), Some("Test:2PAD")), "one Ctrl+Z puts both back");
+    assert!(design.drawings.as_ref().is_none_or(|d| d.footprint_assignments.is_empty()));
+    // a footprint nobody has is refused and changes nothing
+    let nowhere = Cmd::ExchangeFootprints { references: vec!["U1".into()], footprint: Some("Alt:Nope".into()), options: eda_ops::ExchangeOptions::change(), library: Default::default() };
+    assert!(step(&dir, nowhere, false, "test").is_err());
+    assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Test:2PAD"));
+}
+
+#[test]
+fn a_locked_footprint_is_not_changed_by_its_symbols_footprint_field_and_update_pcb_says_so() {
+    let dir = board_with_schematic("locked_footprint");
+    add_alt_library(&dir);
+    step(&dir, Cmd::SetLocked { ids: vec!["U1".into()], locked: true }, false, "test").unwrap();
+    let edit = on_its_sheet(&dir, "U1", Cmd::EditSymbolFields { id: "U1".into(), value: None, footprint: Some("Alt:WIDE".into()), datasheet: None });
+    step(&dir, edit, false, "test").unwrap();
+    assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Test:2PAD"), "the board keeps the locked footprint it has");
+    assert_eq!(symbol_footprint(&dir, "U1"), "Alt:WIDE", "the schematic has what was typed");
+    let report = crate::fp_assign_api::update_pcb(&dir);
+    let change = &report["changes"][0];
+    assert_eq!((change["reference"].as_str(), change["locked"].as_bool(), change["found"].as_bool()), (Some("U1"), Some(true), Some(true)), "{report}");
+    // unlocked, Update PCB's exchange puts it right
+    step(&dir, Cmd::SetLocked { ids: vec!["U1".into()], locked: false }, false, "test").unwrap();
+    step(&dir, Cmd::replace_footprint("U1", "Alt:WIDE"), false, "test").unwrap();
+    assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Alt:WIDE"));
+    assert!(crate::fp_assign_api::update_pcb(&dir)["changes"].as_array().unwrap().is_empty());
+}

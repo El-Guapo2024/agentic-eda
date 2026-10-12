@@ -17,6 +17,12 @@ export async function openUpdateDialog(api: StudioApi, dispatch: Dispatch<Action
   const parts = (api.getState().board?.parts ?? []).map((p) => ({ ref: p.ref, placed: p.placed }));
   openSweepDialog({
     kind: "element",
-    element: createElement(UpdatePcbDialog, { direction, initial: report.changes, parts, apply: (cmds) => api.cmdBatch(cmds) }),
+    element: createElement(UpdatePcbDialog, {
+      direction,
+      initial: report.changes,
+      parts,
+      // the server says why in a toast (the Strict switch refuses a change that adds a gate failure)
+      apply: async (cmds) => ((await api.cmdBatch(cmds)) ? null : (api.getState().toast?.message ?? "The update was refused.")),
+    }),
   });
 }

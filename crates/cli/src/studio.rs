@@ -903,6 +903,7 @@ fn handle(
         ("POST", "/api/repair_board") => respond(stream, "200 OK", "application/json", crate::board_control_api::repair_board(dir).to_string().as_bytes()),
         // The footprint assignment tools (`crate::fp_assign_api`)
         ("GET", "/api/update_pcb") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::update_pcb(dir).to_string().as_bytes()),
+        ("POST", "/api/exchange_plan") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::exchange_plan(dir, &body).to_string().as_bytes()),
         ("GET", "/api/footprint_associations") => respond(stream, "200 OK", "application/json", crate::board_control_api::footprint_associations(dir, &query_value(target, "ref")).to_string().as_bytes()),
         ("POST", "/api/fab/cmp") => respond(stream, "200 OK", "application/json", crate::board_control_api::export_cmp(dir).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
