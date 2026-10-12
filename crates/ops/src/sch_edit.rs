@@ -565,9 +565,7 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
     if pin.name == before.name && pin.shape == before.shape && pin.at == before.at {
         return Err(vec![CheckResult::fail("ops_sheet_pin_unchanged", id, "the pin already has these properties")]);
     }
-    // The id follows the pin's name and place (`SheetPin::id_seed`): a renamed or moved pin gets the id its new content hashes to.
-    pin.id = String::new();
-    sch.assign_missing_ids();
+    // The pin keeps its id: it is the same item after its Properties (KiCad keeps the item and its selection), and a pin moved by `sch_move` keeps it too.
     Ok(())
 }
 
@@ -766,7 +764,7 @@ mod tests {
         b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None })).unwrap();
         let renamed = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(renamed.shape, LabelShape::Bidirectional);
-        assert_ne!(renamed.id, vin.id, "the id follows the pin's name and place");
+        assert_eq!(renamed.id, vin.id, "the pin keeps its id, so it is still the selected item after its Properties");
         b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)) })).unwrap();
         let moved = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(moved.at, p(10_000, 18_000));

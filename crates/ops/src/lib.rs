@@ -4017,6 +4017,8 @@ impl<'a> Board<'a> {
             Power(usize),
             Label(usize),
             Text(usize),
+            /// A pin of a placed sheet: (sheet, pin). `SCH_EDIT_TOOL::Swap`: pins swap only with pins of the same sheet.
+            SheetPin(usize, usize),
         }
         if a == b {
             return Err(vec![CheckResult::fail("ops_bad_swap", a, "a swap needs two different items")]);
@@ -4038,21 +4040,35 @@ impl<'a> Board<'a> {
             if let Some(i) = sch.texts.iter().position(|t| t.id == id) {
                 return Ok(Slot::Text(i));
             }
-            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label or text with this id to swap")])
+            for (si, s) in sch.sheets.iter().enumerate() {
+                if let Some(pi) = s.pins.iter().position(|p| p.id == id) {
+                    return Ok(Slot::SheetPin(si, pi));
+                }
+            }
+            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label, text or sheet pin with this id to swap")])
         };
         let (sa, sb) = (find(a)?, find(b)?);
+        // "Sheet pins are special, we need to make sure if we have any sheet pins, that we only have sheet pins, and that they have the same parent"
+        match (sa, sb) {
+            (Slot::SheetPin(x, _), Slot::SheetPin(y, _)) if x != y => return Err(vec![CheckResult::fail("ops_bad_swap", a, "sheet pins swap only with pins of the same sheet")]),
+            (Slot::SheetPin(..), other) | (other, Slot::SheetPin(..)) if !matches!(other, Slot::SheetPin(..)) => return Err(vec![CheckResult::fail("ops_bad_swap", a, "a sheet pin swaps only with another pin of its sheet")]),
+            _ => {}
+        }
         let at_of = |s: Slot| match s {
             Slot::Symbol(i) => sch.symbols[i].at,
             Slot::Power(i) => sch.power_symbols[i].at,
             Slot::Label(i) => sch.labels[i].at,
             Slot::Text(i) => sch.texts[i].at,
+            Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at,
         };
         let (pa, pb) = (at_of(sa), at_of(sb));
+        // (a pin's side is where it sits on the border, so trading places trades sides, as `SCH_EDIT_TOOL::Swap` does by hand)
         let mut set_at = |s: Slot, p: Point| match s {
             Slot::Symbol(i) => sch.symbols[i].at = p,
             Slot::Power(i) => sch.power_symbols[i].at = p,
             Slot::Label(i) => sch.labels[i].at = p,
             Slot::Text(i) => sch.texts[i].at = p,
+            Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at = p,
         };
         set_at(sa, pb);
         set_at(sb, pa);
@@ -5114,3 +5130,5 @@ mod sch_body_style_tests;
 mod sch_props_tests;
 #[cfg(test)]
 mod sch_pins_tests;
+#[cfg(test)]
+mod sch_sheet_pin_tests;

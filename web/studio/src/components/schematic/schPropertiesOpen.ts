@@ -28,6 +28,9 @@ export function openSchProperties(sch: Schematic, ids: readonly string[], dispat
     case "sheet":
       dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_sheet", id: target.id } });
       return true;
+    case "sheet_pin":
+      dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_sheet_pin", id: target.id } });
+      return true;
     case "graphic":
       dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_graphic", id: target.id } });
       return true;

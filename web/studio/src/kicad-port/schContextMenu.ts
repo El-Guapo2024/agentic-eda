@@ -25,6 +25,8 @@ export interface SchSelectionSummary {
   busEntries: number;
   noConnects: number;
   sheets: number;
+  /** Pins of hierarchical sheets (`SCH_SHEET_PIN_T`). */
+  sheetPins: number;
   /** Rectangles, circles, arcs, beziers and polygons. */
   shapes: number;
   /** Fields of a symbol, a power symbol or a sheet, picked on their own (`SCH_FIELD_T`). */
@@ -66,6 +68,7 @@ export function emptySummary(): SchSelectionSummary {
     busEntries: 0,
     noConnects: 0,
     sheets: 0,
+    sheetPins: 0,
     shapes: 0,
     fields: 0,
     ruleAreas: 0,
@@ -109,12 +112,13 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const single = s.total === 1;
   const singleSymbolOrPower = single && s.symbols + s.powerSymbols === 1;
   const multipleSymbolsOrPower = s.total > 1 && s.symbols + s.powerSymbols === s.total;
-  const connectedCount = s.powerSymbols + s.wires + s.buses + s.busEntries + labels + s.directiveLabels + s.junctions;
+  // `connectedTypes` has the pins of sheets (`SCH_SHEET_PIN_T`) too
+  const connectedCount = s.powerSymbols + s.wires + s.buses + s.busEntries + labels + s.directiveLabels + s.junctions + s.sheetPins;
   const connected = connectedCount > 0 && connectedCount === s.total;
   const linesSelection = s.total > 0 && s.wires + s.buses + s.lines === s.total;
   const sheetSelection = single && s.sheets === 1;
   // `RotatableItems` holds the fields too (`SCH_FIELD_T`): a field turns its text, and a mirror flips its justification
-  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.fields > 0;
+  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.fields > 0;
 
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
   // `makeBodyStyleMenu` at `SingleMultiBodyStyleSymbol` (KiCad lists each body style; the studio has the one command that cycles through them)
@@ -127,10 +131,10 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
     });
   }
   // `swapSelectionCondition`: OnlyTypes( SwappableItems ) && MoreThan( 1 ).
-  const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.junctions + s.noConnects;
+  const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.junctions + s.noConnects;
   add(s.total > 1 && swappable === s.total && item("eeschema.InteractiveEdit.swap"));
   // `propertiesCondition`: one item of a type that has a properties dialog.
-  add(single && s.symbols + s.sheets + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
+  add(single && s.symbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
   // `autoplaceCondition`: any selected item is one that has fields (a symbol, a sheet); the command also takes the item of a selected field
   add(s.symbols + s.powerSymbols + s.sheets + s.fields > 0 && item("eeschema.InteractiveEdit.autoplaceFields"));
   if (single && s.symbols === 1) {

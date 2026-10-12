@@ -2125,7 +2125,7 @@ export function useActionRunner() {
         "eeschema.InteractiveEdit.swap",
         schematicOnly(() => {
           if (!sch) return;
-          const swappable = (id: string) => Boolean(api.symbolById(id) || sch.labels.some((l) => l.id === id) || sch.texts.some((t) => t.id === id) || sch.power_symbols.some((p) => p.id === id));
+          const swappable = (id: string) => Boolean(api.symbolById(id) || sch.labels.some((l) => l.id === id) || sch.texts.some((t) => t.id === id) || sch.power_symbols.some((p) => p.id === id) || sch.sheets.some((s) => s.pins.some((p) => p.id === id)));
           const ids = [...state.selection].filter(swappable);
           if (ids.length < 2) return;
           void api.cmdBatch(ids.slice(0, -1).map((a, i) => ({ op: "swap_sch_items" as const, a, b: ids[i + 1]! })));

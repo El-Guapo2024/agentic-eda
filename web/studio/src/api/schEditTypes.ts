@@ -100,6 +100,8 @@ export type SchToolDialog =
   | { kind: "props_field"; id: string }
   | { kind: "props_text"; id: string }
   | { kind: "props_sheet"; id: string }
+  /** Sheet Pin Properties (`DIALOG_SHEET_PIN_PROPERTIES`) of the pin `id` of a sheet on this sheet. */
+  | { kind: "props_sheet_pin"; id: string }
   | { kind: "props_graphic"; id: string }
   | { kind: "props_stroke"; ids: string[] };
 

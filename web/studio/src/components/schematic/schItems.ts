@@ -11,8 +11,9 @@ import { globalLabelOutline, hierLabelOutline, inferSpin, LABEL_TEXT_SIZE_UM, lo
 import { resolveLibSymbol, symbolBounds } from "./libSymbol";
 import { fieldBox, fieldItems, isShownField, type FieldItem } from "../../kicad-port/schFieldEdit";
 import { hitPin, pinBox, pinById, pinItems } from "../../kicad-port/schPins";
+import { sheetPinBox, sheetPinById, sheetPinItems } from "../../kicad-port/schSheetPinItems";
 
-export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "graphic" | "field" | "pin";
+export type SchItemKind = "symbol" | "power" | "wire" | "label" | "text" | "no_connect" | "bus_entry" | "junction" | "line" | "sheet" | "sheet_pin" | "graphic" | "field" | "pin";
 
 export interface SchItemRef {
   id: string;
@@ -84,6 +85,8 @@ export function allItems(sch: Schematic): SchItemRef[] {
   for (const l of sch.lines ?? []) if (l.id) out.push({ id: l.id, kind: "line" });
   for (const g of sch.graphics ?? []) if (g.id) out.push({ id: g.id, kind: "graphic" });
   for (const s of sch.sheets) if (s.id) out.push({ id: s.id, kind: "sheet" });
+  // The pins of those sheets (`SCH_SHEET_PIN_T`), above their sheet: each is selected, moved along the border, edited and deleted on its own.
+  for (const p of sheetPinItems(sch)) out.push({ id: p.id, kind: "sheet_pin" });
   for (const n of sch.no_connects) if (n.id) out.push({ id: n.id, kind: "no_connect" });
   for (const l of sch.labels) if (l.id) out.push({ id: l.id, kind: "label" });
   for (const t of sch.texts) if (t.id) out.push({ id: t.id, kind: "text" });
@@ -164,6 +167,10 @@ export function itemBounds(sch: Schematic, ref: SchItemRef): Box | null {
     case "pin": {
       const pin = pinById(sch, ref.id);
       return pin ? pinBox(pin, measureStrokeText) : null;
+    }
+    case "sheet_pin": {
+      const pin = sheetPinById(sch, ref.id);
+      return pin ? sheetPinBox(pin, measureStrokeText) : null;
     }
   }
 }

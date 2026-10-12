@@ -4756,6 +4756,48 @@ mod tests {
         std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
     }
 
+    /// The pins of a hierarchical sheet, taken one by one -- moved along the border, edited, swapped with another pin of the sheet and deleted -- each make exactly one undo
+    /// step, and one Undo puts the sheet and the net list back exactly.
+    #[test]
+    fn every_sheet_pin_verb_is_one_undo_step() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_sheet_pin_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let pt = |x: Um, y: Um| Point { x, y };
+            let pin = |id: &str, name: &str, at: Point| eda_model::ir::SheetPin { id: id.into(), name: name.into(), shape: eda_model::ir::LabelShape::Input, at };
+            // a sheet 20 x 10 mm at (90, 10) mm with a pin on its left border (to a wire and a label) and one on its right border
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![pin("shpin_in", "IN", pt(90_000, 15_000)), pin("shpin_out", "OUT", pt(110_000, 14_000))], page: String::new() });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_in".into(), net: "N1".into(), pins: vec![], pts: vec![pt(80_000, 15_000), pt(90_000, 15_000)], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_in".into(), net: "N1".into(), at: pt(80_000, 15_000), kind: eda_model::ir::LabelKind::Local });
+            sch.assign_missing_ids();
+        }
+        design.sheet_contents = Some([("sub.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
+        save(&dir, &design).unwrap();
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents, &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let commands = vec![
+            // along the border, and across to the other one
+            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000, dy: 2_000, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
+            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None }),
+            Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
+            Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Swap Pins, Swap Pin Labels and Swap Unit Labels each make exactly one undo step, and the net list follows what they did to the drawing: the pins end up
     /// on each other's nets.
     #[test]

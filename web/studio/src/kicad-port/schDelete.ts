@@ -17,7 +17,7 @@ export interface SchIds {
   junctions?: ReadonlyArray<{ id: string }>;
   lines?: ReadonlyArray<{ id: string }>;
   graphics?: ReadonlyArray<{ id: string }>;
-  sheets: ReadonlyArray<{ id: string }>;
+  sheets: ReadonlyArray<{ id: string; pins?: ReadonlyArray<{ id: string }> }>;
 }
 
 /** The delete verbs for `ids` (locked items skipped; ids that are not on the sheet ignored). */
@@ -46,6 +46,11 @@ export function deleteCmds(sch: SchIds, ids: readonly string[], locked: Readonly
     else if (has(sch.lines, id)) cmds.push({ op: "delete_sch_line", id });
     else if (has(sch.graphics, id)) cmds.push({ op: "sch_edit", verb: "delete_graphic", id });
     else if (has(sch.sheets, id)) cmds.push({ op: "sch_edit", verb: "delete_sheet", id });
+    else {
+      // a pin of a sheet (`DoDelete` on `SCH_SHEET_PIN_T`: `sheet->RemovePin`): it goes with its sheet when that is deleted too, and a locked sheet keeps its pins
+      const sheet = sch.sheets.find((s) => (s.pins ?? []).some((p) => p.id === id));
+      if (sheet && !kept.includes(sheet.id) && !locked.has(sheet.id)) cmds.push({ op: "sch_edit", verb: "delete_sheet_pin", id });
+    }
   }
   return cmds;
 }

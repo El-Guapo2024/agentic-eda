@@ -787,7 +787,7 @@ function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolea
  * drew here, the view simply had no sheets to show) rather than full
  * pixel-parity with source's own pin glyphs.
  */
-function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, on: boolean) {
+function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, on: boolean, selection: ReadonlySet<string> = new Set()) {
   const hair = 1 / view.scale;
   const [x, y] = s.at;
   const [w, h] = s.size;
@@ -807,11 +807,13 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
 
   // A sheet pin sits on the border it names (`SCH_SHEET_PIN::SetSide`): its flag points into the sheet from that edge and its name is
   // written inside, after the flag -- so a wire reaches the pin from outside and the name never runs over it.
-  const pinColor = layerColor("LAYER_SHEETLABEL");
+  const sheetLabelColor = layerColor("LAYER_SHEETLABEL");
   ctx.save();
-  ctx.strokeStyle = pinColor;
   ctx.lineWidth = Math.max(159, hair);
   for (const p of s.pins) {
+    // a selected pin (`SCH_SHEET_PIN_T`) is drawn in the selection colour
+    const pinColor = p.id && selection.has(p.id) ? layerColor("LAYER_SELECTION_SHADOWS") : sheetLabelColor;
+    ctx.strokeStyle = pinColor;
     const [px, py] = p.at;
     const edge = px <= x ? "left" : px >= x + w ? "right" : py <= y ? "top" : "bottom";
     const spin: LabelSpin = edge === "left" ? "right" : edge === "right" ? "left" : edge === "top" ? "bottom" : "up";
@@ -1020,7 +1022,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // junctions pass above, so a sheet's own local wires/labels/symbols
   // (all drawn later below) read as sitting "on" the page rather than
   // under it.
-  for (const s of sch.sheets) drawSheet(ctx, view, s, opts.selection.has(s.id));
+  for (const s of sch.sheets) drawSheet(ctx, view, s, opts.selection.has(s.id), opts.selection);
 
   // No-connects.
   for (const nc of sch.no_connects) drawNoConnect(ctx, view, nc, opts.selection.has(nc.id));

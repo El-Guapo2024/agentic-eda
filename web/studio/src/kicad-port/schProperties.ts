@@ -14,11 +14,11 @@ export type LabelSpinName = "right" | "up" | "left" | "bottom";
 
 /** What `E` opens for a selection. */
 export type PropertiesTarget =
-  | { kind: "symbol" | "label" | "text" | "sheet" | "graphic"; id: string }
+  | { kind: "symbol" | "label" | "text" | "sheet" | "sheet_pin" | "graphic"; id: string }
   /** Wire/Bus Properties, Line Properties or Junction Properties: one dialog for the lines, bus entries and junctions named. */
   | { kind: "stroke"; ids: string[] };
 
-type Kind = "symbol" | "power" | "wire" | "bus" | "bus_entry" | "junction" | "line" | "label" | "text" | "no_connect" | "sheet" | "graphic";
+type Kind = "symbol" | "power" | "wire" | "bus" | "bus_entry" | "junction" | "line" | "label" | "text" | "no_connect" | "sheet" | "sheet_pin" | "graphic";
 
 function kinds(sch: Schematic, ids: readonly string[]): Array<{ id: string; kind: Kind }> {
   const wire = new Map(sch.wires.map((w) => [w.id, w]));
@@ -31,6 +31,7 @@ function kinds(sch: Schematic, ids: readonly string[]): Array<{ id: string; kind
   const line = new Set((sch.lines ?? []).map((l) => l.id));
   const graphic = new Set((sch.graphics ?? []).map((g) => g.id));
   const sheet = new Set(sch.sheets.map((s) => s.id));
+  const sheetPin = new Set(sch.sheets.flatMap((s) => (s.pins ?? []).map((p) => p.id)));
   const symbol = new Set(sch.symbols.map((s) => s.id));
   const out: Array<{ id: string; kind: Kind }> = [];
   for (const id of ids) {
@@ -57,9 +58,11 @@ function kinds(sch: Schematic, ids: readonly string[]): Array<{ id: string; kind
                       ? "line"
                       : sheet.has(id)
                         ? "sheet"
-                        : graphic.has(id)
-                          ? "graphic"
-                          : null;
+                        : sheetPin.has(id)
+                          ? "sheet_pin"
+                          : graphic.has(id)
+                            ? "graphic"
+                            : null;
     if (kind) out.push({ id, kind });
   }
   return out;
@@ -84,6 +87,7 @@ export function propertiesTarget(sch: Schematic, ids: readonly string[]): Proper
     case "label":
     case "text":
     case "sheet":
+    case "sheet_pin":
     case "graphic":
       return { kind: front.kind, id: front.id };
     default:

@@ -95,6 +95,8 @@ export function itemsOf(sch: Schematic): SchSnapItem[] {
   }
   for (const s of sch.sheets) {
     out.push({ id: s.id, owner: s.id, kind: "sheet", connectable: true, position: s.at, connectionPoints: s.pins.map((p) => p.at as Pt), bbox: box(s.at[0], s.at[1], s.at[0] + s.size[0], s.at[1] + s.size[1]) });
+    // a pin of the sheet, picked up on its own: it is held by its own point (the one that goes to the cursor, kept on its border by the move)
+    for (const p of s.pins) if (p.id) out.push({ id: p.id, owner: s.id, kind: "sheet", connectable: true, position: p.at as Pt, connectionPoints: [p.at as Pt], bbox: box(p.at[0], p.at[1], p.at[0], p.at[1]) });
   }
   for (const ps of sch.power_symbols) {
     const b = itemBounds(sch, { id: ps.id, kind: "power" });
@@ -151,6 +153,9 @@ function kindOfSelected(sch: Schematic, id: string): SchItemKind {
     case "pin":
       // a pin is not moved (`SCH_PIN_T` is no movable item): the grid of the symbol it is on
       return "symbol";
+    case "sheet_pin":
+      // `EE_GRID_HELPER::GetItemGrid`: a sheet pin is a connectable item like its sheet
+      return "sheet";
   }
 }
 
