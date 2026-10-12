@@ -689,7 +689,7 @@ same anywhere); `crates/ops/src/sch_sheets.rs` puts it in.
 | `LoadSheetFromFile`'s checks | **identical**: a file that places itself as a parent of itself is refused ("itself as a parent", with the loop named), symbols with no library link (a legacy `R` for `Device:R`) are refused, the references the design already holds are said (an info line: "are numbered anew"), a library the project does not have is a warning (the symbols are drawn from the definitions the file carries), and the reader's own remarks (symbols without a definition were left out). Nothing is written by a check (`POST /api/sch/sheet_file`) | `SCH_EDIT_FRAME::LoadSheetFromFile`; `Board::check_sheet_file`, `eda_kicad::load_sheet_file` |
 | Frame and library symbols | a screen read from KiCad places a symbol by its library origin, this design by the corner of its box: the screens are converted when they come in, so what the exporter writes back is what kicad-cli reads. The file's library symbol is used when the design's has the same pins; a name whose pins differ comes in under `_N` and the symbols that used it follow | `Board::add_sheet_tree`, `merge_lib_symbols` |
 | Draw Sheet from File (the action with a file) | the parameter is the path (or `{ path, keepAnnotations }`), the file is checked at once ("File ... does not exist." is a toast) and the tool is armed to draw the sheet; with no parameter the chooser opens with Place as sheet forced | `actions/schSheetFileActions.ts`; `DrawSheet`'s `wxFileExists` |
-| Drag and drop of a file (`DdAppendFile`) | missing: a browser gives the page the bytes of a dropped file, not its path | `ui-parity-missing.json` |
+| Drag and drop of a file (`DdAppendFile`) | missing: the window takes drops now (section 20) and says so, but Import Sheet reads a schematic by its path on the server and a dropped file has none (its sheets and libraries are found beside it) | `ui-parity-missing.json` |
 
 Tests: `crates/ops/src/sch_hierarchy_tests.rs` (11: Replace All over the sheets, a pasted sheet, cut and paste, the file as a sheet, as contents, numbering by the Annotate options, Keep annotations, the checks, names counting up),
 `crates/cli/src/sch_hierarchy_tests.rs` (the server: the file is read into the command, undo is one step, a file that is not there or not a schematic changes nothing, a copied sheet pasted with its screens, the annotate report, the file list and the checks;
@@ -701,6 +701,26 @@ sheet carried a ghost of it and a click dropped `ldo_stage1` with the file `ldo_
 
 Limits, recorded rather than hidden: the sheet a file places is always a copy (no shared screen); a reference in an imported file that is not annotated (`R?`) is numbered unless Keep annotations is on, in which case it comes in as `R?1`, `R?2`...; "Place as group"
 is not offered; a power flag in the file and one in the design on the same net are two flags on one net, which ERC reports as `pin_to_pin`, as KiCad does.
+
+## 20. Import Graphics (`sch_drawing_tools.cpp::ImportGraphics`, `dialog_import_gfx_sch.cpp`, `graphics_importer_sch.cpp`; GAPS.md item 28)
+
+File > Import > Graphics... (`eeschema.EditorControl.importGraphics`, Ctrl+Shift+F) and a DXF or SVG dropped on the sheet (`eeschema.EditorControl.ddImportGraphics`) bring a drawing onto the sheet in view. The files are read by the readers of PARITY-pcb.md section 27
+(`crates/kicad/src/{dxf_import,svg_import}.rs`); `Cmd::ImportSchGraphics` (`crates/ops/src/import_graphics_sch.rs`) makes the items, one undo step in the schematic's own history, and is no connectivity edit (a drawn line is not a wire).
+
+| Item | Status | KiCad file:function |
+|---|---|---|
+| The dialog: File: with Browse... (or a dropped file), Placement ("Interactive placement", or "At" X, Y), Import scale, Default line width, Default units; no layer, group or discontinuities (`DIALOG_IMPORT_GFX_SCH`). The studio shows the same description of the file as the board's dialog and has the same typed-origin-over-the-scale arithmetic | **done** (`components/ImportGraphicsDialog.tsx` `SchImportGraphics`, `kicad-port/importGraphics.ts` `buildSchImportCmd`; the line width starts at 0, the sheet's default, as the dialog's empty field gives) | `dialog_import_gfx_sch.cpp`, `dialog_import_gfx_sch_base.cpp` |
+| A line becomes a graphic line (`SchLine`) with its width (no width is the sheet's default, `MapLineWidth`), its dash style and colour (in the stroke table, `SCH_LINE::SetStroke`); a zero-length line is skipped | **done** | `GRAPHICS_IMPORTER_SCH::AddLine`, `MapStrokeParams` |
+| A circle, an arc (three points by rotating the start, a radius over INT_MAX/2 a segment), a polygon (filled with the outline's colour, or with the shape's own: `FILLED_SHAPE` or `FILLED_WITH_COLOR`) and a curve (a Bezier shape; one that is a segment is a line) are shapes (`SchGraphic`) | **done** | `AddCircle`, `AddArc`, `AddPolygon`, `AddSpline` |
+| A shape with no stroke (an SVG shape that is only filled: `-1`, "historically no stroke in Eeschema") | **approximated**: a 1 micrometre hairline, the IR cannot say "no outline" | `MapStrokeParams` |
+| Text becomes a text item (`SchematicText`): position, size = the file's height, an angle along a row or up a column (the nearer of the two); the file's justification moves the anchor (by the text's width, and for a top or middle alignment its height) to the left end of the baseline and is not kept | **approximated** | `AddText` |
+| Interactive placement: the drawing's origin goes to the cursor's grid point (`delta = cursorPos`), the new items are selected and carried by the Move tool (a click drops them, Escape takes the import back, the schematic's last undo step); "At" puts the origin at X, Y over the scale | **done**, **differs** in the preview as on the board (`placeNewSchItems` in `state/store.tsx`: committed at the cursor, then the Move tool follows) | `SCH_DRAWING_TOOLS::ImportGraphics` |
+| A DXF or SVG dropped on the Schematic tab opens the dialog with the file; a `.kicad_sch` dropped there is said to be beyond a drop (see section 19), an image has no item to become | **done** | `m_acceptedExts` of `sch_edit_frame.cpp` |
+
+Tests: `crates/ops/src/import_graphics_sch_tests.rs` (13, with the symbol's), `crates/cli/src/board.rs` (the import is one undo step of the schematic and of the Symbol Editor, each in its own history), `kicad-port/importGraphics.test.ts`. Browser: `e2e/files-in.check.js` (PARITY-pcb.md section 27) on the Schematic tab: the entry in File > Import, the dialog without a layer, a DXF at 10, 5 mm (four lines and four arc shapes spanning x 10 to 50 mm, y -25 to 5), the sheet's default width, one undo, scale 2 with a 0.15 mm default width becoming 0.3,
+an SVG's polygon of its own stroke width, interactive placement with the drawing's origin on the cursor's grid point and the Move tool carrying 8 items, Escape taking it back, and the refusals.
+
+Left: a text keeps no justification and turns to the nearer of 0 and 90 degrees; the schematic image drop and the Import Sheet drop (section 19).
 
 ## Manual click-through needed
 

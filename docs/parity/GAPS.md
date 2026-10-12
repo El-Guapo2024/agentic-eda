@@ -18,14 +18,14 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   recorded with a reason in `web/studio/tools/ui-parity-missing.json`; none is bare. **Every reason was re-checked against main on 2026-10-10
   (`STALE-REASONS.md`): 10 are stale (what they say is missing now exists), 18 are partly stale, 154 hold** (4 of those wait for a branch in
   flight; the library tables wired five reasons). The stale ones are Find by Properties, Migrate 3D Models, the microwave gap and stub, Append Board and its drop, the Footprint Editor's
-  drop, Import Sheet, Draw Sheet from File and the schematic drop; the plan below carries them.
+  drop, Import Sheet, Draw Sheet from File and the schematic drop; the plan below carries them. (`task-files-in` wired Append Board, its drop and the Footprint Editor's drop, with Import Graphics for the board, the schematic and the Symbol Editor and a drop host: item 28.)
 - **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"): **12 closed, 10 partial, 0 open,
   8 out of scope** (was 10, 12, 0, 8 on 2026-10-07; #11 Property dialogs and #25 Align and distribute closed).
 - **Items 1 to 24** are the ranked list of 2026-10-07 with their state brought forward; **items 25 to 35 are new**: the gaps the second phase
   found, from the `PARITY-*.md` "left" notes, the merge messages and reading the code.
 - **In flight, not on main** (read with `git diff main...<branch>`): `task-sch-hierarchy` (item 4; Annotate over the whole
   schematic with KiCad's scope and numbering options, Find and Replace across sheets, the SVG render and the schematic gates over every sheet:
-  6 commits), `task-custom-pads` (item 31; branched, no commit yet). Do not start work that touches their files without reading them first.
+  6 commits), `task-custom-pads` (item 31; branched, no commit yet), `task-files-in` (item 28; Import Graphics, Append Board and the file drops: 7 commits). Do not start work that touches their files without reading them first.
 - **Four findings change the picture.**
   1. *A wired action is not a working feature.* This was the finding of 2026-10-07 and it was fixed where it bit: the schematic edit tools act on
      every item kind (item 1, `2a8bf8f`) and so do the PCB ones (item 8, `88c8c0a`). Before closing any action, run it on every item kind.
@@ -87,7 +87,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | dragging a segment moves its end; no start or end mid-segment; no coupled diff pair shove; no U meander | open | XL (3 parts) |
 | 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | open | M, ongoing |
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | in flight | L |
-| 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | no way to bring an outline from a DXF or another board in | open | L |
+| 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview | mostly done | S |
 | 9 | P9 Board Setup completion and the rule editor | 3 | Board Editor Layers, Text Variables, Formatting, Tuning and Component Classes pages; regex net patterns | open | L (rule editor XL) |
 | 10 | P10 Schematic details | 1, 12, 15, 17, 20 | pins cannot be selected (Swap Pins), no net-collision overlay, no schematic groups, pan and auto-pan | open | M-L |
 | 11 | P11 Search and inspection | 21, 29 | Find by Properties, Clearance Resolution, Footprint Checker; Find ignores user fields and zone names | open | M-L |
@@ -453,11 +453,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `pcbnew/drc/drc_test_provider_misc.cpp`.
 
 ### 28. Bringing files in
-**New, open.** Hit: sometimes; a DXF outline is common. Blocks: yes for DXF and SVG (no workaround but redrawing). Package P8, size L.
-- Append Board and its drop, the Footprint Editor's drop, Import Sheet, Draw Sheet from File and the schematic drop have stale reasons: `Cmd::PasteClipboard`, `BoardPart`, `Cmd::AddSheet`, `Cmd::PasteSch` and
-  `pickTextFile` exist (`STALE-REASONS.md` SR1, size M).
-- Import Graphics (DXF, SVG) for the board, the schematic and the symbol editor, and its three drops, do not exist; the rule is no new dependency, but a DXF is text and an SVG path is a short grammar
-  (KiCad uses libdxfrw and nanosvg). Import Netlist (`BoardPart` makes the parts and `pad_nets` the nets; low value next to item 26).
+**Mostly done (2026-10-11, `task-files-in`)**, limits below. Hit: sometimes; a DXF outline is common. Package P8 for what is left (Import Netlist).
+- Done (`PARITY-pcb.md` section 27, `PARITY-sch.md` section 20, `PARITY-symedit.md`, `PARITY-common.md` section 13a): **Import Graphics** for the board, the schematic and the Symbol Editor, from a DXF (LINE, ARC, CIRCLE, POINT, LWPOLYLINE and POLYLINE with bulges, SPLINE, ELLIPSE,
+  TEXT and MTEXT, BLOCK and INSERT, `$INSUNITS`, lineweights) or an SVG (paths with lines, cubic and quadratic curves and arcs, rect, circle, ellipse, line, polyline, polygon, transforms, fills with holes). The readers are hand-written, no new dependency
+  (`crates/kicad/src/{graphics_import,dxf_import,svg_import}.rs`), the verbs are `Cmd::ImportGraphics` (the layer, the scale, the origin with KiCad's own arithmetic, the default line width and unit, Group imported items, Fix discontinuities with `ConnectBoardShapes`, and a studio option that makes
+  an imported Edge.Cuts the board's outline), `Cmd::ImportSchGraphics` and `Cmd::ImportSymbolGraphics` (`crates/ops/src/{import_graphics,import_graphics_sch,fix_shapes}.rs`), each one undo step; the dialog is `components/ImportGraphicsDialog.tsx`.
+  kicad-cli's DRC finds a DXF-imported Edge.Cuts outline closed, and reports `invalid_outline` with a side missing (`EDA_SLOW_TESTS=1`). **Append Board** (`crates/cli/src/append_api.rs`: the file read as a paste, the point it is held by, what the paste will change; then `Cmd::PasteClipboard` at the cursor, carried by the Move tool, one undo step).
+  **The drops** (`components/FileDropHost.tsx`, `kicad-port/fileDrops.ts`: each editor's `m_acceptedExts`): a `.kicad_pcb` on the board, a `.dxf` or `.svg` on the board and the schematic, a `.kicad_mod` on the Footprint Editor.
+  Browser check `e2e/files-in.check.js`: 98 checks through `window.__eda`.
+- Left: **Import Netlist** (P8c; the parts and nets come from the intent); `DdAppendFile` (a schematic dropped on the sheet: Import Sheet reads a file by its path on the server) and `DdAddImage` (no bitmap item); Import Graphics in the Footprint Editor (`placeImportedGraphics` there);
+  the placement preview (the picture is committed at the cursor and carried by the Move tool, KiCad previews it first; the Symbol Editor's items are added at the cursor and selected); an Append Board that adds the file's layers, keeps a repeated reference and every net as KiCad does (the paste's rules apply: copper on a layer this board lacks is left out, a taken reference is numbered on);
+  several files in one drop (the first is opened, the rest said to be skipped); the DXF's text keeps the file's height only, a symbol has no curves (a curve is cut into segments), a shape with no stroke is a hairline, an SVG pattern and gradient are not drawn, SVG `text`, `image` and `use` are reported and not imported.
 - Port from: `common/import_gfx/{dxf_import_plugin,svg_import_plugin,graphics_importer,graphics_importer_buffer}.cpp`, `pcbnew/import_gfx/{dialog_import_graphics,graphics_importer_pcbnew}.cpp`,
   `eeschema/import_gfx/`, `pcbnew/tools/pcb_control.cpp` (`AppendBoard`), `board_editor_control.cpp` (`ImportNetlist`), `eeschema/tools/sch_drawing_tools.cpp` (`ImportSheet`).
 
@@ -552,7 +558,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - **Project management and the application shell**: New, Open, Revert, Quit, the project manager, Open Non-KiCad Board, Rescue, Open Directory, Open with Text Editor, the calculators (10 rows). A web page has none of these.
 - **Simulator, in scope and last**: 29 rows, now item 34 and package P21.
 - **Deferred until the IR has the item** (reasons in `ui-parity-missing.json`, re-checked in `STALE-REASONS.md`): design blocks (23 rows, item 32), generators (9), tables (18), PCB text boxes, barcodes, points,
-  reference images and hatch fills, schematic images, the symbol text box (item 24), DXF and SVG import (4, item 28), derived symbols, alternate pin functions, design variants (3), padstacks (Remove Unused Pads),
+  reference images and hatch fills, schematic images, the symbol text box (item 24), derived symbols, alternate pin functions, design variants (3), padstacks (Remove Unused Pads),
   embedded files (4: zstd, and no new dependency), custom pads (4, item 31, in flight). The autoplacer (2) is declined: placement runs through `eda board` behind the placement gates. The Footprint and Symbol
   Viewer windows (5) are not planned; the editors' library trees browse.
 - **Internal events** (13 rows) have nothing to wire.
@@ -733,14 +739,14 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/pad.cpp`, `tools/pad_tool.cpp` (`EditPad`), `dialogs/dialog_pad_properties.cpp`, `zone_filler.cpp` (`addKnockout`), `microwave/microwave_polygon.cpp`.
 - Conflicts: P1 (footprint IR, writer, painter), P13 (`zone-filler`), P17 (pad dialogs), P19 (arc stub, function shape), P14 and P2 (`fp_edit.rs` pad edits).
 
-### P8. Files in: Append Board, DXF and SVG, drops (item 28; SR1's PCB half). Size L. Rank 8.
-- Parts: **P8a, M**: the drop host (`components/FileDropHost.tsx`), Append Board and its drop (`crates/cli/src/append_api.rs`: a route turning a `.kicad_pcb` into a paste, then `Cmd::PasteClipboard` with the carry), the Footprint Editor's drop.
-  **P8b, M-L**: Import Graphics for the board (Edge.Cuts from a DXF is the case that matters), the schematic and the symbol editor: hand-written parsers in `crates/kicad/src/{dxf_import,svg_import}.rs` (LINE, ARC, CIRCLE, LWPOLYLINE,
-  POLYLINE first; SVG paths) into a neutral shape list, a verb in `crates/ops/src/import_graphics.rs`, `components/ImportGraphicsDialog.tsx` (layer, line width, origin, scale, interactive placement).
-  **P8c, M, low priority**: Import Netlist.
+### P8. Files in: Append Board, DXF and SVG, drops (item 28; SR1's PCB half). Size S for what is left. Rank 8. **Mostly done: `task-files-in` (2026-10-11); item 28 lists what is left.**
+- Done in the branch: **P8a** the drop host (`components/FileDropHost.tsx`, `kicad-port/fileDrops.ts`), Append Board and its drop (`crates/cli/src/append_api.rs`, `kicad-port/appendBoard.ts`, then `Cmd::PasteClipboard` with the carry) and the Footprint Editor's drop; **P8b** Import Graphics for the board, the schematic and the symbol editor:
+  the readers in `crates/kicad/src/{graphics_import,dxf_import,svg_import}.rs`, the verbs in `crates/ops/src/{import_graphics,import_graphics_sch,fix_shapes}.rs`, `crates/cli/src/graphics_api.rs`, `components/ImportGraphicsDialog.tsx`.
+  Tests: 48 kicad unit tests and 11 integration tests on fixtures, 35 ops tests, 3 slow kicad-cli proofs, 11 cli tests, 23 web unit tests, and `e2e/files-in.check.js` (98 checks).
+- Left: **P8c, M, low priority**: Import Netlist; the rest is in item 28's "Left".
 - KiCad: `common/import_gfx/{dxf_import_plugin,svg_import_plugin,graphics_importer,graphics_importer_buffer}.cpp`, `pcbnew/import_gfx/{dialog_import_graphics,graphics_importer_pcbnew}.cpp`, `eeschema/import_gfx/`,
   `pcbnew/tools/pcb_control.cpp` (`AppendBoard`, `placeBoardItems`, `DdAppendBoard`), `pcbnew/tools/board_editor_control.cpp` (`ImportNetlist`).
-- Conflicts: P4 (the sheet drop), P3 (the library drop); `ops`, `runner`, `studio` hunks.
+- Conflicts: P4 (the sheet drop), P3 (the library drop), P6 (`store.tsx` `placeNewItems` hands a placement to the Move tool beside `pasteClipboard`); `ops`, `runner`, `studio` hunks.
 
 ### P9. Board Setup completion and the rule editor (item 3). Size L; the rule editor XL on its own. Rank 9.
 - **P9a, L**: the missing pages: Board Editor Layers, Text Variables (project variables and `${VAR}` expansion in texts and fields), Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles (`missing_tuning_profile`),
