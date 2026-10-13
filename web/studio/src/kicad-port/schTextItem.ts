@@ -49,11 +49,11 @@ export interface TextLine {
  * Where each line of the text starts (`FONT::getLinePositions`): the first line's top is `size * 1.17` high with `interline` more for every line after it; the block is
  * shifted up by its whole height for a bottom justification and by half of it for a centre one; each line is justified on its own against the anchor.
  */
-export function schTextLines(t: Pick<SchematicText, "content" | "size_um" | "angle" | "h" | "v" | "vertical">, measure: Measure): TextLine[] {
+export function schTextLines(t: Pick<SchematicText, "content" | "shown" | "size_um" | "angle" | "h" | "v" | "vertical">, measure: Measure): TextLine[] {
   const lie = textLie(t);
   const size = t.size_um;
   const pen = defaultPenUm(size);
-  const strings = t.content.split("\n");
+  const strings = (t.shown ?? t.content).split("\n"); // what `${NAME}` stands for, when the backend says (`shown`)
   const interline = interlineUm(size);
   const height = Math.trunc(size * 1.17) + (strings.length - 1) * interline;
   // the offsets are whole internal units, as the C++ ints are
@@ -72,12 +72,12 @@ export function schTextLines(t: Pick<SchematicText, "content" | "size_um" | "ang
  * The box the text takes on the sheet (`EDA_TEXT::GetTextBox`): the longest line and the pen's reach, `fudge` taller than the ink, the lines `interline` apart, justified
  * against the anchor; a text that runs up the sheet is turned a quarter counter-clockwise about it.
  */
-export function schTextBox(t: Pick<SchematicText, "content" | "size_um" | "angle" | "h" | "v" | "vertical" | "at">, measure: Measure): Box {
+export function schTextBox(t: Pick<SchematicText, "content" | "shown" | "size_um" | "angle" | "h" | "v" | "vertical" | "at">, measure: Measure): Box {
   const lie = textLie(t);
   const size = t.size_um;
   const pen = defaultPenUm(size);
   const k = Math.round(pen * 1.5);
-  const lines = t.content.split("\n");
+  const lines = (t.shown ?? t.content).split("\n");
   const w = Math.max(...lines.map((l) => measure(l, size)), size * 0.5) + 2 * k;
   const ext = size + 2 * k;
   const fudge = Math.round(ext * 0.17);

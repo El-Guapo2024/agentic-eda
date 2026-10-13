@@ -216,13 +216,18 @@ impl<'a> Board<'a> {
             if elsewhere.contains(new) {
                 return Err(fail("ops_duplicate_symbol", new, "a symbol with this reference is already on another sheet"));
             }
+            if self.board_part_without_symbol(new) {
+                return Err(fail("ops_duplicate_symbol", new, "a footprint with this reference is already on the board"));
+            }
         }
         for (i, (old, _)) in plan.iter().enumerate() {
-            self.rename_symbol(old, &format!("\u{1}tmp{i}"))?;
+            self.rename_symbol_in_schematic(old, &format!("\u{1}tmp{i}"))?;
         }
         for (i, (_, new)) in plan.iter().enumerate() {
-            self.rename_symbol(&format!("\u{1}tmp{i}"), new)?;
+            self.rename_symbol_in_schematic(&format!("\u{1}tmp{i}"), new)?;
         }
+        // the parts on the board follow in one go, so a plan like `R5 -> R6, R6 -> R7` never has two parts under one reference
+        self.rename_part(&plan.iter().cloned().collect());
         Ok(())
     }
 }

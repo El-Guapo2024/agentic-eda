@@ -25,7 +25,12 @@
 // name and gated to their own tab.
 
 /** Footprint-editor-frame-only actions (`FOOTPRINT_EDIT_FRAME`'s tools): enabled on the Footprint tab only. */
-export const FOOTPRINT_EDITOR_ONLY: ReadonlySet<string> = new Set(["pcbnew.ModuleEditor.newFootprint", "pcbnew.InteractiveDrawing.setAnchor"]);
+export const FOOTPRINT_EDITOR_ONLY: ReadonlySet<string> = new Set([
+  "pcbnew.ModuleEditor.newFootprint",
+  "pcbnew.InteractiveDrawing.setAnchor",
+  // A `.kicad_mod` dropped on the Footprint Editor (`FOOTPRINT_EDITOR_CONTROL::DdImportFootprint`; the board editor's frame does not take one).
+  "pcbnew.Control.ddImportFootprint",
+]);
 
 /** Actions the board editor AND the footprint editor both register (`DRAWING_TOOL` / `EDIT_TOOL` run in both frames): enabled on the PCB and Footprint tabs. */
 export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
@@ -88,6 +93,9 @@ export const SCHEMATIC_AND_SYMBOL_EDITOR: ReadonlySet<string> = new Set([
   "eeschema.InteractiveDrawing.drawRectangle",
   "eeschema.InteractiveDrawing.drawCircle",
   "eeschema.InteractiveDrawing.drawArc",
+  // `SCH_DRAWING_TOOLS::ImportGraphics` and `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics` are both `SCH_ACTIONS::importGraphics` (and its drop).
+  "eeschema.EditorControl.importGraphics",
+  "eeschema.EditorControl.ddImportGraphics",
 ]);
 
 export function isActionEnabledForTab(name: string, tab: string, registered: boolean): boolean {

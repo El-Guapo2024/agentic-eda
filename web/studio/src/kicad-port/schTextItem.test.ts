@@ -83,3 +83,12 @@ test("the box of several lines is taller by an interline for each line after the
   const three = schTextBox(text({ content: "a\nb\nc" }), measure);
   assert.equal(three.maxY - three.minY, one.maxY - one.minY + 2 * interlineUm(1_270));
 });
+
+test("a text with a text variable is laid out and boxed from what the variable stands for (`shown`), not from `${NAME}`", () => {
+  const plain = text({ content: "rev B", h: "center", v: "center" });
+  const variable = text({ content: "${REVISION}", shown: "rev B", h: "center", v: "center" });
+  assert.deepEqual(schTextLines(variable, measure), schTextLines(plain, measure));
+  assert.deepEqual(schTextBox(variable, measure), schTextBox(plain, measure));
+  // a shown text of two lines is two lines
+  assert.equal(schTextLines(text({ content: "${NOTE}", shown: "a\nb" }), measure).length, 2);
+});

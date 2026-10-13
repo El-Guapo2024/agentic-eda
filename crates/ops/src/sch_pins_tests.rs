@@ -170,6 +170,24 @@ fn swap_pins_trades_the_places_of_the_two_pins_and_the_wires_stay() {
 }
 
 #[test]
+fn a_rename_takes_the_swap_with_the_reference_and_a_delete_drops_it() {
+    let m = model();
+    let mut design = empty_design();
+    design.schematic = Some(ok(labelled_resistor(), SchCmd::SwapPins { pins: ids(&["pin:R1:1", "pin:R1:2"]) }));
+    let mut b = Board::new(design, &m, 100, 300);
+    b.apply(&Cmd::RenameSymbol { id: "R1".into(), new_id: "R9".into() }).unwrap();
+    let s = b.design().schematic.clone().unwrap();
+    assert!(s.extras.pin_swaps.contains_key("R9") && !s.extras.pin_swaps.contains_key("R1"), "{:?}", s.extras.pin_swaps);
+    // the pins are still where the swap put them: R9's pin 1 is at the place pin 2 has in the library, on the net B
+    let nets = traced(&s);
+    assert_eq!(net_of(&nets, "R9.1").as_deref(), Some("B"), "{nets:?}");
+    assert_eq!(net_of(&nets, "R9.2").as_deref(), Some("A"), "{nets:?}");
+    // a symbol that is deleted takes its swap with it, so a new R9 is not born with swapped pins
+    b.apply(&Cmd::DeleteSymbol { id: "R9".into(), unit: None }).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().extras.pin_swaps.is_empty(), "{:?}", b.design().schematic.as_ref().unwrap().extras.pin_swaps);
+}
+
+#[test]
 fn swapping_the_same_two_pins_again_puts_them_back_and_leaves_no_entry() {
     let s = labelled_resistor();
     let once = ok(s.clone(), SchCmd::SwapPins { pins: ids(&["pin:R1:1", "pin:R1:2"]) });

@@ -82,6 +82,6 @@ subsystem the studio lacks (design blocks, the Footprint Viewer and Footprint Wi
 Specctra DSN/SES, embedded 3D models, hatch fills, net colours, placement rule areas and the multichannel
 tools, appending another board, importing a netlist, rescue of autosave files, project open/switch);
 exports kicad-cli cannot do (IDF, Hyperlynx, the footprint report); and the ones that would need an edit verb
-the intent-derived constraint model does not have (net classes, custom DRC rules, renaming a footprint).
-Find by Properties and Compare Footprint with Library are recorded the same way: the first is built on
-KiCad's property manager and the full expression language, the second is the DRC library-parity test.
+the intent-derived constraint model did not have (net classes, custom DRC rules and renaming a footprint are verbs now: Board Setup,
+`PARITY-pcb.md` section 30). Find by Properties is recorded the same way: it is built on KiCad's property manager and the full
+expression language; Compare Footprint with Library is done (`PARITY-pcb.md` section 30).

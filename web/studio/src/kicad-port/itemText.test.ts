@@ -66,3 +66,11 @@ test("Copy as Text on the schematic: a label, a text, a sheet pin, a shown field
   // what goes on the clipboard: each text trimmed, the empty ones dropped, one per line in the order selected
   assert.equal(selectionAsText(schSelectionTexts(s, ["txt_a", "lbl_a", "pin:R1:2", "R1", "shpin_a"])), "note\nover two lines\nCLK\nIN");
 });
+
+test("Copy as Text gives what a text variable stands for, as GetShownText( true ) does, for a text and a field", () => {
+  const s = sheet();
+  s.texts[0]!.shown = "rev B\nover two lines";
+  s.symbols[0]!.fields![0]!.shown = "4k7";
+  assert.deepEqual(schSelectionTexts(s, ["txt_a"]), ["rev B\nover two lines"]);
+  assert.deepEqual(schSelectionTexts(s, ["fld:R1:Value"]), ["Value: 4k7"]);
+});

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   TECH_LAYER_NAMES,
+  activeLayerName,
   allPresets,
   builtinPresets,
   currentViewport,
@@ -267,4 +268,36 @@ test("saving a viewport under an existing name replaces it; they are listed by n
   assert.equal(v.length, 2);
   assert.deepEqual(v[0], { name: "a", x: 5, y: 5, w: 6, h: 6 });
   assert.deepEqual(withoutViewport(v, "a").map((x) => x.name), ["b"]);
+});
+
+test("a tool makes its item on the KiCad name of the active layer, which the state holds as a key", () => {
+  assert.equal(activeLayerName("f_silks", "F.SilkS"), "F.SilkS");
+  assert.equal(activeLayerName("b_fab", "F.SilkS"), "B.Fab");
+  assert.equal(activeLayerName("Dwgs_User", "F.SilkS"), "Dwgs.User");
+  assert.equal(activeLayerName("In2.Cu", "F.SilkS"), "In2.Cu", "a copper layer's key is its name");
+  assert.equal(activeLayerName("board_edge", "F.SilkS"), "Edge.Cuts");
+  assert.equal(activeLayerName(null, "F.SilkS"), "F.SilkS", "no active layer: the tool's own");
+  assert.equal(activeLayerName(undefined, "Dwgs.User"), "Dwgs.User");
+  for (const name of TECH_LAYER_NAMES) assert.equal(activeLayerName(layerStateKey(name), "x"), name, name);
+});
+
+test("the layers a board has (Board Editor Layers) are the panel's universe: user layers have keys, names and numbers, and a layer that is off is not in 'All Layers'", () => {
+  assert.equal(layerStateKey("User.5"), "User_5");
+  assert.equal(layerNameOfKey("User_5"), "User.5");
+  assert.equal(layerNameOfKey("User_46"), "User_46", "there is no User.46");
+  assert.equal(layerNameOfKey("User_0"), "User_0");
+  assert.equal(layerId("User.1"), 39);
+  assert.equal(layerId("User.45"), 127);
+  assert.equal(firstLayer(["User.2", "User.1", "F.Fab"]), "F.Fab", "F.Fab is 35, User.1 39");
+  assert.equal(activeLayerName("User_7", "F.SilkS"), "User.7", "an item made with a user layer active goes on it");
+  assert.deepEqual(panelLayers(["F.Cu", "B.Cu"], ["Edge.Cuts", "User.1"]), ["F.Cu", "B.Cu", "Edge.Cuts", "User.1"]);
+  assert.deepEqual(panelLayers(["F.Cu", "B.Cu"]), ["F.Cu", "B.Cu", ...TECH_LAYER_NAMES], "a caller that does not know takes the eighteen technical layers");
+  const optional = ["F.SilkS", "Edge.Cuts", "User.1"];
+  const all = builtinPresets(COPPER2, optional).find((p) => p.name === "All Layers")!;
+  assert.deepEqual(all.layers, ["F.Cu", "B.Cu", ...optional]);
+  assert.ok(presetList(COPPER2, [], optional).some((e) => e.kind === "preset" && e.preset.name === "All Layers"));
+  assert.ok(allPresets(COPPER2, [], optional).length >= 8);
+  const v = view(COPPER2, { universe: panelLayers(COPPER2, optional), visibleLayers: new Set(["F.Cu"]) });
+  const shown = menuPreset(v, "all_layers", COPPER2, optional);
+  assert.deepEqual([...shown.visibleLayers].sort(), ["B.Cu", "Edge.Cuts", "F.Cu", "F.SilkS", "User.1"], "Show All Layers shows what the board has, and no more");
 });

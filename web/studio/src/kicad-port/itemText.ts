@@ -24,7 +24,7 @@ import { sheetPinById } from "./schSheetPinItems";
 /**
  * `GetSchItemAsText` (eeschema/tools/sch_tool_utils.cpp) of each selected item, in selection order: the text of a free text and of every kind of label (`GetShownText( true )`), of a sheet
  * pin, of a field (`Name: value` when its name is shown), of a text box, and a pin's name (`GetShownName()`, "~" being none). An item of any other kind has no text here, and
- * contributes nothing. The shown text is the stored one: text variables (`${...}`) are expanded by the code that owns them.
+ * contributes nothing. The shown text is what the text variables (`${...}`) stand for where the backend says (`shown` of a text and of a field); a label's and a text box's is the stored one.
  */
 export function schSelectionTexts(sch: Schematic, ids: readonly string[]): string[] {
   const out: string[] = [];
@@ -36,7 +36,7 @@ export function schSelectionTexts(sch: Schematic, ids: readonly string[]): strin
     }
     const text = sch.texts.find((t) => t.id === id);
     if (text) {
-      out.push(text.content);
+      out.push(text.shown ?? text.content);
       continue;
     }
     const sheetPin = sheetPinById(sch, id);
@@ -46,7 +46,7 @@ export function schSelectionTexts(sch: Schematic, ids: readonly string[]): strin
     }
     const field = findField(sch, id);
     if (field) {
-      out.push(shownText(field.field));
+      out.push(shownText({ ...field.field, text: field.field.shown ?? field.field.text }));
       continue;
     }
     const graphic = sch.graphics?.find((g) => g.id === id);

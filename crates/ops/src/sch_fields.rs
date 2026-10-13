@@ -425,11 +425,12 @@ fn keys_of(sch: &SchematicSection, id: &str) -> Vec<String> {
     keys.extend(sch.field_layout.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.fields_autoplaced.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.body_styles.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
+    keys.extend(sch.extras.pin_swaps.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.into_iter().collect()
 }
 
-/// A symbol is renamed: what is kept per unit under its reference (where its fields are, whether Autoplace Fields put them there, its body style) is
-/// kept under the new one.
+/// A symbol is renamed: what is kept per unit under its reference (where its fields are, whether Autoplace Fields put them there, its body style, the places
+/// Swap Pins gave its pins) is kept under the new one.
 pub(crate) fn rename_symbol_keys(sch: &mut SchematicSection, id: &str, new_id: &str) {
     for old in keys_of(sch, id) {
         let new = format!("{new_id}{}", &old[id.len()..]);
@@ -440,7 +441,10 @@ pub(crate) fn rename_symbol_keys(sch: &mut SchematicSection, id: &str, new_id: &
             sch.extras.fields_autoplaced.insert(new.clone(), v);
         }
         if let Some(v) = sch.extras.body_styles.remove(&old) {
-            sch.extras.body_styles.insert(new, v);
+            sch.extras.body_styles.insert(new.clone(), v);
+        }
+        if let Some(v) = sch.extras.pin_swaps.remove(&old) {
+            sch.extras.pin_swaps.insert(new, v);
         }
     }
 }
@@ -451,4 +455,5 @@ pub(crate) fn drop_symbol_keys(sch: &mut SchematicSection, id: &str, unit: u32) 
     sch.field_layout.remove(&key);
     sch.extras.fields_autoplaced.remove(&key);
     sch.extras.body_styles.remove(&key);
+    sch.extras.pin_swaps.remove(&key);
 }

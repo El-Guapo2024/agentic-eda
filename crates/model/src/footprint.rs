@@ -291,7 +291,7 @@ pub fn placed_courtyard(model: &ConstraintModel, part: &Part, fp: &FootprintInst
     Some((fp.at.x - w / 2, fp.at.y - h / 2, fp.at.x + w / 2, fp.at.y + h / 2))
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Footprint {
     pub name: String,
@@ -326,6 +326,10 @@ pub struct Footprint {
     /// table entry. When it is not empty it is the whole list and `model` is only its first path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models3d: Vec<Model3d>,
+    /// The silkscreen, the fab body, the assembly drawings and the texts of the footprint (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve`,
+    /// `fp_text user`), in the footprint's frame: [`crate::fp_art`]. Empty for a built-in footprint, and for a design from before this existed.
+    #[serde(default, skip_serializing_if = "crate::fp_art::FpArt::is_empty")]
+    pub art: crate::fp_art::FpArt,
 }
 
 /// One `(model "path" (offset (xyz ..)) (scale (xyz ..)) (rotate (xyz ..)))` of a footprint: KiCad's `FP_3DMODEL` (`pcbnew/footprint.h`).
@@ -744,6 +748,7 @@ fn two_pad(name: &str, pitch: Um, pw: Um, ph: Um) -> Footprint {
         model: None,
         courtyard_outlines: vec![],
         models3d: vec![],
+        art: Default::default(),
     }
 }
 
@@ -762,7 +767,7 @@ fn dual_row(name: &str, n: usize, pitch: Um, col_x: Um, pw: Um, ph: Um) -> Footp
     for i in 0..per_col {
         pads.push(Pad::simple((per_col + i + 1).to_string(), (col_x, y0 + (per_col - 1 - i) as Um * pitch), (pw, ph), PadShape::RoundRect, PadKind::Smd, None));
     }
-    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![] }
+    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 /// Single-row 2.54 mm through-hole header, `n` pins along +x, centred.
@@ -771,7 +776,7 @@ fn pin_header(name: &str, n: usize) -> Footprint {
     let pads = (0..n)
         .map(|i| Pad::simple((i + 1).to_string(), (x0 + i as Um * 2540, 0), (1700, 1700), if i == 0 { PadShape::Rect } else { PadShape::Circle }, PadKind::ThroughHole, Some(1000)))
         .collect();
-    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![] }
+    Footprint { name: name.into(), pads, courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() }
 }
 
 /// All fixed-key built-ins (excludes the generic `PINHEADER-N` family, which
@@ -813,6 +818,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         },
         // Package_TO_SOT_SMD.pretty/SOT-23-5.kicad_mod / SOT-23-6.kicad_mod:
         // both columns at x = ∓1.1375mm, pitch 0.95mm. SOT-23-5 omits the
@@ -848,6 +854,7 @@ pub fn builtin(name: &str) -> Option<Footprint> {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         },
         // Package_SO.pretty SOIC-8/14/16_3.9x*mm_P1.27mm.
         "SOIC-8" => dual_row(&key, 8, 1270, 2475, 1950, 600),
@@ -1126,7 +1133,7 @@ mod tests {
         // footprint, must present the same board-space extent as an
         // unrotated pad inside a footprint rotated 90 degrees: rotation
         // composes additively regardless of which side contributes it.
-        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![] };
+        let mut fp = Footprint { name: "T".into(), pads: vec![Pad::simple("1", (0, 0), (2000, 800), PadShape::Rect, PadKind::Smd, None)], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         fp.pads[0].rot = 90_000;
         let (model, part) = part_with("T", fp.clone());
         let via_pad_rot = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -1156,6 +1163,7 @@ mod tests {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         };
         let (model, part) = part_with("CONN", shield);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();
@@ -1178,6 +1186,7 @@ mod tests {
             model: None,
             courtyard_outlines: vec![],
             models3d: vec![],
+            art: Default::default(),
         };
         let (model, part) = part_with("T", fp);
         let pads = placed_pads(&model, &part, &fp_instance(0, Side::Top)).unwrap();

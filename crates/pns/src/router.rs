@@ -107,10 +107,10 @@ pub struct Router {
     /// a tri-state, since nothing here ever needs to ask "which one" in
     /// the abstract, only "is a drag in progress" or "is a route."
     drag: Option<crate::dragger::Dragger>,
-    /// Gap #7 task item 6: `crate::diff_pair::DiffPairPlacer`'s own
+    /// Gap #7 task item 6: `crate::dp_placer::DiffPairPlacer`'s own
     /// session, mutually exclusive with `session`/`drag` the same way
     /// those two already are with each other.
-    diff: Option<crate::diff_pair::DiffPairPlacer>,
+    diff: Option<crate::dp_placer::DiffPairPlacer>,
     /// The ids of the IR tracks that are arcs (`arc_mid_offset`): the world has them as chords, so a route cannot start or end in the
     /// middle of one (`SplitAdjacentArcs` would split the arc itself).
     arc_tracks: HashSet<String>,
@@ -584,31 +584,21 @@ impl Router {
 
     // ------------------------------------------------------------- diff pairs (stage 6)
     //
-    // `6` on a net with a recognized differential-pair suffix: route two
-    // parallel, gap-matched lines at once (`crate::diff_pair::
-    // DiffPairPlacer`). See that module's own doc comment for this port's
-    // scope (no shove/walkaround/via-switch for a pair yet -- a direct
-    // 45-trace with collision *reporting* only, same contract as
-    // `Mode::MarkObstacles`).
+    // `6` on a net with a recognized differential-pair suffix: route two parallel, gap-matched lines at once
+    // (`crate::dp_placer::DiffPairPlacer`, KiCad's `DIFF_PAIR_PLACER`): coupled in all three modes, walked or shoved together, with
+    // vias. See that module's own doc comment for what differs from KiCad.
 
-    /// `DIFF_PAIR_PLACER::Start` plus upstream's own `FindDpPrimitivePair`:
-    /// resolve whatever's at `at` the same way [`Self::start`] does (a
-    /// real pad/via/track-end within [`START_SNAP_UM`]), then find its
-    /// differential-pair partner net and a real anchor on it already on
-    /// the board. Replaces any route/drag/diff-pair session already in
-    /// progress.
+    /// `DIFF_PAIR_PLACER::Start` plus `ROUTER::isStartingPointRoutable`'s checks for a pair: resolve whatever is at `at` the same
+    /// way [`Self::start`] does (a real pad/via/track-end within [`START_SNAP_UM`]), then find its differential-pair partner net's
+    /// nearest item of the same kind ([`crate::dp_placer::find_dp_primitive_pair`]). Replaces any route/drag/diff-pair session already
+    /// in progress. The error is KiCad's own message.
     pub fn start_diff_pair(&mut self, at: Point, layer_name: &str) -> Result<(), String> {
         let layer = self.layer_index(layer_name).ok_or_else(|| format!("unknown layer {layer_name:?}"))?;
         let hit = self.world.nearest_anchor(at, LayerRange::single(layer), START_SNAP_UM, None);
-        let Some((start_item, start_pos)) = hit else {
+        let Some((start_item, _)) = hit else {
             return Err("no pad, via, or track end there to route from".into());
         };
-        let Some(net) = self.world.get(start_item).map(|i| i.net().clone()).filter(|n| n.is_some()) else {
-            return Err("that item has no net to route".into());
-        };
-        let Some(placer) = crate::diff_pair::DiffPairPlacer::start(&self.world, start_pos, &net, layer, &self.rules) else {
-            return Err("not a recognized differential-pair net (needs a +/-/P/N suffix, with a matching pad for the other half already on the board)".into());
-        };
+        let placer = crate::dp_placer::DiffPairPlacer::start(&self.world, &self.rules, &self.settings, start_item, layer, self.layers.all())?;
         self.session = None;
         self.drag = None;
         self.diff = Some(placer);
@@ -616,28 +606,30 @@ impl Router {
     }
 
     /// `ROUTER::UpdateSizes` for a pair (the "Differential Pair Dimensions..." dialog,
-    /// `ROUTER_TOOL::DpDimensionsDialog`): the running pair's track width and gap. `None` leaves a value as it is. The pair's
+    /// `ROUTER_TOOL::DpDimensionsDialog`): the running pair's track width, gap and via gap. `None` leaves a value as it is. The pair's
     /// own preview and its commit read them, so the next `move` already uses the new values. Returns whether a pair is running.
     pub fn set_diff_pair_dimensions(&mut self, width: Option<Um>, gap: Option<Um>) -> bool {
+        self.set_diff_pair_sizes(width, gap, None)
+    }
+
+    /// [`Self::set_diff_pair_dimensions`] with the dialog's via gap too.
+    pub fn set_diff_pair_sizes(&mut self, width: Option<Um>, gap: Option<Um>, via_gap: Option<Um>) -> bool {
         let Some(d) = self.diff.as_mut() else { return false };
-        if let Some(w) = width.filter(|w| *w > 0) {
-            d.width = w;
-        }
-        if let Some(g) = gap.filter(|g| *g > 0) {
-            d.gap = g;
-        }
+        d.set_dimensions(width, gap, via_gap);
         true
     }
 
-    /// The net names of the diff-pair session currently in progress, if
-    /// any -- `(net_a, net_b)`, the UI's own readout (not consulted by
+    /// The net names of the diff-pair session currently in progress, if any -- `(P, N)`, the UI's own readout (not consulted by
     /// `Router` itself for any decision, same as [`Self::current_net`]).
     pub fn diff_pair_nets(&self) -> Option<(Option<String>, Option<String>)> {
-        self.diff.as_ref().map(|d| (d.net_a.as_deref().map(str::to_string), d.net_b.as_deref().map(str::to_string)))
+        self.diff.as_ref().map(|d| (d.net_p.as_deref().map(str::to_string), d.net_n.as_deref().map(str::to_string)))
     }
 
-    pub fn diff_pair_preview(&self, at: Point) -> Option<crate::diff_pair::DiffPairPreview> {
-        self.diff.as_ref().map(|d| d.preview(&self.world, &self.rules, at))
+    /// `ROUTER::Move` for a pair: the live preview at `at` (`DIFF_PAIR_PLACER::Move`), in the router's mode.
+    pub fn diff_pair_preview(&mut self, at: Point) -> Option<crate::dp_placer::DiffPairPreview> {
+        let d = self.diff.as_mut()?;
+        d.move_to(&self.rules, &self.settings, at);
+        Some(d.preview())
     }
 
     pub fn flip_diff_pair_posture(&mut self) {
@@ -646,13 +638,17 @@ impl Router {
         }
     }
 
+    /// `ROUTER::ToggleViaPlacement` for a pair (`V`): the head ends in a pair of vias, and the route goes on to `to_layer` from them.
+    pub fn toggle_diff_pair_via(&mut self, enabled: bool, diameter: Option<Um>, drill: Option<Um>, to_layer: Option<i32>) {
+        if let Some(d) = &mut self.diff {
+            d.toggle_via(enabled, diameter, drill, to_layer);
+        }
+    }
+
     /// `DIFF_PAIR_PLACER::FixRoute` for an intermediate click.
     pub fn fix_diff_pair(&mut self, at: Point) -> Option<FixOutcome> {
         let d = self.diff.as_mut()?;
-        Some(match d.fix(&self.world, &self.rules, at) {
-            Some(real_end) => FixOutcome::Fixed { real_end },
-            None => FixOutcome::Blocked,
-        })
+        Some(d.fix_route(&self.rules, &self.settings, at, false).unwrap_or(FixOutcome::Blocked))
     }
 
     pub fn undo_diff_pair_segment(&mut self) -> bool {
@@ -663,31 +659,46 @@ impl Router {
         self.diff = None;
     }
 
-    /// `DIFF_PAIR_PLACER::FixRoute` with `aForceFinish`: both lines'
-    /// finished runs become ordinary `Track` IR entries on their own
-    /// nets, in the *same* [`RouteCommit`] (and so the same
-    /// `Cmd::CommitRoute` undo step) a single-track finish produces --
-    /// this port's diff pair needed no new commit shape at all, just more
-    /// tracks in the existing one.
+    /// `DIFF_PAIR_PLACER::FixRoute` with `aForceFinish`: both lines' finished legs become ordinary `Track` IR entries on their own
+    /// nets, the vias `Via` entries, and whatever a shove moved is replaced -- in the *same* [`RouteCommit`] (and so the same
+    /// `Cmd::CommitRoute` undo step) a single-track finish produces. `None` if the head does not fit; the session stays open then.
     pub fn finish_diff_pair(&mut self, at: Point) -> Option<RouteCommit> {
-        let (net_a, net_b, layer, width) = {
-            let d = self.diff.as_ref()?;
-            (d.net_a.clone(), d.net_b.clone(), d.layer, d.width)
-        };
-        let layer_name = self.layer_name(layer).to_string();
-        let (runs_a, runs_b) = self.diff.as_mut()?.finish(&self.world, &self.rules, at)?;
+        let commit = self.diff.as_mut()?.finish(&self.rules, &self.settings, at)?;
+        let route_commit = self.build_dp_commit(&commit);
+        self.diff = None;
+        Some(route_commit)
+    }
+
+    /// What a finished pair puts on the board, as the IR has it.
+    fn build_dp_commit(&self, c: &crate::dp_placer::DpCommit) -> RouteCommit {
         let mut commit = RouteCommit::default();
-        for (net, runs) in [(&net_a, &runs_a), (&net_b, &runs_b)] {
-            let net_name = net.as_deref().unwrap_or("").to_string();
-            for run in runs {
-                if run.point_count() < 2 {
-                    continue;
+        let track = |net: &Net, layer: i32, width: Um, pts: &[Point]| eda_model::ir::Track { id: String::new(), net: net.as_deref().unwrap_or("").to_string(), pins: Vec::new(), layer: self.layer_name(layer).to_string(), width, pts: pts.to_vec(), arc_mid_offset: None };
+        for leg in &c.legs {
+            for (net, pts) in [(&c.net_p, &leg.p), (&c.net_n, &leg.n)] {
+                // a line that goes nowhere is no track
+                if pts.windows(2).any(|w| w[0] != w[1]) {
+                    commit.tracks.push(track(net, leg.layer, leg.width, pts));
                 }
-                commit.tracks.push(eda_model::ir::Track { id: String::new(), net: net_name.clone(), pins: Vec::new(), layer: layer_name.clone(), width, pts: run.pts.clone(), arc_mid_offset: None });
+            }
+            if let Some((a, b)) = &leg.vias {
+                for v in [a, b] {
+                    commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: v.pos, drill: v.drill.max(1), diameter: v.diameter.max(1), from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+                }
             }
         }
-        self.diff = None;
-        Some(commit)
+        for (track_id, lines) in &c.displaced_tracks {
+            commit.remove_track_ids.push(track_id.clone());
+            for line in lines.iter().filter(|l| l.point_count() >= 2) {
+                commit.tracks.push(track(&line.net, line.layer, line.width, &line.pts));
+            }
+        }
+        for (via_id, pos) in &c.displaced_vias {
+            commit.remove_via_ids.push(via_id.clone());
+            if let Some(v) = self.find_via_by_source(via_id) {
+                commit.vias.push(eda_model::ir::Via { id: String::new(), net: v.net.as_deref().unwrap_or("").to_string(), at: *pos, drill: v.drill, diameter: v.diameter, from_layer: self.layer_name(v.layers.start()).to_string(), to_layer: self.layer_name(v.layers.end()).to_string() });
+            }
+        }
+        commit
     }
 
     pub fn net_of(&self, id: ItemId) -> Option<String> {
@@ -1055,21 +1066,26 @@ mod tests {
         router.start_diff_pair(Point { x: -825, y: 0 }, "F.Cu").expect("R1.1 and R1.2 are a pair");
         let at = Point { x: 3000, y: 0 };
         let before = router.diff_pair_preview(at).expect("preview");
-        assert_eq!(before.width, 125, "the net class's own width until the dialog says otherwise");
-        let spacing = |p: &crate::diff_pair::DiffPairPreview| (p.head_a.pts.last().unwrap().y - p.head_b.pts.last().unwrap().y).abs();
-        // The two lines sit `(width + gap) / 2` either side of the spine (`half_total`, integer division).
-        let apart = |w: i64, g: i64| 2 * ((w + g) / 2);
-        assert_eq!(spacing(&before), apart(125, 180));
+        // the model's own 125 um width is under the board's 200 um minimum track width, and its 180 um gap under the 200 um clearance:
+        // the pair is raised to both
+        assert_eq!(before.width, 200, "the net class's own width (raised to the minimum) until the dialog says otherwise");
+        let pitch_of = |p: &crate::dp_placer::DiffPairPreview| {
+            let (a, b) = (p.head_a.last().unwrap(), p.head_b.last().unwrap());
+            (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt()
+        };
+        // the pair ends a pitch apart (the gateways' offsets are whole micrometres: within a few of it)
+        let near = |actual: f64, pitch: i64| actual >= pitch as f64 - 1.0 && actual <= pitch as f64 + 3.0;
+        assert!(near(pitch_of(&before), 200 + 200), "{}", pitch_of(&before));
         assert!(router.set_diff_pair_dimensions(Some(200), Some(300)));
         let after = router.diff_pair_preview(at).expect("preview");
         assert_eq!(after.width, 200);
-        assert_eq!(spacing(&after), apart(200, 300), "the lines sit width + gap apart");
+        assert!(near(pitch_of(&after), 200 + 300), "the lines sit width + gap apart: {}", pitch_of(&after));
         // Zero or negative values are ignored (the dialog refuses a gap of 0).
         assert!(router.set_diff_pair_dimensions(Some(0), Some(-5)));
         assert_eq!(router.diff_pair_preview(at).unwrap().width, 200);
         // `None` leaves a value as it is.
         router.set_diff_pair_dimensions(None, Some(400));
-        assert_eq!(spacing(&router.diff_pair_preview(at).unwrap()), apart(200, 400));
+        assert!(near(pitch_of(&router.diff_pair_preview(at).unwrap()), 200 + 400));
     }
 
     #[test]

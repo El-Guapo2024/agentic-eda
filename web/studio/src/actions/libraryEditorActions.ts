@@ -14,6 +14,7 @@ import type { Action as StudioAction } from "../state/store";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
+import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
 
 export interface LibraryActionContext {
@@ -59,6 +60,11 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   m.set("pcbnew.ModuleEditor.deleteFootprint", fpTab(() => fpLib.deleteFootprint(fpc)));
   // Import Footprint... / Export Current Footprint... -- ImportFootprint, ExportFootprint (the loaded footprint, `GetFirstFootprint()`).
   m.set("pcbnew.ModuleEditor.importFootprint", fpTab(() => fpLib.importFootprint(fpc)));
+  // A `.kicad_mod` dropped on the editor -- FOOTPRINT_EDITOR_CONTROL::DdImportFootprint (`ImportFootprint( *aEvent.Parameter<wxString*>() )`); the parameter is `{ name, text }`.
+  m.set("pcbnew.Control.ddImportFootprint", (param?: unknown) => {
+    const file = asPickedFile(param);
+    if (ctx.tab === "footprint" && file) void fpLib.importFootprint(fpc, file);
+  });
   m.set("pcbnew.ModuleEditor.exportFootprint", fpTab(() => (ctx.fpApi.getState().name ? ctx.fpApi.exportKicadMod() : fpToast("There is no footprint to export."))));
   // Footprint Properties... -- Properties (`pcbnew.ModuleEditor.footprintProperties`).
   m.set("pcbnew.ModuleEditor.footprintProperties", fpTab(() => fpLib.footprintProperties(fpc)));
@@ -88,8 +94,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.text", "text");
   // Load footprint from current PCB -- FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard: pick a board footprint by reference (`SelectFootprintFromBoard`).
   m.set("pcbnew.ModuleEditor.loadFootprintFromBoard", fpTab(() => (ctx.boardParts.some((p) => p.footprint) ? ctx.fpDispatch({ type: "SET_LOAD_FROM_BOARD_OPEN", open: true }) : fpToast("The board has no footprint to load."))));
-  // Insert footprint into PCB -- FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard.
-  m.set("pcbnew.ModuleEditor.saveFootprintToBoard", fpTab(() => fpLib.saveFootprintToBoard(fpc, ctx.boardParts)));
+  // Insert footprint into PCB -- FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard: updates the parts that name the footprint, or inserts it as a part of its own.
+  m.set("pcbnew.ModuleEditor.saveFootprintToBoard", fpTab(() => fpLib.saveFootprintToBoard(fpc, ctx.boardParts, ctx.studioDispatch)));
 
   // Add Pad -- PAD_TOOL::PlacePad (`doInteractiveItemPlacement`, `IPO_REPEAT | IPO_SINGLE_CLICK`): arms the pad tool; every click places a pad made from the default pad.
   m.set(

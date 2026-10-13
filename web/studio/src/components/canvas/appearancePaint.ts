@@ -15,6 +15,7 @@ import type { NetsContext } from "../../kicad-port/appearanceNets";
 import { splitCarried } from "../../kicad-port/pcbCarry";
 import { courtyardConflicts, movedBox, type Box, type MovePreview } from "../../kicad-port/courtyardConflicts";
 import { scaleToZoomFactor } from "../../kicad-port/zoomFit";
+import { shownTitleBlock } from "../../kicad-port/pageSettings";
 
 /** Everything the painter needs from the panel's settings, assembled once per change (components/canvas/Canvas.tsx). */
 export interface PaintAppearance {
@@ -35,7 +36,7 @@ export const PLAIN_APPEARANCE: PaintAppearance = { opacity: DEFAULT_OPACITY, con
 /** The painter's view of the panel's settings for this board: the opacities, the net colours resolved per net, the locked shadow margin (four silkscreen line widths) and the sheet. */
 export function buildPaintAppearance(a: AppearanceState, nets: NetsContext, board: BoardState | null): PaintAppearance {
   const paper = board?.page?.size_um ?? ([297_000, 210_000] as const);
-  const tb = board?.title_block;
+  const tb = shownTitleBlock(board?.title_block);
   const silk = board?.board_rules?.text_graphics?.silk.line_width_um ?? 100;
   return {
     opacity: a.opacity,

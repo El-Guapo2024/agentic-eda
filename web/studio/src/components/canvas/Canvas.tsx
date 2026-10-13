@@ -18,6 +18,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CmdShape, Part } from "../../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState, withGroupSubstitution } from "../../state/store";
+import { drawStrokeWidthUm } from "../../kicad-port/layerDefaults";
+import { activeLayerName } from "../../kicad-port/layerPresets";
 import { carryStart } from "../../kicad-port/pcbTransform";
 import { itemBounds, padById, padParent } from "../../kicad-port/pcbItems";
 import { fieldById } from "../../kicad-port/fpFields";
@@ -100,8 +102,7 @@ const PAN_BUTTONS = new Set([1, 2]);
 const LONG_PRESS_MS = 500;
 /** A click within this many board um of a pad/via/track-end counts as landing on it (which net a route click joins) -- generous enough to be usable at a typical zoom without needing pixel-perfect precision. Where the click goes is the snapping's (`PcbSnap.routePoint`, components/canvas/pcbSnap.ts). */
 const ANCHOR_SNAP_UM = 500;
-/** No per-board "default graphic line width" setting exists (board_rules only covers track/via) -- a plain 0.15mm default, same order of magnitude as KiCad's own out-of-the-box default (0.15-0.2mm silkscreen line width, by version/theme). */
-// (DEFAULT_STROKE_WIDTH_UM now lives in kicad-port/pcbParityState.ts -- incWidth/decWidth step state.pcbx.drawStrokeWidthUm from it.)
+// A new graphic starts at the line thickness of its layer's class (Board Setup > Text & Graphics > Defaults, kicad-port/layerDefaults.ts); incWidth / decWidth step it (state.pcbx.drawStrokeStep).
 /** How many points finish a given drawing-tool shape by itself, once reached, without waiting for an explicit Enter/double-click -- a plain 2-point line/rect/circle doesn't need a third confirmation the way a polygon does. Arc is start/mid/end (3); zone/polygon/route have no auto-finish (arbitrary length). */
 type ShapeToolKind = "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier";
 
@@ -603,11 +604,11 @@ export function Canvas() {
         // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
         const at = snap.lastPoint() ?? (state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, state.gridUm) : draw.bezier?.lastPoint);
         const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
-        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm) });
+        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep)) });
         dispatch({ type: "SET_DRAW_STATE", draw: null });
         return;
       }
-      const shape = shapeFromPoints(draw.shapeKind, draw.pts, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm);
+      const shape = shapeFromPoints(draw.shapeKind, draw.pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
       if (shape) api.cmd({ op: "add_shape", shape });
       dispatch({ type: "SET_DRAW_STATE", draw: null });
     }
@@ -723,7 +724,7 @@ export function Canvas() {
         if (!draw || draw.kind !== "diffpair") {
           const layer = state.activeLayer ?? board.layers[0] ?? "F.Cu";
           const custom = state.pcbx.customDiffPair;
-          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthUm, gap: custom.gapUm } : undefined);
+          void startDiffPairRoute(sx, sy, layer, dispatch, custom ? { width: custom.widthUm, gap: custom.gapUm, viaGap: custom.viaGapSameAsTrackGap ? custom.gapUm : custom.viaGapUm } : undefined, withTrackSnapping(state.routerSettings, state.prefs.magneticTracks));
           return;
         }
         void fixDiffPairRoute(sx, sy, draw, dispatch, api);
@@ -765,7 +766,7 @@ export function Canvas() {
           dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
           const settings = board.drawings?.dimension_settings;
           if (settings) {
-            const payload = defaultDimensionPayload(state.nextDimensionKind, start, end, state.activeLayer ?? "Dwgs.User", settings);
+            const payload = defaultDimensionPayload(state.nextDimensionKind, start, end, activeLayerName(state.activeLayer, "Dwgs.User"), settings, board.board_rules?.text_graphics);
             void api.addDimension(payload).then((id) => {
               if (id) dispatch({ type: "SET_DIMENSION_EDIT_ID", id });
             });
@@ -798,7 +799,7 @@ export function Canvas() {
         const prev = draw?.kind === "shape" && draw.shapeKind === "arc" ? draw.arc : undefined;
         const { geom, arc } = arcClick(prev, [sx, sy], arcAngleSnap(state.pcbx.angleSnapMode, e));
         if (arc) {
-          const shape: CmdShape = { kind: "arc", layer: state.activeLayer ?? "F.SilkS", stroke_width: state.pcbx.drawStrokeWidthUm, filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
+          const shape: CmdShape = { kind: "arc", layer: activeLayerName(state.activeLayer, "F.SilkS"), stroke_width: drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep), filled: false, start: ptXY(arc.start), mid: ptXY(arc.mid), end: ptXY(arc.end) };
           void api.cmd({ op: "add_shape", shape });
         }
         dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "arc", pts: arcClickPoints(geom), arc: geom } : null });
@@ -809,7 +810,7 @@ export function Canvas() {
         const draw = state.drawState;
         const prev = draw?.kind === "shape" && draw.shapeKind === "bezier" ? draw.bezier : undefined;
         const { geom, curve } = bezierClick(prev, [sx, sy]);
-        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm) });
+        if (curve) void api.cmd({ op: "add_shape", shape: bezierShape(curve, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep)) });
         dispatch({ type: "SET_DRAW_STATE", draw: geom ? { kind: "shape", shapeKind: "bezier", pts: [], bezier: geom } : null });
         return;
       }
@@ -826,7 +827,7 @@ export function Canvas() {
         const pts = [...already, point];
         const finishAt = shapeAutoFinishCount(shapeKind);
         if (finishAt !== null && pts.length >= finishAt) {
-          const shape = shapeFromPoints(shapeKind, pts, state.activeLayer ?? "F.SilkS", state.pcbx.drawStrokeWidthUm);
+          const shape = shapeFromPoints(shapeKind, pts, activeLayerName(state.activeLayer, "F.SilkS"), drawStrokeWidthUm(board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep));
           if (shape) api.cmd({ op: "add_shape", shape });
           dispatch({ type: "SET_DRAW_STATE", draw: null });
         } else {

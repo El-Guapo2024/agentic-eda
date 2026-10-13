@@ -6,8 +6,14 @@ import type { Cmd } from "../api/types";
 import type { LayerPairSettings } from "./layerPairs";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 
-/** The line width a freshly armed graphic tool starts at (Canvas.tsx's pre-existing constant, hoisted here so `incWidth`/`decWidth` can step it). */
-export const DEFAULT_STROKE_WIDTH_UM = 150;
+/**
+ * `DRAWING_TOOL::m_stroke`'s width once `incWidth`/`decWidth` have stepped it on `layer`. A graphic starts at the line thickness of its layer's class (Board Setup >
+ * Text & Graphics > Defaults, `kicad-port/layerDefaults.ts`); a step is kept only while the active layer is `layer` and until a drawing tool is armed again.
+ */
+export interface DrawStrokeStep {
+  layer: string;
+  um: number;
+}
 
 /** `ZONE_MODE` (drawing_tool.h) for the two source-zone-driven draws: `CUTOUT` subtracts the drawn polygon from `sourceId`, `SIMILAR` makes a new zone with `sourceId`'s settings and never opens the properties dialog (`ZONE_CREATE_HELPER::createZoneFromExisting`). Plain `ADD` is `null` (the dialog path, unchanged). */
 export interface ZoneDrawMode {
@@ -35,12 +41,15 @@ export interface PcbParityState {
   pcbDialog: PcbDialog;
   /** `PCBNEW_SETTINGS::m_AngleSnapMode` -- starts at 45 deg, what the segment/rect tools always did before this became switchable. */
   angleSnapMode: AngleSnapMode;
-  /** `DRAWING_TOOL::m_stroke`'s width: `incWidth`/`decWidth` step it by `WIDTH_STEP` while a graphic is being drawn. */
-  drawStrokeWidthUm: number;
+  /** `DRAWING_TOOL::m_stroke`'s width, once `incWidth`/`decWidth` have stepped it by `WIDTH_STEP` while a graphic is being drawn; null = the layer class's default. */
+  drawStrokeStep: DrawStrokeStep | null;
   /** A footprint name waiting to be opened in the Footprint Editor tab (`EditFpInFpEditor`): the Footprint Editor lives in its own store, so the action only records the request and `useFootprintEditHotkey` (mounted where both providers are in scope) performs it. */
   fpEditRequest: string | null;
-  /** `MEANDER_SETTINGS` amplitude/spacing the length-tuning dialog edits (`lengthTuner.Ampl*`/`Spacing*` step them). */
-  lengthTuner: { amplitudeUm: number; spacingUm: number };
+  /**
+   * `MEANDER_SETTINGS` amplitude/spacing the length-tuning dialog edits (`lengthTuner.Ampl*`/`Spacing*` step them). The dialog opens at the maximum amplitude and the spacing of Board
+   * Setup > Length-tuning Patterns for its kind (`tunerStart`); `minAmplitudeUm` is that page's minimum amplitude, the floor `AmplitudeStep` keeps.
+   */
+  lengthTuner: { amplitudeUm: number; spacingUm: number; minAmplitudeUm: number };
   /** Bumped by `closeOutline` to ask the canvas to finish the zone/polygon being drawn with the points placed so far (the canvas owns the draw). */
   drawFinishRequest: number;
   /** `TOOL_MANAGER::GetMenuCursorPos()`: where the context menu was opened. The pointer is over the menu by the time an entry runs, so a cursor-driven action (Break Track) reads this instead of the live cursor; the next canvas press clears it. */
@@ -70,15 +79,19 @@ export interface CustomDiffPair {
   viaGapSameAsTrackGap: boolean;
 }
 
+/** `MEANDER_SETTINGS` constants (pns_meander.cpp): `m_minAmplitude = 200000`, `m_step = 50000` nm. */
+export const TUNER_MIN_AMPLITUDE_UM = 200;
+export const TUNER_STEP_UM = 50;
+
 export const DEFAULT_PCB_PARITY: PcbParityState = {
   moveQueue: [],
   movingIndividually: false,
   zoneDrawMode: null,
   pcbDialog: null,
   angleSnapMode: "45",
-  drawStrokeWidthUm: DEFAULT_STROKE_WIDTH_UM,
+  drawStrokeStep: null,
   fpEditRequest: null,
-  lengthTuner: { amplitudeUm: 200, spacingUm: 400 },
+  lengthTuner: { amplitudeUm: 1000, spacingUm: 600, minAmplitudeUm: TUNER_MIN_AMPLITUDE_UM },
   drawFinishRequest: 0,
   menuCursorUm: null,
   layerPairs: null,
@@ -109,13 +122,9 @@ export function nextAngleSnapMode(mode: AngleSnapMode): AngleSnapMode {
   }
 }
 
-/** `MEANDER_SETTINGS` constants (pns_meander.cpp): `m_minAmplitude = 200000`, `m_step = 50000` nm. */
-export const TUNER_MIN_AMPLITUDE_UM = 200;
-export const TUNER_STEP_UM = 50;
-
-/** `MEANDER_PLACER_BASE::AmplitudeStep`: `max(amplitude + sign*step, minAmplitude)`. */
-export function amplitudeStep(amplitudeUm: number, sign: 1 | -1): number {
-  return Math.max(amplitudeUm + sign * TUNER_STEP_UM, TUNER_MIN_AMPLITUDE_UM);
+/** `MEANDER_PLACER_BASE::AmplitudeStep`: `max(amplitude + sign*step, minAmplitude)`; the minimum is the Length-tuning Patterns page's (KiCad's 0.2 mm until it is known). */
+export function amplitudeStep(amplitudeUm: number, sign: 1 | -1, minAmplitudeUm: number = TUNER_MIN_AMPLITUDE_UM): number {
+  return Math.max(amplitudeUm + sign * TUNER_STEP_UM, minAmplitudeUm);
 }
 
 /** `MEANDER_PLACER_BASE::SpacingStep`: `max(spacing + sign*step, trackWidth + clearance)`. */

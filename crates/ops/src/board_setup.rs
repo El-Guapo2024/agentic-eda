@@ -11,7 +11,9 @@
 use std::collections::BTreeMap;
 
 use eda_model::ir::Design;
+use eda_model::layers::LayerSetup;
 use eda_model::rules::{self, Constraints, MaskPaste, NetClassSettings, RulesOverlay, StackupSettings, TextGraphicsDefaults};
+use eda_model::setup_pages::{self, FormattingSettings, HatchOffsets, TuningPatterns, TuningProfiles};
 use eda_model::{CheckResult, ConstraintModel};
 
 type Done = Result<(), Vec<CheckResult>>;
@@ -53,6 +55,65 @@ pub(crate) fn set_mask_paste(design: &mut Design, settings: &MaskPaste) -> Done 
 pub(crate) fn set_text_graphics(design: &mut Design, settings: &TextGraphicsDefaults) -> Done {
     first("ops_bad_text_defaults", settings.validate())?;
     overlay(design).text_graphics = Some(*settings);
+    Ok(())
+}
+
+/// The items a layer holds that would be left on a layer the board no longer has: board-level graphics, texts and dimensions, and the footprint fields whose
+/// layout was set on it. (A footprint's Reference and Value where they have always been, on the silkscreen and fabrication layers, are not counted: KiCad
+/// asks about them and goes on, and every board with a footprint would be refused.)
+fn items_on_layer(design: &Design, layer: &str) -> usize {
+    let Some(d) = design.drawings.as_ref() else { return 0 };
+    d.shapes.iter().filter(|s| s.layer() == layer).count()
+        + d.texts.iter().filter(|t| t.layer == layer).count()
+        + d.dimensions.iter().filter(|x| x.layer == layer).count()
+        + d.footprint_edits.iter().map(|e| e.reference.iter().chain(e.value.iter()).filter(|l| l.layer == layer).count() + e.fields.iter().filter(|f| f.layout.layer == layer).count()).sum::<usize>()
+}
+
+/// `Cmd::SetBoardLayers`: Board Editor Layers (`PANEL_SETUP_LAYERS::TransferDataFromWindow`). The page is checked like the panel checks it (the names, the mandatory
+/// layers, the types); a layer turned off while items are still on it is refused with the layer's name and how many (KiCad deletes them after asking, which one
+/// Undo of a settings dialog cannot be trusted to bring back: move or delete them first).
+pub(crate) fn set_board_layers(design: &mut Design, model: &ConstraintModel, settings: &LayerSetup) -> Done {
+    settings.validate(&model.board.layers).map_err(|c| vec![c])?;
+    let next = settings.canonical();
+    for layer in model.board.layer_setup.enabled_in_order() {
+        if next.enabled.contains(&layer) {
+            continue;
+        }
+        let n = items_on_layer(design, &layer);
+        if n > 0 {
+            let shown = model.board.layer_setup.display_name(&layer);
+            return Err(vec![CheckResult::fail("ops_bad_board_layers", &layer, format!("{n} item(s) are on {shown}, which the board would no longer have; move or delete them first"))]);
+        }
+    }
+    overlay(design).board_layers = Some(next);
+    Ok(())
+}
+
+/// `Cmd::SetFormatting`: Text & Graphics > Formatting.
+pub(crate) fn set_formatting(design: &mut Design, settings: &FormattingSettings) -> Done {
+    settings.validate().map_err(|c| vec![c])?;
+    overlay(design).formatting = Some(settings.clone());
+    Ok(())
+}
+
+/// `Cmd::SetZoneHatchOffsets`: Board Stackup > Zone Hatch Offsets. The page is the layers that have an offset; a layer set to 0, 0 has none.
+pub(crate) fn set_zone_hatch_offsets(design: &mut Design, model: &ConstraintModel, offsets: &HatchOffsets) -> Done {
+    setup_pages::validate_hatch_offsets(offsets, &model.board.layers).map_err(|c| vec![c])?;
+    overlay(design).zone_hatch_offsets = Some(setup_pages::canonical_hatch_offsets(offsets));
+    Ok(())
+}
+
+/// `Cmd::SetTuningPatterns`: Design Rules > Length-tuning Patterns.
+pub(crate) fn set_tuning_patterns(design: &mut Design, settings: &TuningPatterns) -> Done {
+    settings.validate().map_err(|c| vec![c])?;
+    overlay(design).tuning_patterns = Some(settings.clone());
+    Ok(())
+}
+
+/// `Cmd::SetTuningProfiles`: Design Rules > Tuning Profiles, and the profile each net class names.
+pub(crate) fn set_tuning_profiles(design: &mut Design, model: &ConstraintModel, settings: &TuningProfiles) -> Done {
+    settings.validate(&model.board.layers).map_err(|c| vec![c])?;
+    overlay(design).tuning_profiles = Some(settings.canonical());
     Ok(())
 }
 
@@ -102,6 +163,14 @@ pub(crate) fn set_severities(design: &mut Design, severities: &BTreeMap<String, 
         }
     }
     overlay(design).severities = Some(severities.clone());
+    Ok(())
+}
+
+/// `Cmd::SetTextVariables`: the project's text variables (`PANEL_TEXT_VARIABLES::TransferDataFromWindow`), the whole set. Once stored the page is
+/// the project's variables and the board folder's `path-variables.json` is only the seed it started from ([`rules::effective_text_variables`]).
+pub(crate) fn set_text_variables(design: &mut Design, variables: &BTreeMap<String, String>) -> Done {
+    rules::validate_text_variables(variables).map_err(|c| vec![c])?;
+    overlay(design).text_variables = Some(variables.clone());
     Ok(())
 }
 

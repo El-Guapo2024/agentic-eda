@@ -378,7 +378,8 @@ function drawSchFields(ctx: CanvasRenderingContext2D, fields: SchField[], unitSu
   for (const f of fields) {
     if (!f.text || (!f.visible && !paintedShowHiddenFields)) continue;
     const sizeUm = f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM;
-    const text = shownText({ name: f.name, text: f.name === "Reference" ? f.text + unitSuffix : f.text, name_shown: f.name_shown });
+    // `f.shown` is what `${NAME}` in the text stands for (`SCH_FIELD::GetShownText`); a Reference has none, it is written with its unit letter.
+    const text = shownText({ name: f.name, text: f.name === "Reference" ? f.text + unitSuffix : (f.shown ?? f.text), name_shown: f.name_shown });
     const picked = f.id !== undefined && paintedSelection.has(f.id);
     drawKicadText(ctx, text, f.at, {
       sizeUm,
@@ -410,12 +411,12 @@ function drawFieldsAbout(ctx: CanvasRenderingContext2D, symbol: SchematicSymbol,
   drawStrokeText(ctx, symbol.id + unitSuffix, at.ref[0], at.ref[1], { sizeUm: refSizeUm, thicknessUm: refSizeUm * BOLD_THICKNESS_FACTOR, justify: at.justify, color: layerColor("LAYER_REFERENCEPART") });
   if (symbol.value || symbol.mpn) {
     const sizeUm = VALUE_FONT * 1000;
-    drawStrokeText(ctx, symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
+    drawStrokeText(ctx, symbol.shown?.value ?? symbol.value ?? symbol.mpn ?? "", at.value[0], at.value[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_VALUEPART") });
   }
   // Footprint field: small, LAYER_FIELDS purple -- a real field KiCad
   // draws alongside ref/value (this app has no separate "hide field"
   // flag per field, so it always shows when the symbol has a package).
-  const pkg = symbol.footprint ?? symbol.package;
+  const pkg = symbol.shown?.footprint ?? symbol.footprint ?? symbol.package;
   if (pkg) {
     const sizeUm = FIELD_FONT * 1000;
     drawStrokeText(ctx, pkg, at.footprint[0], at.footprint[1], { sizeUm, justify: at.justify, color: layerColor("LAYER_FIELDS") });

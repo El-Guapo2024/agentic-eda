@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BoardState, Shape } from "../api/types";
-import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, exchangeTargets, footprintNamesOf, planCleanupGraphics, planGlobalDeletions, wildMatch } from "./pcbGlobalEdit";
+import { DEFAULT_CLEANUP_GRAPHICS, DEFAULT_GLOBAL_DELETION, planCleanupGraphics, planGlobalDeletions, wildMatch } from "./pcbGlobalEdit";
 
 function board(partial: Record<string, unknown>): BoardState {
   return {
@@ -165,16 +165,4 @@ test("wildcards: * and ? match like WildCompareString, case-insensitively", () =
   assert.ok(wildMatch("*", ""));
   assert.ok(wildMatch("C1.5", "C1.5"));
   assert.ok(!wildMatch("C1.5", "C1x5"), "a dot is a dot");
-});
-
-test("exchange scope: selected, same reference pattern, same value, same footprint, all", () => {
-  const b = board({ parts: [part("R1", "top", true, "10k", "Resistor_SMD:R_0603"), part("R2", "top", true, "1k", "Resistor_SMD:R_0603"), part("C1", "top", true, "10k", "Capacitor_SMD:C_0402"), part("U1", "top", false, "mcu", "QFN")] });
-  const args = { selectedRef: "R1", reference: "R*", value: "10k", footprint: "Resistor_SMD:*" };
-  assert.deepEqual(exchangeTargets(b, "selected", args), ["R1"]);
-  assert.deepEqual(exchangeTargets(b, "reference", args), ["R1", "R2"]);
-  assert.deepEqual(exchangeTargets(b, "value", args), ["R1", "C1"]);
-  assert.deepEqual(exchangeTargets(b, "footprint", args), ["R1", "R2"]);
-  assert.deepEqual(exchangeTargets(b, "all", args), ["R1", "R2", "C1"], "an unplaced part is not on the board");
-  assert.deepEqual(exchangeTargets(b, "selected", { ...args, selectedRef: null }), []);
-  assert.deepEqual(footprintNamesOf(b, ["R1", "R2", "C1"]), ["Resistor_SMD:R_0603", "Capacitor_SMD:C_0402"]);
 });

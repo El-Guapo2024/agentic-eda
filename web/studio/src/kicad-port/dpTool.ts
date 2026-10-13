@@ -1,26 +1,43 @@
 // Pure glue between the backend's differential-pair router session
-// (crates/pns::diff_pair, driven through crates/cli/src/route_api.rs's
-// dp_{start,move,fix,finish} endpoints) and this app's `DrawState` -- the
-// `6` counterpart of routeTool.ts's single-track glue. Same split: this
-// module turns a `DiffPairPreview` reply into the "diffpair" DrawState
-// patch Canvas.tsx's painter already knows how to draw, and stays on the
-// dependency-free side of the line every other kicad-port module is
-// already on.
+// (crates/pns::dp_placer, KiCad's DIFF_PAIR_PLACER, driven through
+// crates/cli/src/route_api.rs's dp_{start,move,fix,via,finish} endpoints)
+// and this app's `DrawState` -- the `6` counterpart of routeTool.ts's
+// single-track glue. Same split: this module turns a `DiffPairPreview`
+// reply into the "diffpair" DrawState patch Canvas.tsx's painter already
+// knows how to draw, and stays on the dependency-free side of the line
+// every other kicad-port module is already on.
 //
 // router_tool.cpp's own DIFF_PAIR_PLACER loop this ports (the state
-// machine, not the geometry -- that's crates/pns::diff_pair):
+// machine, not the geometry -- that's crates/pns::dp_placer):
 //   6 (nothing selected) -> start from whatever pad/via/track-end is
 //                           under the cursor, on a net with a recognized
 //                           differential-pair suffix (components/canvas/
-//                           diffPairRouting.ts)
-//   mouse move            -> live preview of both lines at once
+//                           diffPairRouting.ts); the partner is the nearest
+//                           item of the complementary net
+//   mouse move            -> live preview of both lines at once, coupled:
+//                           walked around what is in the way, or pushed
+//                           through it (Shove), per the router mode
+//   V                     -> the head ends in a pair of vias a via gap
+//                           apart; the next click places them and the
+//                           route goes on from them on the other layer
 //   click                 -> fix the current head as a permanent leg
 //   double-click/Enter    -> finish (same commit as a click reaching a
 //                            coupled pair of same-net anchors)
 //   Esc                   -> cancel, nothing committed
 //   Backspace             -> undo the last fixed leg
-//   /                     -> flip posture (the spine's, same as `X`)
+//   /                     -> flip posture (straight-then-diagonal or the
+//                            other way round)
 import type { DiffPairPreview } from "../api/types";
+
+/** A via of the pair, as the preview carries it (one per net). */
+export interface DpDrawVia {
+  net: string | null;
+  x: number;
+  y: number;
+  diameter: number;
+  fromLayer: string;
+  toLayer: string;
+}
 
 /** Mirrors `state/store.tsx`'s `DrawState`'s "diffpair" variant exactly --
  * duplicated rather than imported, same convention `RouteDrawState`/
@@ -32,12 +49,26 @@ export interface DpDrawState {
   netB: string | null;
   layer: string;
   width: number;
+  /** The edge-to-edge gap the pair is routed at. */
+  gap?: number;
   ptsA: [number, number][];
   ptsB: [number, number][];
   colliding?: boolean;
   runsA?: { layer: string; pts: [number, number][] }[];
   runsB?: { layer: string; pts: [number, number][] }[];
   snappedEnd?: boolean;
+  /** `V` is on: the head ends in `vias`. `pendingViaLayer` is the layer the route goes on to after them. */
+  placingVia?: boolean;
+  pendingViaLayer?: string;
+  vias?: DpDrawVia[];
+  fixedVias?: DpDrawVia[];
+  /** Shove mode: what the head would push aside. */
+  displaced?: { layer: string; pts: [number, number][] }[];
+  displacedVias?: { source_via: string; x: number; y: number }[];
+}
+
+function viaOf(v: NonNullable<DiffPairPreview["vias"]>[number]): DpDrawVia {
+  return { net: v.net, x: v.x, y: v.y, diameter: v.diameter, fromLayer: v.from_layer, toLayer: v.to_layer };
 }
 
 /** The `DrawState` "diffpair" patch for a successful `DiffPairPreview`
@@ -49,11 +80,25 @@ export function dpStateFromPreview(current: DpDrawState, preview: DiffPairPrevie
     netB: preview.net_b ?? current.netB,
     layer: preview.layer,
     width: preview.width,
+    gap: preview.gap ?? current.gap,
     ptsA: preview.head_a,
     ptsB: preview.head_b,
     colliding: preview.colliding,
     runsA: preview.runs_a,
     runsB: preview.runs_b,
     snappedEnd: preview.snapped_end,
+    placingVia: preview.placing_via ?? false,
+    vias: (preview.vias ?? []).map(viaOf),
+    fixedVias: (preview.fixed_vias ?? []).map(viaOf),
+    displaced: preview.displaced ?? [],
+    displacedVias: preview.displaced_vias ?? [],
   };
+}
+
+/**
+ * `V` while a pair is routed (`ROUTER_TOOL::onViaCommand` -> `handleLayerSwitch`): the pair of vias is armed, with the layer the route goes
+ * on to after them (`toLayer`: the other end of the layer pair, see `otherLayerOfPair`); a second `V` takes the vias away again.
+ */
+export function dpViaRequest(draw: DpDrawState, toLayer: string): { enabled: boolean; toLayer: string } {
+  return { enabled: !draw.placingVia, toLayer };
 }

@@ -1066,8 +1066,15 @@ pub fn derive_project(board_dir: &Path, work: &Path, pro: &mut serde_json::Value
             }
         }
     }
-    let vars = read_project_variables(board_dir);
-    any |= !vars.is_empty();
+    // The design's Text Variables page (`export_kicad_pro_for` put it in `pro`) is the project's whole set once it has been used; the board folder's file is the seed
+    // it started from and no longer says anything (`eda_model::rules::effective_text_variables`).
+    let from_page = pro.get("text_variables").is_some_and(serde_json::Value::is_object);
+    let vars = if from_page {
+        pro.get("text_variables").and_then(|v| v.as_object()).map(|m| m.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect()).unwrap_or_default()
+    } else {
+        read_project_variables(board_dir)
+    };
+    any |= from_page || !vars.is_empty();
     if any {
         let folder = board_dir.display().to_string();
         let mut text = pro.get("text_variables").and_then(|v| v.as_object()).cloned().unwrap_or_default();
@@ -1096,7 +1103,8 @@ pub struct ImportedSetup {
 /// A real KiCad project keeps its library tables beside the board and its own variables in the project file's `text_variables`; `eda import-kicad` brings both along, so the
 /// libraries of the project still resolve from the new board folder. `${KIPRJMOD}` in them named the project's folder, so it is written out as `source_dir` (a path relative to
 /// the project is made absolute against it, [`derived_for_kicad`]). A table or a variables file the board's folder already has is kept, and importing into the project's own
-/// folder carries nothing: its setup already is the board's. Only the names a path variable may have ([`is_variable_name`]) are taken, never `KIPRJMOD`.
+/// folder carries nothing: its setup already is the board's. Every text variable the project has comes along, not only the ones named like a path variable (Board Setup >
+/// Text Variables edits them all, Configure Paths the ones it can list); only a name the Text Variables page would refuse is left behind, and `KIPRJMOD` always.
 pub fn import_project_setup(source_dir: &Path, board_dir: &Path, project_file: Option<&str>) -> ImportedSetup {
     let mut done = ImportedSetup::default();
     let same = |a: &Path, b: &Path| std::fs::canonicalize(a).ok().zip(std::fs::canonicalize(b).ok()).is_some_and(|(a, b)| a == b);
@@ -1131,7 +1139,7 @@ pub fn import_project_setup(source_dir: &Path, board_dir: &Path, project_file: O
     let vars: BTreeMap<String, String> = taken
         .iter()
         .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.replace("${KIPRJMOD}", &folder).replace("$(KIPRJMOD)", &folder))))
-        .filter(|(name, _)| is_variable_name(name) && name != "KIPRJMOD")
+        .filter(|(name, _)| eda_model::rules::text_variable_name_problem(name).is_none())
         .collect();
     if !vars.is_empty() {
         if board_dir.join(PATH_VARIABLES_FILE).exists() {
@@ -1187,11 +1195,11 @@ mod tests {
         assert_eq!(table.rows[1].uri, "${THEIRS}/T.kicad_sym", "another variable stays a variable");
         assert!(table.rows[1].hidden, "the flags come along");
         assert!(!board.join("fp-lib-table").exists());
-        // the valid names only, never KIPRJMOD; the folder written out in a value
+        // every text variable with a name the Text Variables page takes, never KIPRJMOD; the folder written out in a value
         let vars = read_project_variables(&board);
-        assert_eq!(vars.keys().map(String::as_str).collect::<Vec<_>>(), vec!["REVISION", "THEIRS"]);
+        assert_eq!(vars.keys().map(String::as_str).collect::<Vec<_>>(), vec!["Not a name", "REVISION", "THEIRS"]);
         assert_eq!(vars["THEIRS"], format!("{folder}/theirs"));
-        assert_eq!(done.variables, 2);
+        assert_eq!(done.variables, 3);
         // a second import into the same board keeps what is there; the project's own folder carries nothing
         let again = import_project_setup(&project, &board, Some(pro));
         assert_eq!((again.tables.len(), again.variables, again.notes.len()), (0, 0, 3), "{:?}", again.notes);
@@ -1551,6 +1559,13 @@ mod tests {
         assert_eq!(pro["text_variables"]["KIPRJMOD"], board.display().to_string());
         assert_eq!(pro["text_variables"]["TEAM"], format!("{}/shared", board.display()));
         assert_eq!(pro["erc"], serde_json::json!({}));
+        // the Text Variables page, once used, is the whole set: the file's TEAM is not added behind it, and `${KIPRJMOD}` in a value is the real folder
+        let mut paged = serde_json::json!({ "text_variables": { "REV": "B", "LIBS": "${KIPRJMOD}/libs" } });
+        assert_eq!(derive_project(&board, &work, &mut paged), Ok(true));
+        assert_eq!(paged["text_variables"], serde_json::json!({ "KIPRJMOD": board.display().to_string(), "REV": "B", "LIBS": format!("{}/libs", board.display()) }));
+        let mut emptied = serde_json::json!({ "text_variables": {} });
+        assert_eq!(derive_project(&board, &work, &mut emptied), Ok(true));
+        assert_eq!(emptied["text_variables"], serde_json::json!({ "KIPRJMOD": board.display().to_string() }), "a page with every variable deleted shadows the file");
         // a table that does not parse is left out rather than failing the export
         std::fs::write(board.join("sym-lib-table"), "(sym_lib_table (oops))").unwrap();
         write_project_variables(&board, &BTreeMap::new()).unwrap();

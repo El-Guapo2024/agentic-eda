@@ -33,6 +33,7 @@ import { useGridOverrides } from "../state/gridOverrides";
 import { useGridSettings } from "../state/gridSettings";
 import { computeVisibleGridSize } from "../kicad-port/grid";
 import { heldCursor } from "../kicad-port/heldCursor";
+import { shownTitleBlock } from "../kicad-port/pageSettings";
 import { paintSnapOverlay } from "./canvas/snapOverlayPainter";
 import { layerColor } from "./canvas/layers";
 import { drawPageAndFrame, drawZoneReferences, drawTitleBlock, drawGridDots, pageOf } from "./schematic/drawingSheet";
@@ -315,7 +316,7 @@ export function SchematicView() {
     drawPageAndFrame(ctx, state.schematicView, page);
     if (state.gridVisible) drawGridDots(ctx, state.schematicView, width, height, visibleGridUm, page);
     drawZoneReferences(ctx, state.schematicView, page);
-    const tb = sch.title_block;
+    const tb = shownTitleBlock(sch.title_block);
     const crumbs = sch.sheet_path ?? [];
     drawTitleBlock(
       ctx,

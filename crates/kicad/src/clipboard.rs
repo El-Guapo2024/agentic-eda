@@ -228,7 +228,7 @@ pub fn export_pcb_clipboard(design: &Design, model: &ConstraintModel, ids: &[Str
     writeln!(out, "\t(version 20241229)").unwrap();
     writeln!(out, "\t(generator \"pcbnew\")").unwrap();
     writeln!(out, "\t(generator_version \"9.0\")").unwrap();
-    write_layers(&mut out, &model.board.layers);
+    write_layers(&mut out, &model.board.layers, &model.board.layer_setup);
     writeln!(out, "\t(net 0 \"\")").unwrap();
     for (name, n) in &net_num {
         writeln!(out, "\t(net {n} {})", sexpr_str(name)).unwrap();

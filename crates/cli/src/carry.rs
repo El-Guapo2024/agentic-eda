@@ -18,9 +18,8 @@
 //!
 //! A pending step survives a restart of the server the same way: it is on disk, and the next command settles it.
 
-use super::{clear_dir, domain_tag, fail, history_root, lock, log_activity, push_snapshot_tagged, redo_dir, save, undo_dir};
+use super::{clear_dir, fail, history_root, lock, log_activity, push_snapshot_tagged, redo_dir, save, undo_dir};
 use eda_model::CheckResult;
-use eda_ops::Domain;
 use std::path::{Path, PathBuf};
 
 /// Where a command stands in a carried placement.
@@ -68,12 +67,12 @@ fn drop_pending(dir: &Path) {
     let _ = std::fs::remove_dir_all(pending_dir(dir));
 }
 
-/// Holds `before` open as the pending step.
-fn hold(dir: &Path, before: &eda_model::ir::Design, domain: Domain, by: &str) {
+/// Holds `before` open as the pending step, under the history tag `tag` (`board::snapshot_tag`).
+fn hold(dir: &Path, before: &eda_model::ir::Design, tag: &str, by: &str) {
     let root = pending_dir(dir);
     let _ = std::fs::create_dir_all(&root);
     let _ = std::fs::write(root.join("design.json"), serde_json::to_string(before).unwrap_or_default());
-    let _ = std::fs::write(root.join("meta"), format!("{}\n{by}\n", domain_tag(domain)));
+    let _ = std::fs::write(root.join("meta"), format!("{tag}\n{by}\n"));
 }
 
 /// Puts the pending step on the undo stack as a step of its own and clears the redo stack (a new edit erases old redos). Called with the lock held.
@@ -87,12 +86,12 @@ pub(super) fn settle_locked(dir: &Path) -> bool {
 
 /// What a command that succeeded leaves in the history: for a normal command the design before it on the undo stack (and the redo stack cleared); for the
 /// start of a carry that design kept aside; for the drop the pending design in its place, so the carry and the drop are one step.
-pub(super) fn record(dir: &Path, carry: Option<Carry>, before: &eda_model::ir::Design, domain: Domain, by: &str) {
+pub(super) fn record(dir: &Path, carry: Option<Carry>, before: &eda_model::ir::Design, tag: &str, by: &str) {
     match carry {
-        Some(Carry::Begin) => hold(dir, before, domain, by),
+        Some(Carry::Begin) => hold(dir, before, tag, by),
         Some(Carry::Commit) if settle_locked(dir) => {}
         _ => {
-            let _ = push_snapshot_tagged(&undo_dir(dir), before, domain_tag(domain), by);
+            let _ = push_snapshot_tagged(&undo_dir(dir), before, tag, by);
             clear_dir(&redo_dir(dir));
         }
     }

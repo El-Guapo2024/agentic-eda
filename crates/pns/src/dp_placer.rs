@@ -1,0 +1,1380 @@
+//! Port of `PNS::DIFF_PAIR_PLACER` (`pcbnew/router/pns_diff_pair_placer.{h,cpp}`): the interactive router for a differential pair --
+//! both nets at once, from a pair of pads, vias or track ends to wherever the cursor goes, in the router's mode.
+//!
+//! The geometry (gateways, the pair, the coupled length) is [`crate::diff_pair`]; this is the session:
+//!
+//! - [`DiffPairPlacer::start`] is `Start` with `FindDpPrimitivePair` ([`find_dp_primitive_pair`]): the item under the cursor and the
+//!   nearest item of the coupled net of the same kind (and layers) are the pair's start (`DP_PRIMITIVE_PAIR`); a pair of tracks
+//!   has to be at its end (`getDanglingAnchor`).
+//! - [`DiffPairPlacer::move_to`] is `Move`: `routeHead` fits the start's gateways (`gwsEntry.BuildFromPrimitivePair`) to the end's
+//!   (`BuildFromPrimitivePair` of the coupled pair under the cursor, else `BuildForCursor`, the cursor first pushed away from what
+//!   the pair's circle would sit on, `propagateDpHeadForces`), then the mode decides what happens to an obstacle: `rhMarkObstacles`
+//!   only reports it, `rhWalkOnly` walks the pair around it ([`DiffPairPlacer::try_walk_dp`]: one line is walked around the obstacle,
+//!   the other is shoved to the gap from it), `rhShoveOnly` walks the pair around the pads and shoves the tracks and vias, both lines
+//!   as heads of one shove.
+//! - [`DiffPairPlacer::fix_route`] is `FixRoute`: the pair is added to the world, the next leg starts from where it ended
+//!   (`EndingPrimitives`) and `m_initialDiagonal` carries the posture on. A pair with vias (`V`, [`DiffPairPlacer::toggle_via`]) ends in
+//!   two vias a `viaGap()` apart and goes on on the other layer from them (`SetLayer`).
+//!
+//! What differs from KiCad, on purpose:
+//!
+//! - **No springback.** Every `Move` resolves from the world as the last fix left it, as the rest of this router does
+//!   ([`crate::shove`]'s header): there is no shove branch kept between mouse samples.
+//! - **A walk that fails shows the pair as it was drawn.** `tryWalkDp` ends with `if( bestScore > 0.0 ) {..; return true;}`, which is
+//!   always true -- when no attempt worked, `best` is an empty `DIFF_PAIR` and the pair vanishes while the walk is called a success. Here a
+//!   failed walk leaves the pair where [`DiffPairPlacer::route_head`] put it and reports that it does not fit (it is drawn in violation).
+//! - **Four attempts are two.** `tryWalkDp` tries `attempt` 0..=3 with `pfirst = attempt & 1` and a winding `attempt & 2` that
+//!   `attemptWalk` never reads; attempts 2 and 3 repeat 0 and 1.
+//! - **Backspace** (`UnfixRoute`, which `DIFF_PAIR_PLACER` does not implement) takes back the last fixed leg: the world, the posture and
+//!   the pair it went on from are put back as they were before it.
+//! - **A gap below the clearance is raised to it** when it comes from the rules (the model's 180 um fallback is under its 200 um default
+//!   clearance, which no pair can be clean at); one the user typed in the dialog is kept. The width is at least the board's minimum
+//!   track width, as `ImportSizes` makes it.
+
+use crate::diff_pair::{direction_of, line_project, vnorm, vsub, DiffPair, DpGateways, DpPrimitivePair, PairLine, ANG_HALF_FULL, ANG_STRAIGHT};
+use crate::direction45::Direction45;
+use crate::item::{net_of, same_net, Item, ItemId, Kind, Net, Via};
+use crate::layer::LayerRange;
+use crate::line::Line;
+use crate::line_placer::{FixOutcome, SNAP_UM};
+use crate::node::{kind_mask, Node, QueryOpts};
+use crate::settings::{Mode, RoutingSettings};
+use crate::shove::{DisplacedLine, DisplacedVia, ShoveHead};
+use crate::walkaround::{WalkPolicy, WalkStatus, Walker};
+use eda_drc::kimath::Shape;
+use eda_model::ir::{Point, Um};
+use eda_model::BoardRules;
+use std::collections::{BTreeMap, HashSet};
+
+// ------------------------------------------------------------------------------------------------
+// sizes
+// ------------------------------------------------------------------------------------------------
+
+/// The parts of `SIZES_SETTINGS` a pair uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DpSizes {
+    /// `DiffPairWidth`.
+    pub width: Um,
+    /// `DiffPairGap`: edge to edge.
+    pub gap: Um,
+    /// `DiffPairViaGap`: edge to edge between the two vias.
+    pub via_gap: Um,
+    pub via_diameter: Um,
+    pub via_drill: Um,
+    /// `GetDiffPairHoleToHole`.
+    pub hole_to_hole: Um,
+}
+
+impl DpSizes {
+    /// `PNS_KICAD_IFACE_BASE::ImportSizes` for a pair, from the net class of the P net (the nets of a pair are in one class): width, gap
+    /// and via gap. `ImportSizes` starts the width at the board's minimum track width and takes the larger of that and the class's
+    /// (`std::max( diffPairWidth, constraint.m_Value.Opt() )`), so a pair is never narrower than the board allows (the model's 125 um
+    /// fallback is under its 200 um minimum). The gaps are raised to the clearance the two nets need between them: a pair routed at
+    /// less cannot be clean (the fallback gap is 180 um, under the 200 um default clearance).
+    pub fn resolve(rules: &BoardRules, net_p: &str, net_n: &str) -> Self {
+        let clearance = Node::clearance(rules, &net_of(net_p), &net_of(net_n));
+        DpSizes {
+            width: rules.diff_pair_width_of(net_p).max(rules.track_width_min_um),
+            gap: rules.diff_pair_gap_of(net_p).max(clearance),
+            via_gap: rules.diff_pair_via_gap_of(net_p).max(clearance),
+            via_diameter: rules.via_diameter_of(net_p),
+            via_drill: rules.via_drill_of(net_p),
+            hole_to_hole: rules.hole_to_hole_min_um,
+        }
+    }
+
+    /// `DIFF_PAIR_PLACER::viaGap`.
+    pub fn via_gap_total(&self) -> Um {
+        self.via_gap.max(self.hole_to_hole + self.via_drill - self.via_diameter)
+    }
+
+    /// `DIFF_PAIR_PLACER::gap`: the pitch of the two lines, centre to centre.
+    pub fn pitch(&self) -> Um {
+        self.gap + self.width
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// FindDpPrimitivePair
+// ------------------------------------------------------------------------------------------------
+
+/// `DpNetPair`'s refusal.
+const NO_COMPLEMENT: &str = "Unable to find complementary differential pair nets. Make sure the names of the nets belonging to a differential pair end with either N/P or +/-.";
+/// `FindDpPrimitivePair`'s refusal when the item has no dangling end.
+const NOT_AT_THE_END: &str = "Can't find a suitable starting point.  If starting from an existing differential pair make sure you are at the end.";
+
+/// `getDanglingAnchor`: where a pair can start on an item -- a pad's or via's centre, or the end of a track nothing else joins.
+pub fn dangling_anchor(node: &Node, item: &Item) -> Option<Point> {
+    match item {
+        Item::Via(_) | Item::Solid(_) => item.anchors().first().copied(),
+        Item::Segment(s) => {
+            let lonely = |p: Point| node.joint_at(p, &s.net).is_some_and(|j| j.links.len() == 1);
+            if lonely(s.a) {
+                Some(s.a)
+            } else if lonely(s.b) {
+                Some(s.b)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// What [`find_dp_primitive_pair`] found: the pair, and the items in the world it is made of.
+#[derive(Debug, Clone)]
+pub struct FoundPair {
+    pub pair: DpPrimitivePair,
+    pub id_p: ItemId,
+    pub id_n: ItemId,
+}
+
+/// `DIFF_PAIR_PLACER::FindDpPrimitivePair`: the item `item_id` and the item of the same kind, on the coupled net, whose dangling anchor
+/// is nearest to its own (a pad or via has to be on the same layers too). The pair is P first, whichever of the two was asked for
+/// (`DpNetPair`: the net named `+` or `P` is P).
+pub fn find_dp_primitive_pair(node: &Node, item_id: ItemId) -> Result<FoundPair, String> {
+    let item = node.get(item_id).ok_or_else(|| NO_COMPLEMENT.to_string())?;
+    let ref_net = item.net().clone();
+    let ref_name = ref_net.as_deref().ok_or_else(|| NO_COMPLEMENT.to_string())?;
+    let polarity = crate::diff_pair::dp_net_polarity(ref_name);
+    let coupled_name = crate::diff_pair::dp_coupled_net_name(ref_name).filter(|_| polarity != 0).ok_or_else(|| NO_COMPLEMENT.to_string())?;
+    let coupled_net = net_of(&coupled_name);
+
+    let ref_anchor = dangling_anchor(node, item).ok_or_else(|| NOT_AT_THE_END.to_string())?;
+
+    // `AllItemsInNet( coupledNet )`, nearest first; a tie goes to the lower id so that the result does not depend on the table's order
+    let mut best: Option<(i64, ItemId, Point)> = None;
+    for (id, other) in node.iter() {
+        if !same_net(other.net(), &coupled_net) || other.kind() != item.kind() {
+            continue;
+        }
+        let Some(anchor) = dangling_anchor(node, other) else { continue };
+        if matches!(item.kind(), Kind::Solid | Kind::Via) && other.layers() != item.layers() {
+            continue; // `shapeMatches`
+        }
+        let dist = vnorm(vsub(anchor, ref_anchor));
+        if best.is_none_or(|(d, bid, _)| (dist, id) < (d, bid)) {
+            best = Some((dist, id, anchor));
+        }
+    }
+    let Some((_, other_id, other_anchor)) = best else {
+        return Err(format!("Can't find a suitable starting point for coupled net \"{coupled_name}\"."));
+    };
+    let other = node.get(other_id).cloned().expect("found in the node");
+    let (mut pair, id_p, id_n);
+    if polarity != 1 {
+        // `refNet != netP`: the item found is P
+        pair = DpPrimitivePair::new(other, item.clone());
+        pair.anchor_p = other_anchor;
+        pair.anchor_n = ref_anchor;
+        (id_p, id_n) = (other_id, item_id);
+    } else {
+        pair = DpPrimitivePair::new(item.clone(), other);
+        pair.anchor_p = ref_anchor;
+        pair.anchor_n = other_anchor;
+        (id_p, id_n) = (item_id, other_id);
+    }
+    Ok(FoundPair { pair, id_p, id_n })
+}
+
+// ------------------------------------------------------------------------------------------------
+// the session
+// ------------------------------------------------------------------------------------------------
+
+/// A leg of the route that has been fixed: the two lines on one layer, and the two vias they end in (a leg that ends in vias is the
+/// last on its layer).
+#[derive(Debug, Clone)]
+pub struct DpLeg {
+    pub layer: i32,
+    pub width: Um,
+    pub p: Vec<Point>,
+    pub n: Vec<Point>,
+    pub vias: Option<(Via, Via)>,
+}
+
+/// Everything a finished route puts on the board.
+#[derive(Debug, Clone)]
+pub struct DpCommit {
+    pub net_p: Net,
+    pub net_n: Net,
+    pub legs: Vec<DpLeg>,
+    /// The tracks a shove moved, by IR track id: their replacement lines (none: the track is removed).
+    pub displaced_tracks: Vec<(String, Vec<Line>)>,
+    /// The vias a shove moved, by IR via id.
+    pub displaced_vias: Vec<(String, Point)>,
+}
+
+/// A via, as the preview draws it.
+#[derive(Debug, Clone)]
+pub struct PreviewVia {
+    pub net: Net,
+    pub pos: Point,
+    pub diameter: Um,
+    pub drill: Um,
+    pub layers: LayerRange,
+}
+
+impl From<&Via> for PreviewVia {
+    fn from(v: &Via) -> Self {
+        PreviewVia { net: v.net.clone(), pos: v.pos, diameter: v.diameter, drill: v.drill, layers: v.layers }
+    }
+}
+
+/// The live pair: what the last `Move` left, and what has been fixed so far.
+#[derive(Debug, Clone)]
+pub struct DiffPairPreview {
+    pub layer: i32,
+    pub width: Um,
+    pub gap: Um,
+    /// The fixed legs of P (`a`) and N (`b`), one line per leg, each on its own layer.
+    pub runs_a: Vec<Line>,
+    pub runs_b: Vec<Line>,
+    /// The head: the two lines from where the fixed legs end to the cursor, walked or shoved per the mode.
+    pub head_a: Line,
+    pub head_b: Line,
+    /// The pair does not fit as drawn (`!m_fitOk`): a line collides, or the mode could not resolve it.
+    pub colliding: bool,
+    /// Both lines end on a coupled pair of pads, vias or track ends (`m_snapOnTarget`): fixing here finishes the route.
+    pub snapped_end: bool,
+    /// The vias the head ends in, if a pair of vias is being placed (`V`): P's and N's.
+    pub vias: Vec<PreviewVia>,
+    /// The vias of the fixed legs.
+    pub fixed_vias: Vec<PreviewVia>,
+    /// `Mode::Shove`: the tracks and vias the head would push aside.
+    pub displaced_lines: Vec<DisplacedLine>,
+    pub displaced_vias: Vec<DisplacedVia>,
+    pub placing_via: bool,
+}
+
+/// What `Start` and `Move` and `FixRoute` need to undo a fix: the state before it.
+#[derive(Debug, Clone)]
+struct Snapshot {
+    world: Node,
+    legs: usize,
+    own_items: Vec<ItemId>,
+    prev_pair: Option<DpPrimitivePair>,
+    start: DpPrimitivePair,
+    start_diagonal: bool,
+    initial_diagonal: bool,
+    current_layer: i32,
+    displaced_tracks: BTreeMap<String, Vec<Line>>,
+    displaced_vias: BTreeMap<String, Point>,
+}
+
+/// `PNS::DIFF_PAIR_PLACER`.
+pub struct DiffPairPlacer {
+    pub net_p: Net,
+    pub net_n: Net,
+    pub sizes: DpSizes,
+    /// `m_start`, the pair the route began on -- or, after a layer change, the vias it went on from.
+    start: DpPrimitivePair,
+    /// `m_prevPair`: what the last fix ended on, which the next head starts from.
+    prev_pair: Option<DpPrimitivePair>,
+    /// The ids of the two items the route started on and of those it has fixed: a head does not end on them.
+    start_items: Vec<ItemId>,
+    own_items: Vec<ItemId>,
+    /// All layers of the board, for an end item while a via is placed.
+    all_layers: LayerRange,
+    /// The session's copy of the world: the router's, with the legs fixed so far (`m_world` after `CommitPlacement`) and whatever the
+    /// shoves of those legs moved.
+    world: Node,
+    legs: Vec<DpLeg>,
+    history: Vec<Snapshot>,
+    /// What shoves moved, by IR id, the latest position of each (as [`crate::line_placer::LinePlacer`] keeps them).
+    displaced_tracks: BTreeMap<String, Vec<Line>>,
+    displaced_vias: BTreeMap<String, Point>,
+    /// `m_startDiagonal` / `m_initialDiagonal`: the posture of the head, and the one the next leg starts with.
+    start_diagonal: bool,
+    initial_diagonal: bool,
+    /// `m_currentLayer`.
+    current_layer: i32,
+    /// `m_placingVia`, and the layer the route goes on to after the vias (`switchLayerOnViaPlacement`).
+    placing_via: bool,
+    via_to_layer: Option<i32>,
+    // ---- what the last Move left
+    /// `m_currentTrace`, `m_currentTraceOk`, `m_fitOk`, `m_snapOnTarget`.
+    current_trace: DiffPair,
+    current_trace_ok: bool,
+    fit_ok: bool,
+    snap_on_target: bool,
+    current_end_item: Option<ItemId>,
+    /// `m_currentNode` / `m_lastNode`: the world the last shove left, if it shoved.
+    last_node: Option<Node>,
+    shoved_lines: Vec<DisplacedLine>,
+    shoved_vias: Vec<DisplacedVia>,
+    /// `m_idle`: the route is finished.
+    pub idle: bool,
+    pub placement_correct: bool,
+}
+
+impl DiffPairPlacer {
+    /// `DIFF_PAIR_PLACER::Start`, and what `ROUTER::isStartingPointRoutable` asks of a pair first: the item under the cursor (`start_item`)
+    /// and its coupled partner ([`find_dp_primitive_pair`]), the gap at the start of a pair of tracks matching the configured one, and
+    /// the lines at the start not colliding with anything (at the board's minimum width if not at the pair's own). `layer` is the layer
+    /// the route starts on.
+    pub fn start(world: &Node, rules: &BoardRules, settings: &RoutingSettings, start_item: ItemId, layer: i32, all_layers: LayerRange) -> Result<Self, String> {
+        let found = find_dp_primitive_pair(world, start_item)?;
+        let (Some(prim_p), Some(prim_n)) = (found.pair.prim_p.clone(), found.pair.prim_n.clone()) else { return Err(NO_COMPLEMENT.into()) };
+        let (net_p, net_n) = (prim_p.net().clone(), prim_n.net().clone());
+        let (name_p, name_n) = (net_p.as_deref().unwrap_or(""), net_n.as_deref().unwrap_or(""));
+        let mut sizes = DpSizes::resolve(rules, name_p, name_n);
+
+        // `isStartingPointRoutable` (`if( Settings().AllowDRCViolations() ) return true;` first)
+        if !settings.allow_drc_violations() {
+            if sizes.gap < rules.min_clearance_um {
+                return Err("Diff pair gap is less than board minimum clearance.".into());
+            }
+        }
+        // starting from tracks: the width they have (`inheritTrackWidth`)
+        if let (Item::Segment(sp), Item::Segment(_)) = (&prim_p, &prim_n) {
+            sizes.width = sp.width;
+        }
+        if !settings.allow_drc_violations() {
+            // ... and the gap they are at has to be the configured one (to 10 %)
+            if let (Item::Segment(_), Item::Segment(_)) = (&prim_p, &prim_n) {
+                let actual_gap = vnorm(vsub(found.pair.anchor_p, found.pair.anchor_n));
+                let configured = sizes.gap + sizes.width;
+                if (actual_gap - configured).abs() > configured / 10 {
+                    return Err("The differential pair gap at the start point does not match the configured gap. This can occur in neckdown areas where tracks have narrower width and spacing. Adjust the differential pair settings or start from a location with the correct gap.".into());
+                }
+            }
+            // the two lines, as dots, collide with nothing: "If the only reason we collide is track width; it's better to allow the user to
+            // start anyway and just highlight the resulting collisions, so they can change width later."
+            let dummy_collides = |width: Um| {
+                [(found.pair.anchor_n, &net_n), (found.pair.anchor_p, &net_p)].iter().any(|(at, net)| {
+                    let pts = [*at, *at];
+                    PairLine { pts: &pts, net: *net, layer, width, via: None }.hits_node(world, rules, kind_mask::ANY)
+                })
+            };
+            if dummy_collides(sizes.width) && dummy_collides(rules.track_width_min_um) {
+                return Err("The routing start point violates DRC.".into());
+            }
+        }
+
+        Ok(DiffPairPlacer {
+            net_p: net_p.clone(),
+            net_n: net_n.clone(),
+            sizes,
+            start: found.pair,
+            prev_pair: None,
+            start_items: vec![found.id_p, found.id_n],
+            own_items: Vec::new(),
+            all_layers,
+            world: world.branch(),
+            legs: Vec::new(),
+            history: Vec::new(),
+            displaced_tracks: BTreeMap::new(),
+            displaced_vias: BTreeMap::new(),
+            start_diagonal: false,
+            initial_diagonal: false,
+            current_layer: layer,
+            placing_via: false,
+            via_to_layer: None,
+            current_trace: DiffPair { net_p, net_n, ..DiffPair::default() },
+            current_trace_ok: false,
+            fit_ok: false,
+            snap_on_target: false,
+            current_end_item: None,
+            last_node: None,
+            shoved_lines: Vec::new(),
+            shoved_vias: Vec::new(),
+            idle: false,
+            placement_correct: false,
+        })
+    }
+
+    pub fn current_layer(&self) -> i32 {
+        self.current_layer
+    }
+
+    pub fn is_placing_via(&self) -> bool {
+        self.placing_via
+    }
+
+    /// `UpdateSizes` from the Differential Pair Dimensions dialog: the width, the gap and the via gap of the next `Move`.
+    pub fn set_dimensions(&mut self, width: Option<Um>, gap: Option<Um>, via_gap: Option<Um>) {
+        if let Some(w) = width.filter(|w| *w > 0) {
+            self.sizes.width = w;
+        }
+        if let Some(g) = gap.filter(|g| *g > 0) {
+            self.sizes.gap = g;
+        }
+        if let Some(g) = via_gap.filter(|g| *g > 0) {
+            self.sizes.via_gap = g;
+        }
+        self.current_trace.width = self.sizes.width;
+        self.current_trace.set_gap(self.sizes.gap);
+    }
+
+    /// `DIFF_PAIR_PLACER::FlipPosture`.
+    pub fn flip_posture(&mut self) {
+        self.start_diagonal = !self.start_diagonal;
+    }
+
+    /// `DIFF_PAIR_PLACER::ToggleVia`: the head ends in a pair of vias (or stops doing so). `to_layer` is the layer the route goes on to
+    /// after them; without one, the other end of the board.
+    pub fn toggle_via(&mut self, enabled: bool, diameter: Option<Um>, drill: Option<Um>, to_layer: Option<i32>) {
+        self.placing_via = enabled;
+        if enabled {
+            if let Some(d) = diameter.filter(|d| *d > 0) {
+                self.sizes.via_diameter = d;
+            }
+            if let Some(d) = drill.filter(|d| *d > 0) {
+                self.sizes.via_drill = d;
+            }
+            self.via_to_layer = to_layer.or_else(|| Some(if self.current_layer == self.all_layers.start() { self.all_layers.end() } else { self.all_layers.start() }));
+        } else {
+            self.via_to_layer = None;
+        }
+    }
+
+    /// `makeVia`: a via of the pair's size on the layers between the current one and the one the route goes on to.
+    fn make_via(&self, pos: Point, net: &Net) -> Via {
+        let to = self.via_to_layer.unwrap_or(self.current_layer);
+        Via { net: net.clone(), layers: LayerRange::new(self.current_layer, to), pos, diameter: self.sizes.via_diameter, drill: self.sizes.via_drill, source_via: None, locked: false }
+    }
+
+    /// The end item of a cursor (`TOOL_BASE::updateEndItem`, `pickSingleItem` for each net of the pair): a pad or via of either net near
+    /// it, else a track end, on the layer being routed (any while vias are placed). Not the items the route started on or has fixed.
+    fn pick_end_item(&self, at: Point) -> Option<ItemId> {
+        let layers = if self.placing_via { self.all_layers } else { LayerRange::single(self.current_layer) };
+        let own: HashSet<ItemId> = self.start_items.iter().chain(self.own_items.iter()).copied().collect();
+        let mut best: Option<((u8, i64, ItemId), ItemId)> = None;
+        for (id, item) in self.world.iter() {
+            if own.contains(&id) || !item.layers().overlaps(&layers) {
+                continue;
+            }
+            if !(same_net(item.net(), &self.net_p) || same_net(item.net(), &self.net_n)) {
+                continue;
+            }
+            // pads and vias take priority over tracks (`prioritized[]`); then the nearest
+            let class = if matches!(item, Item::Segment(_)) { 1u8 } else { 0 };
+            let dist = item.anchors().iter().map(|a| vnorm(vsub(*a, at))).min();
+            let Some(dist) = dist.filter(|d| *d <= SNAP_UM) else { continue };
+            let key = (class, dist, id);
+            if best.as_ref().is_none_or(|(k, _)| key < *k) {
+                best = Some((key, id));
+            }
+        }
+        best.map(|(_, id)| id)
+    }
+
+    /// `DIFF_PAIR_PLACER::propagateDpHeadForces`: the cursor, pushed off what the circle round the end of the pair (or of its vias) would
+    /// sit on, so that the end gateways are where there is room. `None` when the cursor cannot be moved clear. Not in Highlight
+    /// collisions mode; in Shove mode off pads alone (the rest is the shove's to move).
+    fn propagate_dp_head_forces(&self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Option<Point> {
+        let mut virt = if self.placing_via {
+            let mut v = self.make_via(p, &None);
+            v.diameter = self.sizes.via_gap_total() + 2 * v.diameter;
+            v
+        } else {
+            let mut v = self.make_via(p, &None);
+            v.layers = LayerRange::single(self.current_layer);
+            v.diameter = self.sizes.gap + 2 * self.sizes.width;
+            v
+        };
+        let mask = match settings.mode {
+            Mode::MarkObstacles => return Some(p),
+            Mode::Walkaround => kind_mask::ANY,
+            Mode::Shove => kind_mask::SOLID,
+        };
+
+        // "Note: this code is lifted from VIA::PushoutForce and then optimized for this use case and to check proper clearances to the
+        // diff pair line."
+        const MAX_ITER: usize = 40;
+        let mut iter = 0;
+        let mut collided = false;
+        let mut force: (i64, i64) = (0, 0);
+        let mut handled: HashSet<ItemId> = HashSet::new();
+        let norm_sq = |v: (i64, i64)| v.0 as i128 * v.0 as i128 + v.1 as i128 * v.1 as i128;
+        while iter < MAX_ITER {
+            let circle = Shape::Circle { c: virt.pos, r: virt.diameter / 2 };
+            let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true };
+            let mut obstacles = self.world.colliding_with(&circle, &virt.net, virt.layers, rules, &[], opts);
+            obstacles.sort_by_key(|o| o.id);
+            let Some(obs) = obstacles.first() else { break };
+            if handled.contains(&obs.id) {
+                break;
+            }
+            let Some(item) = self.world.get(obs.id) else { break };
+            let clearance = Node::clearance_to(rules, &self.net_p, item);
+            let mut layer_force = (0i64, 0i64);
+            collided = false;
+            // `RelevantShapeLayers`: the layers both occupy (shapes are the same on every layer here)
+            if item.layers().overlaps(&virt.layers) {
+                if let Some(f) = crate::shove::item_circle_mtv(item, virt.pos, virt.diameter / 2, clearance) {
+                    collided = true;
+                    layer_force = f;
+                }
+                if norm_sq(layer_force) > norm_sq(force) {
+                    force = layer_force;
+                }
+            }
+            if collided {
+                virt.pos = Point { x: virt.pos.x + force.0, y: virt.pos.y + force.1 };
+            }
+            handled.insert(obs.id);
+            iter += 1;
+        }
+        let succeeded = !collided || iter != MAX_ITER;
+        succeeded.then_some(Point { x: p.x + force.0, y: p.y + force.1 })
+    }
+
+    /// `DIFF_PAIR_PLACER::routeHead`: fit the gateways of where the pair is coming from to those of where it is going -- the coupled
+    /// pair of pads, vias or track ends under the cursor, or the cursor -- and take the best pair of lines between them. `false` only
+    /// when nothing fits and nothing ever did.
+    fn route_head(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> bool {
+        self.fit_ok = false;
+        let pitch = self.sizes.pitch();
+        let mut gws_entry = DpGateways::new(pitch);
+        let mut gws_target = DpGateways::new(pitch);
+        if self.prev_pair.is_none() {
+            self.prev_pair = Some(self.start.clone());
+        }
+        let prev = self.prev_pair.clone().expect("set above");
+        gws_entry.build_from_primitive_pair(&prev, self.start_diagonal);
+
+        let target = self.current_end_item.and_then(|id| find_dp_primitive_pair(&self.world, id).ok());
+        if let Some(target) = target {
+            gws_target.build_from_primitive_pair(&target.pair, self.start_diagonal);
+            self.snap_on_target = true;
+        } else {
+            let Some(fp) = self.propagate_dp_head_forces(rules, settings, p) else { return false };
+            let (midp, dir_v) = prev.cursor_orientation(fp);
+            let fp_proj = line_project((midp, Point { x: midp.x + dir_v.0, y: midp.y + dir_v.1 }), fp);
+            // "compute 'leader point' distance from the cursor (project cursor position on the extension of the starting segment pair
+            // of the DP)"
+            let lead_dist = vnorm(vsub(fp_proj, fp));
+            gws_target.set_fit_vias(self.placing_via, self.sizes.via_diameter, Some(self.sizes.via_gap_total()));
+            if lead_dist > (self.sizes.gap + self.sizes.width) / 2 {
+                // "far from the initial segment extension line -> allow a 45-degree obtuse turn"
+                gws_target.build_for_cursor(fp);
+            } else {
+                // "close to the initial segment extension line -> keep straight part only, project as close as possible to the cursor."
+                gws_target.build_for_cursor(fp_proj);
+                gws_target.filter_by_orientation(ANG_STRAIGHT | ANG_HALF_FULL, direction_of(dir_v));
+            }
+            self.snap_on_target = false;
+        }
+
+        self.current_trace.set_gap(pitch);
+        self.current_trace.layer = self.current_layer;
+        let result = gws_entry.fit_gateways(&gws_target, self.start_diagonal, &mut self.current_trace);
+        if result {
+            self.current_trace_ok = true;
+            self.current_trace.set_nets(self.net_p.clone(), self.net_n.clone());
+            self.current_trace.width = self.sizes.width;
+            self.current_trace.set_gap(self.sizes.gap);
+            if self.placing_via {
+                let last_p = *self.current_trace.p.last().expect("a fitted pair has points");
+                let last_n = *self.current_trace.n.last().expect("a fitted pair has points");
+                let (via_p, via_n) = (self.make_via(last_p, &self.net_p), self.make_via(last_n, &self.net_n));
+                self.current_trace.append_vias(via_p, via_n);
+            } else {
+                self.current_trace.remove_vias();
+            }
+            return true;
+        }
+        self.current_trace_ok && !self.current_trace.is_empty()
+    }
+
+    // ---------------------------------------------------------------- the modes
+
+    /// `rhMarkObstacles`: the pair as fitted; it does not fit if either line collides.
+    fn rh_mark_obstacles(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> bool {
+        if !self.route_head(rules, settings, p) {
+            return false;
+        }
+        let hit_p = self.current_trace.p_pair_line().hits_node(&self.world, rules, kind_mask::ANY);
+        let hit_n = self.current_trace.n_pair_line().hits_node(&self.world, rules, kind_mask::ANY);
+        self.fit_ok = !(hit_p || hit_n);
+        self.fit_ok
+    }
+
+    /// `rhWalkOnly`: the pair walked around everything in its way.
+    fn rh_walk_only(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> bool {
+        if !self.route_head(rules, settings, p) {
+            return false;
+        }
+        let mut pair = self.current_trace.clone();
+        self.fit_ok = self.try_walk_dp(&self.world, rules, settings, &mut pair, false);
+        if self.fit_ok {
+            self.current_trace = pair;
+        }
+        self.fit_ok
+    }
+
+    /// `rhShoveOnly`: the pair walked around the pads, then both lines are heads of one shove that moves the tracks and vias in the way.
+    fn rh_shove_only(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> bool {
+        let ok = self.route_head(rules, settings, p);
+        self.fit_ok = false;
+        if !ok {
+            return false;
+        }
+        let mut pair = self.current_trace.clone();
+        if !self.try_walk_dp(&self.world, rules, settings, &mut pair, true) {
+            return false;
+        }
+        self.current_trace = pair;
+        let heads = vec![
+            ShoveHead { line: self.current_trace.p_line(), via: self.current_trace.via_p.clone() },
+            ShoveHead { line: self.current_trace.n_line(), via: self.current_trace.via_n.clone() },
+        ];
+        if let Some(out) = crate::shove::shove_heads(&self.world, heads, rules, settings) {
+            // "Update m_currentTrace with the shoved shapes so FixRoute() commits correct geometry"
+            let (hp, hn) = (out.heads[0].clone(), out.heads[1].clone());
+            self.current_trace.set_shape(hp, hn, false);
+            let (hit_p, hit_n) = (self.current_trace.p_pair_line().hits_node(&out.world, rules, kind_mask::ANY), self.current_trace.n_pair_line().hits_node(&out.world, rules, kind_mask::ANY));
+            self.shoved_lines = out.displaced_lines;
+            self.shoved_vias = out.displaced_vias;
+            self.last_node = Some(out.world);
+            if !hit_p && !hit_n {
+                self.fit_ok = true;
+            }
+        }
+        self.fit_ok
+    }
+
+    /// `DIFF_PAIR_PLACER::route`.
+    fn route(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> bool {
+        match settings.mode {
+            Mode::MarkObstacles => self.rh_mark_obstacles(rules, settings, p),
+            Mode::Walkaround => self.rh_walk_only(rules, settings, p),
+            Mode::Shove => self.rh_shove_only(rules, settings, p),
+        }
+    }
+
+    /// `DIFF_PAIR_PLACER::Move`: re-route the head to the cursor at `p`.
+    pub fn move_to(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> bool {
+        if self.idle {
+            return false;
+        }
+        self.current_end_item = self.pick_end_item(p);
+        self.fit_ok = false;
+        self.last_node = None;
+        self.shoved_lines.clear();
+        self.shoved_vias.clear();
+        self.route(rules, settings, p)
+    }
+
+    // ---------------------------------------------------------------- walking a pair
+
+    /// `walkaround.Route( line )` for one line of the pair: the shortest way around everything of the kinds in `mask`, or `None` if there
+    /// is none (`ST_DONE` is the only success).
+    fn walk_line(node: &Node, rules: &BoardRules, settings: &RoutingSettings, line: PairLine, mask: u8) -> Option<Vec<Point>> {
+        if line.pts.len() < 2 {
+            return None;
+        }
+        let mut walker = Walker::new(node, rules);
+        walker.item_mask = mask;
+        walker.iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
+        walker.set_allowed_policies(&[WalkPolicy::Shortest]);
+        walker.set_end_via(line.via.cloned());
+        let out = walker.route(line.net, line.layer, line.width, line.pts);
+        (out.status_of(WalkPolicy::Shortest) == WalkStatus::Done).then(|| out.line_of(WalkPolicy::Shortest).to_vec())
+    }
+
+    /// `DIFF_PAIR_PLACER::attemptWalk`: walk one line of the pair around what it collides with, shove the other to the gap from it, and
+    /// if that one now collides walk it and shove the first -- up to three rounds. `None` if a walk or a shove fails or the rounds run out.
+    fn attempt_walk(node: &Node, rules: &BoardRules, settings: &RoutingSettings, current: &DiffPair, p_first: bool, solids_only: bool) -> Option<DiffPair> {
+        let mask = if solids_only { kind_mask::SOLID } else { kind_mask::ANY };
+        let mut cur = current.clone();
+        let mut current_is_p = p_first;
+        let mut iter = 0;
+        loop {
+            // the line to walk (`preWalk`) and the one to shove (`preShove`), with what they are made of
+            let (walk_net, shove_net) = if current_is_p { (cur.net_p.clone(), cur.net_n.clone()) } else { (cur.net_n.clone(), cur.net_p.clone()) };
+            let (walk_via, shove_via) = if current_is_p { (cur.via_p.clone(), cur.via_n.clone()) } else { (cur.via_n.clone(), cur.via_p.clone()) };
+            let (walk_pts, shove_pts) = if current_is_p { (cur.p.clone(), cur.n.clone()) } else { (cur.n.clone(), cur.p.clone()) };
+            let pre_walk = PairLine { pts: &walk_pts, net: &walk_net, layer: cur.layer, width: cur.width, via: walk_via.as_ref() };
+            let pre_shove = PairLine { pts: &shove_pts, net: &shove_net, layer: cur.layer, width: cur.width, via: shove_via.as_ref() };
+            if !pre_walk.hits_node(node, rules, mask) {
+                current_is_p = !current_is_p;
+                if !pre_shove.hits_node(node, rules, mask) {
+                    break;
+                }
+            } else {
+                let post_walk_pts = Self::walk_line(node, rules, settings, pre_walk, mask)?;
+                let post_walk = Line::from_points(walk_net.clone(), cur.layer, cur.width, post_walk_pts);
+                let pre_shove_line = Line::from_points(shove_net.clone(), cur.layer, cur.width, shove_pts.clone());
+                // `shove.ForceClearance( true, cur.Gap() - 2 * PNS_HULL_MARGIN )`: the margin takes a hair off the gap so that a line already at
+                // the gap is not pushed. It is 20 nm there; here the hulls carry a micrometre of rounding guard of their own
+                // (`HULL_ROUNDING_GUARD`), which is what comes off.
+                let forced = cur.gap - crate::hull::HULL_ROUNDING_GUARD;
+                let post_shove = crate::shove::shove_obstacle_line(node, rules, settings, &post_walk, walk_via.as_ref(), &pre_shove_line, shove_via.as_ref(), Some(forced))?;
+                let (mut post_walk, mut post_shove) = (post_walk, post_shove);
+                post_walk.simplify();
+                post_shove.simplify();
+                let swap = !current_is_p;
+                cur.set_shape(post_walk.pts.clone(), post_shove.pts.clone(), swap);
+                current_is_p = !current_is_p;
+                let shoved_hits = PairLine { pts: &post_shove.pts, net: &shove_net, layer: cur.layer, width: cur.width, via: shove_via.as_ref() }.hits_node(node, rules, mask);
+                if !shoved_hits {
+                    break;
+                }
+                iter += 1;
+            }
+            if iter >= 3 {
+                break;
+            }
+        }
+        if iter == 3 {
+            return None;
+        }
+        let mut walked = current.clone();
+        walked.set_shape(cur.p, cur.n, false);
+        Some(walked)
+    }
+
+    /// `DIFF_PAIR_PLACER::tryWalkDp`: the better of the walks starting with P and with N -- the longest coupled length, the least skew --
+    /// then optimized ([`crate::optimizer::optimize_pair`]). `false` leaves `pair` as it was.
+    fn try_walk_dp(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, pair: &mut DiffPair, solids_only: bool) -> bool {
+        let mut best: Option<DiffPair> = None;
+        let mut best_score = 100_000_000_000_000.0f64;
+        // KiCad tries four attempts, `pfirst = attempt & 1` and a winding it never reads: the third and fourth repeat the first two
+        for p_first in [false, true] {
+            if let Some(p) = Self::attempt_walk(node, rules, settings, pair, p_first, solids_only) {
+                let cl = 1.0 + p.coupled_length();
+                let skew = p.skew();
+                let score = cl + skew.abs() * 3.0;
+                if score < best_score {
+                    best_score = score;
+                    best = Some(p);
+                }
+            }
+        }
+        let Some(best) = best else { return false };
+        pair.set_shape_from(&best);
+        crate::optimizer::optimize_pair(node, rules, pair);
+        true
+    }
+
+    // ---------------------------------------------------------------- fixing
+
+    /// What `Move` left, for the UI.
+    pub fn preview(&self) -> DiffPairPreview {
+        let line_of = |pts: &[Point], net: &Net| Line::from_points(net.clone(), self.current_layer, self.sizes.width, pts.to_vec());
+        let mut vias = Vec::new();
+        if let (Some(vp), Some(vn)) = (&self.current_trace.via_p, &self.current_trace.via_n) {
+            vias = vec![PreviewVia::from(vp), PreviewVia::from(vn)];
+        }
+        let fixed_vias = self.legs.iter().filter_map(|l| l.vias.as_ref()).flat_map(|(a, b)| [PreviewVia::from(a), PreviewVia::from(b)]).collect();
+        let leg_lines = |p: bool| self.legs.iter().map(|l| Line::from_points(if p { self.net_p.clone() } else { self.net_n.clone() }, l.layer, l.width, if p { l.p.clone() } else { l.n.clone() })).collect::<Vec<_>>();
+        // what the head shoves now, and what the legs fixed so far shoved (a fix puts the shoved track in the world, where it stays pushed
+        // until the commit): the head's answer wins for a track both have moved
+        let mut displaced_lines = self.shoved_lines.clone();
+        let moving: HashSet<&str> = self.shoved_lines.iter().filter_map(|d| d.source_track.as_deref()).collect();
+        for (id, lines) in &self.displaced_tracks {
+            if !moving.contains(id.as_str()) {
+                displaced_lines.extend(lines.iter().filter(|l| l.point_count() >= 2).map(|l| DisplacedLine { source_track: Some(id.clone()), line: l.clone() }));
+            }
+        }
+        let mut displaced_vias = self.shoved_vias.clone();
+        for (id, pos) in &self.displaced_vias {
+            if !self.shoved_vias.iter().any(|d| &d.source_via == id) {
+                displaced_vias.push(DisplacedVia { source_via: id.clone(), pos: *pos });
+            }
+        }
+        DiffPairPreview {
+            layer: self.current_layer,
+            width: self.sizes.width,
+            gap: self.sizes.gap,
+            runs_a: leg_lines(true),
+            runs_b: leg_lines(false),
+            head_a: line_of(&self.current_trace.p, &self.net_p),
+            head_b: line_of(&self.current_trace.n, &self.net_n),
+            colliding: !self.fit_ok,
+            snapped_end: self.snap_on_target,
+            vias,
+            fixed_vias,
+            displaced_lines,
+            displaced_vias,
+            placing_via: self.placing_via,
+        }
+    }
+
+    /// The tracks and vias a shove moved, merged into what the route has displaced so far: the latest position of each wins.
+    fn absorb_displacement(&mut self) {
+        let mut fresh: BTreeMap<String, Vec<Line>> = BTreeMap::new();
+        for d in &self.shoved_lines {
+            if let Some(id) = &d.source_track {
+                let e = fresh.entry(id.clone()).or_default();
+                if d.line.point_count() >= 2 {
+                    e.push(d.line.clone());
+                }
+            }
+        }
+        for (id, ls) in fresh {
+            self.displaced_tracks.insert(id, ls);
+        }
+        for d in &self.shoved_vias {
+            self.displaced_vias.insert(d.source_via.clone(), d.pos);
+        }
+    }
+
+    /// `DIFF_PAIR_PLACER::FixRoute( aP, aEndItem, aForceFinish )`: the head becomes a leg of the route. Not when it does not fit (and
+    /// violations are not allowed) or has no segments: `None`. A pair that ended on a coupled pair of pads or vias, or `force_finish`,
+    /// is finished; otherwise the next leg goes on from where this ended (`EndingPrimitives`), and with vias on the other layer.
+    pub fn fix_route(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point, force_finish: bool) -> Option<FixOutcome> {
+        if self.idle {
+            return None;
+        }
+        self.move_to(rules, settings, p);
+        self.fix_head(settings, force_finish)
+    }
+
+    /// [`Self::fix_route`] for the head the last `Move` left.
+    fn fix_head(&mut self, settings: &RoutingSettings, force_finish: bool) -> Option<FixOutcome> {
+        if !self.fit_ok && !settings.allow_drc_violations() {
+            return None;
+        }
+        if crate::diff_pair::segment_count(&self.current_trace.p) < 1 || crate::diff_pair::segment_count(&self.current_trace.n) < 1 {
+            return None;
+        }
+        let was = Snapshot {
+            world: self.world.clone(),
+            legs: self.legs.len(),
+            own_items: self.own_items.clone(),
+            prev_pair: self.prev_pair.clone(),
+            start: self.start.clone(),
+            start_diagonal: self.start_diagonal,
+            initial_diagonal: self.initial_diagonal,
+            current_layer: self.current_layer,
+            displaced_tracks: self.displaced_tracks.clone(),
+            displaced_vias: self.displaced_vias.clone(),
+        };
+        if crate::diff_pair::segment_count(&self.current_trace.p) > 1 {
+            let t = &self.current_trace.p;
+            self.initial_diagonal = !Direction45::from_seg(t[t.len() - 3], t[t.len() - 2]).is_diagonal();
+        }
+        // "avoid fixing the last segment" unless the route ends here
+        if !self.snap_on_target && !self.current_trace.ends_with_vias() && !force_finish && !settings.fix_all_segments {
+            let (mut new_p, mut new_n) = (self.current_trace.p.clone(), self.current_trace.n.clone());
+            if new_p.len() > 2 && new_n.len() > 2 {
+                new_p.pop();
+                new_n.pop();
+            }
+            self.current_trace.set_shape(new_p, new_n, false);
+        }
+
+        // the world the head left (shoved, or as it was), with the pair in it
+        let mut node = self.last_node.take().unwrap_or_else(|| self.world.clone());
+        let trace = self.current_trace.clone();
+        let vias = match (&trace.via_p, &trace.via_n) {
+            (Some(a), Some(b)) => Some((a.clone(), b.clone())),
+            _ => None,
+        };
+        if let Some((a, b)) = &vias {
+            self.own_items.push(node.add(Item::Via(a.clone())));
+            self.own_items.push(node.add(Item::Via(b.clone())));
+        }
+        self.own_items.extend(node.add_line(&trace.p_line(), None, false));
+        self.own_items.extend(node.add_line(&trace.n_line(), None, false));
+        self.world = node;
+        self.absorb_displacement();
+        self.shoved_lines.clear();
+        self.shoved_vias.clear();
+        self.history.push(was);
+
+        self.legs.push(DpLeg { layer: self.current_layer, width: trace.width, p: trace.p.clone(), n: trace.n.clone(), vias: vias.clone() });
+        let ending = trace.ending_primitives();
+        self.prev_pair = Some(ending);
+        self.placement_correct = true;
+
+        let real_end = self.snap_on_target;
+        if let Some((a, _)) = &vias {
+            // `switchLayerOnViaPlacement` -> `SetLayer`: on from the vias, on the other layer
+            let _ = a;
+            self.current_layer = self.via_to_layer.unwrap_or(self.current_layer);
+            self.start = self.prev_pair.clone().expect("just set");
+            self.placing_via = false;
+            self.via_to_layer = None;
+        }
+        // `initPlacement`
+        self.start_diagonal = self.initial_diagonal;
+        self.current_end_item = None;
+        self.current_trace.remove_vias();
+        self.current_trace.p.clear();
+        self.current_trace.n.clear();
+        self.snap_on_target = false;
+        self.fit_ok = false;
+        if real_end || force_finish {
+            self.idle = true;
+        }
+        Some(FixOutcome::Fixed { real_end })
+    }
+
+    /// `FixRoute( .., aForceFinish = true )` and `CommitPlacement`: fix the head and finish the route, or just finish it if the last fix
+    /// already did. `None` if the head does not fit.
+    pub fn finish(&mut self, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Option<DpCommit> {
+        if !self.idle {
+            // a head with nothing in it is not a leg (finishing right after the start places nothing)
+            self.move_to(rules, settings, p);
+            let has_head = crate::diff_pair::segment_count(&self.current_trace.p) >= 1 && crate::diff_pair::segment_count(&self.current_trace.n) >= 1;
+            if has_head {
+                self.fix_head(settings, true)?;
+            } else {
+                self.idle = true;
+            }
+        }
+        Some(self.commit())
+    }
+
+    /// Everything the route has fixed, to put on the board.
+    pub fn commit(&self) -> DpCommit {
+        DpCommit {
+            net_p: self.net_p.clone(),
+            net_n: self.net_n.clone(),
+            legs: self.legs.clone(),
+            displaced_tracks: self.displaced_tracks.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            displaced_vias: self.displaced_vias.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        }
+    }
+
+    /// Backspace: take back the last fixed leg (see this module's header).
+    pub fn undo_last_segment(&mut self) -> bool {
+        let Some(was) = self.history.pop() else { return false };
+        self.world = was.world;
+        self.legs.truncate(was.legs);
+        self.own_items = was.own_items;
+        self.prev_pair = was.prev_pair;
+        self.start = was.start;
+        self.start_diagonal = was.start_diagonal;
+        self.initial_diagonal = was.initial_diagonal;
+        self.current_layer = was.current_layer;
+        self.displaced_tracks = was.displaced_tracks;
+        self.displaced_vias = was.displaced_vias;
+        self.idle = false;
+        self.placing_via = false;
+        self.via_to_layer = None;
+        self.current_trace.p.clear();
+        self.current_trace.n.clear();
+        self.current_trace.remove_vias();
+        self.last_node = None;
+        true
+    }
+
+    /// The legs fixed so far.
+    pub fn legs(&self) -> &[DpLeg] {
+        &self.legs
+    }
+
+    /// The session's world, for tests: the router's with the legs in it.
+    pub fn world(&self) -> &Node {
+        &self.world
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::item::{Segment, Solid};
+
+    fn p(x: Um, y: Um) -> Point {
+        Point { x, y }
+    }
+
+    /// Clearance 200, a USB class with a 200-wide pair at a gap of 250 (pitch 450).
+    fn rules() -> BoardRules {
+        serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\nnet_classes:\n  - name: usb\n    nets: [\"USB_*\"]\n    diff_pair_width: 200\n    diff_pair_gap: 250\n").unwrap()
+    }
+
+    #[allow(dead_code)]
+    fn pad(node: &mut Node, net: &str, at: Point, r: Um) -> ItemId {
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::new(0, 1), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
+    }
+
+    fn smd_pad(node: &mut Node, net: &str, at: Point, r: Um) -> ItemId {
+        node.add(Item::Solid(Solid { net: net_of(net), layers: LayerRange::single(0), pos: at, shape: Shape::Circle { c: at, r }, source: format!("{net}@{},{}", at.x, at.y), edge: false }))
+    }
+
+    fn track(node: &mut Node, net: &str, a: Point, b: Point, width: Um) -> ItemId {
+        node.add(Item::Segment(Segment { net: net_of(net), layer: 0, a, b, width, source_track: Some((format!("trk_{net}"), 0)), locked: false }))
+    }
+
+    fn mode(m: Mode) -> RoutingSettings {
+        RoutingSettings { mode: m, ..RoutingSettings::default() }
+    }
+
+    /// Two SMD pad pairs 10 mm apart: USB_DP/USB_DN at x = 0 and x = 10000, 1000 apart in y.
+    fn two_pad_pairs() -> (Node, ItemId) {
+        let mut node = Node::new();
+        let start = smd_pad(&mut node, "USB_DP", p(0, 0), 250);
+        smd_pad(&mut node, "USB_DN", p(0, 1000), 250);
+        smd_pad(&mut node, "USB_DP", p(10_000, 0), 250);
+        smd_pad(&mut node, "USB_DN", p(10_000, 1000), 250);
+        (node, start)
+    }
+
+    fn placer(node: &Node, start: ItemId) -> DiffPairPlacer {
+        DiffPairPlacer::start(node, &rules(), &RoutingSettings::default(), start, 0, LayerRange::new(0, 1)).expect("starts")
+    }
+
+    #[test]
+    fn the_pair_starts_on_the_item_and_its_coupled_partner_whichever_net_was_clicked() {
+        let (node, dp_pad) = two_pad_pairs();
+        let found = find_dp_primitive_pair(&node, dp_pad).unwrap();
+        assert_eq!((found.pair.anchor_p, found.pair.anchor_n), (p(0, 0), p(0, 1000)), "P is the net named P, N the one named N");
+        // clicking the N pad gives the same pair, P first
+        let dn_pad = node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.pos == p(0, 1000))).map(|(id, _)| id).unwrap();
+        let again = find_dp_primitive_pair(&node, dn_pad).unwrap();
+        assert_eq!((again.pair.anchor_p, again.pair.anchor_n, again.id_p, again.id_n), (p(0, 0), p(0, 1000), found.id_p, found.id_n));
+        // the nearest of the coupled net is the partner: a farther USB_DN pad does not matter
+        assert_eq!(found.id_n, dn_pad);
+    }
+
+    #[test]
+    fn a_net_that_is_not_half_of_a_pair_is_refused_with_kicads_message() {
+        let mut node = Node::new();
+        let id = smd_pad(&mut node, "GND", p(0, 0), 250);
+        assert!(find_dp_primitive_pair(&node, id).unwrap_err().contains("Unable to find complementary differential pair nets"));
+        let lone = smd_pad(&mut node, "USB_DP", p(5000, 0), 250);
+        assert!(find_dp_primitive_pair(&node, lone).unwrap_err().contains("coupled net \"USB_DN\""), "no USB_DN anywhere");
+    }
+
+    #[test]
+    fn a_track_can_start_a_pair_only_at_its_dangling_end() {
+        let mut node = Node::new();
+        let t_p = track(&mut node, "USB_DP", p(0, 0), p(2000, 0), 150);
+        let t_n = track(&mut node, "USB_DN", p(0, 400), p(2000, 400), 150);
+        // joints in the middle of both: the pair is two segments a line, and only their outer ends are free
+        let (p1, p2) = node.split_segment(t_p, p(1000, 0)).unwrap();
+        let (n1, n2) = node.split_segment(t_n, p(1000, 400)).unwrap();
+        let found = find_dp_primitive_pair(&node, p2).expect("the end of P and the nearest free end of N");
+        assert_eq!((found.pair.anchor_p, found.pair.anchor_n), (p(2000, 0), p(2000, 400)));
+        assert!(found.pair.directional());
+        assert_eq!((found.id_p, found.id_n), (p2, n2));
+        // from the other end: the first halves
+        let other = find_dp_primitive_pair(&node, n1).unwrap();
+        assert_eq!((other.pair.anchor_p, other.pair.anchor_n), (p(0, 0), p(0, 400)));
+        let _ = p1;
+        // a segment with no free end -- one a third track meets at the far end too -- is no start
+        node.add(Item::Segment(Segment { net: net_of("USB_DP"), layer: 0, a: p(1000, 0), b: p(1000, -500), width: 150, source_track: None, locked: false }));
+        assert!(dangling_anchor(&node, node.get(p2).unwrap()).is_some(), "the far end is still free");
+        node.add(Item::Segment(Segment { net: net_of("USB_DP"), layer: 0, a: p(2000, 0), b: p(2500, 0), width: 150, source_track: None, locked: false }));
+        assert!(find_dp_primitive_pair(&node, p2).unwrap_err().contains("make sure you are at the end"), "P is joined at both ends now");
+    }
+
+    #[test]
+    fn a_pair_between_two_pad_pairs_is_coupled_and_finishes_on_them() {
+        let (node, start) = two_pad_pairs();
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        assert_eq!(dp.sizes.pitch(), 450);
+        // the cursor on the far pair's P pad: the end item is found, the pair snaps onto both pads
+        assert!(dp.move_to(&rules, &settings, p(10_000, 0)));
+        let pv = dp.preview();
+        assert!(!pv.colliding && pv.snapped_end, "{pv:?}");
+        assert_eq!((pv.head_a.first(), pv.head_a.last()), (Some(p(0, 0)), Some(p(10_000, 0))));
+        assert_eq!((pv.head_b.first(), pv.head_b.last()), (Some(p(0, 1000)), Some(p(10_000, 1000))));
+        // the two lines run side by side at the pitch for most of the way
+        let mut trace = dp.current_trace.clone();
+        trace.width = 200;
+        trace.set_gap(250);
+        assert!(trace.coupled_length() > 8_000.0, "coupled {}", trace.coupled_length());
+        // fixing it there finishes the route
+        assert!(matches!(dp.fix_route(&rules, &settings, p(10_000, 0), false), Some(FixOutcome::Fixed { real_end: true })));
+        assert!(dp.idle);
+        let commit = dp.finish(&rules, &settings, p(10_000, 0)).expect("already finished");
+        assert_eq!(commit.legs.len(), 1);
+        assert_eq!((commit.legs[0].p.first(), commit.legs[0].p.last()), (Some(&p(0, 0)), Some(&p(10_000, 0))));
+    }
+
+    /// The least edge-to-edge distance between the lines of the head (a gap, not a pitch).
+    fn min_gap(a: &[Point], wa: Um, b: &[Point], wb: Um) -> f64 {
+        let mut best = f64::MAX;
+        for sa in a.windows(2) {
+            for sb in b.windows(2) {
+                best = best.min(Shape::Stadium { a: sa[0], b: sa[1], r: wa / 2 }.gap_to(&Shape::Stadium { a: sb[0], b: sb[1], r: wb / 2 }));
+            }
+        }
+        best
+    }
+
+    /// The least gap between a line of `width` along `pts` and an item.
+    fn gap_to_item(pts: &[Point], width: Um, item: &Item) -> f64 {
+        pts.windows(2).map(|w| Shape::Stadium { a: w[0], b: w[1], r: width / 2 }.gap_to(&item.shape(item.layers().start()))).fold(f64::MAX, f64::min)
+    }
+
+    /// The pair keeps its gap: no two points of the lines closer than the gap less a micrometre of rounding, and over most of its
+    /// length the lines run beside each other at it (`DIFF_PAIR::CoupledLength`).
+    fn assert_coupled(pv: &DiffPairPreview, min_share: f64) {
+        let gap = min_gap(&pv.head_a.pts, pv.width, &pv.head_b.pts, pv.width);
+        assert!(gap >= pv.gap as f64 - 1.5, "the lines come within {gap} of each other, the gap is {}\n P {:?}\n N {:?}", pv.gap, pv.head_a.pts, pv.head_b.pts);
+        let mut dp = DiffPair { p: pv.head_a.pts.clone(), n: pv.head_b.pts.clone(), width: pv.width, ..DiffPair::default() };
+        dp.set_gap(pv.gap);
+        let share = dp.coupled_length() / dp.total_length();
+        assert!(share >= min_share, "only {:.0} % of the pair is coupled\n P {:?}\n N {:?}", share * 100.0, pv.head_a.pts, pv.head_b.pts);
+    }
+
+    #[test]
+    fn marking_obstacles_only_reports_a_pad_in_the_way() {
+        let (mut node, start) = two_pad_pairs();
+        pad(&mut node, "GND", p(5000, -100), 400);
+        let (rules, settings) = (rules(), mode(Mode::MarkObstacles));
+        let mut dp = placer(&node, start);
+        assert!(!dp.move_to(&rules, &settings, p(10_000, 0)));
+        let pv = dp.preview();
+        assert!(pv.colliding, "the straight pair runs into the pad");
+        assert_eq!(pv.head_a.pts.len(), 4, "and is drawn as it is, not walked");
+        assert!(dp.fix_route(&rules, &settings, p(10_000, 0), false).is_none(), "a violation is not fixed ...");
+        let allowed = RoutingSettings { can_violate_drc: true, ..settings };
+        assert!(dp.fix_route(&rules, &allowed, p(10_000, 0), false).is_some(), "... unless violations are allowed");
+    }
+
+    #[test]
+    fn a_pair_walks_around_a_pad_together_and_keeps_its_gap() {
+        // a pad just outside the P line (y = 300): the pair has to give way to it, both lines on the same side
+        let (mut node, start) = two_pad_pairs();
+        let gnd = pad(&mut node, "GND", p(5000, -100), 400);
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        assert!(dp.move_to(&rules, &settings, p(10_000, 0)), "a way around exists");
+        let pv = dp.preview();
+        assert!(!pv.colliding && pv.snapped_end);
+        assert_eq!((pv.head_a.first(), pv.head_a.last()), (Some(p(0, 0)), Some(p(10_000, 0))), "ends where it began");
+        assert_eq!((pv.head_b.first(), pv.head_b.last()), (Some(p(0, 1000)), Some(p(10_000, 1000))));
+        let item = node.get(gnd).unwrap().clone();
+        for (line, name) in [(&pv.head_a, "P"), (&pv.head_b, "N")] {
+            let gap = gap_to_item(&line.pts, pv.width, &item);
+            assert!(gap >= 200.0 - 1.0, "{name} comes within {gap} of the pad: {:?}", line.pts);
+        }
+        assert_coupled(&pv, 0.85);
+        // it really did bend: more than the two fan-out corners at each end
+        assert!(pv.head_a.pts.len() > 4 && pv.head_b.pts.len() > 4);
+        // the pair as a whole moved, not one line: both bump away from the pad (down, y grows)
+        let y_max = |l: &Line| l.pts.iter().map(|q| q.y).max().unwrap();
+        assert!(y_max(&pv.head_a) >= 500 && y_max(&pv.head_b) >= 900, "P {:?} N {:?}", pv.head_a.pts, pv.head_b.pts);
+    }
+
+    #[test]
+    fn a_pair_shoves_a_track_and_keeps_its_gap() {
+        // a GND track in a U whose bottom (y = 150) dips into the pair's lane
+        let (mut node, start) = two_pad_pairs();
+        for (i, w) in [p(3000, -1500), p(3000, 150), p(7000, 150), p(7000, -1500)].windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some(("u".into(), i)), locked: false }));
+        }
+        let (rules, settings) = (rules(), mode(Mode::Shove));
+        let mut dp = placer(&node, start);
+        assert!(dp.move_to(&rules, &settings, p(10_000, 0)), "the track can be pushed");
+        let pv = dp.preview();
+        assert!(!pv.colliding && pv.snapped_end);
+        // the pair itself did not give way: it is the straight pair of the free-space case
+        assert_eq!(pv.head_a.pts, vec![p(0, 0), p(274, 274), p(9726, 274), p(10_000, 0)]);
+        assert_eq!(pv.head_b.pts, vec![p(0, 1000), p(274, 726), p(9726, 726), p(10_000, 1000)]);
+        assert_coupled(&pv, 0.9);
+        // the track gave way: it is one displaced IR track, replaced by a line that keeps the clearance from both lines
+        assert_eq!(pv.displaced_lines.len(), 1, "{:?}", pv.displaced_lines);
+        assert_eq!(pv.displaced_lines[0].source_track.as_deref(), Some("u"));
+        let moved = &pv.displaced_lines[0].line;
+        assert_eq!((moved.first(), moved.last()), (Some(p(3000, -1500)), Some(p(7000, -1500))), "its ends stayed");
+        for (line, name) in [(&pv.head_a, "P"), (&pv.head_b, "N")] {
+            let gap = min_gap(&line.pts, pv.width, &moved.pts, 200);
+            assert!(gap >= 199.0, "{name} is {gap} from the shoved track\n {:?}", moved.pts);
+        }
+        // fixing and finishing carries it into the commit
+        assert!(matches!(dp.fix_route(&rules, &settings, p(10_000, 0), false), Some(FixOutcome::Fixed { real_end: true })));
+        let commit = dp.finish(&rules, &settings, p(10_000, 0)).unwrap();
+        assert_eq!(commit.displaced_tracks.len(), 1);
+        assert_eq!(commit.displaced_tracks[0].0, "u");
+        assert_eq!(commit.displaced_tracks[0].1.len(), 1);
+    }
+
+    #[test]
+    fn a_fixed_leg_keeps_showing_the_track_it_shoved() {
+        // a GND track in a short U whose bottom dips into the pair's lane only between x = 3000 and 4000
+        let (mut node, start) = two_pad_pairs();
+        for (i, w) in [p(3000, -1500), p(3000, 150), p(4000, 150), p(4000, -1500)].windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some(("u".into(), i)), locked: false }));
+        }
+        let (rules, settings) = (rules(), mode(Mode::Shove));
+        let mut dp = placer(&node, start);
+        assert!(dp.move_to(&rules, &settings, p(5000, 500)));
+        let shoved = dp.preview().displaced_lines.iter().map(|d| (d.source_track.clone(), d.line.pts.clone())).collect::<Vec<_>>();
+        assert_eq!(shoved.len(), 1, "{shoved:?}");
+        assert!(matches!(dp.fix_route(&rules, &settings, p(5000, 500), false), Some(FixOutcome::Fixed { real_end: false })));
+        // the next head is on from there and clear of the track: it pushes nothing, the leg before it has moved the track, and it is still drawn pushed, once
+        assert!(dp.move_to(&rules, &settings, p(9000, 500)));
+        assert!(dp.shoved_lines.is_empty(), "this head pushes nothing itself: the track is in the world where the fixed leg left it");
+        let pv = dp.preview();
+        assert_eq!(pv.displaced_lines.len(), 1, "{:?}", pv.displaced_lines);
+        assert_eq!(pv.displaced_lines[0].source_track.as_deref(), Some("u"));
+        assert_eq!(pv.displaced_lines[0].line.pts, shoved[0].1, "the pushed track is where the fixed leg left it");
+        // and what the commit takes is the same track
+        let commit = dp.finish(&rules, &settings, p(9000, 500)).unwrap();
+        assert_eq!(commit.displaced_tracks.len(), 1);
+        assert_eq!((commit.displaced_tracks[0].0.as_str(), commit.displaced_tracks[0].1[0].pts.clone()), ("u", shoved[0].1.clone()));
+    }
+
+    #[test]
+    fn the_same_track_is_walked_around_in_walk_around_mode() {
+        let (mut node, start) = two_pad_pairs();
+        for (i, w) in [p(3000, -1500), p(3000, 150), p(7000, 150), p(7000, -1500)].windows(2).enumerate() {
+            node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: w[0], b: w[1], width: 200, source_track: Some(("u".into(), i)), locked: false }));
+        }
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        assert!(dp.move_to(&rules, &settings, p(10_000, 0)));
+        let pv = dp.preview();
+        assert!(!pv.colliding && pv.displaced_lines.is_empty(), "nothing is moved");
+        assert_coupled(&pv, 0.85);
+        for (line, name) in [(&pv.head_a, "P"), (&pv.head_b, "N")] {
+            for w in [(p(3000, -1500), p(3000, 150)), (p(3000, 150), p(7000, 150)), (p(7000, 150), p(7000, -1500))] {
+                let gap = min_gap(&line.pts, pv.width, &[w.0, w.1], 200);
+                assert!(gap >= 199.0, "{name} is {gap} from the track: {:?}", line.pts);
+            }
+        }
+    }
+
+    #[test]
+    fn a_pad_pair_at_45_degrees_fans_out_diagonally() {
+        // rectangular pads (1.0 x 0.6 mm) on a diagonal: (0,0) and (700,700). The gateways with entry lines -- the two lines leave the
+        // pads side by side, along the pads' long side -- are only built for pads that line up like this.
+        let mut node = Node::new();
+        let rect = |c: Point| Shape::Rect { x0: c.x - 500, y0: c.y - 300, x1: c.x + 500, y1: c.y + 300 };
+        let start = node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(0), pos: p(0, 0), shape: rect(p(0, 0)), source: "J1.1".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(0), pos: p(700, 700), shape: rect(p(700, 700)), source: "J1.2".into(), edge: false }));
+        let found = find_dp_primitive_pair(&node, start).unwrap();
+        let mut gws = DpGateways::new(400);
+        gws.build_from_primitive_pair(&found.pair, false);
+        let fans: Vec<&crate::diff_pair::DpGateway> = gws.gateways.iter().filter(|g| g.priority >= 99).collect();
+        assert_eq!(fans.len(), 4, "two fan-outs (ortho and diagonal distance) each way: {:?}", gws.gateways.iter().map(|g| g.priority).collect::<Vec<_>>());
+        assert!(fans.iter().all(|g| g.has_entry_lines && g.entry_p[0] == p(0, 0) && g.entry_n[0] == p(700, 700)), "the entry lines start on the pads");
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        // to the right of both pads: the lines leave the pads and run side by side
+        assert!(dp.move_to(&rules, &settings, p(7000, 350)));
+        let pv = dp.preview();
+        assert!(!pv.colliding);
+        assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(p(0, 0)), Some(p(700, 700))), "from the pad centres");
+        assert_coupled(&pv, 0.7);
+        // every segment is horizontal, vertical or diagonal
+        for line in [&pv.head_a, &pv.head_b] {
+            for w in line.pts.windows(2) {
+                let (dx, dy) = ((w[1].x - w[0].x).abs(), (w[1].y - w[0].y).abs());
+                assert!(dx == 0 || dy == 0 || dx == dy, "{:?}", line.pts);
+            }
+        }
+    }
+
+    #[test]
+    fn a_pair_of_vias_is_placed_a_via_gap_apart_and_the_route_goes_on_on_the_other_layer() {
+        let (mut node, start) = two_pad_pairs();
+        // the start pads are SMD on F.Cu; the far pair is on B.Cu
+        let far: Vec<ItemId> = node.iter().filter(|(_, it)| matches!(it, Item::Solid(s) if s.pos.x == 10_000)).map(|(id, _)| id).collect();
+        for id in far {
+            node.remove(id);
+        }
+        node.add(Item::Solid(Solid { net: net_of("USB_DP"), layers: LayerRange::single(1), pos: p(10_000, 0), shape: Shape::Circle { c: p(10_000, 0), r: 250 }, source: "far P".into(), edge: false }));
+        node.add(Item::Solid(Solid { net: net_of("USB_DN"), layers: LayerRange::single(1), pos: p(10_000, 1000), shape: Shape::Circle { c: p(10_000, 1000), r: 250 }, source: "far N".into(), edge: false }));
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        dp.toggle_via(true, None, None, Some(1));
+        assert!(dp.is_placing_via());
+        assert!(dp.move_to(&rules, &settings, p(5000, 500)));
+        let pv = dp.preview();
+        assert!(!pv.colliding, "{pv:?}");
+        assert_eq!(pv.vias.len(), 2, "one via per net");
+        let (via_p, via_n) = (&pv.vias[0], &pv.vias[1]);
+        assert_eq!((via_p.net.as_deref(), via_n.net.as_deref()), (Some("USB_DP"), Some("USB_DN")));
+        assert_eq!(via_p.layers, LayerRange::new(0, 1), "a through via");
+        // `viaGap()`: the vias are the via gap (the larger of the pair's 250 and the hole-to-hole spacing) apart, edge to edge
+        let centres = vnorm(vsub(via_p.pos, via_n.pos));
+        let wanted = dp.sizes.via_gap_total() + dp.sizes.via_diameter;
+        assert!(centres >= wanted - 2 && centres <= wanted + 4, "centres {centres}, wanted about {wanted}");
+        assert_eq!(pv.head_a.last(), Some(via_p.pos), "each line ends in its via");
+        assert_eq!(pv.head_b.last(), Some(via_n.pos));
+        // fix: the pair of vias is placed and the route goes on from them, on B.Cu
+        assert!(matches!(dp.fix_route(&rules, &settings, p(5000, 500), false), Some(FixOutcome::Fixed { real_end: false })));
+        assert_eq!(dp.current_layer(), 1);
+        assert!(!dp.is_placing_via());
+        assert_eq!(dp.legs().len(), 1);
+        assert!(dp.legs()[0].vias.is_some());
+        assert!(dp.move_to(&rules, &settings, p(10_000, 0)), "on to the far pads");
+        let pv = dp.preview();
+        assert_eq!(pv.layer, 1);
+        assert!(pv.snapped_end && !pv.colliding);
+        assert_eq!(pv.head_a.first(), Some(via_p.pos), "from the via");
+        assert_eq!(pv.fixed_vias.len(), 2);
+        let commit = dp.finish(&rules, &settings, p(10_000, 0)).unwrap();
+        assert_eq!(commit.legs.len(), 2);
+        assert_eq!((commit.legs[0].layer, commit.legs[1].layer), (0, 1));
+        assert_eq!(commit.legs[1].p.last(), Some(&p(10_000, 0)));
+    }
+
+    #[test]
+    fn a_pair_of_vias_is_pushed_off_a_pad_in_walk_around_mode() {
+        let (mut node, start) = two_pad_pairs();
+        pad(&mut node, "GND", p(5000, 500), 300);
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        dp.toggle_via(true, None, None, Some(1));
+        // the cursor is just beside the pad's centre: `propagateDpHeadForces` moves the pair's end off it
+        assert!(dp.move_to(&rules, &settings, p(5000, 700)));
+        let pv = dp.preview();
+        assert!(!pv.colliding, "{pv:?}");
+        assert_eq!(pv.vias.len(), 2);
+        let gnd = node.iter().find(|(_, it)| matches!(it, Item::Solid(s) if s.net.as_deref() == Some("GND"))).map(|(_, it)| it.clone()).unwrap();
+        for v in &pv.vias {
+            let gap = Shape::Circle { c: v.pos, r: v.diameter / 2 }.gap_to(&gnd.shape(0));
+            assert!(gap >= 199.0, "a via is {gap} from the pad");
+        }
+    }
+
+    #[test]
+    fn backspace_takes_the_last_leg_back() {
+        let (node, start) = two_pad_pairs();
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        assert!(!dp.undo_last_segment(), "nothing to take back yet");
+        dp.move_to(&rules, &settings, p(4000, 500));
+        assert!(matches!(dp.fix_route(&rules, &settings, p(4000, 500), false), Some(FixOutcome::Fixed { real_end: false })));
+        assert_eq!(dp.legs().len(), 1);
+        let first_end = dp.legs()[0].p.last().copied().unwrap();
+        dp.move_to(&rules, &settings, p(6000, 700));
+        assert!(dp.fix_route(&rules, &settings, p(6000, 700), false).is_some());
+        assert_eq!(dp.legs().len(), 2);
+        assert_eq!(dp.legs()[1].p.first(), Some(&first_end), "the second leg goes on from the first");
+        assert!(dp.undo_last_segment());
+        assert_eq!(dp.legs().len(), 1);
+        assert!(dp.undo_last_segment());
+        assert!(dp.legs().is_empty() && !dp.undo_last_segment());
+        // and the route can be started over from the pads
+        dp.move_to(&rules, &settings, p(4000, 500));
+        assert_eq!(dp.preview().head_a.first(), Some(p(0, 0)));
+    }
+
+    #[test]
+    fn flipping_the_posture_chooses_the_other_of_two_fits() {
+        // the cursor is up and a little to the right of the pads: the pair can leave straight up and turn at the end, or leave
+        // sideways and turn up at once (`FitGateways` gives the posture it prefers a bonus over the other one)
+        let (node, start) = two_pad_pairs();
+        let (rules, settings) = (rules(), mode(Mode::Walkaround));
+        let mut dp = placer(&node, start);
+        let target = p(1000, -2000);
+        assert!(dp.move_to(&rules, &settings, target));
+        let before = dp.preview().head_a.pts.clone();
+        dp.flip_posture();
+        assert!(dp.move_to(&rules, &settings, target));
+        let after = dp.preview().head_a.pts.clone();
+        assert_ne!(before, after, "the other posture is another route to the same place");
+        assert_eq!(before.first(), after.first());
+        // flipping again is the first one again
+        dp.flip_posture();
+        dp.move_to(&rules, &settings, target);
+        assert_eq!(dp.preview().head_a.pts, before);
+    }
+
+    #[test]
+    fn a_gap_below_the_clearance_is_raised_to_it_but_the_dialog_may_ask_for_less() {
+        // the model's fallback gap is 180 um, under its 200 um clearance
+        let plain: BoardRules = serde_yaml::from_str("track_width: 200\nclearance: 200\nvia_drill: 300\nvia_diameter: 600\n").unwrap();
+        let sizes = DpSizes::resolve(&plain, "A_P", "A_N");
+        assert_eq!((sizes.width, sizes.gap), (200, 200), "the 125 um fallback width is under the board's 200 um minimum track width too");
+        let (node, start) = two_pad_pairs();
+        let mut dp = DiffPairPlacer::start(&node, &plain, &RoutingSettings::default(), start, 0, LayerRange::new(0, 1)).unwrap();
+        dp.set_dimensions(None, Some(150), None);
+        assert_eq!(dp.sizes.gap, 150, "typed in: kept");
+    }
+}
+
+

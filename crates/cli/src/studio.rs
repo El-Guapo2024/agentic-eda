@@ -517,7 +517,8 @@ fn read_request(stream: &TcpStream) -> Result<(String, String, Vec<u8>), String>
             }
         }
     }
-    let mut body = vec![0u8; length.min(1 << 20)];
+    // A file dropped on the page (a board to append, a DXF or SVG to import) travels in the body, so it is not held to a megabyte.
+    let mut body = vec![0u8; length.min(64 << 20)];
     reader.read_exact(&mut body).map_err(|e| e.to_string())?;
     Ok((method, target, body))
 }
@@ -582,7 +583,7 @@ fn handle(
         },
         ("GET", "/api/version") => respond(stream, "200 OK", "application/json", version(dir, job).to_string().as_bytes()),
         ("GET", "/api/state") => {
-            let v = state(dir, job).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            let v = state(dir, job, crate::text_vars_json::clock_of(target)).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/schematic.svg") => match schematic_svg(dir, schematic) {
@@ -597,7 +598,7 @@ fn handle(
             // existed already behaved.
             let query = target.split('?').nth(1).unwrap_or("");
             let sheet_path = query.split('&').find_map(|kv| kv.strip_prefix("sheet=")).unwrap_or("");
-            let v = schematic_json(dir, sheet_path).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            let v = schematic_json(dir, sheet_path, crate::text_vars_json::clock_of(target)).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         // File > Save As... (`common.Control.saveAs`): the design as the derived KiCad files, for the browser to save.
@@ -755,6 +756,10 @@ fn handle(
         }
         // PCB Copy: the selection as KiCad's clipboard text (a read; the browser puts it on the system clipboard). Paste is `Cmd::PasteClipboard`.
         ("POST", "/api/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::clipboard_api::copy(dir, &body).to_string().as_bytes()),
+        // Import Graphics (DXF, SVG): what a file holds, for the dialog (a read; the import is `Cmd::ImportGraphics`).
+        ("POST", "/api/import_graphics/read") => respond(stream, "200 OK", "application/json", crate::graphics_api::read(&body).to_string().as_bytes()),
+        // Append Board: what a `.kicad_pcb` brings and the point it is held by (a read; the append is `Cmd::PasteClipboard` with the file's text).
+        ("POST", "/api/append_board/read") => respond(stream, "200 OK", "application/json", crate::append_api::read(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -852,6 +857,7 @@ fn handle(
         ("POST", "/api/route/dp_dims") => respond(stream, "200 OK", "application/json", route_api::dp_dims(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_move") => respond(stream, "200 OK", "application/json", route_api::dp_move(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
+        ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
         // 7 (gap #7 task item 4): length tuning. Stateless -- no session
@@ -901,6 +907,11 @@ fn handle(
         ("POST", "/api/fab/pcb_bom") => offload(stream, lane, dir, job, path, &body, |dir, _| crate::board_output_api::pcb_bom(dir)),
         // Board control that is not a kicad-cli run (`crate::board_control_api`): cheap, answered on the loop.
         ("POST", "/api/repair_board") => respond(stream, "200 OK", "application/json", crate::board_control_api::repair_board(dir).to_string().as_bytes()),
+        // The footprint assignment tools (`crate::fp_assign_api`)
+        ("GET", "/api/update_pcb") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::update_pcb(dir).to_string().as_bytes()),
+        ("POST", "/api/exchange_plan") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::exchange_plan(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/reannotate_plan") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::reannotate_plan(dir, &body).to_string().as_bytes()),
+        ("GET", "/api/footprint_diff") => respond(stream, "200 OK", "application/json", crate::fp_assign_api::footprint_diff(dir, &query_value(target, "ref")).to_string().as_bytes()),
         ("GET", "/api/footprint_associations") => respond(stream, "200 OK", "application/json", crate::board_control_api::footprint_associations(dir, &query_value(target, "ref")).to_string().as_bytes()),
         ("POST", "/api/fab/cmp") => respond(stream, "200 OK", "application/json", crate::board_control_api::export_cmp(dir).to_string().as_bytes()),
         ("GET", p) if ui_root.is_some() && !p.starts_with("/api/") => serve_file(stream, ui_root.unwrap(), p.trim_start_matches('/')),
@@ -950,8 +961,10 @@ fn version(dir: &Path, job: &Job) -> Value {
     json!(version_string(dir, job))
 }
 
-fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
+pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -> Result<Value, Vec<CheckResult>> {
     let (meta, design, model) = board::load(dir)?;
+    // What `${NAME}` stands for in the board's texts and fields (`crate::text_vars_json`); each of them carries `shown` where it differs from the stored text.
+    let tv = crate::text_vars_json::PcbShown::new(dir, &design, &model, crate::text_vars_json::project(dir, &meta.intent, clock));
     let b = eda_ops::Board::new(design.clone(), &model, meta.snap_um, meta.spacing_um);
     let view = eda_ops::view::view(&b, &model)?;
     let block_of: std::collections::HashMap<String, String> = view["parts"]
@@ -1005,7 +1018,10 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             if let Some(footprint) = &footprint {
                 // The footprint's fields as laid out on the board, and its attributes.
                 p["fields"] = json!(crate::fp_json::fields_json(&design, part, fp, footprint));
+                tv.annotate_fields(&part.reference, &mut p["fields"]);
                 p["attrs"] = crate::fp_json::attrs_json(&design, fp, footprint);
+                // Its silkscreen, fab drawings and texts (`graphics`, `texts`), board space.
+                crate::fp_art_json::add_art(&mut p, part, fp, footprint);
             }
             p["at"] = json!([fp.at.x, fp.at.y]);
             p["rot"] = json!(fp.rot as f64 / 1000.0);
@@ -1019,7 +1035,8 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             p["courtyard"] = json!(placed_courtyard(&model, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's body (the box of its footprint's `F.Fab` graphics, board space) for the 3D view's fallback boxes -- the courtyard is the body plus its
             // clearance and the pads' reach. Absent when no `F.Fab` is known for the footprint: the view then sizes the box from the courtyard.
-            p["body"] = json!(crate::body_api::placed_body(&body_libs, &design, part, fp).map(|c| [c.0, c.1, c.2, c.3]));
+            // The footprint's own fab drawings first (they are what the board draws), else the library's.
+            p["body"] = json!(resolved.as_ref().and_then(|f| crate::fp_art_json::placed_body(fp, f)).or_else(|| crate::body_api::placed_body(&body_libs, &design, part, fp)).map(|c| [c.0, c.1, c.2, c.3]));
             // The part's 3D models with the placement its footprint gives each, and whether KiCad counts it a through-hole, SMD or virtual model: what the 3D
             // view loads (`GET /api/3dmodel`) and places. Absent when the footprint names no model: the view then draws the body box.
             if let Some(models) = resolved.as_ref().and_then(|f| crate::model3d_api::part_json(&model, part, f)) {
@@ -1131,7 +1148,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
     let drawings = design.drawings.as_ref().map(|d| {
         json!({
             "shapes": d.shapes.iter().map(shape_json).collect::<Vec<_>>(),
-            "texts": d.texts.iter().map(|t| json!({
+            "texts": d.texts.iter().map(|t| tv.text_json(json!({
                 "id": t.id, "content": t.content, "x": t.at.x, "y": t.at.y, "angle": t.angle,
                 "layer": t.layer, "size": t.size_um, "stroke_width": t.stroke_width,
                 "justify": match t.justify {
@@ -1140,7 +1157,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
                     eda_model::ir::TextJustify::Right => "right",
                 },
                 "mirror": t.mirror,
-            })).collect::<Vec<_>>(),
+            }))).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc.
             "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).collect::<Vec<_>>(),
             // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
@@ -1200,10 +1217,20 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
             "board_thickness_um": model.board.board_thickness_um,
             "copper_layers": model.board.layers.len(),
             "layer_names": model.board.layers,
+            // Board Editor Layers (`eda_model::layers`): the non-copper layers the board has in KiCad's order, the names the user gave its layers and the types that are not the default's.
+            "layer_setup": model.board.layer_setup.canonical(),
+            // The smaller pages (`eda_model::setup_pages`): Formatting, Zone Hatch Offsets (copper layer -> offset), Length-tuning Patterns and Tuning Profiles (with the profile each net class names).
+            "formatting": model.board.formatting,
+            "zone_hatch_offsets": model.board.hatch_offsets,
+            "tuning_patterns": model.board.tuning_patterns,
+            "tuning_profiles": model.board.tuning_profiles,
             "severities": eda_kicad::effective_rule_severities(&model),
             "custom_rules_text": model.board.custom_rules_text,
+            // Text Variables (`PROJECT::GetTextVars`): the project's variables as `${NAME}` reads them, name -> value -- the page's rows once it has been used, else the
+            // board folder's `path-variables.json` (`crate::text_variables`).
+            "text_variables": crate::text_variables::project_variables(dir),
             "overlay": design.drawings.as_ref().and_then(|d| d.rules.as_ref()).map(|r| {
-                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some())]
+                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some()), ("board_layers", r.board_layers.is_some()), ("formatting", r.formatting.is_some()), ("zone_hatch_offsets", r.zone_hatch_offsets.is_some()), ("tuning_patterns", r.tuning_patterns.is_some()), ("tuning_profiles", r.tuning_profiles.is_some())]
                     .iter()
                     .filter(|(_, set)| *set)
                     .map(|(name, _)| *name)
@@ -1221,7 +1248,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
         "grid_origin": design.drawings.as_ref().and_then(|d| d.grid_origin).map(|p| json!([p.x, p.y])),
         // The board's paper and title block (Page Settings); null is A4 landscape / an empty title block.
         "page": design.drawings.as_ref().and_then(|d| d.page.as_ref()).map(crate::page_json::page_json),
-        "title_block": design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(crate::page_json::title_block_json),
+        "title_block": design.drawings.as_ref().and_then(|d| d.title_block.as_ref()).map(|tb| tv.title_block_json(tb)),
         "checks": checks,
         "activity": activity,
         "job": job.lock().map(|j| j.clone()).unwrap_or_default(),
@@ -1233,7 +1260,7 @@ fn state(dir: &Path, job: &Job) -> Result<Value, Vec<CheckResult>> {
 /// -- the same convention `outline`/`pts` already use elsewhere in this
 /// API, so a `(add|move|delete)_shape` command and this read use the same
 /// shape.
-fn shape_json(s: &Shape) -> Value {
+pub(crate) fn shape_json(s: &Shape) -> Value {
     let pt = |p: eda_model::ir::Point| json!([p.x, p.y]);
     match s {
         Shape::Segment { id, layer, stroke_width, filled, start, end } => {
@@ -1464,22 +1491,30 @@ pub(crate) fn resolve_sheet(design: &eda_model::ir::Design, sheet_path: &str) ->
 /// fields, empty arrays for a plain single-sheet design). No second cache
 /// next to `schematic_svg`'s -- these boards are small, so deriving again
 /// on a cache miss costs nothing worth guarding.
-fn schematic_json(dir: &Path, sheet_path: &str) -> Result<Value, Vec<CheckResult>> {
-    let (_, mut design, model) = board::load(dir)?;
+pub(crate) fn schematic_json(dir: &Path, sheet_path: &str, clock: eda_model::text_vars::Clock) -> Result<Value, Vec<CheckResult>> {
+    let (meta, mut design, model) = board::load(dir)?;
     // A board with no stored schematic shows the one derived from its intent: module sheets, whole, so the sheet path resolves.
     if design.schematic.is_none() {
         let derived = board::derived_schematic(&design, &model)?;
         design.schematic = derived.schematic;
         design.sheet_contents = derived.sheet_contents;
     }
-    Ok(schematic_json_of(&design, &model, sheet_path))
+    let project = crate::text_vars_json::project(dir, &meta.intent, clock);
+    Ok(schematic_json_with(&design, &model, sheet_path, Some((dir, project))))
 }
 
 /// [`schematic_json`] of a design that is already loaded (the schematic clipboard asks it of a design a paste has just been tried on).
 pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str) -> Value {
+    schematic_json_with(design, model, sheet_path, None)
+}
+
+/// [`schematic_json_of`] with the board folder and project of the board it is the schematic of, which the `shown` form of each text and field needs
+/// (`${NAME}`, `crate::text_vars_json`); without them the texts are sent as stored.
+fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str, shown: Option<(&Path, eda_model::text_vars::Project)>) -> Value {
     let (sch, breadcrumb) = resolve_sheet(design, sheet_path);
     // The net each pin is on ("REF.PIN" -> net), for the pin highlight and the pin's description.
     let pin_net: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
+    let shown = shown.map(|(dir, project)| crate::text_vars_json::SchShown::new(dir, design, model, &breadcrumb, project));
     let symbols: Vec<Value> = sch
         .symbols
         .iter()
@@ -1505,8 +1540,11 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
             // Where each field is drawn on the sheet (`eda_engine::fields`): the placements the section keeps, else Autoplace Fields'. Not for a
             // schematic read from a KiCad file, whose symbols are placed by their own origin rather than the engine's box corner.
             let owner = eda_model::ir::field_key(&s.id, s.unit);
-            let fields: Vec<Value> = owner_fields_json(&sch, model, &owner);
-            json!({
+            let mut fields: Vec<Value> = owner_fields_json(&sch, model, &owner);
+            if let Some(sh) = &shown {
+                sh.annotate_symbol_fields(&owner, &mut fields);
+            }
+            let mut symbol = json!({
                 "id": s.id,
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &owner),
@@ -1552,7 +1590,12 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
                 "exclude_from_bom": s.exclude_from_bom,
                 "exclude_from_board": s.exclude_from_board,
                 "exclude_from_sim": s.exclude_from_sim,
-            })
+            });
+            // The Value and Footprint the painter writes for a symbol that has no `fields` (a sheet read from a KiCad file), as `${NAME}` makes them read.
+            if let Some(shown) = shown.as_ref().and_then(|sh| sh.symbol_shown_json(&owner)) {
+                symbol["shown"] = shown;
+            }
+            symbol
         })
         .collect();
     let wires: Vec<Value> = sch
@@ -1597,7 +1640,16 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
     let texts: Vec<Value> = sch
         .texts
         .iter()
-        .map(|t| text_json(&sch, t))
+        .map(|t| {
+            let mut v = text_json(&sch, t);
+            if let Some(sh) = &shown {
+                let text = sh.text_shown(&t.content);
+                if text != t.content {
+                    v["shown"] = json!(text);
+                }
+            }
+            v
+        })
         .collect();
     let power_symbols: Vec<Value> = sch
         .power_symbols
@@ -1605,7 +1657,10 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
         .map(|p| json!({ "id": p.id, "lib_id": p.lib_id, "at": [p.at.x, p.at.y], "rot": p.rot as f64 / 1000.0, "net": p.net, "pin": p.pin, "fields": eda_engine::fields::power_fields(&sch, p).iter().map(|f| page_field_json(&p.id, f)).collect::<Vec<_>>(), "fields_autoplaced": fields_autoplaced_json(&sch, &p.id) }))
         .collect();
     let no_connects: Vec<Value> = sch.no_connects.iter().map(|nc| json!({ "id": nc.id, "at": [nc.at.x, nc.at.y], "pin": nc.pin })).collect();
-    let title_block = sch.title_block.as_ref().map(crate::page_json::title_block_json);
+    let title_block = sch.title_block.as_ref().map(|tb| match &shown {
+        Some(sh) => sh.title_block_json(tb),
+        None => crate::page_json::title_block_json(tb),
+    });
 
     // Resolved library-symbol graphics for every distinct lib_id this sheet
     // uses, so the frontend can draw KiCad's actual symbols instead of a
@@ -1648,9 +1703,13 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
         .sheets
         .iter()
         .map(|s| {
+            let mut fields = eda_engine::fields::sheet_fields(&sch, s).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>();
+            if let Some(sh) = &shown {
+                sh.annotate_sheet_fields(&mut fields);
+            }
             json!({
                 "id": s.id, "name": s.name, "file": s.file, "page": s.page,
-                "fields": eda_engine::fields::sheet_fields(&sch, s).iter().map(|f| page_field_json(&s.id, f)).collect::<Vec<_>>(),
+                "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
                 "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),

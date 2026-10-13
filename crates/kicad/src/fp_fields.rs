@@ -32,8 +32,20 @@ impl<'a> FpExtra<'a> {
 /// `(effects (font (size H W) [(thickness T)] [bold] [italic]) [(justify [left|right] [top|bottom] [mirror])])`:
 /// `EDA_TEXT::Format`. The size is written height first; a thickness of 0 is KiCad's auto thickness and is left out.
 fn effects(l: &FieldLayout) -> String {
+    effects_with(l, None, 0)
+}
+
+/// [`effects`] with the font face and the line spacing a text may have (`(face ..)` first, `(line_spacing ..)` after the size, in thousandths: 1000 is
+/// KiCad's 1.0 and is not written).
+pub(crate) fn effects_with(l: &FieldLayout, face: Option<&str>, line_spacing_permille: i64) -> String {
     let mut s = String::from("(effects (font");
+    if let Some(f) = face.filter(|f| !f.is_empty()) {
+        write!(s, " (face {})", sexpr_str(f)).unwrap();
+    }
     write!(s, " (size {} {})", mm(l.size.1), mm(l.size.0)).unwrap();
+    if line_spacing_permille != 0 && line_spacing_permille != 1000 {
+        write!(s, " (line_spacing {})", fmt_mm_f(line_spacing_permille as f64 / 1000.0)).unwrap();
+    }
     if l.thickness > 0 {
         write!(s, " (thickness {})", mm(l.thickness)).unwrap();
     }
@@ -158,7 +170,7 @@ fn bool_tok(item: &[Sexpr], name: &str) -> Option<bool> {
 
 /// A `(property ..)` or `(fp_text reference|value ..)`'s layout, un-mirrored and un-rotated into the footprint's frame
 /// ([`FieldLayout::set_from_file`]). `text` is its raw text.
-fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> FieldLayout {
+pub(crate) fn parse_layout(item: &[Sexpr], side: Side, fp_rot: Millideg) -> FieldLayout {
     let default_layer = if side == Side::Bottom { "B.Fab" } else { "F.Fab" };
     let layer_node = sexpr::find(item, "layer");
     let layer = layer_node.and_then(|l| sexpr::txt(l, 1)).unwrap_or(default_layer);
@@ -235,11 +247,30 @@ pub(crate) fn parse_attrs(attr: &[Sexpr]) -> FootprintAttrs {
 /// layouts (always, so the file's own placement survives), the user fields (the properties that are not Reference, Value,
 /// Datasheet, Description, the legacy Footprint field or `ki_fp_filters`), and the attributes when the footprint has an `(attr ..)`.
 /// `id` is the id the importer gave the footprint, `value` the part's value.
+#[cfg(test)]
 pub(crate) fn parse_footprint_edit(fp: &[Sexpr], id: &str, value: Option<&str>, side: Side, fp_rot: Millideg) -> FootprintEdit {
+    parse_footprint_edit_in(fp, id, value, side, fp_rot, i64::MAX)
+}
+
+/// The first file version whose properties are fields with a place and a layer of their own (`PCB_FIELD`s: KiCad 8). Before it a `(property "name" "value")`
+/// held a value and nothing more.
+const FIELD_PROPERTIES_VERSION: i64 = 20230620;
+
+/// [`parse_footprint_edit`] for a file of `file_version`. A property of an older file is not drawn (`parseFOOTPRINT_unchecked`: "Hide the field by default if
+/// it is a legacy field that did not have text effects applied"), and the ones that held the sheet, the symbol's keywords and its description are not
+/// fields at all.
+pub(crate) fn parse_footprint_edit_in(fp: &[Sexpr], id: &str, value: Option<&str>, side: Side, fp_rot: Millideg, file_version: i64) -> FootprintEdit {
+    let legacy = file_version < FIELD_PROPERTIES_VERSION;
     let mut edit = FootprintEdit::new(id);
     for p in sexpr::find_all(fp, "property") {
         let (Some(name), Some(text)) = (sexpr::txt(p, 1), sexpr::txt(p, 2)) else { continue };
-        let layout = parse_layout(p, side, fp_rot);
+        if legacy && matches!(name, "ki_keywords" | "ki_locked" | "ki_description" | "Sheetfile" | "Sheet file" | "Sheetname" | "Sheet name") {
+            continue;
+        }
+        let mut layout = parse_layout(p, side, fp_rot);
+        if legacy {
+            layout.visible = bool_tok(p, "hide") == Some(false);
+        }
         match name {
             REFERENCE => edit.reference = Some(with_text(layout, text, id)),
             VALUE => edit.value = Some(with_text(layout, text, value.unwrap_or(id))),
@@ -370,6 +401,23 @@ mod tests {
         let a = e.attrs.unwrap();
         assert_eq!(a.kind, FootprintKind::Smd);
         assert!(a.dnp && a.exclude_from_bom && !a.board_only && !a.exclude_from_pos_files);
+    }
+
+    #[test]
+    fn a_property_of_an_old_file_is_hidden_and_the_sheet_ones_are_not_fields() {
+        let node = parse(
+            r#"(footprint "x" (layer "F.Cu") (at 0 0)
+                (property "Sheet file" "a.kicad_sch") (property "Sheetname" "root") (property "ki_description" "an inductor") (property "Manufacturer" "ACME")
+                (property "Shown" "yes" (hide no)))"#,
+        );
+        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20210722);
+        let names: Vec<&str> = e.fields.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["Manufacturer", "Shown"]);
+        assert_eq!((e.fields[0].layout.visible, e.fields[1].layout.visible), (false, true));
+        // the same properties in a current file are fields like any other, shown
+        let e = parse_footprint_edit_in(&node, "L1", None, Side::Top, 0, 20241229);
+        assert_eq!(e.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), vec!["Sheet file", "Sheetname", "Manufacturer", "Shown"]);
+        assert!(e.fields.iter().all(|f| f.layout.visible));
     }
 
     #[test]

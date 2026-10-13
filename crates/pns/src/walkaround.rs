@@ -225,6 +225,9 @@ pub struct Walker<'a> {
     skip: HashSet<ItemId>,
     /// Items that are never obstacles (the walking line's own segments in the node).
     exclude: Vec<ItemId>,
+    /// The via the walking line ends in, if it does (`LINE::EndsWithVia`): it is an obstacle for the nearest-obstacle search and the
+    /// collision checks, as it is in KiCad -- the walk itself goes around the cluster it finds, with the line's chain.
+    end_via: Option<crate::item::Via>,
     // per-route state
     iteration: u32,
     initial_length: f64,
@@ -233,7 +236,7 @@ pub struct Walker<'a> {
 
 impl<'a> Walker<'a> {
     pub fn new(node: &'a Node, rules: &'a BoardRules) -> Self {
-        Walker { node, rules, item_mask: kind_mask::ANY, iteration_limit: 40, length_limit_on: true, length_expansion_factor: 10.0, policies: [false; 3], restricted: HashSet::new(), skip: HashSet::new(), exclude: Vec::new(), iteration: 0, initial_length: 0.0, processed: HashSet::new() }
+        Walker { node, rules, item_mask: kind_mask::ANY, iteration_limit: 40, length_limit_on: true, length_expansion_factor: 10.0, policies: [false; 3], restricted: HashSet::new(), skip: HashSet::new(), exclude: Vec::new(), end_via: None, iteration: 0, initial_length: 0.0, processed: HashSet::new() }
     }
 
     /// `SetAllowedPolicies`.
@@ -260,12 +263,17 @@ impl<'a> Walker<'a> {
         self.exclude = items.into_iter().collect();
     }
 
+    /// The walking line ends in `via` (a pair's head that places vias).
+    pub fn set_end_via(&mut self, via: Option<crate::item::Via>) {
+        self.end_via = via;
+    }
+
     fn nearest_obstacle(&self, pts: &[Point], net: &Net, layer: i32, width: Um) -> Option<crate::node::NearestHit> {
         let line = Line::from_points(net.clone(), layer, width, pts.to_vec());
         let restricted = &self.restricted;
         let filter = |id: ItemId| restricted.contains(&id);
         let opts = QueryOpts { kind_mask: self.item_mask, filter: if restricted.is_empty() { None } else { Some(&filter) }, use_epsilon: true };
-        self.node.nearest_obstacle(&line, None, self.rules, &self.exclude, opts)
+        self.node.nearest_obstacle(&line, self.end_via.as_ref(), self.rules, &self.exclude, opts)
     }
 
     /// `CheckColliding( &line )`: any leg touches anything in the world.
@@ -273,7 +281,7 @@ impl<'a> Walker<'a> {
         pts.windows(2).any(|w| {
             let shape = Shape::Stadium { a: w[0], b: w[1], r: width / 2 };
             self.node.first_colliding(&shape, net, LayerRange::single(layer), self.rules, &self.exclude).is_some()
-        })
+        }) || self.end_via.as_ref().is_some_and(|v| self.node.first_colliding(&Shape::Circle { c: v.pos, r: v.diameter / 2 }, &v.net, v.layers, self.rules, &self.exclude).is_some())
     }
 
     /// `shortest->Collide( item, .. )`: does the path collide with this one item.
@@ -286,6 +294,11 @@ impl<'a> Walker<'a> {
         let clearance = if clearance > 0 { (clearance - crate::node::CLEARANCE_EPSILON).max(0) } else { clearance };
         let item_shape = item.shape(item.layers().start());
         pts.windows(2).any(|w| Shape::Stadium { a: w[0], b: w[1], r: width / 2 }.collides(&item_shape, clearance).is_some())
+            || self.end_via.as_ref().is_some_and(|v| {
+                let via_clearance = Node::clearance_to(self.rules, &v.net, item);
+                let via_clearance = if via_clearance > 0 { (via_clearance - crate::node::CLEARANCE_EPSILON).max(0) } else { via_clearance };
+                !crate::item::same_net(item.net(), &v.net) && item.layers().overlaps(&v.layers) && Shape::Circle { c: v.pos, r: v.diameter / 2 }.collides(&item_shape, via_clearance).is_some()
+            })
     }
 
     /// `processCluster`: walk `pts` around every item of the cluster in turn.

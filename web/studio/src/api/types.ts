@@ -91,6 +91,8 @@ export interface FieldInfo {
   id: string;
   name: string;
   text: string;
+  /** What `${NAME}` in `text` stands for; absent when it is `text` itself. See `BoardText.shown`. */
+  shown?: string;
   x: Um;
   y: Um;
   angle: number;
@@ -126,6 +128,85 @@ export interface FootprintAttrsInfo {
 
 /** `[minX, minY, maxX, maxY]`, footprint-local, µm. */
 export type CourtyardBox = [Um, Um, Um, Um];
+
+/** `STROKE_PARAMS`' line style, the words `(stroke (type ..))` uses. A solid (or `default`) stroke has no `dash` on the wire. */
+export type FpDash = "dash" | "dot" | "dash_dot" | "dash_dot_dot";
+/** `FILL_T`'s hatched fills. */
+export type FpHatch = "hatch" | "reverse_hatch" | "cross_hatch";
+
+interface FpGraphicCommon {
+  layer: string;
+  stroke_width: Um;
+  /** Absent when false. */
+  filled?: boolean;
+  dash?: FpDash;
+  hatch?: FpHatch;
+  /** Every layer of a shape that is on several (`layer` is the first). */
+  layers?: string[];
+}
+
+/**
+ * One graphic of a placed footprint (crates/cli/src/fp_art_json.rs, `Part.graphics`): the silkscreen outline, the pin-1 mark, the fab body, an assembly drawing -- the
+ * `Shape` the board's own graphics are, in board space like the pads, without an `id` (kicad-port/fpArt.ts `graphicsOf` gives them complete).
+ */
+export type FpGraphic =
+  | (FpGraphicCommon & { kind: "segment"; start: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "arc"; start: [Um, Um]; mid: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "rect"; start: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "circle"; center: [Um, Um]; end: [Um, Um] })
+  | (FpGraphicCommon & { kind: "polygon"; pts: [Um, Um][] })
+  | (FpGraphicCommon & { kind: "bezier"; start: [Um, Um]; c1: [Um, Um]; c2: [Um, Um]; end: [Um, Um] });
+
+/** One text of a placed footprint (`fp_text user`, `Part.texts`): the keys of a field, at the absolute angle it has on the board, variables resolved. */
+export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "w" | "h" | "thickness" | "layer" | "halign" | "valign" | "mirror" | "bold" | "italic" | "upright" | "knockout"> & {
+  /** Set when the text is exactly `${REFERENCE}` or `${VALUE}`: the Appearance panel's References and Values rows switch it (`PCB_TEXT::ViewGetLOD`). */
+  role?: "reference" | "value";
+};
+
+/** The options of `DIALOG_EXCHANGE_FOOTPRINTS` (crates/ops/src/fp_exchange.rs `ExchangeOptions`; kicad-port/pcbExchange.ts has the three presets). */
+export interface ExchangeOptions {
+  /** "Match pad positions". */
+  match_pad_positions: boolean;
+  /** "Remove text items if not in library footprint". */
+  remove_extra_texts: boolean;
+  /** "Update/reset text layers and visibilities". */
+  reset_text_layers: boolean;
+  /** "Update/reset text sizes and styles". */
+  reset_text_effects: boolean;
+  /** "Update/reset text position and rotation". */
+  reset_text_positions: boolean;
+  /** "Update/reset text content". */
+  reset_text_content: boolean;
+  /** "Update/reset fabrication attributes". */
+  reset_fabrication_attrs: boolean;
+  /** "Update/reset clearance overrides". */
+  reset_clearance_overrides: boolean;
+  /** "Update/reset 3D models". */
+  reset_3d_models: boolean;
+}
+
+/** The dialog of Geographical Reannotate (`DIALOG_BOARD_REANNOTATE`; crates/model/src/reannotate.rs `ReannotateOptions`, kicad-port/reannotate.ts has the values it opens with). */
+export interface ReannotateOptions {
+  /** "Footprint Order": which of the eight radio buttons, 0 to 7, in the dialog's order. */
+  direction: number;
+  /** "Based on location of": the footprint or its Reference text. */
+  location: "footprint" | "reference";
+  /** "Round locations to": the grid, um. */
+  grid_um: number;
+  /** "Reannotation Scope". */
+  scope: "all" | "front" | "back" | "selection";
+  /** "Exclude locked footprints". */
+  exclude_locked: boolean;
+  /** "Exclude references": prefixes, or patterns ending in `*`, separated by commas or spaces. */
+  exclude: string;
+  /** "Front reference start" (1 by default) and "Back reference start" (0, blank, continues from the front). */
+  front_start: number;
+  back_start: number;
+  front_prefix: string;
+  back_prefix: string;
+  remove_front_prefix: boolean;
+  remove_back_prefix: boolean;
+}
 
 export interface Part {
   ref: string;
@@ -166,6 +247,10 @@ export interface Part {
   /** How KiCad's 3D viewer sorts the part's models: a through-hole model (`tht`), an SMD one or a virtual one (`BOARD_ADAPTER::IsFootprintShown`). */
   kind3d?: "smd" | "tht" | "virtual";
   pads?: Pad[];
+  /** The footprint's silkscreen, fab and assembly drawings, board space (absent when it has none). */
+  graphics?: FpGraphic[];
+  /** The footprint's own texts (`${REFERENCE}` on the fab layer ...), board space (absent when it has none). */
+  texts?: FpTextInfo[];
   /** Reference, Value and the user fields, as they are on the board (absent from an older backend). */
   fields?: FieldInfo[];
   /** The attributes in effect: the edit's, else derived from the pads and the schematic symbol. */
@@ -368,6 +453,8 @@ export type TextJustify = "left" | "center" | "right";
 export interface BoardText {
   id: string;
   content: string;
+  /** What `${NAME}` in `content` stands for (the Text Variables page, KiCad's own variables); absent when it is `content` itself. The painter and the boxes use it; an edit starts from `content`. */
+  shown?: string;
   x: Um;
   y: Um;
   /** Millidegrees -- NOT divided down like a Part's `rot`. */
@@ -723,12 +810,109 @@ export interface BoardState {
     severities?: Record<string, RuleSeverity>;
     /** The text of the board's custom DRC rules (`.kicad_dru`); null = none. */
     custom_rules_text?: string | null;
-    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`. */
+    /** The project's text variables as `${NAME}` reads them, name -> value (`PROJECT::GetTextVars`): the Text Variables page's rows once it has been used, else the board folder's `path-variables.json`. */
+    text_variables?: Record<string, string>;
+    /** Board Editor Layers (`eda_model::layers`): the non-copper layers the board has in KiCad's order, the names the user gave its layers and the types that are not the default's. Absent from an older backend (then a board has the 18 technical layers). */
+    layer_setup?: LayerSetup;
+    /** Text & Graphics > Formatting (`eda_model::setup_pages`). */
+    formatting?: FormattingSettings;
+    /** Board Stackup > Zone Hatch Offsets: copper layer -> the offset of a hatched zone's pattern; only the layers that have one. */
+    zone_hatch_offsets?: HatchOffsets;
+    /** Design Rules > Length-tuning Patterns: what a tuning pattern of each kind starts from. */
+    tuning_patterns?: TuningPatterns;
+    /** Design Rules > Tuning Profiles: the profiles and the profile each net class names. */
+    tuning_profiles?: TuningProfiles;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`, `formatting`, `zone_hatch_offsets`, `tuning_patterns`, `tuning_profiles`. */
     overlay?: string[];
   };
 }
 
 export type RuleSeverity = "error" | "warning" | "ignore";
+
+/** `eda_model::setup_pages::FormattingSettings` -- Text & Graphics > Formatting: the dash and gap of dashed lines, in line widths, and the "apply board defaults to footprint .." boxes. */
+export interface FormattingSettings {
+  dash_length_ratio: number;
+  gap_length_ratio: number;
+  apply_to_fp_fields: boolean;
+  apply_to_fp_text: boolean;
+  apply_to_fp_shapes: boolean;
+  apply_to_fp_dimensions: boolean;
+  apply_to_fp_barcodes: boolean;
+}
+
+/** `ZONE_LAYER_PROPERTIES::hatching_offset`, µm. */
+export interface HatchOffset {
+  x_um: Um;
+  y_um: Um;
+}
+export type HatchOffsets = Record<string, HatchOffset>;
+
+export type MeanderCornerStyle = "chamfer" | "round";
+
+/** `PNS::MEANDER_SETTINGS`, the part Board Setup > Length-tuning Patterns edits. */
+export interface MeanderSettings {
+  min_amplitude_um: Um;
+  max_amplitude_um: Um;
+  spacing_um: Um;
+  corner_style: MeanderCornerStyle;
+  corner_radius_percentage: number;
+  single_sided: boolean;
+}
+export interface TuningPatterns {
+  single_track: MeanderSettings;
+  diff_pair: MeanderSettings;
+  diff_pair_skew: MeanderSettings;
+}
+
+export type TuningProfileType = "single" | "differential";
+
+/** One row of a tuning profile's track propagation grid. Delays are KiCad's own unit, attoseconds per millimetre (1 ps/mm is 1,000,000). */
+export interface ProfileLayerEntry {
+  signal_layer: string;
+  top_reference_layer?: string | null;
+  bottom_reference_layer?: string | null;
+  width_um: Um;
+  diff_pair_gap_um: Um;
+  delay_as_per_mm: number;
+}
+
+/** One row of the via overrides grid; the delay is a time in attoseconds (1 ps is 1,000,000). */
+export interface ProfileViaOverride {
+  signal_layer_from: string;
+  signal_layer_to: string;
+  via_layer_from: string;
+  via_layer_to: string;
+  delay_as: number;
+}
+
+export interface TuningProfile {
+  name: string;
+  profile_type: TuningProfileType;
+  target_impedance: number;
+  enable_time_domain_tuning: boolean;
+  layer_entries: ProfileLayerEntry[];
+  via_propagation_delay_as: number;
+  via_overrides: ProfileViaOverride[];
+}
+
+/** Design Rules > Tuning Profiles: the profiles, and the profile each net class (`Default` included) names -- one the project does not have is what kicad-cli reports as `missing_tuning_profile`. */
+export interface TuningProfiles {
+  profiles: TuningProfile[];
+  class_profiles?: Record<string, string>;
+}
+
+/** `LAYER_T`: a copper layer is a signal, a power plane, a mixed or a jumper layer; a user layer is auxiliary (it does not flip with the board) or off-board at the front or the back (it does). */
+export type BoardLayerType = "signal" | "power" | "mixed" | "jumper" | "auxiliary" | "front" | "back";
+
+/**
+ * `eda_model::layers::LayerSetup` -- Board Setup > Board Editor Layers: the non-copper layers the board has (`enabled`: the technical layers by the names the board file writes, `F.SilkS`,
+ * and `User.1` .. `User.45`), the name the user gave a layer (else KiCad's standard name shows) and the types that are not the layer's default.
+ */
+export interface LayerSetup {
+  enabled: string[];
+  names?: Record<string, string>;
+  types?: Record<string, BoardLayerType>;
+}
 
 /** `eda_model::rules::NetClassSettings` -- Board Setup > Net Classes: the Default class and the others, with the net-name patterns that assign nets to each. */
 export interface NetClassSettings {
@@ -987,6 +1171,56 @@ export interface PadEditCmd {
   custom?: PadCustom;
 }
 
+/**
+ * File > Import > Graphics... (`DRAWING_TOOL::PlaceImportedGraphics`): a DXF or SVG file (its `text`) as the board's own lines, arcs, circles, polygons, curves and text on `layer`,
+ * one undo step. `offset_*_nm` is the importer's offset after the scale (nanometres); `fix_tolerance_um` is "Fix discontinuities" with its tolerance; `replace_outline` makes
+ * the imported Edge.Cuts shapes the board's outline. See crates/ops/src/import_graphics.rs.
+ */
+export interface ImportGraphicsCmd {
+  op: "import_graphics";
+  format: "dxf" | "svg";
+  text: string;
+  layer: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+  group?: boolean;
+  fix_tolerance_um?: Um | null;
+  replace_outline?: boolean;
+}
+
+/**
+ * `SCH_DRAWING_TOOLS::ImportGraphics` (schematic) and `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics` (Symbol Editor): the same file as graphic lines, shapes and text of the sheet in
+ * view, or as drawn items of the symbol `lib_id` on `unit` / `body_style`, in one undo step. `offset_*_nm` is the importer's offset after the scale; `line_width_um` 0 is the sheet's
+ * default width. See crates/ops/src/import_graphics_sch.rs.
+ */
+export interface ImportSchGraphicsCmd {
+  op: "import_sch_graphics";
+  format: "dxf" | "svg";
+  text: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+}
+
+export interface ImportSymbolGraphicsCmd {
+  op: "import_symbol_graphics";
+  lib_id: string;
+  unit?: number;
+  body_style?: number;
+  format: "dxf" | "svg";
+  text: string;
+  dxf_units?: string;
+  scale?: number;
+  offset_x_nm?: number;
+  offset_y_nm?: number;
+  line_width_um?: Um;
+}
+
 /** `PASTE_MODE` (`include/dialogs/dialog_paste_special.h`): the reference designators of pasted footprints are given the next free number ("unique"), left as the clipboard has them even if another footprint has them ("keep", a plain paste's default) or cleared to `REF**` ("remove"). */
 export type PcbPasteMode = "unique" | "keep" | "remove";
 
@@ -1075,6 +1309,18 @@ export type Cmd =
   | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
   /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
   | { op: "set_custom_rules"; text: string }
+  /** Board Setup > Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` shows the value; the derived `.kicad_pro` carries them for kicad-cli. */
+  | { op: "set_text_variables"; variables: Record<string, string> }
+  /** Board Setup > Board Editor Layers (`panel_setup_layers.cpp`): the whole page -- the layers the board has, their names and types. Refused with the layer's name when a name or type is out of the panel's rules or a layer is turned off while items are on it. */
+  | { op: "set_board_layers"; settings: LayerSetup }
+  /** Board Setup > Formatting (`panel_setup_formatting.cpp`): the whole page. Refused with the setting's name (`dash_length_ratio`) when a ratio is not above 0 and at most 1000. */
+  | { op: "set_formatting"; settings: FormattingSettings }
+  /** Board Setup > Zone Hatch Offsets (`panel_setup_zone_hatch_offsets.cpp`): the whole page, copper layer -> offset; a layer left out (or at 0, 0) has none. */
+  | { op: "set_zone_hatch_offsets"; offsets: HatchOffsets }
+  /** Board Setup > Length-tuning Patterns (`panel_setup_tuning_patterns.cpp`): the whole page. Refused with `group.field` (`diff_pair.min_amplitude`). */
+  | { op: "set_tuning_patterns"; settings: TuningPatterns }
+  /** Board Setup > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the whole page, with the profile each net class names. Refused with the profile's name. */
+  | { op: "set_tuning_profiles"; settings: TuningProfiles }
   /**
    * `dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
    * Marker): waive the DRC violations as one undo step. An exclusion whose `(check, items)` is waived already is replaced (that edits its comment).
@@ -1146,12 +1392,19 @@ export type Cmd =
   | { op: "duplicate"; ids: string[] }
   /** Cmd+V (`PCB_CONTROL::Paste`): KiCad's own clipboard text (the text a Copy or a KiCad puts there), its origin placed at `at`. See crates/ops/src/pcb_paste.rs. */
   | { op: "paste_clipboard"; text: string; at: PointXY }
+  | ImportGraphicsCmd
+  | ImportSchGraphicsCmd
+  | ImportSymbolGraphicsCmd
   /** Paste Special... (`DIALOG_PASTE_SPECIAL`, crates/ops/src/pcb_paste_special.rs): a paste with the dialog's two answers -- what happens to the reference designators of the pasted footprints (`PASTE_MODE`; "keep" is what a plain paste does) and "Clear net assignments". */
   | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
   /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
   | { op: "in_group"; group: string; cmd: Cmd }
-  /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
-  | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
+  /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. `definition` is the footprint's own copy, for one the board cannot find by name (Insert footprint into PCB sends the Footprint Editor's). */
+  | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string; definition?: LibraryFootprint | null }
+  /** Change Footprint(s) / Update Footprint(s) from Library (`DIALOG_EXCHANGE_FOOTPRINTS`) and the footprint a symbol's Footprint field names (`replaceFootprint`): put `references` on `footprint`, or -- `footprint` absent -- each on the library copy of the footprint it is on. The pose, lock and group stay; the rest follows `options`. The server brings the library copy. See crates/ops/src/fp_exchange.rs. */
+  | { op: "exchange_footprints"; references: string[]; footprint?: string | null; options?: ExchangeOptions }
+  /** Geographical Reannotate (`DIALOG_BOARD_REANNOTATE`): the footprints renumbered by where they are, in the order, scope, prefixes and start numbers of `options`; `selection` is the footprints the "Selection" scope names. The symbols take the new references in the same step; one undo step. Refused when two footprints would be left with one reference. See crates/ops/src/reannotate.rs. */
+  | { op: "reannotate_board"; options: ReannotateOptions; selection: string[] }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */
@@ -1501,33 +1754,58 @@ export interface DragPreview {
   fanout: { layer: string; width: Um; pts: [Um, Um][] }[];
 }
 
-/** `POST /api/route/dp_{start,move,fix,undo_segment,finish}` (gap #7 task
- * item 6, `6`): route two parallel, gap-matched lines (a differential
- * pair) from one session -- `eda_pns::diff_pair::DiffPairPlacer`. Shares
- * the same backend session as the route/drag endpoints above; only one of
- * a route, a drag, or a diff pair can be in progress at once. No shove/
- * walkaround/via-switch for a pair in this port -- `colliding` is report-
- * only, same contract as a plain route in `mark_obstacles` mode -- see
- * `crates/pns/PARITY.md`'s own diff-pair section for why. */
+/** A via of a pair (`PNS::VIA`, as `DIFF_PAIR_PLACER` places them): one per net, a `viaGap()` apart. */
+export interface DpVia {
+  net: string | null;
+  x: Um;
+  y: Um;
+  diameter: Um;
+  drill: Um;
+  from_layer: string;
+  to_layer: string;
+}
+
+/** `POST /api/route/dp_{start,move,fix,via,undo_segment,finish}` (`6`):
+ * route two parallel, gap-matched lines (a differential pair) from one
+ * session -- `eda_pns::dp_placer::DiffPairPlacer`, KiCad's
+ * `DIFF_PAIR_PLACER`. Shares the same backend session as the route/drag
+ * endpoints above; only one of a route, a drag, or a diff pair can be in
+ * progress at once. The pair is coupled in all three router modes: walked
+ * around what is in the way (`walkaround`), pushed through it with the
+ * tracks and vias moved aside (`shove`), or only marked (`mark_obstacles`:
+ * `colliding` reports it). `V` (`dp_via`) ends the head in a pair of vias
+ * and the route goes on from them on the other layer. */
 export interface DiffPairPreview {
   ok: boolean;
   message?: string;
+  /** The pair's P and N nets (`DpNetPair`: the one named `+` or `P` first). */
   net_a: string | null;
   net_b: string | null;
   layer: string;
   width: Um;
+  /** The edge-to-edge gap the pair is routed at. */
+  gap?: Um;
+  /** The pair does not fit as drawn (`!m_fitOk`). */
   colliding: boolean;
   /** The live, not-yet-fixed head of each line -- already resolved
-   * (offset from the spine, snapped to the real pad(s) at either end)
-   * server-side, draw directly. */
+   * (coupled, walked or shoved per the mode, snapped to the real pad(s) at
+   * either end) server-side, draw directly. */
   head_a: [Um, Um][];
   head_b: [Um, Um][];
-  /** Already-fixed runs from earlier in this session, one array per line. */
+  /** Already-fixed legs from earlier in this session, one per leg for each line, each on its own layer. */
   runs_a: RoutePreviewRun[];
   runs_b: RoutePreviewRun[];
-  /** Both lines found a same-net anchor near the cursor at once --
-   * finishing now lands exactly on a real coupled pad pair. */
+  /** Both lines end on a coupled pair of pads, vias or track ends --
+   * finishing now lands exactly on it. */
   snapped_end: boolean;
+  /** `V` is on: the head ends in `vias` (one per net). */
+  placing_via?: boolean;
+  vias?: DpVia[];
+  /** The vias of the fixed legs. */
+  fixed_vias?: DpVia[];
+  /** `shove` mode: the tracks and vias the head would push aside. */
+  displaced?: RouteDisplacedLine[];
+  displaced_vias?: RouteDisplacedVia[];
 }
 
 export interface DpFixReply {
@@ -1793,6 +2071,8 @@ export interface SchField {
   /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
   name: string;
   text: string;
+  /** What `${NAME}` in `text` stands for (`SCH_FIELD::GetShownText`); absent when it is `text` itself. A Reference never has one: the painter writes it with its unit letter. */
+  shown?: string;
   /** The text's anchor on the sheet, micrometres. */
   at: [Um, Um];
   /** The text runs upward: a quarter turn counter-clockwise about the anchor. */
@@ -1848,6 +2128,8 @@ export interface SchematicSymbol {
   /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** What `${NAME}` in `value` and `footprint` stands for, for the symbols the state lists no `fields` of (a sheet read from a KiCad file); only the ones that differ. */
+  shown?: { value?: string; footprint?: string };
 }
 
 /**
@@ -1955,6 +2237,8 @@ export interface SchematicText {
   /** Stable id (`txt_xxxxxxxxxxxx`) -- for `delete_sch_text`. */
   id: string;
   content: string;
+  /** What `${NAME}` in `content` stands for (`SCH_TEXT::GetShownText`); absent when it is `content` itself. */
+  shown?: string;
   at: [Um, Um];
   angle: Degrees;
   size_um: Um;
@@ -1970,6 +2254,8 @@ export interface TitleBlock {
   rev: string;
   company: string;
   comments: string[];
+  /** The values with the project's text variables in them expanded (`TITLE_BLOCK::TextVarResolver`), when that changes any of them: the drawing sheet shows these, the Page Settings dialog edits the stored ones above. */
+  shown?: { title: string; date: string; rev: string; company: string; comments: string[] };
 }
 
 /** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_um` is the resolved width and height in its orientation. */

@@ -56,9 +56,18 @@ mod review;
 pub mod library_editors;
 mod array;
 pub use array::ArrayGeometry;
+mod fix_shapes;
 mod fp_edit;
+mod import_graphics;
+pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, ImportGraphics};
+mod import_graphics_sch;
+pub use import_graphics_sch::{sch_items as graphics_sch_items, symbol_items as graphics_symbol_items, ImportSchGraphics, ImportSymbolGraphics};
+mod fp_exchange;
+pub use fp_exchange::{board_footprint, footprint_name_of, pending_footprint_changes, BoardFootprint, ExchangeOptions, FootprintChange};
 mod library_place;
 mod outline;
+mod part_rename;
+mod reannotate;
 mod pcb_global_edit;
 mod pcb_groups;
 mod pcb_paste;
@@ -527,6 +536,21 @@ pub enum Cmd {
     SetRuleSeverities { severities: BTreeMap<String, String> },
     /// Design Rules > Custom Rules: the text of the board's `.kicad_dru`.
     SetCustomRules { text: String },
+    /// Board Stackup > Board Editor Layers (`panel_setup_layers.cpp`): the non-copper layers the board has (the technical ones and User.1 to User.45), the
+    /// names the user gave its layers and their types. The whole page; refused with the layer's name when a name or type is out of the panel's rules or
+    /// a layer is turned off while items are on it.
+    SetBoardLayers { settings: eda_model::layers::LayerSetup },
+    /// Text & Graphics > Formatting (`panel_setup_formatting.cpp`): the dash and gap ratios of dashed lines and the "apply board defaults to footprint .." boxes.
+    SetFormatting { settings: eda_model::setup_pages::FormattingSettings },
+    /// Board Stackup > Zone Hatch Offsets (`panel_setup_zone_hatch_offsets.cpp`): the whole page, copper layer -> the offset of a hatched zone's pattern (a layer left out has none).
+    SetZoneHatchOffsets { offsets: eda_model::setup_pages::HatchOffsets },
+    /// Design Rules > Length-tuning Patterns (`panel_setup_tuning_patterns.cpp`): what a tuning pattern of each kind starts from.
+    SetTuningPatterns { settings: eda_model::setup_pages::TuningPatterns },
+    /// Design Rules > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the profiles and the profile each net class names.
+    SetTuningProfiles { settings: eda_model::setup_pages::TuningProfiles },
+    /// Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` in a text, a field or the title
+    /// block shows the value, and the derived `.kicad_pro` carries them (`text_variables`) so kicad-cli's plots show the same.
+    SetTextVariables { variables: BTreeMap<String, String> },
 
     // ------------------------------------------------------- DRC and ERC review
     //
@@ -704,6 +728,40 @@ pub enum Cmd {
         value: String,
         #[serde(default)]
         definition: Option<LibraryFootprint>,
+    },
+    /// `DRAWING_TOOL::PlaceImportedGraphics` (File > Import > Graphics..., `pcbnew.InteractiveDrawing.placeImportedGraphics`): a DXF or SVG file as
+    /// the board's own lines, arcs, circles, polygons, curves and text on one layer, in one undo step -- see [`import_graphics`] for what is mapped
+    /// and how. The file travels with the command.
+    ImportGraphics(ImportGraphics),
+    /// `SCH_DRAWING_TOOLS::ImportGraphics` (File > Import > Graphics..., `eeschema.EditorControl.importGraphics`): a DXF or SVG file as graphic lines, shapes
+    /// and text of the sheet in view, in one undo step -- see [`import_graphics_sch`].
+    ImportSchGraphics(ImportSchGraphics),
+    /// `SYMBOL_EDITOR_DRAWING_TOOLS::ImportGraphics`: the same into the symbol `lib_id` of the Symbol Editor.
+    ImportSymbolGraphics(ImportSymbolGraphics),
+    /// Change Footprint(s) (`pcbnew.GlobalEdit.changeFootprint(s)`), Update Footprint(s) from Library (`updateFootprint(s)`) and the footprint a symbol's Footprint field names
+    /// (`BOARD_NETLIST_UPDATER::replaceFootprint`): put the parts `references` on `footprint`, or -- `footprint` absent -- each on the library copy of the footprint it is
+    /// on. The pose, lock and group stay; the pads, their nets by number, the texts, the attributes, the overrides and the models follow the dialog's `options`
+    /// (`PCB_EDIT_FRAME::ExchangeFootprint`; see `fp_exchange.rs`). The part's assignment (`DrawingsSection::footprint_assignments`) and, in a change, its symbol's Footprint
+    /// field are set; one undo step on both editors. `library` is the library copy of each footprint the command needs (`Lib:Name` -> footprint), which the studio's
+    /// server fills in from the library tables when it is left out: a command has to replay and undo the same on a machine without the libraries.
+    ExchangeFootprints {
+        references: Vec<String>,
+        #[serde(default)]
+        footprint: Option<String>,
+        #[serde(default)]
+        options: ExchangeOptions,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        library: BTreeMap<String, Footprint>,
+    },
+    /// Geographical Reannotate (`pcbnew.ReannotateTool.ShowReannotateDialog`, `DIALOG_BOARD_REANNOTATE`): the footprints on the board renumbered by where they are, in the order,
+    /// scope, prefixes and start numbers of `options` (`eda_model::reannotate`); `selection` is the footprints the "Selection" scope names (the studio's selection). Refused when two
+    /// footprints would be left with one reference. The symbols take the new references in the same step (what "Update Schematic from PCB" would have them take) and the board's
+    /// parts move with them, so there is no part, pose or route under an old reference; one undo step on both editors.
+    ReannotateBoard {
+        #[serde(default)]
+        options: eda_model::reannotate::ReannotateOptions,
+        #[serde(default)]
+        selection: Vec<String>,
     },
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
@@ -1110,16 +1168,16 @@ pub enum Cmd {
     /// cascading the change through every `"REF.PIN"` string this sheet's
     /// wires/power-symbols/no-connects hold (so a wire that named
     /// `"R1.2"` still resolves after `R1` becomes `R5`). Refused if
-    /// `new_id` is blank or already names another symbol on this sheet.
-    /// Deliberately does *not* retarget `design.placement`'s own
-    /// `FootprintInstance` (the PCB side has no rename concept at all) or
-    /// touch intent.yaml (read-only to every verb in this file) -- the
-    /// next `reconcile_schematic` pass simply synthesizes a fresh `Part`
-    /// for the new id, same mechanism `AddSymbol`'s own doc describes,
-    /// while the old reference's PCB footprint (if any) is left exactly
-    /// where it was, now with no matching schematic symbol. A real
-    /// "rename and keep the PCB placement" is future work -- see
-    /// PARITY-sch.md.
+    /// `new_id` is blank or already names another symbol on this sheet,
+    /// another sheet, or a footprint of the board.
+    ///
+    /// The board's part goes with the symbol, in the same step
+    /// ([`Board::rename_part`], `part_rename.rs`): its pose, the pads its
+    /// routing ends on, its net pins, its fields and edits, its zone
+    /// overrides, its lock and its group are under the new reference, and the
+    /// intent's part is recorded in `DrawingsSection::renamed_parts` for the
+    /// loader to lay over the intent (which no verb edits). One undo step for
+    /// both halves ([`Cmd::spans_both_editors`]).
     RenameSymbol { id: String, new_id: String },
 
     /// Symbol Fields Table "OK/Apply" (`dialog_symbol_fields_table.cpp`'s
@@ -1581,6 +1639,7 @@ impl Cmd {
             | Cmd::AddJunction { .. }
             | Cmd::DeleteJunction { .. }
             | Cmd::AddSchLine { .. }
+            | Cmd::ImportSchGraphics(_)
             | Cmd::DeleteSchLine { .. }
             | Cmd::AddSheet { .. }
             | Cmd::ImportSheet { .. }
@@ -1651,6 +1710,7 @@ impl Cmd {
             | Cmd::EditSymbolPin { .. }
             | Cmd::PushPinProperty { .. }
             | Cmd::AddSymbolGraphic { .. }
+            | Cmd::ImportSymbolGraphics(_)
             | Cmd::DeleteSymbolGraphic { .. }
             | Cmd::MoveSymbolGraphic { .. }
             | Cmd::EditSymbolGraphic { .. }
@@ -1676,7 +1736,31 @@ impl Cmd {
             Cmd::SchEdit(c) => c.edits_connectivity(),
             // A definition kept with the schematic changes no connection.
             Cmd::EmbedLibSymbol { .. } => false,
+            // Drawn lines, shapes and text are not wires: nothing they cross is connected to them.
+            Cmd::ImportSchGraphics(_) => false,
             _ => true,
+        }
+    }
+}
+
+impl Cmd {
+    /// Does this command change both editors' halves of the design in one step? A reference rename moves the schematic's symbol and the board's part together
+    /// (`Board::rename_part`), so one Ctrl+Z, from either tab, has to take both back: the history keeps such a step as a whole-design step
+    /// (`crates/cli/src/board.rs`, the `both` tag), where an edit of one editor is undone from that editor's tab alone (`Cmd::domain`).
+    pub fn spans_both_editors(&self) -> bool {
+        match self {
+            Cmd::Batch { cmds } => cmds.iter().any(Cmd::spans_both_editors),
+            Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.spans_both_editors(),
+            Cmd::RenameSymbol { .. } | Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => true,
+            // the board's footprint and the symbol's Footprint field are put right together
+            Cmd::ExchangeFootprints { .. } => true,
+            // the footprints' references and the symbols' go together
+            Cmd::ReannotateBoard { .. } => true,
+            // Replace All renames a reference when it is asked to look at them
+            Cmd::ReplaceText { search, .. } => search.replace_references,
+            // Field Properties of a Reference field renames the symbol
+            Cmd::SchEdit(sch_edit::SchCmd::EditField { id, text: Some(_), .. }) => id.ends_with(":Reference"),
+            _ => false,
         }
     }
 }
@@ -1718,6 +1802,11 @@ impl Cmd {
             Cmd::Duplicate { ids } => ids.iter().map(String::as_str).collect(),
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
+            Cmd::ImportGraphics(req) => vec![req.layer.as_str()],
+            Cmd::ImportSchGraphics(_) => vec!["sch_graphics"],
+            Cmd::ImportSymbolGraphics(req) => vec![req.lib_id.as_str()],
+            Cmd::ExchangeFootprints { references, .. } => references.iter().map(String::as_str).collect(),
+            Cmd::ReannotateBoard { .. } => vec!["reannotate"],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
@@ -1746,6 +1835,12 @@ impl Cmd {
             Cmd::SetStackup { .. } => vec!["stackup"],
             Cmd::SetRuleSeverities { .. } => vec!["severities"],
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
+            Cmd::SetTextVariables { .. } => vec!["text_variables"],
+            Cmd::SetBoardLayers { .. } => vec!["board_layers"],
+            Cmd::SetFormatting { .. } => vec!["formatting"],
+            Cmd::SetZoneHatchOffsets { .. } => vec!["zone_hatch_offsets"],
+            Cmd::SetTuningPatterns { .. } => vec!["tuning_patterns"],
+            Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
@@ -2190,6 +2285,12 @@ impl<'a> Board<'a> {
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
+            Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
+            Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
+            Cmd::SetFormatting { settings } => board_setup::set_formatting(&mut self.design, settings),
+            Cmd::SetZoneHatchOffsets { offsets } => board_setup::set_zone_hatch_offsets(&mut self.design, self.model, offsets),
+            Cmd::SetTuningPatterns { settings } => board_setup::set_tuning_patterns(&mut self.design, settings),
+            Cmd::SetTuningProfiles { settings } => board_setup::set_tuning_profiles(&mut self.design, self.model, settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),
@@ -2287,8 +2388,13 @@ impl<'a> Board<'a> {
 
             Cmd::Duplicate { ids } => self.duplicate_all(ids),
             Cmd::PasteClipboard { text, at } => self.paste_clipboard(text, *at),
+            Cmd::ImportGraphics(req) => self.import_graphics(req),
+            Cmd::ImportSchGraphics(req) => self.import_sch_graphics(req),
+            Cmd::ImportSymbolGraphics(req) => self.import_symbol_graphics(req),
             Cmd::PasteSpecial { text, at, mode, clear_nets } => self.paste_special(text, *at, *mode, *clear_nets),
             Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
+            Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
+            Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
@@ -2895,6 +3001,16 @@ impl<'a> Board<'a> {
         }
     }
 
+    /// Board Editor Layers: a technical or user layer the board has turned off takes nothing new -- KiCad's tools and dialogs only offer the enabled ones.
+    /// (Copper layers are the stackup's, `known_layer`; a name that is no layer of KiCad's is the caller's business, as it always was.)
+    fn layer_is_on(&self, layer: &str, what: &str) -> Result<(), Vec<CheckResult>> {
+        if eda_model::layers::is_optional_layer(layer) && !self.model.board.layer_setup.enabled.iter().any(|l| l == layer) {
+            let shown = self.model.board.layer_setup.display_name(layer);
+            return Err(vec![CheckResult::fail("ops_layer_off", what, format!("{shown} is not a layer this board has; turn it on in Board Setup > Board Editor Layers first"))]);
+        }
+        Ok(())
+    }
+
     /// The board's routing section, creating an empty one if this is the
     /// first hand-added piece of copper. Unlike a part edit, adding copper
     /// must never clear an existing routing section -- see
@@ -3277,6 +3393,7 @@ impl<'a> Board<'a> {
         if dimension.start == dimension.end {
             return Err(vec![CheckResult::fail("ops_bad_dimension", "dimension", "a dimension needs two distinct feature points")]);
         }
+        self.layer_is_on(&dimension.layer, "dimension")?;
         dimension.id = String::new();
         let dr = self.drawings_mut();
         dr.dimensions.push(dimension);
@@ -3492,6 +3609,7 @@ impl<'a> Board<'a> {
                 return Err(vec![CheckResult::fail("ops_bad_shape", "shape", "a polygon needs at least three points")]);
             }
         }
+        self.layer_is_on(shape.layer(), "shape")?;
         shape.set_id(String::new()); // ids are ours to assign, never the caller's
         let dr = self.drawings_mut();
         dr.shapes.push(shape);
@@ -3523,6 +3641,7 @@ impl<'a> Board<'a> {
         if stroke_width <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width must be positive")]);
         }
+        self.layer_is_on(layer, id)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "the board has no drawings yet")])?;
         let s = dr.shapes.iter_mut().find(|s| s.id() == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_shape", id, "no shape with this id")])?;
         s.set_layer(layer.into());
@@ -3538,6 +3657,7 @@ impl<'a> Board<'a> {
         if text.size_um <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", "text", "text size must be positive")]);
         }
+        self.layer_is_on(&text.layer, "text")?;
         text.id = String::new();
         let dr = self.drawings_mut();
         dr.texts.push(text);
@@ -3553,6 +3673,7 @@ impl<'a> Board<'a> {
         if size_um <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
+        self.layer_is_on(&layer, id)?;
         let dr = self.design.drawings.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "the board has no drawings yet")])?;
         let t = dr.texts.iter_mut().find(|t| t.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_text", id, "no text with this id")])?;
         t.content = content;
@@ -4393,7 +4514,28 @@ impl<'a> Board<'a> {
     /// sharing `id` together, in one step -- a multi-unit reference's units
     /// are the same physical part, so they always carry the same reference
     /// text; renaming only one of them would desync it from its siblings.
+    /// The board's part goes with the symbol ([`Board::rename_part`]).
     fn rename_symbol(&mut self, id: &str, new_id: &str) -> Result<(), Vec<CheckResult>> {
+        // another footprint of the board with that reference (a copy, a footprint placed from a library, a part with no symbol on this sheet) would
+        // be two parts under one key
+        if new_id != id && self.board_part_without_symbol(new_id) {
+            return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a footprint with this reference is already on the board")]);
+        }
+        if self.rename_symbol_in_schematic(id, new_id)? {
+            self.rename_part(&BTreeMap::from([(id.to_string(), new_id.to_string())]));
+        }
+        Ok(())
+    }
+
+    /// Is `reference` a footprint of the board that no symbol of the schematic is for (a copy, one placed from a library, one whose symbol was deleted)? A
+    /// part renamed to it would be two footprints under one key.
+    pub(crate) fn board_part_without_symbol(&self, reference: &str) -> bool {
+        let on_board = self.design.placement.iter().any(|p| p.footprints.iter().any(|f| f.id == reference)) || self.design.drawings.iter().any(|d| d.board_parts.iter().any(|b| b.reference == reference));
+        on_board && self.design.schematic.iter().chain(self.design.sheet_contents.iter().flat_map(|c| c.values())).all(|s| s.symbols.iter().all(|x| x.id != reference))
+    }
+
+    /// The schematic's half of [`Self::rename_symbol`]: the symbol and everything keyed by its reference on the sheet. `Ok(false)` when `new_id` is `id`.
+    fn rename_symbol_in_schematic(&mut self, id: &str, new_id: &str) -> Result<bool, Vec<CheckResult>> {
         if new_id.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_symbol", id, "a symbol needs a reference designator")]);
         }
@@ -4405,7 +4547,7 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_duplicate_symbol", new_id, "a symbol with this reference is already on another sheet")]);
         }
         if new_id == id {
-            return Ok(()); // renaming to the same id is a no-op, not an error
+            return Ok(false); // renaming to the same id is a no-op, not an error
         }
         // a generated symbol is drawn from the part it is named for: it keeps its drawing under a name of its own
         self.freeze_generated_symbols(&BTreeSet::from([id.to_string()]));
@@ -4437,7 +4579,7 @@ impl<'a> Board<'a> {
         }
         // where its fields are, and whether Autoplace Fields put them there, follow the new reference
         sch_fields::rename_symbol_keys(sch, id, new_id);
-        Ok(())
+        Ok(true)
     }
 
     // -------------------------------------------------- footprint editor
@@ -4578,7 +4720,7 @@ impl<'a> Board<'a> {
         if pad.size.0 <= 0 || pad.size.1 <= 0 {
             return Err(vec![CheckResult::fail("ops_bad_pad", &pad.number, "pad size must be positive")]);
         }
-        let probe = Footprint { name: "probe".into(), pads: vec![pad.to_engine_pad()], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![] };
+        let probe = Footprint { name: "probe".into(), pads: vec![pad.to_engine_pad()], courtyard: None, model: None, courtyard_outlines: vec![], models3d: vec![], art: Default::default() };
         let errs = probe.validate();
         if errs.is_empty() {
             Ok(())
@@ -5099,9 +5241,19 @@ mod pcb_props_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
 #[cfg(test)]
+mod import_graphics_tests;
+#[cfg(test)]
+mod import_graphics_sch_tests;
+#[cfg(test)]
 mod pcb_groups_tests;
 #[cfg(test)]
 pub(crate) mod sch_annotate_tests;
+#[cfg(test)]
+mod part_rename_tests;
+#[cfg(test)]
+mod reannotate_tests;
+#[cfg(test)]
+mod fp_exchange_tests;
 #[cfg(test)]
 mod sch_hierarchy_tests;
 #[cfg(test)]

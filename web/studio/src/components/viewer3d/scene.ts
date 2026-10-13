@@ -59,6 +59,8 @@ import { bezierPolyline } from "../../kicad-port/bezierPoly";
 import { boardOutlinePolygons } from "../../kicad-port/pcbOutline";
 import { fallbackBodyHeightMm, partBodyBoxUm } from "../../kicad-port/partBody";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { artTextAsField, graphicsOf, layersOf } from "../../kicad-port/fpArt";
+import { fieldAsText } from "../../kicad-port/fpFields";
 
 // ---------------------------------------------------------------------
 // Units
@@ -794,7 +796,7 @@ function buildTextMesh(t: BoardText, y?: number, tint?: THREE.Color, kind = "sil
   return buildSilkTextMesh({
     y,
     tint,
-    content: t.content,
+    content: t.shown ?? t.content,
     xMm: mm(t.x),
     zMm: mm(t.y),
     sizeMm: mm(t.size),
@@ -858,6 +860,53 @@ function buildRefDesignatorMesh(part: Part): THREE.Mesh | null {
     mirror: false,
     name: "part-ref",
   });
+}
+
+/** The line and fill materials and the colour of one ink. */
+interface Ink {
+  line: THREE.LineBasicMaterial;
+  fill: THREE.MeshStandardMaterial;
+  color: THREE.Color;
+}
+
+/**
+ * A footprint's own silkscreen and drawings, in 3D: each graphic of `part.graphics` on the layer KiCad's 3D viewer would draw it on -- the silkscreen of its side (the outline,
+ * the pin-1 mark), an adhesive layer, a user layer; the fab and courtyard layers, copper, mask and paste are not drawn flat (`shapeLayerOf`) -- and its texts on those layers.
+ * The footprint's fab body is the placeholder box ([`buildPartPlaceholder`]: `part.body` is the box of its `F.Fab` drawings). A text that is the `${REFERENCE}` follows the References row.
+ */
+function addFootprintArt(group: THREE.Group, part: Part, mats: { shown: (row: string) => boolean; silkLineMat: Record<Side, THREE.LineBasicMaterial>; silkFillMat: Record<Side, THREE.Material>; inkOf: (row: string) => Ink }): void {
+  const { shown, silkLineMat, silkFillMat, inkOf } = mats;
+  for (const g of graphicsOf(part)) {
+    for (const layer of layersOf(g)) {
+      const on = shapeLayerOf(layer);
+      if (!on) continue;
+      const s = layer === g.layer ? g : { ...g, layer };
+      if (on.kind === "silk") {
+        if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) addLayerShape(group, s, silkY(on.side), silkLineMat[on.side], silkFillMat[on.side], "silk");
+      } else if (on.kind === "adhesive") {
+        if (shown("adhesive")) {
+          const ink = inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes");
+          addLayerShape(group, s, techLayerY(on.side), ink.line, ink.fill, "adhesive");
+        }
+      } else if (shown(on.row)) {
+        const ink = inkOf(on.row);
+        addLayerShape(group, s, techLayerY("top"), ink.line, ink.fill, on.row);
+      }
+    }
+  }
+  for (const t of part.texts ?? []) {
+    const on = shapeLayerOf(t.layer);
+    if (!on || !t.text || (t.role === "reference" && !shown("references"))) continue;
+    // One line: the 3D text is a texture of a single line of the stroke font.
+    const text = fieldAsText(artTextAsField({ ...t, text: t.text.replace(/\n/g, " ") }));
+    if (on.kind === "silk") {
+      if (shown(on.side === "top" ? "silkscreen_top" : "silkscreen_bottom")) group.add(buildTextMesh(text));
+    } else if (on.kind === "adhesive") {
+      if (shown("adhesive")) group.add(buildTextMesh(text, techLayerY(on.side), inkOf(on.side === "top" ? "F_Adhes" : "B_Adhes").color, "adhesive"));
+    } else if (shown(on.row)) {
+      group.add(buildTextMesh(text, techLayerY("top"), inkOf(on.row).color, on.row));
+    }
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -943,6 +992,17 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
   const pasteMat = pasteMaterial();
   const silkLineMat = { top: silkMaterial("top"), bottom: silkMaterial("bottom") };
   const silkFillMat = { top: silkFillMaterial("top"), bottom: silkFillMaterial("bottom") };
+  // The ink of a user layer or an adhesive layer, one material per row, for the free drawings and for a footprint's own.
+  const userMat = new Map<string, THREE.LineBasicMaterial>();
+  const userFill = new Map<string, THREE.MeshStandardMaterial>();
+  const inkOf = (row: string): Ink => {
+    let line = userMat.get(row);
+    let fill = userFill.get(row);
+    const color = row.startsWith("user_") ? paletteColor(row).color : hexColor(layerColor(row));
+    if (!line) userMat.set(row, (line = new THREE.LineBasicMaterial({ color })));
+    if (!fill) userFill.set(row, (fill = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0, side: THREE.DoubleSide })));
+    return { line, fill, color };
+  };
 
   for (const part of board.parts) {
     const side = part.side;
@@ -963,21 +1023,14 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
       const refMesh = buildRefDesignatorMesh(part);
       if (refMesh) group.add(refMesh);
     }
+
+    // The footprint's own silkscreen and drawings (`part.graphics`, `part.texts`): on the layers KiCad's 3D viewer draws, as a free drawing is.
+    addFootprintArt(group, part, { shown, silkLineMat, silkFillMat, inkOf });
   }
 
   // Free drawings, each on the layer KiCad's 3D viewer would draw it on: silkscreen, adhesive, a user layer -- and nothing for the layers it does not draw (`Edge.Cuts`,
   // courtyard, fab, copper, mask, paste).
   if (board.drawings) {
-    const userMat = new Map<string, THREE.LineBasicMaterial>();
-    const userFill = new Map<string, THREE.MeshStandardMaterial>();
-    const inkOf = (row: string): { line: THREE.LineBasicMaterial; fill: THREE.MeshStandardMaterial; color: THREE.Color } => {
-      let line = userMat.get(row);
-      let fill = userFill.get(row);
-      const color = row.startsWith("user_") ? paletteColor(row).color : hexColor(layerColor(row));
-      if (!line) userMat.set(row, (line = new THREE.LineBasicMaterial({ color })));
-      if (!fill) userFill.set(row, (fill = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0, side: THREE.DoubleSide })));
-      return { line, fill, color };
-    };
     for (const s of board.drawings.shapes) {
       const on = shapeLayerOf(s.layer);
       if (!on) continue;

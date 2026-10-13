@@ -11,6 +11,7 @@
 //
 // Pure: no store, no DOM. Unit-tested in globalEditTextGraphics.test.ts.
 import type { BoardState } from "../api/types";
+import { enabledOptionalLayers } from "./boardLayers";
 import { ancestors } from "./groupTree";
 
 /** The Scope box. */
@@ -29,12 +30,9 @@ export interface TextGraphicsFilter {
   selectedOnly: boolean;
 }
 
-/** The technical layers of a board after its copper, in the order of the layer selector (`PCB_LAYER_BOX_SELECTOR`: adhesive, paste, silkscreen, mask, user, edge, courtyard, fab). */
-const TECHNICAL_LAYERS = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
-
-/** Every layer a text, a graphic item or a dimension can be on: the board's copper, then the technical layers, then any other layer an item of the board is on (a user layer). */
+/** Every layer a text, a graphic item or a dimension can be on: the board's copper, then the technical and user layers it has (Board Editor Layers, in the order of the layer selector `PCB_LAYER_BOX_SELECTOR`), then any other layer an item of the board is on. */
 export function textGraphicsLayers(board: BoardState | null): string[] {
-  const out = [...(board?.layers ?? []), ...TECHNICAL_LAYERS];
+  const out = [...(board?.layers ?? []), ...enabledOptionalLayers(board?.board_rules?.layer_setup)];
   const known = new Set(out);
   const dr = board?.drawings;
   for (const layer of [...(dr?.shapes ?? []).map((s) => s.layer), ...(dr?.texts ?? []).map((t) => t.layer), ...(dr?.dimensions ?? []).map((d) => d.layer)]) {

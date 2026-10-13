@@ -12,7 +12,7 @@ use eda_model::ir::Point;
 pub type Seg2 = (Point, Point);
 
 /// `rescale( num, val, den )` (`libs/kimath/src/math/util.cpp`): `num * val / den`, rounded to nearest, halves away from zero.
-fn rescale(num: i128, val: i128, den: i128) -> i128 {
+pub(crate) fn rescale(num: i128, val: i128, den: i128) -> i128 {
     let n = num * val;
     if (n < 0) ^ (den < 0) {
         (n - den / 2) / den

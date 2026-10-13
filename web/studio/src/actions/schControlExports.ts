@@ -4,6 +4,7 @@ import type { SchControlContext } from "./schControlActions";
 import { fetchHierarchy, fetchSchematicFiles, postSymbolSvg } from "../api/schControlClient";
 import { fileStem } from "../kicad-port/saveAs";
 import { samePath } from "../kicad-port/sheetPages";
+import { shownTitleBlock } from "../kicad-port/pageSettings";
 import { saveBlob, saveTextFile } from "../api/libraryClient";
 import { layerColor } from "../components/canvas/layers";
 import { drawPageAndFrame, drawTitleBlock, drawZoneReferences, pageOf } from "../components/schematic/drawingSheet";
@@ -58,7 +59,7 @@ export function renderSheetImage(ctx: SchControlContext): HTMLCanvasElement | nu
   g.scale(scale, scale);
   drawPageAndFrame(g, view, page);
   drawZoneReferences(g, view, page);
-  const tb = sch.title_block;
+  const tb = shownTitleBlock(sch.title_block);
   const crumbs = sch.sheet_path ?? [];
   drawTitleBlock(
     g,

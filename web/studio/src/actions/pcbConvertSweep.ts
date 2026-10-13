@@ -4,6 +4,9 @@
 // (`POST /api/convert/polys`), everything else is kicad-port/pcbConvert.ts. Called from `registerPcbEditSweep`.
 
 import { createElement } from "react";
+import type { TextGraphicsDefaults } from "../api/types";
+import { lineThicknessUm } from "../kicad-port/layerDefaults";
+import { activeLayerName } from "../kicad-port/layerPresets";
 import type { BoardState, Cmd } from "../api/types";
 import { convertPolys } from "../api/client";
 import {
@@ -32,11 +35,9 @@ const last: { convert: ConvertSettings; outset: OutsetParams; tracks: { layer: s
   tracks: { layer: "", net: "", deleteOriginals: true },
 };
 
-/** `bds.m_LineThickness[ bds.GetLayerClass( layer ) ]` with KiCad's defaults (board_design_settings.h): copper 0.2 mm, silkscreen / fab / other 0.1 mm, edges and courtyard 0.05 mm. */
-export function layerLineWidthUm(layer: string): number {
-  if (layer.endsWith(".Cu")) return 200;
-  if (layer === "Edge.Cuts" || layer.endsWith(".CrtYd")) return 50;
-  return 100;
+/** `bds.m_LineThickness[ bds.GetLayerClass( layer ) ]`: the board's Text & Graphics default for the layer's class, KiCad's own table (copper 0.2 mm, silkscreen / fab / other 0.1 mm, edges and courtyard 0.05 mm) when the backend sends none. */
+export function layerLineWidthUm(layer: string, defaults?: TextGraphicsDefaults): number {
+  return lineThicknessUm(defaults, layer);
 }
 
 /** Every net a pad of the board carries (the nets a new track can belong to). */
@@ -51,7 +52,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
   const board = state.board;
   const { toast, pcbOnly, requestFiltered, applyEdit } = createSweepHelpers(ctx);
   /** `PCB_LAYER_ID destLayer = m_frame->GetActiveLayer()`. */
-  const destLayer = (): string | null => state.activeLayer ?? board?.layers[0] ?? null;
+  const destLayer = (): string | null => (state.activeLayer ? activeLayerName(state.activeLayer, "") : (board?.layers[0] ?? null));
 
   // ------------------------------------------------- Create Polygon / Zone / Rule Area
   // CONVERT_TOOL::CreatePolys.
@@ -82,7 +83,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
             onOk: (chosen: ConvertSettings) => {
               last.convert = chosen;
               void (async () => {
-                const resolved = kind === "poly" ? resolveConvertSettings(chosen, layerLineWidthUm(layer)) : chosen;
+                const resolved = kind === "poly" ? resolveConvertSettings(chosen, layerLineWidthUm(layer, board?.board_rules?.text_graphics)) : chosen;
                 const reply = await convertPolys(ids, resolved.strategy, resolved.gapUm);
                 if (!reply.ok || reply.rings.length === 0) {
                   if (kind === "poly") toast(`Could not convert selection: ${resolved.strategy === "bounding_hull" ? "Resulting polygon would be empty" : "Objects must form a closed shape"}`, "error");
@@ -134,7 +135,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
           showHull: false,
           onOk: (chosen: ConvertSettings) => {
             last.convert = { ...last.convert, deleteOriginals: chosen.deleteOriginals };
-            const plan = planConvertToLines(board, ids, layer, state.pcbx.drawStrokeWidthUm, chosen.deleteOriginals);
+            const plan = planConvertToLines(board, ids, layer, layerLineWidthUm(layer, board.board_rules?.text_graphics), chosen.deleteOriginals);
             if (plan.empty) return;
             void applyEdit(plan.cmds, plan.removed);
           },
@@ -214,7 +215,7 @@ export function registerPcbConvertSweep(m: Map<string, () => void>, ctx: SweepCt
         element: createElement(OutsetItemsDialog, {
           params: start,
           layers,
-          layerDefaultWidth: layerLineWidthUm,
+          layerDefaultWidth: (layer: string) => layerLineWidthUm(layer, board?.board_rules?.text_graphics),
           onOk: (params: OutsetParams) => {
             last.outset = params;
             const shapes = ids.map((id) => api.shapeById(id)).filter((s): s is NonNullable<typeof s> => !!s);

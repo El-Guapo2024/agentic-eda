@@ -32,6 +32,7 @@ import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
 import { drcMarkerObject } from "../../kicad-port/appearance";
+import { drawFootprintArt } from "./fpArtPaint";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
 
 /**
@@ -142,13 +143,13 @@ export interface PaintOptions {
 /** How much of its colour an item outside the entered group keeps. */
 export const OUTSIDE_ENTERED_GROUP_ALPHA = 0.3;
 
-function layerAlpha(opts: PaintOptions, key: string): number {
+export function layerAlpha(opts: PaintOptions, key: string): number {
   // HIGH_CONTRAST_MODE::DIMMED mixes the inactive layers 80 % into the background; HIDDEN draws them not at all.
   if (opts.activeLayer && opts.highContrast && opts.activeLayer !== key) return opts.appearance?.contrastHidden ? 0 : 0.25;
   return opts.layerOpacity[key] ?? 1;
 }
 
-function withAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: () => void) {
+export function withAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: () => void) {
   if (alpha >= 1) return draw();
   if (alpha <= 0) return;
   const prev = ctx.globalAlpha;
@@ -371,6 +372,9 @@ function drawFootprint(ctx: CanvasRenderingContext2D, view: ViewTransform, part:
       ctx.stroke();
     });
   }
+
+  // The footprint's own silkscreen, fab and assembly drawings and its texts (`part.graphics`, `part.texts`), each on its layer and over the pads.
+  drawFootprintArt(ctx, view, part, opts);
 
   // The Reference, the Value and the user fields are drawn by `drawFields` once the backend says where they are (`part.fields`); an older backend's footprint has
   // only its reference, drawn beside the courtyard the way it always was.
@@ -684,7 +688,7 @@ function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
 }
 
 /** A Shape/Text's own dotted KiCad layer name ("F.SilkS") -> colors.json's real key ("F_SilkS") -- unlike copperColorKey() (which also lowercases, fine for copper's own always-lowercase-safe names but wrong for e.g. "Edge.Cuts" -> "Edge_Cuts"), these carry a real named layer already and just need the punctuation swapped, case preserved. */
-function realLayerKey(layer: string): string {
+export function realLayerKey(layer: string): string {
   return layer.replace(/\./g, "_");
 }
 
@@ -710,7 +714,7 @@ function drawShapes(ctx: CanvasRenderingContext2D, view: ViewTransform, board: B
 }
 
 /** `sketch` is `pcbnew.Control.graphicOutlines` ("Sketch Graphic Items", `m_DisplayGraphicsFill` off): a filled shape is drawn as its outline only. */
-function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
+export function drawShapeGeometry(ctx: CanvasRenderingContext2D, s: Shape, sketch = false) {
   ctx.beginPath();
   switch (s.kind) {
     case "segment":
@@ -791,7 +795,7 @@ function drawTexts(ctx: CanvasRenderingContext2D, view: ViewTransform, board: Bo
     const color = selected ? layerColor("selection") : layerColor(realLayerKey(t.layer));
     // millideg -> rad; canvas Y grows downward, so negate for KiCad's CCW-positive convention (matches painter's other rotations)
     const angleRad = (-t.angle / 1000) * (Math.PI / 180);
-    drawStrokeText(ctx, t.content, t.x, t.y, {
+    drawStrokeText(ctx, t.shown ?? t.content, t.x, t.y, {
       sizeUm: Math.max(t.size, hairlineUm(view, 8)),
       // "Sketch Text Items" (`m_DisplayTextFill` off): the text in line mode, one pixel wide.
       thicknessUm: opts.sketchText ? hairlineUm(view, 1) : t.stroke_width,
@@ -1038,16 +1042,21 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   }
 
   if (draw.kind === "diffpair") {
-    // No shove/walkaround for a pair in this port (crates/pns/src/
-    // diff_pair.rs's own doc comment) -- a collision on *either* line
-    // colors *both*, since the pair is conceptually one unit to the user
-    // even though each line is drawn/collision-checked independently.
+    // A collision on *either* line colors *both*: the pair is one unit to the user, though each line is checked on its own. The head is
+    // already coupled, walked or shoved by the router (crates/pns/src/dp_placer.rs); `displaced` is what Shove would push aside.
     const violationColor = "#ff3333";
     const color = draw.colliding ? violationColor : layerColor(copperColorKey(draw.layer));
     for (const run of draw.runsA ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     for (const run of draw.runsB ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
     strokeDashedPolyline(ctx, view, draw.ptsA, color, draw.width, false);
     strokeDashedPolyline(ctx, view, draw.ptsB, color, draw.width, false);
+    for (const d of draw.displaced ?? []) strokeDashedPolyline(ctx, view, d.pts, "#ffaa33", draw.width || 150, false);
+    for (const v of draw.displacedVias ?? []) {
+      const d = board.routing?.vias.find((via) => via.id === v.source_via)?.d ?? 600;
+      strokeViaGhost(ctx, view, v.x, v.y, d, "#ffaa33");
+    }
+    for (const v of draw.fixedVias ?? []) strokeViaGhost(ctx, view, v.x, v.y, v.diameter, layerColor("via"));
+    for (const v of draw.vias ?? []) strokeViaGhost(ctx, view, v.x, v.y, v.diameter, draw.colliding ? violationColor : layerColor("via"));
     return;
   }
 

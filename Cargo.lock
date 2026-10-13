@@ -640,6 +640,7 @@ name = "eda-kicad"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "eda-clipper2",
  "eda-connectivity",
  "eda-drc",
  "eda-engine",
@@ -647,6 +648,7 @@ dependencies = [
  "eda-layout",
  "eda-model",
  "eda-place",
+ "eda-shape-poly-set",
  "eda-zone-filler",
  "serde",
  "serde_json",

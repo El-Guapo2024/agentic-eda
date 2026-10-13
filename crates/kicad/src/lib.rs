@@ -21,6 +21,7 @@ use eda_model::ir::{Design, FieldPlacement, NetLabel, NoConnect, PowerSymbol, Sc
 use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
+mod fp_art_io;
 mod fp_fields;
 mod pad_shape;
 mod pcb;
@@ -33,7 +34,7 @@ mod sexpr;
 mod page;
 mod import;
 mod import_items;
-pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
+pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, merge_project_setup_pages, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
 
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules};
@@ -79,6 +80,10 @@ pub mod drc_exclusions;
 pub use pcb::effective_erc_severities;
 // The Appearance panel's share: the layers, objects, colours, presets and views the person chose, in the derived `.kicad_prl` and `.kicad_pro`.
 pub mod appearance;
+// Import Graphics (`common/import_gfx`): the readers of DXF files and the shapes they hand the importers of the editors.
+pub mod dxf_import;
+pub mod graphics_import;
+pub mod svg_import;
 
 const STUB_MM: f64 = 1.27;
 

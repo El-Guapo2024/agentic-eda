@@ -225,6 +225,20 @@ mod tests {
         assert!(parse_footprint(b"(kicad_pcb)")["error"].is_string());
     }
 
+    /// A `.kicad_mod` dropped on the Footprint Editor (`pcbnew.Control.ddImportFootprint`) is read by this route: its silkscreen, its fab drawing and its text come with it.
+    #[test]
+    fn a_dropped_kicad_mod_brings_its_silkscreen_and_fab_art() {
+        let text = br#"(footprint "Dropped" (layer "F.Cu")
+            (fp_line (start -2 -1) (end 2 -1) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+            (fp_rect (start -1 -0.5) (end 1 0.5) (stroke (width 0.1) (type solid)) (fill no) (layer "F.Fab"))
+            (fp_text user "${REFERENCE}" (at 0 0 0) (layer "F.Fab") (effects (font (size 0.5 0.5) (thickness 0.08))))
+            (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask" "F.Paste")))"#;
+        let r = parse_footprint(text);
+        let layers: Vec<String> = r["footprint"]["graphics"].as_array().unwrap_or(&vec![]).iter().map(|g| g["layer"].as_str().unwrap_or("").to_string()).collect();
+        assert!(layers.iter().any(|l| l == "F.SilkS") && layers.iter().any(|l| l == "F.Fab"), "{r}");
+        assert_eq!(r["footprint"]["texts"].as_array().map(Vec::len), Some(1), "{r}");
+    }
+
     fn temp_root(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("eda-library-api-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

@@ -18,12 +18,12 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   recorded with a reason in `web/studio/tools/ui-parity-missing.json`; none is bare. **Every reason was re-checked against main on 2026-10-10
   (`STALE-REASONS.md`): 10 are stale (what they say is missing now exists), 18 are partly stale, 154 hold** (4 of those wait for a branch in
   flight; the library tables wired five reasons). The stale ones are Find by Properties, Migrate 3D Models, the microwave gap and stub, Append Board and its drop, the Footprint Editor's
-  drop, Import Sheet, Draw Sheet from File and the schematic drop; the plan below carries them.
+  drop, Import Sheet, Draw Sheet from File and the schematic drop; the plan below carries them. (`task-files-in` wired Append Board, its drop and the Footprint Editor's drop, with Import Graphics for the board, the schematic and the Symbol Editor and a drop host: item 28.)
 - **The original 30 gaps** (Appendix A; numbering kept because code comments cite "GAPS.md #8", "#20", "#6"): **13 closed, 9 partial, 0 open,
   8 out of scope** (was 10, 12, 0, 8 on 2026-10-07; #11 Property dialogs, #25 Align and distribute and, on `task-pcb-edit-details`, #14 Clipboard closed).
 - **Items 1 to 24** are the ranked list of 2026-10-07 with their state brought forward; **items 25 to 35 are new**: the gaps the second phase
   found, from the `PARITY-*.md` "left" notes, the merge messages and reading the code.
-- **In flight, not on main** (2026-10-10; read with `git diff main...<branch>`): `task-fp-graphics` (P1), `task-diff-pairs` (P5b), `task-files-in` (P8).
+- **In flight, not on main** (2026-10-11; read with `git diff main...<branch>`): `task-diff-pairs` (P5b), `task-files-in` (P8), `task-board-setup` (P9a), `task-sch-details` (P10).
   Do not start work that touches their files without reading them first.
 - **Trapezoid, chamfered and custom pads are KiCad's (2026-10-10; `PARITY-pcb.md` section 27, `PARITY-fpedit.md` section 10).** A pad keeps its real shape in the IR (`Pad::ext`, `LibraryPad::custom`); the `.kicad_pcb` and `.kicad_mod`
   readers and writers are `pcb_io_kicad_sexpr`'s (kicad-cli's plot of the original and of our export is identical, for a board and for a library footprint); and the DRC, the routing gate, the router, connectivity and the zone filler
@@ -32,23 +32,32 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   GND 11.33% to 0.15% of the area, `issue5093`'s `/right/GND` 776.56% to 1.49%; 198 of the 208 fills of the 17 QA boards are within 1% of kicad-cli's area and 189 within 0.5%. Left: Explode and Recombine, padstacks (a pad has one shape for all layers),
   a custom pad's proxy spokes, and the instant 3D scene (`eda_drc::pad_shape::pad_outline` and the state's `pads[].outline` are there for it). Measured: 40 new Rust tests (five of them slow-tier, with kicad-cli) and 25 new
   `node --test` cases; `web/studio/e2e/pad-shapes.check.js` runs 6 scenarios through `window.__eda` on a served board.
+- **A footprint carries its own graphics (2026-10-10, `task-fp-graphics`; `PARITY-pcb.md` section 28).** The silkscreen outline, the pin-1 mark, the fab body, the assembly drawings and the texts of a footprint (`fp_line`, `fp_arc`, `fp_circle`,
+  `fp_rect`, `fp_poly`, `fp_curve`, `fp_text user`) are `Footprint::art` (`crates/model/src/fp_art.rs`), in the footprint's frame, so they move, turn and flip with it. The `.kicad_mod` and `.kicad_pcb` readers and writers are
+  `pcb_io_kicad_sexpr`'s (a bottom-side footprint in the file's mirrored frame): kicad-cli's SVG plot of the silkscreen and fab layers of the original and of our export is the same, primitive for primitive, on six QA boards (24,090 primitives,
+  `complex_hierarchy` among them), a synthetic board and a board made from `examples/opamp_filter.yaml`. The canvas draws them by layer under the Appearance rows, a click on a stroke picks the footprint, the 3D scene draws the silkscreen, the
+  in-house board build reads them (a board made here and one imported are read the same way) and `drawings.footprint_extras` no longer holds a footprint's graphics or texts. A legacy library's through-hole pads on `F.SilkS` come back out too
+  (`PadMaskInfo::art_layers`). The measure: `complex_hierarchy`'s `silk_over_copper` 104 -> 2 became 104 -> 104, `silk_overlap` 199 -> 5 became 199 -> 199, `silk_edge_clearance` 14 -> 2 became 14 -> 14; the re-export of a real board gives kicad-cli
+  the original's counts on 7 of 12 boards (was 6). Left: hatch lines, the footprint editor's stroke types and vertical justification, the title block's variables in a footprint text, mask-only pads and a pad on the silkscreen of a library footprint.
+  Measured: 33 new Rust tests (three of them slow-tier, with kicad-cli), 9 new `node --test` cases, and `web/studio/e2e/fp-graphics.check.js`, 6 scenarios through `window.__eda` on a served board.
 - **Four findings change the picture.**
   1. *A wired action is not a working feature.* This was the finding of 2026-10-07 and it was fixed where it bit: the schematic edit tools act on
      every item kind (item 1, `2a8bf8f`) and so do the PCB ones (item 8, `88c8c0a`). Before closing any action, run it on every item kind.
   2. *The KiCad files we write drop design data, and kicad-cli judges those files.* The writer keeps zone settings, keepouts, dimensions, groups,
-     locks, arcs, teardrops (`b145f0e`) and the board outline as Edge.Cuts items (`a46fd29`). **The biggest thing it still drops is the footprint's
-     own graphics: no part outline, pin-1 mark or fab body is on the canvas, in the file or in the silkscreen kicad-cli plots (item 25).**
+     locks, arcs, teardrops (`b145f0e`), the board outline as Edge.Cuts items (`a46fd29`) and the footprint's own graphics: part outline, pin-1 mark, fab body
+     and texts, on the canvas, in the file and in the silkscreen kicad-cli plots (item 25, `task-fp-graphics`). **What it still drops: the mask-only pads, barcodes, component classes and tuning profiles.**
   3. *One root sits under several gaps: the constraint model built from the intent has no edit verbs.* It now has an overlay for the rules
      (`drawings.rules`), for the nets (`design.nets`), for the libraries, for footprint fields, attributes and pad edits
      (`drawings.footprint_edits`), for the zone filler's pad and footprint settings (`drawings.zone_overrides`) and for footprints that exist only on
-     the board (`drawings.board_parts`). **It has none for which footprint a part uses: the schematic's Footprint field never reaches the board,
-     Change Footprint does not exist, and a reference rename leaves the board's footprint, its pose and its routing behind (item 26).**
+     the board (`drawings.board_parts`), and since 2026-10-12 for which footprint a part uses (`drawings.footprint_assignments`) and which reference a part
+     has (`drawings.renamed_parts`): the schematic's Footprint field reaches the board, Change Footprint exists, and a reference rename carries the board's
+     footprint, its pose and its routing (item 26).
   4. *Most earlier parity work was typechecked and unit-tested and never clicked.* Six areas now have a browser check driven through
      `window.__eda` (`web/studio/e2e/`: Appearance, DRC and ERC review, footprint edit and arrays, Properties panel, snap and grid, the 3D viewer);
      the schematic editors, Board Setup, the choosers, the router, the PCB edit tools, the zones and the hierarchy have none (item 33).
 - **Docs.** Action level: `UI-ACTIONS.md`, with `STALE-REASONS.md` beside it. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl,common}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 310 added since have not been compared) and `CODE-COMPARE-router.md`,
-  `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and connectivity: `REPORT.md` (the re-export part measured 2026-10-08).
+  `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and connectivity: `REPORT.md` (the re-export part re-measured 2026-10-11, after P1).
   Engines: `ARCHITECTURE.md`. The "Missing" lists below were re-read against the code where a merge touched them; a bullet no merge touched is
   carried forward from 2026-10-07 and says so.
 
@@ -76,6 +85,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 21 | Find on the PCB | Mostly done | `4c041a6` (10-09) |
 | 22 | Create Array | Mostly done | `afcb91b` (10-09) |
 | 23 | The 3D viewer: KiCad's models, layer tree, stackup colours | **Done** | `89ff669` (10-10) |
+| 25, 2 | Footprint graphics: silkscreen, fab and assembly drawings and texts are the footprint's own (IR, `.kicad_mod` and `.kicad_pcb`, canvas, 3D, in-house checks) | **Done** (limits in item 25) | `task-fp-graphics` (10-10, not merged) |
 
 Not moved: items 15, 19, 20, 24.
 
@@ -86,15 +96,15 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 | rank | package | items | what the user meets | state | size |
 |---|---|---|---|---|---|
-| 1 | P1 Footprint graphics on the board | 25, 2 | no part outline, pin-1 mark or fab body on the canvas, in the file or in the silkscreen; an imported board loses them on export | open | L |
-| 2 | P2 Footprint assignment, exchange and reference rename | 26, 9 | the Footprint field of a symbol does nothing on the board; no Change Footprint; a rename leaves the footprint and its routing behind | open | L |
+| 1 | P1 Footprint graphics on the board | 25, 2 | no part outline, pin-1 mark or fab body on the canvas, in the file or in the silkscreen; an imported board loses them on export | done 2026-10-10 on `task-fp-graphics` (not merged); item 25 lists what is left | L |
+| 2 | P2 Footprint assignment, exchange and reference rename | 26, 9 | the Footprint field of a symbol does nothing on the board; no Change Footprint; a rename leaves the footprint and its routing behind | done 2026-10-12 on `task-fp-assign` (not merged); item 26 lists what is left | L |
 | 3 | P3 Library tables and paths | 5 | a symbol or footprint made in the editors cannot be saved into a table library's file; no Reset or Migrate Libraries; no 3D model search paths | mostly done | S |
 | 4 | P4 Schematic hierarchy: the rest | 4 | Import Sheet, sheets in the clipboard, the last cross-sheet cases | in flight | M |
-| 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | **P5a done on `task-router-drag` (2026-10-10)**: a segment slides, an illegal drag falls back, routes start and end mid-track, Route From Other End after the first fix. Left: no coupled diff pair shove; no U meander | P5a done, P5b and P5c open | L (2 parts left) |
+| 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | **P5a done on `task-router-drag` (2026-10-10)**: a segment slides, an illegal drag falls back, routes start and end mid-track, Route From Other End after the first fix. **P5b done on `task-diff-pairs` (2026-10-11)**: a pair is KiCad's, walked or shoved as one with its gap, with vias. Left: no U meander, no pair length tuning of KiCad's kind | P5a and P5b done, P5c open | L (1 part left) |
 | 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | mostly done (merged 2026-10-10); items 8, 15, 17 and 35 list what is left | M, ongoing |
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
-| 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | no way to bring an outline from a DXF or another board in | open | L |
-| 9 | P9 Board Setup completion and the rule editor | 3 | Board Editor Layers, Text Variables, Formatting, Tuning and Component Classes pages; regex net patterns | open | L (rule editor XL) |
+| 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview | mostly done | S |
+| 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
 | 10 | P10 Schematic details | 1, 12, 15, 17, 20 | no schematic groups, a user-defined field has no place on the sheet, no Pin Helpers menu (done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
 | 11 | P11 Search and inspection | 21, 29 | Find by Properties, Clearance Resolution, Footprint Checker; Find ignores user fields and zone names | open | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
@@ -125,7 +135,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   shapes, rule areas, text boxes, directive labels); strokes and junction looks are drawn and written to the `.kicad_sch` as KiCad writes them, and read back.
 - Measured: 49 Rust tests for the move family, 17 for Properties, 4 in `board.rs` (each verb is one undo step, the nets untouched), 19 `node --test` cases;
   clicked through on a copy of mcu30. No browser check script yet (item 33).
-- Done 2026-10-12 (`task-sch-details`; `PARITY-sch.md` sections 20 to 25): a symbol's pins are items (hover, click, box, the Pins filter, the summary; the net highlight and Select Node start from one) with Swap Pins, Swap Pin Labels and Swap Unit Labels
+- Done 2026-10-12 (`task-sch-details`; `PARITY-sch.md` sections 21 to 26): a symbol's pins are items (hover, click, box, the Pins filter, the summary; the net highlight and Select Node start from one) with Swap Pins, Swap Pin Labels and Swap Unit Labels
   (`SchExtras::pin_swaps`, three `SchEdit` verbs, one undo step each); a sheet's pins are items one by one (moved along the border, Sheet Pin Properties, Delete, Alt+S swap; the hierarchy's nets follow); a global or hierarchical label with Auto rotates
   itself when it is placed, edited in Label Properties, moved and dragged (`AutoRotateItem`); a free text has a justification (`SchExtras::text_justify`) that is written, read back and flipped by Rotate and Mirror as `SCH_TEXT` flips it;
   the net-collision overlay of a Move or Drag (`SCH_DRAG_NET_COLLISION_MONITOR`: circles at the junctions the held items would make between two nets, marks where a connection is pulled apart, the warning cursor); the Symbol Fields Table's attribute
@@ -135,28 +145,29 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   the angle, the pin and the cached copy of the symbol back as we wrote them); `web/studio/e2e/sch-details.check.js` (nine scenarios through `window.__eda`, 72 checks, every scenario undoes itself).
 - Missing: Pin Helpers (`PIN_TRICKS_MENU`: Wire, No Connect, Net Label, Hierarchical Label and Global Label on a selected pin or sheet pin); a sheet's border and fill; a user-defined field has no place on the sheet (`FieldPlacement::name` can name one in `SchematicSection::field_layout`, but the editor
   lists, draws and autoplaces only the standard fields and `user_fields` holds values only: package P10 step 8, not reached); a sheet pin's font, size, bold, italic and colour have no place in the IR; a power symbol's Properties has no footprint, datasheet, exclusion flags or
-  pin table; Autoplace Fields does not read the swapped pin places and the reader does not turn a `lib_name` copy back into a swap; the Symbol Fields Table has no variants and no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
+  pin table; Autoplace Fields does not read the swapped pin places and the reader does not turn a `lib_name` copy back into a swap (so a copy, paste or duplicate of a symbol with swapped pins has the library's pins); the Symbol Fields Table has no variants and no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
   `eda_engine::placed` (older note, not re-checked since the overlap fix, `f24fa31`, which made generated symbols draw their pins as KiCad's do).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
-**Mostly done (2026-10-08, 10-09).** Hit: any board with a pour, keepout or dimension; every export; every imported board. Blocks: no longer for keepouts. Package P1 for the biggest of what is left.
+**Mostly done (2026-10-08, 10-09, 10-10).** Hit: any board with a pour, keepout or dimension; every export; every imported board. Blocks: no longer for keepouts. The footprint's own graphics (P1) were the biggest of what was left and are done.
 - Done (`b145f0e`; `crates/kicad/src/{pcb,pcb_items,import_items,import}.rs`): a rule area is written as a keepout zone (before, it failed the whole export with
   `kicad.unknown_net`); every zone writes its own clearance, minimum width, priority, pad connection, thermal gap and spoke, hatch, island and fill settings;
   arc tracks are arcs; locks, dimensions, groups, zone names and teardrop flags are written and read back (round-trip tests in `pcb.rs`). **The board outline
   (`a46fd29`, 10-09)**: Edge.Cuts come back as the items they were (`gr_arc`, `gr_circle`, `gr_rect`, `gr_poly`, `gr_curve`, `gr_line`), a malformed outline stays
   malformed in the export, a footprint's own Edge.Cuts become board-level shapes, KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))` is read.
-- Measured (`REPORT.md`, `scores.json`, 2026-10-08, kicad-cli 10.99 on `qa/data` of the KiCad sources): the re-export of a real board gives kicad-cli the same
-  violation counts as the original on **6 of 12** boards (50.0%), up from 4 of 12; all 12 re-exports load.
-- Missing: **footprint-local graphics and texts** (`fp_line`, `fp_circle`, `fp_text`) are imported into `drawings.footprint_extras`, which only the in-house DRC reads,
-  and never written back (512 `fp_line`s on `complex_hierarchy`: `silk_over_copper` 104 -> 2, `silk_overlap` 199 -> 5) -- item 25; a footprint that had no library is
-  written as `eda:<name>`, so a project that turns `lib_footprint_issues` on gets a violation for a library that does not exist; barcodes, component classes and tuning
-  profiles are not read (the `api_kitchen_sink`, `component_classes_drc` and `drc_missing_tuning_profile` differences); 189 non-rectangular pad shapes of the QA corpus are
-  approximated as rectangles (item 31). `scores.json` was last measured before the outline and footprint work (10-08): re-run `tools/parity_report.py` when P1 lands.
+- Done (`task-fp-graphics`, 10-10; item 25): **a footprint's graphics and texts** (`fp_line`, `fp_circle`, `fp_text` ...: 512 `fp_line`s on `complex_hierarchy`) are the footprint's own and come back out, and so does a pad's
+  silkscreen layer: `silk_over_copper` 104 -> 104 (was 2), `silk_overlap` 199 -> 199 (was 5), `silk_edge_clearance` 14 -> 14 (was 2).
+- Measured (`REPORT.md`, `scores.json`, the re-export part on 2026-10-11, kicad-cli 10.99 on `qa/data` of the KiCad sources): the re-export of a real board gives kicad-cli the same
+  violation counts as the original on **7 of 12** boards (58.3%), up from 6 (10-08) and 4; all 12 re-exports load.
+- Missing: a footprint that had no library is written as `eda:<name>`, so a project that turns `lib_footprint_issues` on gets a violation for a library that does not exist (72 on `complex_hierarchy`); barcodes,
+  component classes and tuning profiles are not read (the `api_kitchen_sink`, `component_classes_drc` and `drc_missing_tuning_profile` differences); 189 non-rectangular pad shapes of the QA corpus are
+  approximated as rectangles (item 31); `complex_hierarchy` still differs in `clearance` (112 -> 117), `copper_edge_clearance` (14 -> 15), `solder_mask_bridge` (112 -> 115) and `shorting_items` (0 -> 2), not analysed.
+  `scores.json` was last measured before the outline and footprint work (10-08) except for the re-export part.
 - Port from: `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp` and `pcb_io_kicad_sexpr_parser.cpp`.
 
 ### 3. Board Setup and the rules
-**Mostly done (2026-10-08).** Hit: the start of every project. Blocks: no; the pages that do not exist yet need a model first. Package P9.
+**Mostly done (2026-10-12; P9a).** Hit: the start of every project. Blocks: no. Package P9.
 - Done (`b145f0e`): `eda_model::rules::RulesOverlay` (`crates/model/src/rules.rs`) holds one optional page per Board Setup page in `design.json` (`drawings.rules`);
   `board::load` lays it over the intent's (or the imported project's) rules, as `design.nets` is, so the router, the gates, the studio and the derived `.kicad_pro`,
   `.kicad_pcb` and `.kicad_dru` that kicad-cli reads all follow an edit. Seven undoable verbs (`set_net_classes`, `set_constraints`, `set_mask_paste`,
@@ -164,10 +175,23 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `components/BoardSetupDialog.tsx` is KiCad's page tree and all ten pages edit: Physical Stackup (a layer's `(color ...)` too, since 10-09), Solder Mask/Paste,
   Defaults, Dimensions, Constraints, Pre-defined Sizes, Teardrops, Net Classes (with the patterns and the nets each matches), Custom Rules (as text, "Check rule syntax"
   through kicad-cli: `POST /api/check_rules`) and Violation Severity (KiCad's 64 checks). Assign Netclass works from the board and the schematic.
-- Missing: the Board Editor Layers, Zone Hatch Offsets, Formatting, Text Variables, Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files pages
-  (nothing in the model holds them); the rule-tree designer (`DRETool.drcRuleEditor`, 82 files in `pcbnew/drc/rule_editor`; the `.kicad_dru` is edited as text);
-  KiCad's regular-expression net patterns, bus notation and composite net classes (a pattern here is `*` and `?`, first class wins); dielectric sub-layers and impedance
-  control on the stackup; and this app's drawing tools do not start new items from the Text & Graphics defaults yet (they reach the derived `.kicad_pro` only).
+- Done (P9a, `task-board-setup`, 2026-10-12; `web/studio/PARITY-pcb.md` section 9b has the detail and the proofs): six more verbs and pages -- **Text Variables** (`set_text_variables`; `${NAME}` is
+  expanded by `eda_model::text_vars` in board texts, footprint fields, schematic texts, symbol fields and the title block, the state carries the shown form, the derived `.kicad_pro` carries the
+  variables so kicad-cli's plots show the same: proved), **Board Editor Layers** (`set_board_layers`; the technical and user layers, their names and types; the board file's `(layers ..)` is
+  KiCad's and the importer reads it; the layer pickers, the Appearance panel and `${LAYER}` follow; an item cannot be put on a layer that is off nor a layer with items turned off; proved with
+  kicad-cli), **Formatting** (dash and gap ratios in the plot parameters, the footprint boxes in the project and applied when a footprint is put on the board), **Zone Hatch Offsets** (the filler
+  moves the hatch pattern; written as KiCad writes it), **Length-tuning Patterns** (the length tuner starts from them) and **Tuning Profiles** (with the profile each net class names;
+  kicad-cli reports `missing_tuning_profile`: proved); the drawing tools start from the Text & Graphics defaults of the layer's class (lines, shapes, text, dimensions; `incWidth`/`decWidth`; the CLI too);
+  and **regular-expression net patterns and composite net classes** (`eda_model::net_pattern`, `BoardRules::effective_class`: a net is in every class that matches it, the class higher in the list
+  winning where several set a size and Default giving the rest; a net in two classes makes the derived project carry the classes, and kicad-cli agrees: proved). Thirteen verbs now in
+  `crates/ops/src/board_setup.rs`'s family, 79 browser checks in `web/studio/e2e/board-setup-pages.check.js`.
+- Missing: the **Component Classes** and **Embedded Files** pages (nothing in the model holds them; the `component_classes_drc` difference of the QA corpus stays); the rule-tree designer
+  (`DRETool.drcRuleEditor`, 82 files in `pcbnew/drc/rule_editor`; the `.kicad_dru` is edited as text -- P9b); bus notation in net patterns (`D[0..7]`) and the net class labels of the schematic; the
+  transmission-line calculator of the Tuning Profiles grid; the tuner's corner style and single-sided settings (kept and written, not used by this app's meander generator); the Net Classes grid's own
+  Tuning Profile column (the class's profile is chosen on the Tuning Profiles page); zone-level hatch offsets (the board's per-layer offset is what the filler reads; KiCad itself loses the board's
+  when it saves, see section 9b); Formatting's dimension and barcode boxes (library footprints here hold neither) and, for a footprint the model already knows, the art of its library (only the copy
+  of a footprint the board keeps is restyled); in Text Variables: `@{}` math, `VCSHASH`, schematic labels, text boxes and power symbol fields, `PIN_NAME(n)`, library footprint texts and text pasted
+  from the clipboard; dielectric sub-layers and impedance control on the stackup.
 - Port from: `pcbnew/dialogs/dialog_board_setup.cpp` and `panel_setup_*.cpp`, `common/dialogs/panel_setup_netclasses.cpp`, `panel_setup_severities.cpp`,
   `panel_text_variables.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`.
 
@@ -234,20 +258,25 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `eeschema/tools/sch_editor_control.cpp` (`doCopy`, `Paste`), `common/clipboard.cpp`, `eeschema/sch_io/kicad_sexpr/`.
 
 ### 7. The router
-**Partial.** Shove near pads, vias and tracks, the board edge, every setting and the via drag are done (2026-10-08, `1e4d7ea`, `03b46de`). **Dragging a segment, a route that starts or ends mid-segment and Route From Other End after the first fix are done too (P5a, 2026-10-10, branch `task-router-drag`: `68eb737`, `c1b409c`, `bae172b`, `0a9290e`, `9dbcd8e`, `77e526e`, `bc573db`).** Hit: differential pairs with obstacles. Blocks: partly. Package P5.
+**Partial.** Shove near pads, vias and tracks, the board edge, every setting and the via drag are done (2026-10-08, `1e4d7ea`, `03b46de`). **Dragging a segment, a route that starts or ends mid-segment and Route From Other End after the first fix are done too (P5a, 2026-10-10, branch `task-router-drag`: `68eb737`, `c1b409c`, `bae172b`, `0a9290e`, `9dbcd8e`, `77e526e`, `bc573db`). A differential pair is KiCad's too: its gateways, Highlight collisions / Walk around / Shove with the two lines held at the pair's gap, `V` for a pair of vias, the pair optimizer (P5b, 2026-10-11, branch `task-diff-pairs`: `aa48f28`, `8df6fba`, `04c753d`, `cdc464b`, `3de42d5`, `4666af7`, `880ad08`, `708d29c`, `d9c5fe7`).** Hit: the meander of a length-tuned pair or track is not KiCad's. Blocks: partly. Package P5.
 - Exists: `crates/pns` ports hulls, `LINE::Walkaround`, shove of tracks and vias (a stack of lines with ranks, `onCollidingSolid`, `pushOrShoveVia`, the optimizer over every shoved line),
-  the optimizer with smart pads, loop removal, diff-pair routing, single-track and diff-pair length and skew tuning (dialog-driven), `D`/`G` drag of a segment (`DM_SEGMENT`: it slides, its neighbours follow at 45 degrees),
+  the optimizer with smart pads, loop removal, **the differential pair as `DIFF_PAIR_PLACER` (`diff_pair.rs`, `dp_placer.rs`: the gateways of `pns_diff_pair.cpp`, the pair started from a pad pair, a via pair or a pair of track ends and meeting the coupled
+  pair under the cursor, walked round what is in its way as one unit and shoved with its lines held at the pair's gap, `V` for a pair of vias with the route going on on the other layer, `/` posture, Backspace, one undo step, the pair optimizer `mergeDpSegments`;
+  kicad-cli's DRC finds no clearance, track width or diff-pair gap violation a placed pair adds)**, single-track and diff-pair length and skew tuning (dialog-driven), `D`/`G` drag of a segment (`DM_SEGMENT`: it slides, its neighbours follow at 45 degrees),
   a corner or a via, with the last valid position restored when the cursor is where the drag cannot be resolved; routes that start and end in the middle of a track (`SplitAdjacentSegments`) and Route From Other End
   before and after the first fix (`ContinueFromEnd`); the clearance gate measures
   pads by their exact outline (`eda_drc::board::placed_pad_copper`); the board outline with its cutouts, arcs and a footprint's own Edge.Cuts are obstacles with the copper-to-edge clearance
   (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`, `crates/pns/src/from_ir.rs`); every `RoutingSettings` field is read and Interactive Router Settings has `dialog_pns_settings.cpp`'s rows
   (`crates/pns/PARITY.md`; `CODE-COMPARE-router.md` D1-D6, D8, D10, D12, D15, D16 fixed).
-- Missing (`CODE-COMPARE-router.md` D18): a diff pair has no coupled shove or
-  walkaround and no via; length tuning is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs (`ARC_T`: a track that is an arc is not split by a route,
+- Missing (`CODE-COMPARE-router.md` D18): length tuning is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs (`ARC_T`: a track that is an arc is not split by a route,
   `SplitAdjacentArcs`, and `DM_ARC` is not a drag), mouse-trail posture (the dialog's "Use mouse path to set track posture" and "Optimize entire track being dragged" rows are disabled; the second needs the optimizer's
-  `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`), springback or `ShoveTimeLimit`; a head that ends in a via is not shoved with its via; `findRedundantSegment` and locked joints (`from_ir` never sets `Segment.locked`: a locked
+  `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`), springback or `ShoveTimeLimit`; a single track's head that ends in a via is not shoved with its via (a pair's heads are: `Shove::run_heads`); `findRedundantSegment` and locked joints (`from_ir` never sets `Segment.locked`: a locked
   track is dragged and shoved all the same); the generators (`PCB_GENERATOR`, 9 rows) that keep a tuning pattern editable.
   Browser check of P5a done (2026-10-10, `window.__eda` on the 30-part board: segment drag, 30-degree segment, corner dropped on a pad, route started and ended mid-track, Route From Other End after a fix: item 33 for the rest).
+  **Left of the pair (P5b): Route From Other End (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, so KiCad does it for a pair; here only a single track), springback (every move of a pair resolves from the world the last fix left), a pair that fails to walk shows
+  the pair as drawn and flags it (KiCad's `tryWalkDp` empties it: `bestScore > 0.0` is always true), two walk attempts where KiCad makes four (it repeats two), Backspace is an extension (`DIFF_PAIR_PLACER` has no `UnfixRoute`); a drag of a pair needs nothing (KiCad's `DRAGGER`
+  has no pair mode: `m_draggedLine` is one `LINE`).** Browser check of P5b done (2026-10-11, `web/studio/e2e/diff-pairs.check.js` on a scratch board built from `examples/through_hole_headers.yaml`: starting from either pad, the three modes, a pair routed, finished on the other header and undone in one step,
+  the pair of vias, `/`, Backspace, Escape). `docs/parity/CODE-COMPARE-router.md` section I and D18, `crates/pns/PARITY.md` Stage 7.
 - Port from: `pcbnew/router/` (`pns_dragger.cpp`, `pns_multi_dragger.cpp`, `pns_line_placer.cpp`, `pns_diff_pair_placer.cpp`, `pns_meander*.cpp`, `pns_shove.cpp`, `pns_walkaround.cpp`,
   `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`, `pcbnew/tools/generator_tool.cpp`.
 
@@ -267,7 +296,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/tools/edit_tool.cpp`, `edit_tool_move_fct.cpp`, `align_distribute_tool.cpp`, `pcb_selection_tool.cpp`, `pcb_control.cpp` (`Paste`, `placeBoardItems`), `common/dialogs/dialog_paste_special.cpp`, `pcbnew/kicad_clipboard.cpp`.
 
 ### 9. Footprints on the board are editable objects
-**Mostly done (2026-10-09, `afcb91b`).** Hit: every board (silkscreen cleanup, mounting holes). Blocks: no longer. Package P2 and P1 for what is left.
+**Mostly done (2026-10-09, `afcb91b`).** Hit: every board (silkscreen cleanup, mounting holes). Blocks: no longer. Package P2 for what is left (P1, the footprint's graphics, is done).
 - Done (`PARITY-pcb.md` section 26; `crates/model/src/fp_edit.rs`, `crates/ops/src/fp_edit.rs`, `crates/kicad/src/fp_fields.rs`, `kicad-port/fpFields.ts`, `components/{FootprintPropertiesDialog,BoardPadPropertiesDialog}.tsx`): a
   footprint's Reference and Value are fields with a position, size, thickness, layer, visibility, rotation, justification, mirror, bold, italic, keep upright and knockout; user fields can be added, renamed
   and deleted; the attributes (SMD, through hole or unspecified, not in schematic, exclude from position files, exclude from BOM, do not populate, exempt from the courtyard requirement) are per instance,
@@ -276,7 +305,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   whose position and BOM exports honour. A field is an item of the board (`REF:Name`): selected, drawn (following the Appearance rows), moved, dragged, turned, flipped. A pad's and a footprint's zone
   connection, relief gap, spoke width and angle and clearance are the zone filler's overlay (`drawings.zone_overrides`) and the same dialogs edit them. Board-only footprints are the "not in schematic" attribute.
 - Measured: 69 new Rust tests and 39 `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 19 scenarios through `window.__eda`; real kicad-cli honoured do-not-populate and exclude-from-position-files.
-- Missing: Change Footprint(s), Update Footprints from Library that reads the library, geographical reannotate -- now item 26; per-footprint mask and paste margin overrides; padstacks (item 31; trapezoid,
+- Missing: per-footprint mask and paste margin overrides; (Change Footprint(s), Update Footprints from Library that reads the library and geographical reannotate are done, item 26;) padstacks (item 31; trapezoid,
   chamfered and custom pads are done, 2026-10-10), fabrication property, pad number and pin function edits, pad-to-die length; Datasheet and Description fields and text variables in field text; our own placement and courtyard
   checks do not read a pad's offset or margins (kicad-cli does); logos; the microwave tools (their reason, "no free footprint", is stale: `STALE-REASONS.md` SR3).
 - Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_pad_properties.cpp`, `pcbnew/pcb_field.cpp`, `pcbnew/footprint.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
@@ -315,7 +344,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   and written to the `.kicad_sch`. Fields are items: picked, moved (`M`, a drag), turned, mirrored, hidden with Delete and edited in Field Properties; `O` runs Autoplace Fields; a turn re-autoplaces
   (`SchExtras::fields_autoplaced`). A label's spin, size, bold and italic are stored and edited. A placed symbol in the alternate ("De Morgan") body style is drawn, written and read back (`LibSymbol::alternate`,
   `SchExtras::body_styles`, Cycle Body Style). 44 Rust tests, 17 `node --test` cases.
-- Done 2026-10-12 (`PARITY-sch.md` sections 20 and 22): a free text's justification (`SchExtras::text_justify`: stored when it is not left and bottom, written as `(justify ..)`, read back, flipped by Rotate and Mirror, carried by copy and paste); a label's Auto
+- Done 2026-10-12 (`PARITY-sch.md` sections 21 and 23): a free text's justification (`SchExtras::text_justify`: stored when it is not left and bottom, written as `(justify ..)`, read back, flipped by Rotate and Mirror, carried by copy and paste); a label's Auto
   (`LabelLook::auto_rotate`); a symbol's pins are items, and Swap Pins keeps each pin's place in `SchExtras::pin_swaps`.
 - Missing: a field's font face and colour, a label's own fields (netclass, intersheet references) and a user-defined field's place on the sheet have no place in the IR; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
@@ -354,7 +383,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (a pad starts a connection; a chain of graphic lines is not followed), Ctrl+U returns to the imperial unit last used, Alt+` (`toggleNetHighlight`) turns the highlight off and on from the net it remembers, and Add Corner
   puts the corner at the nearest point of the edge (zone, polygon, line, arc). Carried forward from 2026-10-07 and not re-checked: Enter during a PCB route finishes it instead of clicking (`common.Control.cursorClick`),
   Route From Other End only before the first fix and `V` does nothing outside a route (all three belong to the router, package P5); Select Connection needs a selection on the schematic; Mirror X then Y collapses to one flag.
-  Fixed 2026-10-12 on the schematic (`task-sch-details`, `PARITY-sch.md` sections 20 to 26): the net highlight and Select Node start from a pin; a label's Auto-rotate; Copy as Text; Repeat Last Item repeats a label and a text with their properties;
+  Fixed 2026-10-12 on the schematic (`task-sch-details`, `PARITY-sch.md` sections 21 to 27): the net highlight and Select Node start from a pin; a label's Auto-rotate; Copy as Text; Repeat Last Item repeats a label and a text with their properties;
   Global Edit's text size edits the text in place instead of replacing it (which dropped its id and justification); the schematic pans with the middle and right buttons as the preferences say and auto-pans while drawing and moving.
 
 ### 16. The PCB context menu
@@ -393,7 +422,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 20. Schematic view controls
 **Mostly done on the schematic (2026-10-12, `task-sch-details`, not merged).** Hit: constantly. Blocks: no. Package P10.
-- Done 2026-10-12 (`PARITY-sch.md` section 26): the schematic canvas pans, zooms or does nothing with the middle and the right button as Preferences > Mouse and Touchpad say (`input.drag_middle`, `input.drag_right`; a right press that is no drag still
+- Done 2026-10-12 (`PARITY-sch.md` section 27): the schematic canvas pans, zooms or does nothing with the middle and the right button as Preferences > Mouse and Touchpad say (`input.drag_middle`, `input.drag_right`; a right press that is no drag still
   opens the context menu), and with Automatically pan while moving object on it auto-pans at the edge while a wire, bus, line, shape or sheet is drawn, items are held by M, G or a drag, a paste is carried or a box is dragged
   (`kicad-port/viewControls.ts`, `SchematicView.tsx`).
 - Missing: the PCB canvas pans with the middle or right button and auto-pans at the edge (opt-in, as in KiCad; `Canvas.tsx`) but does not read the drag settings, and the footprint and symbol canvases pan with either button, ignore the settings and never auto-pan;
@@ -425,7 +454,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `kicad-cli pcb export vrml` into a cache. Time to the first real model on mcu30 (30 parts) and a 93-part QA board: 2.7 to 4.4 s from the request, from 10 to 50 s with the GLB export (now the optional "Exact
   export"). The Appearance manager is `appearance_controls_3D.cpp`'s layer tree (`kicad-port/appearance3d.ts`); stackup colours come from Board Setup (`StackupLayer.color`); hover highlight; animated view
   moves. The board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts. `e2e/viewer3d.check.js` (50 checks). Two stalls of the request loop were found by measuring and fixed.
-- Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; values, footprint text, off-board silkscreen, models not
+- Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; the Value and user fields (a footprint's own texts and the Reference are drawn since P1), off-board silkscreen, models not
   in the position file and DNP models; X3D and IGES models; per-layer ambient and specular colours of the board; the preferences that set the animation speed; NPTH holes are not cut out of the slab
   (`aIncludeNPTHAsOutlines`, item 27); the footprint editor's 3D model panel (item 30).
 
@@ -436,36 +465,41 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `ui-parity-missing.json`. Add one when a work package needs it. Custom-shape pads left this list: they are item 31.
 
 ### 25. Footprints on the board carry no graphics
-**New, open.** Hit: every board. Blocks: yes, for the silkscreen and assembly output and for the look of the board. Package P1, size L.
-- What is missing, read from the code: the engine `Footprint` (`crates/model/src/footprint.rs`) holds pads, courtyard and `models3d`. `LibraryFootprint::to_engine_footprint` (`crates/model/src/ir.rs`) says in its
-  own comment that text, fields and attributes "stay editor-only (the engine has no use for silkscreen art...)", and the graphics of a library footprint are dropped with them. `write_footprint`
-  (`crates/kicad/src/pcb.rs`) writes pads, the courtyard (`fp_rect` / `fp_poly` on `F.CrtYd`), the fields and the attributes -- no `fp_line`, `fp_arc`, `fp_circle`, `fp_poly` or `fp_text` on silk or fab. The
-  canvas (`components/canvas/painter.ts`, `drawFootprint`) draws courtyard, pads and fields. So a board made here has no component outlines, no pin-1 marks and no F.Fab bodies on screen, in the file, in the
-  Gerber silkscreen kicad-cli plots from it, or in the 3D viewer's silk; and our silk and mask checks have nothing of a part to judge.
-- Imported boards: the importer keeps a footprint's silk and mask graphics and texts in `drawings.footprint_extras` (board space, `FootprintExtra.graphics`, `texts`), read only by the in-house silk and mask DRC
-  and never written back: on `complex_hierarchy` (512 `fp_line`s) kicad-cli's `silk_over_copper` goes from 104 to 2 and `silk_overlap` from 199 to 5 after our export (`REPORT.md`, item 2).
-- To do: graphics and texts as part of the placed footprint, in its frame (so they move, turn and flip with it), read from `.kicad_mod` and from boards (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`,
-  `fp_curve`, `fp_text`), written by the board writer (a bottom-side footprint in KiCad's mirrored frame), drawn by the painter under the Appearance rows, hit-tested, drawn by the 3D scene, read by the
-  silk and mask checks; `footprint_extras` retired; a kicad-cli silk plot equal before and after a round trip is the test (the pattern of `a46fd29`).
+**Done (2026-10-10, `task-fp-graphics`, not merged yet)**, limits below. Hit: every board. Blocks: no longer. Package P1, size L.
+- Done (`PARITY-pcb.md` section 28; `crates/model/src/fp_art.rs`, `crates/kicad/src/fp_art_io.rs`, `crates/cli/src/fp_art_json.rs`, `crates/drc/src/fp_art.rs`, `components/canvas/fpArtPaint.ts`, `kicad-port/fpArt.ts`, `viewer3d/scene.ts`):
+  a footprint's graphics and texts (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve`, `fp_text user`: the silkscreen outline, the pin-1 mark, the fab body, the assembly drawings) are `Footprint::art`, in the
+  frame of the pads, so a move, a turn or a flip carries them. Read from `.kicad_mod` and `.kicad_pcb` and written by `write_footprint` as `format( FOOTPRINT )` does (a bottom-side footprint mirrored, on the other
+  side's layers); built-in packages (`0603`, `SOIC-8`) get the art of the installed KiCad footprint they stand for. kicad-cli's SVG plot of `F.SilkS`, `B.SilkS`, `F.Fab` and `B.Fab` is the same before and after a round trip
+  on six QA boards (24,090 primitives, `complex_hierarchy` among them), a synthetic board and a board made from an example (slow tier). The canvas draws them by layer under the Appearance rows, a click on a stroke picks
+  the footprint, the 3D scene draws the silkscreen and the drawings on the other flat layers, the in-house board build (`eda_drc::DrcBoard`) reads them, and the importer no longer keeps a footprint's graphics and
+  texts in `drawings.footprint_extras`. A pad on the silkscreen (a legacy library's through-hole pads) is written back with its layer (`PadMaskInfo::art_layers`). Measured: `complex_hierarchy`'s `silk_over_copper`,
+  `silk_overlap` and `silk_edge_clearance` are the original's after our export (104, 199, 14; they were 2, 5, 2), and `component_classes` and `api_kitchen_sink`'s silkscreen counts too.
+- Missing: the hatch lines of a hatched fill (`EDA_SHAPE::UpdateHatching`; drawn as the outline); the footprint editor's model has no field for a stroke type, a hatch, a vertical justification, bold, italic or keep upright, so a
+  footprint saved from the editor loses them; no verb edits a footprint's graphics on the board (the footprint editor does); the title block's variables in a footprint text; the mask-only pads (`FootprintExtra::graphics`
+  with a pad number) are not written back; a library footprint's pads on the silkscreen are not read and Pad Properties has no field for a pad's technical layers; the Value and user fields are not in the 3D view.
 - Port from: `pcbnew/footprint.cpp`, `pcbnew/pcb_shape.cpp`, `pcbnew/pcb_text.cpp`, `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp` (`format( FOOTPRINT )`), `pcb_io_kicad_sexpr_parser.cpp`
   (`parseFOOTPRINT_unchecked`), `pcbnew/pcb_painter.cpp` (`draw( FOOTPRINT )`).
 
 ### 26. Footprint assignment, exchange and reference rename
-**New, open.** Hit: every project that changes a footprint or renumbers a part. Blocks: yes. Package P2, size L.
-- What is missing, read from the code: a part's footprint comes from the intent (`Part.footprint`); `board::fold_unknown_symbols` copies a schematic symbol's Footprint field only for a symbol the model has
-  not heard of. So `Cmd::EditSymbolFields { footprint }` (Symbol Properties, Assign Footprints, the Symbol Fields Table) edits the schematic field and nothing on the board, and Update PCB from Schematic (F8,
-  `kicad-port/updatePcb.ts`) is a report that says the board is up to date. `Cmd::RenameSymbol`'s own doc says it does not retarget `design.placement`, so Edit Reference (`U`), Annotate with reset and Increment
-  Annotations leave the old reference's footprint, pose, routing, fields, edits, zone overrides, locks and group membership where they were and the next reconcile makes a fresh unplaced part.
-  "Update Footprints from Library" (`actions/pcbGlobalEditSweep.ts`) only publishes the project-library entry a footprint uses (`Cmd::UpdateFootprintOnBoard`); it never reads the installed library or a
-  table. Insert footprint into PCB updates the parts that already name the footprint (`PARITY-fpedit.md`); `Cmd::PlaceFootprint` could add a new one.
-- To do (in this order): (1) a rename that carries the board's part with it, as one undo step; (2) a per-instance footprint assignment overlay in `DrawingsSection` (beside `footprint_edits`, applied by `board::load`
-  as `design.nets` and `rules` are), followed by the schematic's Footprint field (`replaceFootprint`); (3) Change Footprint(s) with the dialog's options (update or reset fields, text layers, 3D models; pads kept
-  by number); (4) Update Footprints from Library that reads the library copy and lists what differs (`FootprintNeedsUpdate`); (5) Compare Footprint with Library; (6) Reannotate (geographical); (7) Insert
-  footprint into PCB adds a part. Swap Pad Nets and Swap Gate Nets are decided here: a swap on the board makes the board disagree with the schematic drawing, as in KiCad (`--schematic-parity` reports it).
+**Done (2026-10-12, `task-fp-assign`, not merged yet)**, limits below. Hit: every project that changes a footprint or renumbers a part. Blocks: no longer. Package P2, size L.
+- Done (`PARITY-pcb.md` section 30; `crates/model/src/{fp_assign,fp_exchange,fp_compare,reannotate}.rs`, `crates/ops/src/{part_rename,fp_exchange,reannotate}.rs`, `crates/cli/src/{library_place,fp_assign_api}.rs`,
+  `components/{PcbGlobalEditDialogs,FootprintDiffDialog,ReannotateDialog,UpdatePcbDialog}.tsx`, `kicad-port/{pcbExchange,updatePcb,footprintDiff,reannotate,fpInsert}.ts`), the seven steps, each its own commit (`7af8ee7`, `a81dfd2`, `4d01fe8`, `9de882f`, `a8f4b22`, `65f2fa1`, `4a3f088`):
+  (1) a rename carries the board's part (`Board::rename_part`: pose, footprint, the pads the routing ends on, net pins, fields and edits, zone overrides, lock, groups; the intent's part in `drawings.renamed_parts`) from Edit Reference,
+  Annotate with reset and Increment Annotations, in one undo step on both editors (the history's `both` tag, `Cmd::spans_both_editors`); (2) `DrawingsSection::footprint_assignments`: the schematic symbol's Footprint field
+  is the board's footprint (`replaceFootprint`: Symbol Properties, Assign Footprints, the Symbol Fields Table), Update PCB from Schematic (F8) lists and applies what the board could not take (a locked footprint, a
+  footprint no library has) and Update Schematic from PCB carries the board's back; (3) Change Footprint(s) with the dialog's options (`Cmd::ExchangeFootprints`, `ExchangeFootprint` ported with its pad alignment and its
+  text matching), four actions and the Footprint Properties buttons; (4) Update Footprints from Library reads the library copy through the tables and lists what differs (`FootprintNeedsUpdate`, `eda_model::fp_compare`);
+  (5) Compare Footprint with Library (the Summary and Visual pages, the slider, the update it opens); (6) Geographical Reannotate (`DIALOG_BOARD_REANNOTATE` ported, `Cmd::ReannotateBoard`, the symbols follow); (7) Insert
+  footprint into PCB adds a part of its own where no part names the footprint. Every edit is an undoable `/api/cmd` verb; the IR additions are additive overlays with serde defaults.
+- Measured: 76 new Rust tests and 28 `node --test` cases; kicad-cli's `--schematic-parity` (slow tier) says the same after a rename, after a Change Footprint and after a reannotation as it said before, and the derived
+  `.kicad_pcb` and `.kicad_sch` name the new references; `web/studio/e2e/fp-assign.check.js` runs 8 scenarios (69 checks) through `window.__eda` (port 8824, a board made from `examples/mcu_board_30plus.yaml`).
+- Left: Swap Pad Nets (`EDIT_TOOL::SwapPadNets`) was not reached. In this IR a pad's net is its pin's place in `design.nets`, so it is a verb that rotates the nets of the selected pads by moving their pins between nets, with the tracks that end on the pads (`Track::pins`) taking the new net; it makes the board disagree with the schematic, as in KiCad (kicad-cli's `--schematic-parity` reports it), until Update Schematic from PCB carries a pin swap back, and the next schematic edit that changes connectivity (`Cmd::edits_connectivity`) reads `design.nets` from the drawing again, so a swap kept only there would be undone by it. Swap Gate Nets also needs the footprint's unit info (`FOOTPRINT::GetUnitInfo`: the `(units ..)` of a multi-gate footprint), which the IR does not hold. Pad nets of an exchange are kept by pad number only (KiCad also matches pads that share no number by position). `FootprintNeedsUpdate` compares what the model keeps of a library footprint,
+  so the file's attribute flags, net-tie groups, rule areas and stackup layers are not reported. Insert footprint into PCB places the footprint at the centre of the board instead of carrying it on the cursor. Import
+  Netlist (a part from a netlist has no schematic symbol).
 - Port from: `pcbnew/dialogs/dialog_exchange_footprints.cpp`, `pcbnew/pcb_edit_frame.cpp` (`ExchangeFootprint`), `pcbnew/netlist_reader/board_netlist_updater.cpp` (`replaceFootprint`,
   `updateFootprintParameters`, `updateComponentPadConnections`), `pcbnew/tools/global_edit_tool.cpp` (`ExchangeFootprints`), `pcbnew/tools/board_reannotate_tool.cpp`,
-  `pcbnew/dialogs/dialog_board_reannotate.cpp`, `pcbnew/footprint.cpp` (`FootprintNeedsUpdate`), `pcbnew/tools/board_inspection_tool.cpp` (`DiffFootprint`), `eeschema/tools/assign_footprints.cpp`,
-  `eeschema/tools/backannotate.cpp`, `pcbnew/tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
+  `pcbnew/dialogs/dialog_board_reannotate.cpp`, `pcbnew/footprint.cpp` and `pcbnew/drc/drc_test_provider_library_parity.cpp` (`FootprintNeedsUpdate`), `pcbnew/tools/board_inspection_tool.cpp` (`DiffFootprint`),
+  `eeschema/tools/assign_footprints.cpp`, `eeschema/tools/backannotate.cpp`, `pcbnew/tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
 
 ### 27. Board outline leftovers
 **New, open.** Hit: boards with cutouts, slots or rounded corners. Blocks: no. Package P12, size M. From `PARITY-pcb.md` section 25 ("Not done") and `crates/zone-filler/PARITY.md`.
@@ -479,11 +513,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `pcbnew/drc/drc_test_provider_misc.cpp`.
 
 ### 28. Bringing files in
-**New, open.** Hit: sometimes; a DXF outline is common. Blocks: yes for DXF and SVG (no workaround but redrawing). Package P8, size L.
-- Append Board and its drop, the Footprint Editor's drop, Import Sheet, Draw Sheet from File and the schematic drop have stale reasons: `Cmd::PasteClipboard`, `BoardPart`, `Cmd::AddSheet`, `Cmd::PasteSch` and
-  `pickTextFile` exist (`STALE-REASONS.md` SR1, size M).
-- Import Graphics (DXF, SVG) for the board, the schematic and the symbol editor, and its three drops, do not exist; the rule is no new dependency, but a DXF is text and an SVG path is a short grammar
-  (KiCad uses libdxfrw and nanosvg). Import Netlist (`BoardPart` makes the parts and `pad_nets` the nets; low value next to item 26).
+**Mostly done (2026-10-11, `task-files-in`)**, limits below. Hit: sometimes; a DXF outline is common. Package P8 for what is left (Import Netlist).
+- Done (`PARITY-pcb.md` section 29, `PARITY-sch.md` section 20, `PARITY-symedit.md`, `PARITY-common.md` section 13a): **Import Graphics** for the board, the schematic and the Symbol Editor, from a DXF (LINE, ARC, CIRCLE, POINT, LWPOLYLINE and POLYLINE with bulges, SPLINE, ELLIPSE,
+  TEXT and MTEXT, BLOCK and INSERT, `$INSUNITS`, lineweights) or an SVG (paths with lines, cubic and quadratic curves and arcs, rect, circle, ellipse, line, polyline, polygon, transforms, fills with holes). The readers are hand-written, no new dependency
+  (`crates/kicad/src/{graphics_import,dxf_import,svg_import}.rs`), the verbs are `Cmd::ImportGraphics` (the layer, the scale, the origin with KiCad's own arithmetic, the default line width and unit, Group imported items, Fix discontinuities with `ConnectBoardShapes`, and a studio option that makes
+  an imported Edge.Cuts the board's outline), `Cmd::ImportSchGraphics` and `Cmd::ImportSymbolGraphics` (`crates/ops/src/{import_graphics,import_graphics_sch,fix_shapes}.rs`), each one undo step; the dialog is `components/ImportGraphicsDialog.tsx`.
+  kicad-cli's DRC finds a DXF-imported Edge.Cuts outline closed, and reports `invalid_outline` with a side missing (`EDA_SLOW_TESTS=1`). **Append Board** (`crates/cli/src/append_api.rs`: the file read as a paste, the point it is held by, what the paste will change; then `Cmd::PasteClipboard` at the cursor, carried by the Move tool, one undo step).
+  **The drops** (`components/FileDropHost.tsx`, `kicad-port/fileDrops.ts`: each editor's `m_acceptedExts`): a `.kicad_pcb` on the board, a `.dxf` or `.svg` on the board and the schematic, a `.kicad_mod` on the Footprint Editor.
+  Browser check `e2e/files-in.check.js`: 102 checks through `window.__eda`.
+- Left: **Import Netlist** (P8c; the parts and nets come from the intent); `DdAppendFile` (a schematic dropped on the sheet: Import Sheet reads a file by its path on the server) and `DdAddImage` (no bitmap item); Import Graphics in the Footprint Editor (`placeImportedGraphics` there);
+  the placement preview (the picture is on the board while the Move tool carries it, in a step held open: one undo step with its drop, Escape leaves nothing; KiCad previews it first; the Symbol Editor's items are added at the cursor and selected); an Append Board that adds the file's layers and keeps every net as KiCad does (the paste's rules apply: copper on a layer this board lacks is left out, an item on a net nobody brings has none; a repeated reference is shown as the file has it, as KiCad leaves it, but filed under a free one);
+  several files in one drop (the first is opened, the rest said to be skipped); the DXF's text keeps the file's height only, a symbol has no curves (a curve is cut into segments), a shape with no stroke is a hairline, an SVG pattern and gradient are not drawn, SVG `text`, `image` and `use` are reported and not imported.
 - Port from: `common/import_gfx/{dxf_import_plugin,svg_import_plugin,graphics_importer,graphics_importer_buffer}.cpp`, `pcbnew/import_gfx/{dialog_import_graphics,graphics_importer_pcbnew}.cpp`,
   `eeschema/import_gfx/`, `pcbnew/tools/pcb_control.cpp` (`AppendBoard`), `board_editor_control.cpp` (`ImportNetlist`), `eeschema/tools/sch_drawing_tools.cpp` (`ImportSheet`).
 
@@ -587,7 +627,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - **Project management and the application shell**: New, Open, Revert, Quit, the project manager, Open Non-KiCad Board, Rescue, Open Directory, Open with Text Editor, the calculators (10 rows). A web page has none of these.
 - **Simulator, in scope and last**: 29 rows, now item 34 and package P21.
 - **Deferred until the IR has the item** (reasons in `ui-parity-missing.json`, re-checked in `STALE-REASONS.md`): design blocks (23 rows, item 32), generators (9), tables (18), PCB text boxes, barcodes, points,
-  reference images and hatch fills, schematic images, the symbol text box (item 24), DXF and SVG import (4, item 28), derived symbols, alternate pin functions, design variants (3), padstacks (Remove Unused Pads),
+  reference images and hatch fills, schematic images, the symbol text box (item 24), derived symbols, alternate pin functions, design variants (3), padstacks (Remove Unused Pads),
   embedded files (4: zstd, and no new dependency), custom pads (item 31: Explode, Recombine and the microwave shapes are left). The autoplacer (2) is declined: placement runs through `eda board` behind the placement gates. The Footprint and Symbol
   Viewer windows (5) are not planned; the editors' library trees browse.
 - **Internal events** (13 rows) have nothing to wire.
@@ -651,9 +691,9 @@ Rules that keep them apart (each is how an earlier package did it):
 
 Waves:
 
-- **Running now** (2026-10-10): P1 (`task-fp-graphics`), P5b (`task-diff-pairs`), P8 (`task-files-in`). P3, P4, P5a, P6 and P7 are merged; their sections list what is left.
-- **Next free slot**: P5b and P5c (P5a is merged), which share no hub with anything; P2, P14, P16, P17 and the Footprint Checker and Compare Footprint once P1 has merged its IR.
-- **After P1 has merged its IR**: P2 (its assignment overlay holds a definition with graphics). Step 1 of P2, the rename, can start sooner if P4 has merged its Annotate.
+- **Running now** (2026-10-12): P9a (`task-board-setup`), P10 (`task-sch-details`). P1, P2, P3, P4, P5a, P5b, P6, P7 and P8 are merged; their sections list what is left.
+- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P14, P16, P17 and the Footprint Checker, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
+- **P2** merged 2026-10-12 (Compare Footprint with Library included); Swap Pad Nets and Swap Gate Nets are left (item 26).
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
 - **After P7**: P13, P17, and P19's arc stub and function shape.
 - **After P3 and P4**: P18. **P8's PCB half** is independent; its sheet half is P4's.
@@ -697,7 +737,12 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - **P8 and P18 after P4** for Import Sheet: `crates/ops/src/sheets.rs`, `board.rs`.
 - **P5 with P6** only in `Canvas.tsx` handlers and `routing.ts`' entry points.
 
-### P1. Footprint graphics on the board (item 25). Size L. Rank 1.
+### P1. Footprint graphics on the board (item 25). Size L. Rank 1. **Done 2026-10-10 on `task-fp-graphics`, waiting for its merge; item 25 lists what is left.**
+- Status (2026-10-10): the five steps below, each its own commit (`6251ee0` IR, reader and writer; `2d76355` canvas; `75228c8` 3D; `85ae2c0` the in-house checks; `8e026f0` `footprint_extras` retired), then a pad's silkscreen layer
+  (`e1f2e05`, which the `complex_hierarchy` measure needed: 185 of its pads are on `F.SilkS`) and a `#2` definition written under its library (`4cecb61`). kicad-cli: the silkscreen and fab plots of six QA boards, a synthetic
+  board and an example board are equal after the round trip (slow tier); `complex_hierarchy` `silk_over_copper`, `silk_overlap`, `silk_edge_clearance` equal the original's. Browser: `e2e/fp-graphics.check.js`, 6 scenarios.
+  Hubs touched, each by a hunk: `ir.rs` (`PadMaskInfo::art_layers`, docs), `footprint.rs` (`Footprint::art`), `model/lib.rs` (`installed_art`), `studio.rs`, `import.rs`, `pcb.rs`, `painter.ts`, `types.ts`. P2, P14, P16 and P17 can start from the
+  merge: `FpArt`, `FpShape::placed` and `FpText::placed` are what they reuse.
 - Why: a board made here has no part outlines, pin-1 marks or fab bodies on screen, in the `.kicad_pcb`, in the Gerber silkscreen kicad-cli plots from it or in the 3D silk; an imported board loses its footprint-local
   graphics on export (`REPORT.md`: `complex_hierarchy`, 512 `fp_line`s).
 - Files: `crates/model/src/footprint.rs` and a new `fp_art.rs` (graphics and texts in the footprint's own frame; one hook in `Footprint`), `crates/model/src/ir.rs` (`LibraryFootprint::to_engine_footprint` stops dropping
@@ -710,7 +755,10 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   re-run `tools/parity_report.py` (the `complex_hierarchy` row is the measure).
 - Conflicts: P7 (footprint IR, `write_footprint`, the footprint painter: sequence, see above); P2, P14, P16, P17 start after P1's IR lands; P12 none.
 
-### P2. Footprint assignment, exchange and reference rename (item 26; SR4). Size L. Rank 2.
+### P2. Footprint assignment, exchange and reference rename (item 26; SR4). Size L. Rank 2. **Done 2026-10-12 on `task-fp-assign`, waiting for its merge; item 26 lists what is left.**
+- Status (2026-10-12): the seven steps below, each its own commit (`7af8ee7` the rename, `a81dfd2` the assignment and the Footprint field, `4d01fe8` Change Footprint(s), `9de882f` Update from Library, `a8f4b22` Compare Footprint with Library,
+  `65f2fa1` Geographical Reannotate, `4a3f088` Insert footprint into PCB). kicad-cli: the parity test after a rename, a Change Footprint and a reannotation (slow tier). Browser: `e2e/fp-assign.check.js`, 8 scenarios. Swap Pad Nets and Swap Gate Nets are not done (item 26 says why).
+  Hubs touched, each by a hunk: `ir.rs` (`renamed_parts`, `footprint_assignments`), `model/lib.rs`, `ops/lib.rs` (`Cmd::ExchangeFootprints`, `Cmd::ReannotateBoard`, `rename_symbol`, `spans_both_editors`), `sch_annotate.rs`, `sch_control.rs`, `board.rs` (`build_model`, the history tag, `carry.rs`), `studio.rs` (three routes), `types.ts`, `useActionRunner.ts` (F8), `commonSuiteActions.ts`; `store.tsx`, `Canvas.tsx`, `painter.ts` and `SchematicView.tsx` untouched.
 - Why: the Footprint field of a symbol does nothing on the board, Change Footprint does not exist, Update from Library never reads a library, and a reference rename strands the footprint.
 - Files: `crates/model/src/ir.rs` (an assignment overlay in `DrawingsSection`, beside `footprint_edits`, applied by `board::load`), `crates/cli/src/board.rs` (`load`, `fold_unknown_symbols`, `reconcile_schematic`: the symbol's Footprint
   field is followed, a rename carries the part), `crates/ops/src/` new `fp_exchange.rs` plus the `Cmd` hunks in `lib.rs`, `rename_symbol` and `annotate` calling a `rename_part` that moves the pose, `footprint_edits`,
@@ -719,7 +767,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/dialogs/dialog_exchange_footprints.cpp`, `pcb_edit_frame.cpp` (`ExchangeFootprint`), `netlist_reader/board_netlist_updater.cpp` (`replaceFootprint`, `updateFootprintParameters`, `updateComponentPadConnections`),
   `tools/global_edit_tool.cpp` (`ExchangeFootprints`), `tools/board_reannotate_tool.cpp`, `dialogs/dialog_board_reannotate.cpp`, `footprint.cpp` (`FootprintNeedsUpdate`), `tools/board_inspection_tool.cpp` (`DiffFootprint`),
   `eeschema/tools/assign_footprints.cpp`, `backannotate.cpp`, `tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
-- Order: the seven steps of item 26; Swap Pad Nets last and only if the board may disagree with the schematic.
+- Order: the seven steps of item 26; Swap Pad Nets last and only if the board may disagree with the schematic (it was not reached).
 - Conflicts: P4 (`rename_symbol` and `annotate` in `ops/lib.rs`, `reconcile_schematic`); P1 (the definition carries graphics); P14, P7 (`fp_edit.rs`); P3 (merged: `library_place.rs` reads the libraries through a `LibSource`).
 
 ### P3. Library tables and paths (item 5). Size S for what is left. Rank 3. **Mostly done: `task-lib-tables`.**
@@ -749,7 +797,12 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   (same three segments) and `simple-drag-shove-singlelayer` (116 of 134, the same 139 tracks); a browser check. Left of the original text below: nothing, except what the item 7 paragraph lists as missing.
   The package as it was planned: `crates/pns/src/{dragger,line_placer,router,node}.rs` (D7: `DM_SEGMENT`, `dragCorner45`, `SHP_REVERSED`, last-valid restore; `SplitAdjacentSegments` so a route starts and ends
   mid-segment; Route From Other End after the first fix), `crates/cli/src/route_api.rs`, `web/studio/src/components/canvas/{routing,dragging}.ts`, `kicad-port/{routeTool,dragTool}.ts`, `actions/pcbRouterSweep.ts`.
-- **P5b, L**: differential pairs with obstacles: coupled shove and walkaround, vias (`crates/pns/src/{diff_pair,dp_tune,shove,walkaround}.rs`, `diffPairRouting.ts`, `kicad-port/dpTool.ts`).
+- **P5b, L. DONE 2026-10-11 on `task-diff-pairs` (9 commits, `aa48f28` to `d9c5fe7`; the rows of section I of `CODE-COMPARE-router.md` are FAITHFUL or ADAPTED now, D18's "diff-pair shove/walkaround/via" is closed).** What is there: `diff_pair.rs` is `pns_diff_pair.cpp` (`DP_PRIMITIVE_PAIR`, `DP_GATEWAYS` with their
+  priorities and the 22.5-degree continuation, `DIFF_PAIR::BuildInitial`, `CheckConnectionAngle`, the coupled length and skew) and `dp_placer.rs` is `pns_diff_pair_placer.cpp` (`Start` / `FindDpPrimitivePair`, `routeHead`, `rhMarkObstacles`, `rhWalkOnly` / `attemptWalk` / `tryWalkDp`, `rhShoveOnly`, `propagateDpHeadForces`,
+  `ToggleVia` / `SetLayer`, `FixRoute`, `FlipPosture`); `shove.rs` runs several heads and takes a forced clearance (`ShoveObstacleLine`, `ForceClearance`) and `optimizer.rs` is `mergeDpSegments` with a memo of the world's answers; `POST /api/route/dp_{start,dims,move,via,fix,undo_segment,finish}`;
+  the studio's pair tool runs in the router's mode, shows what the shove pushes, takes `V`. Proof: unit tests, `crates/pns/tests/dp_boards.rs` (KiCad's `dp_test.kicad_pcb`: no QA corpus session routes a pair), three HTTP tests, the slow kicad-cli gate
+  `a_placed_pair_passes_kicad_clis_clearance_and_diff_pair_gap_checks`, a slow random-board sweep (`whatever_the_cursor_does_an_accepted_pair_leaves_the_board_clean_and_keeps_its_gap`) and the browser check. Left, item 7 lists it: Route From Other End for a pair; nothing for a pair drag (KiCad has none).
+  The package as it was planned: `crates/pns/src/{diff_pair,shove,walkaround}.rs`, `diffPairRouting.ts`, `kicad-port/dpTool.ts`.
 - **P5c, L**: the U meander and interactive tuning (`crates/pns/src/{meander,dp_tune}.rs`, `crates/cli/src/tune_api.rs`, `components/LengthTuningDialog.tsx`), arcs (`ARC_T`), mouse-trail posture, springback and `ShoveTimeLimit`,
   and, if wanted, tuning patterns as items (the nine generator rows).
 - KiCad: `pcbnew/router/` (`pns_dragger`, `pns_multi_dragger`, `pns_line_placer`, `pns_diff_pair_placer`, `pns_meander*`, `pns_shove`, `pns_walkaround`, `pns_router`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`,
@@ -775,16 +828,17 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/pad.cpp`, `tools/pad_tool.cpp` (`EditPad`), `dialogs/dialog_pad_properties.cpp`, `zone_filler.cpp` (`addKnockout`), `microwave/microwave_polygon.cpp`.
 - Conflicts: P1 (footprint IR, writer, painter), P13 (`zone-filler`), P17 (pad dialogs), P19 (arc stub, function shape), P14 and P2 (`fp_edit.rs` pad edits).
 
-### P8. Files in: Append Board, DXF and SVG, drops (item 28; SR1's PCB half). Size L. Rank 8.
-- Parts: **P8a, M**: the drop host (`components/FileDropHost.tsx`), Append Board and its drop (`crates/cli/src/append_api.rs`: a route turning a `.kicad_pcb` into a paste, then `Cmd::PasteClipboard` with the carry), the Footprint Editor's drop.
-  **P8b, M-L**: Import Graphics for the board (Edge.Cuts from a DXF is the case that matters), the schematic and the symbol editor: hand-written parsers in `crates/kicad/src/{dxf_import,svg_import}.rs` (LINE, ARC, CIRCLE, LWPOLYLINE,
-  POLYLINE first; SVG paths) into a neutral shape list, a verb in `crates/ops/src/import_graphics.rs`, `components/ImportGraphicsDialog.tsx` (layer, line width, origin, scale, interactive placement).
-  **P8c, M, low priority**: Import Netlist.
+### P8. Files in: Append Board, DXF and SVG, drops (item 28; SR1's PCB half). Size S for what is left. Rank 8. **Mostly done: `task-files-in` (2026-10-11); item 28 lists what is left.**
+- Done in the branch: **P8a** the drop host (`components/FileDropHost.tsx`, `kicad-port/fileDrops.ts`), Append Board and its drop (`crates/cli/src/append_api.rs`, `kicad-port/appendBoard.ts`, then `Cmd::PasteClipboard` with the carry) and the Footprint Editor's drop; **P8b** Import Graphics for the board, the schematic and the symbol editor:
+  the readers in `crates/kicad/src/{graphics_import,dxf_import,svg_import}.rs`, the verbs in `crates/ops/src/{import_graphics,import_graphics_sch,fix_shapes}.rs`, `crates/cli/src/graphics_api.rs`, `components/ImportGraphicsDialog.tsx`.
+  Tests: 48 kicad unit tests and 11 integration tests on fixtures, 35 ops tests, 3 slow kicad-cli proofs, 15 cli tests, 23 web unit tests, and `e2e/files-in.check.js` (102 checks).
+- Left: **P8c, M, low priority**: Import Netlist; the rest is in item 28's "Left".
 - KiCad: `common/import_gfx/{dxf_import_plugin,svg_import_plugin,graphics_importer,graphics_importer_buffer}.cpp`, `pcbnew/import_gfx/{dialog_import_graphics,graphics_importer_pcbnew}.cpp`, `eeschema/import_gfx/`,
   `pcbnew/tools/pcb_control.cpp` (`AppendBoard`, `placeBoardItems`, `DdAppendBoard`), `pcbnew/tools/board_editor_control.cpp` (`ImportNetlist`).
-- Conflicts: P4 (the sheet drop), P3 (the library drop); `ops`, `runner`, `studio` hunks.
+- Conflicts: P4 (the sheet drop), P3 (the library drop), P6 (`store.tsx` `placeNewItems` hands a placement to the Move tool beside `pasteClipboard`); `ops`, `runner`, `studio` hunks.
 
 ### P9. Board Setup completion and the rule editor (item 3). Size L; the rule editor XL on its own. Rank 9.
+- **Status (2026-10-12): P9a done on `task-board-setup`** except Component Classes (`component_classes_drc`) and Embedded Files; P9b open. Item 3 lists what each page does and what is left.
 - **P9a, L**: the missing pages: Board Editor Layers, Text Variables (project variables and `${VAR}` expansion in texts and fields), Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles (`missing_tuning_profile`),
   Component Classes (`component_classes_drc`), regular-expression net patterns and composite net classes, and drawing tools that start from the Text & Graphics defaults. Files: `crates/model/src/rules.rs`,
   `crates/ops/src/board_setup.rs`, `crates/kicad-engine/src/lib.rs` (project file), `crates/kicad/src/{pcb,import,custom_rules}.rs`, `web/studio/src/components/{BoardSetupDialog.tsx,boardSetup/*}`, `kicad-port/boardSetupRules.ts`.
@@ -795,7 +849,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 
 ### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged); schematic groups, a user-defined field's place and Pin Helpers are left.**
 - Done there: pin selection (`SCH_PIN_T`: Swap Pins, Swap Pin Labels, Swap Unit Labels, the pin-level highlight and Select Node), sheet pins one by one, the net-collision overlay of a drag, `AutoRotateItem` after a label lands, a power symbol's Properties dialog,
-  text justification flipping on a mirror, pan with the middle and right button and auto-pan while drawing and moving, the Symbol Fields Table's attribute columns and Exclude DNP filter, Copy as Text, part of the item 15 schematic list. `PARITY-sch.md` sections 20 to 26;
+  text justification flipping on a mirror, pan with the middle and right button and auto-pan while drawing and moving, the Symbol Fields Table's attribute columns and Exclude DNP filter, Copy as Text, part of the item 15 schematic list. `PARITY-sch.md` sections 21 to 27;
   `web/studio/e2e/sch-details.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_details.rs`.
 - Left: schematic groups (`sch_group_tool.cpp`), a user-defined field's place on the sheet (`SchematicSection::field_layout`), Pin Helpers, a sheet pin's text look, a label's own fields.
 - Files: `web/studio/src/components/SchematicView.tsx`, `components/schematic/{schItems,schHit,schSelectionSummary}.ts`, `kicad-port/{schMove,selection,schConnection}.ts`, `components/SymbolFieldsTableDialog.tsx`,

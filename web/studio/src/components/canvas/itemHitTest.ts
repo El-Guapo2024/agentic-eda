@@ -154,7 +154,7 @@ export function shapeArea(s: Shape): number {
 /** A rough text bounding box: size-tall, ~0.6*size per character wide (matches painter.ts's own font-metric-free approach), positioned per justify. Shared by the hit test below and `selectionCandidates.ts`'s area computation. */
 export function textBoundingBox(t: BoardText): { x0: number; y0: number; x1: number; y1: number } {
   const halfH = t.size / 2;
-  const w = Math.max(t.content.length, 1) * t.size * 0.6;
+  const w = Math.max((t.shown ?? t.content).length, 1) * t.size * 0.6;
   const x0 = t.justify === "left" ? t.x : t.justify === "right" ? t.x - w : t.x - w / 2;
   return { x0, y0: t.y - halfH, x1: x0 + w, y1: t.y + halfH };
 }

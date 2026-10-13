@@ -31,10 +31,12 @@ import { pickSelectionCandidates } from "../components/canvas/selectionCandidate
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
-import { amplitudeStep, nextAngleSnapMode, spacingStep, stepStrokeWidth } from "../kicad-port/pcbParityState";
+import { amplitudeStep, nextAngleSnapMode, spacingStep } from "../kicad-port/pcbParityState";
+import { tunerStart } from "../kicad-port/setupPages";
+import { steppedDrawStroke } from "../kicad-port/layerDefaults";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { finishDiffPairRoute } from "../components/canvas/diffPairRouting";
+import { finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
 import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
@@ -58,7 +60,7 @@ import { netNavigatorItems, stepNetItem, type NavSchematic } from "../kicad-port
 import { repeatCmds } from "../kicad-port/schRepeat";
 import { nextReference } from "../kicad-port/nextReference";
 import { refDesPrefix } from "../kicad-port/packFootprints";
-import { updatePcbMessage } from "../kicad-port/updatePcb";
+import { openUpdateDialog } from "./updatePcbAction";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
@@ -88,6 +90,7 @@ import { deleteLastPoint } from "../components/schematic/schShapeTools";
 import { openSchProperties } from "../components/schematic/schPropertiesOpen";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
+import { registerImportActions } from "./importActions";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
 import { registerPcbMenuActions } from "./pcbMenuActions";
@@ -197,6 +200,7 @@ export function useActionRunner() {
     // The board-control actions (display options, net highlight and ratsnest, zone tools, exports, repair): actions/boardControlActions.ts.
     registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
     registerAppearanceActions(m, { state, dispatch });
+    registerImportActions(m, { tab: state.tab, dispatch, api });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
@@ -382,14 +386,21 @@ export function useActionRunner() {
       m.set("pcbnew.EditorControl.trackWidthInc", pcbOnly(() => cycleWidth(1)));
       m.set("pcbnew.EditorControl.trackWidthDec", pcbOnly(() => cycleWidth(-1)));
     } else if (state.drawState?.kind === "diffpair") {
-      // Same shape as the route branch above, scoped down to what this
-      // port's diff pair actually supports (no via/layer-switch, no width
-      // cycling -- see crates/pns/src/diff_pair.rs's own doc comment).
+      // Same shape as the route branch above (crates/pns/src/dp_placer.rs is the pair's placer): `V` places a pair of vias and the
+      // route goes on from them on the other layer; no width cycling.
       const draw = state.drawState;
       const cursor = state.cursorUm ?? { x: draw.ptsA[draw.ptsA.length - 1]?.[0] ?? 0, y: draw.ptsA[draw.ptsA.length - 1]?.[1] ?? 0 };
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
         pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
+      );
+      // `V` (`layerToggle`): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts)
+      m.set(
+        "pcbnew.Control.layerToggle",
+        pcbOnly(() => {
+          if (!state.board) return;
+          void toggleDiffPairVia(draw, cursor, otherLayerOfPair(layerPairsOf(state.board, state.pcbx.layerPairs).current, draw.layer), dispatch);
+        })
       );
       m.set(
         "pcbnew.InteractiveRouter.UndoLastSegment",
@@ -462,6 +473,9 @@ export function useActionRunner() {
         const refs = requestSelection();
         if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
         if (state.selection.size === 0) dispatch({ type: "SET_SELECTION", refs });
+        // The tuner starts from Board Setup > Length-tuning Patterns for its kind (`PCB_TUNING_PATTERN` takes the board's meander defaults).
+        const start = tunerStart(state.board?.board_rules?.tuning_patterns, mode);
+        dispatch({ type: "PCBX", patch: { lengthTuner: { amplitudeUm: start.amplitudeUm, spacingUm: start.spacingUm, minAmplitudeUm: start.minAmplitudeUm } } });
         dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true, mode });
       });
     m.set("pcbnew.LengthTuner.TuneSingleTrack", startTuner("single"));
@@ -545,26 +559,17 @@ export function useActionRunner() {
         }
       })
     );
-    m.set(
-      "pcbnew.InteractiveDrawing.line",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_segment" ? "select" : "draw_segment" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.arc",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_arc" ? "select" : "draw_arc" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.rectangle",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_rect" ? "select" : "draw_rect" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.circle",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_circle" ? "select" : "draw_circle" }))
-    );
-    m.set(
-      "pcbnew.InteractiveDrawing.graphicPolygon",
-      pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "draw_polygon" ? "select" : "draw_polygon" }))
-    );
+    // Arming a graphic tool starts it at the line thickness of its layer's class again (`m_stroke.SetWidth( bds.GetLineThickness( m_layer ) )`): a step of incWidth / decWidth is gone.
+    const armGraphicTool = (tool: "draw_segment" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon") =>
+      pcbOnly(() => {
+        dispatch({ type: "PCBX", patch: { drawStrokeStep: null } });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === tool ? "select" : tool });
+      });
+    m.set("pcbnew.InteractiveDrawing.line", armGraphicTool("draw_segment"));
+    m.set("pcbnew.InteractiveDrawing.arc", armGraphicTool("draw_arc"));
+    m.set("pcbnew.InteractiveDrawing.rectangle", armGraphicTool("draw_rect"));
+    m.set("pcbnew.InteractiveDrawing.circle", armGraphicTool("draw_circle"));
+    m.set("pcbnew.InteractiveDrawing.graphicPolygon", armGraphicTool("draw_polygon"));
     m.set(
       "pcbnew.InteractiveDrawing.text",
       pcbOnly(() => dispatch({ type: "SET_ACTIVE_TOOL", tool: state.activeTool === "text" ? "select" : "text" }))
@@ -811,7 +816,7 @@ export function useActionRunner() {
       // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.
       if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       // `EDIT_TOOL::Duplicate` / `PCB_CONTROL::Paste`: cancelling the move that carries the new items takes them away again.
-      if (state.tab === "pcb" && state.activeTool === "move") void api.revertCarriedPlacement();
+      if ((state.tab === "pcb" || state.tab === "schematic") && state.activeTool === "move") void api.revertCarriedPlacement();
       dispatch({ type: "ESCAPE" });
     });
 
@@ -1034,13 +1039,10 @@ export function useActionRunner() {
     // `common.SuiteControl.openPreferences` (ACTIONS::openPreferences, Ctrl+,): the Preferences dialog; the one page the studio can back
     // is Mouse and Touchpad (PreferencesDialog.tsx, kicad-port/preferences.ts) -- every canvas reads what it saves.
     m.set("common.SuiteControl.openPreferences", () => dispatch({ type: "SET_PREFERENCES_DIALOG_OPEN", open: true }));
-    // `common.Control.updatePcbFromSchematic` (F8): see kicad-port/updatePcb.ts -- the board is re-derived from the schematic on
-    // every schematic edit, so this refetches the design and reports what an update would leave (nothing to apply).
+    // `common.Control.updatePcbFromSchematic` (F8): see kicad-port/updatePcb.ts -- the board is re-derived from the schematic on every schematic edit and follows
+    // the symbols' Footprint fields, so this lists the footprints whose symbol names another one and applies them (components/UpdatePcbDialog.tsx).
     m.set("common.Control.updatePcbFromSchematic", () => {
-      void api.refresh().then(() => {
-        const parts = api.getState().board?.parts ?? [];
-        dispatch({ type: "TOAST", message: updatePcbMessage(parts), kind: "info" });
-      });
+      void openUpdateDialog(api, dispatch, "pcb");
     });
     // `common.Control.saveAs` (ACTIONS::saveAs, Ctrl+Shift+S): "Save current document to another location". design.json is the only
     // master, so what is saved is the editor's derived KiCad file(s) -- `.kicad_pcb`, or the `.kicad_sch` (+ one per sub-sheet) --
@@ -1879,8 +1881,8 @@ export function useActionRunner() {
 
       // ---- incWidth / decWidth (Ctrl++ / Ctrl+-) -- drawing_tool.cpp DRAWING_TOOL::DrawSegment: `m_stroke.SetWidth( width +/- WIDTH_STEP )` while a graphic tool is armed.
       if (shapeToolActive) {
-        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeWidthUm: stepStrokeWidth(state.pcbx.drawStrokeWidthUm, 1) } })));
-        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeWidthUm: stepStrokeWidth(state.pcbx.drawStrokeWidthUm, -1) } })));
+        m.set("pcbnew.InteractiveDrawing.incWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeStep: steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, 1) } })));
+        m.set("pcbnew.InteractiveDrawing.decWidth", pcbOnly(() => dispatch({ type: "PCBX", patch: { drawStrokeStep: steppedDrawStroke(state.board?.board_rules?.text_graphics, state.activeLayer, state.pcbx.drawStrokeStep, -1) } })));
       }
 
       // ---- lineModeNext (Shift+Space) and the explicit modes -- pcb_viewer_tools.cpp PCB_VIEWER_TOOLS::NextLineMode: DIRECT -> DEG45 -> DEG90 -> DIRECT.
@@ -1916,8 +1918,8 @@ export function useActionRunner() {
         const trackWidth = selTrack?.width ?? board?.board_rules?.track_width ?? 250;
         const clearance = board?.board_rules?.clearance ?? 0;
         const setTuner = (patch: Partial<typeof tuner>) => dispatch({ type: "PCBX", patch: { lengthTuner: { ...tuner, ...patch } } });
-        m.set("pcbnew.lengthTuner.AmplIncrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, 1) })));
-        m.set("pcbnew.lengthTuner.AmplDecrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, -1) })));
+        m.set("pcbnew.lengthTuner.AmplIncrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, 1, tuner.minAmplitudeUm) })));
+        m.set("pcbnew.lengthTuner.AmplDecrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, -1, tuner.minAmplitudeUm) })));
         m.set("pcbnew.lengthTuner.SpacingIncrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, 1, trackWidth, clearance) })));
         m.set("pcbnew.lengthTuner.SpacingDecrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, -1, trackWidth, clearance) })));
       }
@@ -1927,6 +1929,8 @@ export function useActionRunner() {
         pcbOnly(() => {
           const refs = [...state.selection];
           if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
+          const start = tunerStart(state.board?.board_rules?.tuning_patterns, state.lengthTuningMode);
+          dispatch({ type: "PCBX", patch: { lengthTuner: { amplitudeUm: start.amplitudeUm, spacingUm: start.spacingUm, minAmplitudeUm: start.minAmplitudeUm } } });
           dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
         })
       );

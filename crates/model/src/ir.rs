@@ -2252,12 +2252,13 @@ pub struct DrawingsSection {
     /// re-applied automatically, matching source).
     #[serde(default)]
     pub dimension_settings: DimensionSettings,
-    /// Per-placed-footprint solder-mask/silk facts an imported board needs
-    /// but a library [`crate::Footprint`] + [`FootprintInstance`] cannot
-    /// carry (pad layer sets and mask margins, footprint graphics on the
-    /// silk/mask layers, net-tie groups, `allow_soldermask_bridges`). Read
-    /// only by `eda_drc`'s silk/solder-mask providers; empty for a design
-    /// that did not come from a `.kicad_pcb`.
+    /// Per-placed-footprint solder-mask facts an imported board needs but a
+    /// library [`crate::Footprint`] + [`FootprintInstance`] cannot carry (pad
+    /// layer sets and mask margins, mask-only pads, net-tie groups,
+    /// `allow_soldermask_bridges`, the zone facts). The footprint's silkscreen,
+    /// fab and mask graphics and its texts are not here any more: they are the
+    /// footprint's own ([`crate::fp_art::FpArt`], [`crate::Footprint::art`]).
+    /// Empty for a design that did not come from a `.kicad_pcb`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_extras: Vec<FootprintExtra>,
     /// Zone-connection edits made on the board to placed footprints and their pads (Footprint Properties and Pad Properties:
@@ -2335,6 +2336,19 @@ pub struct DrawingsSection {
     /// library has it". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub footprint_edits: Vec<crate::fp_edit::FootprintEdit>,
+    /// The intent's parts that have another reference now (Edit Reference, Annotate, Increment Annotations, Reannotate): laid over the intent's
+    /// model each time the board is loaded ([`crate::fp_assign::apply_part_renames`]), so the part, its nets and everything keyed by it are
+    /// under the new reference and nothing is left under the old one. One entry per renamed intent part, `from` the intent's reference, sorted by
+    /// it. Additive: absent in an older `design.json` reads as "every part has the reference the intent gave it". Lives here for the reason
+    /// `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renamed_parts: Vec<crate::fp_assign::PartRename>,
+    /// The footprint each part of the board is on when the board changed it (Change Footprint, Update Footprint from Library, the symbol's Footprint field
+    /// followed): the name, and the board's own copy of the footprint where it keeps one -- see [`crate::fp_assign`]. Laid over the intent's parts each time the
+    /// board is loaded. One entry per part, sorted by reference. Additive: absent in an older `design.json` reads as "every part is on the footprint the intent
+    /// gave it". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprint_assignments: Vec<crate::fp_assign::FootprintAssignment>,
     /// `true` when the board's outline is made of the shapes on layer `Edge.Cuts` in [`Self::shapes`] and of nothing else: an
     /// imported board whose Edge.Cuts have arcs, circles, rectangles, curves, cutouts or several loops, which a closed polygon of
     /// straight edges cannot hold. `placement.outline` is then only their summary (the outer ring of the largest outline, curves
@@ -2378,6 +2392,12 @@ pub struct PadMaskInfo {
     /// (`*.Cu` -> every copper layer, `*.Mask` -> `F.Mask`+`B.Mask`).
     #[serde(default)]
     pub layers: Vec<String>,
+    /// The layers of the pad besides copper, paste and mask: the silkscreen, fab, courtyard and adhesive layers and the user ones (the
+    /// through-hole pads of an older library are on `F.SilkS`, and kicad-cli's silkscreen checks measure them there). Named as for a
+    /// top-side footprint, like [`crate::fp_art::FpArt`] (a back-side footprint's `B.SilkS` is `F.SilkS` here), so a footprint that is
+    /// flipped takes them to the other side; the writer puts them back into the pad's `(layers ..)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub art_layers: Vec<String>,
     /// `(solder_mask_margin ..)`: the pad's own margin override
     /// (`PADSTACK::SolderMaskMargin`); `None` inherits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2611,10 +2631,14 @@ pub struct FootprintExtra {
     pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
-    /// Footprint graphics on silk/mask layers, board space.
+    /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
+    /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
+    /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them
+    /// only for a footprint that has no art.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<FootprintGraphic>,
-    /// Visible footprint text (reference/value/user) on silk layers.
+    /// Visible footprint texts on silk layers, board space: likewise only in a design imported before footprints had texts of
+    /// their own ([`crate::fp_art::FpArt::texts`], and the Reference, Value and user fields of [`crate::fp_edit`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<FootprintText>,
 }
@@ -3144,9 +3168,13 @@ impl LibraryFootprint {
     /// at their defaults since `crate::footprint::Footprint` has no
     /// concept of any of them yet.
     pub fn from_engine_footprint(fp: &crate::footprint::Footprint) -> Self {
+        // The footprint's silkscreen, fab drawings and texts come across as the editor's graphics and texts (ids are backfilled by the caller).
+        let (graphics, texts) = fp.art.to_library();
         LibraryFootprint {
             name: fp.name.clone(),
             pads: fp.pads.iter().map(LibraryPad::from_engine_pad).collect(),
+            graphics,
+            texts,
             courtyard: fp.courtyard,
             model: fp.model.clone(),
             ..Default::default()
@@ -3154,13 +3182,23 @@ impl LibraryFootprint {
     }
 
     /// The reverse of `from_engine_footprint`/the basis for exporting a
-    /// derived `.kicad_mod` (GAPS.md #8 step 6): this footprint's pads
-    /// and courtyard/model as the engine's own `Footprint` -- graphics/
-    /// text/fields/attributes stay editor-only (the engine has no use for
-    /// silkscreen art or a BOM-exclude flag), same split `LibraryPad::
-    /// to_engine_pad`'s doc explains.
+    /// derived `.kicad_mod` (GAPS.md #8 step 6): this footprint's pads,
+    /// courtyard, model and its graphics and texts ([`crate::fp_art`]: the
+    /// silkscreen, the fab body and the texts a board shows) as the engine's own
+    /// `Footprint` -- fields/attributes stay editor-only (the engine has no use
+    /// for a BOM-exclude flag), same split `LibraryPad::to_engine_pad`'s doc
+    /// explains. A graphic on the courtyard or the board edge is not art (the
+    /// footprint's courtyard is the `courtyard` field).
     pub fn to_engine_footprint(&self) -> crate::footprint::Footprint {
-        crate::footprint::Footprint { name: self.name.clone(), pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(), courtyard: self.courtyard, model: self.model.clone(), courtyard_outlines: vec![], models3d: vec![] }
+        crate::footprint::Footprint {
+            name: self.name.clone(),
+            pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(),
+            courtyard: self.courtyard,
+            model: self.model.clone(),
+            courtyard_outlines: vec![],
+            models3d: vec![],
+            art: crate::fp_art::FpArt::from_library(&self.graphics, &self.texts),
+        }
     }
 
     /// Assign a deterministic id to every pad/graphic/text whose `id` is

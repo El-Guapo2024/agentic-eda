@@ -157,6 +157,14 @@ style when they are 1 (and empty text fields), so no pin ever matched the unit b
 
 Not click-tested for the snapped coordinates: `window.__eda.state().view` is null on this tab, so the check script cannot place a pointer on the canvas. The grid it picks is the unit-tested `gridSizeFor` / `selectionGrid` (`gridOverrides.test.ts`); the tab mounts and arms its tools with no console error.
 
+## Import Graphics (`symbol_editor_drawing_tools.cpp::ImportGraphics`, `graphics_importer_lib_symbol.cpp`; GAPS.md item 28)
+
+File > Import > Graphics... (`eeschema.EditorControl.importGraphics`, the schematic's action: `SCH_ACTIONS::importGraphics` runs in this frame too) imports a DXF or SVG into the open symbol, through the same dialog as the schematic's (PARITY-sch.md section 20) and one command,
+`Cmd::ImportSymbolGraphics` (`crates/ops/src/import_graphics_sch.rs`): one undo step in the Symbol Editor's own history. A line is a two-point polyline, a polygon a closed polyline (filled with the outline's colour when filled), a circle and an arc as they are, text as text, in millimetres with the library's Y axis up (the drawing comes out the way up it was drawn)
+on the unit and body style being edited (`m_unit`; KiCad leaves the body style at "all"). A symbol has no curves, so a Bezier curve of the file is cut into segments at `ARC_LOW_DEF_MM` (20 micrometres), where KiCad keeps the curve; a polygon filled with a colour is filled with the outline's, the library fill having no colour. A text is anchored at the middle of its baseline here, so the file's horizontal justification
+is applied to its position. The items are added at the cursor's grid point (interactive placement) or at "At" X, Y, and selected; they are not carried by the Move tool, which this editor has no such flow for -- drag them (KiCad previews them under the cursor first). Tests: `crates/ops/src/import_graphics_sch_tests.rs` (the symbol's: an outline in mm with Y up, unit and body style, scale and offset, text, an SVG curve, the refusals), the browser check `e2e/files-in.check.js` (a DXF at 10, 5 mm giving 4 polylines and 4 arcs spanning x 10 to 50, y -5 to 25, selected, one undo; an SVG outline as a closed polyline of its 0.1 mm stroke; interactive placement on the 1.27 mm grid).
+The Symbol Editor accepts no dropped file (KiCad's `SYMBOL_EDIT_FRAME` has no `m_acceptedExts`): a drop is said not to be a file this editor opens.
+
 ## Known gaps (not fixed, scope-bounded)
 
 - DeMorgan alternate body style: authorable, exported to `.kicad_sym`, and (since the schematic item 12 work) shown by a placed symbol.

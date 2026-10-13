@@ -36,8 +36,8 @@ export async function parseFootprintText(text: string): Promise<ParsedFootprint>
   return { footprint: { ...f, pads: f.pads ?? [], graphics: f.graphics ?? [], texts: f.texts ?? [], fields: f.fields ?? [] }, warnings: r.warnings ?? [] };
 }
 
-/** The server reads at most 1 MiB of a request body (`studio.rs::handle`); a bigger file would arrive cut off and fail to parse, so say so up front. */
-export const MAX_IMPORT_BYTES = 1 << 20;
+/** The server reads at most 64 MiB of a request body (`studio.rs::read_request`); a bigger file would arrive cut off and fail to parse, so say so up front. */
+export const MAX_IMPORT_BYTES = 64 << 20;
 
 /** A browser "Open file" chooser: resolves to the chosen file's name and text, or `null` when it is cancelled. */
 export function pickTextFile(accept: string): Promise<{ name: string; text: string } | null> {
@@ -59,7 +59,7 @@ export function pickTextFile(accept: string): Promise<{ name: string; text: stri
       if (file.size > MAX_IMPORT_BYTES) {
         settled = true;
         input.remove();
-        return reject(new ApiError(`${file.name} is larger than 1 MB, which the studio's server will not read`));
+        return reject(new ApiError(`${file.name} is larger than 64 MB, which the studio's server will not read`));
       }
       try {
         done({ name: file.name, text: await file.text() });

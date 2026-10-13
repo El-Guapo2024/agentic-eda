@@ -259,6 +259,8 @@ pub struct FillInput {
     pub edge_clearance: i64,
     /// `BOARD_DESIGN_SETTINGS::m_MinClearance`: the floor a pad's own clearance override cannot go below.
     pub min_clearance: i64,
+    /// `BOARD_DESIGN_SETTINGS::m_ZoneLayerProperties`: copper layer -> the offset (x, y) of the hatch pattern of the zones on it (Board Setup > Zone Hatch Offsets).
+    pub hatch_offsets: std::collections::HashMap<String, (i64, i64)>,
 }
 
 /// `max_error`: the polygon-approximation tolerance for circles/arcs
@@ -626,7 +628,7 @@ where
         // Rings and the clearance holes of unconnected pads both keep the hatch holes off them.
         let mut protect = thermal_rings.clone();
         protect.boolean_add(&clearance_holes);
-        hatch::add_hatch_fill(zone, &mut fill, &protect, max_error);
+        hatch::add_hatch_fill(zone, &mut fill, &protect, max_error, input.hatch_offsets.get(layer).copied().unwrap_or((0, 0)));
     } else {
         fill.fracture(true);
         // `connect_nearby_polys` is not ported (see the module doc comment).

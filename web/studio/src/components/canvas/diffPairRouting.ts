@@ -3,25 +3,37 @@
 // same split: thin client-side glue (turn a click/move into the right
 // `/api/route/dp_*` call and `DrawState` update), not a second copy of
 // `eda_pns::diff_pair`'s own geometry.
-import { dpFinish, dpFix, dpStart } from "../../api/client";
+import { dpFinish, dpFix, dpMove, dpStart, dpToggleVia } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
-import { dpStateFromPreview, type DpDrawState } from "../../kicad-port/dpTool";
+import { dpStateFromPreview, dpViaRequest, type DpDrawState } from "../../kicad-port/dpTool";
+import type { RouterSettings } from "../../kicad-port/routerSettings";
 
 /** `6` / the first click after arming the diff-pair tool: start a session
  * from whatever pad/via/track-end is at `(x, y)`, on a net with a
- * recognized differential-pair suffix and a matching pad for the other
- * half already on the board (`dp_coupled_net_name`). Shows an error toast
- * and leaves `drawState` untouched otherwise. */
-export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number }): Promise<void> {
+ * recognized differential-pair suffix and a matching item for the other
+ * half already on the board (`dp_coupled_net_name`). `settings` are the
+ * router's (the pair is walked, shoved or only marked per its mode).
+ * Shows an error toast -- KiCad's own message -- and leaves `drawState`
+ * untouched otherwise. */
+export async function startDiffPairRoute(x: number, y: number, layer: string, dispatch: Dispatch<Action>, dims?: { width: number; gap: number; viaGap?: number }, settings?: RouterSettings): Promise<void> {
   // `dims`: the "Differential Pair Dimensions..." dialog's custom width and gap, when it was used.
-  const preview = await dpStart(x, y, layer, dims);
+  const preview = await dpStart(x, y, layer, dims, settings);
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Start from a differential-pair net (needs a +/-/P/N suffix and a matching pad already on the board).", kind: "error" });
     return;
   }
-  const draw: DpDrawState = { kind: "diffpair", netA: preview.net_a, netB: preview.net_b, layer: preview.layer, width: preview.width, ptsA: preview.head_a, ptsB: preview.head_b, colliding: preview.colliding, runsA: preview.runs_a, runsB: preview.runs_b, snappedEnd: preview.snapped_end };
+  const draw: DpDrawState = dpStateFromPreview({ kind: "diffpair", netA: preview.net_a, netB: preview.net_b, layer: preview.layer, width: preview.width, ptsA: [], ptsB: [] }, preview);
   dispatch({ type: "SET_DRAW_STATE", draw });
+}
+
+/** `V` while a pair is routed (`ROUTER_TOOL::onViaCommand` -> `handleLayerSwitch`): arm or disarm the pair of vias, then ask for the preview again so the vias show. */
+export async function toggleDiffPairVia(draw: DpDrawState, cursor: { x: number; y: number }, toLayer: string, dispatch: Dispatch<Action>): Promise<void> {
+  const request = dpViaRequest(draw, toLayer);
+  const reply = await dpToggleVia(request.enabled, request.toLayer);
+  if (!reply.ok) return;
+  const preview = await dpMove(cursor.x, cursor.y);
+  if (preview.ok) dispatch({ type: "SET_DRAW_STATE", draw: { ...dpStateFromPreview(draw, preview), pendingViaLayer: request.enabled ? request.toLayer : undefined } });
 }
 
 /** A click while routing a pair: fix the current head. Finishes the whole

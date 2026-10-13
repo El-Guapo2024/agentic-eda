@@ -327,43 +327,10 @@ export function planCleanupGraphics(shapes: readonly Shape[], o: CleanupGraphics
   return { items, remove, add };
 }
 
-// ---------------------------------------------------------------------- exchange scope
-
-/** `DIALOG_EXCHANGE_FOOTPRINTS`' "which footprints" choices. */
-export type ExchangeScope = "selected" | "reference" | "value" | "footprint" | "all";
+// ---------------------------------------------------------------------- wildcards
 
 /** `WildCompareString`-style match: `*` any run, `?` one character, case-insensitive. */
 export function wildMatch(pattern: string, text: string): boolean {
   const re = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".")}$`, "i");
   return re.test(text);
-}
-
-/**
- * The footprints (placed parts) a scope names: the selected one, those whose reference designator / value / footprint ID matches the
- * pattern, or every one.
- */
-export function exchangeTargets(board: BoardState, scope: ExchangeScope, args: { selectedRef: string | null; reference: string; value: string; footprint: string }): string[] {
-  const placed = board.parts.filter((p) => p.placed);
-  switch (scope) {
-    case "selected":
-      return args.selectedRef && placed.some((p) => p.ref === args.selectedRef) ? [args.selectedRef] : [];
-    case "reference":
-      return placed.filter((p) => wildMatch(args.reference, p.ref)).map((p) => p.ref);
-    case "value":
-      return placed.filter((p) => wildMatch(args.value, p.value ?? "")).map((p) => p.ref);
-    case "footprint":
-      return placed.filter((p) => wildMatch(args.footprint, p.footprint ?? "")).map((p) => p.ref);
-    case "all":
-      return placed.map((p) => p.ref);
-  }
-}
-
-/** The distinct footprint names of `refs`, in first-seen order. */
-export function footprintNamesOf(board: BoardState, refs: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const ref of refs) {
-    const name = board.parts.find((p) => p.ref === ref)?.footprint;
-    if (name && !out.includes(name)) out.push(name);
-  }
-  return out;
 }
