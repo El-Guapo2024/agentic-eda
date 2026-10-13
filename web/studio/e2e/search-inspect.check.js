@@ -55,7 +55,7 @@
   const rowNames = () => [...document.querySelectorAll('[data-testid^="fbp-row-"]')].map((tr) => tr.getAttribute("data-testid").slice("fbp-row-".length));
   const rowValue = (name) => dialog(`fbp-row-${name}`)?.querySelectorAll("td")[1]?.innerText;
   const closeDialogs = async () => {
-    for (const id of ["find-by-properties", "pcb-find-dialog", "inspect-clearance", "inspect-constraints"]) {
+    for (const id of ["find-by-properties", "pcb-find-dialog", "inspect-clearance", "inspect-constraints", "footprint-checker"]) {
       if (dialog(id)) { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); dialog(id)?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await sleep(250); }
     }
   };
@@ -443,6 +443,109 @@
       await closeDialogs();
       for (let i = 0; i < steps; i++) { await __eda.run("common.Interactive.undo"); await sleep(700); }
     }
+  });
+
+  // -------------------------------------------------------------------------------------------------------------------- the Footprint Checker
+  await scenario("the Footprint Checker is kicad-cli's DRC on a scratch board that holds the footprint: markers on the canvas, the dialog's list, badges and Show boxes", async (t) => {
+    const cmd = async (c) => (await fetch("/api/cmd", { method: "POST", body: JSON.stringify({ strict: false, cmd: c }) })).json();
+    const clickTab = async (label) => { [...document.querySelectorAll("button, [role=tab]")].find((b) => b.textContent.trim() === label)?.click(); await sleep(600); };
+    const library = async () => (await json("/api/footprint_library")).project ?? [];
+    const before = await library();
+    let steps = 0;
+    const waitFor = async (pred, ms = 45000) => { const t0 = Date.now(); while (!pred() && Date.now() - t0 < ms) await sleep(400); return pred(); };
+    const badge = (key) => dialog(`footprint-checker`)?.querySelector(`[data-testid="fpc-badge-${key}"]`)?.textContent;
+    const rows = () => [...document.querySelectorAll('[data-testid="footprint-checker"] [data-testid^="fpc-marker-"]')];
+    const runChecks = async () => {
+      dialog("fpc-run").click();
+      await sleep(300);
+      return waitFor(() => !/Checking the footprint/.test(text("fpc-list")) && !dialog("fpc-run").disabled);
+    };
+    try {
+      await clickTab("Footprint");
+      t(__eda.state().tab === "footprint", "the Footprint Editor tab");
+      const acts = __eda.actions({ all: true });
+      t(acts.some((a) => a.id === "pcbnew.ModuleEditor.checkFootprint" && a.enabled), "Inspect > Footprint Checker is a handled action");
+      await __eda.run("pcbnew.ModuleEditor.newFootprint");
+      steps++;
+      await sleep(900);
+      const name = (await library()).find((n) => !before.includes(n));
+      t(!!name, `a new footprint to check: ${name}`);
+      const pad = (num, x) => ({ number: num, at: { x, y: 0 }, size: [1000, 1000], shape: "rect", kind: "smd", drill: null, rot: 0, layers: [] });
+      for (const [num, x] of [["1", -400], ["2", 400]]) { const r = await cmd({ op: "add_pad", footprint: name, pad: pad(num, x) }); t(r.ok, `pad ${num}: ${r.message ?? ""}`); if (r.ok) steps++; }
+      await sleep(500);
+
+      // opening the dialog runs nothing: the badges say "-"
+      await __eda.run("pcbnew.ModuleEditor.checkFootprint");
+      await sleep(400);
+      t(!!dialog("footprint-checker"), "the Footprint Checker dialog opens");
+      t(badge("errors") === "-" && badge("warnings") === "-" && badge("exclusions") === "0", `before a run the badges say '-': ${badge("errors")} ${badge("warnings")} ${badge("exclusions")}`);
+      t(rows().length === 0 && /Run Checks to check the footprint\./.test(text("fpc-list")), "no markers yet");
+
+      // two pads of different numbers that overlap, and no courtyard
+      t(await runChecks(), "Run Checks finishes");
+      const types = rows().map((r) => r.getAttribute("data-type")).sort();
+      t(JSON.stringify(types) === JSON.stringify(["missing_courtyard", "shorting_items"]), `the markers kicad-cli's DRC puts on the scratch board: ${types.join(", ")}`);
+      t(badge("errors") === "1" && badge("warnings") === "1", `the badges: ${badge("errors")} errors, ${badge("warnings")} warnings`);
+      const short = rows().find((r) => r.getAttribute("data-type") === "shorting_items");
+      t(short?.getAttribute("data-severity") === "error" && /Items shorting two nets/.test(short.innerText) && /Pad 1/.test(short.innerText) && /Pad 2/.test(short.innerText), `a short is an error and names both pads: ${short?.innerText.replace(/\n/g, " | ")}`);
+      const missing = rows().find((r) => r.getAttribute("data-type") === "missing_courtyard");
+      t(missing?.getAttribute("data-severity") === "warning" && /no courtyard/.test(missing.innerText), `a missing courtyard is a warning: ${missing?.innerText.replace(/\n/g, " | ")}`);
+      t(/REF\*\*/.test(text("fpc-list")), "the items name the footprint as the editor's own, REF**");
+      t(/kicad-cli/.test(text("footprint-checker")), "the dialog says which engine ran");
+
+      // selecting a marker selects what it names
+      short.click();
+      await sleep(300);
+      const sel = __eda.state().selection.map((s) => s.id).sort();
+      t(sel.length === 2 && sel.every((id) => /^pad|\./.test(id) || id.length > 0), `the marker's pads are selected: ${sel.join()}`);
+      // the Show boxes
+      dialog("fpc-show-warnings").click();
+      await sleep(250);
+      t(rows().length === 1 && rows()[0].getAttribute("data-type") === "shorting_items", `Warnings off: ${rows().length} row`);
+      dialog("fpc-show-warnings").click();
+      await sleep(250);
+      t(rows().length === 2, "Warnings on again");
+      dialog("fpc-delete-one").click();
+      await sleep(250);
+      t(rows().length === 1, "Delete Marker removes the selected one");
+
+      // the same footprint, mended: a closed courtyard, the pads apart
+      const line = (a, b) => ({ kind: "segment", layer: "F.CrtYd", stroke_width: 50, filled: false, start: a, end: b });
+      const P = (x, y) => ({ x, y });
+      for (const g of [line(P(-3000, -2000), P(3000, -2000)), line(P(3000, -2000), P(3000, 2000)), line(P(3000, 2000), P(-3000, 2000)), line(P(-3000, 2000), P(-3000, -2000))]) { const r = await cmd({ op: "add_footprint_graphic", footprint: name, shape: g }); t(r.ok, `courtyard line: ${r.message ?? ""}`); if (r.ok) steps++; }
+      const fp = await json(`/api/footprint?name=${encodeURIComponent(name)}`);
+      const second = fp.pads.find((p) => p.number === "2");
+      const moved = await cmd({ op: "move_pad", footprint: name, id: second.id, x: 1500, y: 0 });
+      t(moved.ok, `pad 2 moved apart: ${moved.message ?? ""}`);
+      if (moved.ok) steps++;
+      await sleep(500);
+      t(await runChecks(), "a second run finishes");
+      t(rows().length === 0 && /No problems found\./.test(text("fpc-list")), `a clean footprint has no markers: ${text("fpc-list").slice(0, 80)}`);
+      t(badge("errors") === "0" && badge("warnings") === "0", `the badges: ${badge("errors")} / ${badge("warnings")}`);
+
+      // markers stay on the board after Close; Delete All Markers takes them away and the badges say '-' again
+      dialog("fpc-close").click();
+      await sleep(300);
+      t(!dialog("footprint-checker"), "Close closes the dialog");
+      await __eda.run("pcbnew.ModuleEditor.checkFootprint");
+      await sleep(300);
+      t(badge("errors") === "0" && badge("warnings") === "0", "reopened: the badges still count the last run");
+      // (nothing is left to delete after the clean run: put a marker back first)
+      const edit = await cmd({ op: "move_pad", footprint: name, id: (await json(`/api/footprint?name=${encodeURIComponent(name)}`)).pads.find((p) => p.number === "2").id, x: 400, y: 0 });
+      if (edit.ok) steps++;
+      await sleep(400);
+      t(await runChecks(), "a third run finishes");
+      t(rows().length === 1 && badge("errors") === "1", `the pads overlap again: ${rows().length} marker, ${badge("errors")} error`);
+      dialog("fpc-delete-all").click();
+      await sleep(250);
+      t(rows().length === 0 && badge("errors") === "-" && badge("warnings") === "-", `Delete All Markers: the badges say '-' again (${badge("errors")}, ${badge("warnings")})`);
+    } finally {
+      await closeDialogs();
+      for (let i = 0; i < steps + 1; i++) { await __eda.run("common.Interactive.undo"); await sleep(600); }
+      await clickTab("PCB");
+    }
+    const after = await library();
+    t(after.length === before.length || after.every((n) => before.includes(n)), `the undos take the new footprint away: ${after.join()}`);
   });
 
   await scenario("the board is as it was and nothing broke", async (t) => {

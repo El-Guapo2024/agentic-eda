@@ -22,7 +22,7 @@
     "pcbnew.ModuleEditor.padTable": "supported",
     "pcbnew.PadTool.defaultPadProperties": "supported",
     "common.Control.showDatasheet": "supported",
-    "pcbnew.ModuleEditor.checkFootprint": "not ported: the footprint checker is DRC, which only kicad-cli runs",
+    "pcbnew.ModuleEditor.checkFootprint": "supported",
     "pcbnew.ModuleEditor.loadFootprintFromBoard": "supported",
     "pcbnew.ModuleEditor.saveFootprintToBoard": "supported",
     "common.Control.toggleGrid": "supported",

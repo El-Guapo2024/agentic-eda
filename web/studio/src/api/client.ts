@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, InspectReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
@@ -702,4 +702,9 @@ export function inspectClearance(req: { a: string; b: string; aAt?: [Um, Um]; bA
 /** `POST /api/inspect/constraints`: `InspectConstraints` for one item. */
 export function inspectConstraints(req: { item: string; at?: [Um, Um]; units: LengthUnit }): Promise<InspectReply> {
   return postJson("/api/inspect/constraints", { item: req.item, at: req.at ? [req.at[0] / 1000, req.at[1] / 1000] : undefined, units: req.units });
+}
+
+/** `POST /api/footprint/check`: the Footprint Checker on the footprint `name` open in the Footprint Editor (kicad-cli's DRC on a scratch board that holds it). */
+export function fetchFootprintCheck(name: string): Promise<FpCheckReply> {
+  return postJson("/api/footprint/check", { name });
 }

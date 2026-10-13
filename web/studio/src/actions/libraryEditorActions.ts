@@ -4,16 +4,17 @@
 // heavy ones live in `footprintLibraryOps.ts` / `symbolLibraryOps.ts`); handlers only act on their own tab (`actionTabGate.ts` keeps the
 // menus and hotkeys in step).
 //
-// Not registered, with the reason recorded in `tools/ui-parity-missing.json`: `pcbnew.ModuleEditor.createFootprint` (the footprint wizard),
-// `checkFootprint` (the footprint checker is DRC, which only kicad-cli runs), the five `pcbnew.MicrowaveTool.*` (board-only footprints and custom
-// pads), `eeschema.SymbolLibraryControl.{deriveFromExistingSymbol, flattenSymbol, updateSymbolFields, showRelatedLibraryFieldsTable}` (derived
-// symbols), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol Viewer), `showHiddenFields` and
-// `eeschema.SymbolDrawing.drawSymbolTextBox`.
+// Not registered, with the reason recorded in `tools/ui-parity-missing.json`: `pcbnew.ModuleEditor.createFootprint` (the footprint wizard), the five
+// `pcbnew.MicrowaveTool.*` (board-only footprints and custom pads), `eeschema.SymbolLibraryControl.{deriveFromExistingSymbol, flattenSymbol,
+// updateSymbolFields, showRelatedLibraryFieldsTable}` (derived symbols), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol
+// Viewer), `showHiddenFields` and `eeschema.SymbolDrawing.drawSymbolTextBox`. The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
+// board (actions/footprintCheckerActions.ts).
 import type { Dispatch } from "react";
 import type { Action as StudioAction } from "../state/store";
 import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintEditorStore";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
+import { showFootprintChecker } from "./footprintCheckerActions";
 import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
 
@@ -65,6 +66,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
     const file = asPickedFile(param);
     if (ctx.tab === "footprint" && file) void fpLib.importFootprint(fpc, file);
   });
+  // Inspect > Footprint Checker (`FOOTPRINT_EDITOR_CONTROL::CheckFootprint`): kicad-cli's DRC on a scratch board that holds the footprint (actions/footprintCheckerActions.ts).
+  m.set("pcbnew.ModuleEditor.checkFootprint", fpTab(() => showFootprintChecker(ctx.fpApi)));
   m.set("pcbnew.ModuleEditor.exportFootprint", fpTab(() => (ctx.fpApi.getState().name ? ctx.fpApi.exportKicadMod() : fpToast("There is no footprint to export."))));
   // Footprint Properties... -- Properties (`pcbnew.ModuleEditor.footprintProperties`).
   m.set("pcbnew.ModuleEditor.footprintProperties", fpTab(() => fpLib.footprintProperties(fpc)));

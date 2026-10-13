@@ -2875,3 +2875,24 @@ export interface InspectReply {
   compile_error: string | null;
   pages: InspectPage[];
 }
+
+/** `POST /api/footprint/check` (the Footprint Editor's Footprint Checker, `DIALOG_FOOTPRINT_CHECKER`): the markers kicad-cli's DRC puts on a scratch board that holds the footprint
+ * being edited -- courtyard, attribute, pad, shorting-pad, net-tie and silkscreen checks -- with the editor's own item ids on the items. */
+export interface FpCheckMarker {
+  /** The check, by the board DRC's key: `missing_courtyard`, `malformed_courtyard`, `shorting_items`, `padstack_invalid`, `footprint_type_mismatch`, ... */
+  type: string;
+  description: string;
+  severity: "error" | "warning" | "exclusion" | "ignore";
+  /** Where the marker is drawn, micrometres, the footprint's own frame. */
+  at: [Um, Um];
+  /** The items the violation names: kicad-cli's description, their position, and the editor's id (a pad, a graphic, a text) when it is one of the footprint's. */
+  items: { description: string; pos: [Um, Um]; id: string | null }[];
+}
+
+export interface FpCheckReply {
+  ok: boolean;
+  message?: string;
+  engine?: string;
+  markers?: FpCheckMarker[];
+  counts?: { errors: number; warnings: number };
+}

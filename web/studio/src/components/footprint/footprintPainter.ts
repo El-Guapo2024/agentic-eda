@@ -361,6 +361,8 @@ export interface FpPaintOptions {
   /** High Contrast Mode (`common.Control.highContrastMode`): what is not on `activeLayer` is drawn dimmed. */
   highContrast?: boolean;
   activeLayer?: string;
+  /** The Footprint Checker's markers (`PCB_MARKER`s of the editor's board): where, how severe, and whether the dialog has it selected. */
+  markers?: { at: [number, number]; severity: string; selected: boolean }[];
 }
 
 /** What High Contrast Mode leaves of an item off the active layer (the board painter's `layerAlpha` uses the same 0.25). */
@@ -429,4 +431,29 @@ export function paintFootprint(
 
   drawAnchor(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorUm);
+  if (opts.markers && opts.markers.length > 0) drawCheckMarkers(ctx, view, opts.markers);
+}
+
+const CHECK_MARKER_RADIUS_UM = 300;
+
+/** The Footprint Checker's markers: a ring and a "!" in the colour of the severity (`LAYER_DRC_ERROR` / `LAYER_DRC_WARNING`), the selected one larger and highlighted (`LAYER_DRC_HIGHLIGHTED`) -- the board painter's stand-in for `MARKER_BASE`'s icon. */
+function drawCheckMarkers(ctx: CanvasRenderingContext2D, view: ViewTransform, markers: readonly { at: [number, number]; severity: string; selected: boolean }[]) {
+  const hair = hairlineUm(view, 1.5);
+  for (const m of markers) {
+    const [x, y] = m.at;
+    const color = m.selected ? layerColor("LAYER_DRC_HIGHLIGHTED") : layerColor(m.severity === "exclusion" ? "LAYER_DRC_EXCLUSION" : m.severity === "error" ? "LAYER_DRC_ERROR" : "LAYER_DRC_WARNING");
+    const r = m.selected ? CHECK_MARKER_RADIUS_UM * 1.4 : CHECK_MARKER_RADIUS_UM;
+    ctx.save();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(100, hair);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.globalAlpha = 0.35;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.stroke();
+    drawStrokeText(ctx, "!", x, y + r * 0.5, { sizeUm: r * 1.3, justify: "center", color, thicknessUm: r * 0.22 });
+    ctx.restore();
+  }
 }

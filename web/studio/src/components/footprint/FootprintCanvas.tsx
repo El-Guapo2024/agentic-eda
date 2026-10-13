@@ -11,6 +11,7 @@ import type { CmdShape, LibraryPad, PadKind } from "../../api/types";
 import { useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/footprintEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
 import { paintFootprint } from "./footprintPainter";
+import { useFootprintChecker } from "../../state/footprintChecker";
 import { snapPoint } from "../canvas/gridHelper";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
@@ -251,6 +252,10 @@ export function FootprintCanvas() {
     userMovedRef.current = false;
   }, [state.name]);
 
+  // The Footprint Checker's markers of this footprint (the board's `PCB_MARKER`s: they stay after the dialog is closed).
+  const checker = useFootprintChecker();
+  const checkMarkers = checker.name === state.name && checker.markers.length > 0 ? checker.markers.map((m, i) => ({ at: m.at as [number, number], severity: m.severity, selected: checker.selected === i })) : undefined;
+
   // Render loop.
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -283,10 +288,13 @@ export function FootprintCanvas() {
       movePreview: state.movePreview,
       highContrast: state.highContrast,
       activeLayer: state.activeLayer,
+      markers: checkMarkers,
     });
     ctx.restore();
     ctx.restore();
-  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize]);
+    // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

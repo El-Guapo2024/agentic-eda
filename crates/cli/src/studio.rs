@@ -879,6 +879,8 @@ fn handle(
         // Board Setup > Custom Rules, "Check syntax": kicad-cli loads the text on a probe board (it has no checker of its own, and
         // drops a rules file it cannot parse without saying so); kicad-cli's, so off the loop like DRC.
         ("POST", "/api/check_rules") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::check_rules),
+        // The Footprint Editor's Footprint Checker: kicad-cli's DRC on a scratch board that holds the footprint being edited; kicad-cli's, so off the loop like DRC.
+        ("POST", "/api/footprint/check") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::footprint_check),
         // Fabrication and schematic outputs (Plot / Generate Drill Files /
         // Footprint Position Files / Plot Schematic / Export Netlist): each
         // dialog's JSON becomes kicad-cli arguments (`crate::fab_api`,

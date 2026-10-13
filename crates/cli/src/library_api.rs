@@ -38,7 +38,7 @@ fn installed_symbol_in<S: LibSource + ?Sized>(src: &S, lib_id: &str) -> Option<L
 
 /// A footprint by name from the project library, else KiCad's installed libraries, else whatever the model resolves it to (intent, a loaded
 /// `.kicad_mod`, the builtin table) -- for a *read-only* answer; opening one in the editor copies it into the project library first.
-fn footprint_any(dir: &Path, name: &str) -> Result<(LibraryFootprint, bool), Vec<CheckResult>> {
+pub(crate) fn footprint_any(dir: &Path, name: &str) -> Result<(LibraryFootprint, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     if let Some(fp) = design.footprint_library.as_ref().and_then(|l| l.by_name(name)) {
         return Ok((fp.clone(), true));
