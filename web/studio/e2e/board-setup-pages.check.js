@@ -21,6 +21,8 @@
 //                    metre too far is marked), Length-tuning Patterns (a minimum above the maximum is marked; Apply stores the three groups; the length tuner opens at the maximum amplitude and the
 //                    spacing of its kind) and Tuning Profiles (a profile with no name is marked; a new row takes the layers KiCad gives it; a layer named twice stops Apply; a class may name a profile that
 //                    is not defined and the page says so) each store one undo step
+//   net classes      a pattern is a wildcard pattern or a regular expression (the list of the nets it matches says which nets), a net several classes match is said to be in all of them with its
+//                    composite class's name, the patterns are stored as typed, and moving a class changes the order they are kept in (a class's place in the table is its priority)
 //   end              no console error came up while it ran, and the board is as it was (texts, variables, overlay, shapes, dimensions, title block, footprint fields)
 //
 // A scenario that throws does not stop the run: its section ends with a failed check "<section> ran to the end (stopped at: <step>)" naming the step it was at (and why), the next section
@@ -156,6 +158,7 @@
   const fingerprint = (s) => JSON.stringify({
     variables: s.board_rules?.text_variables ?? {},
     layers: s.board_rules?.layer_setup ?? null,
+    classes: s.board_rules?.net_classes ?? [],
     pages: [s.board_rules?.formatting, s.board_rules?.zone_hatch_offsets, s.board_rules?.tuning_patterns, s.board_rules?.tuning_profiles],
     overlay: s.board_rules?.overlay ?? [],
     texts: (s.drawings?.texts ?? []).length,
@@ -521,6 +524,63 @@
       const savedAgain = await apply(p);
       if (savedAgain === "Saved.") steps.push("pcb");
       check("and it is stored too", savedAgain === "Saved." && (await stored()).tuning_profiles.class_profiles.Default === "USB 90", savedAgain);
+    });
+
+    // ---------------------------------------------------------------------------------------------------------------------------------- net classes
+    await section("net classes", async () => {
+      step("opening Net Classes");
+      const p = await openPage("Net Classes");
+      const classesBefore = JSON.stringify((await state()).board_rules.net_classes);
+      await press(p, "Add Netclass");
+      await press(p, "Add Netclass");
+      const names = [...p.querySelectorAll('input[aria-label$=" name"]')].filter((i) => /^Netclass \d+ name$/.test(i.getAttribute("aria-label")));
+      check("Add Netclass adds a class named like KiCad's", names.length === 2 && names[0].value === "Netclass 1" && names[1].value === "Netclass 2", names.map((i) => i.value).join());
+      await setText(names[0], "pins");
+      await setText(names[1], "leds");
+      await setText(p.querySelector('input[aria-label="pins Clearance"]'), "0.3mm");
+      await setText(p.querySelector('input[aria-label="leds Clearance"]'), "0.1mm");
+      step("assigning patterns");
+      await press(p, "Add Assignment");
+      await press(p, "Add Assignment");
+      await press(p, "Add Assignment");
+      const pattern = (i) => p.querySelector(`input[aria-label="Pattern ${i}"]`);
+      const owner = (i) => p.querySelector(`select[aria-label="Net class of pattern ${i}"]`);
+      await setText(pattern(1), "PA[0-3]");
+      await setSelect(owner(1), "pins");
+      await setText(pattern(2), "LED?");
+      await setSelect(owner(2), "leds");
+      await setText(pattern(3), "PA(1|7)");
+      await setSelect(owner(3), "leds");
+      pattern(1).closest("tr").click();
+      await sleep(200);
+      const shown = (label) => [...(p.querySelector(`[aria-label="${label}"]`)?.querySelectorAll("div") ?? [])].map((d) => d.textContent.trim());
+      check("a regular expression's nets are listed: PA[0-3] is the four pins", ["PA0", "PA1", "PA2", "PA3"].every((n) => shown("Nets matching the selected pattern").includes(n)) && !shown("Nets matching the selected pattern").includes("PA4"), shown("Nets matching the selected pattern").join());
+      pattern(2).closest("tr").click();
+      await sleep(200);
+      check("a wildcard pattern's too: LED? is the two LEDs", shown("Nets matching the selected pattern").join() === "LED1,LED2", shown("Nets matching the selected pattern").join());
+      pattern(3).closest("tr").click();
+      await sleep(200);
+      check("and a group: PA(1|7)", shown("Nets matching the selected pattern").join() === "PA1,PA7", shown("Nets matching the selected pattern").join());
+      const composite = p.querySelector('[aria-label="Nets in more than one class"]')?.textContent ?? "";
+      check("a net two classes match is said to be in both, with the name KiCad gives the composite class", /1 net is in more than one class/.test(composite) && /PA1: pins,leds,Default/.test(composite), composite);
+      step("applying the net classes");
+      const savedClasses = await apply(p);
+      if (savedClasses === "Saved.") steps.push("pcb");
+      let st = await state();
+      const stored = st.board_rules.net_classes;
+      check("Apply stores the classes in the order of the table with their patterns as typed", savedClasses === "Saved." && stored.map((c) => c.name).join() === "pins,leds" && JSON.stringify(stored[0].nets) === JSON.stringify(["PA[0-3]"]) && JSON.stringify(stored[1].nets) === JSON.stringify(["LED?", "PA(1|7)"]) && stored[0].clearance === 300 && stored[1].clearance === 100, JSON.stringify(stored));
+      step("moving a class");
+      const rows = [...p.querySelectorAll("table.bs-grid")][0].querySelectorAll("tbody tr");
+      rows[1].click();
+      await sleep(150);
+      await press(p, "Down");
+      const movedApply = await apply(p);
+      if (movedApply === "Saved.") steps.push("pcb");
+      st = await state();
+      check("moving pins down stores the order leds, pins: a class's place is its priority", movedApply === "Saved." && st.board_rules.net_classes.map((c) => c.name).join() === "leds,pins", JSON.stringify(st.board_rules.net_classes.map((c) => c.name)));
+      const compositeAfter = p.querySelector('[aria-label="Nets in more than one class"]')?.textContent ?? "";
+      check("and the composite class's name follows it", /PA1: leds,pins,Default/.test(compositeAfter), compositeAfter);
+      check("the classes were not there before", classesBefore === "[]", classesBefore);
     });
 
     await section("drawing tools", async () => {

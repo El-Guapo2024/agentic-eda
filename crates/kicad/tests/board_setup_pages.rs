@@ -126,3 +126,49 @@ fn a_profile_the_page_would_refuse_is_not_imported() {
     merge_project_setup_pages(&mut model, "not json");
     assert_eq!(model.board.tuning_profiles.profiles.len(), 1);
 }
+
+fn class(name: &str, nets: &[&str], clearance: Option<i64>, track: Option<i64>) -> NetClass {
+    NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: track, clearance, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
+}
+
+/// A net in more than one class has KiCad compose its settings (`GetEffectiveNetClass`), which only the project can say: the classes are the project's, in precedence order, and each
+/// net names each class it is in, exactly (the matching of patterns is the studio's, KiCad is told its result).
+#[test]
+fn a_net_in_several_classes_moves_the_net_classes_into_the_project_in_precedence_order() {
+    let (design, mut model, _) = import_kicad_pcb(BOARD).expect("imports");
+    model.nets = ["VBUS", "V3.3", "V3X3", "USB_DP", "GND"].iter().map(|n| Net { name: n.to_string(), pins: vec![] }).collect();
+    model.board.net_classes = vec![class("power", &["VBUS", "V3\\.3"], Some(400), None), class("fast", &["USB_*", "VBUS"], Some(100), Some(500))];
+    let text = export(&design, &model);
+    assert!(!text.contains("(net_class "), "VBUS is in two classes: the project has them");
+    let pro: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+    let classes = pro["net_settings"]["classes"].as_array().unwrap();
+    let order: Vec<(&str, i64)> = classes.iter().map(|c| (c["name"].as_str().unwrap(), c["priority"].as_i64().unwrap())).collect();
+    assert_eq!(order, [("Default", i32::MAX as i64), ("power", 0), ("fast", 1)], "a class's place in the list is its priority; the router's own NetClass::priority is not KiCad's");
+    let pattern = |net: &str| -> Vec<String> { pro["net_settings"]["netclass_patterns"].as_array().unwrap().iter().filter(|p| p["pattern"] == net).map(|p| p["netclass"].as_str().unwrap().to_string()).collect() };
+    assert_eq!(pattern("VBUS"), ["power", "fast"], "one entry for each class the net is in");
+    assert_eq!(pattern("V3\\.3"), ["power"], "a name with a dot is written so that it does not match V3X3");
+    assert!(pattern("V3X3").is_empty() && pattern("GND").is_empty(), "a net in no class is in the Default class: no entry");
+    assert_eq!(pattern("USB_DP"), ["fast"]);
+
+    // A net in one class alone each keeps the board file's classes.
+    model.board.net_classes = vec![class("power", &["VBUS"], Some(400), None), class("fast", &["USB_*"], Some(100), Some(500))];
+    assert!(export(&design, &model).contains("(net_class \"power\""), "one class for each net: the legacy blocks are enough");
+    assert!(export_kicad_pro_for(&design, &model).contains("\"rule_severities\"") && !export_kicad_pro_for(&design, &model).contains("net_settings"));
+}
+
+/// A project's classes come in the order KiCad composes them in: by `priority` (the lowest number first, a class that says none is -1) and then by name, whatever order the file
+/// lists them in (KiCad writes them by name).
+#[test]
+fn a_projects_net_classes_come_in_in_the_order_of_their_priority() {
+    let pro = serde_json::json!({ "net_settings": { "classes": [
+        { "name": "Default", "priority": 2147483647, "clearance": 0.2 },
+        { "name": "alpha", "priority": 2, "clearance": 0.3 },
+        { "name": "bravo", "priority": 0, "clearance": 0.4 },
+        { "name": "charlie", "priority": 1, "clearance": 0.5 },
+        { "name": "delta", "clearance": 0.6 }
+    ], "netclass_patterns": [
+        { "netclass": "alpha", "pattern": "A*" }, { "netclass": "bravo", "pattern": "B*" }, { "netclass": "charlie", "pattern": "C*" }, { "netclass": "delta", "pattern": "D*" }
+    ] } });
+    let classes = eda_kicad::parse_project_net_classes(&pro.to_string());
+    assert_eq!(classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["delta", "bravo", "charlie", "alpha"], "-1 (none) first, then 0, 1, 2");
+}

@@ -2398,6 +2398,40 @@ mod tests {
         assert_eq!(count(&dir), 1, "Undo takes the profile back");
     }
 
+    /// A net in two classes has the settings of both, the class that takes precedence winning where both set one, and kicad-cli composes them the way the studio does: the classes are the
+    /// project's in the order of the list, so moving a class up changes the clearance kicad-cli holds the net to (slow tier).
+    #[test]
+    fn kicad_cli_composes_the_settings_of_a_net_in_two_classes_in_the_order_the_studio_lists_them() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("composite_classes");
+        setup(&dir);
+        two_close_tracks(&dir);
+        let count = |dir: &Path| drc_counts(dir).get("clearance").copied().unwrap_or(0);
+        assert_eq!(count(&dir), 0, "250 um of air between GND and VCC is fine for the board's 200 um");
+        let class = |name: &str, nets: &[&str], clearance: Um| eda_model::NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(200), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
+        // VCC is in both: `wide` names it, `power` has a pattern (`V??`, or the regular expression `V[A-Z]+`) that matches it. `wide` is first, so its 100 um is VCC's clearance.
+        let (wide, power) = (class("wide", &["VCC"], 100), class("power", &["V[A-Z]{2}"], 400));
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![wide.clone(), power.clone()], ..defaults.clone() } }, false, "ui").unwrap();
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!(model.board.matching_classes("VCC").len(), 2, "the regular expression matches VCC");
+        assert_eq!(model.board.clearance_of("VCC"), 100);
+        assert_eq!(count(&dir), 0, "kicad-cli holds VCC to wide's 100 um first: the 200 um of GND is the larger of the two");
+        // power first: its 400 um wins.
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power, wide], ..defaults } }, false, "ui").unwrap();
+        assert_eq!(load(&dir).unwrap().2.board.clearance_of("VCC"), 400);
+        assert!(count(&dir) >= 1, "now kicad-cli holds VCC to power's 400 um and the two tracks are too close");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir), 0, "Undo puts the order back");
+    }
+
     /// `eda board shape add` and `text add` without a width or a size take what Text & Graphics > Defaults gives the layer's class, and follow the page.
     #[test]
     fn the_cli_starts_a_new_shape_and_text_from_the_defaults_of_the_layers_class() {

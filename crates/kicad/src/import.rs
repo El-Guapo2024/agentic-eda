@@ -765,7 +765,13 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
     let Some(net_settings) = root.get("net_settings") else {
         return Vec::new();
     };
-    let classes = net_settings.get("classes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let mut classes = net_settings.get("classes").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    // KiCad writes the classes in the order of their names; a class's precedence is its `priority` (the Net Classes panel gives each its row, the lowest number winning, a class that
+    // says none is -1), and the studio's list is in precedence order (`BoardRules::matching_classes`), so the list is sorted the way `makeEffectiveNetclass` sorts the classes.
+    classes.sort_by(|a, b| {
+        let key = |c: &serde_json::Value| (c.get("priority").and_then(|p| p.as_i64()).unwrap_or(-1), c.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string());
+        key(a).cmp(&key(b))
+    });
     let patterns = net_settings.get("netclass_patterns").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 
     let num_mm = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_f64()).map(mm_to_um);

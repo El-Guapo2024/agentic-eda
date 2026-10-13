@@ -46,7 +46,8 @@ fn net_class_name(rules: &BoardRules, net: &str) -> String {
     if net.is_empty() {
         return "Default".into();
     }
-    rules.class_of(net).map_or_else(|| "Default".to_string(), |c| c.name.clone())
+    // `BOARD_CONNECTED_ITEM::GetNetClassName` is the effective class's name: the classes the net is in, joined by a comma, with Default last when it gives a setting.
+    rules.effective_class(net).name
 }
 
 fn field_of(v: &Value) -> PcbField {

@@ -666,9 +666,10 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
 }
 
 /// Whether the derived project carries the net classes (`net_settings`) in place of the board file's legacy `(net_class ..)` blocks. It has to when a class names a tuning
-/// profile, which only the project form can say: KiCad moves the legacy classes of a board into the project, replacing the project's own.
+/// profile, which only the project form can say (KiCad moves the legacy classes of a board into the project, replacing the project's own), and when a net is in more than one
+/// class, whose settings KiCad composes from the classes the project assigns it to (`NET_SETTINGS::GetEffectiveNetClass`): a legacy block names one class for a net.
 pub(crate) fn net_classes_in_project(model: &ConstraintModel) -> bool {
-    !model.board.tuning_profiles.class_profiles.is_empty()
+    !model.board.tuning_profiles.class_profiles.is_empty() || model.nets.iter().any(|n| model.board.matching_classes(&n.name).len() > 1)
 }
 
 /// One `TUNING_PROFILE` as the project file keeps it (`common/project/tuning_profiles.cpp`): widths and gaps in nanometres, delays in attoseconds per millimetre, via delays in
@@ -714,8 +715,9 @@ fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
         }
     }
     classes.push(default);
-    for c in &b.net_classes {
-        let mut j = serde_json::json!({ "name": c.name, "priority": c.priority, "tuning_profile": profile_of(&c.name) });
+    // A class's place in the list is its priority (`panel_setup_netclasses.cpp`: `SetPriority( row )`; the Default class has the lowest); `NetClass::priority` is the router's own.
+    for (row, c) in b.net_classes.iter().enumerate() {
+        let mut j = serde_json::json!({ "name": c.name, "priority": row as i32, "tuning_profile": profile_of(&c.name) });
         for (key, v) in [("clearance", c.clearance), ("track_width", c.track_width), ("via_diameter", c.via_diameter), ("via_drill", c.via_drill), ("microvia_diameter", c.microvia_diameter), ("microvia_drill", c.microvia_drill), ("diff_pair_width", c.diff_pair_width), ("diff_pair_gap", c.diff_pair_gap), ("diff_pair_via_gap", c.diff_pair_via_gap)] {
             if let Some(v) = v {
                 j[key] = serde_json::json!(mm_f(v));
@@ -732,8 +734,23 @@ fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
     let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
     net_names.sort();
     net_names.dedup();
-    let patterns: Vec<serde_json::Value> = net_names.iter().filter_map(|n| b.class_of(n).map(|c| serde_json::json!({ "netclass": c.name, "pattern": n }))).collect();
+    // One pattern for each class a net is in, naming the net exactly (a name written so neither reading of a pattern gives its characters a meaning): KiCad then composes the classes of
+    // a net the way the studio does (`BoardRules::effective_class`) whatever its own regular expressions would have said of the patterns.
+    let patterns: Vec<serde_json::Value> = net_names.iter().flat_map(|n| b.matching_classes(n).into_iter().map(move |c| serde_json::json!({ "netclass": c.name, "pattern": exact_pattern(n) }))).collect();
     serde_json::json!({ "classes": classes, "meta": { "version": 5 }, "net_colors": null, "netclass_assignments": null, "netclass_patterns": patterns })
+}
+
+/// A net name as a pattern that matches that name and no other, read as a regular expression (`NET_SETTINGS`' matchers read every pattern as a wildcard pattern and as a regular
+/// expression): each character a regular expression gives a meaning to is escaped.
+fn exact_pattern(net: &str) -> String {
+    let mut out = String::with_capacity(net.len());
+    for c in net.chars() {
+        if ".+*?()[]{}|^$\\".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// The per-type DRC severities the derived project holds: the imported project's own or Board Setup's, with "ignore"

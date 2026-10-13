@@ -23,49 +23,12 @@
 
 import type { Constraints, LayerClassDefaults, MaskPaste, NetClass, NetClassSettings, RuleSeverity, Stackup, StackupLayer, StackupSettings, TextGraphicsDefaults, Um } from "../api/types";
 import { strNumCmp } from "./sheetPages";
+import { globMatch, patternMatches } from "./netPattern";
+
+export { globMatch };
 
 // ------------------------------------------------------------------ net class patterns
 
-/**
- * What a net class pattern matches: `*` is any run of characters (empty too), `?` any one character, everything else itself, and the
- * pattern must cover the whole net name (`EDA_PATTERN_MATCH_WILDCARD_ANCHORED`; `eda_model::glob_match` is the backend's twin).
- */
-export function globMatch(pattern: string, name: string): boolean {
-  const p = Array.from(pattern);
-  const s = Array.from(name);
-  let pi = 0;
-  let si = 0;
-  let star = -1; // where the last `*` is in the pattern
-  let mark = 0; //  and how much of the name it has swallowed so far
-  while (si < s.length) {
-    if (pi < p.length && p[pi] === "*") {
-      star = pi++;
-      mark = si;
-    } else if (pi < p.length && (p[pi] === "?" || p[pi] === s[si])) {
-      pi++;
-      si++;
-    } else if (star >= 0) {
-      pi = star + 1;
-      si = ++mark;
-    } else {
-      return false;
-    }
-  }
-  while (pi < p.length && p[pi] === "*") pi++;
-  return pi === p.length;
-}
-
-/**
- * The plain patterns a typed or proposed pattern stands for. KiCad reads a pattern as a regular expression too, and its assignment dialog
- * proposes `prefix(tail|tail)` or `a|b|c`; matching those needs no regular expressions here: `a|b|c` is the three patterns `a`, `b` and `c`,
- * and `prefix(x|y)suffix` is `prefixxsuffix` and `prefixysuffix`. Anything else, including a parenthesis that does not hold an alternation
- * (`Net-(R1-Pad1)` is a net's name), is one pattern, as written.
- */
-export function expandPattern(pattern: string): string[] {
-  const grouped = /^([^()|]*)\(([^()]*\|[^()]*)\)([^()|]*)$/.exec(pattern);
-  const out = grouped ? grouped[2]!.split("|").map((alt) => grouped[1]! + alt + grouped[3]!) : pattern.includes("|") && !/[()]/.test(pattern) ? pattern.split("|") : [pattern];
-  return out.filter((p) => p !== "");
-}
 
 /**
  * `GetNetclassPatternForSet`: the pattern the Assign Netclass dialog starts with for the nets picked -- the net's own name for one, else the
@@ -101,18 +64,14 @@ export function assignmentRows(classes: readonly NetClass[]): AssignmentRow[] {
 }
 
 /**
- * `SetNetclassPatternAssignment` / `addSinglePatternAssignment`: assigning `pattern` to `netclass` adds one row per plain pattern it
- * stands for ([`expandPattern`]), none for a pattern already assigned to that class. A pattern already assigned to another class moves to
- * this one -- KiCad keeps both and merges the two classes for the nets it matches; here the first class that matches owns a net, so a copy
- * under a class further down would never apply.
+ * `SetNetclassPatternAssignment` / `addSinglePatternAssignment`: assigning `pattern` (trimmed, as typed: KiCad reads `a|b|c` and `prefix(x|y)` as regular expressions, so they are patterns
+ * like any other) to `netclass` adds a row, none for a pattern already assigned to that class. A pattern already assigned to another class stays there: KiCad keeps both, and the nets
+ * the pattern matches are in both classes, whose settings it composes (`GetEffectiveNetClass`).
  */
 export function addAssignment(rows: readonly AssignmentRow[], pattern: string, netclass: string): AssignmentRow[] {
-  let out = [...rows];
-  for (const p of expandPattern(pattern.trim())) {
-    out = out.filter((r) => r.pattern !== p || r.netclass === netclass);
-    if (!out.some((r) => r.pattern === p && r.netclass === netclass)) out.push({ pattern: p, netclass });
-  }
-  return out;
+  const p = pattern.trim();
+  if (p === "" || rows.some((r) => r.pattern === p && r.netclass === netclass)) return [...rows];
+  return [...rows, { pattern: p, netclass }];
 }
 
 /**
@@ -121,10 +80,10 @@ export function addAssignment(rows: readonly AssignmentRow[], pattern: string, n
  * Default class holds no patterns). An empty pattern assigns nothing.
  */
 export function withAssignment(settings: NetClassSettings, pattern: string, netclass: string): NetClassSettings {
-  const plain = expandPattern(pattern.trim());
-  if (plain.length === 0) return settings;
+  const p = pattern.trim();
+  if (p === "") return settings;
   const rows = assignmentRows(settings.classes);
-  const next = netclass === settings.default.name ? rows.filter((r) => !plain.includes(r.pattern)) : addAssignment(rows, pattern, netclass);
+  const next = netclass === settings.default.name ? rows.filter((r) => r.pattern !== p) : addAssignment(rows, pattern, netclass);
   return { default: settings.default, classes: applyAssignments(settings.classes, next) };
 }
 
@@ -140,21 +99,37 @@ export function netClassSettingsOf(rules: { default_class?: NetClass; track_widt
   return { default: def, classes: rules.net_classes };
 }
 
-/** The classes with their patterns taken from the assignment table. A row naming no class, or with nothing in its pattern, is dropped; a pattern typed as `a|b` becomes two. */
+/** The classes with their patterns taken from the assignment table. A row naming no class, or with nothing in its pattern, is dropped. */
 export function applyAssignments(classes: readonly NetClass[], rows: readonly AssignmentRow[]): NetClass[] {
-  return classes.map((c) => ({ ...c, nets: rows.filter((r) => r.netclass === c.name).flatMap((r) => expandPattern(r.pattern.trim())) }));
+  return classes.map((c) => ({ ...c, nets: rows.filter((r) => r.netclass === c.name).map((r) => r.pattern.trim()).filter((p) => p !== "") }));
 }
 
-/** The nets, among `nets`, that `pattern` (as typed, so `a|b` too) assigns -- the "Nets matching" list. */
+/** The nets, among `nets`, that `pattern` assigns -- the "Nets matching" list (`EDA_COMBINED_MATCHER( pattern, CTX_NETCLASS )`: a wildcard pattern or a regular expression, the whole name). */
 export function netsMatching(pattern: string, nets: readonly string[]): string[] {
-  const plain = expandPattern(pattern.trim());
-  return nets.filter((n) => plain.some((p) => globMatch(p, n)));
+  const p = pattern.trim();
+  return p === "" ? [] : nets.filter((n) => patternMatches(p, n));
 }
 
 /** The class that owns `net`: the first class, in order, with a pattern that matches it, else the Default class. */
 export function classOfNet(classes: readonly NetClass[], net: string, defaultName = "Default"): string {
-  for (const c of classes) if (c.nets.some((p) => globMatch(p, net))) return c.name;
+  for (const c of classes) if (c.nets.some((p) => patternMatches(p, net))) return c.name;
   return defaultName;
+}
+
+/** Every class `net` is in, the one that takes precedence first (a class's place in the list is its priority). */
+export function classesOfNet(classes: readonly NetClass[], net: string): NetClass[] {
+  return classes.filter((c) => c.nets.some((p) => patternMatches(p, net)));
+}
+
+/**
+ * `NET_SETTINGS::GetEffectiveNetClass`' name for a net: the classes it is in, highest priority first, joined by a comma, with `Default` last when some setting of the net comes from it (a class
+ * that sets all of clearance, track width, via size and hole, uVia size and hole and the pair's width and gap needs none). A net in no class is in Default alone.
+ */
+export function effectiveClassName(classes: readonly NetClass[], net: string, defaultName = "Default"): string {
+  const own = classesOfNet(classes, net);
+  const sets = (f: (c: NetClass) => number | undefined) => own.some((c) => f(c) !== undefined);
+  const complete = own.length > 0 && sets((c) => c.clearance) && sets((c) => c.track_width) && sets((c) => c.via_diameter) && sets((c) => c.via_drill) && sets((c) => c.microvia_diameter) && sets((c) => c.microvia_drill) && sets((c) => c.diff_pair_width) && sets((c) => c.diff_pair_gap);
+  return [...own.map((c) => c.name), ...(complete ? [] : [defaultName])].join(",");
 }
 
 /** `MAXIMUM_CLEARANCE` (board_design_settings.h): a larger clearance overflows the integer maths in KiCad's engines. */
