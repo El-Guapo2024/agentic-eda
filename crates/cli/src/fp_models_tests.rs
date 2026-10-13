@@ -170,3 +170,84 @@ fn the_models_follow_their_footprint_and_a_bottom_one_is_written_in_kicads_frame
     let u1 = back.parts.iter().find(|p| p.reference == "U1").unwrap();
     assert_eq!(back.footprint_of(u1).unwrap().models3d, vec![placed], "read back, the list is the one it was written from");
 }
+
+/// The Footprint Editor's list reaches the board once the footprint is updated on it (`UpdateFootprintOnBoard`: "Update Footprint from Library"), for every instance, and an
+/// instance whose own list the board set keeps that one.
+#[test]
+fn a_list_set_in_the_footprint_editor_reaches_the_board_with_the_footprint_and_a_boards_own_list_wins() {
+    let dir = scratch("models_from_the_editor");
+    setup(&dir);
+    step(&dir, Cmd::OpenFootprintForEdit { name: "2PAD".into() }, false, "test").unwrap();
+    let list = two_models();
+    step(
+        &dir,
+        Cmd::EditFootprintProperties {
+            name: "2PAD".into(),
+            description: String::new(),
+            keywords: String::new(),
+            attributes: Default::default(),
+            reference_visible: true,
+            value_visible: true,
+            model: None,
+            models3d: Some(list.clone()),
+            zone_connection: None,
+        },
+        false,
+        "test",
+    )
+    .unwrap();
+    assert_eq!(sent(&dir, "U1"), None, "the library entry is not on the board until it is published: nothing automatic");
+    step(&dir, Cmd::UpdateFootprintOnBoard { name: "2PAD".into() }, false, "test").unwrap();
+    assert_eq!(sent(&dir, "U1"), Some(list.clone()), "the footprint's models come with it");
+    assert_eq!(sent(&dir, "U2"), Some(list.clone()));
+    let (_, _, model) = load(&dir).unwrap();
+    assert_eq!(model.footprint_of(model.part("U2").unwrap()).unwrap().model.as_deref(), Some(list[0].path.as_str()), "`model` is the first path");
+    // the derived board file writes both models for both instances
+    let pcb = derived_board(&dir);
+    assert_eq!(footprint_block(&pcb, "U1").matches("(model ").count(), 2);
+    assert_eq!(footprint_block(&pcb, "U2").matches("(model ").count(), 2);
+
+    // a list the board set for one instance is that instance's, the library's is the other's
+    let own = vec![Model3d::identity("mine.step")];
+    step(&dir, Cmd::SetBoardModels { part: "U1".into(), models: own.clone() }, false, "test").unwrap();
+    assert_eq!((sent(&dir, "U1"), sent(&dir, "U2")), (Some(own), Some(list)));
+}
+
+/// The footprint a library entry becomes when it is placed on the board from the project library keeps its models (`to_engine_footprint`): Place Footprint and Insert into PCB.
+#[test]
+fn a_footprint_placed_from_the_project_library_brings_its_models() {
+    let dir = scratch("models_placed_from_library");
+    setup(&dir);
+    let mut fp = eda_model::ir::LibraryFootprint::new_empty("Test:Mounted");
+    fp.pads.push(eda_model::ir::LibraryPad {
+        id: String::new(),
+        number: "1".into(),
+        at: eda_model::ir::Point { x: 0, y: 0 },
+        offset: eda_model::ir::Point::default(),
+        size: (1_000, 1_000),
+        shape: eda_model::ir::LibraryPadShape::Rect,
+        kind: eda_model::footprint::PadKind::Smd,
+        drill: None,
+        drill_slot: None,
+        rot: 0,
+        roundrect_ratio: None,
+        trapezoid_delta: None,
+        chamfer_ratio: None,
+        chamfer_corners: Default::default(),
+        custom: None,
+        layers: vec![],
+        clearance_override: None,
+        thermal_gap_override: None,
+        thermal_spoke_width_override: None,
+        zone_connection: None,
+        thermal_spoke_angle_mdeg: None,
+    });
+    fp.models3d = two_models();
+    fp.model = Some(fp.models3d[0].path.clone());
+    step(&dir, Cmd::PutLibraryFootprint { footprint: fp.clone(), overwrite: false }, false, "test").unwrap();
+    step(&dir, Cmd::PlaceFootprint { footprint: "Test:Mounted".into(), at: eda_model::ir::Point { x: 10_000, y: 10_000 }, reference: String::new(), value: String::new(), definition: Some(fp) }, false, "test").unwrap();
+    let (_, _, model) = load(&dir).unwrap();
+    let placed = model.parts.iter().find(|p| p.footprint.as_deref() == Some("Test:Mounted")).expect("the footprint is a part of the board now");
+    assert_eq!(model.footprint_of(placed).unwrap().models3d, two_models());
+    assert_eq!(sent(&dir, &placed.reference), Some(two_models()));
+}
