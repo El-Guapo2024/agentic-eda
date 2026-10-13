@@ -64,6 +64,7 @@ import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
 import { SymbolFieldsTableDialog } from "./components/SymbolFieldsTableDialog";
 import { FindReplaceDialog } from "./components/FindReplaceDialog";
+import { FindByPropertiesDialog } from "./components/FindByPropertiesDialog";
 import { PcbFindDialog } from "./components/PcbFindDialog";
 import { SchematicSetupDialog } from "./components/SchematicSetupDialog";
 import { PlotDialog } from "./components/PlotDialog";
@@ -270,6 +271,7 @@ function StudioFrame() {
       <SymbolFieldsTableDialog />
       <FindReplaceDialog />
       <PcbFindDialog />
+      <FindByPropertiesDialog />
       <SchematicSetupDialog />
       <PlotDialog />
       <PlotSchematicDialog />

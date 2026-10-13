@@ -217,6 +217,11 @@ export class PropertyManager<I extends PropItem = PropItem, C = unknown, K = unk
     for (let i = cls.bases.length - 1; i >= 0; i--) this.collectPropsRecur(this.getClass(cls.bases[i]!), result, replaced, order, masked);
   }
 
+  /** `GetAllClasses`: the registered classes, in the order they were first named. */
+  allClasses(): string[] {
+    return [...this.classes.keys()];
+  }
+
   /** `GetProperties`: every property of the class, own and inherited, once each. */
   getProperties(type: string): readonly PropertyDef<I, C, K>[] {
     this.ensureBuilt();

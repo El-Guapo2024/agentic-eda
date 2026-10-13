@@ -5,7 +5,7 @@
 //   pcbnew/tools/board_editor_control.cpp  Find / FindNext                 `ACTIONS::find`, `findNext`, `findPrevious` run on the board editor
 //   pcbnew/tools/pcb_selection_tool.cpp    FindItem                         select the hit and bring the view to it (kicad-port/pcbFind.ts `focusView`)
 //
-// Find by Properties (`PCB_ACTIONS::findByProperties`) stays unwired.
+// Find by Properties (`PCB_ACTIONS::findByProperties`, Edit > Find by Properties...) opens its own dialog (components/FindByPropertiesDialog.tsx).
 import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
 import type { SweepCtx } from "./pcbSweepKit";
@@ -13,6 +13,7 @@ import { findHits, findStatus, focusView, preloadText, stepFind, type PcbHit } f
 import { itemBounds, unionBounds } from "../kicad-port/pcbItems";
 import { netItems } from "../kicad-port/pcbSelectionOps";
 import { getPcbFind, setFindOptions, setPcbFind, withHistory } from "../state/pcbFind";
+import { showFindByProperties } from "./findByPropertiesActions";
 
 type Box = [number, number, number, number];
 
@@ -104,4 +105,5 @@ export function registerPcbFindActions(m: Map<string, (param?: unknown) => void>
   m.set("common.Interactive.find", () => showPcbFindDialog(api));
   m.set("common.Interactive.findNext", () => pcbFindNext(api, dispatch, false));
   m.set("common.Interactive.findPrevious", () => pcbFindNext(api, dispatch, true));
+  m.set("pcbnew.EditorControl.findByProperties", () => showFindByProperties(api));
 }
