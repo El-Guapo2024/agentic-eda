@@ -2832,3 +2832,46 @@ export interface ErcPinMapReply {
   /** True when the design stores its own map (`schematic.erc_pin_map`). */
   custom: boolean;
 }
+
+/** `POST /api/inspect/{clearance,constraints}` (Inspect > Clearance Resolution / Constraints Resolution, `BOARD_INSPECTION_TOOL`): the report pages in KiCad's
+ * wording (HTML lines) with the winning constraint of each, as numbers (nanometres), and every rule it considered. Read-only: it shows which rule wins, it checks nothing. */
+export interface InspectConsidered {
+  rule: string;
+  implicit: boolean;
+  constraint: string;
+  condition: string;
+  applied: boolean;
+  note: string;
+}
+
+export interface InspectResolution {
+  constraint: string;
+  layer: string | null;
+  min: number | null;
+  opt: number | null;
+  max: number | null;
+  rule: string;
+  implicit: boolean;
+  null: boolean;
+  zone_connection: string | null;
+  disallowed: boolean;
+  considered: InspectConsidered[];
+}
+
+export interface InspectPage {
+  title: string;
+  lines: string[];
+  /** A page that is one report per copper layer (the "Clearance" page of items that share several): the layer in the board file, its shown name, its lines. */
+  per_layer: { layer: string; name: string; lines: string[] }[];
+  resolutions: InspectResolution[];
+}
+
+export interface InspectReply {
+  ok: boolean;
+  /** Set when `ok` is false: the info bar message (`ShowInfoBarError`). */
+  message?: string;
+  title: string;
+  /** The `.kicad_dru` did not compile: the report is on the implicit rules alone. */
+  compile_error: string | null;
+  pages: InspectPage[];
+}

@@ -55,7 +55,7 @@
   const rowNames = () => [...document.querySelectorAll('[data-testid^="fbp-row-"]')].map((tr) => tr.getAttribute("data-testid").slice("fbp-row-".length));
   const rowValue = (name) => dialog(`fbp-row-${name}`)?.querySelectorAll("td")[1]?.innerText;
   const closeDialogs = async () => {
-    for (const id of ["find-by-properties", "pcb-find-dialog"]) {
+    for (const id of ["find-by-properties", "pcb-find-dialog", "inspect-clearance", "inspect-constraints"]) {
       if (dialog(id)) { document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); dialog(id)?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })); await sleep(250); }
     }
   };
@@ -303,11 +303,154 @@
     t(left.every((z) => z.name !== "keepout-e2e") && ((await state()).parts.find((p) => p.ref === c1.ref).fields ?? []).every((f) => f.name !== "Supplier"), "the undos take the zone and the fields away");
   });
 
+  // ---------------------------------------------------------------------------------------------------------- Inspect > Clearance / Constraints Resolution
+  const cmdPost = async (c) => (await fetch("/api/cmd", { method: "POST", body: JSON.stringify({ strict: false, cmd: c }) })).json();
+  const padId = (p, i) => {
+    const num = p.pads[i].num;
+    const k = p.pads.slice(0, i + 1).filter((q) => q.num === num).length;
+    return k === 1 ? `${p.ref}.${num}` : `${p.ref}.${num}#${k}`;
+  };
+  // two SMD pads on the front, on different nets, that nobody shares a number with
+  const smdPads = parts.filter((p) => p.side === "top").flatMap((p) => p.pads.map((pad, i) => ({ id: padId(p, i), net: pad.net, ref: p.ref, num: pad.num, th: pad.th === true }))).filter((x) => !x.th && x.net);
+  const padA = smdPads[0];
+  const padB = smdPads.find((x) => x.net !== padA.net && x.ref === padA.ref) ?? smdPads.find((x) => x.net !== padA.net);
+  const inspectOpen = async (kind, ms = 3000) => {
+    const t0 = Date.now();
+    while (!dialog(`inspect-${kind}`) && Date.now() - t0 < ms) await sleep(100);
+    await sleep(150);
+    return dialog(`inspect-${kind}`);
+  };
+  const tabTitles = (kind) => [...document.querySelectorAll(`[data-testid="inspect-${kind}"] [role="tab"]`)].map((b) => b.textContent.trim());
+  const clickTab = async (kind, title) => { dialog(`inspect-tab-${title}`)?.click(); await sleep(150); };
+  const lines = (kind) => [...document.querySelectorAll(`[data-testid="inspect-${kind}"] [data-testid="inspect-line"]`)].map((l) => l.innerText);
+  const postInspect = (route, body) => fetch(`/api/inspect/${route}`, { method: "POST", body: JSON.stringify(body) }).then((r) => r.json());
+
+  await scenario("Clearance Resolution says which clearance applies between two pads, and every rule it looked at, in KiCad's words", async (t) => {
+    t(!!padA && !!padB, `two pads on different nets: ${padA?.id} [${padA?.net}] and ${padB?.id} [${padB?.net}]`);
+    const acts = __eda.actions({ all: true });
+    t(acts.some((a) => a.id === "pcbnew.InspectionTool.InspectClearance" && a.enabled) && acts.some((a) => a.id === "pcbnew.InspectionTool.InspectConstraints" && a.enabled), "both Inspect commands are in the registry");
+    await select([padA.id, padB.id]);
+    const ran = await __eda.run("pcbnew.InspectionTool.InspectClearance");
+    t(ran.ok, `the command ran: ${ran.error ?? ""}`);
+    t(!!(await inspectOpen("clearance")), "the Clearance Report dialog opens");
+    const titles = tabTitles("clearance");
+    t(titles[0] === "F.Cu" && titles[titles.length - 1] === "Physical Clearances", `the pages: ${titles.join(" | ")}`);
+    const reply = await postInspect("clearance", { a: padA.id, b: padB.id, active_layer: "F.Cu", units: "mm" });
+    const res = reply.pages[0].resolutions[0];
+    t(reply.ok && res.constraint === "clearance" && res.min > 0, `the server resolves ${res.min} nm by ${res.rule}`);
+    const text0 = lines("clearance").join("\n");
+    t(/^Clearance resolution for:/m.test(text0) && /^Layer F\.Cu$/m.test(text0), "the header names the layer");
+    t(text0.includes(`[${padA.net}]`) && text0.includes(`[${padB.net}]`) && /\[netclass [^\]]+\]/.test(text0), "and both items, with their net and net class");
+    t(/Checking netclass '[^']+' clearance: \d+\.\d{4} mm\./.test(text0), `an implicit rule is checked: ${(text0.match(/Checking netclass[^\n]*/) ?? [""])[0]}`);
+    t(/Board minimum clearance: \d+\.\d{4} mm\./.test(text0), "the board minimum clearance is told");
+    const mm = (res.min / 1e6).toString();
+    t(new RegExp(`Resolved min clearance: ${mm.replace(".", "\\.")} mm\\.`).test(text0), `the verdict: Resolved min clearance: ${mm} mm.`);
+    await clickTab("clearance", "Physical Clearances");
+    // (KiCad's implicit "barcode visual separation default" rule is a physical_clearance rule, so the page goes through the layers the items share and tells none is in effect)
+    const phys = lines("clearance").join("\n");
+    t(/Checking barcode visual separation default clearance: 1\.0000 mm\./.test(phys) && /Membership not satisfied; constraint ignored\./.test(phys) && /No 'physical_clearance' constraints in effect on F\.Cu\./.test(phys), "the Physical Clearances page goes layer by layer and says none is in effect");
+    await closeDialogs();
+    t(!dialog("inspect-clearance"), "Escape closes it");
+
+    // a rules file rule: it wins, and the report says it overrode the implicit ones
+    let steps = 0;
+    try {
+      const rule = `(version 1)\n(rule "e2e wide"\n\t(condition "A.Type == 'Pad' && B.Type == 'Pad'")\n\t(constraint clearance (min 0.77mm)))\n`;
+      let r = await cmdPost({ op: "set_custom_rules", text: rule });
+      t(r.ok, `custom rules set: ${r.message ?? ""}`);
+      if (r.ok) steps++;
+      await select([padA.id, padB.id]);
+      await __eda.run("pcbnew.InspectionTool.InspectClearance");
+      await inspectOpen("clearance");
+      const t1 = lines("clearance").join("\n");
+      t(/Checking rule 'e2e wide' clearance: 0\.7700 mm\./.test(t1) && /Checking rule condition 'A\.Type == 'Pad' && B\.Type == 'Pad''\./.test(t1), "the rule and its condition are checked");
+      t(/Rule applied; overrides previous constraints\./.test(t1) && /Resolved min clearance: 0\.77 mm\./.test(t1), "it applies, and its clearance is the verdict");
+      t(!/Board minimum clearance/.test(t1), "an explicit rule ends the evaluation: no board minimum line");
+      const j = await postInspect("clearance", { a: padA.id, b: padB.id });
+      t(j.pages[0].resolutions[0].rule === "rule 'e2e wide'" && j.pages[0].resolutions[0].min === 770000, `as numbers: ${j.pages[0].resolutions[0].rule} ${j.pages[0].resolutions[0].min}`);
+      await closeDialogs();
+
+      // a rules file that does not compile: the implicit rules alone, and the notice with its link
+      r = await cmdPost({ op: "set_custom_rules", text: `(version 1)\n(rule x (constraint clearance (min 1)))\n` });
+      if (r.ok) steps++;
+      await select([padA.id, padB.id]);
+      await __eda.run("pcbnew.InspectionTool.InspectClearance");
+      await inspectOpen("clearance");
+      const t2 = lines("clearance").join("\n");
+      t(/Report incomplete: could not compile custom design rules\./.test(t2) && /Show design rules\./.test(t2), "the report says the rules could not be compiled");
+      t(!/e2e wide/.test(t2) && /Resolved min clearance: /.test(t2), "and goes on with the implicit rules");
+      t(!!document.querySelector('[data-testid="inspect-clearance"] a'), "with a link");
+      await closeDialogs();
+    } finally {
+      for (let i = 0; i < steps; i++) { await __eda.run("common.Interactive.undo"); await sleep(700); }
+    }
+    const back = await postInspect("clearance", { a: padA.id, b: padB.id });
+    t(back.compile_error === null && back.pages[0].resolutions[0].rule !== "rule 'e2e wide'", "the undos take the rules away");
+  });
+
+  await scenario("Clearance and Constraints Resolution pick what is not selected, and refuse what makes no sense", async (t) => {
+    // two items selected: no picker; none: both are picked; one: the second is
+    await select([]);
+    let r = await __eda.run("pcbnew.InspectionTool.InspectClearance");
+    t(__eda.state().picker === "Select first item for clearance resolution...", `nothing selected: ${__eda.state().picker}`);
+    await __eda.run("common.Interactive.cancel");
+    t(__eda.state().picker === null && !dialog("inspect-clearance"), "Escape cancels it and no report opens");
+    await select([padA.id]);
+    r = await __eda.run("pcbnew.InspectionTool.InspectClearance");
+    t(__eda.state().picker === "Select second item for clearance resolution...", `one item selected: ${__eda.state().picker}`);
+    await __eda.run("common.Interactive.cancel");
+    t(JSON.stringify(selection()) === JSON.stringify([padA.id]), `the selection is as it was: ${selection().join()}`);
+    // constraints: one item reports, none is picked, several are refused
+    await select([]);
+    await __eda.run("pcbnew.InspectionTool.InspectConstraints");
+    t(__eda.state().picker === "Select item for constraints resolution...", `constraints, nothing selected: ${__eda.state().picker}`);
+    await __eda.run("common.Interactive.cancel");
+    await select([padA.id, padB.id, parts[0].ref]);
+    r = await __eda.run("pcbnew.InspectionTool.InspectConstraints");
+    t(/Select a single item for a constraints resolution report\./.test(r.toast ?? ""), `three selected: ${r.toast}`);
+    t(!dialog("inspect-constraints") && __eda.state().picker === null, "no report, no picker");
+    // the server refuses the same item twice and an unknown one
+    const same = await postInspect("clearance", { a: padA.id, b: padA.id });
+    t(same.ok === false && same.message === "Select two different items for clearance resolution.", `twice the same: ${same.message}`);
+    const nope = await postInspect("constraints", { item: "no-such-item" });
+    t(nope.ok === false && /no such item/.test(nope.message), `unknown: ${nope.message}`);
+  });
+
+  await scenario("Constraints Resolution of a pad: the pages of a pad, the keepout verdict and the assertions of the rules file", async (t) => {
+    let steps = 0;
+    try {
+      await select([padA.id]);
+      await __eda.run("pcbnew.InspectionTool.InspectConstraints");
+      t(!!(await inspectOpen("constraints")), "the Constraints Report dialog opens on one selected item");
+      const titles = tabTitles("constraints");
+      t(JSON.stringify(titles) === JSON.stringify(["Solder Mask", "Solder Paste", "Keepouts", "Assertions"]), `the pages of an SMD pad: ${titles.join(" | ")}`);
+      await clickTab("constraints", "Keepouts");
+      t(/Item allowed at current location\./.test(lines("constraints").join("\n")), "Keepouts: allowed where it is");
+      await clickTab("constraints", "Solder Mask");
+      t(/Resolved solder mask expansion: /.test(lines("constraints").join("\n")), "Solder Mask: resolved");
+      await closeDialogs();
+      const rule = `(version 1)\n(rule "wide pads"\n\t(condition "A.Type == 'Pad'")\n\t(constraint assertion "A.Size_X >= 20mm"))\n`;
+      const set = await cmdPost({ op: "set_custom_rules", text: rule });
+      t(set.ok, `an assertion rule: ${set.message ?? ""}`);
+      if (set.ok) steps++;
+      await select([padA.id]);
+      await __eda.run("pcbnew.InspectionTool.InspectConstraints");
+      await inspectOpen("constraints");
+      await clickTab("constraints", "Assertions");
+      const a = lines("constraints").join("\n");
+      t(/Checking rule assertion 'A\.Size_X >= 20mm'\./.test(a) && /--> Assertion failed\. <--/.test(a), `the assertion is tested and fails: ${(a.match(/Assertion[^\n]*/g) ?? []).join(" / ")}`);
+    } finally {
+      await closeDialogs();
+      for (let i = 0; i < steps; i++) { await __eda.run("common.Interactive.undo"); await sleep(700); }
+    }
+  });
+
   await scenario("the board is as it was and nothing broke", async (t) => {
     await select([]);
     const after = JSON.stringify((await placed()).map((p) => [p.ref, p.at, p.rot, p.side]).sort());
     t(after === pcbBefore, "every footprint is where it was, turned and on the side it was");
-    const errors = (__eda.errors?.() ?? []).slice(errorsFrom);
+    // (the error toast of Constraints Resolution with several items selected is the one a scenario above asked for)
+    const errors = (__eda.errors?.() ?? []).slice(errorsFrom).filter((e) => e.message !== "Select a single item for a constraints resolution report.");
     t(errors.length === 0, `no console error: ${JSON.stringify(errors).slice(0, 200)}`);
   });
 

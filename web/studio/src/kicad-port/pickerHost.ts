@@ -35,7 +35,7 @@ export interface PickerSession {
   /** `SetClickHandler` of a point session. */
   onPoint?: (at: PickPoint) => PickResult;
   /** `SetClickHandler` of an item session; not called when the click found no item ("still looking for an item"). */
-  onItem?: (id: string) => PickResult;
+  onItem?: (id: string, at?: PickPoint) => PickResult;
   /**
    * `SetCancelHandler`: Escape, or another tool being activated, before a click finished the session.
    * `activated` tells the two apart (`evt->IsActivate()`): a tool that backs out one stage on Escape ends for good
@@ -109,7 +109,7 @@ export class PickerHost {
       const id = hit.item();
       // `if( sel.Empty() ) return true; // still looking for an item`
       if (id === null) return true;
-      result = session.onItem ? session.onItem(id) : false;
+      result = session.onItem ? session.onItem(id, hit.point) : false;
     }
     // The handler may have ended or replaced the session itself.
     if (this.current !== session) return true;

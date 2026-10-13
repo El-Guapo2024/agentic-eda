@@ -14,6 +14,7 @@ import { itemBounds, unionBounds } from "../kicad-port/pcbItems";
 import { netItems } from "../kicad-port/pcbSelectionOps";
 import { getPcbFind, setFindOptions, setPcbFind, withHistory } from "../state/pcbFind";
 import { showFindByProperties } from "./findByPropertiesActions";
+import { registerInspectActions } from "./inspectActions";
 
 type Box = [number, number, number, number];
 
@@ -106,4 +107,6 @@ export function registerPcbFindActions(m: Map<string, (param?: unknown) => void>
   m.set("common.Interactive.findNext", () => pcbFindNext(api, dispatch, false));
   m.set("common.Interactive.findPrevious", () => pcbFindNext(api, dispatch, true));
   m.set("pcbnew.EditorControl.findByProperties", () => showFindByProperties(api));
+  // Inspect > Clearance Resolution and Constraints Resolution: the other command that asks which items are meant.
+  registerInspectActions(m, ctx);
 }

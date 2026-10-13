@@ -243,6 +243,50 @@ mod tests {
         assert!(keepouts.contains("Item allowed at current location."), "{keepouts}");
     }
 
+    #[test]
+    fn a_track_is_the_segment_the_click_was_nearest_to_and_the_report_follows_the_frames_units() {
+        use eda_ops::Cmd;
+        let dir = scratch("track");
+        setup(&dir, 3_000, hv_rules(None));
+        // a two-segment track on GND: 4 mm up, then 6 mm along
+        let pts = vec![Point { x: 2_000, y: 2_000 }, Point { x: 2_000, y: 6_000 }, Point { x: 8_000, y: 6_000 }];
+        board::step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 250, pts }, false, "test").unwrap();
+        let (_, design, _) = board::load(&dir).unwrap();
+        let id = design.routing.unwrap().tracks[0].id.clone();
+        let first = clearance(&dir, &body(json!({"a": "U1.1", "b": id, "b_at": [2.0, 3.0]})));
+        let second = clearance(&dir, &body(json!({"a": "U1.1", "b": id, "b_at": [6.0, 6.0]})));
+        let text = |r: &Value| r["pages"][0]["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
+        assert!(text(&first).contains("Track [GND] on F.Cu, length 4.0000 mm [netclass Default]"), "{}", text(&first));
+        assert!(text(&second).contains("Track [GND] on F.Cu, length 6.0000 mm [netclass Default]"), "{}", text(&second));
+        // with no point: the first segment
+        let none = clearance(&dir, &body(json!({"a": "U1.1", "b": id})));
+        assert!(text(&none).contains("length 4.0000 mm"), "{}", text(&none));
+        // the constraints report of the track: its width, the board floor and the class's width
+        let c = constraints(&dir, &body(json!({"item": id, "at": [6.0, 6.0]})));
+        let titles: Vec<_> = c["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect();
+        assert_eq!(titles, ["Track Width", "Solder Mask", "Keepouts", "Assertions"], "{c}");
+        let width = &c["pages"][0]["resolutions"][0];
+        assert_eq!((width["min"].clone(), width["opt"].clone()), (json!(200_000), json!(200_000)), "{c}");
+        // the units: the same width in mils
+        let mils = constraints(&dir, &body(json!({"item": id, "units": "mils"})));
+        let t = mils["pages"][0]["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
+        assert!(t.contains("Resolved width constraints: min 7.87402 mils; opt 7.87402 mils; max <i>undefined</i>."), "{t}");
+        assert!(t.contains("length 157.48 mils"), "a track's description is in the frame's units too: {t}");
+        // a via: the pages of a via, its description by its layers
+        board::step(&dir, Cmd::AddVia { net: "GND".into(), x: 9_000, y: 3_000, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() }, false, "test").unwrap();
+        let (_, design, _) = board::load(&dir).unwrap();
+        let via = design.routing.unwrap().vias[0].id.clone();
+        let v = constraints(&dir, &body(json!({"item": via})));
+        let vt: Vec<_> = v["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect();
+        assert_eq!(vt, ["Via Diameter", "Via Annular Width", "Hole Size", "Solder Mask", "Keepouts", "Assertions"], "{v}");
+        let head = v["pages"][0]["lines"].as_array().unwrap().iter().map(|l| l.as_str().unwrap()).collect::<Vec<_>>().join("\n");
+        assert!(head.contains("Via [GND] on all copper layers [netclass Default]"), "{head}");
+        // the via and a pad: the hole pages come with them
+        let hv = clearance(&dir, &body(json!({"a": via, "b": "U1.1"})));
+        let titles: Vec<_> = hv["pages"].as_array().unwrap().iter().map(|p| p["title"].as_str().unwrap().to_string()).collect();
+        assert!(titles.contains(&"Hole".to_string()) && titles.contains(&"F.Cu".to_string()) && titles.contains(&"Clearance".to_string()) == false, "{titles:?}");
+    }
+
     /// The proof against kicad-cli: the clearance the report resolves is the one kicad-cli's DRC enforces at that spot -- a violation 10 um under it, none 10 um over.
     #[test]
     fn the_resolved_clearance_is_what_kicad_cli_enforces() {
