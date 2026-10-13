@@ -1,12 +1,12 @@
 # Stale reasons in `ui-parity-missing.json`
 
-Checked on 2026-10-10 against main `89ff669` (KiCad source `8303b2ad`, 10.99). `web/studio/tools/ui-parity-missing.json` records why 182 KiCad actions are not wired (pcbnew 84, eeschema 65, common 33; `UI-ACTIONS.md`; 187 when this was checked, until `task-lib-tables` wired five library-table rows). Nearly every reason says "needs X". Since the file was written about 20 large branches have landed, so for each row X was looked for in the Rust crates and in `web/studio/src`. The three branches in flight then (`task-lib-tables`, `task-sch-hierarchy`, `task-custom-pads`) were read with `git diff main...<branch>` and are not counted as existing. The audit (`web/studio/tools/ui-parity-audit.mjs`) agrees that none of the 182 is wired; it cannot know when a reason has gone stale, which is why this file exists.
+Checked on 2026-10-10 against main `89ff669` (KiCad source `8303b2ad`, 10.99). `web/studio/tools/ui-parity-missing.json` records why 178 KiCad actions are not wired (pcbnew 80, eeschema 65, common 33; `UI-ACTIONS.md`; 187 when this was checked, until `task-lib-tables` wired five library-table rows and `task-fp-assign` four footprint rows: Change Footprint, Change Footprints, Compare Footprint with Library and Geographical Reannotate). Nearly every reason says "needs X". Since the file was written about 20 large branches have landed, so for each row X was looked for in the Rust crates and in `web/studio/src`. The three branches in flight then (`task-lib-tables`, `task-sch-hierarchy`, `task-custom-pads`) were read with `git diff main...<branch>` and are not counted as existing. The audit (`web/studio/tools/ui-parity-audit.mjs`) agrees that none of the 178 is wired; it cannot know when a reason has gone stale, which is why this file exists.
 
 | verdict | rows |
 |---|---:|
 | Stale: what the reason says is missing now exists | 10 |
-| Partly stale: the first blocker is gone and another stays, or the reason is overstated because a path through existing code exists | 18 |
-| Holds | 154 (4 of them wait for a branch in flight: custom pads 4) |
+| Partly stale: the first blocker is gone and another stays, or the reason is overstated because a path through existing code exists | 15 |
+| Holds | 153 (4 of them wait for a branch in flight: custom pads 4) |
 
 The work packages for the first two groups are in section 3. They are the `SR` packages here; the ranked plan that sizes them against everything else is at the end of `GAPS.md` (packages `P1` to `P21`).
 
@@ -25,7 +25,7 @@ The work packages for the first two groups are in section 3. They are the `SR` p
 | `eeschema.InteractiveDrawing.drawSheetFromFile` | Draw Sheet from File | the action Import Sheet posts once a file is chosen | same as importSheet. | the same verb; this entry point asks for the file first. | `eeschema/tools/sch_drawing_tools.cpp` (`DrawSheet`) | S once importSheet exists | SR1 |
 | `eeschema.EditorControl.ddAppendFile` | (no menu entry) | a drop handler that needs the sheet-file merge Import Sheet needs, and a drop target | same as importSheet. | a drop target; the handler is `importSheet` with the dropped file (`SCH_EDIT_TOOL::DdAppendFile` runs `importSheet`). | `eeschema/tools/sch_edit_tool.cpp` (`DdAppendFile`), `eeschema/sch_edit_frame.cpp` (`m_acceptedExts`) | S once importSheet exists | SR1 |
 
-## 2. Partly stale (18)
+## 2. Partly stale (15)
 
 "Gone" is the part of the reason that no longer holds; "stays" is what still blocks, or what remains to build. Effort is for the row once it is unblocked.
 
@@ -36,10 +36,7 @@ The work packages for the first two groups are in section 3. They are the `SR` p
 | `pcbnew.InspectionTool.InspectConstraints` | Constraints Resolution | same as InspectClearance. | same as InspectClearance; the constraint types beyond clearance and track width are not ported. | M | SR2 |
 | `pcbnew.ModuleEditor.checkFootprint` | Footprint Checker | "kicad-cli has no footprint-only check" is true but beside the point: the board DRC of a scratch board that holds the one footprint reports the same courtyard, footprint-type, pad, shorting and silk findings (`crates/kicad-engine/src/lib.rs::drc`; `LibraryFootprint::to_engine_footprint` and the board writer build the scratch board). | a scratch-board builder and a filter on the footprint-level codes. Silk and mask findings need the footprint's graphics (GAPS.md item 25). | M | SR2 |
 | `pcbnew.EditorControl.importNetlist` | Import Netlist... | "no verb adds a part or net": `BoardPart` carries a part with its own definition and `pad_nets` (a net the board lacks is made), `Cmd::PlaceFootprint` adds one. | a netlist reader (`.net`, KiCad's XML or legacy) and the design question: a part from a netlist has no schematic symbol, and the schematic is the studio's master. Low value next to Assign Footprints / Update PCB. | M | SR4 |
-| `pcbnew.InspectionTool.DiffFootprint` | Compare Footprint with Library | "needs a library copy to compare": the installed libraries are readable (`crates/kicad/src/model3d.rs::installed_footprint`, `footprint_scan.rs`, `crates/cli/src/library_index.rs`) and an engine footprint has pads, courtyard and models. | the comparison needs graphics and fields on the board footprint (GAPS.md item 25) and a per-instance footprint to compare (item 26). | M after items 25 and 26 | SR4 |
-| `pcbnew.GlobalEdit.changeFootprint` | Change Footprint... | "FootprintInstance holds only position, rotation, side": a footprint made by Duplicate, Paste, Place Footprint or Append is a `BoardPart` with its own footprint name and `definition`, so an exchange of those is one verb. | a footprint of the intent (every footprint of a design that came from a schematic) still gets its library footprint from the frozen intent: there is no per-instance assignment overlay, and the schematic's Footprint field (`Cmd::EditSymbolFields`) never reaches the board. GAPS.md item 26. | L with the overlay | SR4 |
-| `pcbnew.GlobalEdit.changeFootprints` | Change Footprints... | same as changeFootprint. | same as changeFootprint. | L with the overlay | SR4 |
-| `pcbnew.InteractiveEdit.swapPadNets` | Swap Pad Nets | both halves of the reason: pads are selectable items since 2026-10-08 (`kicad-port/pcbItems.ts::padIds`, `88c8c0a`), and `design.nets` is a per-pin net store (`Net.pins`, "REF.PIN") that the board, the ratsnest and the exports read once a schematic edit has landed. | a product decision: a swap on the board makes the board disagree with the schematic drawing, as in KiCad (its DRC reports the schematic parity, here `--schematic-parity`). If that is accepted it is one verb that edits two nets' pin lists. | S-M | SR4 |
+| `pcbnew.InteractiveEdit.swapPadNets` | Swap Pad Nets | both halves of the reason: pads are selectable items since 2026-10-08 (`kicad-port/pcbItems.ts::padIds`, `88c8c0a`), and `design.nets` is a per-pin net store (`Net.pins`, "REF.PIN") that the board, the ratsnest and the exports read once a schematic edit has landed. | the product decision is taken (GAPS.md package P2): a swap on the board makes the board disagree with the schematic drawing, as in KiCad (its DRC reports the schematic parity, here `--schematic-parity`). It is not one verb that edits two nets' pin lists, because `design.nets` is the netlist the schematic's drawing rewrites after every schematic edit: it needs a board-side per-pad net overlay that `reconcile_schematic` keeps and the model fold, the gates, the router and the exports read. | M | SR4 |
 | `pcbnew.InteractiveEdit.swapGateNets` | Swap Gate Nets | same as swapPadNets. | same, plus the footprint's unit info (`FOOTPRINT::GetUnitInfo`: the `(units ..)` of a multi-gate footprint, each with its pins), which the IR does not hold; the swap works on pads of one multi-gate footprint only. | M | SR4 |
 | `pcbnew.MicrowaveTool.createLine` | Draw Microwave Lines | "needs a free board footprint" (see createGap). | the microwave inductor generator (the S and L meander of arcs and segments with its pattern dialog) is not implemented. | M | SR3 |
 | `eeschema.SchDesignBlockControl.deleteDesignBlock` | Delete Design Block | "the schematic has no copy and paste": the schematic clipboard exists (`Cmd::PasteSch`, `crates/kicad/src/sch_clipboard.rs`, merged 2026-10-08, `ee20bab`) and Import Sheet is within reach (SR1). | the design-block library (a folder of `.kicad_blocks` with a `.kicad_sch` each, listed by a library table), its panel and the dialogs. Waits for Import Sheet (library tables are in: `task-lib-tables`). | L for the seven with the library | SR5 |
@@ -73,14 +70,14 @@ Sized for one agent in one sitting each. Every package deletes its rows from `ui
 - Migrate 3D Models: needs `FootprintEdit.models3d` (`crates/model/src/fp_edit.rs`) and its verb, the same piece the 3D model panel needs (GAPS.md package P14), so do them together.
 - Conflicts: `crates/model/src/fp_edit.rs` and `crates/ops/src/fp_edit.rs` with SR4 and P14; `FootprintPropertiesDialog.tsx` with P14.
 
-**SR4. Footprint exchange** (changeFootprint, changeFootprints, DiffFootprint, importNetlist, swapPadNets, swapGateNets partly stale; Reannotate holds until this lands). Size L. This is GAPS.md package P2 (item 26) and the order there is the order here: the per-instance footprint assignment first, then Change Footprint(s), the Footprint field of a symbol and a reference rename reaching the board, then Reannotate and Compare Footprint with Library.
+**SR4. Footprint exchange** (done on `task-fp-assign`, 2026-10-12, GAPS.md package P2 and item 26: changeFootprint, changeFootprints, DiffFootprint and Reannotate are wired; importNetlist, swapPadNets and swapGateNets stay). Size L. What was built, in the order of item 26: the per-instance footprint assignment, Change Footprint(s), the Footprint field of a symbol and a reference rename reaching the board, Update from Library reading the library, Compare Footprint with Library, Reannotate, Insert footprint into PCB.
 - Conflicts: `crates/model/src/ir.rs`, `crates/cli/src/board.rs` and `crates/ops/src/lib.rs` with every package that adds an overlay; `crates/ops/src/lib.rs::rename_symbol` and `annotate` with `task-sch-hierarchy`.
 
 **SR5. Schematic design blocks** (7 partly stale rows, 16 that hold). Size L. GAPS.md package P18. After library tables (P3: the block library is a table) and SR1 (placing a block is Import Sheet in KiCad: `SCH_DRAWING_TOOLS::ImportSheet` runs for `placeDesignBlock` too).
 
 **SR6. Specctra** (exportSpecctraDSN partly stale; importSpecctraSession holds). Size S-M. GAPS.md package P19: expose `to_dsn` as a download, then write the SES reader; `pcbnew/specctra_import_export/specctra_export.cpp` and `specctra_import.cpp` are the references.
 
-## 4. Reasons that hold (154)
+## 4. Reasons that hold (153)
 
 | blocker | rows | why it holds | what unblocks it |
 |---|---:|---|---|
@@ -100,7 +97,6 @@ Sized for one agent in one sitting each. Every package deletes its rows from `ui
 | PCB_GENERATOR items | 9 | the length tuner writes plain tracks and keeps no pattern. | with the meander work of GAPS.md package P5 (item 7). |
 | The autoplacer | 2 | declined: placement runs through `eda board` behind the placement gates. | by design. |
 | The rule-tree designer | 1 | Custom Rules edits the `.kicad_dru` as text; the designer (82 files in `pcbnew/drc/rule_editor`) is not ported. | GAPS.md package P9, last of it (XL). |
-| Reannotate needs a footprint rename | 1 | no verb renames a footprint (`Cmd::RenameSymbol` leaves the board's footprint where it was and the next reconcile makes a fresh part). | unblocked by GAPS.md package P2 (item 26). |
 | Padstacks | 1 | a through-hole pad is copper on every layer here; nothing takes one layer away. | not planned (padstacks are item 9's "not in the pad edit"). |
 | Library symbol model gaps | 6 | `LibSymbol` has no `extends`, no field positions or visibility, no alternate pin functions. | GAPS.md package P17. |
 | Schematic pin selection | 2 | the canvas never selects a single symbol pin (`components/SchematicView.tsx` and `components/schematic/schItems.ts` have no pin kind); Swap Pins also needs per-instance pin geometry. | GAPS.md package P10. |
@@ -127,7 +123,6 @@ The ids, by blocker:
 - **PCB_GENERATOR items** (9): `pcbnew.Generator.genCacnelEdit`, `pcbnew.Generator.genFinishEdit`, `pcbnew.Generator.genRemove`, `pcbnew.Generator.genStartEdit`, `pcbnew.Generator.genUpdateEdit`, `pcbnew.Generator.regenerateAll`, `pcbnew.Generator.regenerateAllTuning`, `pcbnew.Generator.regenerateSelected`, `pcbnew.Generator.showManager`
 - **The autoplacer** (2): `pcbnew.Autoplacer.autoplaceOffboard`, `pcbnew.Autoplacer.autoplaceSelected`
 - **The rule-tree designer** (1): `pcbnew.DRETool.drcRuleEditor`
-- **Reannotate needs a footprint rename** (1): `pcbnew.ReannotateTool.ShowReannotateDialog`
 - **Padstacks** (1): `pcbnew.GlobalEdit.removeUnusedPads`
 - **Library symbol model gaps** (6): `eeschema.SymbolLibraryControl.deriveFromExistingSymbol`, `eeschema.SymbolLibraryControl.flattenSymbol`, `eeschema.SymbolLibraryControl.updateSymbolFields`, `eeschema.SymbolLibraryControl.showRelatedLibraryFieldsTable`, `eeschema.SymbolLibraryControl.showHiddenFields`, `eeschema.EditorControl.togglePinAltIcons`
 - **Schematic pin selection** (2): `eeschema.InteractiveEdit.swapPinLabels`, `eeschema.InteractiveEdit.swapPins`
@@ -142,6 +137,6 @@ Not rows of the JSON file, but they say the same wrong thing and an agent will t
 
 - `web/studio/PARITY-fpedit.md` (Load footprint from current PCB / Insert footprint into PCB, "the board has no verb that adds a footprint of its own"): `Cmd::PlaceFootprint` adds one, so Insert can add a new part instead of only updating existing ones. Its Microwave tools row ("each drops a free footprint") is stale for the same reason.
 - `web/studio/PARITY-sch.md` (Import Sheet, Draw Sheet from File; the seven Design Block rows; the Annotate scope row "this IR has no sheet hierarchy"; the Symbol Fields Table row "the IR has no DNP / BOM-exclusion attributes"): the hierarchy, the clipboard and the DNP and exclusion flags exist (`SymbolInstance::{dnp, exclude_from_bom, exclude_from_sim}`), so the table's attribute columns and its Exclude DNP filter can be built.
-- `web/studio/PARITY-boardctl.md` section 6 ("net classes, custom DRC rules, renaming a footprint" need an edit verb; net colours need a subsystem): net classes and custom rules are Board Setup pages with verbs, net colours are the Appearance panel's. Renaming a footprint is still open (item 26).
+- `web/studio/PARITY-boardctl.md` section 6 ("net classes, custom DRC rules, renaming a footprint" need an edit verb; net colours need a subsystem): net classes and custom rules are Board Setup pages with verbs, net colours are the Appearance panel's. Renaming a footprint is done (item 26, `PARITY-pcb.md` section 29).
 - `web/studio/src/kicad-port/pcbFind.ts` header and `PARITY-pcb.md` section 7a: a zone has no name, a footprint has two visible fields. Both changed on 2026-10-09.
 - `GAPS.md` item 18 "Values shows nothing", item 19 "pad clearance and thermal overrides are stored but no check reads them", item 4 "every schematic verb acts on the root section": all three were stale and are corrected in this revision.
