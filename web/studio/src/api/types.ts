@@ -319,6 +319,27 @@ export type ArrayGeometry =
   | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean; reverse_alternate?: boolean }
   | { kind: "circular"; center: PointXY; count: number; angle_millideg: number; angle_offset_millideg?: number; clockwise?: boolean; rotate_items?: boolean };
 
+/** `crates/ops/src/array_numbering.rs` `NumberingType` (`ARRAY_AXIS::NUMBERING_TYPE`), snake_case on the wire. */
+export type NumberingType = "numeric" | "hex" | "alpha_no_iosqxz" | "alpha_full";
+
+/** One numbering axis of the Footprint Editor's Create Array: the alphabet, the "Pad numbering start" entry as typed and the "Pad numbering increment". */
+export interface AxisSpec {
+  kind: NumberingType;
+  start: string;
+  step: number;
+}
+
+/**
+ * `crates/ops/src/array_numbering.rs` `PadNumbering` -- how `create_footprint_array` renumbers the pads of the copies. `start_specified: false` is "Use first free
+ * number" (numerals from 1 that skip the numbers of the pads outside the array); `two_d` is a grid's "Coordinate (A1, A2, ... B1, ...)" scheme.
+ */
+export interface PadNumbering {
+  start_specified: boolean;
+  two_d: boolean;
+  primary: AxisSpec;
+  secondary: AxisSpec;
+}
+
 /**
  * `crates/model/src/ir.rs` `Zone`'s `ZONE_SETTINGS` fill-engine fields
  * (dialog_copper_zones.cpp's panel) -- everything but id/net/layer/
@@ -1608,6 +1629,8 @@ export type Cmd =
   | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_footprint_text"; footprint: string; id: string }
   | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um }
+  /** `pcbnew.Array.createArray` in the Footprint Editor (`ARRAY_TOOL::CreateArray`, `m_isFootprintEditor`): `numbering` renumbers the pads of the array; left out, the copies keep their source's number. */
+  | { op: "create_footprint_array"; footprint: string; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; numbering?: PadNumbering | null }
 
   // ----------------------------------------------------------- symbol editor
   //

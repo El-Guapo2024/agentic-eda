@@ -56,6 +56,9 @@ mod review;
 pub mod library_editors;
 mod array;
 pub use array::ArrayGeometry;
+mod array_numbering;
+pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
+mod fp_array;
 mod fix_shapes;
 mod fp_edit;
 mod fp_models;
@@ -1504,6 +1507,19 @@ pub enum Cmd {
     EditFootprintText { footprint: String, id: String, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool },
     DeleteFootprintText { footprint: String, id: String },
     MoveFootprintText { footprint: String, id: String, x: Um, y: Um },
+    /// `pcbnew.Array.createArray` (Ctrl+T) in the Footprint Editor, `ARRAY_TOOL::CreateArray` with `m_isFootprintEditor` -- see [`fp_array`]: a grid or a
+    /// circular array of the pads, graphics and texts `ids` name, in one undo step. `arrange` puts the selected items on the points instead of copying them
+    /// (and numbers nothing); `numbering`, when given, renumbers the pads of the array ([`PadNumbering`]: "Renumber pads" with its scheme, direction and
+    /// start), and left out the copies keep the number of their source.
+    CreateFootprintArray {
+        footprint: String,
+        ids: Vec<String>,
+        geometry: ArrayGeometry,
+        #[serde(default)]
+        arrange: bool,
+        #[serde(default)]
+        numbering: Option<PadNumbering>,
+    },
 
     // ----------------------------------------------------- symbol editor
     //
@@ -1759,7 +1775,8 @@ impl Cmd {
             | Cmd::AddFootprintText { .. }
             | Cmd::EditFootprintText { .. }
             | Cmd::DeleteFootprintText { .. }
-            | Cmd::MoveFootprintText { .. } => Domain::FootprintEditor,
+            | Cmd::MoveFootprintText { .. }
+            | Cmd::CreateFootprintArray { .. } => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
             | Cmd::DeleteLibrarySymbol { .. }
@@ -1991,7 +2008,8 @@ impl Cmd {
             | Cmd::AddFootprintText { footprint, .. }
             | Cmd::EditFootprintText { footprint, .. }
             | Cmd::DeleteFootprintText { footprint, .. }
-            | Cmd::MoveFootprintText { footprint, .. } => vec![footprint.as_str()],
+            | Cmd::MoveFootprintText { footprint, .. }
+            | Cmd::CreateFootprintArray { footprint, .. } => vec![footprint.as_str()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -2582,6 +2600,7 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteFootprintText { footprint, id } => self.delete_footprint_text(footprint, id),
             Cmd::MoveFootprintText { footprint, id, x, y } => self.move_footprint_text(footprint, id, *x, *y),
+            Cmd::CreateFootprintArray { footprint, ids, geometry, arrange, numbering } => self.create_footprint_array(footprint, ids, geometry, *arrange, numbering.as_ref()),
 
             Cmd::OpenSymbolForEdit { lib_id } => self.open_symbol_for_edit(lib_id),
             Cmd::DeleteLibrarySymbol { lib_id } => self.delete_library_symbol(lib_id),
@@ -5328,6 +5347,8 @@ mod board_setup_tests;
 mod pcb_transform_tests;
 #[cfg(test)]
 mod array_tests;
+#[cfg(test)]
+mod fp_array_tests;
 #[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]

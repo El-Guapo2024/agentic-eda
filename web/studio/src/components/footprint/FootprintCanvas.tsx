@@ -17,6 +17,7 @@ import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
 import { useActionRunner } from "../../actions/useActionRunner";
+import { picker } from "../../actions/pcbPicker";
 import { isMac } from "../../platform";
 import { ClickDragGesture, dragRuleFor } from "../../kicad-port/dragThreshold";
 import { computeClickModifiers, applySingleClickModifier, hasModifier } from "../../kicad-port/selection";
@@ -385,6 +386,14 @@ export function FootprintCanvas() {
 
     const [sx, sy] = snapPoint(wx, wy, toolGrid());
 
+    // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts: Create Array's "Select Point..." / "Select Item...") a left click answers it, snapped to the
+    // grid, or the item under it for an item session, and does nothing else.
+    if (picker.session()) {
+      const [px, py] = snapPoint(wx, wy, gridOf("current"));
+      picker.click({ point: { x: px, y: py }, item: () => hitTest(wx, wy)?.id ?? null });
+      return;
+    }
+
     // `EDIT_TOOL::doMoveSelection` armed (Duplicate hands its copies straight to it): a click drops them where they are now.
     if (state.activeTool === "move" && state.duplicatePending) {
       const mp = state.movePreview;
@@ -623,6 +632,7 @@ export function FootprintCanvas() {
       { label: "Rotate 90° (R)", onSelect: () => padRefs.forEach((id) => void api.rotatePad(id, 1)), disabled: padRefs.length === 0 },
       { label: "Duplicate (Ctrl+D)", onSelect: () => void api.duplicateSelection(false), disabled: refs.length === 0 },
       { label: "Duplicate and Increment (Ctrl+Shift+D)", onSelect: () => void api.duplicateSelection(true), disabled: refs.length === 0 },
+      act("pcbnew.Array.createArray", "Create Array... (Ctrl+T)", refs.length === 0),
       { label: "Pad Properties...", onSelect: () => dispatch({ type: "SET_PAD_PROPERTIES_ID", id: padRefs[0]! }), disabled: padRefs.length !== 1 },
       act("pcbnew.ModuleEditor.padTable", "Pad Table..."),
       act("pcbnew.PadTool.enumeratePads", "Renumber Pads...", (fp?.pads.length ?? 0) === 0),

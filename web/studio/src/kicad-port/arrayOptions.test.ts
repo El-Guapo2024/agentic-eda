@@ -2,19 +2,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   DEFAULT_ARRAY_OPTIONS,
+  DEFAULT_PAD_NUMBERING,
   arrayCmd,
   arrayGeometry,
   arrayOrigin,
   checkArrayOptions,
   effectiveAngleDeg,
   entriesOf,
+  fpArrayCmd,
   gridPoints,
   optionsFromEntries,
+  padNumberingOf,
+  previewPadNumbers,
   previewPoints,
   rememberedOptions,
   type ArrayEntries,
   type ArrayOptions,
 } from "./arrayOptions";
+import type { LibraryPad } from "../api/types";
 
 const grid = (over: Partial<ArrayOptions> = {}): ArrayOptions => ({ ...DEFAULT_ARRAY_OPTIONS, tab: "grid", ...over });
 const circular = (over: Partial<ArrayOptions> = {}): ArrayOptions => ({ ...DEFAULT_ARRAY_OPTIONS, tab: "circular", ...over });
@@ -184,4 +189,72 @@ test("the preview puts a grid at the origin and a circle about its centre, clock
   near(previewPoints(circular({ centerX: 0, centerY: 0, count: 2, angleDeg: 90, clockwise: false }), [1000, 0]), [[1000, 0], [0, -1000]]);
   near(previewPoints(circular({ centerX: 0, centerY: 0, count: 4, fullCircle: true, offsetAngleDeg: 90 }), [1000, 0]), [[0, 1000], [-1000, 0], [0, -1000], [1000, 0]]);
   assert.deepEqual(previewPoints(grid({ dx: 0 }), [0, 0]), [], "options that make nothing show nothing");
+});
+
+// ------------------------------------------------------------------------------------------------------------------- the footprint editor's pad numbering
+
+test("the footprint editor's dialog starts renumbering from the start value 1, in one continuous run of numerals on both tabs", () => {
+  const p = DEFAULT_PAD_NUMBERING;
+  assert.deepEqual([p.renumber, p.gridFromStart, p.gridCoordinates, p.circFromStart], [true, true, false, true]);
+  assert.deepEqual(p.primary, { kind: "numeric", start: "1", step: "1" });
+  assert.deepEqual(padNumberingOf(grid()), { ok: true, numbering: { start_specified: true, two_d: false, primary: { kind: "numeric", start: "1", step: 1 }, secondary: { kind: "numeric", start: "1", step: 1 } } });
+});
+
+test("\"Renumber pads\" off leaves a grid's copies the number of their source; a circle always renumbers", () => {
+  assert.deepEqual(padNumberingOf(grid({ pads: { ...DEFAULT_PAD_NUMBERING, renumber: false } })), { ok: true, numbering: null });
+  const r = padNumberingOf(circular({ pads: { ...DEFAULT_PAD_NUMBERING, renumber: false } }));
+  assert.ok(r.ok && r.numbering !== null);
+});
+
+test("a coordinate scheme sends both axes; \"Use first free number\" sends none of the entries' worth", () => {
+  const pads = { ...DEFAULT_PAD_NUMBERING, gridCoordinates: true, primary: { kind: "alpha_full" as const, start: "b", step: "2" }, secondary: { kind: "hex" as const, start: "A", step: "1" } };
+  assert.deepEqual(padNumberingOf(grid({ pads })), {
+    ok: true,
+    numbering: { start_specified: true, two_d: true, primary: { kind: "alpha_full", start: "b", step: 2 }, secondary: { kind: "hex", start: "A", step: 1 } },
+  });
+  const free = padNumberingOf(grid({ pads: { ...pads, gridFromStart: false } }));
+  assert.ok(free.ok && free.numbering?.start_specified === false && free.numbering.two_d === false);
+  // a circle's one axis is the circular one
+  const c = padNumberingOf(circular({ pads: { ...pads, circular: { kind: "hex", start: "F", step: "-1" } } }));
+  assert.ok(c.ok && c.numbering?.primary.start === "F" && c.numbering.primary.step === -1 && c.numbering.two_d === false);
+});
+
+test("a start the alphabet lacks, or a step that is no whole number, is named the way the dialog names it, every one on a line", () => {
+  const pads = { ...DEFAULT_PAD_NUMBERING, gridCoordinates: true, primary: { kind: "alpha_no_iosqxz" as const, start: "I", step: "1" }, secondary: { kind: "numeric" as const, start: "1", step: "1.5" } };
+  assert.deepEqual(padNumberingOf(grid({ pads })), {
+    ok: false,
+    error: "Could not determine numbering start from 'I': expected value consistent with alphabet 'ABCDEFGHJKLMNPRTUVWY'.\nBad numeric value for step value: 1.5",
+  });
+  // the entries of an axis the scheme does not use are not looked at
+  assert.equal(padNumberingOf(grid({ pads: { ...pads, gridCoordinates: false, primary: DEFAULT_PAD_NUMBERING.primary } })).ok, true);
+});
+
+test("the command sends the geometry and the numbering, and \"Arrange selection\" numbers nothing", () => {
+  const r = fpArrayCmd(grid({ nx: 4, ny: 1, dx: 1270, dy: 0 }), "Lib:Row", ["pad_1", "pad_2"]);
+  assert.ok(r.ok);
+  if (!r.ok || r.cmd.op !== "create_footprint_array") return;
+  assert.equal(r.cmd.footprint, "Lib:Row");
+  assert.deepEqual(r.cmd.ids, ["pad_1", "pad_2"]);
+  assert.equal(r.cmd.geometry.kind, "grid");
+  assert.equal(r.cmd.arrange, false);
+  assert.equal(r.cmd.numbering?.start_specified, true);
+  const arranged = fpArrayCmd(grid({ arrange: true }), "Lib:Row", ["pad_1"]);
+  assert.ok(arranged.ok && arranged.cmd.op === "create_footprint_array" && arranged.cmd.numbering === null);
+  assert.deepEqual(fpArrayCmd(grid({ pads: { ...DEFAULT_PAD_NUMBERING, primary: { kind: "hex", start: "Z", step: "1" } } }), "F", ["a"]).ok, false);
+});
+
+const padAt = (id: string, number: string, kind: LibraryPad["kind"] = "smd"): LibraryPad =>
+  ({ id, number, at: { x: 0, y: 0 }, size: [1000, 600], offset: { x: 0, y: 0 }, shape: "rect", kind, drill: null, rot: 0, layers: [] }) as unknown as LibraryPad;
+
+test("the preview tells the numbers the pads will take: the first free ones skip the pads that stay, a start value does not", () => {
+  const pads = [padAt("a", "1"), padAt("b", "3"), padAt("c", "9")];
+  const free = grid({ nx: 4, ny: 1, pads: { ...DEFAULT_PAD_NUMBERING, gridFromStart: false } });
+  assert.deepEqual(previewPadNumbers(free, pads, new Set(["c"]), 10), ["2", "4", "5", "6"]);
+  assert.deepEqual(previewPadNumbers(grid({ nx: 4, ny: 1 }), pads, new Set(["c"]), 10), ["1", "2", "3", "4"]);
+  assert.deepEqual(previewPadNumbers(grid({ nx: 4, ny: 1 }), pads, new Set(["c"]), 2), ["1", "2"], "a limit");
+  // two pads a point, a hole that takes none
+  const withHole = [padAt("a", "1"), padAt("h", "", "non_plated_hole"), padAt("c", "2")];
+  assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1 }), withHole, new Set(["a", "h", "c"]), 10), ["1", "2", "3", "4"]);
+  assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1, arrange: true }), pads, new Set(["a"]), 10), [], "arranging numbers nothing");
+  assert.deepEqual(previewPadNumbers(grid({ nx: 2, ny: 1, pads: { ...DEFAULT_PAD_NUMBERING, renumber: false } }), pads, new Set(["a"]), 10), []);
 });

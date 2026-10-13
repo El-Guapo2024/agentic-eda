@@ -15,6 +15,7 @@ import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintE
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
 import { showFootprintChecker } from "./footprintCheckerActions";
+import { fpArrayIds } from "../kicad-port/fpArray";
 import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
 
@@ -89,6 +90,15 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
       void ctx.fpApi.setTool(st.activeTool === tool ? "select" : tool);
     });
   };
+  // Create Array... (Ctrl+T) -- ARRAY_TOOL::CreateArray: `if( selection.Empty() ) return 0;`, then the dialog with the pad numbering panels (`enableArrayNumbering`).
+  const boardCreateArray = m.get("pcbnew.Array.createArray");
+  m.set("pcbnew.Array.createArray", () => {
+    if (ctx.tab !== "footprint") return boardCreateArray?.();
+    const st = ctx.fpApi.getState();
+    if (!st.footprint) return fpToast("Open a footprint first.");
+    if (fpArrayIds(st.footprint, st.selection).length === 0) return;
+    ctx.fpDispatch({ type: "SET_CREATE_ARRAY_OPEN", open: true });
+  });
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.line", "draw_segment");
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.arc", "draw_arc");
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.rectangle", "draw_rect");

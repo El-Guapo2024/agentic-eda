@@ -60,6 +60,9 @@ mod fp_library_tests;
 #[cfg(test)]
 #[path = "fp_models_tests.rs"]
 mod fp_models_tests;
+#[cfg(test)]
+#[path = "lib_editors_tests.rs"]
+mod lib_editors_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1411,6 +1414,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditFootprintText { footprint, id, content, layer, .. } => format!("footprint-text edit {footprint:?} {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteFootprintText { footprint, id } => format!("footprint-text delete {footprint:?} {id}"),
         Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::CreateFootprintArray { footprint, ids, arrange, .. } => format!("footprint-array {footprint:?} --items {}{}", ids.len(), if *arrange { " --arrange" } else { "" }),
 
         // The Symbol Editor tab. No real `eda board` CLI subcommand parses
         // these either, same reasoning as the footprint-editor verbs just
@@ -1601,6 +1605,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::SetPadNumbers { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
+        Cmd::CreateFootprintArray { .. } => "footprint-array",
 
         Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",

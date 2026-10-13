@@ -37,6 +37,8 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.InteractiveDrawing.arcPosture",
   "pcbnew.InteractiveDrawing.bezier",
   "pcbnew.InteractiveEdit.duplicateIncrementPads",
+  // Create Array (Ctrl+T): `ARRAY_TOOL` is registered by both frames; the footprint editor's has the pad numbering panels.
+  "pcbnew.Array.createArray",
   // the drawing tools of the footprint editor's Place menu
   "pcbnew.InteractiveDrawing.line",
   "pcbnew.InteractiveDrawing.arc",

@@ -95,6 +95,8 @@ export interface FootprintEditorState {
   defaultPadOpen: boolean;
   pushPadOpen: boolean;
   loadFromBoardOpen: boolean;
+  /** `pcbnew.Array.createArray`: the Create Array dialog (`DIALOG_CREATE_ARRAY` with the pad numbering panels, `enableArrayNumbering`). */
+  createArrayOpen: boolean;
   /** The board part this footprint was loaded from (`LoadFootprintFromBoard`), so "Insert footprint into PCB" knows what to update. */
   linkedPart: string | null;
   /** `PAD_TOOL::m_lastPadNumber`: the number the last placed (or duplicated-with-increment) pad took, which `Duplicate and Increment` continues from. `null` until one is set -- then the highest-numbered pad stands in (padNumbering.ts's `nextPadNumber`). */
@@ -133,6 +135,7 @@ const initialState: FootprintEditorState = {
   defaultPadOpen: false,
   pushPadOpen: false,
   loadFromBoardOpen: false,
+  createArrayOpen: false,
   linkedPart: null,
   lastPadNumber: null,
   duplicatePending: false,
@@ -170,6 +173,7 @@ export type FpAction =
   | { type: "SET_DEFAULT_PAD_OPEN"; open: boolean }
   | { type: "SET_PUSH_PAD_OPEN"; open: boolean }
   | { type: "SET_LOAD_FROM_BOARD_OPEN"; open: boolean }
+  | { type: "SET_CREATE_ARRAY_OPEN"; open: boolean }
   | { type: "SET_LINKED_PART"; ref: string | null }
   | { type: "SET_LAST_PAD_NUMBER"; number: string | null }
   | { type: "SET_DUPLICATE_PENDING"; pending: boolean }
@@ -255,6 +259,8 @@ function reducer(state: FootprintEditorState, action: FpAction): FootprintEditor
       return { ...state, pushPadOpen: action.open };
     case "SET_LOAD_FROM_BOARD_OPEN":
       return { ...state, loadFromBoardOpen: action.open };
+    case "SET_CREATE_ARRAY_OPEN":
+      return { ...state, createArrayOpen: action.open };
     case "SET_LINKED_PART":
       return { ...state, linkedPart: action.ref };
     case "SET_LAST_PAD_NUMBER":

@@ -10,10 +10,16 @@
 // through are kept for the next time (`s_arrayOptions`). The circular centre starts at `ARRAY_TOOL::CreateArray`'s `origin` -- the item, or the middle of the selection --
 // which the dialog of this KiCad version is handed and never uses; here it is the default.
 //
-// Not KiCad's: a small picture of where the items go, drawn from the entries as they are typed. Not ported: the footprint editor's half of the dialog (pad numbering with
-// `ARRAY_AXIS`), which has no multi-pad selection to work on here, and which the board editor never shows either (`enableArrayNumbering = m_isFootprintEditor`).
+// Not KiCad's: a small picture of where the items go, drawn from the entries as they are typed.
+//
+// The Footprint Editor opens the same dialog on the pads, graphics and texts of the open footprint (`FootprintCreateArrayDialog`, components/footprint/
+// FootprintArrayDialog.tsx; `enableArrayNumbering = m_isFootprintEditor`): there the "Footprint Annotation" box is gone and each tab gets its "Pad numbering" panel --
+// "Renumber pads", the numbering direction, "Reverse numbering on alternate rows/columns", "Initial Pad Number" (Use first free number / From start value), the
+// scheme (Continuous / Coordinate), the alphabet of each axis, "Pad numbering start" and "Pad numbering increment"; on the Circular tab "Numbering Options" (kicad-port/
+// arrayAxis.ts is `ARRAY_AXIS`). The form below is shared; a `host` says which editor it is in and what OK does.
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { picker, pickItem, pickPoint } from "../actions/pcbPicker";
+import { NUMBERING_CHOICES, startAfterAlphabetChange, type NumberingType } from "../kicad-port/arrayAxis";
 import {
   DEFAULT_ARRAY_OPTIONS,
   arrayCmd,
@@ -25,16 +31,55 @@ import {
   rememberedOptions,
   type ArrayEntries,
   type ArrayOptions,
+  type AxisEntry,
+  type PadNumberingOptions,
 } from "../kicad-port/arrayOptions";
 import { itemBounds, itemPosition } from "../kicad-port/pcbItems";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import type { LengthUnit } from "../state/units";
 
-/** `s_arrayOptions`: what the last Create Array that went through held. */
+/** `s_arrayOptions`: what the last Create Array that went through held (the board's and the Footprint Editor's dialogs share it, as KiCad's one class does). */
 let remembered: ArrayOptions = DEFAULT_ARRAY_OPTIONS;
 
+/** What the form needs of the editor it is open in. */
+export interface ArrayHost {
+  /** The Footprint Editor's dialog: pad numbering panels in, Footprint Annotation out. */
+  footprintEditor: boolean;
+  /** How many items are selected. */
+  itemCount: number;
+  units: LengthUnit;
+  /** `ARRAY_TOOL::CreateArray`'s `origin`: a lone item's position, else the centre of the selection; where the circle's centre starts. */
+  origin: [number, number] | null;
+  /** `BOARD_ITEM::GetPosition()` of an id, for "Select Item...". */
+  positionOf: (id: string) => [number, number] | null;
+  /** OK: runs the command. Null when it was accepted (the dialog closes), a message to show when the entries make no command, undefined when the command was refused (the editor's own toast says why). */
+  submit: (options: ArrayOptions) => Promise<string | null | undefined>;
+  close: () => void;
+  /** The numbers the pads will take, for the line under the picture (the Footprint Editor's). */
+  padNumbers?: (options: ArrayOptions) => string[];
+}
+
 export function CreateArrayDialog() {
-  return useStudioState().createArrayDialogOpen ? <ArrayForm /> : null;
+  return useStudioState().createArrayDialogOpen ? <BoardArrayForm /> : null;
+}
+
+function BoardArrayForm() {
+  const state = useStudioState();
+  const dispatch = useStudioDispatch();
+  const api = useStudioApi();
+  const board = state.board;
+  const ids = useMemo(() => [...state.selection], [state.selection]);
+  const origin = useMemo(() => (board ? arrayOrigin(ids, (id) => itemPosition(board, id), (id) => itemBounds(board, id)) : null), [board, ids]);
+  const host: ArrayHost = {
+    footprintEditor: false,
+    itemCount: ids.length,
+    units: state.units,
+    origin,
+    positionOf: (id) => (board ? itemPosition(board, id) : null),
+    submit: async (options) => ((await api.cmd(arrayCmd(options, ids))) ? null : undefined),
+    close: () => dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false }),
+  };
+  return <CreateArrayForm host={host} />;
 }
 
 const MAX_DRAWN = 400;
@@ -98,14 +143,37 @@ function Radio({ checked, onChange, children, tip, testid }: { checked: boolean;
   );
 }
 
-function ArrayForm() {
-  const state = useStudioState();
-  const dispatch = useStudioDispatch();
-  const api = useStudioApi();
-  const units: LengthUnit = state.units;
-  const board = state.board;
-  const ids = useMemo(() => [...state.selection], [state.selection]);
-  const origin = useMemo(() => (board ? arrayOrigin(ids, (id) => itemPosition(board, id), (id) => itemBounds(board, id)) : null), [board, ids]);
+/** A choice list (`wxChoice`) of the four numbering alphabets. */
+function AlphabetChoice({ value, onChange, disabled, testid, label }: { value: NumberingType; onChange: (v: NumberingType) => void; disabled?: boolean; testid: string; label: string }) {
+  return (
+    <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as NumberingType)} data-testid={testid} aria-label={label} style={{ width: "100%", marginBottom: 4, opacity: disabled ? 0.5 : 1 }}>
+      {NUMBERING_CHOICES.map((c) => (
+        <option key={c.type} value={c.type}>
+          {c.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** A `wxRadioBox`: a titled box of radio buttons. */
+function RadioBox({ title, choices, selected, onChange, disabled, testid }: { title: string; choices: string[]; selected: number; onChange: (i: number) => void; disabled?: boolean; testid: string }) {
+  return (
+    <fieldset disabled={disabled} style={{ marginBottom: 6, opacity: disabled ? 0.5 : 1 }} data-testid={testid}>
+      <legend>{title}</legend>
+      {choices.map((c, i) => (
+        <label key={c} style={{ display: "block", marginBottom: 2 }}>
+          <input type="radio" checked={selected === i} onChange={() => onChange(i)} data-testid={`${testid}-${i}`} /> {c}
+        </label>
+      ))}
+    </fieldset>
+  );
+}
+
+export function CreateArrayForm({ host }: { host: ArrayHost }) {
+  const dispatchClose = host.close;
+  const units: LengthUnit = host.units;
+  const origin = host.origin;
 
   const [flags, setFlags] = useState<ArrayOptions>(() => remembered);
   const [entries, setEntries] = useState<ArrayEntries>(() => entriesOf({ ...remembered, centerX: origin?.[0] ?? remembered.centerX, centerY: origin?.[1] ?? remembered.centerY }, units));
@@ -127,14 +195,20 @@ function ArrayForm() {
       if (e.key !== "Escape") return;
       e.stopPropagation();
       e.preventDefault();
-      dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false });
+      dispatchClose();
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [picking, dispatch]);
+  }, [picking, dispatchClose]);
 
   const set = (key: keyof ArrayEntries, value: string) => setEntries((e) => ({ ...e, [key]: value }));
   const flag = <K extends keyof ArrayOptions>(key: K, value: ArrayOptions[K]) => setFlags((f) => ({ ...f, [key]: value }));
+  /** An edit of the footprint editor's pad numbering controls. */
+  const pad = (patch: Partial<PadNumberingOptions>) => setFlags((f) => ({ ...f, pads: { ...f.pads, ...patch } }));
+  /** `OnAxisNumberingChange`: a new alphabet keeps the start entry when it still decodes, else starts over at its first name. */
+  const changeAlphabet = (which: "primary" | "secondary" | "circular", kind: NumberingType) =>
+    setFlags((f) => ({ ...f, pads: { ...f.pads, [which]: { ...f.pads[which], kind, start: startAfterAlphabetChange(kind, f.pads[which].start) } } }));
+  const axisPatch = (which: "primary" | "secondary" | "circular") => (patch: Partial<AxisEntry>) => setFlags((f) => ({ ...f, pads: { ...f.pads, [which]: { ...f.pads[which], ...patch } } }));
   const runPick = async <T,>(pick: () => Promise<T | null>): Promise<T | null> => {
     pickingRef.current = true;
     setPicking(true);
@@ -147,7 +221,7 @@ function ArrayForm() {
   /** `UpdatePickedItem`: the centre becomes the item's position. */
   const selectCentreItem = async () => {
     const id = await runPick(() => pickItem("Select center item..."));
-    const at = id && board ? itemPosition(board, id) : null;
+    const at = id ? host.positionOf(id) : null;
     if (at) setCentre(at[0], at[1]);
   };
   /** `UpdatePickedPoint`: the centre becomes the point. */
@@ -158,22 +232,31 @@ function ArrayForm() {
 
   if (picking) return null;
 
-  const close = () => dispatch({ type: "SET_CREATE_ARRAY_DIALOG_OPEN", open: false });
+  const close = dispatchClose;
   const parsed = optionsFromEntries(flags, entries, units);
   const points = parsed.ok && origin ? previewPoints(parsed.options, origin) : [];
   const circular = flags.tab === "circular";
+  const fpe = host.footprintEditor;
   // With "Full circle" the angle entry is disabled and shows the division (`calculateCircularArrayProperties`).
   const count = Number(entries.count);
   const angleShown = flags.fullCircle && Number.isInteger(count) && count > 0 ? String(Number((360 / count).toFixed(4))) : entries.angle;
 
+  // `setControlEnablement` for the Footprint Editor's pad numbering panels.
+  const p = flags.pads;
+  const useStartGrid = p.renumber && p.gridFromStart;
+  const useStartCirc = p.circFromStart;
+  const padNumbers = fpe && parsed.ok ? (host.padNumbers?.(parsed.options) ?? []) : [];
+
   const submit = async () => {
     const r = optionsFromEntries(flags, entries, units);
     if (!r.ok) return setError(r.error);
-    if (ids.length === 0) return setError("Select at least one item first.");
+    if (host.itemCount === 0) return setError("Select at least one item first.");
     setError(null);
     setBusy(true);
     try {
-      if (await api.cmd(arrayCmd(r.options, ids))) {
+      const refused = await host.submit(r.options);
+      if (refused) setError(refused);
+      else if (refused === null) {
         remembered = rememberedOptions(r.options);
         close();
       }
@@ -195,7 +278,7 @@ function ArrayForm() {
         <div className="dialog-header">
           <span>Create Array</span>
           <span>
-            {ids.length} item{ids.length === 1 ? "" : "s"}
+            {host.itemCount} item{host.itemCount === 1 ? "" : "s"}
           </span>
         </div>
         <div
@@ -218,8 +301,14 @@ function ArrayForm() {
           <div style={{ marginBottom: 6 }}>
             <Preview points={points} circle={circular && parsed.ok && origin ? { centre: [parsed.options.centerX, parsed.options.centerY], through: origin } : null} />
             <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", textAlign: "right" }} data-testid="array-count-note">
-              {points.length > 0 ? `${points.length} position${points.length === 1 ? "" : "s"}${ids.length > 1 && !flags.arrange ? `, ${points.length * ids.length} items` : ""}` : ""}
+              {points.length > 0 ? `${points.length} position${points.length === 1 ? "" : "s"}${host.itemCount > 1 && !flags.arrange ? `, ${points.length * host.itemCount} items` : ""}` : ""}
             </div>
+            {fpe && padNumbers.length > 0 && (
+              <div style={{ fontSize: 11, color: "var(--chrome-text-dim)", textAlign: "right" }} data-testid="array-pad-numbers">
+                Pad numbers: {padNumbers.join(", ")}
+                {padNumbers.length >= 12 ? ", ..." : ""}
+              </div>
+            )}
           </div>
           {!circular && (
             <>
@@ -263,6 +352,31 @@ function ArrayForm() {
                     Centre on source items
                   </Radio>
                 </>
+              )}
+              {fpe && (
+                <div data-testid="array-pad-numbering-grid" style={{ marginBottom: 8 }}>
+                  <label style={{ display: "block", marginBottom: 4 }}>
+                    <input type="checkbox" checked={p.renumber} onChange={(e) => pad({ renumber: e.target.checked })} data-testid="array-renumber" /> Renumber pads
+                  </label>
+                  <RadioBox title="Numbering Direction" choices={["Horizontal, then vertical", "Vertical, then horizontal"]} selected={flags.verticalFirst ? 1 : 0} onChange={(i) => flag("verticalFirst", i === 1)} disabled={!p.renumber} testid="array-direction" />
+                  <label style={{ display: "block", marginBottom: 4, opacity: p.renumber ? 1 : 0.5 }}>
+                    <input type="checkbox" checked={flags.reverseAlternate} disabled={!p.renumber} onChange={(e) => flag("reverseAlternate", e.target.checked)} data-testid="array-reverse-numbering" /> Reverse numbering on alternate rows/columns
+                  </label>
+                  <RadioBox title="Initial Pad Number" choices={["Use first free number", "From start value"]} selected={p.gridFromStart ? 1 : 0} onChange={(i) => pad({ gridFromStart: i === 1 })} disabled={!p.renumber} testid="array-initial" />
+                  <RadioBox title="Pad Numbering Scheme" choices={["Continuous (1, 2, 3...)", "Coordinate (A1, A2, ... B1, ...)"]} selected={p.gridCoordinates ? 1 : 0} onChange={(i) => pad({ gridCoordinates: i === 1 })} disabled={!useStartGrid} testid="array-scheme" />
+                  <div style={{ opacity: useStartGrid ? 1 : 0.5 }}>Primary axis numbering:</div>
+                  <AlphabetChoice value={p.primary.kind} onChange={(k) => changeAlphabet("primary", k)} disabled={!useStartGrid} testid="array-primary-kind" label="Primary axis numbering" />
+                  <div style={{ opacity: useStartGrid && p.gridCoordinates ? 1 : 0.5 }}>Secondary axis numbering:</div>
+                  <AlphabetChoice value={p.secondary.kind} onChange={(k) => changeAlphabet("secondary", k)} disabled={!(useStartGrid && p.gridCoordinates)} testid="array-secondary-kind" label="Secondary axis numbering" />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px", gap: 4, alignItems: "center" }}>
+                    <span style={{ opacity: useStartGrid ? 1 : 0.5 }}>Pad numbering start:</span>
+                    <input value={p.primary.start} disabled={!useStartGrid} onChange={(e) => axisPatch("primary")({ start: e.target.value })} aria-label="Pad numbering start (primary)" data-testid="array-primary-start" style={{ width: 72 }} />
+                    <input value={p.secondary.start} disabled={!(useStartGrid && p.gridCoordinates)} onChange={(e) => axisPatch("secondary")({ start: e.target.value })} aria-label="Pad numbering start (secondary)" data-testid="array-secondary-start" style={{ width: 72 }} />
+                    <span style={{ opacity: useStartGrid ? 1 : 0.5 }}>Pad numbering increment:</span>
+                    <input value={p.primary.step} disabled={!useStartGrid} onChange={(e) => axisPatch("primary")({ step: e.target.value })} aria-label="Pad numbering increment (primary)" data-testid="array-primary-step" style={{ width: 72 }} />
+                    <input value={p.secondary.step} disabled={!(useStartGrid && p.gridCoordinates)} onChange={(e) => axisPatch("secondary")({ step: e.target.value })} aria-label="Pad numbering increment (secondary)" data-testid="array-secondary-step" style={{ width: 72 }} />
+                  </div>
+                </div>
               )}
             </>
           )}
@@ -317,6 +431,21 @@ function ArrayForm() {
                   </label>
                 </>
               )}
+              {fpe &&
+                group(
+                  "Numbering Options",
+                  <div data-testid="array-pad-numbering-circular">
+                    <RadioBox title="Initial Pad Number:" choices={["Use first free number", "From start value"]} selected={p.circFromStart ? 1 : 0} onChange={(i) => pad({ circFromStart: i === 1 })} testid="array-circ-initial" />
+                    <div>Pad Numbering:</div>
+                    <AlphabetChoice value={p.circular.kind} onChange={(k) => changeAlphabet("circular", k)} disabled={!useStartCirc} testid="array-circular-kind" label="Pad Numbering" />
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 80px", gap: 4, alignItems: "center" }}>
+                      <span style={{ opacity: useStartCirc ? 1 : 0.5 }}>Pad numbering start:</span>
+                      <input value={p.circular.start} disabled={!useStartCirc} onChange={(e) => axisPatch("circular")({ start: e.target.value })} aria-label="Pad numbering start" data-testid="array-circular-start" style={{ width: 72 }} />
+                      <span style={{ opacity: useStartCirc ? 1 : 0.5 }}>Pad numbering increment:</span>
+                      <input value={p.circular.step} disabled={!useStartCirc} onChange={(e) => axisPatch("circular")({ step: e.target.value })} aria-label="Pad numbering increment" data-testid="array-circular-step" style={{ width: 72 }} />
+                    </div>
+                  </div>
+                )}
             </>
           )}
 
@@ -332,6 +461,7 @@ function ArrayForm() {
             </>
           )}
           {!flags.arrange &&
+            !fpe &&
             group(
               "Footprint Annotation",
               <>
@@ -344,7 +474,7 @@ function ArrayForm() {
               </>
             )}
 
-          {ids.length === 0 && <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>Select at least one item first.</div>}
+          {host.itemCount === 0 && <div style={{ fontSize: 11, opacity: 0.7, marginTop: 4 }}>Select at least one item first.</div>}
           {error && (
             <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "8px 0 0", fontSize: 12, whiteSpace: "pre-line" }} data-testid="array-error">
               {error}
@@ -355,7 +485,7 @@ function ArrayForm() {
           <button onClick={close} data-testid="array-cancel">
             Cancel
           </button>
-          <button className="primary" onClick={() => void submit()} disabled={busy || ids.length === 0} data-testid="array-ok">
+          <button className="primary" onClick={() => void submit()} disabled={busy || host.itemCount === 0} data-testid="array-ok">
             OK
           </button>
         </div>
