@@ -15,7 +15,7 @@ export type LabelSpinName = "right" | "up" | "left" | "bottom";
 
 /** What `E` opens for a selection. */
 export type PropertiesTarget =
-  | { kind: "symbol" | "label" | "text" | "sheet" | "sheet_pin" | "graphic"; id: string }
+  | { kind: "symbol" | "power" | "label" | "text" | "sheet" | "sheet_pin" | "graphic"; id: string }
   /** Wire/Bus Properties, Line Properties or Junction Properties: one dialog for the lines, bus entries and junctions named. */
   | { kind: "stroke"; ids: string[] };
 
@@ -84,7 +84,9 @@ export function propertiesTarget(sch: Schematic, ids: readonly string[]): Proper
   // `default: if( selection.Size() > 1 ) return 0;`
   if (items.length > 1) return null;
   switch (front.kind) {
+    // a power symbol is a symbol in KiCad: `SCH_SYMBOL_T` opens `DIALOG_SYMBOL_PROPERTIES` (with the Spice button hidden for a power one)
     case "symbol":
+    case "power":
     case "label":
     case "text":
     case "sheet":
@@ -92,7 +94,7 @@ export function propertiesTarget(sch: Schematic, ids: readonly string[]): Proper
     case "graphic":
       return { kind: front.kind, id: front.id };
     default:
-      // A power symbol is a symbol in KiCad (its Value is the rail); this studio's symbol dialog has no power symbol yet. A no-connect has no properties (`case SCH_NO_CONNECT_T: break;`).
+      // A no-connect has no properties (`case SCH_NO_CONNECT_T: break;`).
       return null;
   }
 }
@@ -155,6 +157,29 @@ export function labelEditCmd(
   if (next.bold !== undefined && next.bold !== !!label.bold) edit.bold = next.bold;
   if (next.italic !== undefined && next.italic !== !!label.italic) edit.italic = next.italic;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_label", id: label.id, ...edit } : null;
+}
+
+/**
+ * Symbol Properties of a power symbol (`DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow` for a symbol whose Value is the net it asserts): the new Value (an empty one is not
+ * sent: the backend refuses it) and whether the Reference and the Value are shown. One `edit_field` per field that changed, in one command when there are two or more, so the
+ * dialog's OK is one undo step; null when nothing changed.
+ */
+export function powerEditCmd(
+  power: { id: string; net: string; fields?: ReadonlyArray<{ name: string; visible: boolean }> },
+  next: { net: string; showReference: boolean; showValue: boolean }
+): Cmd | null {
+  const cmds: Cmd[] = [];
+  const field = (name: string) => `fld:${power.id}:${name}`;
+  const visible = (name: string) => power.fields?.find((f) => f.name === name)?.visible;
+  const edit = (name: string, change: { text?: string; visible?: boolean }): Cmd => ({ op: "sch_edit", verb: "edit_field", id: field(name), ...change });
+  const net = next.net.trim();
+  const valueChange: { text?: string; visible?: boolean } = {};
+  if (net !== power.net) valueChange.text = net;
+  if (visible("Value") !== undefined && visible("Value") !== next.showValue) valueChange.visible = next.showValue;
+  if (Object.keys(valueChange).length > 0) cmds.push(edit("Value", valueChange));
+  if (visible("Reference") !== undefined && visible("Reference") !== next.showReference) cmds.push(edit("Reference", { visible: next.showReference }));
+  if (cmds.length === 0) return null;
+  return cmds.length === 1 ? cmds[0]! : { op: "batch", cmds };
 }
 
 /** Text Properties of a free text: only what differs. `sizeUm` null (not a number) is left out; the backend refuses a size outside 0.01 to 1000 mm. */

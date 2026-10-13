@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, mmToUm, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm } from "./schProperties";
+import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, mmToUm, powerEditCmd, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm } from "./schProperties";
 import type { Schematic } from "../api/types";
 
 const sheet = (over: Partial<Schematic> = {}): Schematic =>
@@ -41,9 +41,10 @@ test("E opens the dialog of the first selected item, and only when the selection
   // `default: if( selection.Size() > 1 ) return 0;`
   assert.equal(propertiesTarget(s, ["lbl_a", "lbl_g"]), null);
   assert.equal(propertiesTarget(s, ["R1", "txt_a"]), null);
-  // a no-connect has none, and this studio's symbol dialog has no power symbol yet
+  // a no-connect has none; a power symbol is a symbol and has the Symbol Properties dialog
   assert.equal(propertiesTarget(s, ["nc_a"]), null);
-  assert.equal(propertiesTarget(s, ["#PWR01"]), null);
+  assert.deepEqual(propertiesTarget(s, ["#PWR01"]), { kind: "power", id: "#PWR01" });
+  assert.equal(propertiesTarget(s, ["#PWR01", "R1"]), null, "one item only");
   assert.equal(propertiesTarget(s, []), null);
   assert.equal(propertiesTarget(s, ["gone"]), null);
 });
@@ -178,4 +179,23 @@ test("a graphic that spells out its defaults is the same graphic as one that lea
   // a colour of every channel zero is "no colour"
   assert.ok(graphicsEqual(box, { ...box, color: { r: 0, g: 0, b: 0, a: 0 } }));
   assert.ok(!graphicsEqual(box, { ...box, color: { r: 255, g: 0, b: 0, a: 255 } }));
+});
+
+test("a power symbol's dialog sends the new Value and the Show checks that changed, as one command", () => {
+  const power = { id: "#PWR01", net: "GND", fields: [{ name: "Reference", visible: false }, { name: "Value", visible: true }] };
+  const same = { net: "GND", showReference: false, showValue: true };
+  assert.equal(powerEditCmd(power, same), null, "nothing changed: nothing to send");
+  assert.deepEqual(powerEditCmd(power, { ...same, net: " AGND " }), { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Value", text: "AGND" });
+  assert.deepEqual(powerEditCmd(power, { ...same, showValue: false }), { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Value", visible: false });
+  assert.deepEqual(powerEditCmd(power, { ...same, showReference: true }), { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Reference", visible: true });
+  // the text and the Show check of the Value are one edit; the Reference is another, and two edits are one command
+  assert.deepEqual(powerEditCmd(power, { net: "VCC", showReference: true, showValue: false }), {
+    op: "batch",
+    cmds: [
+      { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Value", text: "VCC", visible: false },
+      { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Reference", visible: true },
+    ],
+  });
+  // a backend that sent no fields has no Show to change
+  assert.equal(powerEditCmd({ id: "#PWR01", net: "GND" }, { net: "GND", showReference: true, showValue: true }), null);
 });

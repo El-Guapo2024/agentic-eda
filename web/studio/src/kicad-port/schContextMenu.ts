@@ -134,7 +134,7 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.junctions + s.noConnects;
   add(s.total > 1 && swappable === s.total && item("eeschema.InteractiveEdit.swap"));
   // `propertiesCondition`: one item of a type that has a properties dialog.
-  add(single && s.symbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
+  add(single && s.symbols + s.powerSymbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
   // `autoplaceCondition`: any selected item is one that has fields (a symbol, a sheet); the command also takes the item of a selected field
   add(s.symbols + s.powerSymbols + s.sheets + s.fields > 0 && item("eeschema.InteractiveEdit.autoplaceFields"));
   if (single && s.symbols === 1) {

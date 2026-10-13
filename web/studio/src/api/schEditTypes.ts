@@ -99,6 +99,8 @@ export type SchToolDialog =
   /** Field Properties (`DIALOG_FIELD_PROPERTIES`) of the field `id` (`fld:<owner>:<name>`). */
   | { kind: "props_field"; id: string }
   | { kind: "props_text"; id: string }
+  /** Symbol Properties of a power symbol (`DIALOG_SYMBOL_PROPERTIES` as `SCH_EDIT_TOOL::Properties` opens it for one). */
+  | { kind: "props_power"; id: string }
   | { kind: "props_sheet"; id: string }
   /** Sheet Pin Properties (`DIALOG_SHEET_PIN_PROPERTIES`) of the pin `id` of a sheet on this sheet. */
   | { kind: "props_sheet_pin"; id: string }

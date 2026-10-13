@@ -26,7 +26,7 @@ import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fet
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
-import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
+import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
@@ -1569,11 +1569,14 @@ export function useActionRunner() {
     m.set(
       "common.Interactive.copyAsText",
       canvasOnly(() => {
-        const ids = [...state.selection];
-        const texts =
-          state.tab === "schematic"
-            ? ids.map((id) => sch?.labels.find((l) => l.id === id)?.net ?? sch?.texts.find((t) => t.id === id)?.content)
-            : ids.map((id) => api.textById(id)?.content ?? api.dimensionById(id)?.text);
+        // `RequestSelection()`: the selection, or the item under the cursor when nothing is selected (a pin is one of the things it can pick)
+        const hovered = (): string[] => {
+          if (!sch || !state.cursorUm) return [];
+          const hit = pickItem(sch, state.cursorUm.x, state.cursorUm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "first");
+          return hit ? [hit] : [];
+        };
+        const ids = state.selection.size > 0 || state.tab !== "schematic" ? [...state.selection] : hovered();
+        const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : ids.map((id) => api.textById(id)?.content ?? api.dimensionById(id)?.text);
         const text = selectionAsText(texts);
         if (text === "") return;
         navigator.clipboard.writeText(text).catch(() => dispatch({ type: "TOAST", message: "Could not write to the clipboard.", kind: "error" }));
