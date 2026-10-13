@@ -432,6 +432,8 @@ fn keys_of(sch: &SchematicSection, id: &str) -> Vec<String> {
 /// A symbol is renamed: what is kept per unit under its reference (where its fields are, whether Autoplace Fields put them there, its body style, the places
 /// Swap Pins gave its pins) is kept under the new one.
 pub(crate) fn rename_symbol_keys(sch: &mut SchematicSection, id: &str, new_id: &str) {
+    // the groups that list the reference list the new one
+    crate::sch_groups::rename_member(sch, id, new_id);
     for old in keys_of(sch, id) {
         let new = format!("{new_id}{}", &old[id.len()..]);
         if let Some(v) = sch.field_layout.remove(&old) {

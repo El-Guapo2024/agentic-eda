@@ -152,7 +152,9 @@ pub fn export_kicad_sch(
 
 fn export_screen(design: &Design, model: &ConstraintModel, meta: &ExportMeta, ctx: &ScreenCtx) -> Result<String, Vec<CheckResult>> {
     let previous = SEED_PREFIX.with(|p| std::mem::replace(&mut *p.borrow_mut(), ctx.seed.clone()));
+    let saved = ITEM_UUIDS.with(|m| m.borrow_mut().replace(BTreeMap::new()));
     let r = export_screen_inner(design, model, meta, ctx);
+    ITEM_UUIDS.with(|m| *m.borrow_mut() = saved);
     SEED_PREFIX.with(|p| *p.borrow_mut() = previous);
     r
 }
@@ -428,6 +430,7 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let dx = mm(be.size.x);
         let dy = mm(be.size.y);
         let uuid = if be.id.is_empty() { duid(&format!("bent:{}:{}", be.at.x, be.at.y)) } else { be.id.clone() };
+        note_item_uuid(&be.id, &uuid);
         writeln!(out, "\t(bus_entry (at {x} {y}) (size {dx} {dy})").unwrap();
         writeln!(out, "\t\t{}", sch_extras_io::line_stroke_str(0, sch.extras.strokes.get(&be.id))).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
@@ -475,6 +478,10 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         let x = mm(pt.x);
         let y = mm(pt.y);
         let uuid = duid(&format!("junction:{net}:{}:{}", pt.x, pt.y));
+        // an explicit junction on the same point is not written twice: the dot above is its dot, in the groups too
+        for j in sch.junctions.iter().filter(|j| j.at == *pt) {
+            note_item_uuid(&j.id, &uuid);
+        }
         writeln!(out, "\t(junction (at {x} {y}) {}", sch_extras_io::junction_attrs(looks_at.get(pt).copied())).unwrap();
         writeln!(out, "\t\t(uuid \"{uuid}\")").unwrap();
         writeln!(out, "\t)").unwrap();
@@ -577,6 +584,9 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
         write_sheet_item(&mut out, sch, s, &page, ctx.instance_paths.first().map(String::as_str).unwrap_or("/"));
     }
 
+    // ---- groups (`SCH_IO_KICAD_SEXPR::saveGroup`): a name, a uuid and the sorted uuids of the members, a group by its own uuid ----
+    write_sheet_groups(&mut out, sch);
+
     // ---- sheet instances (required by KiCad 9 for a valid project-less sheet) ----
     writeln!(out, "\t(sheet_instances").unwrap();
     writeln!(out, "\t\t(path \"/\" (page \"1\"))").unwrap();
@@ -587,6 +597,20 @@ fn export_screen_inner(design: &Design, model: &ConstraintModel, meta: &ExportMe
     Ok(out)
 }
 
+/// The `(group ..)` forms of a screen: every group of `sch.extras.groups` that has a member written, after the items (a member is named by the uuid the
+/// item was written as; a group in a group by the uuid of that group). A group none of whose members is on the sheet is not written
+/// (`if( aGroup->GetItems().empty() ) return;`), and so is not named by the group above it either.
+fn write_sheet_groups(out: &mut String, sch: &eda_model::ir::SchematicSection) {
+    if sch.extras.groups.is_empty() {
+        return;
+    }
+    let written: BTreeMap<String, Vec<String>> = ITEM_UUIDS.with(|m| m.borrow().clone().unwrap_or_default());
+    let groups: Vec<&eda_model::ir::Group> = sch.extras.groups.iter().collect();
+    let uuid_of = |g: &eda_model::ir::Group| duid_for(&format!("group:{}", g.id), &g.id);
+    let locked = |id: &str| sch.extras.is_locked(id);
+    pcb_items::write_groups(out, &groups, &written, &uuid_of, &locked);
+}
+
 /// One `(sheet ...)` item of a screen, as `SCH_IO_KICAD_SEXPR` writes it (`SCH_IO_KICAD_SEXPR::saveSheet`): its place and size, its fields
 /// (`Sheetname`, `Sheetfile`), its pins and the page it has under the path of the screen it is drawn on.
 pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicSection, s: &eda_model::ir::SheetInstance, page: &str, instance_path: &str) {
@@ -595,6 +619,7 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
     let w = mm(s.size.0);
     let h = mm(s.size.1);
     let uuid = sheet_uuid(s);
+    note_item_uuid(&s.id, &uuid);
     writeln!(out, "\t(sheet").unwrap();
     writeln!(out, "\t\t(at {x} {y}) (size {w} {h})").unwrap();
     write!(out, "{}", fields_autoplaced_token(sch, &s.id)).unwrap();
@@ -1465,7 +1490,25 @@ thread_local! {
     static UUID_MAP: std::cell::RefCell<Option<std::collections::HashMap<String, String>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// [`duid`], also recording `uuid -> our_id` when a mapped export is running.
+thread_local! {
+    /// Active while a schematic screen is written: our id of every item written -> the uuids it was written as (a wire is one `(wire ..)` per segment, so
+    /// it has several), which the `(group ..)` forms name their members by.
+    static ITEM_UUIDS: std::cell::RefCell<Option<BTreeMap<String, Vec<String>>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Records that the item `our_id` was written as `uuid` (while a screen is written; otherwise nothing).
+pub(crate) fn note_item_uuid(our_id: &str, uuid: &str) {
+    ITEM_UUIDS.with(|m| {
+        if let Some(map) = m.borrow_mut().as_mut() {
+            let list = map.entry(our_id.to_string()).or_default();
+            if !list.iter().any(|u| u == uuid) {
+                list.push(uuid.to_string());
+            }
+        }
+    });
+}
+
+/// [`duid`], also recording `uuid -> our_id` when a mapped export is running, and the item's uuid for the groups of the screen being written.
 pub(crate) fn duid_for(seed: &str, our_id: &str) -> String {
     let u = duid_raw(seed);
     UUID_MAP.with(|m| {
@@ -1473,6 +1516,7 @@ pub(crate) fn duid_for(seed: &str, our_id: &str) -> String {
             map.insert(u.clone(), our_id.to_string());
         }
     });
+    note_item_uuid(our_id, &u);
     u
 }
 

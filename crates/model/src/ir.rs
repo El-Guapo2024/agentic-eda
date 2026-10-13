@@ -980,6 +980,9 @@ impl SchematicSection {
                 }
             }
         }
+
+        // Groups last: a group is named after its members, so every item has its id by now.
+        self.extras.assign_missing_group_ids();
     }
 }
 
@@ -2009,7 +2012,7 @@ impl Text {
 /// group can reference a footprint/track/via/zone/shape/text id, not
 /// just a drawing, so this is a storage-convenience choice, not a claim
 /// that a group *is* a drawing.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Group {
     /// Stable id (`grp_xxxxxxxxxxxx`). Deterministic from the member id

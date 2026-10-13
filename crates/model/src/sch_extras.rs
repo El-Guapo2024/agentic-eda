@@ -21,6 +21,7 @@
 //! - `body_styles`: the body style a placed symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`; 1 is the normal one, 2 KiCad's alternate "De Morgan" one).
 //! - `pin_swaps`: which pin of a placed symbol sits where another one of its pins is in the library symbol (`SwapPinGeometry`, Swap Pins).
 //! - `text_justify`: how a free-standing text is justified about its anchor (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`), once Text Properties, a turn or a mirror set it.
+//! - `groups`: the sheet's groups (`SCH_GROUP`, `(group ...)` in the file), the same [`crate::ir::Group`] the board's drawings keep; see `crate::groups`.
 
 use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
 use serde::{Deserialize, Serialize};
@@ -88,6 +89,12 @@ pub struct SchExtras {
     /// stored. The writer says it in `(effects ... (justify ...))` and the importer reads it back, so KiCad draws the text where the studio does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_justify: BTreeMap<String, SchTextJustify>,
+    /// The groups of this sheet (`SCH_GROUP`, written as `(group "name" (uuid ..) (members ..))`): a named set of the ids of items of the sheet -- a symbol's reference (every
+    /// placed unit), the id of a wire, label, text, power symbol, no-connect, bus entry, junction, graphic line, drawn shape or sheet -- and of other groups, so groups nest.
+    /// A group has no geometry of its own: its box is its members'. A pin, a field and a sheet pin go along with the item that has them and are never members. The tree is
+    /// read and edited by `crate::groups` (`GroupTree`, `GroupHost`), the same code as the board's groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<crate::ir::Group>,
 }
 
 /// How a free-standing text sits on its anchor: the horizontal and the vertical justification of its `EDA_TEXT`, in the text's own axes (a text turned
@@ -379,6 +386,7 @@ impl SchExtras {
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()
             && self.text_justify.is_empty()
+            && self.groups.is_empty()
     }
 
     /// True when `id` is locked.

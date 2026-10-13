@@ -29,7 +29,7 @@ use eda_model::sch_extras::{JunctionLook, SchStroke};
 use eda_model::symbol::{LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
-use crate::sch_extras_io::parse_bool;
+use crate::sch_extras_io::{parse_bool, uuid_of};
 use crate::sexpr::{self, Sexpr};
 use crate::symbol_lib::build_symbol_table;
 
@@ -91,10 +91,13 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // `(locked yes)` of each item, parallel to the vector it was read into -- resolved to ids once ids exist (see below).
     let is_locked = |node: &[Sexpr]| parse_bool(node, "locked").unwrap_or(false);
     let mut nc_locked: Vec<bool> = Vec::new();
+    // the `(uuid ..)` of each item, parallel to the vector it was read into: a `(group ..)` names its members by them (see below)
+    let mut nc_uuid: Vec<Option<String>> = Vec::new();
     for nc in sexpr::find_all(root, "no_connect") {
         if let Some(at) = sexpr::find(nc, "at").and_then(point_mm) {
             no_connects.push(NoConnect { id: String::new(), at: mm_point_to_um(at), pin: String::new() });
             nc_locked.push(is_locked(nc));
+            nc_uuid.push(uuid_of(nc));
         }
     }
     let nc_points: std::collections::BTreeSet<Point> = no_connects.iter().map(|nc| nc.at).collect();
@@ -125,8 +128,11 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         exclude_from_bom: bool,
         exclude_from_board: bool,
         exclude_from_sim: bool,
+        uuid: Option<String>,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
+    // each power symbol's `(uuid ..)`, parallel to `power_symbols`
+    let mut power_uuid: Vec<Option<String>> = Vec::new();
     let mut locked_refs: BTreeSet<String> = BTreeSet::new();
     // `SCH_SYMBOL_INSTANCE`-style per-sheet-instance overrides -- only ever
     // non-empty when this screen is placed by more than one `SheetInstance`
@@ -182,11 +188,12 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             let world = transform_local_point(pin_local, angle_deg, mirrored, mirror_y);
             let at_pin = Point { x: at_um.x + crate::import::mm_to_um(world.x), y: at_um.y + crate::import::mm_to_um(world.y) };
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
+            power_uuid.push(uuid_of(item));
             continue;
         }
 
         overrides.extend(parse_instance_overrides(item, at_um));
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item) });
     }
 
     if opts.unique_references {
@@ -322,12 +329,14 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     let mut wires: Vec<Wire> = Vec::new();
     let mut wire_locked: Vec<bool> = Vec::new();
+    let mut wire_uuid: Vec<Option<String>> = Vec::new();
     // each wire's, bus's, bus entry's and polyline's `(stroke ...)` and each junction's `(diameter ...) (color ...)`, kept beside its lock flag
     let mut wire_stroke: Vec<SchStroke> = Vec::new();
     for w in sexpr::find_all(root, "wire") {
         if let Some(pts) = import_pts(w) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: false });
             wire_locked.push(is_locked(w));
+            wire_uuid.push(uuid_of(w));
             wire_stroke.push(stroke_of(w));
         }
     }
@@ -338,6 +347,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         if let Some(pts) = import_pts(b) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: true });
             wire_locked.push(is_locked(b));
+            wire_uuid.push(uuid_of(b));
             wire_stroke.push(stroke_of(b));
         }
     }
@@ -360,18 +370,24 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let mut junctions: Vec<eda_model::ir::Junction> = Vec::new();
     let mut junction_locked: Vec<bool> = Vec::new();
     let mut junction_look: Vec<JunctionLook> = Vec::new();
+    // the uuids of the junctions read into each place: two dots on one point are one junction here
+    let mut junction_uuid: Vec<Vec<String>> = Vec::new();
     for j in sexpr::find_all(root, "junction") {
         let Some(at) = sexpr::find(j, "at").and_then(point_mm) else { continue };
         let at = mm_point_to_um(at);
-        if !junctions.iter().any(|x| x.at == at) {
+        if let Some(i) = junctions.iter().position(|x| x.at == at) {
+            junction_uuid[i].extend(uuid_of(j));
+        } else {
             junctions.push(eda_model::ir::Junction { id: String::new(), at });
             junction_locked.push(is_locked(j));
             junction_look.push(look_of(j));
+            junction_uuid.push(uuid_of(j).into_iter().collect());
         }
     }
     // `(polyline (pts ...) (stroke (width w) ...))`: a graphic line on the notes layer (`SchLine`).
     let mut lines: Vec<eda_model::ir::SchLine> = Vec::new();
     let mut line_locked: Vec<bool> = Vec::new();
+    let mut line_uuid: Vec<Option<String>> = Vec::new();
     let mut line_stroke: Vec<SchStroke> = Vec::new();
     for pl in sexpr::find_all(root, "polyline") {
         // A filled polyline is a polygon shape (`SchGraphic`), read below with the other shapes.
@@ -383,6 +399,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             let width_um = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
             lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_um });
             line_locked.push(is_locked(pl));
+            line_uuid.push(uuid_of(pl));
             // the width is the line's own (`SchLine::width_um`); the entry carries the style and the colour
             line_stroke.push(SchStroke { width_um: 0, ..stroke_of(pl) });
         }
@@ -411,6 +428,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     let mut labels: Vec<eda_model::ir::NetLabel> = Vec::new();
     let mut label_locked: Vec<bool> = Vec::new();
+    let mut label_uuid: Vec<Option<String>> = Vec::new();
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
@@ -437,6 +455,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             };
             labels.push(eda_model::ir::NetLabel { id: String::new(), net, at: mm_point_to_um(at), kind });
             label_locked.push(is_locked(l));
+            label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
         }
     }
@@ -446,6 +465,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // below.
     let mut texts: Vec<SchematicText> = Vec::new();
     let mut text_locked: Vec<bool> = Vec::new();
+    let mut text_uuid: Vec<Option<String>> = Vec::new();
     // each text's justification, parallel to `texts` (`SchExtras::text_justify`)
     let mut text_lie: Vec<eda_model::sch_extras::SchTextJustify> = Vec::new();
     for t in sexpr::find_all(root, "text") {
@@ -457,6 +477,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let (angle, justify) = crate::sch_extras_io::read_text_lie(t, &crate::sch_extras_io::read_effects(t));
         texts.push(SchematicText { id: String::new(), content, at: mm_point_to_um(SPoint::new(x_mm, y_mm)), angle, size_um: crate::import::mm_to_um(size_mm) });
         text_locked.push(is_locked(t));
+        text_uuid.push(uuid_of(t));
         text_lie.push(justify);
     }
 
@@ -492,6 +513,21 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         notes.sheets_not_descended += 1;
     }
 
+    // (uuid, id) of the symbols and the power symbols, whose ids are their references (final now: `unique_references` has numbered them)
+    let mut uuid_ids: HashMap<String, Vec<String>> = HashMap::new();
+    for r in &raw {
+        if let Some(u) = &r.uuid {
+            let ids = uuid_ids.entry(u.clone()).or_default();
+            if !ids.contains(&r.reference) {
+                ids.push(r.reference.clone());
+            }
+        }
+    }
+    for (p, u) in power_symbols.iter().zip(&power_uuid) {
+        if let Some(u) = u {
+            uuid_ids.entry(u.clone()).or_default().push(p.id.clone());
+        }
+    }
     let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
@@ -511,6 +547,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     if let Some(sch) = design.schematic.as_mut() {
         let graphics = crate::sch_extras_io::read_graphics(root);
         let graphic_locked: Vec<bool> = graphics.iter().map(|g| g.locked).collect();
+        let graphic_uuid: Vec<Option<String>> = graphics.iter().map(|g| g.uuid.clone()).collect();
         sch.extras.graphics = graphics.into_iter().map(|g| g.graphic).collect();
         sch.assign_missing_ids();
         let mut locked: Vec<String> = Vec::new();
@@ -554,6 +591,47 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         }
         for (id, look) in sch.junctions.iter().map(|j| j.id.clone()).zip(junction_look).filter(|(id, l)| !id.is_empty() && !l.is_default()) {
             sch.extras.junction_looks.insert(id, look);
+        }
+
+        // Groups (`SCH_IO_KICAD_SEXPR_PARSER::resolveGroups`): `(group "name" (uuid ..) (members "uuid" ..))` names its members by the uuids of the file, which are
+        // ours now. A segment of a wire is a wire here, so a member that is a segment is that wire; the one item a group of one holds is not in a group.
+        let mut by_uuid = uuid_ids;
+        let mut note = |uuid: Option<String>, id: &str| {
+            if let (Some(u), false) = (uuid, id.is_empty()) {
+                by_uuid.entry(u).or_default().push(id.to_string());
+            }
+        };
+        for (u, w) in wire_uuid.into_iter().zip(&sch.wires) {
+            note(u, &w.id);
+        }
+        for (u, l) in label_uuid.into_iter().zip(&sch.labels) {
+            note(u, &l.id);
+        }
+        for (u, t) in text_uuid.into_iter().zip(&sch.texts) {
+            note(u, &t.id);
+        }
+        for (u, n) in nc_uuid.into_iter().zip(&sch.no_connects) {
+            note(u, &n.id);
+        }
+        for (u, l) in line_uuid.into_iter().zip(&sch.lines) {
+            note(u, &l.id);
+        }
+        for (us, j) in junction_uuid.into_iter().zip(&sch.junctions) {
+            for u in us {
+                note(Some(u), &j.id);
+            }
+        }
+        for (u, g) in graphic_uuid.into_iter().zip(&sch.extras.graphics) {
+            note(u, &g.id);
+        }
+        // a bus entry and a sheet are known by the uuid of the file already
+        for id in sch.bus_entries.iter().map(|b| &b.id).chain(sch.sheets.iter().map(|s| &s.id)) {
+            note(Some(id.clone()), id);
+        }
+        let (groups, locked_groups) = crate::import_items::build_groups(&by_uuid, &crate::import_items::import_groups(root), std::collections::BTreeSet::new());
+        sch.extras.groups = groups;
+        for id in locked_groups {
+            sch.extras.set_locked(&id, true);
         }
     }
 

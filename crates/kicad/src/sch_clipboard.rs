@@ -14,7 +14,7 @@
 //! fields of a copied symbol are put beside it and marked `(fields_autoplaced yes)`, so KiCad lays them out when the pasted symbol is moved.
 
 use crate::sexpr;
-use crate::{duid_plain, fmt_mm_f, mm, sexpr_str};
+use crate::{duid_plain, fmt_mm_f, mm, note_item_uuid, sexpr_str};
 use eda_model::ir::{Design, LabelKind, LibrarySymbol, Point, SchematicSection, SymbolInstance};
 use eda_model::sch_clipboard::{place_offset_mm, place_offset_um, SchFragment};
 use eda_model::symbol::LibSymbol;
@@ -132,6 +132,8 @@ pub fn parse_clipboard(text: &str) -> Result<SchFragment, String> {
 /// power symbol -- are one polyline again, in the order they were written, so a copy of this studio's own wires pastes as the wires it copied.
 fn join_bends(section: &mut SchematicSection) {
     use eda_model::ir::Wire;
+    // the segments each joined wire was made of: a group names its members by the wires of the file, which the join replaces
+    let mut made_of: Vec<Vec<String>> = Vec::new();
     use std::collections::{BTreeMap, BTreeSet};
     let mut busy: BTreeSet<Point> = BTreeSet::new();
     busy.extend(section.junctions.iter().map(|j| j.at));
@@ -140,6 +142,7 @@ fn join_bends(section: &mut SchematicSection) {
     busy.extend(section.bus_entries.iter().flat_map(|b| [b.at, Point { x: b.at.x + b.size.x, y: b.at.y + b.size.y }]));
     busy.extend(section.power_symbols.iter().map(|p| p.at));
     let wires = std::mem::take(&mut section.wires);
+    let old_ids: std::collections::BTreeSet<String> = wires.iter().map(|w| w.id.clone()).collect();
     let ends = |w: &Wire| (*w.pts.first().unwrap(), *w.pts.last().unwrap());
     let mut count: BTreeMap<(bool, Point), usize> = BTreeMap::new();
     for w in wires.iter().filter(|w| w.pts.len() >= 2) {
@@ -156,6 +159,7 @@ fn join_bends(section: &mut SchematicSection) {
         used[i] = true;
         let bus = wires[i].bus;
         let mut pts = wires[i].pts.clone();
+        let mut parts: Vec<String> = vec![wires[i].id.clone()];
         // On from the last point ...
         loop {
             let end = *pts.last().unwrap();
@@ -164,6 +168,7 @@ fn join_bends(section: &mut SchematicSection) {
             }
             let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && (ends(&wires[j]).0 == end || ends(&wires[j]).1 == end)) else { break };
             used[j] = true;
+            parts.push(wires[j].id.clone());
             if ends(&wires[j]).0 == end {
                 pts.extend(wires[j].pts[1..].iter().copied());
             } else {
@@ -178,13 +183,30 @@ fn join_bends(section: &mut SchematicSection) {
             }
             let Some(j) = (0..wires.len()).find(|&j| !used[j] && wires[j].bus == bus && wires[j].pts.len() >= 2 && (ends(&wires[j]).0 == start || ends(&wires[j]).1 == start)) else { break };
             used[j] = true;
+            parts.push(wires[j].id.clone());
             let mut before: Vec<Point> = if ends(&wires[j]).1 == start { wires[j].pts[..wires[j].pts.len() - 1].to_vec() } else { wires[j].pts.iter().rev().copied().take(wires[j].pts.len() - 1).collect() };
             before.extend(pts);
             pts = before;
         }
         section.wires.push(Wire { id: String::new(), net: String::new(), pins: Vec::new(), pts, bus });
+        made_of.push(parts);
     }
     section.assign_missing_ids();
+    // the groups that listed a segment list the wire it is part of now
+    if !section.extras.groups.is_empty() {
+        let mut now: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+        for (w, parts) in section.wires.iter().zip(&made_of) {
+            for old in parts {
+                now.insert(old.clone(), w.id.clone());
+            }
+        }
+        for g in section.extras.groups.iter_mut() {
+            let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            // a segment that took no part in a wire (a point) is no member any more; the other items are what they were
+            g.member_ids = g.member_ids.iter().filter(|m| !old_ids.contains(*m) || now.contains_key(*m)).map(|m| now.get(m).unwrap_or(m).clone()).filter(|m| seen.insert(m.clone())).collect();
+        }
+        eda_model::groups::prune_groups(&mut section.extras.groups);
+    }
 }
 
 // ---------------------------------------------------------------- writing
@@ -318,7 +340,9 @@ fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>) {
     let _ = writeln!(out, "\t\t(in_pos_files yes)");
     let _ = writeln!(out, "\t\t(dnp {})", yes(sym.dnp));
     let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
-    let _ = writeln!(out, "\t\t(uuid \"{}\")", duid_plain(&format!("clipboard:symbol:{}:{}", sym.id, sym.unit)));
+    let uuid = duid_plain(&format!("clipboard:symbol:{}:{}", sym.id, sym.unit));
+    note_item_uuid(&sym.id, &uuid);
+    let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
 
     let (min_x, min_y, max_x, max_y) = sheet_box_mm(c);
     let cx = (min_x + max_x) / 2.0;
@@ -374,7 +398,9 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let _ = writeln!(out, "\t\t(in_pos_files yes)");
     let _ = writeln!(out, "\t\t(dnp no)");
     let _ = writeln!(out, "\t\t(fields_autoplaced yes)");
-    let _ = writeln!(out, "\t\t(uuid \"{}\")", duid_plain(&format!("clipboard:power:{}", p.id)));
+    let uuid = duid_plain(&format!("clipboard:power:{}", p.id));
+    note_item_uuid(&p.id, &uuid);
+    let _ = writeln!(out, "\t\t(uuid \"{uuid}\")");
     property(out, "Reference", &p.id, (ox, oy), true);
     property(out, "Value", &p.net, (ox, oy - 2.54), false);
     property(out, "Footprint", "", (ox, oy), true);
@@ -391,6 +417,26 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
     let _ = writeln!(out, "\t)");
 }
 
+/// While a copy is written, the uuid every item is written as is noted (`crate::note_item_uuid`), so the groups can name their members by them.
+struct UuidScope(Option<BTreeMap<String, Vec<String>>>);
+
+impl UuidScope {
+    fn start() -> UuidScope {
+        UuidScope(crate::ITEM_UUIDS.with(|m| m.borrow_mut().replace(BTreeMap::new())))
+    }
+
+    /// What has been noted so far.
+    fn snapshot() -> BTreeMap<String, Vec<String>> {
+        crate::ITEM_UUIDS.with(|m| m.borrow().clone().unwrap_or_default())
+    }
+}
+
+impl Drop for UuidScope {
+    fn drop(&mut self) {
+        crate::ITEM_UUIDS.with(|m| *m.borrow_mut() = self.0.take());
+    }
+}
+
 /// The text of `ids`' items as KiCad's clipboard has them. `Err` when the selection holds nothing a copy takes.
 ///
 /// `ids` are what the studio selects by: a symbol's reference (all its placed units), the ids of wires, labels, texts, power symbols,
@@ -398,6 +444,25 @@ fn write_power_symbol(out: &mut String, input: &CopyInput<'_>, p: &eda_model::ir
 /// shows is in `CopyOutput::sheet_files` (what a paste needs the screens of; `SCH_EDITOR_CONTROL::m_supplementaryClipboard`).
 pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutput, Vec<CheckResult>> {
     let sch = input.section;
+    let _uuids = UuidScope::start();
+    // "Groups need to have all their items selected" (`SCH_EDITOR_CONTROL::doCopy`): a selected group is copied with everything below it, the groups in it too
+    let tree = sch.extras.group_tree();
+    let mut copied_groups: Vec<String> = Vec::new();
+    for id in ids.iter().filter(|id| tree.is_group(id)) {
+        for g in tree.group_and_descendants(id) {
+            if !copied_groups.contains(&g) {
+                copied_groups.push(g);
+            }
+        }
+    }
+    let mut ids: Vec<String> = ids.to_vec();
+    for g in &copied_groups {
+        for leaf in tree.group_leaves(g) {
+            if !ids.contains(&leaf) {
+                ids.push(leaf);
+            }
+        }
+    }
     let wanted = |id: &str| ids.iter().any(|i| i == id);
     let mut skipped: Vec<String> = Vec::new();
 
@@ -469,11 +534,13 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         let tag = if w.bus { "bus" } else { "wire" };
         for (j, pair) in w.pts.windows(2).enumerate() {
             let uuid = duid_plain(&format!("clipboard:{tag}:{}:{j}:{},{}:{},{}", w.id, pair[0].x, pair[0].y, pair[1].x, pair[1].y));
+            note_item_uuid(&w.id, &uuid);
             let _ = writeln!(out, "\t({tag}\n\t\t(pts (xy {} {}) (xy {} {}))\n\t\t(stroke (width 0) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(pair[0].x), mm(pair[0].y), mm(pair[1].x), mm(pair[1].y));
         }
     }
     for b in &bus_entries {
         let uuid = duid_plain(&format!("clipboard:bus_entry:{}:{}", b.at.x, b.at.y));
+        note_item_uuid(&b.id, &uuid);
         let _ = writeln!(out, "\t(bus_entry\n\t\t(at {} {})\n\t\t(size {} {})\n\t\t(stroke (width 0) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(b.at.x), mm(b.at.y), mm(b.size.x), mm(b.size.y));
     }
 
@@ -485,11 +552,15 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     dots.dedup();
     for at in &dots {
         let uuid = duid_plain(&format!("clipboard:junction:{}:{}", at.x, at.y));
+        for j in junctions.iter().filter(|j| j.at == *at) {
+            note_item_uuid(&j.id, &uuid);
+        }
         let _ = writeln!(out, "\t(junction\n\t\t(at {} {})\n\t\t(diameter 0)\n\t\t(color 0 0 0 0)\n\t\t(uuid \"{uuid}\")\n\t)", mm(at.x), mm(at.y));
     }
 
     for n in &no_connects {
         let uuid = duid_plain(&format!("clipboard:no_connect:{}:{}", n.at.x, n.at.y));
+        note_item_uuid(&n.id, &uuid);
         let _ = writeln!(out, "\t(no_connect\n\t\t(at {} {})\n\t\t(uuid \"{uuid}\")\n\t)", mm(n.at.x), mm(n.at.y));
     }
 
@@ -497,6 +568,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     for l in &lines {
         let pts: String = l.pts.iter().map(|p| format!(" (xy {} {})", mm(p.x), mm(p.y))).collect();
         let uuid = duid_plain(&format!("clipboard:line:{pts}"));
+        note_item_uuid(&l.id, &uuid);
         let _ = writeln!(out, "\t(polyline\n\t\t(pts{pts})\n\t\t(stroke (width {}) (type default))\n\t\t(uuid \"{uuid}\")\n\t)", mm(l.width_um));
     }
 
@@ -515,6 +587,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
         };
         let (x, y) = (mm(l.at.x), mm(l.at.y));
         let uuid = duid_plain(&format!("clipboard:label:{}:{}:{}", l.net, l.at.x, l.at.y));
+        note_item_uuid(&l.id, &uuid);
         let _ = write!(out, "\t({tag} {}", sexpr_str(&l.net));
         if let Some(shape) = shape {
             let _ = write!(out, "\n\t\t(shape {})", label_shape_token(shape));
@@ -535,6 +608,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     for t in &texts {
         let (x, y) = (mm(t.at.x), mm(t.at.y));
         let uuid = duid_plain(&format!("clipboard:text:{}:{}:{}", t.content, t.at.x, t.at.y));
+        note_item_uuid(&t.id, &uuid);
         // upright angle and the justification, as the file writes them (`KeepUpright`, `EDA_TEXT::Format`)
         let angle = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90.0 } else { 0.0 };
         let effects = crate::sch_extras_io::text_effects_str(t.size_um, sch.extras.text_justify_of(&t.id));
@@ -548,6 +622,14 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     let mut sheet_files: Vec<String> = sheets.iter().map(|s| s.file.clone()).collect();
     sheet_files.sort();
     sheet_files.dedup();
+
+    // The groups: each selected group, and the groups below it, once, naming the uuids the items were written as (`saveGroup`).
+    if !copied_groups.is_empty() {
+        let written = UuidScope::snapshot();
+        let groups: Vec<&eda_model::ir::Group> = sch.extras.groups.iter().filter(|g| copied_groups.contains(&g.id)).collect();
+        let uuid_of = |g: &eda_model::ir::Group| duid_plain(&format!("clipboard:group:{}", g.id));
+        crate::pcb_items::write_groups(&mut out, &groups, &written, &uuid_of, &|_| false);
+    }
 
     Ok(CopyOutput { text: out, items, skipped, sheet_files })
 }

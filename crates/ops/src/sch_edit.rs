@@ -220,6 +220,19 @@ pub enum SchCmd {
         #[serde(default)]
         diameter_um: Option<Um>,
     },
+    /// Group Items (Ctrl+G, `SCH_GROUP_TOOL::Group`): a new group over `ids` -- symbols, wires, labels, texts, shapes, sheets, ... and other groups, which nest. The
+    /// items must be on the sheet and groupable (a pin, a field and a sheet pin go along with the item that has them); at least two. Each id leaves the group it was
+    /// in; when they all shared one, the new group takes their place in it. See `sch_groups.rs`.
+    Group { ids: Vec<String> },
+    /// Ungroup (Ctrl+Shift+G, `GROUP_TOOL::Ungroup`): every listed group dissolves and its members are free of it. A listed id that is no group is skipped; refused when none is.
+    Ungroup { ids: Vec<String> },
+    /// Add Items (`GROUP_TOOL::AddToGroup`): `ids` join the group `group_id`, each leaving the group it was in. A group is refused as a member of itself or of a group below it.
+    AddToGroup { group_id: String, ids: Vec<String> },
+    /// Remove Items (`GROUP_TOOL::RemoveFromGroup`): each id leaves the group it is in. A group left with fewer than two members dissolves. Refused when none is in a group.
+    RemoveFromGroup { ids: Vec<String> },
+    /// Group Properties (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): the group `id` is renamed and its members are exactly `member_ids`, each pulled out of the group
+    /// it was in, the previous members not listed released.
+    EditGroup { id: String, name: String, member_ids: Vec<String> },
 }
 
 impl SchCmd {
@@ -239,6 +252,9 @@ impl SchCmd {
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
+            SchCmd::Group { ids } | SchCmd::Ungroup { ids } | SchCmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
+            SchCmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
+            SchCmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
         }
     }
 
@@ -270,6 +286,11 @@ impl SchCmd {
             SchCmd::SwapPins { pins } => format!("schematic swap-pins {}", pins.join(" ")),
             SchCmd::SwapPinLabels { pins } => format!("schematic swap-pin-labels {}", pins.join(" ")),
             SchCmd::SwapUnitLabels { ids } => format!("schematic swap-unit-labels {}", ids.join(" ")),
+            SchCmd::Group { ids } => format!("schematic group {}", ids.join(" ")),
+            SchCmd::Ungroup { ids } => format!("schematic ungroup {}", ids.join(" ")),
+            SchCmd::AddToGroup { group_id, ids } => format!("schematic group-add {group_id} {}", ids.join(" ")),
+            SchCmd::RemoveFromGroup { ids } => format!("schematic group-remove {}", ids.join(" ")),
+            SchCmd::EditGroup { id, name, .. } => format!("schematic group-properties {id} {name:?}"),
         }
     }
 
@@ -286,6 +307,7 @@ impl SchCmd {
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } => "schematic-pins",
+            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } => "schematic-group",
         }
     }
 
@@ -294,6 +316,8 @@ impl SchCmd {
     pub fn edits_connectivity(&self) -> bool {
         match self {
             SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } => false,
+            // a group is a set of names; it moves, joins and leaves nothing
+            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
             SchCmd::EditField { text, .. } => text.is_some(),
             _ => true,
@@ -346,6 +370,11 @@ impl<'a> Board<'a> {
             SchCmd::SwapPins { pins } => self.swap_pins(pins),
             SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins),
             SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids),
+            SchCmd::Group { ids } => self.sch_group_items(ids),
+            SchCmd::Ungroup { ids } => self.sch_ungroup_items(ids),
+            SchCmd::AddToGroup { group_id, ids } => self.sch_add_to_group(group_id, ids),
+            SchCmd::RemoveFromGroup { ids } => self.sch_remove_from_group(ids),
+            SchCmd::EditGroup { id, name, member_ids } => self.sch_edit_group(id, name, member_ids),
         }
     }
 
@@ -626,8 +655,10 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
 
 /// Every item id of this sheet that Lock can act on (everything but pins and fields; sheet pins are listed
 /// separately because they are accepted-and-ignored).
-fn lockable_ids(sch: &SchematicSection) -> BTreeSet<&str> {
+pub(crate) fn lockable_ids(sch: &SchematicSection) -> BTreeSet<&str> {
     let mut out: BTreeSet<&str> = BTreeSet::new();
+    // a group is locked as an item is (`SCH_ITEM::SetLocked` on the `SCH_GROUP`): what is below it is locked with it
+    out.extend(sch.extras.groups.iter().map(|g| g.id.as_str()));
     out.extend(sch.symbols.iter().map(|s| s.id.as_str()));
     out.extend(sch.power_symbols.iter().map(|p| p.id.as_str()));
     out.extend(sch.wires.iter().map(|w| w.id.as_str()));

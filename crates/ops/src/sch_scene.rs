@@ -281,6 +281,11 @@ pub(crate) struct Scene<'m> {
     pub model: &'m ConstraintModel,
     /// The fields the user picked on their own (`SCH_FIELD`), see `sch_fields.rs`.
     pub fields: Vec<crate::sch_fields::FieldSel>,
+    /// The items held through a group (`SCH_GROUP::Move` hands the move to each member): they move as they are, and a drag takes nothing attached to
+    /// them along, because a group has no connection points (`setupItemsForDrag` asks the group, not its members).
+    pub rigid: BTreeSet<Item>,
+    /// The selection is one group and nothing else: `SCH_EDIT_TOOL::Rotate` turns it on itself and `Mirror` mirrors it about its own centre.
+    pub lone_group: bool,
 }
 
 impl<'m> Scene<'m> {
@@ -299,7 +304,7 @@ impl<'m> Scene<'m> {
         }
         let shapes = sch.symbols.iter().map(|s| symbol_shape(model, &sch, s)).collect();
         let power_shapes = sch.power_symbols.iter().map(|p| power_shape(model, p)).collect();
-        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new() }
+        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new(), rigid: BTreeSet::new(), lone_group: false }
     }
 
     // -------------------------------------------------------------------------------------------------------------- items
