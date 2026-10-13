@@ -908,4 +908,76 @@ mod tests {
         assert_eq!(f["ok"], json!(false));
         assert!(f["message"].as_str().unwrap().contains("changed"), "{f}");
     }
+
+    /// kicad-cli is the judge of the lengths: a board with a tuned track and a tuned pair loads (the `(generated ..)` items are read), the patterns survive the file, and its
+    /// DRC -- `length` and `skew` rules over the nets -- finds nothing wrong with the nets that were tuned to the target the rule asks for, and does find what is wrong with
+    /// the same nets before they were tuned (the control: the rule is evaluated). Slow tier: it runs kicad-cli several times.
+    #[test]
+    fn kicad_cli_finds_the_tuned_nets_within_the_length_and_skew_rules_they_were_tuned_to() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped (set EDA_SLOW_TESTS=1): runs kicad-cli");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found: skipping");
+            return;
+        }
+        let judge = |dir: &Path, rules: &str, kind: &str| -> Vec<String> {
+            let (_, design, mut model) = board::load(dir).unwrap();
+            model.board.custom_rules_text = Some(format!("(version 1)\n{rules}\n"));
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC (it loads the board, `(generated ..)` items included)");
+            report.violations.iter().filter(|v| v.kind == kind).map(|v| v.description.clone()).collect()
+        };
+
+        // a track tuned to 22 mm
+        let one = scratch("kicad_single");
+        setup(&one, ["SIG", "OTHER"], vec![]);
+        let rule = |name: &str, nets: &str, constraint: &str| format!("(rule \"{name}\" (condition \"{nets}\") (constraint {constraint}))");
+        let sig = |c: &str| rule("sig", "A.NetName == 'SIG'", c);
+        let untuned = judge(&one, &sig("length (min 21.9mm) (max 22.1mm)"), "length_out_of_range");
+        assert_eq!(untuned.len(), 1, "the control: the straight 20 mm track is out of the range: {untuned:?}");
+        start(&one, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
+        mv(&one, &body(json!({ "x": 22_000, "y": 9_000 })));
+        assert_eq!(fix(&one, &body(json!({})))["ok"], json!(true));
+        let tuned = judge(&one, &sig("length (min 21.9mm) (max 22.1mm)"), "length_out_of_range");
+        assert!(tuned.is_empty(), "kicad-cli measures the tuned track within 21.9..22.1 mm: {tuned:?}");
+        let tighter = judge(&one, &sig("length (min 21.99mm) (max 22.01mm)"), "length_out_of_range");
+        assert!(tighter.is_empty(), "and within 10 um of the target: {tighter:?}");
+
+        // the patterns survive the file: written as `(generated ..)`, read back with their tracks
+        let (_, design, model) = board::load(&one).unwrap();
+        let text = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).unwrap();
+        assert_eq!(text.matches("\t(generated\n").count(), 1, "one generator is written");
+        let (back, _, _) = eda_kicad::import_kicad_pcb(&text).unwrap();
+        let (a, b) = (&design.drawings.as_ref().unwrap().tuning_patterns[0], &back.drawings.as_ref().unwrap().tuning_patterns[0]);
+        // a polyline of the meander is several segments in the file, so the members come back as that many tracks: as many as the file names
+        let written = text.lines().find(|l| l.trim_start().starts_with("(members")).map_or(0, |l| l.matches('"').count() / 2);
+        assert!(written >= a.member_ids.len(), "{written} items of the file for {} tracks", a.member_ids.len());
+        assert_eq!((b.member_ids.len(), b.origin, b.end, b.mode, &b.layer), (written, a.origin, a.end, a.mode, &a.layer), "the pattern and its members come back");
+        assert!((a.target_length.opt - b.target_length.opt).abs() <= 1 && b.max_amplitude == a.max_amplitude && b.spacing == a.spacing);
+
+        // a pair tuned to 26 mm: both nets, and the skew between them
+        let pair = scratch("kicad_pair");
+        setup(&pair, ["USB_P", "USB_N"], vec![]);
+        let usb = |c: &str| rule("usb", "A.NetName == 'USB_P' || A.NetName == 'USB_N'", c);
+        start(&pair, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "diffpair", "settings": { "target_length": 26_000 } })));
+        mv(&pair, &body(json!({ "x": 22_000, "y": 9_000 })));
+        assert_eq!(fix(&pair, &body(json!({})))["ok"], json!(true));
+        let len = judge(&pair, &usb("length (min 25.9mm) (max 26.1mm)"), "length_out_of_range");
+        assert!(len.is_empty(), "both nets of the pair are 26 mm to kicad-cli: {len:?}");
+        let skew = judge(&pair, &usb("skew (max 0.3mm) (within_diff_pairs)"), "skew_out_of_range");
+        assert!(skew.is_empty(), "and the skew between them is within 0.3 mm: {skew:?}");
+
+        // the skew tuner: USB_N takes a 0.7 mm detour (1.4 mm longer than USB_P), the skew is tuned away
+        let sk = scratch("kicad_skew");
+        let n_path = vec![p(5_000, 10_500), p(10_000, 10_500), p(10_000, 11_200), p(12_000, 11_200), p(12_000, 10_500), p(25_000, 10_500)];
+        setup_with(&sk, ["USB_P", "USB_N"], vec![], vec![("USB_P", vec![p(5_000, 9_500), p(25_000, 9_500)]), ("USB_N", n_path)]);
+        let rule_skew = usb("skew (max 0.15mm) (within_diff_pairs)");
+        assert_eq!(judge(&sk, &rule_skew, "skew_out_of_range").len(), 1, "the control: 1.4 mm of skew is flagged, on the shorter net (the longest has none against itself)");
+        start(&sk, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "skew" })));
+        mv(&sk, &body(json!({ "x": 22_000, "y": 9_000 })));
+        assert_eq!(fix(&sk, &body(json!({})))["ok"], json!(true));
+        let after = judge(&sk, &rule_skew, "skew_out_of_range");
+        assert!(after.is_empty(), "after the skew tuner kicad-cli finds the pair within 0.15 mm: {after:?}");
+    }
 }
