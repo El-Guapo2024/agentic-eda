@@ -1203,6 +1203,12 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetStackup { settings } => format!("board-setup stackup --layers {}", settings.copper_layers),
         Cmd::SetRuleSeverities { .. } => "board-setup severities".to_string(),
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
+        Cmd::SetTextVariables { variables } => format!("board-setup text-variables ({} variables)", variables.len()),
+        Cmd::SetBoardLayers { settings } => format!("board-setup layers ({} enabled)", settings.enabled.len()),
+        Cmd::SetFormatting { .. } => "board-setup formatting".to_string(),
+        Cmd::SetZoneHatchOffsets { offsets } => format!("board-setup zone-hatch-offsets ({} layers)", offsets.len()),
+        Cmd::SetTuningPatterns { .. } => "board-setup tuning-patterns".to_string(),
+        Cmd::SetTuningProfiles { settings } => format!("board-setup tuning-profiles ({} profiles)", settings.profiles.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
@@ -1485,6 +1491,12 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetStackup { .. } => "stackup",
         Cmd::SetRuleSeverities { .. } => "severities",
         Cmd::SetCustomRules { .. } => "custom-rules",
+        Cmd::SetTextVariables { .. } => "text-variables",
+        Cmd::SetBoardLayers { .. } => "board-layers",
+        Cmd::SetFormatting { .. } => "formatting",
+        Cmd::SetZoneHatchOffsets { .. } => "zone-hatch-offsets",
+        Cmd::SetTuningPatterns { .. } => "tuning-patterns",
+        Cmd::SetTuningProfiles { .. } => "tuning-profiles",
         Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
@@ -1838,7 +1850,11 @@ pub fn run(
             "add" => {
                 let kind = flag(rest, "--kind").ok_or_else(|| fail("board_usage", "shape add", "needs --kind segment|arc|rect|circle|polygon"))?;
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "shape add", "needs --layer L"))?;
-                let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
+                // No --width: the line thickness Board Setup > Text & Graphics > Defaults gives the layer's class (`BOARD_DESIGN_SETTINGS::GetLineThickness`).
+                let stroke_width = match flag(rest, "--width") {
+                    Some(w) => mm_arg(&w)?,
+                    None => load(&dir)?.2.board.text_graphics.line_thickness_um(&layer),
+                };
                 let filled = has(rest, "--filled");
                 let pts = parse_pts_mm(&flag(rest, "--pts").ok_or_else(|| fail("board_usage", "shape add", "needs --pts \"x,y ...\", mm"))?)?;
                 let shape = parse_shape(&kind, layer, stroke_width, filled, pts)?;
@@ -1862,8 +1878,16 @@ pub fn run(
                 let at = parse_point_mm(&flag(rest, "--at").ok_or_else(|| fail("board_usage", "text add", "needs --at x,y, mm"))?)?;
                 let angle = parse_angle(flag(rest, "--angle").as_deref())?;
                 let layer = flag(rest, "--layer").ok_or_else(|| fail("board_usage", "text add", "needs --layer L"))?;
-                let size_um = mm_arg(&flag(rest, "--size").ok_or_else(|| fail("board_usage", "text add", "needs --size, mm"))?)?;
-                let stroke_width = mm_arg(&flag(rest, "--width").unwrap_or_else(|| "0.15".into()))?;
+                // No --size or --width: what Board Setup > Text & Graphics > Defaults gives the layer's class (`GetTextSize`, `GetTextThickness`).
+                let defaults = load(&dir)?.2.board.text_graphics;
+                let size_um = match flag(rest, "--size") {
+                    Some(v) => mm_arg(&v)?,
+                    None => defaults.text_size_um(&layer).1,
+                };
+                let stroke_width = match flag(rest, "--width") {
+                    Some(v) => mm_arg(&v)?,
+                    None => defaults.text_thickness_um(&layer),
+                };
                 let justify = parse_justify(flag(rest, "--justify").as_deref())?;
                 let mirror = has(rest, "--mirror");
                 let text = Text { id: String::new(), content, at, angle, layer, size_um, stroke_width, justify, mirror };
@@ -2120,6 +2144,645 @@ mod tests {
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(clearance(&dir), 0, "Undo takes the edit back, overlay and all");
         assert_eq!(load(&dir).unwrap().2.board.clearance, model.board.clearance);
+    }
+
+    /// The Text Variables page is one undo step, it replaces the board folder's `path-variables.json` as the project's variables, the derived project
+    /// carries it for kicad-cli, and Configure Paths is the same list seen through the names it can list.
+    #[test]
+    fn the_text_variables_page_is_one_undo_step_and_configure_paths_edits_the_same_list() {
+        use std::collections::BTreeMap;
+        let dir = scratch("text_variables_undo");
+        setup(&dir);
+        let rows = |r: &[(&str, &str)]| -> BTreeMap<String, String> { r.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect() };
+        let seed = rows(&[("SEED", "1")]);
+        eda_kicad::library_table::write_project_variables(&dir, &seed).unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), seed, "a board whose page was never used has its folder's variables");
+
+        let page = rows(&[("REV", "B"), ("Designer name", "Ada")]);
+        step(&dir, Cmd::SetTextVariables { variables: page.clone() }, false, "ui").unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), page, "the page replaces the seed");
+        let (_, design, model) = load(&dir).unwrap();
+        let pro: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();
+        assert_eq!(pro["text_variables"], serde_json::json!({ "REV": "B", "Designer name": "Ada" }), "the derived project carries the page, for kicad-cli");
+        assert!(step(&dir, Cmd::SetTextVariables { variables: rows(&[("A.B", "x")]) }, false, "ui").is_err());
+        assert_eq!(crate::text_variables::project_variables(&dir), page, "a refused page changes nothing");
+
+        // Configure Paths lists the names it can (REV, not "Designer name") and saves through the same verb, keeping the ones it cannot list.
+        let m = crate::library_tables::tests::machine("vars_in_board", true);
+        let env = m.env();
+        let view = crate::library_tables::view_with(&env, &dir);
+        assert_eq!(view["variables"]["project"], serde_json::json!([{ "name": "REV", "value": "B" }]));
+        let body = serde_json::to_vec(&serde_json::json!({ "variables": [{ "name": "REV", "value": "C" }, { "name": "TEAM", "value": "/srv/libs" }] })).unwrap();
+        let reply = crate::library_tables::set_variables_with(&env, &dir, &body);
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(crate::text_variables::project_variables(&dir), rows(&[("REV", "C"), ("TEAM", "/srv/libs"), ("Designer name", "Ada")]));
+
+        // Each edit is one step: Undo takes the Configure Paths edit back, then the page; the seed is the set again.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), page);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(crate::text_variables::project_variables(&dir), seed, "back before the page: the folder's variables");
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    /// The (name, type, shown name) of every entry of a board file's `(layers ..)`, as KiCad reads or writes it.
+    fn layer_entries(pcb: &str) -> Vec<(String, String, Option<String>)> {
+        let start = pcb.find("(layers").expect("a layers section");
+        let (mut depth, mut tokens, mut entries, mut word, mut quoted) = (0, Vec::<String>::new(), Vec::new(), String::new(), false);
+        for c in pcb[start..].chars() {
+            if quoted {
+                if c == '"' { quoted = false; tokens.push(std::mem::take(&mut word)); } else { word.push(c); }
+                continue;
+            }
+            match c {
+                '"' => quoted = true,
+                '(' => depth += 1,
+                ')' | ' ' | '\n' | '\t' => {
+                    if !word.is_empty() { tokens.push(std::mem::take(&mut word)); }
+                    if c == ')' {
+                        if depth == 2 && tokens.len() >= 3 { entries.push((tokens[1].clone(), tokens[2].clone(), tokens.get(3).cloned())); }
+                        if depth == 2 { tokens.clear(); }
+                        depth -= 1;
+                        if depth == 0 { return entries; }
+                    }
+                }
+                _ => word.push(c),
+            }
+        }
+        entries
+    }
+
+    fn four_copper_layers(dir: &Path) {
+        let path = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        model.board.layers = eda_model::rules::copper_layer_names(4);
+        std::fs::write(&path, serde_yaml::to_string(&model).unwrap()).unwrap();
+    }
+
+    fn a_layers_page() -> eda_model::layers::LayerSetup {
+        use eda_model::layers::{LayerSetup, LayerType};
+        let mut page = LayerSetup::default();
+        page.enabled.extend(["User.1", "User.2", "User.3"].map(String::from));
+        page.names.extend([("User.1", "Notes"), ("In1.Cu", "GND plane"), ("F.SilkS", "Top art")].map(|(l, n)| (l.to_string(), n.to_string())));
+        page.types.extend([("In1.Cu", LayerType::Power), ("In2.Cu", LayerType::Mixed), ("User.2", LayerType::Front), ("User.3", LayerType::Back)].map(|(l, t)| (l.to_string(), t)));
+        page
+    }
+
+    /// The Board Editor Layers page is one undo step, the state carries it, the derived board file is `formatBoardLayers`'s and `${LAYER}` shows the user's name.
+    #[test]
+    fn the_board_layers_page_is_one_undo_step_and_reaches_the_state_the_board_file_and_the_shown_text() {
+        let dir = scratch("board_layers_undo");
+        setup(&dir);
+        four_copper_layers(&dir);
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let clock = crate::text_vars_json::clock_of("/api/state");
+        let before = crate::studio::state(&dir, &job, clock.clone()).unwrap();
+        assert_eq!(before["board_rules"]["layer_setup"]["enabled"].as_array().unwrap().len(), 18, "a board starts with every standard technical layer");
+        assert!(before["board_rules"]["overlay"].as_array().unwrap().iter().all(|o| o != "board_layers"));
+
+        let page = a_layers_page();
+        step(&dir, Cmd::SetBoardLayers { settings: page.clone() }, false, "ui").unwrap();
+        let after = crate::studio::state(&dir, &job, clock.clone()).unwrap();
+        let setup = &after["board_rules"]["layer_setup"];
+        assert_eq!(setup["names"], serde_json::json!({ "F.SilkS": "Top art", "In1.Cu": "GND plane", "User.1": "Notes" }));
+        assert_eq!(setup["types"], serde_json::json!({ "In1.Cu": "power", "In2.Cu": "mixed", "User.2": "front", "User.3": "back" }));
+        assert_eq!(setup["enabled"].as_array().unwrap().len(), 21);
+        assert!(after["board_rules"]["overlay"].as_array().unwrap().iter().any(|o| o == "board_layers"));
+
+        // The derived board file lists them the way KiCad writes them.
+        let (_, design, model) = load(&dir).unwrap();
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).expect("the board file");
+        let entries = layer_entries(&pcb);
+        let entry = |name: &str| entries.iter().find(|e| e.0 == name).cloned().unwrap_or_else(|| panic!("{name} in {entries:?}"));
+        assert_eq!(entry("In1.Cu"), ("In1.Cu".into(), "power".into(), Some("GND plane".into())));
+        assert_eq!(entry("In2.Cu"), ("In2.Cu".into(), "mixed".into(), None));
+        assert_eq!(entry("User.1"), ("User.1".into(), "user".into(), Some("Notes".into())));
+        assert_eq!(entry("User.2"), ("User.2".into(), "front".into(), None));
+        assert_eq!(entry("User.3"), ("User.3".into(), "back".into(), None));
+        assert_eq!(entry("F.SilkS"), ("F.SilkS".into(), "user".into(), Some("Top art".into())));
+        assert_eq!(entries.len(), 4 + 21);
+
+        // A bad page is refused naming the layer and changes nothing; Undo takes the one step back.
+        let mut bad = page.clone();
+        bad.names.insert("User.2".into(), "Notes".into());
+        let e = step(&dir, Cmd::SetBoardLayers { settings: bad }, false, "ui").unwrap_err();
+        assert!(format!("{e:?}").contains("Layer name 'Notes' already in use."), "{e:?}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let undone = crate::studio::state(&dir, &job, clock).unwrap();
+        assert_eq!(undone["board_rules"]["layer_setup"], before["board_rules"]["layer_setup"], "one Undo is the page taken back");
+        assert!(undone["board_rules"]["overlay"].as_array().unwrap().iter().all(|o| o != "board_layers"));
+    }
+
+    /// kicad-cli loads a board whose `(layers ..)` has a renamed user layer, a power plane and an off-board layer: its own rewrite of the file (`pcb upgrade`) keeps the names and
+    /// types, and a text with `${LAYER}` on the renamed layer is plotted with the user's name -- the same plot as the literal text on a board that never renamed it (slow tier).
+    #[test]
+    fn kicad_cli_loads_a_board_with_a_renamed_user_layer_and_a_changed_layer_type() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let Some(cli) = eda_kicad_engine::find_cli() else {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        };
+        let (with, plain) = (scratch("board_layers_cli_a"), scratch("board_layers_cli_b"));
+        let text = |content: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "User.1".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        for dir in [&with, &plain] {
+            setup(dir);
+            four_copper_layers(dir);
+        }
+        let mut page_without_names = a_layers_page();
+        page_without_names.names.clear();
+        step(&with, Cmd::SetBoardLayers { settings: a_layers_page() }, false, "ui").unwrap();
+        step(&with, text("on ${LAYER} / ${LAYER}"), false, "ui").unwrap();
+        step(&plain, Cmd::SetBoardLayers { settings: page_without_names }, false, "ui").unwrap();
+        step(&plain, text("on User.1 / User.1"), false, "ui").unwrap();
+
+        // The plot of the renamed layer shows the user's name where the board says LAYER; the other board has the layer's own name written out.
+        let plot = |dir: &Path| -> String {
+            let args: Vec<String> = ["--layers", "User.1,Edge.Cuts"].iter().map(|s| s.to_string()).collect();
+            let done = crate::kicad_engine::export(dir, "svg", &args).expect("kicad-cli plotted the board");
+            std::fs::read_to_string(dir.join(done["files"][0].as_str().expect("one svg"))).unwrap()
+        };
+        let body = |svg: &str| svg.lines().filter(|l| !l.contains("<title>") && !l.contains("<!--") && !l.contains("<desc>") && !l.contains("Created by") && !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        let (a, b) = (plot(&with), plot(&plain));
+        assert!(a.len() > 2_000, "a real plot: {} bytes", a.len());
+        assert_ne!(body(&a), body(&b), "the plots differ: 'Notes' is not 'User.1'");
+        step(&plain, Cmd::SetBoardLayers { settings: { let mut p = a_layers_page(); p.names.clear(); p.names.insert("User.1".into(), "Notes".into()); p } }, false, "ui").unwrap();
+        let text_id = load(&plain).unwrap().1.drawings.unwrap().texts[0].id.clone();
+        step(&plain, Cmd::EditText { id: text_id, content: "on Notes / Notes".into(), angle: 0, layer: "User.1".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false }, false, "ui").unwrap();
+        assert_eq!(body(&plot(&with)), body(&plot(&plain)), "the LAYER variable on a renamed layer is the user's name, as the studio shows it");
+
+        // kicad-cli's own rewrite of the derived board file keeps what the page set: the names, the types and the layers.
+        let derived = std::fs::read_dir(with.join(".kicad")).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "kicad_pcb")).expect("the derived board");
+        let copy = with.join("upgraded.kicad_pcb");
+        std::fs::copy(&derived, &copy).unwrap();
+        let out = std::process::Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+        assert!(out.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let entries = layer_entries(&std::fs::read_to_string(&copy).unwrap());
+        let entry = |name: &str| entries.iter().find(|e| e.0 == name).cloned().unwrap_or_else(|| panic!("{name} in {entries:?}"));
+        assert_eq!(entry("In1.Cu"), ("In1.Cu".into(), "power".into(), Some("GND plane".into())));
+        assert_eq!(entry("In2.Cu").1, "mixed");
+        assert_eq!(entry("User.1"), ("User.1".into(), "user".into(), Some("Notes".into())));
+        assert_eq!(entry("User.2").1, "front");
+        assert_eq!(entry("User.3").1, "back");
+        assert_eq!(entry("F.SilkS").2.as_deref(), Some("Top art"));
+        assert!(entries.iter().any(|e| e.0 == "Dwgs.User") && entries.iter().any(|e| e.0 == "Margin"), "the standard technical layers are all there");
+    }
+
+    fn a_tuning_profile(name: &str) -> eda_model::setup_pages::TuningProfile {
+        use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile};
+        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_um: 130, diff_pair_gap_um: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+    }
+
+    /// Formatting, Zone Hatch Offsets, Length-tuning Patterns and Tuning Profiles: each a page of one undo step, in the state the studio reads, and in the derived board file and project
+    /// kicad-cli reads (`pcbplotparams`, `zone_defaults`, `defaults.apply_defaults_to_fp_*`, `tuning_pattern_settings`, `tuning_profiles`, and the net classes in the project when one names a profile).
+    #[test]
+    fn the_smaller_setup_pages_are_one_undo_step_each_and_reach_the_state_the_board_file_and_the_project() {
+        use eda_model::setup_pages::{CornerStyle, FormattingSettings, HatchOffset, TuningPatterns, TuningProfiles};
+        let dir = scratch("setup_pages_undo");
+        setup(&dir);
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let clock = crate::text_vars_json::clock_of("/api/state");
+        let rules = |dir: &Path| crate::studio::state(dir, &job, clock.clone()).unwrap()["board_rules"].clone();
+        let files = |dir: &Path| {
+            let (_, design, model) = load(dir).unwrap();
+            (eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap(), serde_json::from_str::<serde_json::Value>(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap())
+        };
+        let before = rules(&dir);
+        assert_eq!((before["formatting"]["dash_length_ratio"].as_f64(), before["tuning_patterns"]["diff_pair"]["spacing_um"].as_i64(), before["zone_hatch_offsets"].as_object().map(|o| o.len()), before["tuning_profiles"]["profiles"].as_array().map(|a| a.len())), (Some(12.0), Some(1_000), Some(0), Some(0)));
+
+        let formatting = FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.0, apply_to_fp_fields: true, ..Default::default() };
+        step(&dir, Cmd::SetFormatting { settings: formatting.clone() }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), HatchOffset { x_um: 1_500, y_um: -2_000 })].into() }, false, "ui").unwrap();
+        let mut patterns = TuningPatterns::default();
+        patterns.diff_pair.corner_style = CornerStyle::Chamfer;
+        patterns.single_track.max_amplitude_um = 1_500;
+        step(&dir, Cmd::SetTuningPatterns { settings: patterns.clone() }, false, "ui").unwrap();
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "ui").unwrap();
+        let profiles = TuningProfiles { profiles: vec![a_tuning_profile("USB 90")], class_profiles: [("power".to_string(), "USB 90".to_string())].into() };
+        step(&dir, Cmd::SetTuningProfiles { settings: profiles.clone() }, false, "ui").unwrap();
+
+        let after = rules(&dir);
+        assert_eq!(after["formatting"], serde_json::to_value(&formatting).unwrap());
+        assert_eq!(after["zone_hatch_offsets"], serde_json::json!({ "F.Cu": { "x_um": 1_500, "y_um": -2_000 } }));
+        assert_eq!(after["tuning_patterns"], serde_json::to_value(&patterns).unwrap());
+        assert_eq!(after["tuning_profiles"]["class_profiles"], serde_json::json!({ "power": "USB 90" }));
+        for page in ["formatting", "zone_hatch_offsets", "tuning_patterns", "tuning_profiles"] {
+            assert!(after["overlay"].as_array().unwrap().iter().any(|o| o == page), "{page} is marked as set");
+        }
+        let (pcb, pro) = files(&dir);
+        assert!(pcb.contains("(dashed_line_dash_ratio 8.000000)") && pcb.contains("(dashed_line_gap_ratio 2.000000)"));
+        assert!(pcb.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))))"));
+        assert!(!pcb.contains("(net_class "), "the net classes are the project's when one names a profile");
+        let ds = &pro["board"]["design_settings"];
+        assert_eq!(ds["defaults"]["apply_defaults_to_fp_fields"], true);
+        assert_eq!(ds["tuning_pattern_settings"]["diff_pair_defaults"]["corner_style"], 0);
+        assert_eq!(ds["tuning_pattern_settings"]["single_track_defaults"]["max_amplitude"], 1.5);
+        assert_eq!(pro["tuning_profiles"]["tuning_profiles_impedance_geometric"][0]["profile_name"], "USB 90");
+        let classes = pro["net_settings"]["classes"].as_array().unwrap();
+        assert!(classes.iter().any(|c| c["name"] == "power" && c["tuning_profile"] == "USB 90" && c["track_width"] == 0.25), "{classes:?}");
+        assert_eq!(pro["net_settings"]["netclass_patterns"], serde_json::json!([{ "netclass": "power", "pattern": "VCC" }]));
+
+        // A bad page is refused with the setting's name and stores nothing.
+        let mut bad = patterns.clone();
+        bad.diff_pair_skew.corner_radius_percentage = 120;
+        assert!(format!("{:?}", step(&dir, Cmd::SetTuningPatterns { settings: bad }, false, "ui").unwrap_err()).contains("diff_pair_skew.corner_radius_percentage"));
+        assert!(format!("{:?}", step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![a_tuning_profile("")], ..Default::default() } }, false, "ui").unwrap_err()).contains("profile 1"));
+        assert_eq!(rules(&dir)["tuning_patterns"], serde_json::to_value(&patterns).unwrap());
+
+        // Each Undo takes one page back: the profiles (and the board file's own net classes with them), the net classes, the patterns, the offsets, the formatting.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!(rules(&dir)["tuning_profiles"]["class_profiles"].is_null() && files(&dir).0.contains("(net_class \"power\""), "no class names a profile, so the board file has the classes again");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(rules(&dir)["tuning_patterns"], before["tuning_patterns"]);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(rules(&dir)["zone_hatch_offsets"], before["zone_hatch_offsets"]);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let back = rules(&dir);
+        assert_eq!((&back["formatting"], &back["overlay"]), (&before["formatting"], &before["overlay"]));
+        let (pcb, pro) = files(&dir);
+        assert!(pcb.contains("(dashed_line_dash_ratio 12.000000)") && !pcb.contains("zone_defaults") && pro.get("tuning_profiles").is_none() && pro.get("net_settings").is_none());
+    }
+
+    /// kicad-cli reads the dash ratios of the derived board and loads it with its hatch offsets: its own rewrite of the file (`pcb upgrade`) keeps the ratios (slow tier).
+    #[test]
+    fn kicad_cli_keeps_the_dash_ratios_of_the_board_and_loads_it_with_its_hatch_offsets() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let Some(cli) = eda_kicad_engine::find_cli() else {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        };
+        let dir = scratch("setup_pages_cli_board");
+        setup(&dir);
+        step(&dir, Cmd::SetFormatting { settings: eda_model::setup_pages::FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.5, ..Default::default() } }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_um: 1_500, y_um: -2_000 }), ("B.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_um: 0, y_um: 700 })].into() }, false, "ui").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let copy = dir.join("upgraded.kicad_pcb");
+        std::fs::write(&copy, eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap()).unwrap();
+        let out = std::process::Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+        assert!(out.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let text = std::fs::read_to_string(&copy).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
+        let number_after = |key: &str| -> f64 { let i = text.find(key).unwrap_or_else(|| panic!("{key} in the file kicad-cli wrote")); text[i + key.len()..].trim_start().split(|c: char| c == ')' || c.is_whitespace()).next().unwrap().parse().unwrap() };
+        assert_eq!((number_after("(dashed_line_dash_ratio"), number_after("(dashed_line_gap_ratio")), (8.0, 2.5), "kicad-cli read the ratios");
+        // The offsets: kicad-cli parses `(zone_defaults (property (layer ..) (hatch_position (xy ..))))` without complaint, but at the KiCad snapshot this studio follows the parser
+        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what the filler reads, and the
+        // file writer is the only thing that fills those). The studio's filler applies them (`eda_zone_filler::hatch`), and the derived file has KiCad's own text for them.
+        let (_, design, model) = load(&dir).unwrap();
+        let derived = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(derived.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))) (property (layer \"B.Cu\") (hatch_position (xy 0 0.7))))"), "{derived}");
+    }
+
+    /// kicad-cli's DRC reports `missing_tuning_profile` for a net class that names a profile the project does not have, and stops when the profile is defined (slow tier).
+    #[test]
+    fn kicad_cli_reports_a_net_class_that_names_a_tuning_profile_the_project_does_not_have() {
+        use eda_model::setup_pages::TuningProfiles;
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("setup_pages_cli_profiles");
+        setup(&dir);
+        let count = |dir: &Path| drc_counts(dir).get("missing_tuning_profile").copied().unwrap_or(0);
+        assert_eq!(count(&dir), 0);
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "ui").unwrap();
+        assert_eq!(count(&dir), 0, "a class that names no profile is fine");
+
+        step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![], class_profiles: [("power".to_string(), "USB 90".to_string())].into() } }, false, "ui").unwrap();
+        assert_eq!(count(&dir), 1, "the class names a profile the project does not have");
+        step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![a_tuning_profile("USB 90")], class_profiles: [("power".to_string(), "USB 90".to_string())].into() } }, false, "ui").unwrap();
+        assert_eq!(count(&dir), 0, "the profile is defined");
+        // The classes moved into the project did not change what kicad-cli judges the board by: the class's own 250 um track width is read from the project.
+        let report = crate::kicad_engine::drc_with(&dir, false, false).unwrap();
+        assert!(report["counts"].get("clearance").is_none() || report["counts"]["clearance"] == 0, "{report}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir), 1, "Undo takes the profile back");
+    }
+
+    /// A net in two classes has the settings of both, the class that takes precedence winning where both set one, and kicad-cli composes them the way the studio does: the classes are the
+    /// project's in the order of the list, so moving a class up changes the clearance kicad-cli holds the net to (slow tier).
+    #[test]
+    fn kicad_cli_composes_the_settings_of_a_net_in_two_classes_in_the_order_the_studio_lists_them() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("composite_classes");
+        setup(&dir);
+        two_close_tracks(&dir);
+        let count = |dir: &Path| drc_counts(dir).get("clearance").copied().unwrap_or(0);
+        assert_eq!(count(&dir), 0, "250 um of air between GND and VCC is fine for the board's 200 um");
+        let class = |name: &str, nets: &[&str], clearance: Um| eda_model::NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: Some(200), clearance: Some(clearance), via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
+        // VCC is in both: `wide` names it, `power` has a pattern (`V??`, or the regular expression `V[A-Z]+`) that matches it. `wide` is first, so its 100 um is VCC's clearance.
+        let (wide, power) = (class("wide", &["VCC"], 100), class("power", &["V[A-Z]{2}"], 400));
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![wide.clone(), power.clone()], ..defaults.clone() } }, false, "ui").unwrap();
+        let (_, _, model) = load(&dir).unwrap();
+        assert_eq!(model.board.matching_classes("VCC").len(), 2, "the regular expression matches VCC");
+        assert_eq!(model.board.clearance_of("VCC"), 100);
+        assert_eq!(count(&dir), 0, "kicad-cli holds VCC to wide's 100 um first: the 200 um of GND is the larger of the two");
+        // power first: its 400 um wins.
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power, wide], ..defaults } }, false, "ui").unwrap();
+        assert_eq!(load(&dir).unwrap().2.board.clearance_of("VCC"), 400);
+        assert!(count(&dir) >= 1, "now kicad-cli holds VCC to power's 400 um and the two tracks are too close");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir), 0, "Undo puts the order back");
+    }
+
+    /// `eda board shape add` and `text add` without a width or a size take what Text & Graphics > Defaults gives the layer's class, and follow the page.
+    #[test]
+    fn the_cli_starts_a_new_shape_and_text_from_the_defaults_of_the_layers_class() {
+        let dir = scratch("cli_text_graphics_defaults");
+        setup(&dir);
+        let cli = |args: &[&str]| {
+            let mut rest: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            rest.extend(["-C".to_string(), dir.display().to_string()]);
+            super::run(&rest, |_| Err(vec![])).unwrap_or_else(|e| panic!("{args:?}: {e:?}"));
+        };
+        cli(&["shape", "add", "--kind", "segment", "--layer", "F.SilkS", "--pts", "1,1 5,1"]);
+        cli(&["shape", "add", "--kind", "segment", "--layer", "F.Cu", "--pts", "1,2 5,2"]);
+        cli(&["shape", "add", "--kind", "segment", "--layer", "Edge.Cuts", "--pts", "1,3 5,3"]);
+        cli(&["shape", "add", "--kind", "segment", "--layer", "F.Fab", "--width", "0.4", "--pts", "1,4 5,4"]);
+        cli(&["text", "add", "--content", "hello", "--at", "3,6", "--layer", "F.SilkS"]);
+        cli(&["text", "add", "--content", "copper", "--at", "3,8", "--layer", "F.Cu"]);
+        let (_, design, _) = load(&dir).unwrap();
+        let d = design.drawings.as_ref().unwrap();
+        let widths: Vec<(String, Um)> = d.shapes.iter().map(|s| match s { Shape::Segment { layer, stroke_width, .. } => (layer.clone(), *stroke_width), _ => unreachable!() }).collect();
+        assert_eq!(widths, vec![("F.SilkS".into(), 100), ("F.Cu".into(), 200), ("Edge.Cuts".into(), 50), ("F.Fab".into(), 400)], "KiCad's line thickness of each class; an explicit --width wins");
+        assert_eq!(d.texts.iter().map(|t| (t.size_um, t.stroke_width)).collect::<Vec<_>>(), vec![(1_000, 100), (1_500, 300)]);
+
+        // The page changes what the next item starts with.
+        let mut defaults = eda_model::rules::TextGraphicsDefaults::default();
+        defaults.silk.line_width_um = 180;
+        defaults.silk.text_width_um = 1_200;
+        defaults.silk.text_height_um = 1_200;
+        defaults.silk.text_thickness_um = 200;
+        step(&dir, Cmd::SetTextGraphicsDefaults { settings: defaults }, false, "ui").unwrap();
+        cli(&["shape", "add", "--kind", "segment", "--layer", "B.SilkS", "--pts", "1,5 5,5"]);
+        cli(&["text", "add", "--content", "again", "--at", "3,10", "--layer", "B.SilkS"]);
+        let (_, design, _) = load(&dir).unwrap();
+        let d = design.drawings.as_ref().unwrap();
+        assert!(matches!(d.shapes.last(), Some(Shape::Segment { stroke_width: 180, .. })));
+        assert_eq!((d.texts.last().unwrap().size_um, d.texts.last().unwrap().stroke_width), (1_200, 200));
+    }
+
+    fn variables_of(rows: &[(&str, &str)]) -> std::collections::BTreeMap<String, String> {
+        rows.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect()
+    }
+
+    /// `${NAME}` in a board text, a footprint's fields and the title block: the state carries the stored text and, where it differs, the shown one
+    /// (`crate::text_vars_json`); the derived board keeps the stored text, and the project file the variables, so kicad-cli shows the same.
+    #[test]
+    fn the_state_shows_what_a_text_variable_stands_for_and_keeps_the_stored_text() {
+        use eda_model::fp_edit::{FieldLayout, UserField};
+        let dir = scratch("text_variables_shown");
+        setup(&dir);
+        step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B"), ("Designer name", "Ada")]) }, false, "ui").unwrap();
+        let text = |content: &str, layer: &str| Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 1_000, y: 1_000 }, angle: 0, layer: layer.into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        for (content, layer) in [("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}", "F.SilkS"), ("plain", "F.SilkS"), ("A{slash}B", "F.Fab"), ("${PROJECTNAME}/${FILENAME} ${CURRENT_DATE} ${U1:Value}", "F.SilkS")] {
+            step(&dir, text(content, layer), false, "ui").unwrap();
+        }
+        let mut value = FieldLayout::new(Point { x: 0, y: 1_000 }, "F.Fab");
+        value.text = Some("${REV}-10k".into());
+        let user = |name: &str, text: &str| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab") };
+        step(&dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", "ERJ ${REV} ${LAYER}")]), attrs: None }, false, "ui").unwrap();
+        step(&dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", "${U1:Value}"), user("Plain", "nothing")]), attrs: None }, false, "ui").unwrap();
+        step(&dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block: eda_model::ir::TitleBlock { title: "Board ${REV}".into(), rev: "C".into(), ..Default::default() } }, false, "ui").unwrap();
+
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let clock = crate::text_vars_json::clock_of("/api/state?clock=2026-10-10T21:30:05");
+        let state = crate::studio::state(&dir, &job, clock).unwrap();
+        let texts = state["drawings"]["texts"].as_array().unwrap();
+        let by = |content: &str| texts.iter().find(|t| t["content"] == content).unwrap_or_else(|| panic!("{content}: {texts:?}"));
+        assert_eq!(by("Rev ${REV} by ${Designer name} on ${LAYER}, \\${REV}")["shown"], "Rev B by Ada on F.Silkscreen, ${REV}", "the stored text is kept beside the shown one");
+        assert!(by("plain").get("shown").is_none(), "a text with nothing to show differently is sent as it always was");
+        assert_eq!(by("A{slash}B")["shown"], "A/B");
+        assert_eq!(by("${PROJECTNAME}/${FILENAME} ${CURRENT_DATE} ${U1:Value}")["shown"], "intent/intent.kicad_pcb 2026-10-10 B-10k", "the project's name, the derived board's file, the browser's day, another footprint's field");
+
+        let part = |r: &str| state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == r).unwrap().clone();
+        let field = |p: &serde_json::Value, name: &str| p["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap().clone();
+        let u1 = part("U1");
+        assert_eq!((field(&u1, "Value")["text"].as_str(), field(&u1, "Value")["shown"].as_str()), (Some("${REV}-10k"), Some("B-10k")));
+        assert_eq!(field(&u1, "MPN")["shown"], "ERJ B F.Fab", "a field's LAYER is its own layer");
+        assert!(field(&u1, "Reference").get("shown").is_none());
+        let u2 = part("U2");
+        assert_eq!(field(&u2, "Twin")["shown"], "B-10k");
+        assert!(field(&u2, "Plain").get("shown").is_none());
+        assert_eq!(state["title_block"]["title"], "Board ${REV}", "the Page Settings dialog edits the stored title");
+        assert_eq!(state["title_block"]["shown"], serde_json::json!({ "title": "Board B", "date": "", "rev": "C", "company": "", "comments": [] }));
+        assert_eq!(state["board_rules"]["text_variables"], serde_json::json!({ "Designer name": "Ada", "REV": "B" }));
+
+        // The derived board keeps the stored texts: kicad-cli expands them from the project file.
+        let (_, design, model) = load(&dir).unwrap();
+        let pcb = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).expect("the board file");
+        assert!(pcb.contains("Rev ${REV} by ${Designer name} on ${LAYER}"), "the board file holds the text as stored");
+        assert!(pcb.contains("ERJ ${REV} ${LAYER}"));
+    }
+
+    /// The same on the schematic: a symbol's fields (and a field of its own), a free text and the title block, each seen from the sheet in view.
+    #[test]
+    fn the_schematic_shows_what_a_text_variable_stands_for_in_fields_texts_and_the_title_block() {
+        let dir = scratch("text_variables_sch");
+        setup_schematic(&dir);
+        // The fixture stands for a sheet read from a KiCad file, whose symbols the state lists no fields of; this test is about a sheet the studio drew.
+        let (_, mut design, _) = load(&dir).unwrap();
+        design.schematic.as_mut().unwrap().imported_from_kicad = false;
+        save(&dir, &design).unwrap();
+        step(&dir, Cmd::SetTextVariables { variables: variables_of(&[("REV", "B")]) }, false, "ui").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some("10k ${REV}".into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
+        step(&dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some("${R1:Value} twin, ${Footprint} ${FOOTPRINT_NAME}".into()), footprint: None, datasheet: None }, false, "ui").unwrap();
+        step(&dir, Cmd::AddSchText { content: "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV}".into(), at: Point { x: 15_000, y: 5_000 }, angle_millideg: 0, size_um: 1_270 }, false, "ui").unwrap();
+        step(&dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block: eda_model::ir::TitleBlock { title: "Main ${REV}".into(), ..Default::default() } }, false, "ui").unwrap();
+
+        let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let sym = |r: &str| sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == r).unwrap().clone();
+        let field = |s: &serde_json::Value, name: &str| s["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap_or_else(|| panic!("{name} in {}", s["fields"])).clone();
+        assert_eq!((field(&sym("R1"), "Value")["text"].as_str(), field(&sym("R1"), "Value")["shown"].as_str()), (Some("10k ${REV}"), Some("10k B")));
+        assert_eq!(field(&sym("R2"), "Value")["shown"], "10k B twin,  ", "a cross reference to another symbol's field, and R2's own empty Footprint field and FOOTPRINT_NAME");
+        assert!(field(&sym("R1"), "Reference").get("shown").is_none(), "a Reference is written by the painter with its unit letter");
+        let text = &sch["texts"][0];
+        assert_eq!(text["shown"], "Sheet 1/1 / Main B B");
+        assert_eq!(sch["title_block"]["shown"]["title"], "Main B");
+        assert_eq!(sch["title_block"]["title"], "Main ${REV}");
+
+        // A sheet read from a KiCad file lists no fields; the Value and Footprint its symbols are drawn with carry their shown form instead.
+        let (_, mut design, _) = load(&dir).unwrap();
+        design.schematic.as_mut().unwrap().imported_from_kicad = true;
+        save(&dir, &design).unwrap();
+        let sch = crate::studio::schematic_json(&dir, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let r1 = sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap().clone();
+        assert_eq!(r1["value"], "10k ${REV}");
+        assert_eq!(r1["shown"], serde_json::json!({ "value": "10k B" }), "the footprint has no variable in it, so it has no shown form");
+    }
+
+    /// The texts of the proof below, as stored on the board with variables in them and as the studio shows them.
+    #[derive(Clone)]
+    struct VariableTexts {
+        board_text: String,
+        value: String,
+        mpn: String,
+        twin: String,
+        title: String,
+        company: String,
+    }
+
+    impl VariableTexts {
+        fn with_variables() -> VariableTexts {
+            VariableTexts {
+                board_text: "Rev ${REV} of ${PROJECTNAME} on ${LAYER} ${U1:Value}".into(),
+                value: "${REV}-10k".into(),
+                mpn: "ERJ-${REV} ${NET_NAME(1)} ${FOOTPRINT_NAME} ${FOOTPRINT_LIBRARY} ${LAYER} \\${REV}".into(),
+                twin: "${U1:Value} ${U1:MPN} ${REFERENCE} ${U1:NET_CLASS(2)}".into(),
+                title: "Board ${REV}".into(),
+                company: "${PROJECTNAME} Inc".into(),
+            }
+        }
+    }
+
+    /// The board of the proof below: the two footprints of `setup`, a board text, fields on both footprints and the title block, with `texts` as their text.
+    /// `variables` is the project's variable list, none on the board that has what they stand for written out.
+    fn board_with_text_variables(dir: &Path, texts: &VariableTexts, variables: &[(&str, &str)]) {
+        use eda_model::fp_edit::{FieldLayout, UserField};
+        setup(dir);
+        if !variables.is_empty() {
+            step(dir, Cmd::SetTextVariables { variables: variables_of(variables) }, false, "ui").unwrap();
+        }
+        let add = Cmd::AddText { text: Text { id: String::new(), content: texts.board_text.clone(), at: Point { x: 3_000, y: 12_000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1_000, stroke_width: 150, justify: Default::default(), mirror: false } };
+        step(dir, add, false, "ui").unwrap();
+        let mut value = FieldLayout::new(Point { x: 0, y: 2_500 }, "F.SilkS");
+        value.text = Some(texts.value.clone());
+        let user = |name: &str, text: &str, y: Um| UserField { name: name.into(), text: text.into(), layout: FieldLayout::new(Point { x: 0, y }, "F.SilkS") };
+        step(dir, Cmd::EditBoardFootprint { part: "U1".into(), reference: None, value: Some(value), fields: Some(vec![user("MPN", &texts.mpn, -2_500)]), attrs: None }, false, "ui").unwrap();
+        step(dir, Cmd::EditBoardFootprint { part: "U2".into(), reference: None, value: None, fields: Some(vec![user("Twin", &texts.twin, -2_500)]), attrs: None }, false, "ui").unwrap();
+        let title_block = eda_model::ir::TitleBlock { title: texts.title.clone(), rev: "C".into(), company: texts.company.clone(), ..Default::default() };
+        step(dir, Cmd::SetBoardPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block }, false, "ui").unwrap();
+    }
+
+    /// kicad-cli's plot of a board with `${NAME}` in a board text, in footprint fields and in the title block is the plot of a board that has what the studio
+    /// shows for them written out and no variable at all: the project file carries the variables (`text_variables`), the board file the stored text, and
+    /// `shown` in the state is what kicad-cli draws -- LAYER, NET_NAME(n), FOOTPRINT_NAME, `U1:Value`, PROJECTNAME and a project variable alike (slow tier).
+    #[test]
+    fn kicad_clis_plot_expands_text_variables_as_the_studio_shows_them() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let (with, without) = (scratch("text_vars_plot_a"), scratch("text_vars_plot_b"));
+        let stored = VariableTexts::with_variables();
+        board_with_text_variables(&with, &stored, &[("REV", "B7")]);
+
+        // What the studio shows for each of them.
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let state = crate::studio::state(&with, &job, crate::text_vars_json::clock_of("/api/state")).unwrap();
+        let field = |part: &str, name: &str| -> String {
+            let p = state["parts"].as_array().unwrap().iter().find(|p| p["ref"] == part).unwrap();
+            let f = p["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap();
+            f["shown"].as_str().unwrap_or_else(|| f["text"].as_str().unwrap()).to_string()
+        };
+        let text = &state["drawings"]["texts"][0];
+        let shown = VariableTexts {
+            board_text: text["shown"].as_str().unwrap().to_string(),
+            value: field("U1", "Value"),
+            mpn: field("U1", "MPN"),
+            twin: field("U2", "Twin"),
+            title: state["title_block"]["shown"]["title"].as_str().unwrap().to_string(),
+            company: state["title_block"]["shown"]["company"].as_str().unwrap().to_string(),
+        };
+        assert_eq!(shown.board_text, "Rev B7 of intent on F.Silkscreen B7-10k");
+        assert_eq!(shown.mpn, "ERJ-B7 GND 2PAD eda F.Silkscreen ${REV}", "the studio's own reading of the variables it knows");
+        // A literal `${REV}` that comes back from another field's shown text is a variable again to the text that asked for it (KiCad's ResolveTextVars passes).
+        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD eda F.Silkscreen B7 U2 Default");
+        board_with_text_variables(&without, &shown, &[]);
+
+        let plot = |dir: &Path| -> String {
+            let args: Vec<String> = ["--layers", "F.SilkS,F.Fab,Edge.Cuts"].iter().map(|s| s.to_string()).collect();
+            let done = crate::kicad_engine::export(dir, "svg", &args).expect("kicad-cli plotted the board");
+            let file = done["files"][0].as_str().expect("one svg").to_string();
+            std::fs::read_to_string(dir.join(file)).unwrap()
+        };
+        let (a, b) = (plot(&with), plot(&without));
+        // The same plot but for what names the file: the title and the generation comment.
+        let body = |svg: &str| svg.lines().filter(|l| !l.contains("<title>") && !l.contains("<!--") && !l.contains("<desc>") && !l.contains("Created by") && !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        assert!(a.len() > 2_000, "a real plot, not an empty one: {} bytes", a.len());
+        assert_eq!(body(&a), body(&b), "the plot of the board with variables is the plot of the board with what the studio shows written out");
+
+        // The variable is read: another value is another plot, and the stored text is still what the board file holds.
+        step(&with, Cmd::SetTextVariables { variables: variables_of(&[("REV", "ZZ")]) }, false, "ui").unwrap();
+        assert_ne!(body(&plot(&with)), body(&b), "a different value is a different plot");
+    }
+
+    /// The schematic of the proof below: two symbols, a free text and the title block, with `texts` as their text (`value1`, `value2`, `text`, `title`).
+    fn schematic_with_text_variables(dir: &Path, texts: &[&str; 4], variables: &[(&str, &str)]) {
+        setup_schematic(dir);
+        if !variables.is_empty() {
+            step(dir, Cmd::SetTextVariables { variables: variables_of(variables) }, false, "ui").unwrap();
+        }
+        step(dir, Cmd::EditSymbolFields { id: "R1".into(), value: Some(texts[0].into()), footprint: Some("Resistor_SMD:R_0603".into()), datasheet: None }, false, "ui").unwrap();
+        step(dir, Cmd::EditSymbolFields { id: "R2".into(), value: Some(texts[1].into()), footprint: None, datasheet: None }, false, "ui").unwrap();
+        step(dir, Cmd::AddSchText { content: texts[2].into(), at: Point { x: 15_000, y: 30_000 }, angle_millideg: 0, size_um: 1_270 }, false, "ui").unwrap();
+        let title_block = eda_model::ir::TitleBlock { title: texts[3].into(), ..Default::default() };
+        step(dir, Cmd::SetSchematicPage { page: eda_model::page::PageSettings { paper: "A4".into(), portrait: false, user_size_um: None }, title_block }, false, "ui").unwrap();
+    }
+
+    /// The same proof on the schematic: kicad-cli's plot of a sheet whose symbols' values, free text and title block name variables is the plot of the sheet
+    /// that has what the studio shows for them written out (slow tier).
+    #[test]
+    fn kicad_clis_schematic_plot_expands_text_variables_as_the_studio_shows_them() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let (with, without) = (scratch("text_vars_sch_plot_a"), scratch("text_vars_sch_plot_b"));
+        let stored = [
+            "10k ${REV}",
+            "${R1:Value} ${R1:Footprint} ${FOOTPRINT_NAME} ${SYMBOL_NAME} ${REFERENCE}",
+            "Sheet ${#}/${##} ${SHEETPATH} ${TITLE} ${REV} ${PROJECTNAME} ${FILENAME} \\${REV}",
+            "Main ${REV} ${SHEETNAME}",
+        ];
+        schematic_with_text_variables(&with, &stored, &[("REV", "B7")]);
+        let sch = crate::studio::schematic_json(&with, "", crate::text_vars_json::clock_of("/api/schematic")).unwrap();
+        let sym = |r: &str| sch["symbols"].as_array().unwrap().iter().find(|s| s["id"] == r).unwrap().clone();
+        let shown_value = |r: &str, raw: &str| sym(r)["shown"]["value"].as_str().unwrap_or(raw).to_string();
+        let (v1, v2) = (shown_value("R1", stored[0]), shown_value("R2", stored[1]));
+        let text = sch["texts"][0]["shown"].as_str().unwrap().to_string();
+        let title = sch["title_block"]["shown"]["title"].as_str().unwrap().to_string();
+        assert_eq!(v1, "10k B7");
+        assert_eq!(text, "Sheet 1/1 / Main B7  B7 intent intent.kicad_sch ${REV}", "the studio's own reading: the root sheet has no name, so its name is empty");
+        schematic_with_text_variables(&without, &[v1.as_str(), v2.as_str(), text.as_str(), title.as_str()], &[]);
+
+        let plot = |dir: &Path| -> String {
+            let done = crate::kicad_engine::export_sch(dir, "svg", &[]).expect("kicad-cli plotted the schematic");
+            let file = done["files"][0].as_str().expect("one svg").to_string();
+            std::fs::read_to_string(dir.join(file)).unwrap()
+        };
+        let (a, b) = (plot(&with), plot(&without));
+        let body = |svg: &str| svg.lines().filter(|l| !l.contains("<title>") && !l.contains("<!--") && !l.contains("<desc>") && !l.contains("Created by") && !l.trim().is_empty()).collect::<Vec<_>>().join("\n");
+        assert!(a.len() > 2_000, "a real plot: {} bytes", a.len());
+        assert_eq!(body(&a), body(&b), "the plot of the sheet with variables is the plot of the sheet with what the studio shows written out");
     }
 
     fn track_ids(dir: &Path) -> Vec<(String, String, Vec<Point>)> {

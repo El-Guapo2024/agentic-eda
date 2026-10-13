@@ -19,7 +19,9 @@ mod groups;
 pub mod ir;
 pub mod kicad_font;
 pub mod kicad_geom;
+pub mod layers;
 pub mod modules;
+pub mod net_pattern;
 pub mod outline;
 pub mod pad_geom;
 pub mod page;
@@ -27,9 +29,11 @@ pub mod reannotate;
 pub mod rules;
 pub mod sch_clipboard;
 pub mod sch_extras;
+pub mod setup_pages;
 pub mod sheet_file;
 pub mod sheet_list;
 pub mod symbol;
+pub mod text_vars;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};
 pub use symbol::{is_synthetic_lib_id, resolve_lib_id, LibPin, LibSymbol, SymbolGraphic};
@@ -334,6 +338,22 @@ pub struct BoardRules {
     /// `via_diameter` and `via_drill` above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_class: Option<NetClass>,
+    /// Board Editor Layers: the non-copper layers the board has, the names the user gave its layers and their types (`layers`, above, is the copper stack).
+    /// KiCad's own start (every standard technical layer, nothing renamed) when nobody opened the page.
+    #[serde(default, skip_serializing_if = "layers::LayerSetup::is_default")]
+    pub layer_setup: layers::LayerSetup,
+    /// Text & Graphics > Formatting: the dash and gap ratios of dashed lines and the "apply board defaults to footprint .." boxes.
+    #[serde(default, skip_serializing_if = "setup_pages::FormattingSettings::is_default")]
+    pub formatting: setup_pages::FormattingSettings,
+    /// Board Stackup > Zone Hatch Offsets: per copper layer, how far a hatched zone's pattern is moved. Only the layers that have an offset.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hatch_offsets: setup_pages::HatchOffsets,
+    /// Design Rules > Length-tuning Patterns: what a tuning pattern of each kind starts from.
+    #[serde(default, skip_serializing_if = "setup_pages::TuningPatterns::is_default")]
+    pub tuning_patterns: setup_pages::TuningPatterns,
+    /// Design Rules > Tuning Profiles: the profiles and the profile each net class names.
+    #[serde(default, skip_serializing_if = "setup_pages::TuningProfiles::is_empty")]
+    pub tuning_profiles: setup_pages::TuningProfiles,
 }
 
 fn is_zero_um(v: &ir::Um) -> bool {
@@ -708,51 +728,87 @@ fn d_min_resolved_spokes() -> u32 { 2 }
 fn d_max_error() -> ir::Um { 5 }
 fn d_board_thickness() -> ir::Um { 1600 }
 impl BoardRules {
-    /// The class owning `net`, if any: first match wins.
+    /// Every class whose pattern matches `net`, the one that takes precedence first. A class's place in the list is its priority (`panel_setup_netclasses.cpp` gives each class its row
+    /// as `SetPriority( row )`, the Default class the lowest), and `NET_SETTINGS::makeEffectiveNetclass` sorts the matching ones by it.
+    pub fn matching_classes(&self, net: &str) -> Vec<&NetClass> {
+        self.net_classes.iter().filter(|c| c.matches(net)).collect()
+    }
+
+    /// The class that owns `net` -- the one that takes precedence of those that match it -- if any. A net several classes match has the settings of all of them
+    /// ([`Self::effective_class`]); this is the class it is listed under.
     pub fn class_of(&self, net: &str) -> Option<&NetClass> {
         self.net_classes.iter().find(|c| c.matches(net))
     }
 
+    /// `NET_SETTINGS::GetEffectiveNetClass`: the classes `net` is in, highest priority first, with the Default class last when some setting of `net` comes from it. A net no
+    /// class matches is in the Default class alone. `name` is `NETCLASS::GetName()` of the class KiCad makes of them: the names joined by a comma (one class: its own name).
+    pub fn effective_class(&self, net: &str) -> EffectiveClass {
+        let matching = self.matching_classes(net);
+        let mut constituents: Vec<String> = matching.iter().map(|c| c.name.clone()).collect();
+        // `addMissingDefaults`: the Default class joins when a setting is left that none of them sets (clearance, track width and the via sizes are always the Default's to give).
+        let sets_all = |get: &dyn Fn(&NetClass) -> bool| matching.iter().any(|c| get(c));
+        let needs_default = matching.is_empty()
+            || !sets_all(&|c| c.clearance.is_some())
+            || !sets_all(&|c| c.track_width.is_some())
+            || !sets_all(&|c| c.via_diameter.is_some())
+            || !sets_all(&|c| c.via_drill.is_some())
+            || !sets_all(&|c| c.microvia_diameter.is_some())
+            || !sets_all(&|c| c.microvia_drill.is_some())
+            || !sets_all(&|c| c.diff_pair_width.is_some())
+            || !sets_all(&|c| c.diff_pair_gap.is_some());
+        if needs_default {
+            constituents.push("Default".to_string());
+        }
+        let name = constituents.join(",");
+        EffectiveClass { name, constituents }
+    }
+
+    /// The value of a class setting for `net`: the first class in precedence order that sets it, else the Default class's.
+    fn class_setting<T>(&self, net: &str, get: impl Fn(&NetClass) -> Option<T>) -> Option<T> {
+        self.net_classes.iter().filter(|c| c.matches(net)).find_map(&get).or_else(|| self.default_class.as_ref().and_then(&get))
+    }
+
     /// Track width `net` must be routed at.
     pub fn width_of(&self, net: &str) -> ir::Um {
-        self.class_of(net).and_then(|c| c.track_width).unwrap_or(self.track_width)
+        self.class_setting(net, |c| c.track_width).unwrap_or(self.track_width)
     }
 
     /// Clearance `net`'s own copper keeps, to itself and to everything
     /// else. Absent from the net's class (or no class) = the board default.
     pub fn clearance_of(&self, net: &str) -> ir::Um {
-        self.class_of(net).and_then(|c| c.clearance).unwrap_or(self.clearance)
+        self.class_setting(net, |c| c.clearance).unwrap_or(self.clearance)
     }
 
     /// Via copper diameter `net`'s vias should use. Absent from the net's
     /// class (or no class) = the board default.
     pub fn via_diameter_of(&self, net: &str) -> ir::Um {
-        self.class_of(net).and_then(|c| c.via_diameter).unwrap_or(self.via_diameter)
+        self.class_setting(net, |c| c.via_diameter).unwrap_or(self.via_diameter)
     }
 
     /// Via drill diameter `net`'s vias should use. Absent from the net's
     /// class (or no class) = the board default.
     pub fn via_drill_of(&self, net: &str) -> ir::Um {
-        self.class_of(net).and_then(|c| c.via_drill).unwrap_or(self.via_drill)
+        self.class_setting(net, |c| c.via_drill).unwrap_or(self.via_drill)
     }
 
     /// Differential-pair trace width for `net`'s class. Unlike every
     /// resolver above, there is no board-wide `diff_pair_width` default
     /// field to fall back to (`NetClass::diff_pair_width` was carried
     /// additively on import with nothing reading it until now -- see that
-    /// field's own doc comment); absent a class value, this falls back to
+    /// field's own doc comment); absent a class value (the Default class's
+    /// included), this falls back to
     /// `SIZES_SETTINGS`'s own hardcoded upstream default
     /// (`pns_sizes_settings.h`'s constructor: `m_diffPairWidth(125000)`,
     /// nanometers in KiCad's own internal unit -- 125um here).
     pub fn diff_pair_width_of(&self, net: &str) -> ir::Um {
-        self.class_of(net).and_then(|c| c.diff_pair_width).unwrap_or(125)
+        self.class_setting(net, |c| c.diff_pair_width).unwrap_or(125)
     }
 
     /// Differential-pair gap for `net`'s class -- see
     /// `diff_pair_width_of`'s own doc comment; upstream's matching default
     /// is `m_diffPairGap(180000)` (180um).
     pub fn diff_pair_gap_of(&self, net: &str) -> ir::Um {
-        self.class_of(net).and_then(|c| c.diff_pair_gap).unwrap_or(180)
+        self.class_setting(net, |c| c.diff_pair_gap).unwrap_or(180)
     }
 
     /// Differential-pair via-to-via gap for `net`'s class -- upstream's
@@ -761,7 +817,7 @@ impl BoardRules {
     /// [`Self::diff_pair_gap_of`] rather than its own separate 180um
     /// literal when the class doesn't set one either.
     pub fn diff_pair_via_gap_of(&self, net: &str) -> ir::Um {
-        self.class_of(net).and_then(|c| c.diff_pair_via_gap).unwrap_or_else(|| self.diff_pair_gap_of(net))
+        self.class_setting(net, |c| c.diff_pair_via_gap).unwrap_or_else(|| self.diff_pair_gap_of(net))
     }
 
     /// Widest track any net on this board can take. The router's clearance
@@ -790,6 +846,8 @@ impl Default for BoardRules {
             min_connection_um: 0, microvia_diameter_min_um: d_microvia_diameter_min(), microvia_drill_min_um: d_microvia_drill_min(), min_groove_width_um: 0,
             min_resolved_spokes: d_min_resolved_spokes(), max_error_um: d_max_error(), use_height_for_length_calcs: true, zones_allow_external_fillets: false,
             constraints_explicit: false, board_thickness_um: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
+            layer_setup: layers::LayerSetup::default(),
+            formatting: setup_pages::FormattingSettings::default(), hatch_offsets: Default::default(), tuning_patterns: setup_pages::TuningPatterns::default(), tuning_profiles: Default::default(),
         }
     }
 }
@@ -1047,13 +1105,27 @@ pub struct NetClass {
     pub priority: i32,
 }
 
+/// `NET_SETTINGS::GetEffectiveNetClass`' answer for a net: the classes whose settings it has, highest priority first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EffectiveClass {
+    /// The class names joined by a comma, as `NETCLASS::GetName()` names a composite class; one name when the net is in one class alone.
+    pub name: String,
+    pub constituents: Vec<String>,
+}
+
+impl EffectiveClass {
+    /// Whether the net is in more than one class (a composite class in KiCad's words).
+    pub fn is_composite(&self) -> bool {
+        self.constituents.len() > 1
+    }
+}
+
 impl NetClass {
-    /// Whether `net` belongs to this class. `*` matches any run of characters,
-    /// which covers the way power nets are actually named (`VBAT_RAW`,
-    /// `VBAT_FUSED`), and `?` any one character; the pattern must match the
-    /// whole name (KiCad's `EDA_PATTERN_MATCH_WILDCARD_ANCHORED`).
+    /// Whether `net` belongs to this class: one of its patterns matches the whole name, read as a wildcard pattern (`*` any run of characters, `?` any one character: the way
+    /// power nets are actually named, `VBAT_RAW`, `VBAT_FUSED`) or as a regular expression (`USB_D[PM]`), as KiCad reads a net class pattern
+    /// (`EDA_COMBINED_MATCHER( pattern, CTX_NETCLASS )`, [`net_pattern::pattern_matches`]).
     pub fn matches(&self, net: &str) -> bool {
-        self.nets.iter().any(|pat| glob_match(pat, net))
+        self.nets.iter().any(|pat| net_pattern::pattern_matches(pat, net))
     }
 }
 
@@ -1285,6 +1357,63 @@ mod tests {
         assert_eq!(rules.clearance_of("CC2"), 150);
         assert_eq!(rules.clearance_of("GND"), 200, "a net outside the class keeps the board default");
         assert!(rules.validate().is_empty(), "{:?}", rules.validate());
+    }
+
+    fn class_with(name: &str, nets: &[&str], clearance: Option<ir::Um>, track: Option<ir::Um>) -> NetClass {
+        NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: track, clearance, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 }
+    }
+
+    /// `NET_SETTINGS::GetEffectiveNetClass`: a net several classes match has the settings of all of them, each from the class that takes precedence of those that set it; the Default
+    /// class gives the rest and joins the name. Patterns are wildcard patterns or regular expressions.
+    #[test]
+    fn a_net_in_several_classes_has_the_settings_of_all_of_them_by_precedence() {
+        let mut rules = BoardRules { clearance: 200, track_width: 250, via_diameter: 600, via_drill: 300, ..BoardRules::default() };
+        rules.net_classes = vec![
+            class_with("power", &["VBUS", "V[0-9]+"], Some(400), None),
+            class_with("fast", &["USB_*", "VBUS"], Some(100), Some(500)),
+            class_with("misc", &["MISO"], Some(300), Some(150)),
+        ];
+        // VBUS is in power (first, so it takes precedence) and fast
+        assert_eq!(rules.matching_classes("VBUS").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["power", "fast"]);
+        assert_eq!(rules.class_of("VBUS").unwrap().name, "power", "the class it is listed under is the one that takes precedence");
+        assert_eq!((rules.clearance_of("VBUS"), rules.width_of("VBUS")), (400, 500), "the clearance of power, which sets it first; the track width of fast, since power sets none");
+        assert_eq!(rules.via_diameter_of("VBUS"), 600, "nobody sets it: the Default class's");
+        // a regex pattern
+        assert_eq!(rules.class_of("V12").unwrap().name, "power");
+        assert_eq!(rules.clearance_of("V12"), 400);
+        // one class alone
+        assert_eq!((rules.clearance_of("MISO"), rules.width_of("MISO")), (300, 150));
+        assert_eq!(rules.matching_classes("MISO").len(), 1);
+        // none: the Default class
+        assert_eq!((rules.clearance_of("GND"), rules.width_of("GND")), (200, 250));
+        assert!(rules.matching_classes("GND").is_empty() && rules.class_of("GND").is_none());
+        // the names KiCad gives them
+        assert_eq!(rules.effective_class("VBUS").name, "power,fast,Default");
+        assert_eq!(rules.effective_class("MISO").name, "misc,Default", "a class that sets only some of the settings is joined by Default, as in KiCad");
+        assert_eq!(rules.effective_class("GND").name, "Default");
+        assert!(rules.effective_class("VBUS").is_composite() && !rules.effective_class("GND").is_composite());
+        // a class that sets everything stands alone
+        let mut full = class_with("full", &["FULL"], Some(1), Some(2));
+        full.via_diameter = Some(3);
+        full.via_drill = Some(1);
+        full.microvia_diameter = Some(2);
+        full.microvia_drill = Some(1);
+        full.diff_pair_width = Some(2);
+        full.diff_pair_gap = Some(2);
+        rules.net_classes.push(full);
+        assert_eq!(rules.effective_class("FULL").name, "full");
+        assert!(!rules.effective_class("FULL").is_composite());
+    }
+
+    /// The Default class's own differential-pair sizes are the fallback of a net no class sets them for (`addMissingDefaults`), ahead of the router's own.
+    #[test]
+    fn the_default_class_gives_a_net_the_settings_no_class_of_its_own_gives() {
+        let mut rules = BoardRules::default();
+        rules.default_class = Some(NetClass { diff_pair_width: Some(200), diff_pair_gap: Some(220), ..class_with("Default", &[], None, None) });
+        assert_eq!((rules.diff_pair_width_of("ANY"), rules.diff_pair_gap_of("ANY"), rules.diff_pair_via_gap_of("ANY")), (200, 220, 220));
+        rules.net_classes.push(NetClass { diff_pair_gap: Some(150), ..class_with("tight", &["T*"], None, None) });
+        assert_eq!((rules.diff_pair_width_of("T1"), rules.diff_pair_gap_of("T1")), (200, 150), "the gap from the class, the width from Default");
+        assert_eq!(BoardRules::default().diff_pair_width_of("X"), 125, "with no Default class either: upstream's sizes");
     }
 
     #[test]

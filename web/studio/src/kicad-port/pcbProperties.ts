@@ -15,6 +15,7 @@
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
+import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
 import { toCmdDimension } from "./dimensionConvert";
 import { editAttrsCmd, editFieldCmd, editPadCmd, fieldById, localAngleOf } from "./fpFields";
 import { arcShapeCenter, padById } from "./pcbItems";
@@ -73,7 +74,7 @@ export interface PcbCtx {
   allLayers: readonly string[];
 }
 
-/** `LSET::TechAndUserUIOrder`, the layers a board item can be drawn on besides copper. */
+/** `LSET::TechAndUserUIOrder`, the layers a board item can be drawn on besides copper (the 18 technical layers KiCad starts a board with; a board's own set is `enabledOptionalLayers`). */
 export const TECH_LAYERS: readonly string[] = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
 
 export function pcbContext(board: BoardState, units: LengthUnit): PcbCtx {
@@ -84,7 +85,7 @@ export function pcbContext(board: BoardState, units: LengthUnit): PcbCtx {
   for (const v of rt?.vias ?? []) if (v.net) nets.add(v.net);
   for (const z of rt?.zones ?? []) if (z.net) nets.add(z.net);
   const copper = board.layers;
-  const all = [...copper, ...TECH_LAYERS];
+  const all = [...copper, ...enabledOptionalLayers(board.board_rules?.layer_setup)];
   const used = [...(board.drawings?.shapes ?? []).map((s) => s.layer), ...(board.drawings?.texts ?? []).map((t) => t.layer), ...(board.drawings?.dimensions ?? []).map((d) => d.layer)];
   for (const l of used) if (!all.includes(l)) all.push(l);
   return {
@@ -207,6 +208,8 @@ export function pcbFriendlyName(item: PcbItem): string {
 type PD = PropertyDef<PcbItem, PcbCtx, Cmd>;
 
 const choicesOf = (names: readonly string[]): Choice[] => names.map((n) => ({ label: n, value: n }));
+/** Layer choices: the value is the name in the board file, the label what the board calls the layer (Board Editor Layers). */
+const layerChoicesOf = (c: PcbCtx, names: readonly string[]): Choice[] => names.map((n) => ({ label: layerDisplayName(c.board.board_rules?.layer_setup, n), value: n }));
 const norm360 = (a: number): number => ((a % 360) + 360) % 360;
 const xy = (p: readonly [number, number]): PointXY => ({ x: p[0], y: p[1] });
 const num = (v: PropValue): number => (typeof v === "number" ? v : Number(v));
@@ -425,7 +428,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     owner: "BOARD_ITEM",
     name: "Layer",
     kind: "enum",
-    choices: (_i, c) => choicesOf(c.allLayers),
+    choices: (_i, c) => layerChoicesOf(c, c.allLayers),
     get: (i) => i.text?.layer ?? i.dim?.layer ?? i.field?.layer ?? "",
     set: (i, v) => {
       const layer = String(v);
@@ -451,7 +454,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     owner: "BOARD_CONNECTED_ITEM",
     name: "Layer",
     kind: "enum",
-    choices: (_i, c) => choicesOf(c.copperLayers),
+    choices: (_i, c) => layerChoicesOf(c, c.copperLayers),
     get: (i) => i.track?.layer ?? i.zone?.layer ?? "",
     set: (i, v) => {
       const layer = String(v);
@@ -1208,7 +1211,7 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     owner: "PCB_SHAPE",
     name: "Layer",
     kind: "enum",
-    choices: (_i, c) => choicesOf(c.allLayers),
+    choices: (_i, c) => layerChoicesOf(c, c.allLayers),
     get: (i) => i.shape!.layer,
     set: (i, v) => (i.shape!.layer === String(v) ? [] : [{ op: "edit_shape", id: i.id, layer: String(v), stroke_width: i.shape!.stroke_width, filled: i.shape!.filled }]),
   });

@@ -10,19 +10,23 @@
 import { useEffect, useRef, useState } from "react";
 import { postFabGerbers } from "../api/client";
 import { useStudioDispatch, useStudioState } from "../state/store";
+import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
 
 /** The default checklist: every copper layer (board.layers), both mask/
  * paste/silk layers and the board outline -- the layers a JLCPCB order
- * actually needs (crates/cli/src/fab_api.rs `default_gerber_layers`). */
-function defaultLayers(copperLayers: string[]): string[] {
-  return [...copperLayers, "F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "Edge.Cuts"];
+ * actually needs (crates/cli/src/fab_api.rs `default_gerber_layers`) -- of
+ * those the board has (Board Setup > Board Editor Layers). */
+function defaultLayers(copperLayers: string[], optional: readonly string[]): string[] {
+  return [...copperLayers, ...["F.Mask", "B.Mask", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "Edge.Cuts"].filter((l) => optional.includes(l))];
 }
 
 export function PlotDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const copperLayers = state.board?.layers ?? ["F.Cu", "B.Cu"];
-  const [checked, setChecked] = useState<Set<string>>(() => new Set(defaultLayers(copperLayers)));
+  const layerSetup = state.board?.board_rules?.layer_setup;
+  const optional = enabledOptionalLayers(layerSetup);
+  const [checked, setChecked] = useState<Set<string>>(() => new Set(defaultLayers(copperLayers, optional)));
   // Board Setup > Physical Stackup changes the number of copper layers while this dialog's state lives on: a copper layer the board gained
   // starts checked (the default is every layer the board has) and one it lost is dropped, whatever else was ticked or cleared stays.
   const knownCopper = useRef(copperLayers);
@@ -38,6 +42,21 @@ export function PlotDialog() {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [copperKey]);
+  // The same for the optional layers: one the board turned off is dropped, one it turned on that a plot starts with is checked.
+  const knownOptional = useRef(optional);
+  const optionalKey = optional.join(",");
+  useEffect(() => {
+    const before = knownOptional.current;
+    knownOptional.current = optional;
+    const starts = defaultLayers([], optional);
+    setChecked((prev) => {
+      const next = new Set(prev);
+      for (const l of starts) if (!before.includes(l)) next.add(l);
+      for (const l of before) if (!optional.includes(l)) next.delete(l);
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optionalKey]);
   const [useAuxOrigin, setUseAuxOrigin] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
@@ -64,7 +83,7 @@ export function PlotDialog() {
     }
   };
 
-  const allLayers = [...defaultLayers(copperLayers)];
+  const allLayers = [...copperLayers, ...optional];
 
   return (
     <div className="dialog-backdrop" onClick={close}>
@@ -76,7 +95,7 @@ export function PlotDialog() {
             {allLayers.map((layer) => (
               <label key={layer} className="toggle">
                 <input type="checkbox" checked={checked.has(layer)} onChange={() => toggle(layer)} />
-                {layer}
+                {layerDisplayName(layerSetup, layer)}
               </label>
             ))}
           </div>

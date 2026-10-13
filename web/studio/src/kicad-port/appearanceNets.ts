@@ -10,12 +10,15 @@
 // several classes claim (`ContainsNetclassWithName` is true for each of them); one owner per net is what the studio's net class model has.
 
 import { boardNetNames, classOfNet } from "./boardSetupRules";
+import { enabledOptionalLayers } from "./boardLayers";
 import type { BoardState, NetClass } from "../api/types";
 
 /** The board facts the two tabs and the painter need, derived once per board. */
 export interface NetsContext {
   /** The copper layers, front to back. */
   copper: string[];
+  /** The optional layers the board has (Board Editor Layers: the technical layers and `User.N`, in KiCad's order); absent = the eighteen technical layers a board starts with. */
+  optional?: readonly string[];
   /** Every net the lists show, sorted as `NET_GRID_TABLE::Rebuild` sorts (by name, character code). */
   nets: string[];
   /** The Default class's name and the other classes, in the order Board Setup keeps them (their order is their precedence). */
@@ -61,7 +64,7 @@ function buildNetsContext(board: BoardState): NetsContext {
     }
     return hit;
   };
-  return { copper: board.layers, nets: listedNets(boardNetNames(board)), defaultName, classes, classOf };
+  return { copper: board.layers, optional: enabledOptionalLayers(rules?.layer_setup), nets: listedNets(boardNetNames(board)), defaultName, classes, classOf };
 }
 
 // ----------------------------------------------------------------------------------------------------------------------------------- nets list

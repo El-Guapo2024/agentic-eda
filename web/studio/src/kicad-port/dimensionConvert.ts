@@ -7,7 +7,8 @@
 // usable from both useActionRunner.ts (the "switch dimension arrows"
 // action) and DimensionPropertiesDialog.tsx without either importing the
 // other.
-import type { CmdDimension, CmdDimensionKind, Dimension, DimensionSettings } from "../api/types";
+import type { CmdDimension, CmdDimensionKind, Dimension, DimensionSettings, TextGraphicsDefaults } from "../api/types";
+import { lineThicknessUm, textStyleOf } from "./layerDefaults";
 
 export function cmdDimensionKindOf(dim: Pick<Dimension, "kind" | "height" | "horizontal" | "leader_length">): CmdDimensionKind {
   switch (dim.kind) {
@@ -32,7 +33,7 @@ export function cmdDimensionKindOf(dim: Pick<Dimension, "kind" | "height" | "hor
  * PARITY-pcb.md section 18 on why that's not ported). Orthogonal's
  * `horizontal` defaults to whichever axis the two clicks actually spanned
  * more of -- a reasonable guess from the gesture itself, not a fixed default. */
-export function defaultDimensionPayload(kind: CmdDimensionKind["kind"], start: [number, number], end: [number, number], layer: string, settings: DimensionSettings): CmdDimension {
+export function defaultDimensionPayload(kind: CmdDimensionKind["kind"], start: [number, number], end: [number, number], layer: string, settings: DimensionSettings, defaults?: TextGraphicsDefaults): CmdDimension {
   const DEFAULT_HEIGHT_UM = 5000;
   const DEFAULT_LEADER_LENGTH_UM = 3000;
   const kindObj: CmdDimensionKind =
@@ -61,8 +62,10 @@ export function defaultDimensionPayload(kind: CmdDimensionKind["kind"], start: [
     text_position: settings.text_position,
     keep_text_aligned: settings.keep_text_aligned,
     text_angle: 0,
-    text_size_um: settings.text_size_um,
-    stroke_width: settings.stroke_width,
+    // `PCB_DIMENSION_BASE::StyleFromSettings`: the text size and the line thickness are the layer class's (Text & Graphics > Defaults), not the Dimensions page's;
+    // `settings.text_size_um` and `stroke_width` stand in for a backend that sends no table.
+    text_size_um: defaults ? textStyleOf(defaults, layer).heightUm : settings.text_size_um,
+    stroke_width: defaults ? lineThicknessUm(defaults, layer) : settings.stroke_width,
     arrow_length: settings.arrow_length,
     extension_offset: settings.extension_offset,
     extension_height: settings.extension_height,

@@ -21,8 +21,8 @@ export function PresetBar() {
   const [viewport, setViewport] = useState("");
   const copper = nets.copper;
   const a = state.appearance;
-  const list = presetList(copper, a.presets);
-  const everyone = allPresets(copper, a.presets);
+  const list = presetList(copper, a.presets, nets.optional);
+  const everyone = allPresets(copper, a.presets, nets.optional);
   const mine = a.presets.map((p) => p.name);
 
   const canvasSize = () => {

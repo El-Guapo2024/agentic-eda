@@ -74,8 +74,8 @@ export function objectsOf(s: ViewSlice): ObjectId[] {
   return OBJECT_IDS.filter((id) => (id === "ratsnest" ? s.showRatsnest : id === "grid" ? s.gridVisible : s.appearance.visible[id]));
 }
 
-function viewOf(s: ViewSlice, ctx: Pick<NetsContext, "copper">): PresetView {
-  const universe = panelLayers(ctx.copper);
+function viewOf(s: ViewSlice, ctx: Pick<NetsContext, "copper" | "optional">): PresetView {
+  const universe = panelLayers(ctx.copper, ctx.optional);
   return {
     universe,
     visibleLayers: new Set(universe.filter((l) => s.layerVisible[layerStateKey(l)] !== false)),
@@ -106,9 +106,9 @@ function fromView(s: ViewSlice, v: PresetView): ViewSlice {
 }
 
 /** `syncLayerPresetSelection`: the list shows the preset that matches what is on screen, or the blank entry. */
-function syncPreset(s: ViewSlice, ctx: Pick<NetsContext, "copper">): ViewSlice {
+function syncPreset(s: ViewSlice, ctx: Pick<NetsContext, "copper" | "optional">): ViewSlice {
   const v = viewOf(s, ctx);
-  const hit = matchingPreset(allPresets(ctx.copper, s.appearance.presets), v);
+  const hit = matchingPreset(allPresets(ctx.copper, s.appearance.presets, ctx.optional), v);
   const name = hit ? hit.name : "";
   return name === s.appearance.activePreset ? s : { ...s, appearance: { ...s.appearance, activePreset: name } };
 }
@@ -172,11 +172,11 @@ export function reduceView(s: ViewSlice, op: AppearanceOp, ctx: NetsContext): Vi
       return syncPreset(fromView(s, layerGroupOp(viewOf(s, ctx), op.group)), ctx);
     case "menu_preset":
       // The temporary preset has no name, so the list goes blank -- unless what it left on screen happens to match one (`syncLayerPresetSelection`).
-      return syncPreset(fromView(s, menuPreset(viewOf(s, ctx), op.kind, ctx.copper)), ctx);
+      return syncPreset(fromView(s, menuPreset(viewOf(s, ctx), op.kind, ctx.copper, ctx.optional)), ctx);
     case "hide_all_but_active":
       return syncPreset(fromView(s, hideAllButActive(viewOf(s, ctx))), ctx);
     case "select_preset": {
-      const all = allPresets(ctx.copper, s.appearance.presets);
+      const all = allPresets(ctx.copper, s.appearance.presets, ctx.optional);
       const preset = all.find((p) => p.name === op.name);
       if (!preset) return s;
       return fromView(s, selectPreset(viewOf(s, ctx), preset, all));
@@ -184,7 +184,7 @@ export function reduceView(s: ViewSlice, op: AppearanceOp, ctx: NetsContext): Vi
     case "save_preset": {
       // "Save preset...": a new preset (or one of the user's replaced -- the caller asks first) made of what is on screen, which becomes the current one.
       const name = op.name.trim();
-      if (name === "" || allPresets(ctx.copper, []).some((p) => p.name === name)) return s;
+      if (name === "" || allPresets(ctx.copper, [], ctx.optional).some((p) => p.name === name)) return s;
       const preset = snapshotPreset(name, viewOf(s, ctx));
       return setAppearance(s, { presets: withPreset(s.appearance.presets, preset), activePreset: name });
     }

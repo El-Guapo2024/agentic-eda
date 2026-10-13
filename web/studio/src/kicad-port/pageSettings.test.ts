@@ -14,6 +14,7 @@ import {
   paperSizeUm,
   paperToCmd,
   samePaper,
+  shownTitleBlock,
   titleBlockFields,
   titleBlockToSend,
   userSizeError,
@@ -91,4 +92,13 @@ test("the paper is sent as the verb takes it", () => {
 test("the date button writes the ISO form", () => {
   assert.equal(isoDate(new Date(2026, 9, 7)), "2026-10-07");
   assert.equal(isoDate(new Date(2026, 0, 3)), "2026-01-03");
+});
+
+test("the drawing sheet shows the title block with the project's variables expanded and the dialog keeps the stored values", () => {
+  const stored = { title: "Board ${REV}", date: "", rev: "C", company: "", comments: [] };
+  assert.equal(shownTitleBlock(stored), stored, "nothing to expand: the block itself");
+  assert.equal(shownTitleBlock(null), null);
+  const withShown = { ...stored, shown: { title: "Board B", date: "", rev: "C", company: "", comments: [] } };
+  assert.deepEqual(shownTitleBlock(withShown), { title: "Board B", date: "", rev: "C", company: "", comments: [], shown: undefined });
+  assert.equal(withShown.title, "Board ${REV}", "the stored block is not changed");
 });

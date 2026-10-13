@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
+use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, Part};
 
 use crate::fp_fields::{pad_text, write_attr, write_fields, FpExtra};
@@ -70,7 +71,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
 
     // ---- layers ----
-    write_layers(&mut out, &model.board.layers);
+    write_layers(&mut out, &model.board.layers, &model.board.layer_setup);
 
     // ---- setup ----
     let clearance_mm = mm(model.board.clearance);
@@ -94,6 +95,18 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
     writeln!(out, "\t\t(allow_soldermask_bridges_in_footprints {})", if sm.allow_bridges_in_footprints { "yes" } else { "no" }).unwrap();
     writeln!(out, "\t\t(tenting (front {}) (back {}))", if sm.tent_vias_front { "yes" } else { "no" }, if sm.tent_vias_back { "yes" } else { "no" }).unwrap();
+    // Zone Hatch Offsets (`formatSetup`'s `(zone_defaults (property (layer ..) (hatch_position (xy x y))))`), in `PCB_LAYER_ID` order, for the copper layers the board has.
+    {
+        let mut offsets: Vec<(&String, &eda_model::setup_pages::HatchOffset)> = model.board.hatch_offsets.iter().filter(|(l, o)| !o.is_zero() && model.board.layers.contains(l)).collect();
+        offsets.sort_by_key(|(l, _)| eda_model::layers::pcb_layer_id(l));
+        if !offsets.is_empty() {
+            write!(out, "\t\t(zone_defaults").unwrap();
+            for (layer, o) in offsets {
+                write!(out, " (property (layer {}) (hatch_position (xy {} {})))", sexpr_str(layer), mm(o.x_um), mm(o.y_um)).unwrap();
+            }
+            writeln!(out, ")").unwrap();
+        }
+    }
     // The drill/place file origin (`pcbnew.EditorControl.drillOrigin`): what kicad-cli measures drill, position and
     // (when asked) Gerber coordinates from.
     let aux = design.drawings.as_ref().and_then(|d| d.aux_origin).unwrap_or(eda_model::ir::Point { x: 0, y: 0 });
@@ -109,8 +122,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     writeln!(out, "\t\t\t(usegerberattributes yes)").unwrap();
     writeln!(out, "\t\t\t(usegerberadvancedattributes yes)").unwrap();
     writeln!(out, "\t\t\t(creategerberjobfile yes)").unwrap();
-    writeln!(out, "\t\t\t(dashed_line_dash_ratio 12.000000)").unwrap();
-    writeln!(out, "\t\t\t(dashed_line_gap_ratio 3.000000)").unwrap();
+    // Text & Graphics > Formatting: the dash and the gap of a dashed line, in line widths.
+    writeln!(out, "\t\t\t(dashed_line_dash_ratio {:.6})", model.board.formatting.dash_length_ratio).unwrap();
+    writeln!(out, "\t\t\t(dashed_line_gap_ratio {:.6})", model.board.formatting.gap_length_ratio).unwrap();
     writeln!(out, "\t\t\t(svgprecision 4)").unwrap();
     writeln!(out, "\t\t\t(plotframeref no)").unwrap();
     writeln!(out, "\t\t\t(mode 1)").unwrap();
@@ -155,6 +169,12 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // thinks its nets need: the file we write still tells `kicad-cli pcb
     // drc` that every net wants the board's width/clearance, and it
     // fails every track the escape class routed narrower than that.
+    // A board whose net classes name tuning profiles has none of these blocks: KiCad moves a board's legacy classes into the project, replacing the project's own and with
+    // them the profile each names, so the classes are the project's then (`project_net_settings`).
+    'legacy_net_classes: {
+        if net_classes_in_project(model) {
+            break 'legacy_net_classes;
+        }
     let default_nets: Vec<&str> = net_names.iter().copied().filter(|n| model.board.class_of(n).is_none()).collect();
     writeln!(out, "\t(net_class \"Default\" \"This is the default net class.\"").unwrap();
     writeln!(out, "\t\t(clearance {clearance_mm})").unwrap();
@@ -190,6 +210,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             writeln!(out, "\t\t(add_net {})", sexpr_str(name)).unwrap();
         }
         writeln!(out, "\t)").unwrap();
+    }
     }
 
     // `BOARD_ITEM::IsLocked()`: every locked item's id (`DrawingsSection::locked_ids`). Each item kind
@@ -408,30 +429,51 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     Ok(out)
 }
 
-/// `(layers ..)`: the board's copper layers, outer first, then the technical and user layers this writer uses.
-pub(crate) fn write_layers(out: &mut String, copper_layers: &[String]) {
+/// The number the board file gives a non-copper layer in its `(layers ..)` entry. KiCad's parser reads layers by name and ignores these (copper by position), so
+/// they only have to be distinct; they are the ones KiCad 8 wrote (`B_Adhes` 32 .. `B_Fab` 48, `F_Fab` 49, `User_1` 50 on).
+fn layer_ordinal(layer: &str) -> i32 {
+    match layer {
+        "B.Adhes" => 32,
+        "F.Adhes" => 33,
+        "B.Paste" => 34,
+        "F.Paste" => 35,
+        "B.SilkS" => 36,
+        "F.SilkS" => 37,
+        "B.Mask" => 38,
+        "F.Mask" => 39,
+        "Dwgs.User" => 40,
+        "Cmts.User" => 41,
+        "Eco1.User" => 42,
+        "Eco2.User" => 43,
+        "Edge.Cuts" => 44,
+        "Margin" => 45,
+        "B.CrtYd" => 46,
+        "F.CrtYd" => 47,
+        "B.Fab" => 48,
+        "F.Fab" => 49,
+        other => 49 + eda_model::layers::user_layer_number(other).map_or(0, |n| n as i32),
+    }
+}
+
+/// `(layers ..)` (`PCB_IO_KICAD_SEXPR::formatBoardLayers`): the board's copper layers, outer first, each with its type; then the enabled technical and user layers in
+/// `TechAndUserUIOrder`, typed `user` unless a user layer is off-board at the front or the back. A layer the user renamed, and every layer whose standard name
+/// KiCad shows differs from the one the file writes (`F.SilkS` is `F.Silkscreen`), carries that name as the entry's last word.
+pub(crate) fn write_layers(out: &mut String, copper_layers: &[String], setup: &LayerSetup) {
+    let shown = |layer: &str| {
+        let name = setup.display_name(layer);
+        if name == layer { String::new() } else { format!(" {}", sexpr_str(&name)) }
+    };
     writeln!(out, "\t(layers").unwrap();
     for (i, name) in copper_layers.iter().enumerate() {
-        let ltype = "signal";
         let ord = if i == 0 { 0 } else if i + 1 == copper_layers.len() { 31 } else { i };
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+        writeln!(out, "\t\t({ord} {} {}{})", sexpr_str(name), setup.layer_type(name).word(), shown(name)).unwrap();
     }
-    for (ord, name, ltype) in [
-        (32, "B.Adhes", "user"),
-        (33, "F.Adhes", "user"),
-        (34, "B.Paste", "user"),
-        (35, "F.Paste", "user"),
-        (36, "B.SilkS", "user"),
-        (37, "F.SilkS", "user"),
-        (38, "B.Mask", "user"),
-        (39, "F.Mask", "user"),
-        (44, "Edge.Cuts", "user"),
-        (46, "B.CrtYd", "user"),
-        (47, "F.CrtYd", "user"),
-        (49, "F.Fab", "user"),
-        (50, "B.Fab", "user"),
-    ] {
-        writeln!(out, "\t\t({ord} {} {ltype})", sexpr_str(name)).unwrap();
+    for layer in setup.enabled_in_order() {
+        let ty = match setup.layer_type(&layer) {
+            t @ (LayerType::Front | LayerType::Back) if eda_model::layers::user_layer_number(&layer).is_some() => t.word(),
+            _ => "user",
+        };
+        writeln!(out, "\t\t({} {} {ty}{})", layer_ordinal(&layer), sexpr_str(&layer), shown(&layer)).unwrap();
     }
     writeln!(out, "\t)").unwrap();
 }
@@ -585,14 +627,130 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     defaults.insert("board_outline_line_width".into(), serde_json::json!(mm_f(t.edge_cuts_line_width_um)));
     defaults.insert("courtyard_line_width".into(), serde_json::json!(mm_f(t.courtyard_line_width_um)));
 
+    // Text & Graphics > Formatting: the "apply board defaults to footprint .." boxes (`defaults.apply_defaults_to_fp_*`).
+    let f = &b.formatting;
+    if f.applies_any() {
+        for (key, on) in [("fields", f.apply_to_fp_fields), ("text", f.apply_to_fp_text), ("shapes", f.apply_to_fp_shapes), ("dimensions", f.apply_to_fp_dimensions), ("barcodes", f.apply_to_fp_barcodes)] {
+            defaults.insert(format!("apply_defaults_to_fp_{key}"), serde_json::json!(on));
+        }
+    }
     let mut design_settings = serde_json::json!({ "rule_severities": effective_rule_severities(model), "rules": rules });
-    if b.constraints_explicit || !t.is_default() {
+    if b.constraints_explicit || !t.is_default() || f.applies_any() {
         design_settings["defaults"] = serde_json::Value::Object(defaults);
     }
-    let project = serde_json::json!({ "board": { "design_settings": design_settings } });
+    // Design Rules > Length-tuning Patterns (`tuning_pattern_settings`).
+    if !b.tuning_patterns.is_default() {
+        let group = |m: &eda_model::setup_pages::MeanderSettings| {
+            serde_json::json!({
+                "min_amplitude": mm_f(m.min_amplitude_um),
+                "max_amplitude": mm_f(m.max_amplitude_um),
+                "spacing": mm_f(m.spacing_um),
+                "corner_style": m.corner_style.code(),
+                "corner_radius_percentage": m.corner_radius_percentage,
+                "single_sided": m.single_sided,
+            })
+        };
+        design_settings["tuning_pattern_settings"] = serde_json::json!({ "single_track_defaults": group(&b.tuning_patterns.single_track), "diff_pair_defaults": group(&b.tuning_patterns.diff_pair), "diff_pair_skew_defaults": group(&b.tuning_patterns.diff_pair_skew) });
+    }
+    let mut project = serde_json::json!({ "board": { "design_settings": design_settings } });
+    // Design Rules > Tuning Profiles: the project's `tuning_profiles` (`common/project/tuning_profiles.cpp`), and the net classes when they name one.
+    if !b.tuning_profiles.profiles.is_empty() {
+        project["tuning_profiles"] = serde_json::json!({ "meta": { "version": 0 }, "tuning_profiles_impedance_geometric": b.tuning_profiles.profiles.iter().map(project_tuning_profile).collect::<Vec<_>>() });
+    }
+    if net_classes_in_project(model) {
+        project["net_settings"] = project_net_settings(model);
+    }
     let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
     text.push('\n');
     text
+}
+
+/// Whether the derived project carries the net classes (`net_settings`) in place of the board file's legacy `(net_class ..)` blocks. It has to when a class names a tuning
+/// profile, which only the project form can say (KiCad moves the legacy classes of a board into the project, replacing the project's own), and when a net is in more than one
+/// class, whose settings KiCad composes from the classes the project assigns it to (`NET_SETTINGS::GetEffectiveNetClass`): a legacy block names one class for a net.
+pub(crate) fn net_classes_in_project(model: &ConstraintModel) -> bool {
+    !model.board.tuning_profiles.class_profiles.is_empty() || model.nets.iter().any(|n| model.board.matching_classes(&n.name).len() > 1)
+}
+
+/// One `TUNING_PROFILE` as the project file keeps it (`common/project/tuning_profiles.cpp`): widths and gaps in nanometres, delays in attoseconds per millimetre, via delays in
+/// attoseconds, layers by the names the board file writes (`UNDEFINED` for a reference layer a row leaves out).
+fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_json::Value {
+    serde_json::json!({
+        "profile_name": p.name,
+        "type": p.profile_type.code(),
+        "target_impedance": p.target_impedance,
+        "enable_time_domain_tuning": p.enable_time_domain_tuning,
+        "layer_entries": p.layer_entries.iter().map(|e| serde_json::json!({
+            "signal_layer": e.signal_layer,
+            "top_reference_layer": e.top_reference_layer.as_deref().unwrap_or("UNDEFINED"),
+            "bottom_reference_layer": e.bottom_reference_layer.as_deref().unwrap_or("UNDEFINED"),
+            "width": e.width_um * 1000,
+            "diff_pair_gap": e.diff_pair_gap_um * 1000,
+            "delay": e.delay_as_per_mm,
+        })).collect::<Vec<_>>(),
+        "via_prop_delay": p.via_propagation_delay_as,
+        "via_overrides": p.via_overrides.iter().map(|v| serde_json::json!({
+            "signal_layer_from": v.signal_layer_from,
+            "signal_layer_to": v.signal_layer_to,
+            "via_layer_from": v.via_layer_from,
+            "via_layer_to": v.via_layer_to,
+            "delay": v.delay_as,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// The project's `net_settings` (`common/project/net_settings.cpp`): the Default class and every other class with the tuning profile each names, and one pattern per net that
+/// has a class (the nets a class's patterns match, as the board file's `add_net` lists name them). A class that only exists because a profile is named for it is a class of its own.
+fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
+    let b = &model.board;
+    let mm_f = |um: Um| um as f64 / 1000.0;
+    let profile_of = |class: &str| b.tuning_profiles.class_profiles.get(class).cloned().unwrap_or_default();
+    let mut classes = Vec::new();
+    let mut default = serde_json::json!({ "name": "Default", "priority": i32::MAX, "tuning_profile": profile_of("Default"), "clearance": mm_f(b.clearance), "track_width": mm_f(b.track_width), "via_diameter": mm_f(b.via_diameter), "via_drill": mm_f(b.via_drill) });
+    if let Some(d) = &b.default_class {
+        for (key, v) in [("microvia_diameter", d.microvia_diameter), ("microvia_drill", d.microvia_drill), ("diff_pair_width", d.diff_pair_width), ("diff_pair_gap", d.diff_pair_gap), ("diff_pair_via_gap", d.diff_pair_via_gap)] {
+            if let Some(v) = v {
+                default[key] = serde_json::json!(mm_f(v));
+            }
+        }
+    }
+    classes.push(default);
+    // A class's place in the list is its priority (`panel_setup_netclasses.cpp`: `SetPriority( row )`; the Default class has the lowest); `NetClass::priority` is the router's own.
+    for (row, c) in b.net_classes.iter().enumerate() {
+        let mut j = serde_json::json!({ "name": c.name, "priority": row as i32, "tuning_profile": profile_of(&c.name) });
+        for (key, v) in [("clearance", c.clearance), ("track_width", c.track_width), ("via_diameter", c.via_diameter), ("via_drill", c.via_drill), ("microvia_diameter", c.microvia_diameter), ("microvia_drill", c.microvia_drill), ("diff_pair_width", c.diff_pair_width), ("diff_pair_gap", c.diff_pair_gap), ("diff_pair_via_gap", c.diff_pair_via_gap)] {
+            if let Some(v) = v {
+                j[key] = serde_json::json!(mm_f(v));
+            }
+        }
+        classes.push(j);
+    }
+    // A class the project names a profile for that the board has no class of (an imported project's unused class).
+    for (class, _) in &b.tuning_profiles.class_profiles {
+        if class != "Default" && !b.net_classes.iter().any(|c| &c.name == class) {
+            classes.push(serde_json::json!({ "name": class, "priority": classes.len() as i32 - 1, "tuning_profile": profile_of(class) }));
+        }
+    }
+    let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    net_names.sort();
+    net_names.dedup();
+    // One pattern for each class a net is in, naming the net exactly (a name written so neither reading of a pattern gives its characters a meaning): KiCad then composes the classes of
+    // a net the way the studio does (`BoardRules::effective_class`) whatever its own regular expressions would have said of the patterns.
+    let patterns: Vec<serde_json::Value> = net_names.iter().flat_map(|n| b.matching_classes(n).into_iter().map(move |c| serde_json::json!({ "netclass": c.name, "pattern": exact_pattern(n) }))).collect();
+    serde_json::json!({ "classes": classes, "meta": { "version": 5 }, "net_colors": null, "netclass_assignments": null, "netclass_patterns": patterns })
+}
+
+/// A net name as a pattern that matches that name and no other, read as a regular expression (`NET_SETTINGS`' matchers read every pattern as a wildcard pattern and as a regular
+/// expression): each character a regular expression gives a meaning to is escaped.
+fn exact_pattern(net: &str) -> String {
+    let mut out = String::with_capacity(net.len());
+    for c in net.chars() {
+        if ".+*?()[]{}|^$\\".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// The per-type DRC severities the derived project holds: the imported project's own or Board Setup's, with "ignore"
@@ -646,6 +804,11 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
+    }
+    // The Text Variables page (`PROJECT::GetTextVars`, the project file's `text_variables`): once it has been used it is the project's whole set, and kicad-cli expands
+    // `${NAME}` in the plots, the reports and the DRC from it. Until then the board folder's variables are the project's (`library_table::derive_project`).
+    if let Some(vars) = design.drawings.as_ref().and_then(|d| d.rules.as_ref()).and_then(|r| r.text_variables.as_ref()) {
+        project["text_variables"] = serde_json::json!(vars);
     }
     let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
     text.push('\n');
@@ -1217,7 +1380,7 @@ mod tests {
         assert_eq!(out.matches("(layer \"F.CrtYd\")").count(), top, "one courtyard per top-side footprint");
         assert_eq!(out.matches("(layer \"B.CrtYd\")").count(), bottom, "a bottom-side footprint's courtyard is on B.CrtYd");
         assert!(out.contains("(fp_rect (start ") && out.contains("(fill none) (layer \"F.CrtYd\")"), "{out}");
-        assert!(out.contains("(46 \"B.CrtYd\" user)") && out.contains("(47 \"F.CrtYd\" user)"), "both courtyard layers declared");
+        assert!(out.contains("(46 \"B.CrtYd\" user \"B.Courtyard\")") && out.contains("(47 \"F.CrtYd\" user \"F.Courtyard\")"), "both courtyard layers declared, with the names KiCad shows for them (formatBoardLayers)");
     }
 
     #[test]

@@ -796,7 +796,7 @@ function buildTextMesh(t: BoardText, y?: number, tint?: THREE.Color, kind = "sil
   return buildSilkTextMesh({
     y,
     tint,
-    content: t.content,
+    content: t.shown ?? t.content,
     xMm: mm(t.x),
     zMm: mm(t.y),
     sizeMm: mm(t.size),

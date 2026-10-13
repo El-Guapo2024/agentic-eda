@@ -28,9 +28,6 @@ fn fail(check: &str, what: &str, msg: impl Into<String>) -> Vec<CheckResult> {
 const TEXT_MIN_UM: Um = 1;
 const TEXT_MAX_UM: Um = 250_000;
 
-/// The layers a footprint's text can be on besides copper: `LSET::TechAndUserUIOrder`, plus the `User.1` .. `User.9` layers.
-const TECH_LAYERS: [&str; 18] = ["F.Adhes", "B.Adhes", "F.Paste", "B.Paste", "F.SilkS", "B.SilkS", "F.Mask", "B.Mask", "Dwgs.User", "Cmts.User", "Eco1.User", "Eco2.User", "Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "F.Fab", "B.Fab"];
-
 /// `ClampTextPenSize`: the thickest pen a text of this size takes (a quarter of its smaller side).
 fn max_pen(size: (Um, Um)) -> Um {
     (size.0.abs().min(size.1.abs()) as f64 * 0.25).round() as Um
@@ -56,7 +53,8 @@ impl Board<'_> {
             return Err(fail("ops_bad_field", what, format!("Text thickness is too large for the text size. It will be clamped at {} mm.", max_pen(l.size) as f64 / 1000.0)));
         }
         let layer = l.layer.as_str();
-        let known = self.model.board.layers.iter().any(|c| c == layer) || TECH_LAYERS.contains(&layer) || layer.strip_prefix("User.").is_some_and(|n| n.parse::<u8>().is_ok_and(|n| (1..=9).contains(&n)));
+        // The board's copper layers and the technical and user layers Board Editor Layers has on (`eda_model::layers`).
+        let known = self.model.board.layers.iter().any(|c| c == layer) || self.model.board.layer_setup.enabled.iter().any(|l| l == layer);
         if !known {
             return Err(fail("ops_bad_field", what, format!("{layer:?} is not a layer of this board")));
         }

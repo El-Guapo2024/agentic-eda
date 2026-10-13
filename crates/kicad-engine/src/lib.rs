@@ -277,7 +277,7 @@ fn write_project_with(work: &Path, stem: &str, design: &Design, model: &Constrai
 /// A file stem for the derived files: the project's own name, so the plots,
 /// Gerbers and position files kicad-cli writes carry it (`<stem>-F_Cu.gtl`);
 /// anything that is not a plain file-name character becomes `_`.
-fn file_stem(name: &str) -> String {
+pub fn file_stem(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect();
     if s.is_empty() || s.starts_with('.') { "board".to_string() } else { s }
 }

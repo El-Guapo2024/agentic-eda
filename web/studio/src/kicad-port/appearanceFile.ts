@@ -65,12 +65,12 @@ export const EMPTY_APPEARANCE_FILE: AppearanceFile = { version: APPEARANCE_FILE_
 
 // ------------------------------------------------------------------------------------------------------------------------------------ writing
 
-type FileCtx = Pick<NetsContext, "copper" | "nets">;
+type FileCtx = Pick<NetsContext, "copper" | "nets" | "optional">;
 
 /** `SaveProjectLocalSettings` and the net / preset / viewport part of `SaveProject`. Nets the board no longer has are left out (once the board's nets are known). */
 export function toAppearanceFile(s: ViewSlice, ctx: FileCtx): AppearanceFile {
   const a = s.appearance;
-  const universe = panelLayers(ctx.copper);
+  const universe = panelLayers(ctx.copper, ctx.optional);
   const known = ctx.nets.length > 0 ? new Set(ctx.nets) : null;
   const keepNet = (n: string): boolean => known === null || known.has(n);
   const on = objectsOf(s);
@@ -150,7 +150,7 @@ function colorMap(j: unknown): Record<string, string> | null {
 }
 
 /** What `LoadProjectSettings` does with a file: lays its settings over the slice, leaving alone whatever the file does not say. */
-export function applyAppearanceFile(s: ViewSlice, file: unknown, ctx: Pick<NetsContext, "copper">): ViewSlice {
+export function applyAppearanceFile(s: ViewSlice, file: unknown, ctx: Pick<NetsContext, "copper" | "optional">): ViewSlice {
   if (!isRecord(file)) return s;
   const local = isRecord(file.local) ? file.local : {};
   const project = isRecord(file.project) ? file.project : {};
@@ -161,7 +161,7 @@ export function applyAppearanceFile(s: ViewSlice, file: unknown, ctx: Pick<NetsC
 
   const hiddenLayers = strings(local.hidden_layers);
   if (hiddenLayers) {
-    for (const l of panelLayers(ctx.copper)) layerVisible[layerStateKey(l)] = true;
+    for (const l of panelLayers(ctx.copper, ctx.optional)) layerVisible[layerStateKey(l)] = true;
     for (const l of hiddenLayers) layerVisible[layerStateKey(l)] = false;
   }
   if (isRecord(local.layer_opacity)) for (const [name, v] of Object.entries(local.layer_opacity)) if (typeof v === "number" && v >= 0 && v <= 1) layerOpacity[layerStateKey(name)] = v;

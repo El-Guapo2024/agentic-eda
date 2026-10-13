@@ -91,6 +91,8 @@ export interface FieldInfo {
   id: string;
   name: string;
   text: string;
+  /** What `${NAME}` in `text` stands for; absent when it is `text` itself. See `BoardText.shown`. */
+  shown?: string;
   x: Um;
   y: Um;
   angle: number;
@@ -451,6 +453,8 @@ export type TextJustify = "left" | "center" | "right";
 export interface BoardText {
   id: string;
   content: string;
+  /** What `${NAME}` in `content` stands for (the Text Variables page, KiCad's own variables); absent when it is `content` itself. The painter and the boxes use it; an edit starts from `content`. */
+  shown?: string;
   x: Um;
   y: Um;
   /** Millidegrees -- NOT divided down like a Part's `rot`. */
@@ -806,12 +810,109 @@ export interface BoardState {
     severities?: Record<string, RuleSeverity>;
     /** The text of the board's custom DRC rules (`.kicad_dru`); null = none. */
     custom_rules_text?: string | null;
-    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`. */
+    /** The project's text variables as `${NAME}` reads them, name -> value (`PROJECT::GetTextVars`): the Text Variables page's rows once it has been used, else the board folder's `path-variables.json`. */
+    text_variables?: Record<string, string>;
+    /** Board Editor Layers (`eda_model::layers`): the non-copper layers the board has in KiCad's order, the names the user gave its layers and the types that are not the default's. Absent from an older backend (then a board has the 18 technical layers). */
+    layer_setup?: LayerSetup;
+    /** Text & Graphics > Formatting (`eda_model::setup_pages`). */
+    formatting?: FormattingSettings;
+    /** Board Stackup > Zone Hatch Offsets: copper layer -> the offset of a hatched zone's pattern; only the layers that have one. */
+    zone_hatch_offsets?: HatchOffsets;
+    /** Design Rules > Length-tuning Patterns: what a tuning pattern of each kind starts from. */
+    tuning_patterns?: TuningPatterns;
+    /** Design Rules > Tuning Profiles: the profiles and the profile each net class names. */
+    tuning_profiles?: TuningProfiles;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`, `formatting`, `zone_hatch_offsets`, `tuning_patterns`, `tuning_profiles`. */
     overlay?: string[];
   };
 }
 
 export type RuleSeverity = "error" | "warning" | "ignore";
+
+/** `eda_model::setup_pages::FormattingSettings` -- Text & Graphics > Formatting: the dash and gap of dashed lines, in line widths, and the "apply board defaults to footprint .." boxes. */
+export interface FormattingSettings {
+  dash_length_ratio: number;
+  gap_length_ratio: number;
+  apply_to_fp_fields: boolean;
+  apply_to_fp_text: boolean;
+  apply_to_fp_shapes: boolean;
+  apply_to_fp_dimensions: boolean;
+  apply_to_fp_barcodes: boolean;
+}
+
+/** `ZONE_LAYER_PROPERTIES::hatching_offset`, µm. */
+export interface HatchOffset {
+  x_um: Um;
+  y_um: Um;
+}
+export type HatchOffsets = Record<string, HatchOffset>;
+
+export type MeanderCornerStyle = "chamfer" | "round";
+
+/** `PNS::MEANDER_SETTINGS`, the part Board Setup > Length-tuning Patterns edits. */
+export interface MeanderSettings {
+  min_amplitude_um: Um;
+  max_amplitude_um: Um;
+  spacing_um: Um;
+  corner_style: MeanderCornerStyle;
+  corner_radius_percentage: number;
+  single_sided: boolean;
+}
+export interface TuningPatterns {
+  single_track: MeanderSettings;
+  diff_pair: MeanderSettings;
+  diff_pair_skew: MeanderSettings;
+}
+
+export type TuningProfileType = "single" | "differential";
+
+/** One row of a tuning profile's track propagation grid. Delays are KiCad's own unit, attoseconds per millimetre (1 ps/mm is 1,000,000). */
+export interface ProfileLayerEntry {
+  signal_layer: string;
+  top_reference_layer?: string | null;
+  bottom_reference_layer?: string | null;
+  width_um: Um;
+  diff_pair_gap_um: Um;
+  delay_as_per_mm: number;
+}
+
+/** One row of the via overrides grid; the delay is a time in attoseconds (1 ps is 1,000,000). */
+export interface ProfileViaOverride {
+  signal_layer_from: string;
+  signal_layer_to: string;
+  via_layer_from: string;
+  via_layer_to: string;
+  delay_as: number;
+}
+
+export interface TuningProfile {
+  name: string;
+  profile_type: TuningProfileType;
+  target_impedance: number;
+  enable_time_domain_tuning: boolean;
+  layer_entries: ProfileLayerEntry[];
+  via_propagation_delay_as: number;
+  via_overrides: ProfileViaOverride[];
+}
+
+/** Design Rules > Tuning Profiles: the profiles, and the profile each net class (`Default` included) names -- one the project does not have is what kicad-cli reports as `missing_tuning_profile`. */
+export interface TuningProfiles {
+  profiles: TuningProfile[];
+  class_profiles?: Record<string, string>;
+}
+
+/** `LAYER_T`: a copper layer is a signal, a power plane, a mixed or a jumper layer; a user layer is auxiliary (it does not flip with the board) or off-board at the front or the back (it does). */
+export type BoardLayerType = "signal" | "power" | "mixed" | "jumper" | "auxiliary" | "front" | "back";
+
+/**
+ * `eda_model::layers::LayerSetup` -- Board Setup > Board Editor Layers: the non-copper layers the board has (`enabled`: the technical layers by the names the board file writes, `F.SilkS`,
+ * and `User.1` .. `User.45`), the name the user gave a layer (else KiCad's standard name shows) and the types that are not the layer's default.
+ */
+export interface LayerSetup {
+  enabled: string[];
+  names?: Record<string, string>;
+  types?: Record<string, BoardLayerType>;
+}
 
 /** `eda_model::rules::NetClassSettings` -- Board Setup > Net Classes: the Default class and the others, with the net-name patterns that assign nets to each. */
 export interface NetClassSettings {
@@ -1208,6 +1309,18 @@ export type Cmd =
   | { op: "set_rule_severities"; severities: Record<string, RuleSeverity> }
   /** The text of the board's `.kicad_dru`, verbatim; empty = no custom rules. */
   | { op: "set_custom_rules"; text: string }
+  /** Board Setup > Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` shows the value; the derived `.kicad_pro` carries them for kicad-cli. */
+  | { op: "set_text_variables"; variables: Record<string, string> }
+  /** Board Setup > Board Editor Layers (`panel_setup_layers.cpp`): the whole page -- the layers the board has, their names and types. Refused with the layer's name when a name or type is out of the panel's rules or a layer is turned off while items are on it. */
+  | { op: "set_board_layers"; settings: LayerSetup }
+  /** Board Setup > Formatting (`panel_setup_formatting.cpp`): the whole page. Refused with the setting's name (`dash_length_ratio`) when a ratio is not above 0 and at most 1000. */
+  | { op: "set_formatting"; settings: FormattingSettings }
+  /** Board Setup > Zone Hatch Offsets (`panel_setup_zone_hatch_offsets.cpp`): the whole page, copper layer -> offset; a layer left out (or at 0, 0) has none. */
+  | { op: "set_zone_hatch_offsets"; offsets: HatchOffsets }
+  /** Board Setup > Length-tuning Patterns (`panel_setup_tuning_patterns.cpp`): the whole page. Refused with `group.field` (`diff_pair.min_amplitude`). */
+  | { op: "set_tuning_patterns"; settings: TuningPatterns }
+  /** Board Setup > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the whole page, with the profile each net class names. Refused with the profile's name. */
+  | { op: "set_tuning_profiles"; settings: TuningProfiles }
   /**
    * `dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
    * Marker): waive the DRC violations as one undo step. An exclusion whose `(check, items)` is waived already is replaced (that edits its comment).
@@ -1956,6 +2069,8 @@ export interface SchField {
   /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
   name: string;
   text: string;
+  /** What `${NAME}` in `text` stands for (`SCH_FIELD::GetShownText`); absent when it is `text` itself. A Reference never has one: the painter writes it with its unit letter. */
+  shown?: string;
   /** The text's anchor on the sheet, micrometres. */
   at: [Um, Um];
   /** The text runs upward: a quarter turn counter-clockwise about the anchor. */
@@ -2009,6 +2124,8 @@ export interface SchematicSymbol {
   /** Where its Reference, Value, ... are drawn (absent from a backend built before fields had positions: painter.ts places them by its own rule then). */
   fields?: SchField[];
   fields_autoplaced?: FieldsAutoplaced;
+  /** What `${NAME}` in `value` and `footprint` stands for, for the symbols the state lists no `fields` of (a sheet read from a KiCad file); only the ones that differ. */
+  shown?: { value?: string; footprint?: string };
 }
 
 /**
@@ -2110,6 +2227,8 @@ export interface SchematicText {
   /** Stable id (`txt_xxxxxxxxxxxx`) -- for `delete_sch_text`. */
   id: string;
   content: string;
+  /** What `${NAME}` in `content` stands for (`SCH_TEXT::GetShownText`); absent when it is `content` itself. */
+  shown?: string;
   at: [Um, Um];
   angle: Degrees;
   size_um: Um;
@@ -2122,6 +2241,8 @@ export interface TitleBlock {
   rev: string;
   company: string;
   comments: string[];
+  /** The values with the project's text variables in them expanded (`TITLE_BLOCK::TextVarResolver`), when that changes any of them: the drawing sheet shows these, the Page Settings dialog edits the stored ones above. */
+  shown?: { title: string; date: string; rev: string; company: string; comments: string[] };
 }
 
 /** A document's paper (`PAGE_INFO`) as the state JSON reports it: `size_um` is the resolved width and height in its orientation. */

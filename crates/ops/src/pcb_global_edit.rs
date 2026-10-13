@@ -18,68 +18,26 @@
 
 use super::Board;
 use eda_model::ir::Um;
-use eda_model::rules::{LayerClassDefaults, TextGraphicsDefaults};
+use eda_model::rules::TextGraphicsDefaults;
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
 
-/// `BOARD_DESIGN_SETTINGS::GetLayerClass` (`LAYER_CLASS_*`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LayerClass {
-    Silk,
-    Copper,
-    Edges,
-    Courtyard,
-    Fab,
-    Others,
-}
+#[cfg(test)]
+pub use eda_model::rules::{layer_class, LayerClass};
 
-/// `BOARD_DESIGN_SETTINGS::GetLayerClass( aLayer )`.
-pub fn layer_class(layer: &str) -> LayerClass {
-    match layer {
-        "F.SilkS" | "B.SilkS" => LayerClass::Silk,
-        "Edge.Cuts" => LayerClass::Edges,
-        "F.CrtYd" | "B.CrtYd" => LayerClass::Courtyard,
-        "F.Fab" | "B.Fab" => LayerClass::Fab,
-        l if l.ends_with(".Cu") => LayerClass::Copper,
-        _ => LayerClass::Others,
-    }
-}
-
-/// `DEFAULT_TEXT_SIZE` and `DEFAULT_TEXT_WIDTH` (`include/board_design_settings.h`), in µm: the text of the edges and courtyard classes.
-const DEFAULT_TEXT_SIZE_UM: Um = 1_000;
-const DEFAULT_TEXT_WIDTH_UM: Um = 150;
-
-/// The text defaults of a class, `None` for the two classes that have only a line thickness.
-fn text_class(d: &TextGraphicsDefaults, class: LayerClass) -> Option<&LayerClassDefaults> {
-    match class {
-        LayerClass::Silk => Some(&d.silk),
-        LayerClass::Copper => Some(&d.copper),
-        LayerClass::Fab => Some(&d.fab),
-        LayerClass::Others => Some(&d.others),
-        LayerClass::Edges | LayerClass::Courtyard => None,
-    }
-}
-
-/// `BOARD_DESIGN_SETTINGS::GetLineThickness( aLayer )`.
+/// `BOARD_DESIGN_SETTINGS::GetLineThickness( aLayer )` (`TextGraphicsDefaults::line_thickness_um`).
 pub fn line_thickness(d: &TextGraphicsDefaults, layer: &str) -> Um {
-    match layer_class(layer) {
-        LayerClass::Silk => d.silk.line_width_um,
-        LayerClass::Copper => d.copper.line_width_um,
-        LayerClass::Edges => d.edge_cuts_line_width_um,
-        LayerClass::Courtyard => d.courtyard_line_width_um,
-        LayerClass::Fab => d.fab.line_width_um,
-        LayerClass::Others => d.others.line_width_um,
-    }
+    d.line_thickness_um(layer)
 }
 
 /// `BOARD_DESIGN_SETTINGS::GetTextSize( aLayer )`, as the one size a text of this model has (its height).
 pub fn text_size(d: &TextGraphicsDefaults, layer: &str) -> Um {
-    text_class(d, layer_class(layer)).map(|c| c.text_height_um).unwrap_or(DEFAULT_TEXT_SIZE_UM)
+    d.text_size_um(layer).1
 }
 
 /// `BOARD_DESIGN_SETTINGS::GetTextThickness( aLayer )`.
 pub fn text_thickness(d: &TextGraphicsDefaults, layer: &str) -> Um {
-    text_class(d, layer_class(layer)).map(|c| c.text_thickness_um).unwrap_or(DEFAULT_TEXT_WIDTH_UM)
+    d.text_thickness_um(layer)
 }
 
 /// What `Cmd::EditTextAndGraphics` asks for.

@@ -5,6 +5,8 @@
 //
 // Sizes are µm, KiCad's mils converted exactly (`MMsize( 297, 210 )` is 297 x 210 mm; the inch formats are whole mils).
 
+import type { TitleBlock } from "../api/types";
+
 /** A paper format of `PAGE_INFO::standardPageSizes`: its name, the description the dialog lists and its landscape size. */
 export interface PageFormat {
   name: string;
@@ -127,6 +129,15 @@ export interface TitleBlockFields {
 export function titleBlockFields(tb: { title?: string; date?: string; rev?: string; company?: string; comments?: string[] } | null | undefined): TitleBlockFields {
   const comments = Array.from({ length: COMMENT_COUNT }, (_, i) => tb?.comments?.[i] ?? "");
   return { title: tb?.title ?? "", date: tb?.date ?? "", rev: tb?.rev ?? "", company: tb?.company ?? "", comments };
+}
+
+/**
+ * The title block as the drawing sheet shows it: a title block value that names a project text variable (`${NAME}`) is drawn with the variable expanded
+ * (`TITLE_BLOCK::TextVarResolver`), which the state sends as `shown`. The Page Settings dialog keeps editing the stored values.
+ */
+export function shownTitleBlock<T extends TitleBlock>(tb: T | null | undefined): T | null | undefined {
+  if (!tb?.shown) return tb;
+  return { ...tb, ...tb.shown, shown: undefined };
 }
 
 /** The title block `set_*_page` is sent: the fields as typed, trailing empty comments dropped (the model keeps no `comment 9` of ""). */

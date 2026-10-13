@@ -1,4 +1,4 @@
-// The Layers tab (`APPEARANCE_CONTROLS::rebuildLayers`): the board's copper layers front to back, then the technical layers, each with the active-layer
+// The Layers tab (`APPEARANCE_CONTROLS::rebuildLayers`): the board's copper layers front to back, then the technical and user layers it has (Board Editor Layers), each with the active-layer
 // bar, its colour, an eye and its name; a click on a row makes it the active layer, a right click anywhere in the list opens the layer menu
 // (`rebuildLayerContextMenu`). Below: "Layer Display Options", the inactive-layer mode and Flip board view. (The presets and viewports are in the panel's footer.)
 import { useState } from "react";
@@ -6,7 +6,8 @@ import { useAppearanceView } from "./useAppearanceView";
 import { Eye, Pane, Radios, Swatch } from "./shared";
 import { ContextMenu, type MenuEntry } from "../../canvas/ContextMenu";
 import { copperColorKey, layerColor } from "../../canvas/layers";
-import { TECH_LAYER_NAMES, layerStateKey } from "../../../kicad-port/layerPresets";
+import { layerStateKey } from "../../../kicad-port/layerPresets";
+import { enabledOptionalLayers, layerDisplayName } from "../../../kicad-port/boardLayers";
 import type { ContrastMode } from "../../../kicad-port/appearance";
 
 function LayerRow({ stateKey, label, colorKey }: { stateKey: string; label: string; colorKey: string }) {
@@ -32,6 +33,8 @@ export function LayersTab() {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const board = state.board;
   if (!board) return <div className="ap-note">No board.</div>;
+  // Board Setup > Board Editor Layers: the layers the board has and the names the user gave them (`BOARD::GetLayerName`).
+  const setup = board.board_rules?.layer_setup;
   const mode: ContrastMode = !state.highContrast ? "normal" : state.appearance.contrastHidden ? "hidden" : "dimmed";
   const entries = (): MenuEntry[] => {
     const e: MenuEntry[] = [
@@ -58,10 +61,10 @@ export function LayersTab() {
   return (
     <div className="ap-scroll" onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }}>
       {board.layers.map((layer) => (
-        <LayerRow key={layer} stateKey={layer} label={layer} colorKey={copperColorKey(layer)} />
+        <LayerRow key={layer} stateKey={layer} label={layerDisplayName(setup, layer)} colorKey={copperColorKey(layer)} />
       ))}
-      {TECH_LAYER_NAMES.map((name) => (
-        <LayerRow key={name} stateKey={layerStateKey(name)} label={name} colorKey={layerStateKey(name)} />
+      {enabledOptionalLayers(setup).map((name) => (
+        <LayerRow key={name} stateKey={layerStateKey(name)} label={layerDisplayName(setup, name)} colorKey={layerStateKey(name)} />
       ))}
       <Pane title="Layer Display Options">
         <div className="ap-sub">Inactive layers (H):</div>

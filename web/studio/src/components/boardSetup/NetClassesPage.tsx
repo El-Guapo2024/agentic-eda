@@ -3,12 +3,14 @@
 // the nets it matches), with the list of nets the selected pattern matches. Apply sends the whole page (`set_net_classes`); the rules the
 // router, DRC and the derived `.kicad_pro` use follow, and Undo takes the edit back.
 //
-// A pattern here is `*` (any run of characters) and `?` (one character), anchored to the whole net name; KiCad's regular expressions are not
-// read (kicad-port/boardSetupRules.ts). The first class in the table whose pattern matches a net owns it, so the order of the classes is
-// their precedence; the Up and Down buttons move a class. Not ported: the tuning profile, the PCB colour and the schematic wire columns.
+// A pattern is read the way KiCad reads it (`EDA_COMBINED_MATCHER( pattern, CTX_NETCLASS )`, kicad-port/netPattern.ts): as a wildcard pattern (`*` any run of characters, `?` one character)
+// or as a regular expression (`USB_D[PM]`, `(CLK|DAT)[0-3]`), and the whole net name has to match. A net is in every class with a pattern that matches it, and has the settings of all of
+// them (`GetEffectiveNetClass`): where several set one, the class higher in the table wins -- a class's place in the table is its priority; the Up and Down buttons move a class -- and the
+// Default class gives the rest. Not ported: the PCB colour and the schematic wire columns; the tuning profile of a class is on the Tuning Profiles page.
 import { useEffect, useMemo, useState } from "react";
 import { useStudioState } from "../../state/store";
-import { applyAssignments, assignmentRows, boardNetNames, classOfNet, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
+import { applyAssignments, assignmentRows, boardNetNames, classOfNet, classesOfNet, effectiveClassName, netClassSettingsOf, netsMatching, validateNetClasses, type AssignmentRow, type NetClassIssue } from "../../kicad-port/boardSetupRules";
+import { hasRegexSyntax, isRegex } from "../../kicad-port/netPattern";
 import type { NetClass } from "../../api/types";
 import { LengthField, NumberField, PageFrame, usePageApply, usePageDraft, type PageProps } from "./fields";
 
@@ -70,6 +72,13 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
     const counts = new Map<string, number>();
     for (const n of nets) counts.set(classOfNet(classes, n, draft.def.name), (counts.get(classOfNet(classes, n, draft.def.name)) ?? 0) + 1);
     return counts;
+  }, [draft, nets]);
+
+  // The nets that are in more than one class: KiCad composes their settings (`GetEffectiveNetClass`), the class higher in the table winning where several set one.
+  const composite = useMemo(() => {
+    if (!draft) return [];
+    const classes = applyAssignments(draft.classes, draft.rows);
+    return nets.filter((n) => classesOfNet(classes, n).length > 1).map((n) => ({ net: n, name: effectiveClassName(classes, n, draft.def.name) }));
   }, [draft, nets]);
 
   const setClass = (row: number, patch: Partial<NetClass>) =>
@@ -138,7 +147,7 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
         <>
           <div className="bs-section">Netclasses</div>
           <p className="bs-note">
-            A blank size takes the Default class' value. A net belongs to the first class in the table with a pattern that matches it, and to Default when none does; use Up and Down to change the order.
+            A blank size takes the Default class' value. A net is in every class with a pattern that matches it and has the settings of all of them: where several classes set the same size, the one higher in the table wins, and Default gives the rest. Use Up and Down to change the order.
           </p>
           <div className="bs-scroll-x">
             <table className="bs-grid">
@@ -151,7 +160,7 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
                     </th>
                   ))}
                   <th title="Routing order: nets of a class with a higher priority are routed first (this app's own setting, not a KiCad one)">Priority</th>
-                  <th title="Nets of the board this class owns now">Nets</th>
+                  <th title="Nets of the board whose first class this is (a net in several classes is listed under the one that takes precedence)">Nets</th>
                 </tr>
               </thead>
               <tbody>
@@ -219,7 +228,7 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
           <table className="bs-grid">
             <thead>
               <tr>
-                <th title="Net names the class owns: * is any run of characters, ? any one character, and the pattern must match the whole name. a|b stands for two patterns.">Pattern</th>
+                <th title="Net names the class is for: a wildcard pattern (* is any run of characters, ? any one character) or a regular expression such as USB_D[PM] or (CLK|DAT)[0-3]. The pattern must match the whole name.">Pattern</th>
                 <th>Net Class</th>
                 <th />
               </tr>
@@ -275,11 +284,23 @@ export function NetClassesPage({ hidden, onDirty }: PageProps) {
             {selected && selected.pattern.trim() !== "" ? (
               <>
                 <b>Nets matching '{selected.pattern}':</b>
+                {hasRegexSyntax(selected.pattern.trim()) && !isRegex(selected.pattern.trim()) && <div className="bs-unit">Not a regular expression this port reads: it matches as a wildcard pattern only.</div>}
                 {matching.length === 0 ? <div>(none)</div> : matching.map((n) => <div key={n}>{n}</div>)}
               </>
             ) : (
               <span className="bs-unit">Select a pattern to see the nets it matches.</span>
             )}
+          </div>
+          <div className="bs-matches" aria-label="Nets in more than one class">
+            <b>
+              {composite.length === 0 ? "No net is in more than one class." : `${composite.length} net${composite.length === 1 ? " is" : "s are"} in more than one class (their settings are composed):`}
+            </b>
+            {composite.slice(0, 12).map((c) => (
+              <div key={c.net}>
+                {c.net}: {c.name}
+              </div>
+            ))}
+            {composite.length > 12 && <div className="bs-unit">... and {composite.length - 12} more</div>}
           </div>
         </>
       )}

@@ -167,6 +167,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
         worst_clearance,
         edge_clearance: crate::constraints::edge_clearance_min(rules),
         min_clearance: rules.min_clearance_um,
+        hatch_offsets: rules.hatch_offsets.iter().filter(|(_, o)| !o.is_zero()).map(|(l, o)| (l.clone(), (o.x_um, o.y_um))).collect(),
     };
 
     let zones: Vec<Zone> = board
