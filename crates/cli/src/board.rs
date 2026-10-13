@@ -1359,6 +1359,14 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids } => {
             format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
         }
+        Cmd::CommitTuning { pattern, remove_pattern, tracks, remove_track_ids, .. } => {
+            let what = match (pattern, remove_pattern) {
+                (Some(_), Some(_)) => "re-tune",
+                (Some(_), None) => "tune",
+                (None, _) => "remove the tuning of",
+            };
+            format!("{what}: +{} track(s), -{} track(s)", tracks.len(), remove_track_ids.len())
+        }
 
         // GAPS.md #8. No real `eda board` CLI subcommand parses these
         // either (same reasoning the schematic verbs' own comment above
@@ -1521,6 +1529,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::ImportGraphics(_) => "import-graphics",
         Cmd::ImportSchGraphics(_) | Cmd::ImportSymbolGraphics(_) => "import-graphics",
         Cmd::CommitRoute { .. } => "route",
+        Cmd::CommitTuning { .. } => "tune",
         Cmd::Batch { .. } => "batch",
         Cmd::MoveExact { .. } => "move-exact",
         Cmd::MoveItems { .. } => "move-items",

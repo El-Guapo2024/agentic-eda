@@ -420,6 +420,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     if let Some(drawings) = &design.drawings {
         let groups: Vec<&eda_model::ir::Group> = drawings.groups.iter().collect();
         write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
+        // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
+        crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
     }
 
     writeln!(out, ")").unwrap();
@@ -1749,6 +1751,110 @@ mod tests {
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("\t(arc ").count(), 0, "a stale arc is never written: {out}");
         assert_eq!(out.matches("\t(segment ").count(), 1 + 4);
+    }
+
+    #[test]
+    fn a_tuning_pattern_is_written_as_a_generated_item_naming_its_tracks_and_read_back_with_them() {
+        use eda_model::ir::Point;
+        use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern};
+        let (mut design, model) = fixture();
+        // The meander: a polyline of three points (two segments) beside the board's plain track.
+        design.routing.as_mut().unwrap().tracks.push(Track { id: String::new(), net: "VIN".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 10_000, y: 5_000 }, Point { x: 10_000, y: 6_000 }, Point { x: 11_000, y: 6_000 }], arc_mid_offset: None });
+        design.assign_missing_ids();
+        let ids: Vec<String> = design.routing.as_ref().unwrap().tracks.iter().map(|t| t.id.clone()).collect();
+        let pattern = TuningPattern {
+            id: String::new(),
+            mode: TuningMode::Single,
+            layer: "F.Cu".into(),
+            origin: Point { x: 10_000, y: 5_000 },
+            end: Point { x: 11_000, y: 6_000 },
+            initial_side: PatternSide::Left,
+            min_amplitude: 200,
+            max_amplitude: 1_000,
+            spacing: 600,
+            corner_radius_percent: 80,
+            rounded: true,
+            single_sided: false,
+            override_custom_rules: false,
+            target_length: TargetRange { min: 99_900, opt: 100_000, max: 100_100 },
+            target_skew: TargetRange { min: -100, opt: 0, max: 100 },
+            base_line: vec![Point { x: 10_000, y: 5_000 }, Point { x: 11_000, y: 6_000 }],
+            base_line_coupled: vec![],
+            last_track_width: 200,
+            last_diff_pair_gap: 0,
+            last_tuning_length: 1_414_213,
+            last_netname: "VIN".into(),
+            last_status: "too_short".into(),
+            member_ids: vec![ids[1].clone()],
+        };
+        design.drawings = Some(eda_model::ir::DrawingsSection { tuning_patterns: vec![pattern.clone()], ..Default::default() });
+        design.assign_missing_ids();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(generated\n").count(), 1, "{out}");
+        // Both segments of the polyline are members, by the uuids they were written with, and the plain track is not.
+        let seg_uuids: Vec<&str> = out.lines().filter(|l| l.starts_with("\t(segment ")).filter_map(|l| l.split("(uuid \"").nth(1)).filter_map(|r| r.split('\"').next()).collect();
+        assert_eq!(seg_uuids.len(), 3, "{out}");
+        let members_line = out.lines().find(|l| l.trim_start().starts_with("(members") && l.contains("\"")).and_then(|l| (!l.contains("(group")).then_some(l)).unwrap_or_else(|| panic!("a members line: {out}"));
+        assert_eq!(members_line.matches('"').count(), 4, "two quoted uuids: {members_line}");
+        let in_members = seg_uuids.iter().filter(|u| members_line.contains(**u)).count();
+        assert_eq!(in_members, 2, "the polyline's two segments, not the plain track: {members_line}");
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let drawings = back.drawings.as_ref().expect("the pattern comes back");
+        assert_eq!(drawings.tuning_patterns.len(), 1);
+        let got = &drawings.tuning_patterns[0];
+        let tracks = &back.routing.as_ref().unwrap().tracks;
+        assert_eq!(got.member_ids.len(), 2);
+        for m in &got.member_ids {
+            let t = tracks.iter().find(|t| &t.id == m).expect("a member is a track of the board");
+            assert_eq!(t.pts.len(), 2);
+            assert!(t.pts.iter().all(|p| p.x >= 10_000 && p.y >= 5_000), "the polyline's segments, not the plain track: {t:?}");
+        }
+        let mut want = pattern;
+        want.id = got.id.clone();
+        want.member_ids = got.member_ids.clone();
+        assert_eq!(*got, want);
+        assert!(got.id.starts_with("tun_"), "{}", got.id);
+
+        // A pattern whose tracks are gone is a ghost and is not written.
+        design.routing.as_mut().unwrap().tracks.retain(|t| t.id != ids[1]);
+        design.drawings.as_mut().unwrap().tuning_patterns[0].member_ids = vec![ids[1].clone()];
+        assert_eq!(export_kicad_pcb(&design, &model, &meta()).unwrap().matches("(generated").count(), 0);
+    }
+
+    /// KiCad's own boards with tuning patterns (`qa/data/pcbnew`): every pattern comes in with the tracks its `(members ..)` names. Runs when the KiCad
+    /// source is at `KICAD_SRC_DIR`.
+    #[test]
+    fn the_tuning_patterns_of_kicads_own_boards_are_read_with_their_tracks() {
+        let Ok(dir) = std::env::var("KICAD_SRC_DIR") else { return };
+        for (file, patterns) in [("tuning_generators_load_save.kicad_pcb", 1usize), ("issue22536.kicad_pcb", 4)] {
+            let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join("qa/data/pcbnew").join(file)) else { continue };
+            let (design, model, _) = crate::import_kicad_pcb(&text).unwrap();
+            let got = &design.drawings.as_ref().expect("patterns").tuning_patterns;
+            assert_eq!(got.len(), patterns, "{file}");
+            let n_tracks = design.routing.as_ref().unwrap().tracks.len();
+            for p in got {
+                assert!(p.member_ids.len() > 3 && p.member_ids.len() <= n_tracks, "{file}: {} members", p.member_ids.len());
+                assert!(p.base_line.len() >= 2 && p.target_length.opt > 0, "{file}: {p:?}");
+            }
+            // Written again, the board has the same patterns, with the same members.
+            let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+            assert_eq!(out.matches("\t(generated\n").count(), patterns, "{file}");
+            let (again, _, _) = crate::import_kicad_pcb(&out).unwrap();
+            let key = |p: &eda_model::tuning::TuningPattern| (p.layer.clone(), p.origin.x, p.origin.y);
+            let mut again = again.drawings.as_ref().unwrap().tuning_patterns.clone();
+            again.sort_by_key(key);
+            let mut got: Vec<_> = got.clone();
+            got.sort_by_key(key);
+            assert_eq!(again.len(), patterns, "{file}");
+            for (a, b) in got.iter().zip(&again) {
+                let mut b = b.clone();
+                assert_eq!(a.member_ids.len(), b.member_ids.len(), "{file}");
+                b.id = a.id.clone();
+                b.member_ids = a.member_ids.clone();
+                assert_eq!(*a, b, "{file}");
+            }
+        }
     }
 
     #[test]

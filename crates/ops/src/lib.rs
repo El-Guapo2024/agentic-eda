@@ -74,6 +74,7 @@ mod pcb_paste;
 mod pcb_paste_special;
 mod pcb_props;
 mod pcb_transform;
+mod tuning;
 mod zone_overrides;
 mod sch_annotate;
 mod sch_clipboard;
@@ -802,6 +803,24 @@ pub enum Cmd {
         tracks: Vec<Track>,
         #[serde(default)]
         vias: Vec<Via>,
+    },
+
+    /// What the length tuner (`crates/pns`'s `MeanderPlacer`, `GENERATOR_TOOL::GenEditAction`) makes, as one undo step: remove the tracks of
+    /// the line it tuned (`remove_track_ids`, the old pattern's members among them) and the pattern `remove_pattern`, add `tracks`, and add
+    /// `pattern` with the tracks of `member_indices` (indices into `tracks`) as its members -- see [`eda_model::tuning::TuningPattern`]. A new
+    /// pattern has an empty id; re-tuning one removes it and adds the new record under the same id; removing a pattern is `pattern: None` with the
+    /// baseline put back as `tracks`. Unknown track ids are tolerated, as `CommitRoute`'s are.
+    CommitTuning {
+        #[serde(default)]
+        pattern: Option<eda_model::tuning::TuningPattern>,
+        #[serde(default)]
+        remove_pattern: Option<String>,
+        #[serde(default)]
+        remove_track_ids: Vec<String>,
+        #[serde(default)]
+        tracks: Vec<Track>,
+        #[serde(default)]
+        member_indices: Vec<usize>,
     },
 
     /// Move/rotate one or more placed parts by an exact cartesian offset
@@ -1808,6 +1827,7 @@ impl Cmd {
             Cmd::ExchangeFootprints { references, .. } => references.iter().map(String::as_str).collect(),
             Cmd::ReannotateBoard { .. } => vec!["reannotate"],
             Cmd::CommitRoute { .. } => vec!["route"],
+            Cmd::CommitTuning { pattern, remove_pattern, .. } => remove_pattern.iter().map(String::as_str).chain(pattern.iter().map(|p| p.layer.as_str())).collect(),
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
@@ -2220,9 +2240,11 @@ impl<'a> Board<'a> {
     /// Apply a command, or refuse it. A group keeps only the members that are still on the board afterwards (`pcb_groups.rs`).
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         let groups_before = self.group_universe();
+        let patterns_before = self.tuning_universe();
         let edge_before = outline::snapshot(&self.design);
         self.apply_cmd(cmd)?;
         self.tidy_groups(groups_before);
+        self.tidy_tuning_patterns(patterns_before);
         outline::refresh_if_changed(&mut self.design, edge_before);
         Ok(())
     }
@@ -2397,6 +2419,7 @@ impl<'a> Board<'a> {
             Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
+            Cmd::CommitTuning { pattern, remove_pattern, remove_track_ids, tracks, member_indices } => self.commit_tuning(pattern.as_ref(), remove_pattern.as_deref(), remove_track_ids, tracks.clone(), member_indices),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
             Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
@@ -5246,6 +5269,8 @@ mod import_graphics_tests;
 mod import_graphics_sch_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
+#[cfg(test)]
+mod tuning_tests;
 #[cfg(test)]
 pub(crate) mod sch_annotate_tests;
 #[cfg(test)]
