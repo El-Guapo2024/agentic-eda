@@ -4,8 +4,8 @@
 //! The pure-Rust tests are our writer. The slow ones hand the file to kicad-cli (`EDA_SLOW_TESTS=1`, and they skip when there is none): it loads every file and runs
 //! its ERC, and its netlist says which pin each wire reaches -- the swapped pins are on each other's nets there too.
 
-use eda_kicad::{export_kicad_sch, ExportMeta};
-use eda_model::ir::{Design, LabelKind, NetLabel, Point, Provenance, SchematicSection, SymbolInstance, Wire};
+use eda_kicad::{export_kicad_sch, export_kicad_sch_tree, ExportMeta};
+use eda_model::ir::{Design, LabelKind, LabelShape, NetLabel, Point, Provenance, SchematicSection, SheetInstance, SheetPin, SymbolInstance, Wire};
 use eda_model::symbol::{LibPin, LibSymbol, SPoint, SymbolGraphic};
 use eda_model::{ConstraintModel, Part, Pin, PinKind};
 use std::collections::BTreeMap;
@@ -226,5 +226,83 @@ fn kicad_loads_the_swapped_pins_and_reaches_the_pins_where_the_wires_are() {
     assert_eq!((pins(&plain, "NET_A"), pins(&plain, "NET_B"), pins(&plain, "NET_Y")), (vec!["1".to_string()], vec!["2".to_string()], vec!["3".to_string()]), "{plain:?}");
     let swapped = nets_of("swapped", true);
     assert_eq!((pins(&swapped, "NET_A"), pins(&swapped, "NET_B"), pins(&swapped, "NET_Y")), (vec!["2".to_string()], vec!["1".to_string()], vec!["3".to_string()]), "{swapped:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One sheet that has all three of this package's file details at once: U1 with pins 1 and 2 swapped, a sheet whose pin was moved to its top edge (it was on the left), and a text that
+/// was justified right and bottom by a mirror (`SCH_TEXT::MirrorSpinStyle` on a left-justified one), one that runs up the sheet and a centred one.
+fn details_design(m: &ConstraintModel) -> Design {
+    let mut sch = text_sheet(m);
+    sch.extras.swap_pin_places("U1", "1", "2");
+    sch.sheets.push(SheetInstance {
+        id: "sheet_a".into(),
+        name: "Sub".into(),
+        file: "sub.kicad_sch".into(),
+        at: Point { x: 120_000, y: 100_000 },
+        size: (30_000, 20_000),
+        // moved along the border from the left edge, (120, 110) mm, to the top edge
+        pins: vec![SheetPin { id: String::new(), name: "IN".into(), shape: LabelShape::Input, at: Point { x: 135_000, y: 100_000 } }],
+        page: "2".into(),
+    });
+    let mut design = design_with(sch);
+    design.sheet_contents = Some(BTreeMap::from([("sub.kicad_sch".to_string(), SchematicSection::default())]));
+    design
+}
+
+#[test]
+fn our_file_with_the_three_details_has_what_we_say_in_it_and_kicad_reads_it_the_same() {
+    let m = model();
+    let design = details_design(&m);
+    let files = export_kicad_sch_tree(&design, &m, &META, "root.kicad_sch").expect("the sheets export");
+    let root = &files.iter().find(|(n, _)| n == "root.kicad_sch").expect("a root file").1;
+    // what we write: the swapped pins as the cached copy, the pin on the top edge as KiCad names it (side 90), the texts with their justification
+    assert!(root.contains("(symbol (lib_name \"GATE_1\") (lib_id \"test:GATE\")"));
+    assert!(root.contains("(pin \"IN\" input\n\t\t\t(at 135 100 90)"), "{}", root.lines().filter(|l| l.contains("(pin \"IN\"") || l.contains("(at 135 100")).collect::<Vec<_>>().join("\n"));
+    assert!(text_form(root, "mirrored").contains("(justify right bottom)"));
+
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped the kicad-cli half: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped the kicad-cli half: no kicad-cli");
+        return;
+    };
+    let dir = std::env::temp_dir().join(format!("eda_sch_details_all_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (name, text) in &files {
+        std::fs::write(dir.join(name), text).unwrap();
+    }
+    let file = dir.join("root.kicad_sch");
+
+    // 1. the ERC runs on it: the file and the sheet it names load
+    let report = erc(&cli, &file);
+    assert!(report.get("sheets").is_some(), "{report}");
+    // ... and reports the sheet pin where we put it: the sheet's file has no hierarchical label for it ("hier_label_mismatch"), which KiCad says at the pin. (The report's
+    // positions are hundredths of a millimetre: the pin at (135, 100) mm is (1.35, 1.0).)
+    let mismatch = report["sheets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|s| s["violations"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["type"] == "hier_label_mismatch")
+        .unwrap_or_else(|| panic!("KiCad did not report the sheet pin: {report}"));
+    let pos = &mismatch["items"][0]["pos"];
+    assert_eq!((pos["x"].as_f64(), pos["y"].as_f64()), (Some(1.35), Some(1.0)), "{mismatch}");
+
+    // 2. KiCad reads the file and writes it again (`kicad-cli sch upgrade --force`, its own writer): what it kept is what it understood
+    let run = Command::new(&cli).args(["sch", "upgrade", "--force"]).arg(&file).output().expect("run kicad-cli");
+    assert!(run.status.success(), "kicad-cli sch upgrade: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    let back = std::fs::read_to_string(&file).unwrap();
+    // the justification of each text is the one we wrote (KiCad writes `(justify ...)` for what is not centre and centre, in its own order)
+    assert!(text_form(&back, "legacy").contains("(justify left bottom)"), "{}", text_form(&back, "legacy"));
+    assert!(!text_form(&back, "centred").contains("justify"), "{}", text_form(&back, "centred"));
+    assert!(text_form(&back, "runs up").contains("(at 70 40 90)") && text_form(&back, "runs up").contains("(justify right top)"), "{}", text_form(&back, "runs up"));
+    assert!(text_form(&back, "mirrored").contains("(justify right bottom)"), "{}", text_form(&back, "mirrored"));
+    // the sheet pin is where we put it, on the side KiCad gives a pin on the top edge
+    assert!(back.contains("(pin \"IN\" input") && back.contains("(at 135 100 90)"), "{}", back.lines().filter(|l| l.contains("IN")).collect::<Vec<_>>().join("\n"));
+    // the pins that traded places are still written as a copy of the symbol of their own, with pin 1 where pin 2 is in the library
+    assert!(back.contains("(lib_name \"GATE_1\")"), "KiCad kept the symbol's own copy");
+    assert_eq!(cached_pin_at(&back, "GATE_1", "1"), cached_pin_at(root, "test:GATE", "2"));
     let _ = std::fs::remove_dir_all(&dir);
 }
