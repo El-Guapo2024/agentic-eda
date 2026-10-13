@@ -1195,4 +1195,106 @@ mod tests {
             assert!((ours - kicad).abs() < 0.003, "{net}: kicad-cli says {kicad:.4} mm, the tuner measures {ours:.4} ({} items)", path.items.len());
         }
     }
+
+    /// The tuner on real boards: KiCad's own QA boards, a few tracks of each picked at random, every kind of tuning asked to lengthen them by 3 mm to a cursor along the track.
+    /// Nothing may panic, what the tuner makes must be accepted by `Cmd::CommitTuning`, and a single track that comes out `tuned` must be as long on the board as the placer said.
+    /// Slow tier (`EDA_SLOW_TESTS`, and `KICAD_SRC_DIR`).
+    #[test]
+    fn the_tuner_on_the_boards_of_kicads_own_qa_never_makes_what_the_board_would_refuse() {
+        let (Ok(dir), true) = (std::env::var("KICAD_SRC_DIR"), std::env::var_os("EDA_SLOW_TESTS").is_some()) else { return };
+        let mut rng = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move |n: u64| {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            rng % n.max(1)
+        };
+        let (mut tried, mut started, mut committed, mut measured, mut in_pad) = (0, 0, 0, 0, 0);
+        for name in ["issue8909", "issue3812", "issue6284", "issue5093", "issue14559", "issue11814", "stonehenge", "issue7325", "issue5102", "issue6039", "length_calculations"] {
+            let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join(format!("qa/data/pcbnew/{name}.kicad_pcb"))) else { continue };
+            let Ok((design, model, _)) = eda_kicad::import_kicad_pcb(&text) else { continue };
+            let scene = Rc::new(Scene::of(design, model));
+            // the straight segments of the nets worth tuning: long enough to have a stretch to put a meander on
+            let mut candidates: Vec<(ItemId, Point, Point, String)> = scene
+                .world
+                .iter()
+                .filter_map(|(id, it)| match it {
+                    Item::Segment(s) if s.net.is_some() && s.source_track.is_some() && ((s.b.x - s.a.x).abs() + (s.b.y - s.a.y).abs()) > 3_000 => Some((id, s.a, s.b, scene.layers.name_of(s.layer).to_string())),
+                    _ => None,
+                })
+                .collect();
+            candidates.sort_by_key(|c| c.0);
+            for _ in 0..12 {
+                if candidates.is_empty() {
+                    break;
+                }
+                let (_, a, b, layer) = candidates[next(candidates.len() as u64) as usize].clone();
+                let mid = Point { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+                let Some(pk) = pick(&scene, mid.x, mid.y, 60, Some(&layer)) else { continue };
+                for kind in [TuningMode::Single, TuningMode::DiffPair, TuningMode::DiffPairSkew] {
+                    tried += 1;
+                    // its length (or skew) now, and the target 3 mm longer
+                    let Ok(h) = hover(&scene, kind, &pk, &Value::Null) else { continue };
+                    let target_um = h.readout.current / 1000 + 3_000;
+                    let settings = if kind == TuningMode::DiffPairSkew { json!({}) } else { json!({ "target_length": target_um }) };
+                    let Ok(mut t) = Tuner::start(scene.clone(), kind, &pk, pk.at, &settings) else { continue };
+                    started += 1;
+                    // the end of the stretch: an end of the picked segment, and the cursor a little off it
+                    let to = if next(2) == 0 { b } else { a };
+                    let cursor = Point { x: to.x + (next(400) as i64 - 200), y: to.y + (next(400) as i64 - 200) };
+                    let Ok(moved) = t.mv(cursor, true) else { continue };
+                    let (was_moved, status, current) = (moved.moved && !moved.edits.is_empty(), moved.readout.status, moved.readout.current as f64 / 1e6);
+                    let Ok(cmd) = t.command() else { continue };
+                    let after = apply_cmd(&scene, &cmd).unwrap_or_else(|e| panic!("{name}: the board refuses what the {kind:?} tuner made on {}: {e}", pk.net));
+                    committed += 1;
+                    if kind == TuningMode::Single && was_moved && status == TuningStatus::Tuned {
+                        let scene2 = Scene::of(after, scene.model.clone());
+                        let member = scene2.design.drawings.as_ref().and_then(|d| d.tuning_patterns.last()).and_then(|p| p.member_ids.first().cloned()).expect("the new pattern has members");
+                        let seg = scene2.world.iter().find_map(|(id, it)| match it {
+                            Item::Segment(s) if s.source_track.as_ref().is_some_and(|(tid, _)| *tid == member) => Some(id),
+                            _ => None,
+                        });
+                        if let Some(seg) = seg {
+                            let path = assemble_tuning_path(&scene2.world, seg).expect("a path");
+                            let len = path.length(&scene2.world, &scene2.env) as f64 / 1e6;
+                            // a meander that ran into a pad or a via of its own net is measured as KiCad's length calculation does (`clipLineToPad`: what is in the pad is the straight way out), which
+                            // the placer, like KiCad's, does not take into account: those are counted and left out
+                            let (mut raw, mut clipped) = (0.0f64, 0.0f64);
+                            for it in &path.items {
+                                if let eda_pns::tuning_path::PathItem::Line { line, clipped: c } = it {
+                                    raw += line.pts.windows(2).map(|w| ((w[1].x - w[0].x) as f64).hypot((w[1].y - w[0].y) as f64)).sum::<f64>() / 1000.0;
+                                    clipped += c.length() as f64 / 1e6;
+                                }
+                            }
+                            if raw - clipped > 0.005 {
+                                in_pad += 1;
+                            } else {
+                                assert!((len - current).abs() < 0.08, "{name}: net {} is {len:.4} mm on the board, the placer said {current:.4}", pk.net);
+                                measured += 1;
+                                // the pattern put back (`Remove`) leaves the net as long as it was, and tuned again (`Regenerate`) as long as it was tuned
+                                let pat = scene2.design.drawings.as_ref().and_then(|d| d.tuning_patterns.last()).cloned().expect("the pattern");
+                                let removed = apply_cmd(&scene2, &reset_cmd(&scene2, &pat).unwrap_or_else(|e| panic!("{name}: {} cannot be removed: {e}", pk.net))).expect("the removal applies");
+                                let scene3 = Scene::of(removed, scene.model.clone());
+                                let back = scene3.world.iter().find_map(|(id, it)| match it {
+                                    Item::Segment(s3) if s3.net.as_deref() == Some(pk.net.as_str()) && s3.source_track.is_some() && Seg::new(s3.a, s3.b).squared_distance(pat.origin) <= 4 => Some(id),
+                                    _ => None,
+                                });
+                                if let Some(back) = back {
+                                    let blen = assemble_tuning_path(&scene3.world, back).map(|p| p.length(&scene3.world, &scene3.env)).unwrap_or(0) as f64 / 1e6;
+                                    let was = h.readout.current as f64 / 1e6;
+                                    assert!((blen - was).abs() < 0.01, "{name}: net {} is {blen:.4} mm once its pattern is removed, it was {was:.4}", pk.net);
+                                }
+                                let again = retune_cmds(&scene2, &pat, &Value::Null).unwrap_or_else(|e| panic!("{name}: {} cannot be tuned again: {e}", pk.net));
+                                let scene4 = apply_all(&scene2, &again).expect("the retune applies");
+                                let q = scene4.design.drawings.as_ref().and_then(|d| d.tuning_patterns.iter().find(|q| q.id == pat.id)).expect("the pattern is still there");
+                                assert!((q.last_tuning_length as f64 / 1e6 - current).abs() < 0.08, "{name}: net {} tuned again to {:.4}, it was {current:.4}", pk.net, q.last_tuning_length as f64 / 1e6);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("tried {tried}, started {started}, committed {committed}, tuned and measured {measured} (left out, a meander in a pad: {in_pad})");
+        assert!(started > 20 && committed > 10, "the test is not testing much: {started} started, {committed} committed");
+    }
 }
