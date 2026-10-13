@@ -2,7 +2,7 @@
 // Cleanup Graphics, Change Footprint(s) and Update Footprint(s) from Library. Each cites GLOBAL_EDIT_TOOL
 // (pcbnew/tools/global_edit_tool.cpp at 8303b2ad); the logic is kicad-port/pcbGlobalEdit.ts and the
 // dialogs components/PcbGlobalEditDialogs.tsx. Also the Inspect menu's Compare Footprint with Library
-// (BOARD_INSPECTION_TOOL::DiffFootprint), which ends in the update dialog. Called from `registerPcbEditSweep`.
+// (BOARD_INSPECTION_TOOL::DiffFootprint), which ends in the update dialog, and Geographical Reannotate (BOARD_REANNOTATE_TOOL). Called from `registerPcbEditSweep`.
 
 import { createElement } from "react";
 import type { Cmd } from "../api/types";
@@ -11,6 +11,7 @@ import { CHANGE_OPTIONS, UPDATE_OPTIONS, exchangeCmd, exchangeReport, isLibraryI
 import { postExchangePlan } from "../api/fpAssign";
 import { CleanupGraphicsDialog, ExchangeFootprintsDialog, GlobalDeletionDialog, type ExchangeState } from "../components/PcbGlobalEditDialogs";
 import { FootprintDiffDialog } from "../components/FootprintDiffDialog";
+import { ReannotateDialog } from "../components/ReannotateDialog";
 import { closeSweepDialog, openSweepDialog } from "./pcbSweepDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
 
@@ -170,6 +171,18 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
           },
         }),
       });
+    })
+  );
+
+  // ----------------------------------------------------------------- Geographical Reannotate
+  // BOARD_REANNOTATE_TOOL::ShowReannotateDialog -> DIALOG_BOARD_REANNOTATE: always opens, the scope on "Selection" when footprints are selected (`TransferDataToWindow`). The dialog is
+  // components/ReannotateDialog.tsx; the renumbering is `reannotate_board` (crates/ops/src/reannotate.rs), one undo step in which the symbols follow.
+  m.set(
+    "pcbnew.ReannotateTool.ShowReannotateDialog",
+    pcbOnly(() => {
+      if (!board) return;
+      const footprints = [...state.selection].filter((id) => board.parts.some((p) => p.ref === id && p.placed));
+      openSweepDialog({ kind: "element", element: createElement(ReannotateDialog, { selection: footprints }) });
     })
   );
 }

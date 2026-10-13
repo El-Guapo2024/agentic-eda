@@ -62,6 +62,7 @@ pub use fp_exchange::{board_footprint, footprint_name_of, pending_footprint_chan
 mod library_place;
 mod outline;
 mod part_rename;
+mod reannotate;
 mod pcb_global_edit;
 mod pcb_groups;
 mod pcb_paste;
@@ -722,6 +723,16 @@ pub enum Cmd {
         options: ExchangeOptions,
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         library: BTreeMap<String, Footprint>,
+    },
+    /// Geographical Reannotate (`pcbnew.ReannotateTool.ShowReannotateDialog`, `DIALOG_BOARD_REANNOTATE`): the footprints on the board renumbered by where they are, in the order,
+    /// scope, prefixes and start numbers of `options` (`eda_model::reannotate`); `selection` is the footprints the "Selection" scope names (the studio's selection). Refused when two
+    /// footprints would be left with one reference. The symbols take the new references in the same step (what "Update Schematic from PCB" would have them take) and the board's
+    /// parts move with them, so there is no part, pose or route under an old reference; one undo step on both editors.
+    ReannotateBoard {
+        #[serde(default)]
+        options: eda_model::reannotate::ReannotateOptions,
+        #[serde(default)]
+        selection: Vec<String>,
     },
     /// Insert fresh copies of whole tracks/vias/zones/shapes/texts
     /// (ids ignored and reassigned, same as `AddShape`/`AddText`) --
@@ -1710,6 +1721,8 @@ impl Cmd {
             Cmd::RenameSymbol { .. } | Cmd::Annotate { .. } | Cmd::IncrementAnnotations { .. } => true,
             // the board's footprint and the symbol's Footprint field are put right together
             Cmd::ExchangeFootprints { .. } => true,
+            // the footprints' references and the symbols' go together
+            Cmd::ReannotateBoard { .. } => true,
             // Replace All renames a reference when it is asked to look at them
             Cmd::ReplaceText { search, .. } => search.replace_references,
             // Field Properties of a Reference field renames the symbol
@@ -1757,6 +1770,7 @@ impl Cmd {
             Cmd::PasteItems { .. } | Cmd::PasteClipboard { .. } | Cmd::PasteSpecial { .. } => vec!["paste"],
             Cmd::PlaceFootprint { footprint, .. } => vec![footprint.as_str()],
             Cmd::ExchangeFootprints { references, .. } => references.iter().map(String::as_str).collect(),
+            Cmd::ReannotateBoard { .. } => vec!["reannotate"],
             Cmd::CommitRoute { .. } => vec!["route"],
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
@@ -2321,6 +2335,7 @@ impl<'a> Board<'a> {
             Cmd::PasteSpecial { text, at, mode, clear_nets } => self.paste_special(text, *at, *mode, *clear_nets),
             Cmd::PlaceFootprint { footprint, at, reference, value, definition } => self.place_footprint(footprint, *at, reference, value, definition.as_ref()),
             Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
+            Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
@@ -5140,6 +5155,8 @@ mod pcb_groups_tests;
 pub(crate) mod sch_annotate_tests;
 #[cfg(test)]
 mod part_rename_tests;
+#[cfg(test)]
+mod reannotate_tests;
 #[cfg(test)]
 mod fp_exchange_tests;
 #[cfg(test)]

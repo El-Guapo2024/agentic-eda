@@ -23,6 +23,7 @@ pub mod modules;
 pub mod outline;
 pub mod pad_geom;
 pub mod page;
+pub mod reannotate;
 pub mod rules;
 pub mod sch_clipboard;
 pub mod sch_extras;

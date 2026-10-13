@@ -337,3 +337,128 @@ fn a_locked_footprint_is_not_changed_by_its_symbols_footprint_field_and_update_p
     assert_eq!(load(&dir).unwrap().2.part("U1").unwrap().footprint.as_deref(), Some("Alt:WIDE"));
     assert!(crate::fp_assign_api::update_pcb(&dir)["changes"].as_array().unwrap().is_empty());
 }
+
+// ------------------------------------------------------------------------------------------------ Geographical Reannotate
+
+/// Where the symbol `reference` is drawn: its sheet (the root is `""`) and the point on it.
+fn symbol_at(dir: &Path, reference: &str) -> Option<(String, i64, i64)> {
+    let (_, design, _) = load(dir).unwrap();
+    let screens = design.schematic.iter().map(|s| (String::new(), s)).chain(design.sheet_contents.iter().flat_map(|c| c.iter().map(|(file, s)| (file.clone(), s))));
+    screens.flat_map(|(file, s)| s.symbols.iter().map(move |x| (file.clone(), x))).find(|(_, s)| s.id == reference).map(|(file, s)| (file, s.at.x, s.at.y))
+}
+
+fn reannotate_cmd(options: serde_json::Value, selection: &[&str]) -> Cmd {
+    serde_json::from_value(serde_json::json!({ "op": "reannotate_board", "options": options, "selection": selection })).expect("a board command")
+}
+
+/// The board with U1 and U2 having exchanged places: U2 is the left one now, so a reannotation by place gives the numbers back the other way round.
+fn board_with_exchanged_parts(name: &str) -> std::path::PathBuf {
+    let dir = board_with_schematic(name);
+    step(&dir, Cmd::AddTrack { net: "GND".into(), layer: "F.Cu".into(), width: 200, pts: vec![eda_model::ir::Point { x: 4_000, y: 5_000 }, eda_model::ir::Point { x: 14_000, y: 5_000 }] }, false, "test").unwrap();
+    step(&dir, Cmd::Swap { a: "U1".into(), b: "U2".into() }, false, "test").unwrap();
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000), Some(5_000)));
+    dir
+}
+
+#[test]
+fn a_geographical_reannotation_renumbers_the_footprints_and_the_symbols_follow_in_one_undo_step_from_either_tab() {
+    let dir = board_with_exchanged_parts("reannotate_by_place");
+    let (u1_before, u2_before) = (symbol_at(&dir, "U1").unwrap(), symbol_at(&dir, "U2").unwrap());
+    assert_ne!(u1_before, u2_before, "the two symbols are not in one place (each is on its module's sheet)");
+    // the plan first: what the dialog's window tells before the run
+    let plan = crate::fp_assign_api::reannotate_plan(&dir, serde_json::json!({ "options": { "direction": 0 }, "selection": [] }).to_string().as_bytes());
+    assert_eq!((plan["ok"].as_bool(), plan["valid"].as_bool()), (Some(true), Some(true)), "{plan}");
+    let front: Vec<&str> = plan["plan"]["front"].as_array().unwrap().iter().map(|f| f["reference"].as_str().unwrap()).collect();
+    assert_eq!(front, ["U2", "U1"], "the left footprint first");
+    let log: Vec<(&str, &str)> = plan["plan"]["changes"].as_array().unwrap().iter().map(|c| (c["old"].as_str().unwrap(), c["new"].as_str().unwrap())).collect();
+    assert_eq!(log, [("U1", "U2"), ("U2", "U1")], "the change log, by the old reference");
+    assert_eq!(plan["plan"]["prefixes"], serde_json::json!(["U"]));
+    assert_eq!(pose_x(&dir, "U1"), Some(15_000), "a plan changes nothing");
+
+    step(&dir, reannotate_cmd(serde_json::json!({ "direction": 0 }), &[]), false, "test").unwrap();
+    assert_consistent(&dir);
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(5_000), Some(15_000)), "the left footprint is U1 now");
+    assert_eq!((symbol_at(&dir, "U2"), symbol_at(&dir, "U1")), (Some(u1_before.clone()), Some(u2_before.clone())), "each symbol took its footprint's new reference");
+    let (_, design, model) = load(&dir).unwrap();
+    assert_eq!(design.drawings.as_ref().unwrap().renamed_parts.len(), 2, "a swap: two entries, applied together");
+    assert!(model.nets.iter().any(|n| n.name == "GND" && n.pins.contains(&"U2.1".to_string()) && n.pins.contains(&"U1.1".to_string())));
+    let after = crate::fp_assign_api::reannotate_plan(&dir, serde_json::json!({ "options": { "direction": 0 } }).to_string().as_bytes());
+    assert_eq!(after["plan"]["changes"].as_array().unwrap().iter().filter(|c| c["old"] != c["new"]).count(), 0, "numbered by place: a second run finds nothing to do");
+
+    // one Ctrl+Z from the PCB tab takes the schematic's half and the board's half back
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_consistent(&dir);
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000), Some(5_000)));
+    assert_eq!((symbol_at(&dir, "U1"), symbol_at(&dir, "U2")), (Some(u1_before), Some(u2_before)));
+    assert!(load(&dir).unwrap().1.drawings.as_ref().is_none_or(|d| d.renamed_parts.is_empty()));
+    // redo from the schematic tab, and take it back from there
+    redo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_eq!(pose_x(&dir, "U1"), Some(5_000));
+    undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+    assert_consistent(&dir);
+    assert_eq!(pose_x(&dir, "U1"), Some(15_000));
+}
+
+#[test]
+fn the_reannotate_command_is_read_from_the_studios_json_with_its_numbers() {
+    // the path of `POST /api/cmd`: the body is read as JSON, then the command out of its `cmd`
+    let body = br#"{"cmd":{"op":"reannotate_board","options":{"direction":2,"grid_um":1270,"scope":"selection","exclude":"R C7*","front_start":5,"back_start":0,"front_prefix":"F_","remove_back_prefix":true},"selection":["U1"]}}"#;
+    let req: serde_json::Value = serde_json::from_slice(body).unwrap();
+    let Cmd::ReannotateBoard { options, selection } = serde_json::from_value::<Cmd>(req["cmd"].clone()).expect("the command reads") else { panic!("not the command") };
+    assert_eq!((options.direction, options.grid_um, options.front_start, options.back_start), (2, 1_270, 5, 0));
+    assert_eq!((options.scope, options.exclude.as_str(), options.front_prefix.as_str(), options.remove_back_prefix), (eda_model::reannotate::Scope::Selection, "R C7*", "F_", true));
+    assert_eq!(selection, ["U1"]);
+    // options left out take the dialog's own defaults
+    let bare: Cmd = serde_json::from_value(serde_json::json!({ "op": "reannotate_board" })).unwrap();
+    assert!(matches!(bare, Cmd::ReannotateBoard { ref options, ref selection } if options.front_start == 1 && selection.is_empty()));
+    assert!(serde_json::from_value::<Cmd>(serde_json::json!({ "op": "reannotate_board", "options": { "direction": 1, "nope": true } })).is_err(), "an option the dialog does not have is refused");
+}
+
+#[test]
+fn the_selection_scope_renumbers_only_the_selected_footprints_and_a_plan_says_why_a_run_is_refused() {
+    let dir = board_with_exchanged_parts("reannotate_selection");
+    // U2 selected alone: U1 keeps its number, so U2 takes the first free one, 2, where it is
+    let options = serde_json::json!({ "scope": "selection" });
+    let plan = crate::fp_assign_api::reannotate_plan(&dir, serde_json::json!({ "options": options, "selection": ["U2"] }).to_string().as_bytes());
+    let acts: Vec<(&str, &str)> = plan["plan"]["changes"].as_array().unwrap().iter().map(|c| (c["old"].as_str().unwrap(), c["action"].as_str().unwrap())).collect();
+    assert_eq!(acts, [("U1", "exclude"), ("U2", "update")]);
+    step(&dir, reannotate_cmd(options, &["U2"]), false, "test").unwrap();
+    assert_eq!((pose_x(&dir, "U1"), pose_x(&dir, "U2")), (Some(15_000), Some(5_000)), "U2 is the first free number after U1's: itself");
+    // a plan for options that are not the dialog's is told, not guessed
+    let bad = crate::fp_assign_api::reannotate_plan(&dir, serde_json::json!({ "options": { "direction": "up" } }).to_string().as_bytes());
+    assert_eq!(bad["ok"], false);
+    assert!(bad["message"].as_str().unwrap().contains("bad options"), "{bad}");
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): after a reannotation the derived `.kicad_pcb` and `.kicad_sch` load, and kicad-cli's DRC with `--schematic-parity` finds every footprint
+/// under the reference its symbol has -- the two parts changed places in the numbering and the parity test still says what it said before.
+#[test]
+fn kicad_cli_finds_the_footprints_under_the_symbols_references_after_a_reannotation() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    }
+    let dir = board_with_exchanged_parts("reannotate_kicad_cli");
+    let baseline = parity(&dir);
+    step(&dir, reannotate_cmd(serde_json::json!({}), &[]), false, "test").unwrap();
+    let after = parity(&dir);
+    assert_eq!(after, baseline, "the reannotation adds nothing to what the parity test said before it");
+    for (kind, text) in &after {
+        assert!(!matches!(kind.as_str(), "missing_footprint" | "extra_footprint" | "duplicate_footprints"), "{kind}: {text}");
+        assert!(!text.to_lowercase().contains("footprint given by symbol"), "{kind}: {text}");
+    }
+    let pcb = std::fs::read_to_string(dir.join(".kicad").join("board.kicad_pcb")).expect("the derived board is beside the project");
+    assert!(pcb.contains("\"Reference\" \"U1\"") && pcb.contains("\"Reference\" \"U2\""), "the derived .kicad_pcb names both footprints");
+    // the footprint on the left is U1 in the file kicad-cli read
+    let at_of = |reference: &str| -> f64 {
+        let i = pcb.find(&format!("\"Reference\" \"{reference}\"")).unwrap();
+        let head = &pcb[..i];
+        let at = head.rfind("(at ").unwrap();
+        head[at + 4..].split_whitespace().next().unwrap().parse().unwrap()
+    };
+    assert!(at_of("U1") < at_of("U2"), "U1 is the left footprint: {} {}", at_of("U1"), at_of("U2"));
+}

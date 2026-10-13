@@ -139,6 +139,34 @@ impl<'a> Board<'a> {
         }
     }
 
+    /// Every screen of the design that is in the hierarchy: the root (`""`) and the sheet files reachable from it.
+    fn hierarchy_files(&self) -> Vec<String> {
+        let mut files: Vec<String> = vec![String::new()];
+        let reachable = eda_model::sheet_list::reachable_files(&self.design);
+        files.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().filter(|f| reachable.contains(*f)).cloned()));
+        files
+    }
+
+    /// The references of the schematic's symbols, on every sheet.
+    pub(crate) fn symbol_references(&self) -> BTreeSet<String> {
+        self.hierarchy_files().iter().filter_map(|f| self.screen_of_file(f)).flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect()
+    }
+
+    /// The renames that give each symbol -- every unit of it, on every sheet -- the new reference `map` says (`old -> new`): what [`Board::annotate_apply`] writes. The board's
+    /// parts are not part of it; the caller moves them ([`Board::rename_part`]).
+    pub(crate) fn reference_renames(&self, map: &BTreeMap<String, String>) -> Vec<Rename> {
+        let mut out = Vec::new();
+        for file in self.hierarchy_files() {
+            let Some(sch) = self.screen_of_file(&file) else { continue };
+            for (i, s) in sch.symbols.iter().enumerate() {
+                if let Some(new) = map.get(&s.id) {
+                    out.push(Rename { file: file.clone(), item: Item::Symbol(i), old: s.id.clone(), unit: s.unit, new: new.clone() });
+                }
+            }
+        }
+        out
+    }
+
     /// The screens the scope takes, and what of each.
     fn annotate_scopes(&self, scope: AnnotateScope, ids: Option<&[String]>, opts: &AnnotateOptions) -> Vec<ScreenScope> {
         let walk = sheet_list::walk(&self.design);

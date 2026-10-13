@@ -7,6 +7,8 @@
 //!  * `POST /api/exchange_plan`: `DIALOG_EXCHANGE_FOOTPRINTS::processFootprint`'s look before the change: for each footprint the dialog's choice names, whether the footprint it
 //!    is to be put on (Change) or its own library copy (Update) is found and, for an update, whether the board's differs from it (`FootprintNeedsUpdate`).
 //!  * `GET /api/footprint_diff?ref=U1`: `BOARD_INSPECTION_TOOL::DiffFootprint`: the board's footprint against its library copy, as the lines of the report and both drawings.
+//!  * `POST /api/reannotate_plan`: `DIALOG_BOARD_REANNOTATE::ReannotateBoard`'s plan, before anything is written: the front and back lists in their order, the prefixes, the change log and what is
+//!    wrong with it (`eda_model::reannotate`). The change itself is `Cmd::ReannotateBoard`.
 
 use crate::board;
 use crate::library_index::Kind;
@@ -124,4 +126,24 @@ pub fn footprint_diff(dir: &Path, reference: &str) -> Value {
         }
     }
     Value::Object(out)
+}
+
+/// `{ ok, valid, plan }` for the body `{ "options": {..}, "selection": [..] }` (the fields of `Cmd::ReannotateBoard`): what the dialog's run works out for the board as it is -- the lists
+/// it logs, the change log, the references that are empty or have no number and the duplicates. `valid` is false when two footprints would be left with one reference. Nothing is changed.
+pub fn reannotate_plan(dir: &Path, body: &[u8]) -> Value {
+    let Ok(req) = serde_json::from_slice::<Value>(body) else { return json!({ "ok": false, "message": "the request is not JSON" }) };
+    let options: eda_model::reannotate::ReannotateOptions = match req.get("options") {
+        Some(v) if !v.is_null() => match serde_json::from_value(v.clone()) {
+            Ok(o) => o,
+            Err(e) => return json!({ "ok": false, "message": format!("bad options: {e}") }),
+        },
+        _ => Default::default(),
+    };
+    let selection: Vec<String> = req.get("selection").and_then(Value::as_array).map(|a| a.iter().filter_map(|r| r.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let (meta, design, model) = match board::load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
+    };
+    let plan = eda_ops::Board::new(design, &model, meta.snap_um, meta.spacing_um).reannotate_plan(&options, &selection);
+    json!({ "ok": true, "valid": plan.ok(), "plan": plan })
 }

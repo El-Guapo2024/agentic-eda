@@ -1,7 +1,7 @@
 // The HTTP side of the footprint assignment tools (crates/cli/src/fp_assign_api.rs): what Update PCB from Schematic lists, and, as the tools land, the exchange, update,
 // compare and reannotate dialogs' reports.
 
-import type { Shape } from "./types";
+import type { ReannotateOptions, Shape } from "./types";
 
 /** One footprint whose symbol names another footprint than the board has (`GET /api/update_pcb`). */
 export interface UpdatePcbChange {
@@ -81,4 +81,52 @@ export interface FootprintDiff {
 export async function fetchFootprintDiff(reference: string): Promise<FootprintDiff> {
   const r = await fetch(`/api/footprint_diff?ref=${encodeURIComponent(reference)}`);
   return (await r.json()) as FootprintDiff;
+}
+
+/** A line of the plan's front or back list (`LogFootprints`): the place in the order, the footprint, where it is and where it is taken to be. Micrometres. */
+export interface ReannotateListed {
+  index: number;
+  reference: string;
+  x: number;
+  y: number;
+  rounded_x: number;
+  rounded_y: number;
+}
+
+/** What becomes of one footprint's reference (`REFDES_CHANGE`). */
+export interface ReannotateChange {
+  old: string;
+  new: string;
+  front: boolean;
+  /** `update` gets a new reference; `empty` and `invalid` (no number) and `exclude` keep theirs. */
+  action: "update" | "empty" | "invalid" | "exclude";
+}
+
+/** A footprint whose reference is empty or has no number (`aBadRefDes`). */
+export interface ReannotateBad {
+  reference: string;
+  /** The library id, empty when it has none. */
+  fpid: string;
+  x: number;
+  y: number;
+}
+
+/** What a run of the dialog works out (crates/model/src/reannotate.rs `Plan`). */
+export interface ReannotatePlan {
+  front: ReannotateListed[];
+  back: ReannotateListed[];
+  prefixes: string[];
+  excluded: string[];
+  changes: ReannotateChange[];
+  bad: ReannotateBad[];
+  /** "Duplicate instances of R3": the options leave two footprints one reference. Empty when the plan can be applied. */
+  errors: string[];
+}
+
+/** `POST /api/reannotate_plan`: the plan for the board as it is; nothing is changed. */
+export async function postReannotatePlan(options: ReannotateOptions, selection: readonly string[]): Promise<ReannotatePlan> {
+  const r = await fetch("/api/reannotate_plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ options, selection }) });
+  const j = (await r.json()) as { ok?: boolean; plan?: ReannotatePlan; message?: string };
+  if (!j.ok || !j.plan) throw new Error(j.message ?? "The reannotation could not be planned.");
+  return j.plan;
 }
