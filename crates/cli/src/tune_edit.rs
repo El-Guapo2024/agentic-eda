@@ -813,21 +813,42 @@ pub fn reset_cmd(scene: &Scene, pattern: &TuningPattern) -> Result<Cmd, String> 
     Ok(Cmd::CommitTuning { pattern: None, remove_pattern: Some(pattern.id.clone()), remove_track_ids: remove, tracks, member_indices: Vec::new() })
 }
 
-/// `PCB_TUNING_PATTERN::EditStart`, `Update`, `EditFinish` over a pattern that exists: its tracks put back to the baseline and the placer run over it again with
-/// `settings` (JSON, over what the pattern has). The commands, in order, are one undo step (`Cmd::Batch`).
-pub fn retune_cmds(scene: &Scene, pattern: &TuningPattern, settings: &Value) -> Result<Vec<Cmd>, String> {
-    let reset = reset_cmd(scene, pattern)?;
-    let after_reset = Scene::of(apply_cmd(scene, &reset)?, scene.model.clone());
-    let start = segment_near(&after_reset, pattern.origin, &pattern.layer, &pattern.base_line).ok_or("Unable to find the track the tuning pattern starts on.")?;
-    let (net, width) = match after_reset.world.get(start) {
+/// What a pattern being tuned again keeps beside its tuner: the command that put its tracks back to the baseline, the board that makes and the pattern as it was.
+pub struct EditCtx {
+    pub reset: Cmd,
+    pub after: Rc<Scene>,
+    /// Where the pattern ends (the point the tuner is moved to).
+    pub end: Point,
+    pub pattern: TuningPattern,
+    pub settings: Value,
+}
+
+/// A pattern being tuned again.
+pub struct Retune {
+    pub ctx: EditCtx,
+    pub tuner: Tuner,
+}
+
+fn point_setting(v: &Value, key: &str) -> Option<Point> {
+    let p = v.get(key)?;
+    Some(Point { x: p.get("x")?.as_f64()?.round() as i64, y: p.get("y")?.as_f64()?.round() as i64 })
+}
+
+/// The settings of a pattern as the request keys name them.
+const SETTING_KEYS: [&str; 10] = ["min_amplitude", "max_amplitude", "spacing", "corner_radius_percent", "rounded", "single_sided", "override_custom_rules", "initial_side", "target_length", "target_skew"];
+
+/// A tuner on `after` for `pattern`, starting at `origin`: the pattern's own settings, the request's over them (the length target of a rule is looked up again
+/// unless the pattern overrides the rules).
+fn tuner_for(after: Rc<Scene>, pattern: &TuningPattern, settings: &Value, origin: Point) -> Result<Tuner, String> {
+    let start = segment_near(&after, origin, &pattern.layer, &pattern.base_line).ok_or("Unable to find the track the tuning pattern starts on.")?;
+    let (net, width) = match after.world.get(start) {
         Some(Item::Segment(s)) => (Scene::net_name(&s.net), s.width),
         _ => return Err("Unable to find the track the tuning pattern starts on.".into()),
     };
-    let pk = Pick { item: start, track_id: String::new(), net, layer: pattern.layer.clone(), width, at: pattern.origin };
-    // the pattern's own settings, the request's over them; the length target of a rule is looked up again unless the pattern overrides the rules
+    let pk = Pick { item: start, track_id: String::new(), net, layer: pattern.layer.clone(), width, at: origin };
     let mut carried = Map::new();
     let me = serde_json::to_value(pattern).map_err(|e| e.to_string())?;
-    for key in ["min_amplitude", "max_amplitude", "spacing", "corner_radius_percent", "rounded", "single_sided", "override_custom_rules", "initial_side", "target_length", "target_skew"] {
+    for key in SETTING_KEYS {
         if let Some(v) = me.get(key) {
             carried.insert(key.into(), v.clone());
         }
@@ -837,14 +858,157 @@ pub fn retune_cmds(scene: &Scene, pattern: &TuningPattern, settings: &Value) -> 
             carried.insert(k.clone(), v.clone());
         }
     }
-    let mut tuner = Tuner::start(Rc::new(after_reset), pattern.mode, &pk, pattern.origin, &Value::Object(carried))?;
-    let moved = tuner.mv(pattern.end, false)?;
+    let mut tuner = Tuner::start(after, pattern.mode, &pk, origin, &Value::Object(carried))?;
+    tuner.pattern.id = pattern.id.clone();
+    Ok(tuner)
+}
+
+/// `PCB_TUNING_PATTERN::EditStart` over a pattern that exists: its tracks put back to the baseline (`resetToBaseline`) and the placer started on the result.
+/// `settings` (JSON) may carry new `origin` / `end` points and any of the dialog's settings.
+pub fn begin_retune(scene: &Scene, pattern: &TuningPattern, settings: &Value) -> Result<Retune, String> {
+    let reset = reset_cmd(scene, pattern)?;
+    let after = Rc::new(Scene::of(apply_cmd(scene, &reset)?, scene.model.clone()));
+    let origin = point_setting(settings, "origin").unwrap_or(pattern.origin);
+    let end = point_setting(settings, "end").unwrap_or(pattern.end);
+    let tuner = tuner_for(after.clone(), pattern, settings, origin)?;
+    Ok(Retune { ctx: EditCtx { reset, after, end, pattern: pattern.clone(), settings: settings.clone() }, tuner })
+}
+
+impl EditCtx {
+    /// The start of the pattern moved (its first edit point): the placer is started again at the new origin, on the same board, with the settings the tuner has now.
+    pub fn tuner_at(&self, origin: Point, now: &TuningPattern) -> Result<Tuner, String> {
+        let mut settings = if self.settings.is_object() { self.settings.clone() } else { json!({}) };
+        let current = serde_json::to_value(now).map_err(|e| e.to_string())?;
+        if let Some(o) = settings.as_object_mut() {
+            for key in SETTING_KEYS {
+                if let Some(v) = current.get(key) {
+                    o.insert(key.into(), v.clone());
+                }
+            }
+        }
+        tuner_for(self.after.clone(), &self.pattern, &settings, origin)
+    }
+}
+
+impl Retune {
+    /// `Update`: the placer run from the start of the pattern to its end.
+    pub fn fit(&mut self) -> Result<&Moved, String> {
+        let end = self.ctx.end;
+        fit(&mut self.tuner, end)
+    }
+
+    /// `EditFinish`: the commands that make the change, in order (one undo step).
+    pub fn commands(&self) -> Result<Vec<Cmd>, String> {
+        Ok(vec![self.ctx.reset.clone(), self.tuner.command()?])
+    }
+}
+
+/// `Update` for a tuner of a pattern that exists: moved to `end`, the first meander on the side the pattern says.
+pub fn fit(tuner: &mut Tuner, end: Point) -> Result<&Moved, String> {
+    let moved = tuner.mv(end, false)?;
     if !moved.moved || moved.edits.is_empty() {
         return Err("The tuning pattern could not be fitted again: the tracks between its start and its end are gone.".into());
     }
-    tuner.pattern.id = pattern.id.clone();
-    let tune = tuner.command()?;
-    Ok(vec![reset, tune])
+    Ok(tuner.last().expect("just moved"))
+}
+
+/// `PCB_TUNING_PATTERN::EditStart`, `Update`, `EditFinish` over a pattern that exists: its tracks put back to the baseline and the placer run over it again with
+/// `settings` (JSON, over what the pattern has). The commands, in order, are one undo step (`Cmd::Batch`).
+pub fn retune_cmds(scene: &Scene, pattern: &TuningPattern, settings: &Value) -> Result<Vec<Cmd>, String> {
+    let mut r = begin_retune(scene, pattern, settings)?;
+    r.fit()?;
+    r.commands()
+}
+
+// ------------------------------------------------------------------------------------------------------------------------------------- edit points
+
+fn half(a: i64) -> i64 {
+    (a as f64 / 2.0).round() as i64
+}
+
+/// The offsets of a pair's centreline from the baseline of the clicked line, at the start and at the end (`MakeEditPoints`).
+fn centerline_offsets(p: &TuningPattern) -> (Point, Point) {
+    if p.mode == TuningMode::DiffPair && p.base_line_coupled.len() >= 2 {
+        let (first, last) = (p.base_line_coupled[0], *p.base_line_coupled.last().unwrap());
+        (Point { x: half(first.x - p.origin.x), y: half(first.y - p.origin.y) }, Point { x: half(last.x - p.end.x), y: half(last.y - p.end.y) })
+    } else {
+        (Point { x: 0, y: 0 }, Point { x: 0, y: 0 })
+    }
+}
+
+/// The first segment of the pattern's baseline, moved to the centreline of a pair.
+fn base_segment(p: &TuningPattern) -> (Point, Point) {
+    let (off, _) = centerline_offsets(p);
+    let (a, b) = if p.base_line.len() >= 2 { (p.base_line[0], p.base_line[1]) } else { (p.origin, p.end) };
+    (Point { x: a.x + off.x, y: a.y + off.y }, Point { x: b.x + off.x, y: b.y + off.y })
+}
+
+fn resized(v: (f64, f64), len: f64) -> (f64, f64) {
+    let n = v.0.hypot(v.1);
+    if n == 0.0 {
+        (0.0, 0.0)
+    } else {
+        (v.0 * len / n, v.1 * len / n)
+    }
+}
+
+/// `PCB_TUNING_PATTERN::MakeEditPoints`: the pattern's four handles (micrometres) -- where it starts, where it ends, the width of its meanders (on the side the first
+/// one is) and their spacing.
+pub fn handle_positions(p: &TuningPattern) -> [Point; 4] {
+    let (off, off_end) = centerline_offsets(p);
+    let (a, b) = base_segment(p);
+    let mut amplitude = p.max_amplitude + half(p.last_track_width);
+    if p.mode == TuningMode::DiffPair {
+        amplitude += p.last_track_width + p.last_diff_pair_gap;
+    }
+    if p.initial_side == PatternSide::Left {
+        amplitude = -amplitude;
+    }
+    let dir = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+    let perp = (-dir.1, dir.0);
+    let w = resized(perp, amplitude as f64);
+    let along = resized(dir, (p.spacing as f64 * 1.5).round());
+    let width_handle = Point { x: a.x + w.0.round() as i64, y: a.y + w.1.round() as i64 };
+    let spacing_handle = Point { x: a.x + (w.0 + along.0).round() as i64, y: a.y + (w.1 + along.1).round() as i64 };
+    [Point { x: p.origin.x + off.x, y: p.origin.y + off.y }, Point { x: p.end.x + off_end.x, y: p.end.y + off_end.y }, width_handle, spacing_handle]
+}
+
+/// The distance from `q` to the infinite line through `a` and `b`.
+fn line_distance(a: Point, b: Point, q: Point) -> f64 {
+    let (dx, dy) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
+    let n = dx.hypot(dy);
+    if n == 0.0 {
+        return ((q.x - a.x) as f64).hypot((q.y - a.y) as f64);
+    }
+    (dx * (q.y - a.y) as f64 - dy * (q.x - a.x) as f64).abs() / n
+}
+
+/// `PCB_TUNING_PATTERN::UpdateFromEditPoints` for one handle moved to `pos`: the start or the end of the pattern, the amplitude and the side of its meanders,
+/// the spacing between them. Amplitude and spacing keep to 10 micrometres.
+pub fn apply_handle(p: &mut TuningPattern, handle: usize, pos: Point) {
+    let (off, off_end) = centerline_offsets(p);
+    let (a, b) = base_segment(p);
+    let ten = |v: f64| ((v / 10.0).round() as i64) * 10;
+    match handle {
+        0 => p.origin = Point { x: pos.x - off.x, y: pos.y - off.y },
+        1 => p.end = Point { x: pos.x - off_end.x, y: pos.y - off_end.y },
+        2 => {
+            let mut value = line_distance(a, b, pos) - (p.last_track_width as f64 / 2.0).round();
+            if p.mode == TuningMode::DiffPair {
+                value -= (p.last_track_width + p.last_diff_pair_gap) as f64;
+            }
+            p.max_amplitude = ten(value).max(1);
+            // `base.Side( wHandle ) < 0` is the left
+            let side = Seg::new(to_nm(a), to_nm(b)).side(to_nm(pos));
+            p.initial_side = if side < 0 { PatternSide::Left } else { PatternSide::Right };
+        }
+        3 => {
+            let w = handle_positions(p)[2];
+            let value = (line_distance(a, w, pos) / 1.5).round();
+            p.spacing = ten(value).max(1);
+        }
+        _ => {}
+    }
 }
 
 /// Applies `cmds` in order to a copy of the scene's board, for the next pattern of a batch to be tuned on.
@@ -898,6 +1062,64 @@ mod tests {
         assert_eq!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").unwrap().name, "first");
         rules.custom_rules[0].layer = Some("B.Cu".into());
         assert!(constraint_for(&rules, TuningMode::Single, "SIG", None, "F.Cu").is_none(), "a rule for another layer");
+    }
+
+    fn pattern_for_handles(mode: TuningMode) -> TuningPattern {
+        let mut p = default_pattern(&ConstraintModel::default(), mode, "F.Cu");
+        p.origin = Point { x: 10_000, y: 5_000 };
+        p.end = Point { x: 30_000, y: 5_000 };
+        p.base_line = vec![p.origin, p.end];
+        p.last_track_width = 250;
+        p.max_amplitude = 1_000;
+        p.spacing = 600;
+        p.initial_side = PatternSide::Right;
+        if mode == TuningMode::DiffPair {
+            p.base_line_coupled = vec![Point { x: 10_000, y: 5_700 }, Point { x: 30_000, y: 5_700 }];
+            p.last_diff_pair_gap = 450;
+        }
+        p
+    }
+
+    #[test]
+    fn the_edit_points_of_a_pattern_are_where_make_edit_points_puts_them() {
+        let p = pattern_for_handles(TuningMode::Single);
+        let h = handle_positions(&p);
+        assert_eq!(h[0], Point { x: 10_000, y: 5_000 });
+        assert_eq!(h[1], Point { x: 30_000, y: 5_000 });
+        // the width handle is the amplitude and half the track away from the start of the baseline, on the side of the first meander: perpendicular is (-dy, dx), so +y for a baseline along +x
+        assert_eq!(h[2], Point { x: 10_000, y: 5_000 + 1_000 + 125 });
+        // the spacing handle is one and a half spacings along from it
+        assert_eq!(h[3], Point { x: 10_000 + 900, y: 5_000 + 1_125 });
+        let mut left = p.clone();
+        left.initial_side = PatternSide::Left;
+        assert_eq!(handle_positions(&left)[2], Point { x: 10_000, y: 5_000 - 1_125 });
+        // a pair's handles are on the centreline: half way to the partner's baseline, and the amplitude is counted from there
+        let d = handle_positions(&pattern_for_handles(TuningMode::DiffPair));
+        assert_eq!(d[0], Point { x: 10_000, y: 5_350 });
+        assert_eq!(d[2], Point { x: 10_000, y: 5_350 + 1_000 + 125 + 250 + 450 });
+    }
+
+    #[test]
+    fn dragging_a_handle_to_where_it_is_changes_nothing_and_elsewhere_changes_what_it_stands_for() {
+        for mode in [TuningMode::Single, TuningMode::DiffPair] {
+            let p = pattern_for_handles(mode);
+            let h = handle_positions(&p);
+            for (i, at) in h.iter().enumerate() {
+                let mut q = p.clone();
+                apply_handle(&mut q, i, *at);
+                assert_eq!(q, p, "{mode:?} handle {i}");
+            }
+        }
+        let mut p = pattern_for_handles(TuningMode::Single);
+        // the width handle dragged to the other side and further out: a wider pattern that starts on the left
+        apply_handle(&mut p, 2, Point { x: 10_000, y: 5_000 - 1_525 });
+        assert_eq!((p.max_amplitude, p.initial_side), (1_400, PatternSide::Left));
+        // the spacing handle dragged two spacings along from the width handle's line
+        let w = handle_positions(&p)[2];
+        apply_handle(&mut p, 3, Point { x: w.x + 1_500, y: w.y });
+        assert_eq!(p.spacing, 1_000);
+        apply_handle(&mut p, 1, Point { x: 25_000, y: 5_000 });
+        assert_eq!(p.end, Point { x: 25_000, y: 5_000 });
     }
 
     #[test]

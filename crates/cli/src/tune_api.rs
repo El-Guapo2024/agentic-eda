@@ -15,7 +15,7 @@
 //! API has them.
 
 use crate::board;
-use crate::tune_edit::{self, Moved, Pick, Scene, Tuner};
+use crate::tune_edit::{self, EditCtx, Moved, Pick, Scene, Tuner};
 use eda_model::ir::{Design, Point};
 use eda_model::tuning::{TuningMode, TuningPattern};
 use eda_ops::Cmd;
@@ -31,6 +31,8 @@ type Stamp = Vec<Option<(SystemTime, u64)>>;
 struct Session {
     tuner: Tuner,
     stamp: Stamp,
+    /// A pattern of the board being tuned again (`genStartEdit`): what the tuner does is not a new pattern but a change of this one.
+    edit: Option<EditCtx>,
 }
 
 thread_local! {
@@ -102,6 +104,11 @@ fn pattern_json(p: &TuningPattern) -> Value {
     serde_json::to_value(p).unwrap_or(Value::Null)
 }
 
+/// The pattern's four edit points (`MakeEditPoints`).
+pub fn handles_json(p: &TuningPattern) -> Value {
+    Value::Array(tune_edit::handle_positions(p).iter().map(|h| json!([h.x, h.y])).collect())
+}
+
 /// The cursor's pick for a request: `{x, y, tolerance, layer}`.
 fn pick_for(scene: &Scene, req: &Value) -> Option<Pick> {
     let at = xy(req)?;
@@ -130,7 +137,8 @@ pub fn hover(dir: &Path, body: &[u8]) -> Value {
 
 fn session_reply(s: &Session, moved: Option<&Moved>) -> Value {
     let t = &s.tuner;
-    let mut reply = json!({ "ok": true, "mode": mode_name(t.pattern.mode), "pattern": pattern_json(&t.pattern), "net": t.net });
+    let mut reply = json!({ "ok": true, "mode": mode_name(t.pattern.mode), "pattern": pattern_json(&t.pattern), "net": t.net, "editing": s.edit.is_some() });
+    reply["handles"] = handles_json(&t.pattern);
     if let Some(m) = moved {
         reply["moved"] = json!(m.moved && !m.edits.is_empty());
         reply["readout"] = m.readout.json();
@@ -154,7 +162,7 @@ pub fn start(dir: &Path, body: &[u8]) -> Value {
         Err(m) => return err(m),
     };
     let stamp = stamp_of(dir);
-    let session = Session { tuner, stamp };
+    let session = Session { tuner, stamp, edit: None };
     let reply = {
         let mut r = session_reply(&session, None);
         r["origin"] = json!({ "x": session.tuner.pattern.origin.x, "y": session.tuner.pattern.origin.y });
@@ -206,6 +214,13 @@ pub fn settings(dir: &Path, body: &[u8]) -> Value {
 }
 
 fn refit(s: &mut Session) -> Value {
+    if let Some(ctx) = &s.edit {
+        let end = ctx.end;
+        return match tune_edit::fit(&mut s.tuner, end) {
+            Ok(_) => session_reply(s, s.tuner.last()),
+            Err(m) => err(m),
+        };
+    }
     match s.tuner.last_end() {
         Some(end) => match s.tuner.mv(end, true) {
             Ok(_) => session_reply(s, s.tuner.last()),
@@ -215,7 +230,8 @@ fn refit(s: &mut Session) -> Value {
     }
 }
 
-/// `POST /api/tune/fix` `{x?, y?}`: the second click. Puts the pattern on the board (`Cmd::CommitTuning`, one undo step).
+/// `POST /api/tune/fix` `{x?, y?}`: the second click. Puts the pattern on the board (`Cmd::CommitTuning`, one undo step). The end of an edit of a pattern that
+/// exists (`/api/tune/edit_start`) is this call too.
 pub fn fix(dir: &Path, body: &[u8]) -> Value {
     let req = body_json(body);
     let session = SESSIONS.with(|s| s.borrow_mut().remove(dir));
@@ -223,16 +239,19 @@ pub fn fix(dir: &Path, body: &[u8]) -> Value {
     if stamp_of(dir) != session.stamp {
         return err("The board changed while the pattern was being placed: start it again.");
     }
-    if let Some(to) = xy(&req) {
-        if session.tuner.last_end() != Some(to) {
-            if let Err(m) = session.tuner.mv(to, true) {
-                return err(m);
+    if session.edit.is_none() {
+        if let Some(to) = xy(&req) {
+            if session.tuner.last_end() != Some(to) {
+                if let Err(m) = session.tuner.mv(to, true) {
+                    return err(m);
+                }
             }
         }
     }
-    let cmd = match session.tuner.command() {
-        Ok(c) => c,
-        Err(m) => {
+    let cmd = match (session.tuner.command(), &session.edit) {
+        (Ok(c), Some(ctx)) => Cmd::Batch { cmds: vec![ctx.reset.clone(), c] },
+        (Ok(c), None) => c,
+        (Err(m), _) => {
             // nothing to commit yet: the session goes on
             SESSIONS.with(|s| s.borrow_mut().insert(dir.to_path_buf(), session));
             return err(m);
@@ -242,11 +261,71 @@ pub fn fix(dir: &Path, body: &[u8]) -> Value {
     let p = session.tuner.pattern.clone();
     match board::step(dir, cmd, true, "ui") {
         Ok(summary) => {
-            let id = board::load(dir).ok().and_then(|(_, d, _)| tune_edit::patterns_of(&d).into_iter().find(|q| q.mode == p.mode && q.layer == p.layer && q.origin == p.origin).map(|q| q.id));
+            let id = board::load(dir).ok().and_then(|(_, d, _)| tune_edit::patterns_of(&d).into_iter().find(|q| q.mode == p.mode && q.layer == p.layer && (q.origin == p.origin || (!p.id.is_empty() && q.id == p.id))).map(|q| q.id));
             json!({ "ok": true, "message": summary, "pattern_id": id, "readout": readout })
         }
         Err(e) => err(board::reasons(&e)),
     }
+}
+
+/// `POST /api/tune/edit_start` `{id, settings?}`: `genStartEdit` -- the pattern's tracks are put back to the baseline in the session's board and the placer is
+/// started over it; nothing is changed on the board until `fix`. The reply is the pattern as it fits now, with the four edit points.
+pub fn edit_start(dir: &Path, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let scene = match scene(dir) {
+        Ok(s) => s,
+        Err(m) => return err(m),
+    };
+    let id = req.get("id").and_then(Value::as_str).unwrap_or("");
+    let p = match find_pattern(&scene.design, id) {
+        Ok(p) => p,
+        Err(m) => return err(m),
+    };
+    let mut r = match tune_edit::begin_retune(&scene, &p, &settings_of(&req)) {
+        Ok(r) => r,
+        Err(m) => return err(m),
+    };
+    if let Err(m) = r.fit() {
+        return err(m);
+    }
+    let session = Session { tuner: r.tuner, stamp: stamp_of(dir), edit: Some(r.ctx) };
+    let reply = session_reply(&session, session.tuner.last());
+    SESSIONS.with(|s| s.borrow_mut().insert(dir.to_path_buf(), session));
+    reply
+}
+
+/// `POST /api/tune/edit_move` `{handle, x, y}` or `{settings}`: `genUpdateEdit` -- an edit point (0 the start, 1 the end, 2 the width of the meanders and the side
+/// they start on, 3 their spacing) is at `(x, y)`, or the dialog's settings change; the pattern is fitted again.
+pub fn edit_move(dir: &Path, body: &[u8]) -> Value {
+    let req = body_json(body);
+    with_session(dir, |s| {
+        let Some(ctx) = s.edit.as_mut() else { return err("No tuning pattern is being edited.") };
+        if let Some(settings) = req.get("settings").filter(|v| v.is_object()) {
+            s.tuner.set_settings(settings);
+        }
+        if let (Some(h), Some(at)) = (req.get("handle").and_then(Value::as_u64), xy(&req)) {
+            let mut moved = s.tuner.pattern.clone();
+            tune_edit::apply_handle(&mut moved, h as usize, at);
+            match h {
+                0 => match ctx.tuner_at(moved.origin, &s.tuner.pattern) {
+                    Ok(t) => s.tuner = t,
+                    Err(m) => return err(m),
+                },
+                1 => ctx.end = moved.end,
+                _ => {
+                    s.tuner.pattern.max_amplitude = moved.max_amplitude;
+                    s.tuner.pattern.spacing = moved.spacing;
+                    s.tuner.pattern.initial_side = moved.initial_side;
+                }
+            }
+        }
+        let end = ctx.end;
+        match tune_edit::fit(&mut s.tuner, end) {
+            Ok(_) => session_reply(s, s.tuner.last()),
+            Err(m) => err(m),
+        }
+    })
+    .unwrap_or_else(|| err(NO_SESSION))
 }
 
 /// `POST /api/tune/cancel`: Escape; the session ends, nothing was changed.
@@ -661,6 +740,57 @@ mod tests {
         assert!(tracks.iter().all(|t| t.pts.iter().all(|q| q.y == 9_500)), "all straight again: {tracks:?}");
         board::undo(&dir, "test", None).unwrap();
         assert_eq!(tune_edit::patterns_of(&design_of(&dir)).len(), 1, "one undo brings the pattern back");
+    }
+
+    #[test]
+    fn a_pattern_is_edited_through_its_edit_points_and_the_edit_is_one_undo_step() {
+        let dir = scratch("edit");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": 22_000 } })));
+        mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        let id = fix(&dir, &body(json!({})))["pattern_id"].as_str().unwrap().to_string();
+        let tuned = design_of(&dir);
+
+        // genStartEdit: the session shows the pattern as it fits now, with its four edit points, and the board is untouched
+        let e = edit_start(&dir, &body(json!({ "id": id })));
+        assert_eq!(e["ok"], json!(true), "{e}");
+        assert_eq!(e["editing"], json!(true));
+        assert_eq!(e["handles"].as_array().unwrap().len(), 4);
+        assert_eq!(e["handles"][0], json!([8_000, 9_500]));
+        assert_eq!(e["handles"][1], json!([22_000, 9_500]));
+        assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned));
+        assert!((e["readout"]["current"].as_f64().unwrap() - 22.0).abs() < 0.1);
+
+        // genUpdateEdit: the end handle dragged back to 18 mm, so the pattern is shorter: the same target, less room
+        let m = edit_move(&dir, &body(json!({ "handle": 1, "x": 18_000, "y": 9_500 })));
+        assert_eq!(m["ok"], json!(true), "{m}");
+        assert_eq!(m["pattern"]["end"], json!({ "x": 18_000, "y": 9_500 }), "{m}");
+        assert_eq!(m["handles"][1], json!([18_000, 9_500]));
+        // a settings change in the middle of the edit
+        let m = edit_move(&dir, &body(json!({ "settings": { "target_length": 21_000 } })));
+        assert_eq!(m["ok"], json!(true), "{m}");
+        assert!((m["readout"]["current"].as_f64().unwrap() - 21.0).abs() < 0.1, "{m}");
+        // the amplitude handle: out to 0.8 mm (and the track's half width) on the other side
+        let m = edit_move(&dir, &body(json!({ "handle": 2, "x": 8_000, "y": 9_500 + 925 })));
+        assert_eq!((m["pattern"]["max_amplitude"].clone(), m["pattern"]["initial_side"].clone()), (json!(800), json!("right")), "{m}");
+
+        // genFinishEdit
+        let f = fix(&dir, &body(json!({})));
+        assert_eq!(f["ok"], json!(true), "{f}");
+        assert_eq!(f["pattern_id"], json!(id));
+        let after = tune_edit::patterns_of(&design_of(&dir));
+        assert_eq!(after.len(), 1);
+        assert_eq!((after[0].id.as_str(), after[0].end, after[0].max_amplitude, after[0].target_length.opt), (id.as_str(), p(18_000, 9_500), 800, 21_000));
+        assert!((net_mm(&dir, "SIG") - 21.0).abs() < 0.1);
+        board::undo(&dir, "test", None).unwrap();
+        assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned), "the whole edit is one undo step");
+
+        // genCacnelEdit: nothing is written
+        edit_start(&dir, &body(json!({ "id": id })));
+        edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000, "y": 9_500 })));
+        assert_eq!(cancel(&dir)["had_session"], json!(true));
+        assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&tuned));
+        assert_eq!(edit_move(&dir, &body(json!({ "handle": 1, "x": 15_000, "y": 9_500 })))["ok"], json!(false), "the session is over");
     }
 
     #[test]

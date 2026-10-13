@@ -867,6 +867,8 @@ fn handle(
         ("POST", "/api/tune/step") => respond(stream, "200 OK", "application/json", tune_api::step(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune/settings") => respond(stream, "200 OK", "application/json", tune_api::settings(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune/fix") => respond(stream, "200 OK", "application/json", tune_api::fix(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/edit_start") => respond(stream, "200 OK", "application/json", tune_api::edit_start(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/edit_move") => respond(stream, "200 OK", "application/json", tune_api::edit_move(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune/cancel") => respond(stream, "200 OK", "application/json", tune_api::cancel(dir).to_string().as_bytes()),
         ("POST", "/api/tune/patterns") => respond(stream, "200 OK", "application/json", tune_api::patterns(dir).to_string().as_bytes()),
         ("POST", "/api/tune/pattern") => respond(stream, "200 OK", "application/json", tune_api::pattern(dir, &body).to_string().as_bytes()),
@@ -1166,8 +1168,15 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 },
                 "mirror": t.mirror,
             }))).collect::<Vec<_>>(),
-            // Task item 5 -- see `eda_model::ir::Group`'s own doc.
-            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).collect::<Vec<_>>(),
+            // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
+            // (`generator` names what it is); `tuning_patterns` has the pattern itself.
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
+            "tuning_patterns": d.tuning_patterns.iter().map(|p| {
+                let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
+                v["handles"] = tune_api::handles_json(p);
+                v["info"] = json!(p.tuning_info());
+                v
+            }).collect::<Vec<_>>(),
             // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
             "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
             "dimension_settings": dimension_settings_json(&d.dimension_settings),
