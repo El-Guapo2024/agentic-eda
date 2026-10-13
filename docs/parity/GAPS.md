@@ -94,7 +94,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | mostly done (merged 2026-10-10); items 8, 15, 17 and 35 list what is left | M, ongoing |
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | no way to bring an outline from a DXF or another board in | open | L |
-| 9 | P9 Board Setup completion and the rule editor | 3 | Board Editor Layers, Text Variables, Formatting, Tuning and Component Classes pages; regex net patterns | open | L (rule editor XL) |
+| 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
 | 10 | P10 Schematic details | 1, 12, 15, 17, 20 | pins cannot be selected (Swap Pins), no net-collision overlay, no schematic groups, pan and auto-pan | open | M-L |
 | 11 | P11 Search and inspection | 21, 29 | Find by Properties, Clearance Resolution, Footprint Checker; Find ignores user fields and zone names | open | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
@@ -148,7 +148,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp` and `pcb_io_kicad_sexpr_parser.cpp`.
 
 ### 3. Board Setup and the rules
-**Mostly done (2026-10-08).** Hit: the start of every project. Blocks: no; the pages that do not exist yet need a model first. Package P9.
+**Mostly done (2026-10-12; P9a).** Hit: the start of every project. Blocks: no. Package P9.
 - Done (`b145f0e`): `eda_model::rules::RulesOverlay` (`crates/model/src/rules.rs`) holds one optional page per Board Setup page in `design.json` (`drawings.rules`);
   `board::load` lays it over the intent's (or the imported project's) rules, as `design.nets` is, so the router, the gates, the studio and the derived `.kicad_pro`,
   `.kicad_pcb` and `.kicad_dru` that kicad-cli reads all follow an edit. Seven undoable verbs (`set_net_classes`, `set_constraints`, `set_mask_paste`,
@@ -156,10 +156,23 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `components/BoardSetupDialog.tsx` is KiCad's page tree and all ten pages edit: Physical Stackup (a layer's `(color ...)` too, since 10-09), Solder Mask/Paste,
   Defaults, Dimensions, Constraints, Pre-defined Sizes, Teardrops, Net Classes (with the patterns and the nets each matches), Custom Rules (as text, "Check rule syntax"
   through kicad-cli: `POST /api/check_rules`) and Violation Severity (KiCad's 64 checks). Assign Netclass works from the board and the schematic.
-- Missing: the Board Editor Layers, Zone Hatch Offsets, Formatting, Text Variables, Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files pages
-  (nothing in the model holds them); the rule-tree designer (`DRETool.drcRuleEditor`, 82 files in `pcbnew/drc/rule_editor`; the `.kicad_dru` is edited as text);
-  KiCad's regular-expression net patterns, bus notation and composite net classes (a pattern here is `*` and `?`, first class wins); dielectric sub-layers and impedance
-  control on the stackup; and this app's drawing tools do not start new items from the Text & Graphics defaults yet (they reach the derived `.kicad_pro` only).
+- Done (P9a, `task-board-setup`, 2026-10-12; `web/studio/PARITY-pcb.md` section 9b has the detail and the proofs): six more verbs and pages -- **Text Variables** (`set_text_variables`; `${NAME}` is
+  expanded by `eda_model::text_vars` in board texts, footprint fields, schematic texts, symbol fields and the title block, the state carries the shown form, the derived `.kicad_pro` carries the
+  variables so kicad-cli's plots show the same: proved), **Board Editor Layers** (`set_board_layers`; the technical and user layers, their names and types; the board file's `(layers ..)` is
+  KiCad's and the importer reads it; the layer pickers, the Appearance panel and `${LAYER}` follow; an item cannot be put on a layer that is off nor a layer with items turned off; proved with
+  kicad-cli), **Formatting** (dash and gap ratios in the plot parameters, the footprint boxes in the project and applied when a footprint is put on the board), **Zone Hatch Offsets** (the filler
+  moves the hatch pattern; written as KiCad writes it), **Length-tuning Patterns** (the length tuner starts from them) and **Tuning Profiles** (with the profile each net class names;
+  kicad-cli reports `missing_tuning_profile`: proved); the drawing tools start from the Text & Graphics defaults of the layer's class (lines, shapes, text, dimensions; `incWidth`/`decWidth`; the CLI too);
+  and **regular-expression net patterns and composite net classes** (`eda_model::net_pattern`, `BoardRules::effective_class`: a net is in every class that matches it, the class higher in the list
+  winning where several set a size and Default giving the rest; a net in two classes makes the derived project carry the classes, and kicad-cli agrees: proved). Thirteen verbs now in
+  `crates/ops/src/board_setup.rs`'s family, 79 browser checks in `web/studio/e2e/board-setup-pages.check.js`.
+- Missing: the **Component Classes** and **Embedded Files** pages (nothing in the model holds them; the `component_classes_drc` difference of the QA corpus stays); the rule-tree designer
+  (`DRETool.drcRuleEditor`, 82 files in `pcbnew/drc/rule_editor`; the `.kicad_dru` is edited as text -- P9b); bus notation in net patterns (`D[0..7]`) and the net class labels of the schematic; the
+  transmission-line calculator of the Tuning Profiles grid; the tuner's corner style and single-sided settings (kept and written, not used by this app's meander generator); the Net Classes grid's own
+  Tuning Profile column (the class's profile is chosen on the Tuning Profiles page); zone-level hatch offsets (the board's per-layer offset is what the filler reads; KiCad itself loses the board's
+  when it saves, see section 9b); Formatting's dimension and barcode boxes (library footprints here hold neither) and, for a footprint the model already knows, the art of its library (only the copy
+  of a footprint the board keeps is restyled); in Text Variables: `@{}` math, `VCSHASH`, schematic labels, text boxes and power symbol fields, `PIN_NAME(n)`, library footprint texts and text pasted
+  from the clipboard; dielectric sub-layers and impedance control on the stackup.
 - Port from: `pcbnew/dialogs/dialog_board_setup.cpp` and `panel_setup_*.cpp`, `common/dialogs/panel_setup_netclasses.cpp`, `panel_setup_severities.cpp`,
   `panel_text_variables.cpp`, `pcbnew/drc/drc_rule_parser.cpp`, `pcbnew/tools/drc_rule_editor_tool.cpp`.
 
@@ -771,6 +784,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - Conflicts: P4 (the sheet drop), P3 (the library drop); `ops`, `runner`, `studio` hunks.
 
 ### P9. Board Setup completion and the rule editor (item 3). Size L; the rule editor XL on its own. Rank 9.
+- **Status (2026-10-12): P9a done on `task-board-setup`** except Component Classes (`component_classes_drc`) and Embedded Files; P9b open. Item 3 lists what each page does and what is left.
 - **P9a, L**: the missing pages: Board Editor Layers, Text Variables (project variables and `${VAR}` expansion in texts and fields), Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles (`missing_tuning_profile`),
   Component Classes (`component_classes_drc`), regular-expression net patterns and composite net classes, and drawing tools that start from the Text & Graphics defaults. Files: `crates/model/src/rules.rs`,
   `crates/ops/src/board_setup.rs`, `crates/kicad-engine/src/lib.rs` (project file), `crates/kicad/src/{pcb,import,custom_rules}.rs`, `web/studio/src/components/{BoardSetupDialog.tsx,boardSetup/*}`, `kicad-port/boardSetupRules.ts`.
