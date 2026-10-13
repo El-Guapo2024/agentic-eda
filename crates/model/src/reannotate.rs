@@ -88,9 +88,9 @@ pub struct ReannotateOptions {
     pub direction: u8,
     #[serde(default)]
     pub location: Location,
-    /// "Round locations to": the grid, micrometres. Footprints a little out of line sort as if on the line.
+    /// "Round locations to": the grid, micrometres (a grid of mils is not whole micrometres: 50.8 for 2 mil). Footprints a little out of line sort as if on the line.
     #[serde(default)]
-    pub grid_um: i64,
+    pub grid_um: f64,
     #[serde(default)]
     pub scope: Scope,
     /// "Exclude locked footprints".
@@ -124,7 +124,7 @@ impl Default for ReannotateOptions {
         ReannotateOptions {
             direction: 0,
             location: Location::default(),
-            grid_um: 0,
+            grid_um: 0.0,
             scope: Scope::default(),
             exclude_locked: false,
             exclude: String::new(),
@@ -408,7 +408,7 @@ fn build_change_array(list: &[Info], start: u32, prefix: &str, remove_prefix: bo
 /// `BuildFootprintList` and what follows it in `ReannotateBoard`: the plan for `footprints` under `opts`. `elsewhere` are the references of the design's parts that are not
 /// on the board; their numbers are not given out.
 pub fn plan(footprints: &[ReannotateInput], elsewhere: &[String], opts: &ReannotateOptions) -> Plan {
-    let grid = if opts.grid_um <= 0 { 1000 } else { opts.grid_um * 1000 };
+    let grid = if opts.grid_um > 0.0 { (opts.grid_um * 1000.0).round() as i64 } else { 1000 };
     let excluded: Vec<String> = opts.exclude.split([',', ' ', '\t', '\r', '\n']).filter(|t| !t.is_empty()).map(str::to_string).collect();
     let (mut front, mut back): (Vec<Info>, Vec<Info>) = (Vec::new(), Vec::new());
     for f in footprints {
@@ -592,7 +592,7 @@ mod tests {
     fn a_footprint_a_little_out_of_line_sorts_with_its_row_when_the_grid_is_coarse() {
         // R2 is 0.4 mm lower than R1, a 1 mm grid puts them on one row, so the left one is first
         let parts = vec![fp("R9", 0, 400, true), fp("R8", 5_000, 0, true), fp("R7", 10_000, 100, true)];
-        let p = plan(&parts, &[], &ReannotateOptions { grid_um: 1_000, ..Default::default() });
+        let p = plan(&parts, &[], &ReannotateOptions { grid_um: 1_000.0, ..Default::default() });
         assert_eq!(news(&p), pairs(&[("R7", "R3"), ("R8", "R2"), ("R9", "R1")]));
         // with no grid but the minimum the lowest row goes last
         let p = plan(&parts, &[], &ReannotateOptions::default());
@@ -699,6 +699,17 @@ mod tests {
     }
 
     #[test]
+    fn a_grid_of_mils_is_whole_nanometres_though_not_whole_micrometres() {
+        // 2 mil is 50.8 um: 20 um is on the row, 40 um is on the next one; with the minimum grid (1 um) every um counts
+        let parts = vec![fp("R9", 0, 20, true), fp("R8", 5_000, 0, true), fp("R7", 10_000, 40, true)];
+        let on_grid = plan(&parts, &[], &ReannotateOptions { grid_um: 50.8, ..Default::default() });
+        assert_eq!(news(&on_grid), pairs(&[("R7", "R3"), ("R8", "R2"), ("R9", "R1")]), "R9 and R8 are one row: the left one first");
+        assert_eq!(on_grid.front.iter().map(|f| f.rounded_y).collect::<Vec<_>>(), [0.0, 0.0, 50.8]);
+        let on_minimum = plan(&parts, &[], &ReannotateOptions::default());
+        assert_eq!(news(&on_minimum), pairs(&[("R7", "R3"), ("R8", "R1"), ("R9", "R2")]), "three rows: the upper one first");
+    }
+
+    #[test]
     fn an_empty_board_has_nothing_to_do() {
         let p = plan(&[], &[], &ReannotateOptions::default());
         assert!(p.ok() && p.changes.is_empty() && p.front.is_empty() && p.back.is_empty());
@@ -707,7 +718,7 @@ mod tests {
     #[test]
     fn the_options_read_back_from_json_with_their_defaults() {
         let o: ReannotateOptions = serde_json::from_str(r#"{"direction":2,"grid_um":1270,"scope":"selection","exclude":"R","front_start":5}"#).unwrap();
-        assert_eq!((o.direction, o.grid_um, o.scope, o.front_start, o.back_start), (2, 1270, Scope::Selection, 5, 0));
+        assert_eq!((o.direction, o.grid_um, o.scope, o.front_start, o.back_start), (2, 1270.0, Scope::Selection, 5, 0));
         let o: ReannotateOptions = serde_json::from_str("{}").unwrap();
         assert_eq!(o, ReannotateOptions::default());
         assert_eq!(o.front_start, 1, "the dialog opens with front reference start 1");

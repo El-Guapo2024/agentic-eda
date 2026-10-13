@@ -405,9 +405,12 @@ fn the_reannotate_command_is_read_from_the_studios_json_with_its_numbers() {
     let body = br#"{"cmd":{"op":"reannotate_board","options":{"direction":2,"grid_um":1270,"scope":"selection","exclude":"R C7*","front_start":5,"back_start":0,"front_prefix":"F_","remove_back_prefix":true},"selection":["U1"]}}"#;
     let req: serde_json::Value = serde_json::from_slice(body).unwrap();
     let Cmd::ReannotateBoard { options, selection } = serde_json::from_value::<Cmd>(req["cmd"].clone()).expect("the command reads") else { panic!("not the command") };
-    assert_eq!((options.direction, options.grid_um, options.front_start, options.back_start), (2, 1_270, 5, 0));
+    assert_eq!((options.direction, options.grid_um, options.front_start, options.back_start), (2, 1_270.0, 5, 0));
     assert_eq!((options.scope, options.exclude.as_str(), options.front_prefix.as_str(), options.remove_back_prefix), (eda_model::reannotate::Scope::Selection, "R C7*", "F_", true));
     assert_eq!(selection, ["U1"]);
+    // a grid of mils is not whole micrometres (the toolbar's 2 mil is 50.8)
+    let mils: Cmd = serde_json::from_value(serde_json::json!({ "op": "reannotate_board", "options": { "grid_um": 50.8 } })).expect("a fractional grid reads");
+    assert!(matches!(mils, Cmd::ReannotateBoard { ref options, .. } if (options.grid_um - 50.8).abs() < 1e-9));
     // options left out take the dialog's own defaults
     let bare: Cmd = serde_json::from_value(serde_json::json!({ "op": "reannotate_board" })).unwrap();
     assert!(matches!(bare, Cmd::ReannotateBoard { ref options, ref selection } if options.front_start == 1 && selection.is_empty()));
