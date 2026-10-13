@@ -33,6 +33,8 @@ import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
+import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
+import type { TuneHoverReply } from "../../api/tuneTypes";
 import { copperColor, drawAnchors, drawBoardArea, drawConflicts, drawLockedShadows, drawSheet, footprintShown, on, on as objectOnPaint, opacityOf, ratsnestColor, type PaintAppearance } from "./appearancePaint";
 
 /**
@@ -82,6 +84,8 @@ export interface PaintOptions {
   movePreview: (CarryPreview & { kind?: string; perRefOffsetUm?: Record<string, [number, number]> }) | null;
   /** The route/zone/drawing tool currently in progress (Canvas.tsx), and the cursor to rubber-band its next point toward -- null cursor (pointer left the canvas, or hasn't moved yet) just skips the rubber-band, still showing the fixed points so far. */
   drawState: DrawState | null;
+  /** The length tuner armed, no pattern started: the track under the cursor with its status box (`updateHoverStatus`). */
+  tuneHover?: { reply: TuneHoverReply; at: [number, number] } | null;
   cursorUm: { x: number; y: number } | null;
   /** Where the tool in force has put the cursor (the grid helper's last answer: anchor, snap line or grid); the rubber band and the via ghost follow it. Null: the raw cursor is snapped to the grid. */
   snappedCursor?: readonly [number, number] | null;
@@ -455,7 +459,10 @@ function drawTracksAndVias(ctx: CanvasRenderingContext2D, view: ViewTransform, b
   if (!board.routing) return;
   const tracksOn = on(opts.layerVisible, "tracks");
   const trackAlpha = opacityOf(opts.appearance, "tracks");
+  // the tuner's preview takes the place of the tracks it replaces (`hideRemovedItems`)
+  const replaced = opts.drawState?.kind === "tune" && opts.drawState.hide.length > 0 ? new Set(opts.drawState.hide) : null;
   for (const t of tracksOn ? board.routing.tracks : []) {
+    if (replaced?.has(t.id)) continue;
     const key = copperColorKey(t.layer);
     const bucket = key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
     if (bucket !== wantLayer) continue;
@@ -1010,6 +1017,11 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, boar
   const draw = opts.drawState;
   if (!draw) return;
 
+  if (draw.kind === "tune") {
+    drawTune(ctx, view, draw, opts.cursorUm ? [opts.cursorUm.x, opts.cursorUm.y] : null, opts.units);
+    return;
+  }
+
   if (draw.kind === "route") {
     const violationColor = "#ff3333";
     for (const run of draw.runs ?? []) strokeDashedPolyline(ctx, view, run.pts, layerColor(copperColorKey(run.layer)), draw.width, false);
@@ -1289,6 +1301,7 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   drawGridOrigin(ctx, view, opts.gridOrigin, layerColor("background"));
   // In-progress route/drag/via/zone/drawing tool preview, on top of everything committed.
   drawInProgress(ctx, view, board, opts);
+  if (opts.activeTool === "tune" && !opts.drawState && opts.tuneHover) drawTuneHover(ctx, view, opts.tuneHover, opts.units);
   if (opts.activeTool === "via") drawViaGhost(ctx, board, opts);
   // pcb_point_editor.cpp: a single selected zone's outline corners are
   // draggable handles, shown only in the plain Select tool (same as
@@ -1299,6 +1312,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   // zone corner handles above (a selection-mode indicator, not board
   // content).
   if (opts.activeTool === "select") drawSelectedGroups(ctx, view, board, opts);
+  // A selected tuning pattern shows its baseline, its outline and its four edit points (`PCB_TUNING_PATTERN::ViewDraw`).
+  if (opts.activeTool === "select") drawSelectedPatterns(ctx, view, board, opts.selection);
   // DRC markers last of all -- an overlay above every board layer and
   // the in-progress tool preview, matching real KiCad.
   if (opts.drcViolations) drawDrcMarkers(ctx, view, opts.drcViolations, opts.drcSelected, opts.drcStale, opts.layerVisible);

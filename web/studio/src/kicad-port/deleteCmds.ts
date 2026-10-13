@@ -8,6 +8,12 @@ import type { BoardState, Cmd } from "../api/types";
 import { expandGroups } from "./groupTree";
 import { isLocked } from "./pcbTransform";
 
+/** The tuning patterns (`PCB_GENERATOR`s) among `ids`: deleting one puts the track back as it was before it was tuned, which the tuner's API does (`/api/tune/remove`), not a verb. */
+export function tuningPatternIds(board: BoardState | null | undefined, ids: readonly string[]): string[] {
+  const patterns = board?.drawings?.tuning_patterns ?? [];
+  return ids.filter((id) => patterns.some((p) => p.id === id));
+}
+
 /**
  * The verbs that delete `ids` from the board: tracks, vias, zones, graphics, text and dimensions by their verb, a placed footprint
  * by ripping it up (the board's footprints come from the schematic, so deleting one unplaces it), a group as all its members -- the groups it holds opened.
@@ -18,7 +24,10 @@ export function boardDeleteCmds(board: BoardState, ids: readonly string[]): { cm
   const groups = board.drawings?.groups ?? [];
   let skippedLocked = 0;
   const free: string[] = [];
+  const patterns = new Set(tuningPatternIds(board, ids));
   for (const id of ids) {
+    // a tuning pattern is not deleted with its tracks: it is removed (`PCB_TUNING_PATTERN::Remove`, the track put back) -- see [`tuningPatternIds`]
+    if (patterns.has(id)) continue;
     if (isLocked(board, id)) skippedLocked++;
     else free.push(id);
   }

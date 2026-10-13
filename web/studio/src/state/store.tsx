@@ -8,6 +8,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import { activeLayerName } from "../kicad-port/layerPresets";
+import type { TuneDrawState } from "../kicad-port/tuneTool";
 import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimension, DrcReport, ErcReport, FillReport, Group, LabelScope, LintReport, Part, PcbPasteMode, Ratsnest, RuleAreaFields, Schematic, SchematicSymbol, SchSearchData, SchematicText, SchematicWire, Shape, Track, TuneMode, Um, Via, ViaPreset, Zone, ZoneSettingsFields } from "../api/types";
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
@@ -90,6 +91,8 @@ export type ToolId =
   | "route"
   /** `6` (gap #7 task item 6, pcbnew.InteractiveRouter.DiffPair): route a differential pair -- see kicad-port/dpTool.ts's own header comment. */
   | "diffpair"
+  /** `7` / `8` / `9` (pcbnew.LengthTuner.*, `DRAWING_TOOL::PlaceTuningPattern`): the length tuner -- hover a track, click to start a pattern, click again where it ends; `lengthTuningMode` says which of the three. See kicad-port/tuneTool.ts. */
+  | "tune"
   | "via"
   | "zone"
   | "draw_segment"
@@ -167,6 +170,7 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
   drag: "Drag (keeps connections): click to drop, Esc to cancel",
   route: "Route track: click to add a point, V for via, Enter/double-click to finish, Esc to cancel",
   diffpair: "Route differential pair: click to add a point, Enter/double-click to finish, Esc to cancel",
+  tune: "Tune length: click a track to start the pattern, click again where it ends (1-4: spacing and amplitude, Ctrl+L: settings, Esc: cancel, then leave)",
   via: "Click to place a via",
   zone: "Zone: click to add points, Enter/double-click to finish, Esc to cancel",
   draw_segment: "Line: click start, then end",
@@ -217,6 +221,8 @@ export const TOOL_MESSAGES: Record<ToolId, string> = {
  * is just the CURRENT segment's points since the last via/start.
  */
 export type DrawState =
+  /** `7` / `8` / `9`: a tuning pattern on its way to the board, or one of the board being edited through its edit points -- kicad-port/tuneTool.ts. */
+  | TuneDrawState
   /** `S` (`SCH_DRAWING_TOOLS::DrawSheet`): the first corner of the sheet being sized; the second click ends it (`sizeSheet`). */
   | { kind: "sheet"; start: [Um, Um] }
   /** The schematic shape being drawn (`DrawShape` / `DrawRuleArea`): `shape` for a rectangle, circle, arc, Bezier curve or text box, `poly` for a rule area; `brk` is a Break / Slice waiting for its drop. */

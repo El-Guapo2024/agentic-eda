@@ -9,7 +9,6 @@
 //   panel_setup_zone_hatch_offsets.cpp    one offset per copper layer in `LSET::AllCuMask().UIOrder()`
 //   panel_setup_tuning_patterns.cpp       three groups of meander defaults (`PNS::MEANDER_SETTINGS`)
 //   panel_setup_tuning_profile_info.cpp   OnAddTrackRow (which layers a new row starts with), OnAddViaOverride, ValidateProfile
-//   pns_meander_placer_base.cpp           AmplitudeStep: the amplitude hot keys step the maximum amplitude and never below the minimum
 //
 // Beyond KiCad's panels: a dash or gap ratio must be above 0 and at most 1000, a hatch offset at most a metre, an amplitude or a spacing above 0 and at most 100 mm, a corner
 // radius from 0 to 100 per cent and the minimum amplitude not above the maximum; a profile's rows may only name the board's copper layers and a delay is at most what KiCad's `int` holds.
@@ -133,18 +132,6 @@ export function tuningPatternsProblems(p: TuningPatterns): Record<string, string
 
 export function sameTuningPatterns(a: TuningPatterns | undefined | null, b: TuningPatterns | undefined | null): boolean {
   return JSON.stringify(tuningPatternsOf(a)) === JSON.stringify(tuningPatternsOf(b));
-}
-
-export type TuneMode = "single" | "diffpair" | "skew";
-
-/**
- * What the length tuner starts from for a mode (`PCB_TUNING_PATTERN` takes the board's `m_SingleTrackMeanderSettings`, `m_DiffPairMeanderSettings` or `m_SkewMeanderSettings` for the
- * pattern it makes): the amplitude is the maximum amplitude (what `AmplitudeStep` steps), the spacing the page's, and the amplitude never steps below the minimum.
- */
-export function tunerStart(patterns: TuningPatterns | undefined | null, mode: TuneMode): { amplitudeUm: number; spacingUm: number; minAmplitudeUm: number } {
-  const p = tuningPatternsOf(patterns);
-  const s = mode === "single" ? p.single_track : mode === "diffpair" ? p.diff_pair : p.diff_pair_skew;
-  return { amplitudeUm: s.max_amplitude_um, spacingUm: s.spacing_um, minAmplitudeUm: s.min_amplitude_um };
 }
 
 // ------------------------------------------------------------------------------------------------------------------------------------ Tuning Profiles

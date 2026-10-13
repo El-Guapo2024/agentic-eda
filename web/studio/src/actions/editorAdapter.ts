@@ -18,7 +18,8 @@ import { hitSymbol, hitWire } from "../components/schematic/schHit";
 import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { deleteCmds as schDeleteCmds } from "../kicad-port/schDelete";
-import { boardDeleteCmds } from "../kicad-port/deleteCmds";
+import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
+import { removeTuningPatterns } from "../components/canvas/tuneRouting";
 import { topLevelGroup } from "../kicad-port/groupTree";
 import { pickFootprintItem, pickSymbolItem } from "../kicad-port/libEditorHit";
 
@@ -180,10 +181,11 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
           if (!board || !snap.api) return null;
           // a click on a member of a group that has not been entered takes the whole group (`FilterCollectorForHierarchy`)
           const groups = board.drawings?.groups ?? [];
-          const { cmds, skippedLocked } = boardDeleteCmds(
-            board,
-            ids.map((id) => promoteToGroup(id, groups, studio.enteredGroupId))
-          );
+          const promoted = ids.map((id) => promoteToGroup(id, groups, studio.enteredGroupId));
+          const { cmds, skippedLocked } = boardDeleteCmds(board, promoted);
+          // a tuning pattern is removed (`PCB_TUNING_PATTERN::Remove`), not deleted track by track
+          const patterns = tuningPatternIds(board, promoted);
+          if (patterns.length > 0) await removeTuningPatterns(patterns, snap.api, snap.dispatch);
           if (cmds.length > 0) await snap.api.cmdBatch(cmds);
           return skippedLocked > 0 && cmds.length === 0 ? "Item locked." : null;
         },

@@ -11,6 +11,7 @@
 
 import type { AnnotateOptions } from "./hierarchyTypes";
 import type { JunctionLook, SchEditCmd, SchGraphic, SchMoveCmd, SchStroke } from "./schEditTypes";
+import type { TuningPattern } from "./tuneTypes";
 
 export type Um = number;
 export type Degrees = number;
@@ -474,6 +475,8 @@ export interface Drawings {
   /** Task item 7 -- see `Dimension`'s own doc. */
   dimensions: Dimension[];
   dimension_settings: DimensionSettings;
+  /** The length-tuning patterns of the board (`PCB_TUNING_PATTERN`, crates/model/src/tuning.rs); each is also listed in `groups` with the tracks of its meander as members. */
+  tuning_patterns?: TuningPattern[];
 }
 
 /** `crates/model/src/ir.rs` `Group` (task item 5) -- `PCB_GROUP`: a named set of member item ids (a part reference, or a track/via/zone/shape/text id), no geometry of its own. No nested groups in this model. */
@@ -481,6 +484,8 @@ export interface Group {
   id: string;
   name: string;
   member_ids: string[];
+  /** A `PCB_GENERATOR` (which is a `PCB_GROUP`): what makes the group -- a tuning pattern (`Drawings.tuning_patterns`). It is selected as a group but edited through its properties and edit points, and deleting it puts the track back. */
+  generator?: "tuning_pattern";
 }
 
 /** `crates/model/src/ir.rs` `DimensionUnits`/`DimensionUnitsFormat`/`DimensionTextPosition`/`ArrowDirection` (task item 7). */
@@ -1816,43 +1821,7 @@ export interface DpFixReply {
   preview?: DiffPairPreview;
 }
 
-/** `POST /api/tune_length/{preview,apply}` (gap #7 task item 4, `7`):
- * lengthen a straight, single-segment track to a target length by
- * inserting a meander -- `eda_pns::meander`. Unlike every other
- * interactive-router endpoint, this is entirely stateless: no session,
- * every call re-reads `design.json` fresh (see that module's own doc
- * comment on why length tuning is a one-shot dialog here, not a third
- * live mouse-driven session). */
-export interface TuneLengthReply {
-  ok: boolean;
-  message?: string;
-  /** Which tuner answered: `7` single track, `8` differential pair, `9` skew. */
-  mode?: TuneMode;
-  net?: string;
-  layer?: string;
-  width?: Um;
-  /** Single: the source track's own straight-line length, before tuning. Pair (`8`): the pair's length, the longer net's whole routed length. Skew (`9`): the selected net's whole routed length. Also present on a pair/skew *error* reply, so the dialog can offer a sensible default target. */
-  original_length?: Um;
-  /** The generated meander's real, measured length -- usually within a
-   * few um of the requested target when reachable, see that module's own
-   * doc comment on why it isn't always exact to the micrometer. For a pair
-   * (`8`) it is the pair's length after tuning; for skew (`9`) the selected net's. */
-  achieved_length?: Um;
-  pts?: [Um, Um][];
-  colliding?: boolean;
-  /** `8`/`9`: the complementary net (`BOARD::MatchDpSuffix`). */
-  partner_net?: string;
-  /** `8`: the partner line's own replacement points, and the two lines' centre-to-centre distance (`gap + width`). */
-  partner_pts?: [Um, Um][];
-  pitch?: Um;
-  /** `9`: the partner net's whole routed length (`m_coupledLength`). */
-  partner_length?: Um;
-  /** `8`/`9`: this net minus the partner, before and after tuning (`CurrentSkew`). */
-  skew_before?: Um;
-  skew_after?: Um;
-}
-
-/** `7` / `8` / `9`: which `pcbnew.LengthTuner.*` the dialog is running. */
+/** `7` / `8` / `9`: which `pcbnew.LengthTuner.*` the tool is running. */
 export type TuneMode = "single" | "diffpair" | "skew";
 
 /** `dialog_cleanup_tracks_and_vias_base.cpp`'s checkboxes -- see

@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
@@ -605,35 +605,6 @@ export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
 
 export function dpFinish(x: Um, y: Um): Promise<CmdReply> {
   return postJson("/api/route/dp_finish", { x: Math.round(x), y: Math.round(y) });
-}
-
-// `7`: length tuning (gap #7 task item 4) -- stateless, see
-// api/types.ts's TuneLengthReply doc comment and components/
-// LengthTuningDialog.tsx. `trackId` must name a straight, single-segment
-// track (eda_pns::meander's own scope).
-
-export interface TuneLengthRequest {
-  trackId: string;
-  amplitude: Um;
-  spacing: Um;
-  targetLength: Um;
-  flip: boolean;
-  /** `7` single (default), `8` diffpair, `9` skew. */
-  mode?: TuneMode;
-  /** `9`: how much longer than the partner net this line should end up (0: equal length). */
-  targetSkew?: Um;
-}
-
-function tuneLengthBody(req: TuneLengthRequest) {
-  return { track_id: req.trackId, amplitude: req.amplitude, spacing: req.spacing, target_length: req.targetLength, flip: req.flip, mode: req.mode ?? "single", target_skew: req.targetSkew ?? 0 };
-}
-
-export function tuneLengthPreview(req: TuneLengthRequest): Promise<TuneLengthReply> {
-  return postJson("/api/tune_length/preview", tuneLengthBody(req));
-}
-
-export function tuneLengthApply(req: TuneLengthRequest): Promise<TuneLengthReply> {
-  return postJson("/api/tune_length/apply", tuneLengthBody(req));
 }
 
 // `pcbnew.GlobalEdit.cleanupTracksAndVias` (task item 1) -- stateless,

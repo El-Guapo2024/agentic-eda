@@ -3,6 +3,7 @@
 // `PCBX` reducer action) so the shared store file carries a single, easily
 // merged hunk instead of a field per action.
 import type { Cmd } from "../api/types";
+import type { TuneHoverReply, TuneKind, TuneSettings } from "../api/tuneTypes";
 import type { LayerPairSettings } from "./layerPairs";
 import { DEFAULT_ARC_EDIT_MODE, type ArcEditMode } from "./pcbPointEdit";
 
@@ -46,10 +47,16 @@ export interface PcbParityState {
   /** A footprint name waiting to be opened in the Footprint Editor tab (`EditFpInFpEditor`): the Footprint Editor lives in its own store, so the action only records the request and `useFootprintEditHotkey` (mounted where both providers are in scope) performs it. */
   fpEditRequest: string | null;
   /**
-   * `MEANDER_SETTINGS` amplitude/spacing the length-tuning dialog edits (`lengthTuner.Ampl*`/`Spacing*` step them). The dialog opens at the maximum amplitude and the spacing of Board
-   * Setup > Length-tuning Patterns for its kind (`tunerStart`); `minAmplitudeUm` is that page's minimum amplitude, the floor `AmplitudeStep` keeps.
+   * The length tuner's `MEANDER_SETTINGS` for each kind of tuning (`meanderSettings` of `DRAWING_TOOL::PlaceTuningPattern`), over the board's Length-tuning Patterns page: what the
+   * Tuning Pattern dialog (Ctrl+L) set, and what a pattern left of them (the amplitude and spacing keys step them). Absent: the page's own.
    */
-  lengthTuner: { amplitudeUm: number; spacingUm: number; minAmplitudeUm: number };
+  tuneSettings: Partial<Record<TuneKind, TuneSettings>>;
+  /** The Tuning Pattern dialog is open (`state.lengthTuningDialogOpen`) for this pattern of the board (`ShowPropertiesDialog`); `null` is the tool's own settings. */
+  tuneDialogPattern: string | null;
+  /** The status box of the track under the cursor with the tuner armed (`updateHoverStatus`), and where the cursor was. */
+  tuneHover: { reply: TuneHoverReply; at: [number, number] } | null;
+  /** The Generators Manager (`DIALOG_GENERATORS`) is open. */
+  generatorsManagerOpen: boolean;
   /** Bumped by `closeOutline` to ask the canvas to finish the zone/polygon being drawn with the points placed so far (the canvas owns the draw). */
   drawFinishRequest: number;
   /** `TOOL_MANAGER::GetMenuCursorPos()`: where the context menu was opened. The pointer is over the menu by the time an entry runs, so a cursor-driven action (Break Track) reads this instead of the live cursor; the next canvas press clears it. */
@@ -79,10 +86,6 @@ export interface CustomDiffPair {
   viaGapSameAsTrackGap: boolean;
 }
 
-/** `MEANDER_SETTINGS` constants (pns_meander.cpp): `m_minAmplitude = 200000`, `m_step = 50000` nm. */
-export const TUNER_MIN_AMPLITUDE_UM = 200;
-export const TUNER_STEP_UM = 50;
-
 export const DEFAULT_PCB_PARITY: PcbParityState = {
   moveQueue: [],
   movingIndividually: false,
@@ -91,7 +94,10 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   angleSnapMode: "45",
   drawStrokeStep: null,
   fpEditRequest: null,
-  lengthTuner: { amplitudeUm: 1000, spacingUm: 600, minAmplitudeUm: TUNER_MIN_AMPLITUDE_UM },
+  tuneSettings: {},
+  tuneDialogPattern: null,
+  tuneHover: null,
+  generatorsManagerOpen: false,
   drawFinishRequest: 0,
   menuCursorUm: null,
   layerPairs: null,
@@ -120,14 +126,4 @@ export function nextAngleSnapMode(mode: AngleSnapMode): AngleSnapMode {
     default:
       return "direct";
   }
-}
-
-/** `MEANDER_PLACER_BASE::AmplitudeStep`: `max(amplitude + sign*step, minAmplitude)`; the minimum is the Length-tuning Patterns page's (KiCad's 0.2 mm until it is known). */
-export function amplitudeStep(amplitudeUm: number, sign: 1 | -1, minAmplitudeUm: number = TUNER_MIN_AMPLITUDE_UM): number {
-  return Math.max(amplitudeUm + sign * TUNER_STEP_UM, minAmplitudeUm);
-}
-
-/** `MEANDER_PLACER_BASE::SpacingStep`: `max(spacing + sign*step, trackWidth + clearance)`. */
-export function spacingStep(spacingUm: number, sign: 1 | -1, trackWidthUm: number, clearanceUm: number): number {
-  return Math.max(spacingUm + sign * TUNER_STEP_UM, trackWidthUm + clearanceUm);
 }

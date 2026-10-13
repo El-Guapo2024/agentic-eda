@@ -31,8 +31,9 @@ import { pickSelectionCandidates } from "../components/canvas/selectionCandidate
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
-import { amplitudeStep, nextAngleSnapMode, spacingStep } from "../kicad-port/pcbParityState";
-import { tunerStart } from "../kicad-port/setupPages";
+import { nextAngleSnapMode } from "../kicad-port/pcbParityState";
+import { cancelEditPattern, cancelTune, finishEditPattern, removeTuningPatterns, startEditPattern, stepTune, updateEditPattern } from "../components/canvas/tuneRouting";
+import { tuneRegenerate } from "../api/tuneClient";
 import { steppedDrawStroke } from "../kicad-port/layerDefaults";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
@@ -45,7 +46,7 @@ import { pickedVertices } from "../kicad-port/schMove";
 import { alignMoves, type SchAlignItem, type SchAlignKind } from "../kicad-port/schAlign";
 import type { SchTurn } from "../api/schEditTypes";
 import { findNextMatch } from "../components/schematic/findNavigation";
-import { boardDeleteCmds } from "../kicad-port/deleteCmds";
+import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { symbolBounds } from "../components/schematic/painter";
 import { alignToGrid } from "../kicad-port/gridSnap";
@@ -209,8 +210,11 @@ export function useActionRunner() {
       // `EDIT_TOOL::DeleteItems`: each item by its own verb, a group with everything below it (the groups it holds opened), a locked item -- or a group with a locked
       // item anywhere in it -- skipped (kicad-port/deleteCmds.ts).
       if (state.tab === "pcb" && state.board) cmds.push(...boardDeleteCmds(state.board, refs).cmds);
+      // A tuning pattern is removed, its track put back (`PCB_TUNING_PATTERN::Remove`), before what else was selected goes.
+      const patterns = state.tab === "pcb" ? tuningPatternIds(state.board, refs) : [];
       dispatch({ type: "CLEAR_SELECTION" });
-      if (cmds.length) void api.cmdBatch(cmds);
+      if (patterns.length > 0) void removeTuningPatterns(patterns, api, dispatch).then(() => (cmds.length ? api.cmdBatch(cmds) : undefined));
+      else if (cmds.length) void api.cmdBatch(cmds);
     };
 
     /**
@@ -459,24 +463,15 @@ export function useActionRunner() {
     // `Ctrl+<` (dialog_pns_settings.cpp): the router's settings, sent with the next `X`/`D` session start and, on OK, to the one
     // running -- see `state.routerSettings`'s own doc comment.
     m.set("pcbnew.InteractiveRouter.SettingsDialog", pcbOnly(() => dispatch({ type: "SET_ROUTER_SETTINGS_DIALOG_OPEN", open: true })));
-    // `7` (gap #7 task item 4): length tuning -- see
-    // components/LengthTuningDialog.tsx's own header comment on why this
-    // is a dialog rather than a fourth interactive session. Needs a
-    // single straight track selected first (the dialog itself explains
-    // this when opened with nothing/the wrong thing selected, same as
-    // moveExact's own "only meaningful with something selected" gate).
-    // `8` / `9` (`PNS::DP_MEANDER_PLACER` / `PNS::MEANDER_SKEW_PLACER`): the same dialog, in pair / skew mode -- the clicked track picks the pair
-    // (`Start( aP, aStartItem )`: "Please select a track whose length you want to tune"), so like `7` they start from the selected -- or, with
-    // nothing selected, the hovered -- track.
+    // `7` / `8` / `9` (`PCB_ACTIONS::tuneSingleTrack` / `tuneDiffPair` / `tuneDiffPairSkew`, `DRAWING_TOOL::PlaceTuningPattern`): arms the length tuner -- hover a track to
+    // read its length, click to start a pattern on it, click again where it ends (the canvas does the clicking: components/canvas/tuneRouting.ts). The tool's settings are
+    // Board Setup's Length-tuning Patterns page for the kind, over what the Tuning Pattern dialog (Ctrl+L) set.
     const startTuner = (mode: "single" | "diffpair" | "skew") =>
       pcbOnly(() => {
-        const refs = requestSelection();
-        if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
-        if (state.selection.size === 0) dispatch({ type: "SET_SELECTION", refs });
-        // The tuner starts from Board Setup > Length-tuning Patterns for its kind (`PCB_TUNING_PATTERN` takes the board's meander defaults).
-        const start = tunerStart(state.board?.board_rules?.tuning_patterns, mode);
-        dispatch({ type: "PCBX", patch: { lengthTuner: { amplitudeUm: start.amplitudeUm, spacingUm: start.spacingUm, minAmplitudeUm: start.minAmplitudeUm } } });
-        dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true, mode });
+        void cancelTune(state, dispatch);
+        dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: false, mode });
+        dispatch({ type: "SET_DRAW_STATE", draw: null });
+        dispatch({ type: "SET_ACTIVE_TOOL", tool: "tune" });
       });
     m.set("pcbnew.LengthTuner.TuneSingleTrack", startTuner("single"));
     m.set("pcbnew.LengthTuner.TuneDiffPair", startTuner("diffpair"));
@@ -813,6 +808,8 @@ export function useActionRunner() {
       // kinds (`POST /api/route/cancel` drops whatever's active on the
       // shared `Router`), so route/drag/diff-pair all share this one branch.
       if (state.drawState?.kind === "route" || state.drawState?.kind === "drag" || state.drawState?.kind === "diffpair") cancelInteractiveRoute(dispatch);
+      // `PlaceTuningPattern`: Escape drops the pattern being placed (or the edit of one) and the tool goes on; with none started it leaves the tool (the ESCAPE below).
+      if (state.activeTool === "tune" && cancelTune(state, dispatch)) return;
       // RouteSelected's loop (`m_cancelled = true` when Escape arrives while `m_inRouteSelected`): the whole run ends and the tool is popped.
       if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       // `EDIT_TOOL::Duplicate` / `PCB_CONTROL::Paste`: cancelling the move that carries the new items takes them away again.
@@ -1911,27 +1908,81 @@ export function useActionRunner() {
       m.set("pcbnew.EditorControl.EditLibFpInFpEditor", openFootprintEditor(true));
 
       // ---- lengthTuner.{AmplIncrease,AmplDecrease,SpacingIncrease,SpacingDecrease} (3/4/1/2) -- pns_meander_placer_base.cpp MEANDER_PLACER_BASE::AmplitudeStep / SpacingStep,
-      // active while the length-tuning dialog (this app's "tuning tool active") is open.
-      if (state.lengthTuningDialogOpen) {
-        const tuner = state.pcbx.lengthTuner;
-        const selTrack = [...state.selection][0] ? api.trackById([...state.selection][0]!) : undefined;
-        const trackWidth = selTrack?.width ?? board?.board_rules?.track_width ?? 250;
-        const clearance = board?.board_rules?.clearance ?? 0;
-        const setTuner = (patch: Partial<typeof tuner>) => dispatch({ type: "PCBX", patch: { lengthTuner: { ...tuner, ...patch } } });
-        m.set("pcbnew.lengthTuner.AmplIncrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, 1, tuner.minAmplitudeUm) })));
-        m.set("pcbnew.lengthTuner.AmplDecrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, -1, tuner.minAmplitudeUm) })));
-        m.set("pcbnew.lengthTuner.SpacingIncrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, 1, trackWidth, clearance) })));
-        m.set("pcbnew.lengthTuner.SpacingDecrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, -1, trackWidth, clearance) })));
+      // `DRAWING_TOOL::PlaceTuningPattern`'s handlers: they act on the pattern being placed (the server's placer steps its own settings and fits the meander again), and warn
+      // "Select a track to tune first." without one. Only while the tuner is armed, as the keys are the tool's.
+      if (state.activeTool === "tune") {
+        for (const name of ["pcbnew.lengthTuner.AmplIncrease", "pcbnew.lengthTuner.AmplDecrease", "pcbnew.lengthTuner.SpacingIncrease", "pcbnew.lengthTuner.SpacingDecrease"]) m.set(name, pcbOnly(() => void stepTune(state, dispatch, name)));
       }
-      // ---- LengthTuner.Settings (Ctrl+L) -- pcb_tuning_pattern.cpp `lengthTunerSettings`: this app's tuner settings live in the length-tuning dialog, so it opens it on a single straight track.
+      // ---- LengthTuner.Settings (Ctrl+L) -- `lengthTunerSettings`: the Tuning Pattern dialog for the tool (its settings, and the pattern being placed) while the tuner is armed;
+      // a tuning pattern that is selected has its own (E): that dialog tunes it again.
       m.set(
         "pcbnew.LengthTuner.Settings",
         pcbOnly(() => {
-          const refs = [...state.selection];
-          if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
-          const start = tunerStart(state.board?.board_rules?.tuning_patterns, state.lengthTuningMode);
-          dispatch({ type: "PCBX", patch: { lengthTuner: { amplitudeUm: start.amplitudeUm, spacingUm: start.spacingUm, minAmplitudeUm: start.minAmplitudeUm } } });
+          const sole = state.selection.size === 1 ? [...state.selection][0]! : null;
+          const pattern = state.activeTool !== "tune" && sole ? state.board?.drawings?.tuning_patterns?.find((p) => p.id === sole) : undefined;
+          dispatch({ type: "PCBX", patch: { tuneDialogPattern: pattern?.id ?? null } });
           dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
+        })
+      );
+
+      // ---- Generator.* (generator_tool.cpp): the tuning pattern is the one generator. `regenerateAll` / `regenerateAllTuning` tune every pattern of the board again as the board is now
+      // (`GENERATOR_TOOL::RegenerateAllOfType`), `regenerateSelected` the selected ones; each is one undo step. `showManager` is the Generators Manager. `genStartEdit` /
+      // `genUpdateEdit` / `genFinishEdit` / `genCacnelEdit` are the point editor's session over the selected pattern: its tracks are put back to the baseline in a copy, the end
+      // of the pattern follows the cursor (the edit points can be dragged too), and a click puts the result on the board.
+      const regenerate = (ids?: string[], what = "Rebuilt.") =>
+        pcbOnly(async () => {
+          const r = await tuneRegenerate(ids);
+          dispatch({ type: "TOAST", message: r.ok ? (r.message ?? what) : (r.message ?? "Nothing was rebuilt."), kind: r.ok ? "info" : "error" });
+          await api.refresh();
+        });
+      m.set("pcbnew.Generator.regenerateAll", regenerate());
+      m.set("pcbnew.Generator.regenerateAllTuning", regenerate());
+      m.set(
+        "pcbnew.Generator.regenerateSelected",
+        pcbOnly(async () => {
+          const ids = [...state.selection].filter((id) => state.board?.drawings?.tuning_patterns?.some((p) => p.id === id));
+          if (ids.length === 0) {
+            dispatch({ type: "TOAST", message: "Select a generator to rebuild.", kind: "error" });
+            return;
+          }
+          await regenerate(ids)();
+        })
+      );
+      m.set("pcbnew.Generator.showManager", pcbOnly(() => dispatch({ type: "PCBX", patch: { generatorsManagerOpen: true } })));
+      const editPattern = () => {
+        const sole = state.selection.size === 1 ? [...state.selection][0]! : null;
+        return sole ? state.board?.drawings?.tuning_patterns?.find((p) => p.id === sole) : undefined;
+      };
+      m.set(
+        "pcbnew.Generator.genStartEdit",
+        pcbOnly(async () => {
+          const p = editPattern();
+          if (!p) {
+            dispatch({ type: "TOAST", message: "Select a tuning pattern to edit.", kind: "error" });
+            return;
+          }
+          dispatch({ type: "SET_ACTIVE_TOOL", tool: "tune" });
+          await startEditPattern(dispatch, p);
+        })
+      );
+      m.set(
+        "pcbnew.Generator.genUpdateEdit",
+        pcbOnly(async () => {
+          if (state.drawState?.kind !== "tune" || !state.cursorUm) return;
+          await updateEditPattern(dispatch, 1, state.cursorUm.x, state.cursorUm.y);
+        })
+      );
+      m.set("pcbnew.Generator.genFinishEdit", pcbOnly(async () => void (await finishEditPattern(dispatch, api))));
+      m.set("pcbnew.Generator.genCacnelEdit", pcbOnly(() => cancelEditPattern(dispatch)));
+      m.set(
+        "pcbnew.Generator.genRemove",
+        pcbOnly(async () => {
+          const ids = [...state.selection].filter((id) => state.board?.drawings?.tuning_patterns?.some((p) => p.id === id));
+          if (ids.length === 0) {
+            dispatch({ type: "TOAST", message: "Select a generator to remove.", kind: "error" });
+            return;
+          }
+          await removeTuningPatterns(ids, api, dispatch);
         })
       );
 
