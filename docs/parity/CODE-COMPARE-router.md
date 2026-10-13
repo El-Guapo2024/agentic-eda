@@ -14,10 +14,10 @@ Status counts of the rows in the summary table (section "Function table"; a row 
 
 | Status | Rows |
 |---|---|
-| FAITHFUL | 44 |
+| FAITHFUL | 45 |
 | ADAPTED | 89 |
 | DIVERGENT | 24 |
-| MISSING | 12 |
+| MISSING | 11 |
 | **Total** | **169** |
 
 By section:
@@ -36,7 +36,7 @@ By section:
 | J. Meander / length tuning | 7 | 10 | 0 | 0 |
 | K. Router session | 0 | 5 | 1 | 1 |
 | L. `DIRECTION_45` | 3 | 0 | 1 | 1 |
-| M. Constants and tolerances | 8 | 3 | 1 | 2 |
+| M. Constants and tolerances | 9 | 3 | 1 | 1 |
 
 Headline findings (details, repros and fixes in "Divergences to fix"):
 
@@ -109,7 +109,7 @@ Columns: KiCad function | KiCad file:line | ours file:line | status | note.
 | SHOVE::onReverseCollidingVia | pns_shove.cpp:1267 | shove.rs `on_reverse_colliding_via` | ADAPTED | Ported with the rank system. |
 | SHOVE::fixupViaCollisions / patchTadpoleVia | pns_shove.cpp:1517, :1599 | shove.rs `fixup_via_collisions`, `patch_tadpole_via` | ADAPTED | Ported. |
 | SHOVE::shoveIteration | pns_shove.cpp:1633-1878 | shove.rs `shove_iteration` | ADAPTED | Ported (D12): `NearestObstacle` per kind in the order SOLID, VIA, SEGMENT (HOLE is not modelled), nearest by hull-intersection path length (`Node::nearest_obstacle`), `fixupViaCollisions`, `unwindLineStack( ni )`, then the reverse-collision branch (rank) or the normal one. |
-| SHOVE::shoveMainLoop | pns_shove.cpp:1880 | shove.rs `shove_main_loop` | ADAPTED | Iteration limit 250 with KiCad's `m_iter >= iterLimit` after the iteration; the 1000 ms `ShoveTimeLimit` is MISSING (no wall-clock bound; the iteration cap is the only one). |
+| SHOVE::shoveMainLoop | pns_shove.cpp:1880 | shove.rs `shove_main_loop` | ADAPTED | Both bounds are KiCad's, checked after every iteration like `st == SH_INCOMPLETE || timeLimit.Expired() || m_iter >= iterLimit`: the iteration limit 250 and the 1000 ms `ShoveTimeLimit` (`time_limit.rs`, `TIME_LIMIT::Expired()` is `>=`; the clock starts with the loop; a limit of 0 gives the one iteration and then `SH_INCOMPLETE`, tested). Not ported: the free dragged via KiCad pushes a proxy line for (`ShoveDraggingVia`: a via drag does not shove against the via itself). |
 | SHOVE::Run | pns_shove.cpp:2388-2606 | shove.rs:253-363 | ADAPTED | Heads are locked at their endpoints (`LockJoint`), head via cloned, springback pushed; ours branches a full copy per call, no locks, no springback (justified by the stateless HTTP model, PARITY.md decision 1). |
 | SHOVE::runOptimizer | pns_shove.cpp:2013-2121 | shove.rs `run_optimizer` | ADAPTED | Ported (D10): every shoved line is optimized in the shoved world after the loop (OE_LOW: MERGE_OBTUSE x1; MEDIUM/FULL: MERGE_SEGMENTS x2; SMART_PADS), restricted to the affected area inflated by the widest line (`AREA_CONSTRAINT`, non-strict; no `VisibleViewArea` intersection, there is no view). Head lines are skipped; `LinePlacer` optimizes the head against the world the shove left. `LIMIT_CORNER_COUNT` is a no-op in KiCad too. |
 | springback (`reduceSpringback`, `pushSpringback`, node stack) | pns_shove.cpp:924, :983 | -- | MISSING | Justified: no tick stream between requests. Observable only as "un-shove" smoothness while dragging. |
@@ -277,7 +277,7 @@ Columns: KiCad function | KiCad file:line | ours file:line | status | note.
 | `cHullFailureExpansionFactor` | 1000 nm per attempt (pns_shove.cpp:526) | 1 um (shove.rs:101,241) | FAITHFUL | Plus the global +1 guard (hull.rs:208). |
 | kink threshold | `aClearance / 10` (pns_utils.cpp:181) | `clearance / 10` (hull.rs:273) | FAITHFUL | Scale-free in the ratio; the integer division now acts on um (rounds 1000x more coarsely: clearance 205 -> 20 um vs 20.5 -> 20 in nm-scaled terms). |
 | shove iteration limit | 250, `m_iter >= limit` (pns_routing_settings.cpp:46) | 250, `iterations > limit` (settings.rs:88, shove.rs:271) | FAITHFUL | Off by one. |
-| shove time limit | 1000 ms | -- | MISSING | |
+| shove time limit | 1000 ms (`m_shoveTimeLimit`, pns_routing_settings.cpp:44; `TIME_LIMIT::Expired()` is `>=`, time_limit.cpp:39) | 1000 ms (`RoutingSettings::shove_time_limit_ms`, `shove_time_limit` in the router settings API; `TimeLimit::expired`, time_limit.rs) | FAITHFUL | `Instant` for `wxGetLocalTimeMillis`, whole milliseconds as there; checked after every iteration, the clock restarting with each main loop. Measured on the router's random shove tests in a debug build: the shoves that succeed take 2-8 iterations (up to 0.2 s); the long ones run into the iteration limit (250 iterations in 0.4-1.0 s), and the clock stopped one of those at iteration 241. |
 | walkaround iteration limit | 40 (`SetIterationLimit( Settings().WalkaroundIterationLimit() )`) | 40 | FAITHFUL | Counted per cluster, as KiCad does (D15 fixed, section F). |
 | `Walkaround` loop guard | `iterLimit = 1000` (pns_line.cpp:451) | 1000 (line_walk.rs:296) | FAITHFUL | |
 | clearance epsilon | 500 nm | 1000 nm | ADAPTED | See section E. |
@@ -424,7 +424,7 @@ KiCad spends one iteration per obstacle *cluster*; ours one per item, with the s
 
 ### D18. Other gaps worth tracking
 
-Mark-obstacles hull snap (`rhMarkObstacles`), (`SplitAdjacentSegments`: done 2026-10-10, see its row), (shove `viaOnEnd` hull and `shoveLineFromLoneVia`: done by the shove port), `ShoveTimeLimit`, `LockJoint`/locked joints, `findRedundantSegment` (duplicate segments), `from_ir` never sets `Segment.locked`, (diff-pair shove/walkaround/via: done 2026-10-11, section I; what a pair still lacks: Route From Other End (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, so KiCad does it for a pair; here only `Router::continue_from_end` for a single track) and the pair's length and skew tuning (P5c); a drag of a pair is no gap: KiCad's `DRAGGER` has no pair mode). **The board outline is an obstacle now (2026-10-08, was added with the shove port as a gap):** `PNS_KICAD_IFACE_BASE::syncGraphicalItem` adds the `Edge.Cuts` graphics as solids on every copper layer and `Clearance( .., CT_EDGE_CLEARANCE )` asks them for the board's copper-to-edge clearance; `from_ir.rs` does the same for the IR's outline (`Solid::edge`), so a shove toward the edge stops at the clearance. Eight shoves toward `mcu30`'s top edge leave kicad-cli no `copper_edge_clearance` violation (slow test; without the outline the shove to y = 5500 left three). Inner cutouts, arcs and a footprint's own Edge.Cuts graphics are obstacles too since 2026-10-09 (`from_ir.rs` reads the Edge.Cuts items, not the polygon).
+Mark-obstacles hull snap (`rhMarkObstacles`), (`SplitAdjacentSegments`: done 2026-10-10, see its row), (shove `viaOnEnd` hull and `shoveLineFromLoneVia`: done by the shove port), (`ShoveTimeLimit`: done with P5c, section M), `LockJoint`/locked joints, `findRedundantSegment` (duplicate segments), `from_ir` never sets `Segment.locked`, (diff-pair shove/walkaround/via: done 2026-10-11, section I; what a pair still lacks: Route From Other End (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, so KiCad does it for a pair; here only `Router::continue_from_end` for a single track) and the pair's length and skew tuning (P5c); a drag of a pair is no gap: KiCad's `DRAGGER` has no pair mode). **The board outline is an obstacle now (2026-10-08, was added with the shove port as a gap):** `PNS_KICAD_IFACE_BASE::syncGraphicalItem` adds the `Edge.Cuts` graphics as solids on every copper layer and `Clearance( .., CT_EDGE_CLEARANCE )` asks them for the board's copper-to-edge clearance; `from_ir.rs` does the same for the IR's outline (`Solid::edge`), so a shove toward the edge stops at the clearance. Eight shoves toward `mcu30`'s top edge leave kicad-cli no `copper_edge_clearance` violation (slow test; without the outline the shove to y = 5500 left three). Inner cutouts, arcs and a footprint's own Edge.Cuts graphics are obstacles too since 2026-10-09 (`from_ir.rs` reads the Edge.Cuts items, not the polygon).
 
 ## Stale or misleading documentation found
 

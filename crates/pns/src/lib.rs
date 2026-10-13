@@ -49,6 +49,7 @@ pub mod router;
 pub mod seg_ops;
 pub mod settings;
 pub mod shove;
+pub mod time_limit;
 pub mod tuning_commit;
 pub mod tuning_path;
 pub mod line_walk;

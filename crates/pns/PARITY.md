@@ -127,9 +127,11 @@ What is ported, function for function (`pns_shove.cpp`):
 
 Where it differs, on purpose:
 
-- **No springback, no time limit.** Every call branches fresh from the
-  committed world (decision 1, and the HTTP-per-sample driver); the 250
-  iterations are the only bound.
+- **No springback.** Every call branches fresh from the committed world
+  (decision 1, and the HTTP-per-sample driver). The shove main loop is bounded
+  as KiCad's is: 250 iterations (`ShoveIterationLimit`) and one second
+  (`ShoveTimeLimit`, `time_limit.rs`), checked after every iteration; either
+  one ends the shove as `SH_INCOMPLETE`.
 - **Widths survive (D10).** `SHOVE::assembleLine` passes the default
   `aAllowSegmentSizeMismatch = true`, so KiCad assembles *through* a change of
   width and writes the whole chain back at the width of the segment it hit.
@@ -418,7 +420,7 @@ entire track being dragged and Use mouse path to set track posture have
 nothing behind them here and are shown disabled with the reason in their tool
 tip (**2026-10-10: Smooth dragged segments works now**, `smooth_dragged_segments`). `POST /api/route/{start,drag_start,dp_start}` take a `settings` object
 (`route_api.rs` `settings_of`: those switches and `shove_iteration_limit`,
-`walkaround_iteration_limit`, `via_force_prop_iteration_limit`,
+`shove_time_limit` (ms), `walkaround_iteration_limit`, `via_force_prop_iteration_limit`,
 `walkaround_hug_length_threshold`, which KiCad has no row for); `mode` and
 `remove_loops` at the top level still work. **OK in the dialog also applies
 the settings to the route, drag or diff pair in progress**
