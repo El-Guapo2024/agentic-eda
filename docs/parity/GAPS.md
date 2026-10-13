@@ -49,8 +49,9 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   3. *One root sits under several gaps: the constraint model built from the intent has no edit verbs.* It now has an overlay for the rules
      (`drawings.rules`), for the nets (`design.nets`), for the libraries, for footprint fields, attributes and pad edits
      (`drawings.footprint_edits`), for the zone filler's pad and footprint settings (`drawings.zone_overrides`) and for footprints that exist only on
-     the board (`drawings.board_parts`). **It has none for which footprint a part uses: the schematic's Footprint field never reaches the board,
-     Change Footprint does not exist, and a reference rename leaves the board's footprint, its pose and its routing behind (item 26).**
+     the board (`drawings.board_parts`), and since 2026-10-12 for which footprint a part uses (`drawings.footprint_assignments`) and which reference a part
+     has (`drawings.renamed_parts`): the schematic's Footprint field reaches the board, Change Footprint exists, and a reference rename carries the board's
+     footprint, its pose and its routing (item 26).
   4. *Most earlier parity work was typechecked and unit-tested and never clicked.* Six areas now have a browser check driven through
      `window.__eda` (`web/studio/e2e/`: Appearance, DRC and ERC review, footprint edit and arrays, Properties panel, snap and grid, the 3D viewer);
      the schematic editors, Board Setup, the choosers, the router, the PCB edit tools, the zones and the hierarchy have none (item 33).
@@ -96,7 +97,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | rank | package | items | what the user meets | state | size |
 |---|---|---|---|---|---|
 | 1 | P1 Footprint graphics on the board | 25, 2 | no part outline, pin-1 mark or fab body on the canvas, in the file or in the silkscreen; an imported board loses them on export | done 2026-10-10 on `task-fp-graphics` (not merged); item 25 lists what is left | L |
-| 2 | P2 Footprint assignment, exchange and reference rename | 26, 9 | the Footprint field of a symbol does nothing on the board; no Change Footprint; a rename leaves the footprint and its routing behind | open | L |
+| 2 | P2 Footprint assignment, exchange and reference rename | 26, 9 | the Footprint field of a symbol does nothing on the board; no Change Footprint; a rename leaves the footprint and its routing behind | done 2026-10-12 on `task-fp-assign` (not merged); item 26 lists what is left | L |
 | 3 | P3 Library tables and paths | 5 | a symbol or footprint made in the editors cannot be saved into a table library's file; no Reset or Migrate Libraries; no 3D model search paths | mostly done | S |
 | 4 | P4 Schematic hierarchy: the rest | 4 | Import Sheet, sheets in the clipboard, the last cross-sheet cases | in flight | M |
 | 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | **P5a done on `task-router-drag` (2026-10-10)**: a segment slides, an illegal drag falls back, routes start and end mid-track, Route From Other End after the first fix. **P5b done on `task-diff-pairs` (2026-10-11)**: a pair is KiCad's, walked or shoved as one with its gap, with vias. Left: no U meander, no pair length tuning of KiCad's kind | P5a and P5b done, P5c open | L (1 part left) |
@@ -283,7 +284,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   whose position and BOM exports honour. A field is an item of the board (`REF:Name`): selected, drawn (following the Appearance rows), moved, dragged, turned, flipped. A pad's and a footprint's zone
   connection, relief gap, spoke width and angle and clearance are the zone filler's overlay (`drawings.zone_overrides`) and the same dialogs edit them. Board-only footprints are the "not in schematic" attribute.
 - Measured: 69 new Rust tests and 39 `node --test` cases; `web/studio/e2e/footprint-edit.check.js` runs 19 scenarios through `window.__eda`; real kicad-cli honoured do-not-populate and exclude-from-position-files.
-- Missing: Change Footprint(s), Update Footprints from Library that reads the library, geographical reannotate -- now item 26; per-footprint mask and paste margin overrides; padstacks (item 31; trapezoid,
+- Missing: per-footprint mask and paste margin overrides; (Change Footprint(s), Update Footprints from Library that reads the library and geographical reannotate are done, item 26;) padstacks (item 31; trapezoid,
   chamfered and custom pads are done, 2026-10-10), fabrication property, pad number and pin function edits, pad-to-die length; Datasheet and Description fields and text variables in field text; our own placement and courtyard
   checks do not read a pad's offset or margins (kicad-cli does); logos; the microwave tools (their reason, "no free footprint", is stale: `STALE-REASONS.md` SR3).
 - Port from: `pcbnew/dialogs/dialog_footprint_properties.cpp`, `dialog_pad_properties.cpp`, `pcbnew/pcb_field.cpp`, `pcbnew/footprint.cpp`, `pcbnew/tools/board_editor_control.cpp` (`PlaceFootprint`).
@@ -454,21 +455,25 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`parseFOOTPRINT_unchecked`), `pcbnew/pcb_painter.cpp` (`draw( FOOTPRINT )`).
 
 ### 26. Footprint assignment, exchange and reference rename
-**New, open.** Hit: every project that changes a footprint or renumbers a part. Blocks: yes. Package P2, size L.
-- What is missing, read from the code: a part's footprint comes from the intent (`Part.footprint`); `board::fold_unknown_symbols` copies a schematic symbol's Footprint field only for a symbol the model has
-  not heard of. So `Cmd::EditSymbolFields { footprint }` (Symbol Properties, Assign Footprints, the Symbol Fields Table) edits the schematic field and nothing on the board, and Update PCB from Schematic (F8,
-  `kicad-port/updatePcb.ts`) is a report that says the board is up to date. `Cmd::RenameSymbol`'s own doc says it does not retarget `design.placement`, so Edit Reference (`U`), Annotate with reset and Increment
-  Annotations leave the old reference's footprint, pose, routing, fields, edits, zone overrides, locks and group membership where they were and the next reconcile makes a fresh unplaced part.
-  "Update Footprints from Library" (`actions/pcbGlobalEditSweep.ts`) only publishes the project-library entry a footprint uses (`Cmd::UpdateFootprintOnBoard`); it never reads the installed library or a
-  table. Insert footprint into PCB updates the parts that already name the footprint (`PARITY-fpedit.md`); `Cmd::PlaceFootprint` could add a new one.
-- To do (in this order): (1) a rename that carries the board's part with it, as one undo step; (2) a per-instance footprint assignment overlay in `DrawingsSection` (beside `footprint_edits`, applied by `board::load`
-  as `design.nets` and `rules` are), followed by the schematic's Footprint field (`replaceFootprint`); (3) Change Footprint(s) with the dialog's options (update or reset fields, text layers, 3D models; pads kept
-  by number); (4) Update Footprints from Library that reads the library copy and lists what differs (`FootprintNeedsUpdate`); (5) Compare Footprint with Library; (6) Reannotate (geographical); (7) Insert
-  footprint into PCB adds a part. Swap Pad Nets and Swap Gate Nets are decided here: a swap on the board makes the board disagree with the schematic drawing, as in KiCad (`--schematic-parity` reports it).
+**Done (2026-10-12, `task-fp-assign`, not merged yet)**, limits below. Hit: every project that changes a footprint or renumbers a part. Blocks: no longer. Package P2, size L.
+- Done (`PARITY-pcb.md` section 30; `crates/model/src/{fp_assign,fp_exchange,fp_compare,reannotate}.rs`, `crates/ops/src/{part_rename,fp_exchange,reannotate}.rs`, `crates/cli/src/{library_place,fp_assign_api}.rs`,
+  `components/{PcbGlobalEditDialogs,FootprintDiffDialog,ReannotateDialog,UpdatePcbDialog}.tsx`, `kicad-port/{pcbExchange,updatePcb,footprintDiff,reannotate,fpInsert}.ts`), the seven steps, each its own commit (`7af8ee7`, `a81dfd2`, `4d01fe8`, `9de882f`, `a8f4b22`, `65f2fa1`, `4a3f088`):
+  (1) a rename carries the board's part (`Board::rename_part`: pose, footprint, the pads the routing ends on, net pins, fields and edits, zone overrides, lock, groups; the intent's part in `drawings.renamed_parts`) from Edit Reference,
+  Annotate with reset and Increment Annotations, in one undo step on both editors (the history's `both` tag, `Cmd::spans_both_editors`); (2) `DrawingsSection::footprint_assignments`: the schematic symbol's Footprint field
+  is the board's footprint (`replaceFootprint`: Symbol Properties, Assign Footprints, the Symbol Fields Table), Update PCB from Schematic (F8) lists and applies what the board could not take (a locked footprint, a
+  footprint no library has) and Update Schematic from PCB carries the board's back; (3) Change Footprint(s) with the dialog's options (`Cmd::ExchangeFootprints`, `ExchangeFootprint` ported with its pad alignment and its
+  text matching), four actions and the Footprint Properties buttons; (4) Update Footprints from Library reads the library copy through the tables and lists what differs (`FootprintNeedsUpdate`, `eda_model::fp_compare`);
+  (5) Compare Footprint with Library (the Summary and Visual pages, the slider, the update it opens); (6) Geographical Reannotate (`DIALOG_BOARD_REANNOTATE` ported, `Cmd::ReannotateBoard`, the symbols follow); (7) Insert
+  footprint into PCB adds a part of its own where no part names the footprint. Every edit is an undoable `/api/cmd` verb; the IR additions are additive overlays with serde defaults.
+- Measured: 76 new Rust tests and 28 `node --test` cases; kicad-cli's `--schematic-parity` (slow tier) says the same after a rename, after a Change Footprint and after a reannotation as it said before, and the derived
+  `.kicad_pcb` and `.kicad_sch` name the new references; `web/studio/e2e/fp-assign.check.js` runs 8 scenarios (69 checks) through `window.__eda` (port 8824, a board made from `examples/mcu_board_30plus.yaml`).
+- Left: Swap Pad Nets (`EDIT_TOOL::SwapPadNets`) was not reached. In this IR a pad's net is its pin's place in `design.nets`, so it is a verb that rotates the nets of the selected pads by moving their pins between nets, with the tracks that end on the pads (`Track::pins`) taking the new net; it makes the board disagree with the schematic, as in KiCad (kicad-cli's `--schematic-parity` reports it), until Update Schematic from PCB carries a pin swap back, and the next schematic edit that changes connectivity (`Cmd::edits_connectivity`) reads `design.nets` from the drawing again, so a swap kept only there would be undone by it. Swap Gate Nets also needs the footprint's unit info (`FOOTPRINT::GetUnitInfo`: the `(units ..)` of a multi-gate footprint), which the IR does not hold. Pad nets of an exchange are kept by pad number only (KiCad also matches pads that share no number by position). `FootprintNeedsUpdate` compares what the model keeps of a library footprint,
+  so the file's attribute flags, net-tie groups, rule areas and stackup layers are not reported. Insert footprint into PCB places the footprint at the centre of the board instead of carrying it on the cursor. Import
+  Netlist (a part from a netlist has no schematic symbol).
 - Port from: `pcbnew/dialogs/dialog_exchange_footprints.cpp`, `pcbnew/pcb_edit_frame.cpp` (`ExchangeFootprint`), `pcbnew/netlist_reader/board_netlist_updater.cpp` (`replaceFootprint`,
   `updateFootprintParameters`, `updateComponentPadConnections`), `pcbnew/tools/global_edit_tool.cpp` (`ExchangeFootprints`), `pcbnew/tools/board_reannotate_tool.cpp`,
-  `pcbnew/dialogs/dialog_board_reannotate.cpp`, `pcbnew/footprint.cpp` (`FootprintNeedsUpdate`), `pcbnew/tools/board_inspection_tool.cpp` (`DiffFootprint`), `eeschema/tools/assign_footprints.cpp`,
-  `eeschema/tools/backannotate.cpp`, `pcbnew/tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
+  `pcbnew/dialogs/dialog_board_reannotate.cpp`, `pcbnew/footprint.cpp` and `pcbnew/drc/drc_test_provider_library_parity.cpp` (`FootprintNeedsUpdate`), `pcbnew/tools/board_inspection_tool.cpp` (`DiffFootprint`),
+  `eeschema/tools/assign_footprints.cpp`, `eeschema/tools/backannotate.cpp`, `pcbnew/tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
 
 ### 27. Board outline leftovers
 **New, open.** Hit: boards with cutouts, slots or rounded corners. Blocks: no. Package P12, size M. From `PARITY-pcb.md` section 25 ("Not done") and `crates/zone-filler/PARITY.md`.
@@ -659,9 +664,9 @@ Rules that keep them apart (each is how an earlier package did it):
 
 Waves:
 
-- **Running now** (2026-10-12): P2 (`task-fp-assign`), P9a (`task-board-setup`), P10 (`task-sch-details`). P1, P3, P4, P5a, P5b, P6, P7 and P8 are merged; their sections list what is left.
-- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P14, P16, P17 and the Footprint Checker and Compare Footprint, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
-- **P2** is running: its assignment overlay holds a definition with graphics. Step 1 of P2, the rename, needs P4's Annotate.
+- **Running now** (2026-10-12): P9a (`task-board-setup`), P10 (`task-sch-details`). P1, P2, P3, P4, P5a, P5b, P6, P7 and P8 are merged; their sections list what is left.
+- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P14, P16, P17 and the Footprint Checker, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
+- **P2** merged 2026-10-12 (Compare Footprint with Library included); Swap Pad Nets and Swap Gate Nets are left (item 26).
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
 - **After P7**: P13, P17, and P19's arc stub and function shape.
 - **After P3 and P4**: P18. **P8's PCB half** is independent; its sheet half is P4's.
@@ -723,7 +728,10 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   re-run `tools/parity_report.py` (the `complex_hierarchy` row is the measure).
 - Conflicts: P7 (footprint IR, `write_footprint`, the footprint painter: sequence, see above); P2, P14, P16, P17 start after P1's IR lands; P12 none.
 
-### P2. Footprint assignment, exchange and reference rename (item 26; SR4). Size L. Rank 2.
+### P2. Footprint assignment, exchange and reference rename (item 26; SR4). Size L. Rank 2. **Done 2026-10-12 on `task-fp-assign`, waiting for its merge; item 26 lists what is left.**
+- Status (2026-10-12): the seven steps below, each its own commit (`7af8ee7` the rename, `a81dfd2` the assignment and the Footprint field, `4d01fe8` Change Footprint(s), `9de882f` Update from Library, `a8f4b22` Compare Footprint with Library,
+  `65f2fa1` Geographical Reannotate, `4a3f088` Insert footprint into PCB). kicad-cli: the parity test after a rename, a Change Footprint and a reannotation (slow tier). Browser: `e2e/fp-assign.check.js`, 8 scenarios. Swap Pad Nets and Swap Gate Nets are not done (item 26 says why).
+  Hubs touched, each by a hunk: `ir.rs` (`renamed_parts`, `footprint_assignments`), `model/lib.rs`, `ops/lib.rs` (`Cmd::ExchangeFootprints`, `Cmd::ReannotateBoard`, `rename_symbol`, `spans_both_editors`), `sch_annotate.rs`, `sch_control.rs`, `board.rs` (`build_model`, the history tag, `carry.rs`), `studio.rs` (three routes), `types.ts`, `useActionRunner.ts` (F8), `commonSuiteActions.ts`; `store.tsx`, `Canvas.tsx`, `painter.ts` and `SchematicView.tsx` untouched.
 - Why: the Footprint field of a symbol does nothing on the board, Change Footprint does not exist, Update from Library never reads a library, and a reference rename strands the footprint.
 - Files: `crates/model/src/ir.rs` (an assignment overlay in `DrawingsSection`, beside `footprint_edits`, applied by `board::load`), `crates/cli/src/board.rs` (`load`, `fold_unknown_symbols`, `reconcile_schematic`: the symbol's Footprint
   field is followed, a rename carries the part), `crates/ops/src/` new `fp_exchange.rs` plus the `Cmd` hunks in `lib.rs`, `rename_symbol` and `annotate` calling a `rename_part` that moves the pose, `footprint_edits`,
@@ -732,7 +740,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/dialogs/dialog_exchange_footprints.cpp`, `pcb_edit_frame.cpp` (`ExchangeFootprint`), `netlist_reader/board_netlist_updater.cpp` (`replaceFootprint`, `updateFootprintParameters`, `updateComponentPadConnections`),
   `tools/global_edit_tool.cpp` (`ExchangeFootprints`), `tools/board_reannotate_tool.cpp`, `dialogs/dialog_board_reannotate.cpp`, `footprint.cpp` (`FootprintNeedsUpdate`), `tools/board_inspection_tool.cpp` (`DiffFootprint`),
   `eeschema/tools/assign_footprints.cpp`, `backannotate.cpp`, `tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
-- Order: the seven steps of item 26; Swap Pad Nets last and only if the board may disagree with the schematic.
+- Order: the seven steps of item 26; Swap Pad Nets last and only if the board may disagree with the schematic (it was not reached).
 - Conflicts: P4 (`rename_symbol` and `annotate` in `ops/lib.rs`, `reconcile_schematic`); P1 (the definition carries graphics); P14, P7 (`fp_edit.rs`); P3 (merged: `library_place.rs` reads the libraries through a `LibSource`).
 
 ### P3. Library tables and paths (item 5). Size S for what is left. Rank 3. **Mostly done: `task-lib-tables`.**

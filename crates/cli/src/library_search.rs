@@ -698,6 +698,18 @@ pub(crate) fn installed_footprint<S: LibSource + ?Sized>(src: &S, name: &str) ->
     Some(fp)
 }
 
+/// A footprint of the installed libraries as the board's model has footprints (`eda_model::Footprint`: pads, graphics, courtyard outlines and 3D models, as the
+/// board reader keeps them), named `Lib:Name`: the library copy an exchange puts on a part, and what the board's is compared with.
+pub(crate) fn installed_engine_footprint<S: LibSource + ?Sized>(src: &S, name: &str) -> Option<eda_model::Footprint> {
+    let (lib, item) = name.split_once(':')?;
+    if !legal_library_name(item) || item.is_empty() {
+        return None;
+    }
+    let file = footprint_dir(src, lib).ok()?.join(format!("{item}.kicad_mod"));
+    let text = std::fs::read_to_string(file).ok()?;
+    eda_kicad::parse_footprint_file(&text, name).ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

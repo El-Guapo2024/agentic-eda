@@ -71,7 +71,7 @@ pub(crate) fn attrs_json(design: &Design, fp: &FootprintInstance, footprint: &Fo
     })
 }
 
-fn shape_name(s: PadShape) -> &'static str {
+pub(crate) fn shape_name(s: PadShape) -> &'static str {
     match s {
         PadShape::Rect => "rect",
         PadShape::RoundRect => "round_rect",

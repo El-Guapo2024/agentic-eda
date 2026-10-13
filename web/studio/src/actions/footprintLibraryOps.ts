@@ -8,13 +8,15 @@
 // copy). Copy, Export, Duplicate read any footprint; Delete and Rename need a project-library entry.
 import type { Dispatch } from "react";
 import type { Cmd } from "../api/types";
-import { fetchFootprintLibraryNames } from "../api/client";
+import { fetchFootprintLibraryNames, fetchState } from "../api/client";
 import { fetchAnyFootprint, parseFootprintText, pickTextFile } from "../api/libraryClient";
+import { addedPart, insertedMessage, outlineCentre } from "../kicad-port/fpInsert";
 import { duplicateIdCount, repairMessage } from "../kicad-port/fpRepair";
 import { ensureUniqueLibId, footprintNameError, joinLibName, pastedFootprintName, PROJECT_LIBRARY, splitLibName } from "../kicad-port/libraryNames";
 import { askConfirm, askText } from "../components/library/libraryDialogs";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
 import type { FootprintEditorApi, FpAction } from "../state/footprintEditorStore";
+import type { Action as StudioAction } from "../state/store";
 
 export interface FpCtx {
   api: FootprintEditorApi;
@@ -206,18 +208,45 @@ export async function repairFootprint(c: FpCtx): Promise<void> {
 }
 
 /**
- * `FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard` (`pcbnew.ModuleEditor.saveFootprintToBoard`, "Insert footprint into PCB"): the edited footprint goes
- * to the board. KiCad exchanges the board footprint it was loaded from, or inserts a new one; the studio's board holds only the footprints of its
- * netlist's parts, so this is the explicit "Update Footprint on Board": every part naming the footprint now takes its pads from the library entry.
- * `parts` are the board's parts as `{ ref, footprint }`.
+ * `FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard` (`pcbnew.ModuleEditor.saveFootprintToBoard`, "Insert footprint into PCB"): the edited footprint goes to the board. KiCad exchanges
+ * the board footprint it was loaded from, or -- when there is none -- inserts it as a new one. The studio's board holds the footprints of its parts, so where parts name the footprint
+ * this is the explicit "Update Footprint on Board" (every part naming it takes its pads from the library entry); where none does the footprint is inserted as a part of its own
+ * (`insertFootprint`). `parts` are the board's parts as `{ ref, footprint }`.
  */
-export async function saveFootprintToBoard(c: FpCtx, parts: readonly { ref: string; footprint: string | null }[]): Promise<void> {
+export async function saveFootprintToBoard(c: FpCtx, parts: readonly { ref: string; footprint: string | null }[], studio?: Dispatch<StudioAction>): Promise<void> {
   const st = c.api.getState();
   if (!st.name) return info(c, "Open a footprint first.");
   const users = parts.filter((p) => p.footprint === st.name).map((p) => p.ref);
-  if (users.length === 0) {
-    return fail(c, new Error(`No part on the board uses ${st.name}. The studio's board holds only the footprints of its netlist's parts, so there is nothing to update and a free footprint cannot be inserted.`));
-  }
+  if (users.length === 0) return insertFootprint(c, st.name, studio);
   if (!(await c.api.cmd({ op: "update_footprint_on_board", name: st.name }))) return;
   info(c, `${st.name}: ${users.length === 1 ? users[0] : `${users.length} parts`} on the board now follow${users.length === 1 ? "s" : ""} this footprint`);
+}
+
+/**
+ * The insert branch of `SaveFootprintToBoard`: a part of its own for the footprint (`Cmd::PlaceFootprint`: the next free reference of the footprint's usual prefix, its name as the
+ * value), carrying the editor's copy, at the centre of the board; the project's entry is published in the same step so the part resolves to the edited footprint by its name. One undo
+ * step on the board. KiCad hangs the footprint on the board editor's cursor; the studio shows the board with the new part selected.
+ */
+async function insertFootprint(c: FpCtx, name: string, studio?: Dispatch<StudioAction>): Promise<void> {
+  const definition = c.api.getState().footprint;
+  if (!definition) return fail(c, new Error(`${name} has no footprint to insert.`));
+  let before;
+  try {
+    before = await fetchState();
+  } catch (e) {
+    return fail(c, e);
+  }
+  const place: Cmd = { op: "place_footprint", footprint: name, at: outlineCentre(before.outline), definition };
+  if (!(await c.api.cmd({ op: "batch", cmds: [place, { op: "update_footprint_on_board", name }] }))) return;
+  let added: string | null = null;
+  try {
+    added = addedPart(before.parts, (await fetchState()).parts);
+  } catch {
+    /* the part is on the board; only its name is not told */
+  }
+  if (studio) {
+    studio({ type: "SET_TAB", tab: "pcb" });
+    if (added) studio({ type: "SET_SELECTION", refs: [added] });
+  }
+  info(c, insertedMessage(name, added));
 }

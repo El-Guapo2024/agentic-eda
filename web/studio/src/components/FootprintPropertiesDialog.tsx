@@ -10,14 +10,18 @@
 // position, the orientation, the side and the lock through the verbs the move, rotate, flip and lock tools use -- so a side change flips the layers and the
 // mirroring the grid just set, as `FOOTPRINT::Flip` does -- then the zone connection of the footprint and of each pad whose fields were changed.
 //
-// Not ported: the footprint's own mask/paste margins, the 3D models and embedded files, jumper pad groups, Update and Change Footprint (they need the
-// footprint chooser). The Reference and Value texts come from the schematic and the intent: they are shown, not edited.
+// Update Footprint... and Change Footprint... (`FP_PROPS_UPDATE_FP`, `FP_PROPS_CHANGE_FP`) close the dialog and open the exchange dialog on this footprint
+// (components/PcbGlobalEditDialogs.tsx, `ShowExchangeFootprintsDialog( aFootprint, updateMode, true )`).
+//
+// Not ported: the footprint's own mask/paste margins, the 3D models and embedded files, jumper pad groups. The Reference and Value texts come from the schematic and the
+// intent: they are shown, not edited.
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
 import { checkFieldRow, fieldsOf, layoutOf, localAngleOf, newFieldLayout, newFieldName, parseFieldId, attrsOf, REFERENCE, VALUE } from "../kicad-port/fpFields";
 import { footprintZoneForm, padNumbers, padZoneForm, zoneCmds, type FootprintZoneForm, type PadZoneForm } from "../kicad-port/padZone";
 import { PAD_CONNECTION_OPTIONS } from "../kicad-port/padSettings";
 import { TECH_LAYERS } from "../kicad-port/pcbProperties";
+import { useActionRunner } from "../actions/useActionRunner";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
@@ -37,6 +41,7 @@ export function FootprintPropertiesDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
+  const { run } = useActionRunner();
   const open = state.footprintPropertiesOpen;
   const board = state.board;
   const units = state.units;
@@ -433,6 +438,26 @@ export function FootprintPropertiesDialog() {
         </div>
         <div className="dialog-footer">
           <button onClick={() => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true })}>Move Exactly...</button>
+          <button
+            title="Update this footprint from its library copy"
+            data-testid="footprint-properties-update"
+            onClick={() => {
+              close();
+              run("pcbnew.GlobalEdit.updateFootprint");
+            }}
+          >
+            Update Footprint...
+          </button>
+          <button
+            title="Put this footprint on another footprint of the libraries"
+            data-testid="footprint-properties-change"
+            onClick={() => {
+              close();
+              run("pcbnew.GlobalEdit.changeFootprint");
+            }}
+          >
+            Change Footprint...
+          </button>
           <button onClick={close}>Cancel</button>
           <button className="primary" onClick={() => void submit()} disabled={busy} data-testid="footprint-properties-ok">
             OK

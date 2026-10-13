@@ -11,13 +11,17 @@
 //!     all of it back.
 //!   * `SetSymbolLibIds { changes }` (Edit Symbol Library Links) keeps the definition of every installed symbol it links to first, the same way.
 //!   * `PlaceFootprint { footprint }` carries the footprint's pads, graphics and courtyard as `definition`.
+//!   * `ExchangeFootprints` carries the library copy of each footprint it puts a part on (`library`), and a symbol's Footprint field that is edited
+//!     (`EditSymbolFields`, the Symbol Fields Table's `SetSymbolFields`) is followed by the board in the same step: the exchange of the part's footprint is
+//!     added to the command, `board_netlist_updater.cpp`'s `replaceFootprint`.
 //!
 //! A symbol the model already resolves (the intent's own, one it already uses, one the design keeps) is left alone: the design's copy wins.
 
 use crate::library_index::{Kind, LibSource};
 use eda_model::ir::Design;
 use eda_model::ConstraintModel;
-use eda_ops::Cmd;
+use eda_ops::{footprint_name_of, Cmd, ExchangeOptions};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 /// Whether `cmd` can name a library symbol or footprint at all: the library tables are read only for a command that does.
@@ -25,7 +29,9 @@ fn places_from_libraries(cmd: &Cmd) -> bool {
     match cmd {
         Cmd::Batch { cmds } => cmds.iter().any(places_from_libraries),
         Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => places_from_libraries(cmd),
-        Cmd::AddSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } => true,
+        Cmd::AddSymbol { .. } | Cmd::SetSymbolLibIds { .. } | Cmd::PlaceFootprint { .. } | Cmd::ExchangeFootprints { .. } => true,
+        Cmd::EditSymbolFields { footprint: Some(f), .. } => !f.trim().is_empty(),
+        Cmd::SetSymbolFields { edits, .. } => edits.iter().any(|e| e.field == "Footprint"),
         _ => false,
     }
 }
@@ -93,6 +99,37 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
                 Cmd::Batch { cmds: embeds }
             })
         }
+        Cmd::ExchangeFootprints { references, footprint, options, library } => {
+            // the library copy of each footprint it needs: the one the parts change to, or the one each is on
+            let mut names: Vec<String> = match footprint {
+                Some(f) => vec![f.trim().to_string()],
+                None => references.iter().filter_map(|r| model.part(r)).map(footprint_name_of).collect(),
+            };
+            names.sort();
+            names.dedup();
+            let mut library = library.clone();
+            let mut added = false;
+            for name in names {
+                if library.contains_key(&name) {
+                    continue;
+                }
+                if let Some(copy) = crate::library_search::installed_engine_footprint(footprints, &name) {
+                    library.insert(name, copy);
+                    added = true;
+                }
+            }
+            added.then(|| Cmd::ExchangeFootprints { references: references.clone(), footprint: footprint.clone(), options: *options, library })
+        }
+        // The symbol's Footprint field is the board's footprint (`replaceFootprint`): the exchange follows the edit
+        Cmd::EditSymbolFields { id, footprint: Some(f), .. } => follow_footprint_field(cmd, id, f, design, model, footprints),
+        Cmd::SetSymbolFields { edits, .. } => {
+            let follows: Vec<Cmd> = edits.iter().filter(|e| e.field == "Footprint").filter_map(|e| exchange_for_field(&e.id, &e.value, design, model, footprints)).collect();
+            (!follows.is_empty()).then(|| {
+                let mut cmds = vec![cmd.clone()];
+                cmds.extend(follows);
+                Cmd::Batch { cmds }
+            })
+        }
         Cmd::PlaceFootprint { footprint, at, reference, value, definition: None } => {
             // The model knows it already (the intent's, a library's it resolved, the built-in table): nothing to bring.
             let probe = eda_model::Part { reference: "?".into(), mpn: None, lcsc: None, value: None, package: None, footprint: Some(footprint.trim().to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
@@ -104,6 +141,59 @@ fn rewrite<S: LibSource + ?Sized, F: LibSource + ?Sized>(cmd: &Cmd, design: &Des
         }
         _ => None,
     }
+}
+
+/// Does something have the footprint `wanted` for the part `id`: a library of the tables, the Footprint Editor, or the model itself (another part's, a built-in package)?
+/// `Some(library entry)` where a library has it (the command carries that copy), `Some(None)` where the model or the editor has it, `None` where nothing does.
+fn find_footprint<F: LibSource + ?Sized>(wanted: &str, id: &str, design: &Design, model: &ConstraintModel, footprints: &F) -> Option<Option<eda_model::Footprint>> {
+    if let Some(copy) = crate::library_search::installed_engine_footprint(footprints, wanted) {
+        return Some(Some(copy));
+    }
+    let value = model.part(id).and_then(|p| p.value.clone());
+    let probe = eda_model::Part { reference: id.to_string(), mpn: None, lcsc: None, value, package: None, footprint: Some(wanted.to_string()), symbol: None, datasheet: None, pins: vec![], body_um: None, edge: None };
+    let in_editor = design.footprint_library.as_ref().is_some_and(|l| l.by_name(wanted).is_some());
+    (model.footprint_of(&probe).is_some() || in_editor).then_some(None)
+}
+
+/// The library copy of footprint `name`: the Footprint Editor's entry for it where the project edited one (the newest copy there is), else the file of the library tables.
+pub(crate) fn library_copy<F: LibSource + ?Sized>(name: &str, design: &Design, footprints: &F) -> Option<eda_model::Footprint> {
+    let edited = design.footprint_library.as_ref().and_then(|l| l.by_name(name)).map(|entry| {
+        let mut copy = entry.to_engine_footprint();
+        copy.name = name.to_string();
+        copy
+    });
+    edited.or_else(|| crate::library_search::installed_engine_footprint(footprints, name))
+}
+
+/// Is the footprint `wanted` one the studio can put on the part `id` (Update PCB from Schematic: "Cannot update %s (footprint '%s' not found).")?
+pub(crate) fn footprint_found<F: LibSource + ?Sized>(wanted: &str, id: &str, design: &Design, model: &ConstraintModel, footprints: &F) -> bool {
+    find_footprint(wanted, id, design, model, footprints).is_some()
+}
+
+/// The exchange that puts the board's part `id` on the footprint `wanted`, the one its symbol's Footprint field now names -- `None` when the board is on it already, when
+/// there is no such part, when its footprint is locked, or when no library has the footprint (the schematic keeps what was typed and the board stays as it was: Update PCB
+/// from Schematic lists it).
+fn exchange_for_field<F: LibSource + ?Sized>(id: &str, wanted: &str, design: &Design, model: &ConstraintModel, footprints: &F) -> Option<Cmd> {
+    let wanted = wanted.trim();
+    let part = model.part(id)?;
+    if wanted.is_empty() || footprint_name_of(part) == wanted {
+        return None;
+    }
+    // `replaceFootprint` does not change a locked footprint ("Could not change %s footprint from '%s' to '%s' (footprint is locked)."): Update PCB lists it
+    if design.drawings.as_ref().is_some_and(|d| d.locked_ids.iter().any(|l| l == id)) {
+        return None;
+    }
+    let mut library = BTreeMap::new();
+    if let Some(copy) = find_footprint(wanted, id, design, model, footprints)? {
+        library.insert(wanted.to_string(), copy);
+    }
+    Some(Cmd::ExchangeFootprints { references: vec![id.to_string()], footprint: Some(wanted.to_string()), options: ExchangeOptions::replace(), library })
+}
+
+/// `cmd` (an edit of the symbol `id`'s Footprint field) and the exchange that makes the board follow it, in one command.
+fn follow_footprint_field<F: LibSource + ?Sized>(cmd: &Cmd, id: &str, wanted: &str, design: &Design, model: &ConstraintModel, footprints: &F) -> Option<Cmd> {
+    let exchange = exchange_for_field(id, wanted, design, model, footprints)?;
+    Some(Cmd::Batch { cmds: vec![cmd.clone(), exchange] })
 }
 
 /// (For the tests of the modules that build sources of their own.)

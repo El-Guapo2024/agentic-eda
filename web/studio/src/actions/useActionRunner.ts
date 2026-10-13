@@ -59,7 +59,7 @@ import { netNavigatorItems, stepNetItem, type NavSchematic } from "../kicad-port
 import { repeatCmds } from "../kicad-port/schRepeat";
 import { nextReference } from "../kicad-port/nextReference";
 import { refDesPrefix } from "../kicad-port/packFootprints";
-import { updatePcbMessage } from "../kicad-port/updatePcb";
+import { openUpdateDialog } from "./updatePcbAction";
 import { useSymApi, useSymDispatch } from "../state/symbolEditorStore";
 import { registerLibraryEditorActions } from "./libraryEditorActions";
 import { registerCommonActions, type ActionHandler } from "./commonActions";
@@ -1042,13 +1042,10 @@ export function useActionRunner() {
     // `common.SuiteControl.openPreferences` (ACTIONS::openPreferences, Ctrl+,): the Preferences dialog; the one page the studio can back
     // is Mouse and Touchpad (PreferencesDialog.tsx, kicad-port/preferences.ts) -- every canvas reads what it saves.
     m.set("common.SuiteControl.openPreferences", () => dispatch({ type: "SET_PREFERENCES_DIALOG_OPEN", open: true }));
-    // `common.Control.updatePcbFromSchematic` (F8): see kicad-port/updatePcb.ts -- the board is re-derived from the schematic on
-    // every schematic edit, so this refetches the design and reports what an update would leave (nothing to apply).
+    // `common.Control.updatePcbFromSchematic` (F8): see kicad-port/updatePcb.ts -- the board is re-derived from the schematic on every schematic edit and follows
+    // the symbols' Footprint fields, so this lists the footprints whose symbol names another one and applies them (components/UpdatePcbDialog.tsx).
     m.set("common.Control.updatePcbFromSchematic", () => {
-      void api.refresh().then(() => {
-        const parts = api.getState().board?.parts ?? [];
-        dispatch({ type: "TOAST", message: updatePcbMessage(parts), kind: "info" });
-      });
+      void openUpdateDialog(api, dispatch, "pcb");
     });
     // `common.Control.saveAs` (ACTIONS::saveAs, Ctrl+Shift+S): "Save current document to another location". design.json is the only
     // master, so what is saved is the editor's derived KiCad file(s) -- `.kicad_pcb`, or the `.kicad_sch` (+ one per sub-sheet) --

@@ -161,6 +161,51 @@ export type FpTextInfo = Pick<FieldInfo, "id" | "text" | "x" | "y" | "angle" | "
   role?: "reference" | "value";
 };
 
+/** The options of `DIALOG_EXCHANGE_FOOTPRINTS` (crates/ops/src/fp_exchange.rs `ExchangeOptions`; kicad-port/pcbExchange.ts has the three presets). */
+export interface ExchangeOptions {
+  /** "Match pad positions". */
+  match_pad_positions: boolean;
+  /** "Remove text items if not in library footprint". */
+  remove_extra_texts: boolean;
+  /** "Update/reset text layers and visibilities". */
+  reset_text_layers: boolean;
+  /** "Update/reset text sizes and styles". */
+  reset_text_effects: boolean;
+  /** "Update/reset text position and rotation". */
+  reset_text_positions: boolean;
+  /** "Update/reset text content". */
+  reset_text_content: boolean;
+  /** "Update/reset fabrication attributes". */
+  reset_fabrication_attrs: boolean;
+  /** "Update/reset clearance overrides". */
+  reset_clearance_overrides: boolean;
+  /** "Update/reset 3D models". */
+  reset_3d_models: boolean;
+}
+
+/** The dialog of Geographical Reannotate (`DIALOG_BOARD_REANNOTATE`; crates/model/src/reannotate.rs `ReannotateOptions`, kicad-port/reannotate.ts has the values it opens with). */
+export interface ReannotateOptions {
+  /** "Footprint Order": which of the eight radio buttons, 0 to 7, in the dialog's order. */
+  direction: number;
+  /** "Based on location of": the footprint or its Reference text. */
+  location: "footprint" | "reference";
+  /** "Round locations to": the grid, um. */
+  grid_um: number;
+  /** "Reannotation Scope". */
+  scope: "all" | "front" | "back" | "selection";
+  /** "Exclude locked footprints". */
+  exclude_locked: boolean;
+  /** "Exclude references": prefixes, or patterns ending in `*`, separated by commas or spaces. */
+  exclude: string;
+  /** "Front reference start" (1 by default) and "Back reference start" (0, blank, continues from the front). */
+  front_start: number;
+  back_start: number;
+  front_prefix: string;
+  back_prefix: string;
+  remove_front_prefix: boolean;
+  remove_back_prefix: boolean;
+}
+
 export interface Part {
   ref: string;
   value: string | null;
@@ -1241,8 +1286,12 @@ export type Cmd =
   | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
   /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
   | { op: "in_group"; group: string; cmd: Cmd }
-  /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. */
-  | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string }
+  /** `A` (`BOARD_EDITOR_CONTROL::PlaceFootprint`): a footprint of a library (`Lib:Name`) as a part of its own at `at`. The server brings the pads from the installed libraries; `reference` / `value` empty take the library's usual prefix with the next free number and the footprint's name. See crates/ops/src/library_place.rs. `definition` is the footprint's own copy, for one the board cannot find by name (Insert footprint into PCB sends the Footprint Editor's). */
+  | { op: "place_footprint"; footprint: string; at: PointXY; reference?: string; value?: string; definition?: LibraryFootprint | null }
+  /** Change Footprint(s) / Update Footprint(s) from Library (`DIALOG_EXCHANGE_FOOTPRINTS`) and the footprint a symbol's Footprint field names (`replaceFootprint`): put `references` on `footprint`, or -- `footprint` absent -- each on the library copy of the footprint it is on. The pose, lock and group stay; the rest follows `options`. The server brings the library copy. See crates/ops/src/fp_exchange.rs. */
+  | { op: "exchange_footprints"; references: string[]; footprint?: string | null; options?: ExchangeOptions }
+  /** Geographical Reannotate (`DIALOG_BOARD_REANNOTATE`): the footprints renumbered by where they are, in the order, scope, prefixes and start numbers of `options`; `selection` is the footprints the "Selection" scope names. The symbols take the new references in the same step; one undo step. Refused when two footprints would be left with one reference. See crates/ops/src/reannotate.rs. */
+  | { op: "reannotate_board"; options: ReannotateOptions; selection: string[] }
   /** Cmd+V: insert fresh copies of whole items (ids ignored/reassigned) -- the clipboard's own full data, not references, so paste still works after the original was deleted. */
   | { op: "paste_items"; tracks?: CmdTrack[]; vias?: CmdVia[]; zones?: CmdZone[]; shapes?: CmdShape[]; texts?: CmdText[] }
   /** Shift+M "Move Exactly...": translate every named part by the same (dx, dy), then rotate each by the same `rotate_millideg` around `pivot` (null = each part's own anchor -- a pure spin). */

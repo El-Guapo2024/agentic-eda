@@ -51,6 +51,12 @@ pub(crate) mod carry;
 #[cfg(test)]
 #[path = "pcb_edit_details_tests.rs"]
 mod edit_details_tests;
+#[cfg(test)]
+#[path = "fp_assign_tests.rs"]
+mod fp_assign_tests;
+#[cfg(test)]
+#[path = "fp_library_tests.rs"]
+mod fp_library_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -92,11 +98,21 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     // route or a hand-add would get, so every board is addressable from
     // the moment it is opened. A no-op once every id is already set.
     design.assign_missing_ids();
+    let model = build_model(dir, &meta, &design)?;
+    Ok((meta, design, model))
+}
+
+/// The model a design is judged against: the intent the board came from, with the design's overlays laid over it ("design.json wins over the frozen
+/// intent"). [`load`] builds it; a command that changes what the overlays say (a rename, a footprint exchange) builds it again for the design that results.
+pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Design) -> Result<ConstraintModel, Vec<CheckResult>> {
     let mut model: ConstraintModel = serde_yaml::from_str(
         &std::fs::read_to_string(&meta.intent)
             .map_err(|e| fail("board_no_intent", &meta.intent, format!("the intent this board came from is gone: {e}")))?,
     )
     .map_err(|e| fail("board_bad_intent", &meta.intent, format!("the intent does not parse: {e}")))?;
+    // The intent's parts that were renamed here (Edit Reference, Annotate, Reannotate) have their new reference before anything is keyed by one: the
+    // nets below, the libraries, the instance footprints and the art.
+    eda_model::fp_assign::apply_part_renames(design, &mut model);
     crate::resolve_footprint_libraries_of(dir, &mut model);
     crate::resolve_symbol_libraries_of(dir, &mut model);
     // Once a schematic `Cmd` has run on this board, its own derived net
@@ -133,7 +149,7 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     // exporter) goes through `ConstraintModel::symbol_of`, so this one
     // overlay is what makes "Update Symbol from Library" actually update
     // a placed instance -- see `LibrarySymbol::published`'s own doc.
-    publish_overlay(&design, &mut model);
+    publish_overlay(design, &mut model);
     // Board Setup's edits to the rules (net classes, constraints, mask and paste, text defaults, the stackup, violation
     // severities, custom rules): the same "design.json wins over the frozen intent" precedent, applied page by page
     // (`eda_model::rules::RulesOverlay`). The router, the gates, the studio and the derived `.kicad_pro`/`.kicad_pcb`/
@@ -147,16 +163,19 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
         }
     }
     // A symbol placed with `AddSymbol` has no part in the intent: its synthesized one (see `reconcile_schematic`) is not stored anywhere, so it is rebuilt here.
-    fold_unknown_symbols(&design, &mut model);
+    fold_unknown_symbols(design, &mut model);
     // A footprint copied onto the board has no part in the intent either; `board_parts` is where it lives.
-    fold_board_parts(&design, &mut model);
+    fold_board_parts(design, &mut model);
+    // The footprint each part is on, where the board changed it (Change Footprint, Update from Library, the symbol's Footprint field followed): the name here, the
+    // board's own copy of it in `fold_footprint_edits` below.
+    eda_model::fp_assign::apply_footprint_assignments(design, &mut model);
     // A placed symbol's own Footprint field (its library's default, or the one the Footprint Chooser assigned) names a library footprint the same
     // way an intent part does: resolve what the folded parts name, so it can be placed on the board.
     crate::resolve_footprint_libraries_of(dir, &mut model);
     // The pads a footprint's Pad Properties edits changed: its own footprint, for every reader of `footprint_of` (after the libraries are resolved, so
     // a part placed from an installed library has its footprint to lay the edits on).
-    fold_footprint_edits(&design, &mut model);
-    Ok((meta, design, model))
+    fold_footprint_edits(design, &mut model);
+    Ok(model)
 }
 
 /// `model.instance_footprints` for every footprint whose pad edits change the geometry the engine knows (shape, size, hole, type,
@@ -165,9 +184,16 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
 pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     model.instance_footprints.clear();
     let Some(dr) = design.drawings.as_ref() else { return };
+    // the footprint a part was exchanged for, where the board keeps its own copy of it (`FootprintAssignment::definition`)
+    for a in &dr.footprint_assignments {
+        if let (Some(def), true) = (&a.definition, model.part(&a.reference).is_some()) {
+            model.instance_footprints.insert(a.reference.clone(), def.clone());
+        }
+    }
     for edit in dr.footprint_edits.iter().filter(|e| e.pads.iter().any(eda_model::fp_edit::PadEdit::changes_engine_pad)) {
         let Some(part) = model.part(&edit.id).cloned() else { continue };
-        let Some(library) = model.library_footprint_of(&part) else { continue };
+        // the edits are laid on the copy the board keeps, else on what the model resolves
+        let Some(library) = model.instance_footprints.get(&edit.id).cloned().or_else(|| model.library_footprint_of(&part)) else { continue };
         model.instance_footprints.insert(edit.id.clone(), eda_model::fp_edit::patched_footprint(&library, &edit.pads));
     }
 }
@@ -625,18 +651,17 @@ pub(crate) fn step_carrying(dir: &Path, cmd: Cmd, strictness: Strictness, by: &s
     sync_external_edits_locked(dir);
     let line = cmd_line(&cmd);
     let before = std::fs::read_to_string(design_path(dir)).ok().and_then(|s| serde_json::from_str::<eda_model::ir::Design>(&s).ok());
-    let domain = cmd.domain();
     let r = step_quiet(dir, &cmd, strictness);
     match &r {
-        Ok(summary) => {
+        Ok((summary, tag)) => {
             if let Some(before) = before {
-                carry::record(dir, carry, &before, domain, by);
+                carry::record(dir, carry, &before, tag, by);
             }
             log_activity(dir, by, &line, true, summary)
         }
         Err(e) => log_activity(dir, by, &line, false, &reasons(e)),
     }
-    r
+    r.map(|(summary, _)| summary)
 }
 
 /// Undo/redo history: two stacks of whole-design snapshots, under the
@@ -672,6 +697,19 @@ fn domain_tag(d: Domain) -> &'static str {
 /// The tag of a whole-design step (an outside edit of `design.json`):
 /// it matches every undo scope and always restores the whole design.
 const FILE_TAG: &str = "file";
+
+/// The tag of a step that changed both editors' halves of the design at once (`Cmd::spans_both_editors`: a rename of a part moves the schematic's symbol and the
+/// board's footprint). Undone from the PCB tab or the schematic tab alike, and takes back both halves ([`restore_both`]); the library editors keep their own history.
+const BOTH_TAG: &str = "both";
+
+/// The tag a command's step is kept under.
+fn snapshot_tag(cmd: &Cmd) -> &'static str {
+    if cmd.spans_both_editors() {
+        BOTH_TAG
+    } else {
+        domain_tag(cmd.domain())
+    }
+}
 
 /// Push a snapshot named `<timestamp>.<tag>.json`, with its author (`ui`,
 /// `agent`, `file`, ...) in a `<timestamp>.<tag>.by` sidecar.
@@ -716,6 +754,8 @@ fn pop_snapshot(stack_dir: &Path, scope: Option<Domain>) -> Option<Snapshot> {
             // A whole-design step matches the board's own scopes; the
             // library editors keep their own local history, as in KiCad.
             FILE_TAG => return (!matches!(scope, Some(Domain::FootprintEditor | Domain::SymbolEditor))).then_some(None),
+            // both editors' halves: found from the PCB tab and from the schematic tab
+            BOTH_TAG => return (!matches!(scope, Some(Domain::FootprintEditor | Domain::SymbolEditor))).then_some(None),
             "schematic" => Domain::Schematic,
             "footprint_editor" => Domain::FootprintEditor,
             "symbol_editor" => Domain::SymbolEditor,
@@ -812,6 +852,13 @@ fn restore_domain(current: eda_model::ir::Design, snapshot: eda_model::ir::Desig
     }
 }
 
+/// The design with a [`BOTH_TAG`] step taken back (or brought back, for redo): the board's half and the schematic's half of `snapshot` over `current`.
+/// The libraries of the Footprint Editor are not part of it.
+fn restore_both(current: eda_model::ir::Design, snapshot: eda_model::ir::Design) -> eda_model::ir::Design {
+    let board = restore_domain(current, snapshot.clone(), Some(Domain::Pcb));
+    restore_domain(board, snapshot, Some(Domain::Schematic))
+}
+
 /// `eda board undo` (CLI, `scope: None`) or `POST /api/undo` (studio UI,
 /// `scope: Some(state.tab)`): back to the state before the last edit --
 /// the last edit *of any kind* for the CLI (unchanged from before
@@ -832,8 +879,8 @@ pub(crate) fn undo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
         return Err(fail("board_no_undo", "undo", msg));
     };
     let _ = push_snapshot_tagged(&redo_dir(dir), &current, &snap.tag, &snap.by);
-    // A whole-design (`file`) step restores everything, whatever the scope.
-    let restored = restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope });
+    // A whole-design (`file`) step restores everything, whatever the scope; one that changed both editors' halves restores both.
+    let restored = if snap.tag == BOTH_TAG { restore_both(current, snap.design) } else { restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope }) };
     save(dir, &restored)?;
     let msg = format!("undo: reverted the last edit (by {})", snap.by);
     log_activity(dir, by, "undo", true, &msg);
@@ -865,8 +912,8 @@ pub(crate) fn redo(dir: &Path, by: &str, scope: Option<Domain>) -> Result<String
         return Err(fail("board_no_redo", "redo", msg));
     };
     let _ = push_snapshot_tagged(&undo_dir(dir), &current, &snap.tag, &snap.by);
-    // A whole-design (`file`) step restores everything, whatever the scope.
-    let restored = restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope });
+    // A whole-design (`file`) step restores everything, whatever the scope; one that changed both editors' halves restores both.
+    let restored = if snap.tag == BOTH_TAG { restore_both(current, snap.design) } else { restore_domain(current, snap.design, if snap.domain.is_none() { None } else { scope }) };
     save(dir, &restored)?;
     let msg = format!("redo: re-applied the undone edit (by {})", snap.by);
     log_activity(dir, by, "redo", true, &msg);
@@ -907,11 +954,15 @@ fn all_failures(board: &Board, model: &ConstraintModel) -> usize {
     failures_in(&all_checks(board, model))
 }
 
-fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, Vec<CheckResult>> {
+/// [`step_carrying`]'s work: the command applied, judged and saved. Answers the summary and the history tag of the step -- that of the command as it was applied
+/// (the studio's server may have added to it, e.g. the exchange of a footprint a symbol's Footprint field names), so a step that changed both editors' halves of the
+/// design is undone as one.
+fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, &'static str), Vec<CheckResult>> {
     let (meta, mut design, mut model) = load(dir)?;
     // A symbol or footprint out of a library of the library tables goes in with its definition (`crate::library_place`).
     let with_definitions = crate::library_place::with_installed_definitions(dir, cmd, &design, &model);
     let cmd = with_definitions.as_ref().unwrap_or(cmd);
+    let tag = snapshot_tag(cmd);
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
     let cmd = with_file.as_ref().unwrap_or(cmd);
@@ -951,12 +1002,19 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
     let board_parts = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.board_parts.clone()).unwrap_or_default();
     // Likewise a pad edit changes the footprint its part has (`fold_footprint_edits`).
     let pad_edits = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.footprint_edits.iter().map(|e| (e.id.clone(), e.pads.clone())).collect::<Vec<_>>()).unwrap_or_default();
-    let refolded: Option<ConstraintModel> = (board_parts(board.design()) != board_parts(was.design()) || pad_edits(board.design()) != pad_edits(was.design())).then(|| {
-        let mut m = model.clone();
-        fold_board_parts(board.design(), &mut m);
-        fold_footprint_edits(board.design(), &mut m);
-        m
-    });
+    // A rename moves the intent's part under a new reference and an exchange puts a part on another footprint: the model is built again for the design that
+    // results, as the next load will build it.
+    let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone())).unwrap_or_default();
+    let refolded: Option<ConstraintModel> = if renames(board.design()) != renames(was.design()) {
+        build_model(dir, &meta, board.design()).ok()
+    } else {
+        (board_parts(board.design()) != board_parts(was.design()) || pad_edits(board.design()) != pad_edits(was.design())).then(|| {
+            let mut m = model.clone();
+            fold_board_parts(board.design(), &mut m);
+            fold_footprint_edits(board.design(), &mut m);
+            m
+        })
+    };
     let judged: &ConstraintModel = refolded.as_ref().unwrap_or(&model);
     let board = if refolded.is_some() { Board::new(board.design().clone(), judged, meta.snap_um, meta.spacing_um) } else { board };
 
@@ -1021,7 +1079,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
         reconcile_schematic(&mut design, &mut model, drawn_before.as_ref());
     }
     save(dir, &design)?;
-    Ok(format!(
+    let summary = format!(
         "{}: {placed}/{} placed ({:.0}%), {failures} failure(s){}{}",
         cmd_name(cmd),
         n_parts,
@@ -1032,7 +1090,8 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<String, V
             d => format!(", {d} opened"),
         },
         if stale { "; routing cleared" } else { "" }
-    ))
+    );
+    Ok((summary, tag))
 }
 
 /// Who the activity log says issued a CLI command: `EDA_ACTOR`, so a
@@ -1258,6 +1317,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddSymbol { id, lib_id, at, .. } => format!("schematic place {id} --lib {lib_id} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::EmbedLibSymbol { symbol } => format!("schematic keep-symbol {:?}", symbol.lib_id),
         Cmd::PlaceFootprint { footprint, at, reference, .. } => format!("footprint place {footprint:?} --at {},{} --ref {reference:?}", mm(at.x), mm(at.y)),
+        Cmd::ExchangeFootprints { references, footprint, .. } => match footprint {
+            Some(f) => format!("footprint change {} --to {f:?}", references.join(",")),
+            None => format!("footprint update {}", references.join(",")),
+        },
+        Cmd::ReannotateBoard { options, selection } => format!("footprint reannotate --direction {} --scope {:?}{}", options.direction, options.scope, if selection.is_empty() { String::new() } else { format!(" --selection {}", selection.join(",")) }),
         Cmd::OnSheet { sheet, cmd } => format!("on-sheet {sheet:?} {}", cmd_line(cmd)),
         Cmd::InGroup { group, cmd } => format!("in-group {group:?} {}", cmd_line(cmd)),
         Cmd::ReorganizeSheets => "schematic reorganize-sheets".to_string(),
@@ -1473,6 +1537,9 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSymbol { .. } => "schematic-place",
         Cmd::EmbedLibSymbol { .. } => "schematic-keep-symbol",
         Cmd::PlaceFootprint { .. } => "place-footprint",
+        Cmd::ExchangeFootprints { footprint: Some(_), .. } => "change-footprint",
+        Cmd::ExchangeFootprints { footprint: None, .. } => "update-footprint",
+        Cmd::ReannotateBoard { .. } => "reannotate",
         Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd_name(cmd),
         Cmd::ReorganizeSheets => "schematic-reorganize-sheets",
         Cmd::EditSymbolFields { .. } => "schematic-edit-fields",

@@ -10,10 +10,11 @@
 //!   its number. The sheet number the "sheet number x 100" algorithms count by is the sheet's page (`GetPageNumberAsInt`).
 //! * Symbols of the sheets in scope are renamed together with everything that is keyed by the reference: the pins of its wires, power
 //!   symbols and no-connect flags, its user fields, where its fields are drawn, its body style, its lock, and the net list's pins.
+//! * A part the schematic renames takes its footprint on the board with it ([`Board::rename_part`]: the pose, the copper on its pads, its fields, edits,
+//!   zone overrides, lock and groups), so a renumbering leaves no part, pose or route under the old reference.
 //!
 //! Not done here: a stand-alone "Clear Annotation" -- a design cannot hold two symbols named `R?` (a part is its reference), so
-//! "Clear existing annotations" numbers again at once -- and the PCB: a footprint on the board keeps the reference it has (the same
-//! limit as `Cmd::RenameSymbol`).
+//! "Clear existing annotations" numbers again at once.
 
 use eda_model::annotate::{self, Algo, Entry, Problem, SortOrder};
 use crate::sch_clipboard::LibMerge;
@@ -138,6 +139,34 @@ impl<'a> Board<'a> {
         }
     }
 
+    /// Every screen of the design that is in the hierarchy: the root (`""`) and the sheet files reachable from it.
+    fn hierarchy_files(&self) -> Vec<String> {
+        let mut files: Vec<String> = vec![String::new()];
+        let reachable = eda_model::sheet_list::reachable_files(&self.design);
+        files.extend(self.design.sheet_contents.iter().flat_map(|c| c.keys().filter(|f| reachable.contains(*f)).cloned()));
+        files
+    }
+
+    /// The references of the schematic's symbols, on every sheet.
+    pub(crate) fn symbol_references(&self) -> BTreeSet<String> {
+        self.hierarchy_files().iter().filter_map(|f| self.screen_of_file(f)).flat_map(|s| s.symbols.iter().map(|x| x.id.clone())).collect()
+    }
+
+    /// The renames that give each symbol -- every unit of it, on every sheet -- the new reference `map` says (`old -> new`): what [`Board::annotate_apply`] writes. The board's
+    /// parts are not part of it; the caller moves them ([`Board::rename_part`]).
+    pub(crate) fn reference_renames(&self, map: &BTreeMap<String, String>) -> Vec<Rename> {
+        let mut out = Vec::new();
+        for file in self.hierarchy_files() {
+            let Some(sch) = self.screen_of_file(&file) else { continue };
+            for (i, s) in sch.symbols.iter().enumerate() {
+                if let Some(new) = map.get(&s.id) {
+                    out.push(Rename { file: file.clone(), item: Item::Symbol(i), old: s.id.clone(), unit: s.unit, new: new.clone() });
+                }
+            }
+        }
+        out
+    }
+
     /// The screens the scope takes, and what of each.
     fn annotate_scopes(&self, scope: AnnotateScope, ids: Option<&[String]>, opts: &AnnotateOptions) -> Vec<ScreenScope> {
         let walk = sheet_list::walk(&self.design);
@@ -221,6 +250,10 @@ impl<'a> Board<'a> {
                 let entry = Entry::new(key, &p.id, 1, 1, lib_item_name(&p.lib_id), &p.net, num, (p.at.x, p.at.y), true);
                 (if scope.is_some_and(|sc| sc.power) { &mut mine } else { &mut others }).push(entry);
             }
+        }
+        // a footprint that exists only on the board (a mounting hole, a test point) is a part of the design too: its reference is taken
+        for b in self.design.drawings.iter().flat_map(|d| d.board_parts.iter()) {
+            others.push(Entry::new(usize::MAX, &b.reference, 1, 1, "", b.value.as_deref().unwrap_or(""), 0, (0, 0), false));
         }
         (slots, mine, others)
     }
@@ -375,6 +408,11 @@ impl<'a> Board<'a> {
             };
             let Some(sch) = self.screen_of_file_mut(&file) else { continue };
             whole_all.extend(rename_in_section(sch, &mine, &pin_units));
+        }
+
+        // the board's parts go with their symbols (a sheet that has just come in has none yet, and its references may be a board part's own)
+        if remap_nets {
+            self.rename_part(&whole_all);
         }
 
         // the net list's pins, so a net keeps its name through the renumbering
