@@ -22,18 +22,27 @@
 // preview (`PreviewRefresh`) and "Export" writing the file
 // (`OnExport`) -- relative to the board directory, see sch_api.rs.
 //
-// Not ported (PARITY-sch.md): attribute columns (DNP / exclude from BOM...
-// -- not in the IR), variants, "Include excluded from BOM" / "Exclude DNP"
-// filters, the scope selector (this table covers the current design's
-// symbols), saved view presets, and the sidebar field-name templates.
+// The attribute columns (`${DNP}`, `${EXCLUDE_FROM_BOM}`, `${EXCLUDE_FROM_BOARD}`,
+// `${EXCLUDE_FROM_SIM}`: `FIELDS_EDITOR_GRID_DATA_MODEL::isAttribute`) are checkbox
+// cells that stage "1" or "0" like any cell (a group of mixed symbols shows an
+// indeterminate box and a click sets them all); the options "Include 'DNP' Symbols"
+// and "Include 'Exclude from BOM' Symbols" (the dialog's options menu) filter the
+// rows by the flags the sheet has, and KiCad's built-in views (`BOM_PRESET::
+// BuiltInPresets`) can be applied from the Preset box.
+//
+// Not ported (PARITY-sch.md): variants, the scope selector (this table covers the
+// current design's symbols), saved view presets of one's own, and the sidebar
+// field-name templates.
 import { useEffect, useRef, useState } from "react";
 import { exportBom, fetchFieldsTable } from "../api/client";
 import { postBomFile } from "../api/schControlClient";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import type { BomFmt, FieldsTableReply, FieldsTableRow, FieldsTableSpec } from "../api/types";
 import {
+  attributeState,
   bomFmtPresets,
   emptyChanges,
+  isAttributeColumn,
   isEditableColumn,
   isEmptyChanges,
   matchingBomPreset,
@@ -44,6 +53,7 @@ import {
   stageEdit,
   stageRemoveField,
   stageRenameField,
+  toggledAttribute,
   validNewFieldName,
   type StagedChanges,
 } from "../kicad-port/fieldsTableStage";
@@ -56,6 +66,16 @@ function isGenerated(name: string): boolean {
   return name.startsWith("${") && name.endsWith("}");
 }
 
+/** A checkbox cell of an attribute column: checked, unchecked, or indeterminate for a group whose symbols differ. */
+function AttributeCell({ text, mixed, label, onToggle }: { text: string; mixed: boolean; label: string; onToggle: () => void }) {
+  const ref = useRef<HTMLInputElement>(null);
+  const state = attributeState(text, mixed);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = state === "mixed";
+  }, [state]);
+  return <input ref={ref} type="checkbox" aria-label={label} checked={state === "checked"} onChange={onToggle} />;
+}
+
 export function SymbolFieldsTableDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
@@ -66,6 +86,7 @@ export function SymbolFieldsTableDialog() {
   const [spec, setSpec] = useState<FieldsTableSpec | null>(null);
   const [changes, setChanges] = useState<StagedChanges>(emptyChanges());
   const [table, setTable] = useState<FieldsTableReply | null>(null);
+  const presets = table?.presets ?? [];
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [newField, setNewField] = useState("");
@@ -139,6 +160,17 @@ export function SymbolFieldsTableDialog() {
 
   const updateSpec = (patch: Partial<FieldsTableSpec>) => setSpec((s) => (s ? { ...s, ...patch } : s));
   const setColumn = (name: string, patch: { show?: boolean; group_by?: boolean }) => setSpec((s) => (s ? { ...s, columns: s.columns.map((c) => (c.name === name ? { ...c, ...patch } : c)) } : s));
+
+  // `ApplyBomPreset`: one of KiCad's built-in views, its columns, grouping and the two filters replacing the current ones (a user field stays, hidden)
+  const applyPreset = async (name: string) => {
+    if (!spec || name === "") return;
+    const reply = await fetchFieldsTable(spec, isEmptyChanges(changes) ? null : changes, name);
+    if (!reply.ok) {
+      setError(reply.message ?? "Could not apply the preset.");
+      return;
+    }
+    setSpec(reply.spec);
+  };
 
   const apply = async (): Promise<boolean> => {
     if (!dirty) return true;
@@ -217,6 +249,13 @@ export function SymbolFieldsTableDialog() {
       {shown.map(({ c, i }) => {
         const text = row.cells[i] ?? "";
         const mixed = row.mixed[i] ?? false;
+        if (isAttributeColumn(c.name)) {
+          return (
+            <td key={c.name} style={{ padding: "1px 4px", textAlign: "center" }}>
+              <AttributeCell text={text} mixed={mixed} label={`${c.label || c.name} of ${row.refs.join(", ")}`} onToggle={() => commitCell(row, c.name, toggledAttribute(text, mixed))} />
+            </td>
+          );
+        }
         if (!isEditableColumn(c.name)) {
           return (
             <td key={c.name} style={{ padding: "2px 8px", color: child ? "var(--chrome-text-dim)" : undefined, paddingLeft: child && c.name === "Reference" ? 22 : 8 }}>
@@ -334,7 +373,29 @@ export function SymbolFieldsTableDialog() {
                     Filter
                     <input value={spec.filter} placeholder="Reference…" style={{ fontSize: 11 }} onChange={(e) => updateSpec({ filter: e.target.value })} />
                   </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    Preset
+                    <select aria-label="Preset" value="" style={{ fontSize: 11 }} onChange={(e) => void applyPreset(e.target.value)}>
+                      <option value="">Apply a view…</option>
+                      {presets.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <span style={{ color: "var(--chrome-text-dim)" }}>{table ? `${table.rows.length} row${table.rows.length === 1 ? "" : "s"}` : ""}</span>
+                </div>
+                {/* the options menu of the dialog: "Include 'DNP' Symbols" and "Include 'Exclude from BOM' Symbols" */}
+                <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 8, fontSize: 11 }}>
+                  <label className="toggle" title="Show symbols marked 'DNP' in the table. This setting also controls whether or not 'DNP' symbols are included on export.">
+                    <input type="checkbox" aria-label="Include DNP symbols" checked={!spec.exclude_dnp} onChange={(e) => updateSpec({ exclude_dnp: !e.target.checked })} />
+                    Include 'DNP' symbols
+                  </label>
+                  <label className="toggle" title="Show symbols marked 'Exclude from BOM' in the table. Symbols marked 'Exclude from BOM' are never included on export.">
+                    <input type="checkbox" aria-label="Include Exclude from BOM symbols" checked={!!spec.include_excluded_from_bom} onChange={(e) => updateSpec({ include_excluded_from_bom: e.target.checked })} />
+                    Include 'Exclude from BOM' symbols
+                  </label>
                 </div>
                 <div style={{ overflow: "auto", maxHeight: "52vh", border: "1px solid var(--chrome-border)", borderRadius: 6 }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11 }}>

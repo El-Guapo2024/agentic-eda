@@ -1,12 +1,12 @@
 # Stale reasons in `ui-parity-missing.json`
 
-Checked on 2026-10-10 against main `89ff669` (KiCad source `8303b2ad`, 10.99). `web/studio/tools/ui-parity-missing.json` records why 178 KiCad actions are not wired (pcbnew 80, eeschema 65, common 33; `UI-ACTIONS.md`; 187 when this was checked, until `task-lib-tables` wired five library-table rows and `task-fp-assign` four footprint rows: Change Footprint, Change Footprints, Compare Footprint with Library and Geographical Reannotate). Nearly every reason says "needs X". Since the file was written about 20 large branches have landed, so for each row X was looked for in the Rust crates and in `web/studio/src`. The three branches in flight then (`task-lib-tables`, `task-sch-hierarchy`, `task-custom-pads`) were read with `git diff main...<branch>` and are not counted as existing. The audit (`web/studio/tools/ui-parity-audit.mjs`) agrees that none of the 178 is wired; it cannot know when a reason has gone stale, which is why this file exists.
+Checked on 2026-10-10 against main `89ff669` (KiCad source `8303b2ad`, 10.99). `web/studio/tools/ui-parity-missing.json` records why 176 KiCad actions are not wired (pcbnew 80, eeschema 63, common 33; `UI-ACTIONS.md`; 187 when this was checked, until `task-lib-tables` wired five library-table rows, `task-fp-assign` four footprint rows (Change Footprint, Change Footprints, Compare Footprint with Library and Geographical Reannotate) and `task-sch-details` the two pin-swap rows). Nearly every reason says "needs X". Since the file was written about 20 large branches have landed, so for each row X was looked for in the Rust crates and in `web/studio/src`. The three branches in flight then (`task-lib-tables`, `task-sch-hierarchy`, `task-custom-pads`) were read with `git diff main...<branch>` and are not counted as existing. The audit (`web/studio/tools/ui-parity-audit.mjs`) agrees that none of the 176 is wired; it cannot know when a reason has gone stale, which is why this file exists.
 
 | verdict | rows |
 |---|---:|
 | Stale: what the reason says is missing now exists | 10 |
 | Partly stale: the first blocker is gone and another stays, or the reason is overstated because a path through existing code exists | 15 |
-| Holds | 153 (4 of them wait for a branch in flight: custom pads 4) |
+| Holds | 151 (4 of them wait for a branch in flight: custom pads 4) |
 
 The work packages for the first two groups are in section 3. They are the `SR` packages here; the ranked plan that sizes them against everything else is at the end of `GAPS.md` (packages `P1` to `P21`).
 
@@ -77,7 +77,7 @@ Sized for one agent in one sitting each. Every package deletes its rows from `ui
 
 **SR6. Specctra** (exportSpecctraDSN partly stale; importSpecctraSession holds). Size S-M. GAPS.md package P19: expose `to_dsn` as a download, then write the SES reader; `pcbnew/specctra_import_export/specctra_export.cpp` and `specctra_import.cpp` are the references.
 
-## 4. Reasons that hold (153)
+## 4. Reasons that hold (151)
 
 | blocker | rows | why it holds | what unblocks it |
 |---|---:|---|---|
@@ -99,7 +99,6 @@ Sized for one agent in one sitting each. Every package deletes its rows from `ui
 | The rule-tree designer | 1 | Custom Rules edits the `.kicad_dru` as text; the designer (82 files in `pcbnew/drc/rule_editor`) is not ported. | GAPS.md package P9, last of it (XL). |
 | Padstacks | 1 | a through-hole pad is copper on every layer here; nothing takes one layer away. | not planned (padstacks are item 9's "not in the pad edit"). |
 | Library symbol model gaps | 6 | `LibSymbol` has no `extends`, no field positions or visibility, no alternate pin functions. | GAPS.md package P17. |
-| Schematic pin selection | 2 | the canvas never selects a single symbol pin (`components/SchematicView.tsx` and `components/schematic/schItems.ts` have no pin kind); Swap Pins also needs per-instance pin geometry. | GAPS.md package P10. |
 | Other EDA formats and legacy libraries | 4 | importers for other formats, legacy `.lib` libraries, the schematic's symbol cache, online part libraries. | out of scope. |
 | Design variants | 3 | per-variant overrides of DNP, exclusion flags and fields; the IR has the flags (`SymbolInstance::{dnp, exclude_from_bom, exclude_from_sim}`) but no variants. | not planned. |
 | Annotate Automatically | 1 | a symbol gets its number when it is placed (`nextReference`), so there is no unannotated state to switch on. | by design. |
@@ -125,7 +124,6 @@ The ids, by blocker:
 - **The rule-tree designer** (1): `pcbnew.DRETool.drcRuleEditor`
 - **Padstacks** (1): `pcbnew.GlobalEdit.removeUnusedPads`
 - **Library symbol model gaps** (6): `eeschema.SymbolLibraryControl.deriveFromExistingSymbol`, `eeschema.SymbolLibraryControl.flattenSymbol`, `eeschema.SymbolLibraryControl.updateSymbolFields`, `eeschema.SymbolLibraryControl.showRelatedLibraryFieldsTable`, `eeschema.SymbolLibraryControl.showHiddenFields`, `eeschema.EditorControl.togglePinAltIcons`
-- **Schematic pin selection** (2): `eeschema.InteractiveEdit.swapPinLabels`, `eeschema.InteractiveEdit.swapPins`
 - **Other EDA formats and legacy libraries** (4): `eeschema.EditorControl.importNonKicadSchematic`, `eeschema.EditorControl.remapSymbols`, `eeschema.EditorControl.rescueSymbols`, `eeschema.RemoteSymbols.showPanel`
 - **Design variants** (3): `eeschema.EditorControl.addVariant`, `eeschema.EditorControl.removeVariant`, `eeschema.EditorControl.editVariantDescription`
 - **Annotate Automatically** (1): `eeschema.EditorControl.annotateAutomatically`
@@ -136,7 +134,7 @@ The ids, by blocker:
 Not rows of the JSON file, but they say the same wrong thing and an agent will trip on them:
 
 - `web/studio/PARITY-fpedit.md` (Load footprint from current PCB / Insert footprint into PCB, "the board has no verb that adds a footprint of its own"): `Cmd::PlaceFootprint` adds one, so Insert can add a new part instead of only updating existing ones. Its Microwave tools row ("each drops a free footprint") is stale for the same reason.
-- `web/studio/PARITY-sch.md` (Import Sheet, Draw Sheet from File; the seven Design Block rows; the Annotate scope row "this IR has no sheet hierarchy"; the Symbol Fields Table row "the IR has no DNP / BOM-exclusion attributes"): the hierarchy, the clipboard and the DNP and exclusion flags exist (`SymbolInstance::{dnp, exclude_from_bom, exclude_from_sim}`), so the table's attribute columns and its Exclude DNP filter can be built.
+- `web/studio/PARITY-sch.md` (Import Sheet, Draw Sheet from File; the seven Design Block rows; the Annotate scope row "this IR has no sheet hierarchy"; the Symbol Fields Table row "the IR has no DNP / BOM-exclusion attributes"): the hierarchy, the clipboard and the DNP and exclusion flags exist (`SymbolInstance::{dnp, exclude_from_bom, exclude_from_sim}`); the table's attribute columns and its Exclude DNP filter were built on `task-sch-details` (2026-10-12, `PARITY-sch.md` section 25), and the rows "Swap Pins, Swap Pin Labels" and "Net collision during a drag" and the Copy as Text note are corrected there.
 - `web/studio/PARITY-boardctl.md` section 6 ("net classes, custom DRC rules, renaming a footprint" need an edit verb; net colours need a subsystem): net classes and custom rules are Board Setup pages with verbs, net colours are the Appearance panel's. Renaming a footprint is done (item 26, `PARITY-pcb.md` section 30).
 - `web/studio/src/kicad-port/pcbFind.ts` header and `PARITY-pcb.md` section 7a: a zone has no name, a footprint has two visible fields. Both changed on 2026-10-09.
 - `GAPS.md` item 18 "Values shows nothing", item 19 "pad clearance and thermal overrides are stored but no check reads them", item 4 "every schematic verb acts on the root section": all three were stale and are corrected in this revision.

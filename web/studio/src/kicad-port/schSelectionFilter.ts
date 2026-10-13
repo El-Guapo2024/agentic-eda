@@ -2,10 +2,10 @@
 // `PANEL_SCH_SELECTION_FILTER` (eeschema/widgets/panel_sch_selection_filter.cpp) edits and `SCH_SELECTION_TOOL::itemPassesFilter`
 // (eeschema/tools/sch_selection_tool.cpp, 8303b2ad) applies to every click, box selection, Select All and cursor pick-up.
 //
-// Left out: KiCad's "Pins" (a pin cannot be selected on its own here) and "Images" (the studio has no bitmap items) -- a switch
-// that gates nothing would only mislead. A locked item (kicad-port/schLock.ts) is selectable only with "Locked items" on.
+// Left out: KiCad's "Images" (the studio has no bitmap items) -- a switch that gates nothing would only mislead. "Pins" (symbol and sheet pins) is here. A locked item (kicad-port/schLock.ts) is selectable only with "Locked items" on.
 import type { Schematic } from "../api/types";
 import { fieldItems, parseFieldId } from "./schFieldEdit";
+import { parsePinItemId, pinItems, referenceOfKey } from "./schPins";
 
 export interface SchSelectionFilter {
   /** Allow selecting locked items. */
@@ -18,6 +18,8 @@ export interface SchSelectionFilter {
   wires: boolean;
   /** Local, global and hierarchical labels. */
   labels: boolean;
+  /** The pins of symbols and of sheets (`SCH_PIN_T`, `SCH_SHEET_PIN_T`). */
+  pins: boolean;
   /** Graphic lines and shapes. */
   graphics: boolean;
   ruleAreas: boolean;
@@ -33,13 +35,14 @@ export const SCH_FILTER_CATEGORIES: ReadonlyArray<{ key: SchFilterCategory; labe
   { key: "text", label: "Text" },
   { key: "wires", label: "Wires" },
   { key: "labels", label: "Labels" },
+  { key: "pins", label: "Pins" },
   { key: "graphics", label: "Graphics" },
   { key: "ruleAreas", label: "Rule Areas" },
   { key: "otherItems", label: "Other items" },
 ];
 
 /** `SCH_SELECTION_FILTER_OPTIONS::SetDefaults` (and project_local_settings.cpp's JSON defaults): everything selectable but locked items. */
-export const DEFAULT_SCH_SELECTION_FILTER: SchSelectionFilter = { lockedItems: false, symbols: true, text: true, wires: true, labels: true, graphics: true, ruleAreas: true, otherItems: true };
+export const DEFAULT_SCH_SELECTION_FILTER: SchSelectionFilter = { lockedItems: false, symbols: true, text: true, wires: true, labels: true, pins: true, graphics: true, ruleAreas: true, otherItems: true };
 
 /** `SCH_SELECTION_FILTER_OPTIONS::All`: every category on ("locked items" is a switch of its own). */
 export const allCategoriesOn = (f: SchSelectionFilter): boolean => SCH_FILTER_CATEGORIES.every((c) => f[c.key]);
@@ -81,11 +84,16 @@ export function categoryById(sch: Schematic): Map<string, SchFilterCategory> {
   }
   // SCH_FIELD_T is text
   for (const f of fieldItems(sch)) out.set(f.id, "text");
+  // SCH_PIN_T and SCH_SHEET_PIN_T
+  for (const p of pinItems(sch)) out.set(p.id, "pins");
+  for (const s of sch.sheets) for (const p of s.pins ?? []) if (p.id) out.set(p.id, "pins");
   return out;
 }
 
 /** The id a field is locked by: the item that has it (`SCH_FIELD::IsLocked` is its parent's), a symbol by its reference whatever its unit. */
 function lockKey(id: string): string {
+  const pin = parsePinItemId(id);
+  if (pin) return referenceOfKey(pin.key); // `SCH_PIN::IsLocked`: the pin of a locked symbol
   const f = parseFieldId(id);
   if (!f) return id;
   const unit = /^(.*)#(\d+)$/.exec(f.owner);

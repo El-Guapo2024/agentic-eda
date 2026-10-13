@@ -61,3 +61,19 @@ test("repeatCmds: the copies are themselves repeatable, so a second press keeps 
   assert.equal((second[0] as { net: string }).net, "D2");
   assert.deepEqual((second[0] as { at: { x: number; y: number } }).at, { x: 0, y: 5080 });
 });
+
+test("a label or text placed with its dialog's properties repeats with them: the label's text steps on, both move one grid step down", () => {
+  const out = repeatCmds(
+    [
+      { op: "sch_edit", verb: "place_label", net: "CLK0", at: { x: 1000, y: 2000 }, kind: { scope: "global", shape: "output" }, spin: "left", auto_rotate: true, bold: true },
+      { op: "sch_edit", verb: "place_text", content: "note", at: { x: 100, y: 200 }, angle: 90_000, size_um: 1270, h: "right", v: "top" },
+    ],
+    ctx,
+  );
+  assert.deepEqual(out[0], { op: "sch_edit", verb: "place_label", net: "CLK1", at: { x: 1000, y: 2000 + REPEAT_OFFSET_UM[1] }, kind: { scope: "global", shape: "output" }, spin: "left", auto_rotate: true, bold: true });
+  assert.deepEqual(out[1], { op: "sch_edit", verb: "place_text", content: "note", at: { x: 100, y: 200 + REPEAT_OFFSET_UM[1] }, angle: 90_000, size_um: 1270, h: "right", v: "top" });
+  // they are what the repeat source keeps; an edit of a label is not
+  assert.notEqual(repeatSource({ op: "sch_edit", verb: "place_label", net: "A", at: { x: 0, y: 0 }, kind: { scope: "local" } }), null);
+  assert.notEqual(repeatSource({ op: "sch_edit", verb: "place_text", content: "t", at: { x: 0, y: 0 }, size_um: 1270 }), null);
+  assert.equal(repeatSource({ op: "sch_edit", verb: "edit_label", id: "lbl_a", text: "X" }), null);
+});

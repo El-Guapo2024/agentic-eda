@@ -2009,6 +2009,8 @@ pub struct Board<'a> {
     /// The intent's own nets, when the caller supplied them (`Board::with_intent_nets`): lets Reorganize give a net its declared
     /// name back. `None` for every board built without them.
     intent_nets: Option<Vec<eda_model::Net>>,
+    /// What the net-collision monitor drew for the last Move or Drag this board applied (`sch_net_collision.rs`): the studio's move preview reads it with the sheet.
+    net_collision: Option<sch_net_collision::NetCollision>,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -2052,7 +2054,12 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None }
+    }
+
+    /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
+    pub fn net_collision(&self) -> Option<&sch_net_collision::NetCollision> {
+        self.net_collision.as_ref()
     }
 
     pub fn design(&self) -> &Design {
@@ -2090,6 +2097,7 @@ impl<'a> Board<'a> {
             decoupling: Arc::clone(&self.decoupling),
             focus: self.focus.clone(),
             intent_nets: self.intent_nets.clone(),
+            net_collision: None,
         }
     }
 
@@ -4138,6 +4146,8 @@ impl<'a> Board<'a> {
             Power(usize),
             Label(usize),
             Text(usize),
+            /// A pin of a placed sheet: (sheet, pin). `SCH_EDIT_TOOL::Swap`: pins swap only with pins of the same sheet.
+            SheetPin(usize, usize),
         }
         if a == b {
             return Err(vec![CheckResult::fail("ops_bad_swap", a, "a swap needs two different items")]);
@@ -4159,21 +4169,35 @@ impl<'a> Board<'a> {
             if let Some(i) = sch.texts.iter().position(|t| t.id == id) {
                 return Ok(Slot::Text(i));
             }
-            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label or text with this id to swap")])
+            for (si, s) in sch.sheets.iter().enumerate() {
+                if let Some(pi) = s.pins.iter().position(|p| p.id == id) {
+                    return Ok(Slot::SheetPin(si, pi));
+                }
+            }
+            Err(vec![CheckResult::fail("ops_unknown_item", id, "no symbol, power symbol, label, text or sheet pin with this id to swap")])
         };
         let (sa, sb) = (find(a)?, find(b)?);
+        // "Sheet pins are special, we need to make sure if we have any sheet pins, that we only have sheet pins, and that they have the same parent"
+        match (sa, sb) {
+            (Slot::SheetPin(x, _), Slot::SheetPin(y, _)) if x != y => return Err(vec![CheckResult::fail("ops_bad_swap", a, "sheet pins swap only with pins of the same sheet")]),
+            (Slot::SheetPin(..), other) | (other, Slot::SheetPin(..)) if !matches!(other, Slot::SheetPin(..)) => return Err(vec![CheckResult::fail("ops_bad_swap", a, "a sheet pin swaps only with another pin of its sheet")]),
+            _ => {}
+        }
         let at_of = |s: Slot| match s {
             Slot::Symbol(i) => sch.symbols[i].at,
             Slot::Power(i) => sch.power_symbols[i].at,
             Slot::Label(i) => sch.labels[i].at,
             Slot::Text(i) => sch.texts[i].at,
+            Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at,
         };
         let (pa, pb) = (at_of(sa), at_of(sb));
+        // (a pin's side is where it sits on the border, so trading places trades sides, as `SCH_EDIT_TOOL::Swap` does by hand)
         let mut set_at = |s: Slot, p: Point| match s {
             Slot::Symbol(i) => sch.symbols[i].at = p,
             Slot::Power(i) => sch.power_symbols[i].at = p,
             Slot::Label(i) => sch.labels[i].at = p,
             Slot::Text(i) => sch.texts[i].at = p,
+            Slot::SheetPin(si, pi) => sch.sheets[si].pins[pi].at = p,
         };
         set_at(sa, pb);
         set_at(sb, pa);
@@ -4251,6 +4275,7 @@ impl<'a> Board<'a> {
         if sch.texts.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_sch_text", id, "no text with this id")]);
         }
+        sch.extras.text_justify.remove(id);
         Ok(())
     }
 
@@ -5251,6 +5276,9 @@ pub mod episode;
 pub mod flash;
 pub mod sch_edit;
 pub mod sch_move;
+mod sch_pins;
+mod sch_labels;
+pub mod sch_net_collision;
 mod sch_drag;
 mod sch_props;
 mod sch_scene;
@@ -5263,3 +5291,11 @@ mod sch_fields_tests;
 mod sch_body_style_tests;
 #[cfg(test)]
 mod sch_props_tests;
+#[cfg(test)]
+mod sch_pins_tests;
+#[cfg(test)]
+mod sch_labels_tests;
+#[cfg(test)]
+mod sch_net_collision_tests;
+#[cfg(test)]
+mod sch_sheet_pin_tests;

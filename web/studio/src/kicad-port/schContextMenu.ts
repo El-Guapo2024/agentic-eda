@@ -25,6 +25,8 @@ export interface SchSelectionSummary {
   busEntries: number;
   noConnects: number;
   sheets: number;
+  /** Pins of hierarchical sheets (`SCH_SHEET_PIN_T`). */
+  sheetPins: number;
   /** Rectangles, circles, arcs, beziers and polygons. */
   shapes: number;
   /** Fields of a symbol, a power symbol or a sheet, picked on their own (`SCH_FIELD_T`). */
@@ -38,8 +40,10 @@ export interface SchSelectionSummary {
   sameReferenceUnits: number;
   /** The one selected symbol has more than one body style (`SCH_CONDITIONS::SingleMultiBodyStyleSymbol`). */
   multiBodyStyle: boolean;
-  /** Selected pins (pin selection is not part of this studio's schematic yet: always 0 there). */
+  /** Selected pins (`SCH_PIN_T`). */
   pins: number;
+  /** Preferences > Editing Options > "Allow unconstrained pin swaps" (`m_Input.allow_unconstrained_pin_swaps`): Swap Pins is in the menu only with it on. */
+  allowPinSwaps: boolean;
   /** The one selected polygon or rule area has its outline under the cursor (`SCH_POINT_EDITOR::addCornerCondition`). */
   canAddCorner: boolean;
   /** ... and a corner of it is under the cursor, leaving enough corners (`removeCornerCondition`). */
@@ -64,6 +68,7 @@ export function emptySummary(): SchSelectionSummary {
     busEntries: 0,
     noConnects: 0,
     sheets: 0,
+    sheetPins: 0,
     shapes: 0,
     fields: 0,
     ruleAreas: 0,
@@ -73,6 +78,7 @@ export function emptySummary(): SchSelectionSummary {
     sameReferenceUnits: 0,
     multiBodyStyle: false,
     pins: 0,
+    allowPinSwaps: false,
     canAddCorner: false,
     canRemoveCorner: false,
   };
@@ -106,12 +112,13 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const single = s.total === 1;
   const singleSymbolOrPower = single && s.symbols + s.powerSymbols === 1;
   const multipleSymbolsOrPower = s.total > 1 && s.symbols + s.powerSymbols === s.total;
-  const connectedCount = s.powerSymbols + s.wires + s.buses + s.busEntries + labels + s.directiveLabels + s.junctions;
+  // `connectedTypes` has the pins of sheets (`SCH_SHEET_PIN_T`) too
+  const connectedCount = s.powerSymbols + s.wires + s.buses + s.busEntries + labels + s.directiveLabels + s.junctions + s.sheetPins;
   const connected = connectedCount > 0 && connectedCount === s.total;
   const linesSelection = s.total > 0 && s.wires + s.buses + s.lines === s.total;
   const sheetSelection = single && s.sheets === 1;
   // `RotatableItems` holds the fields too (`SCH_FIELD_T`): a field turns its text, and a mirror flips its justification
-  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.fields > 0;
+  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.fields > 0;
 
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
   // `makeBodyStyleMenu` at `SingleMultiBodyStyleSymbol` (KiCad lists each body style; the studio has the one command that cycles through them)
@@ -124,10 +131,10 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
     });
   }
   // `swapSelectionCondition`: OnlyTypes( SwappableItems ) && MoreThan( 1 ).
-  const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.junctions + s.noConnects;
+  const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.junctions + s.noConnects;
   add(s.total > 1 && swappable === s.total && item("eeschema.InteractiveEdit.swap"));
   // `propertiesCondition`: one item of a type that has a properties dialog.
-  add(single && s.symbols + s.sheets + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
+  add(single && s.symbols + s.powerSymbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
   // `autoplaceCondition`: any selected item is one that has fields (a symbol, a sheet); the command also takes the item of a selected field
   add(s.symbols + s.powerSymbols + s.sheets + s.fields > 0 && item("eeschema.InteractiveEdit.autoplaceFields"));
   if (single && s.symbols === 1) {
@@ -144,7 +151,9 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
     add(item("eeschema.InteractiveDrawing.placeSheetPin"), item("eeschema.InteractiveDrawing.autoplaceAllSheetPins"), item("eeschema.InteractiveDrawing.syncSheetPins"));
     add(s.sheetHasUndefinedPins && item("eeschema.InteractiveEdit.cleanupSheetPins"));
   }
-  add(s.pins > 1 && item("eeschema.InteractiveEdit.swapPinLabels"), s.sameReferenceUnits > 1 && item("eeschema.InteractiveEdit.swapUnitLabels"), s.pins > 1 && item("eeschema.InteractiveEdit.swapPins"));
+  // `multiplePinsSelection` (more than one item, all pins), `multipleUnitsSelection`, and for Swap Pins `allowPinSwaps` as well
+  const onlyPins = s.pins > 1 && s.pins === s.total;
+  add(onlyPins && item("eeschema.InteractiveEdit.swapPinLabels"), s.sameReferenceUnits > 1 && item("eeschema.InteractiveEdit.swapUnitLabels"), onlyPins && s.allowPinSwaps && item("eeschema.InteractiveEdit.swapPins"));
   add(connected && item("eeschema.InteractiveEdit.assignNetclass"), connected && item("eeschema.InteractiveEdit.findNetInInspector"));
   // `SCH_POINT_EDITOR::Init`: Count( 1 ) && addCornerCondition / removeCornerCondition.
   add(single && s.canAddCorner && item("eeschema.PointEditor.addCorner"), single && s.canRemoveCorner && item("eeschema.PointEditor.removeCorner"));

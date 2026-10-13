@@ -1953,6 +1953,20 @@ pub fn field_key(id: &str, unit: u32) -> String {
     }
 }
 
+/// The id of one pin of a placed symbol as an item of the sheet (`SCH_PIN_T`): `pin:<field_key>:<pin number>`. A pin has no id of its own in KiCad
+/// (it belongs to its symbol, which a file names by reference and unit), so the studio selects it by this.
+pub fn pin_item_id(key: &str, number: &str) -> String {
+    format!("pin:{key}:{number}")
+}
+
+/// The [`field_key`] and the pin number of a [`pin_item_id`]; `None` for any other id. The key ends at the first `:` after the prefix (a reference
+/// holds none), so a pin number may hold colons.
+pub fn parse_pin_item_id(id: &str) -> Option<(&str, &str)> {
+    let rest = id.strip_prefix("pin:")?;
+    let (key, number) = rest.split_once(':')?;
+    (!key.is_empty() && !number.is_empty()).then_some((key, number))
+}
+
 /// Free-standing board text (KiCad's `PCB_TEXT` / `gr_text`): silkscreen
 /// labels, fab notes -- anything that is not a footprint's own reference or
 /// value field (those stay on `FootprintInstance`/`Part`, exactly as

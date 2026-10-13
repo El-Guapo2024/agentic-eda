@@ -1512,6 +1512,8 @@ pub(crate) fn schematic_json_of(design: &eda_model::ir::Design, model: &eda_mode
 /// (`${NAME}`, `crate::text_vars_json`); without them the texts are sent as stored.
 fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::ConstraintModel, sheet_path: &str, shown: Option<(&Path, eda_model::text_vars::Project)>) -> Value {
     let (sch, breadcrumb) = resolve_sheet(design, sheet_path);
+    // The net each pin is on ("REF.PIN" -> net), for the pin highlight and the pin's description.
+    let pin_net: std::collections::HashMap<&str, &str> = model.nets.iter().flat_map(|n| n.pins.iter().map(move |p| (p.as_str(), n.name.as_str()))).collect();
     let shown = shown.map(|(dir, project)| crate::text_vars_json::SchShown::new(dir, design, model, &breadcrumb, project));
     let symbols: Vec<Value> = sch
         .symbols
@@ -1531,7 +1533,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                     p.pins
                         .iter()
                         .filter(|pin| resolved.as_ref().and_then(|r| r.pin_by_number(&pin.number)).is_none_or(|rp| rp.unit == 0 || rp.unit == s.unit))
-                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind }))
+                        .map(|pin| json!({ "number": pin.number, "name": pin.name, "kind": pin.kind, "net": pin_net.get(format!("{}.{}", s.id, pin.number).as_str()) }))
                         .collect()
                 })
                 .unwrap_or_default();
@@ -1581,6 +1583,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "mpn": part.and_then(|p| p.mpn.clone()),
                 "package": part.and_then(|p| p.package.clone()),
                 "pins": pins,
+                // The places Swap Pins traded (`SchExtras::pin_swaps`): pin number -> the number of the pin whose place it has. The canvas draws the pin there.
+                "pin_swaps": sch.extras.pin_swaps_of(&owner),
                 // Do not Populate / Exclude from BOM / Board / Simulation (`setDNP` ...): the flags the painter marks and the attribute actions toggle.
                 "dnp": s.dnp,
                 "exclude_from_bom": s.exclude_from_bom,
@@ -1630,14 +1634,14 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
             };
             // The look Label Properties set (size, bold, italic); the defaults when it never did.
             let look = sch.extras.label_looks.get(&l.id).copied().unwrap_or_default();
-            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic })
+            json!({ "id": l.id, "net": l.net, "at": [l.at.x, l.at.y], "scope": scope, "shape": shape.map(label_shape_str), "spin": sch.extras.label_spins.get(&l.id), "size_um": look.text_size_um(), "bold": look.bold, "italic": look.italic, "auto_rotate": look.auto_rotate })
         })
         .collect();
     let texts: Vec<Value> = sch
         .texts
         .iter()
         .map(|t| {
-            let mut v = json!({ "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_um": t.size_um });
+            let mut v = text_json(&sch, t);
             if let Some(sh) = &shown {
                 let text = sh.text_shown(&t.content);
                 if text != t.content {
@@ -1923,6 +1927,19 @@ pub(crate) fn synthesize_generic_symbol(lib_id: &str, model: &eda_model::Constra
         pin_name_offset_mm: eda_model::symbol::DEFAULT_PIN_NAME_OFFSET_MM,
         alternate: None,
     }
+}
+
+/// A free-standing schematic text as the studio draws it: its angle (0 or 90 once it has been through KiCad's rules, whatever an older design says), whether it runs up the
+/// sheet, and how it is justified about its anchor (`SchExtras::text_justify`: left and bottom unless something set it).
+pub(crate) fn text_json(sch: &eda_model::ir::SchematicSection, t: &eda_model::ir::SchematicText) -> Value {
+    use eda_model::ir::{TextJustify, TextVAlign};
+    let j = sch.extras.text_justify_of(&t.id);
+    let vertical = eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0);
+    json!({
+        "id": t.id, "content": t.content, "at": [t.at.x, t.at.y], "angle": t.angle as f64 / 1000.0, "size_um": t.size_um, "vertical": vertical,
+        "h": match j.h { TextJustify::Left => "left", TextJustify::Center => "center", TextJustify::Right => "right" },
+        "v": match j.v { TextVAlign::Top => "top", TextVAlign::Center => "center", TextVAlign::Bottom => "bottom" },
+    })
 }
 
 /// A field on the sheet as the painter reads it: the text, its anchor in micrometres, whether it runs vertically, how it is justified

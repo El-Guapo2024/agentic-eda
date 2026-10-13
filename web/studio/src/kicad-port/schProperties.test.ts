@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, mmToUm, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm } from "./schProperties";
+import { colorToHex, graphicsEqual, hexToColor, labelEditCmd, mmToUm, powerEditCmd, propertiesTarget, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm } from "./schProperties";
 import type { Schematic } from "../api/types";
 
 const sheet = (over: Partial<Schematic> = {}): Schematic =>
@@ -41,9 +41,10 @@ test("E opens the dialog of the first selected item, and only when the selection
   // `default: if( selection.Size() > 1 ) return 0;`
   assert.equal(propertiesTarget(s, ["lbl_a", "lbl_g"]), null);
   assert.equal(propertiesTarget(s, ["R1", "txt_a"]), null);
-  // a no-connect has none, and this studio's symbol dialog has no power symbol yet
+  // a no-connect has none; a power symbol is a symbol and has the Symbol Properties dialog
   assert.equal(propertiesTarget(s, ["nc_a"]), null);
-  assert.equal(propertiesTarget(s, ["#PWR01"]), null);
+  assert.deepEqual(propertiesTarget(s, ["#PWR01"]), { kind: "power", id: "#PWR01" });
+  assert.equal(propertiesTarget(s, ["#PWR01", "R1"]), null, "one item only");
   assert.equal(propertiesTarget(s, []), null);
   assert.equal(propertiesTarget(s, ["gone"]), null);
 });
@@ -75,6 +76,34 @@ test("a text dialog sends only what changed, and keeps an angle the dialog canno
   assert.deepEqual(textEditCmd({ ...t, angle: 90 }, { content: "hello", sizeUm: 1270, vertical: false }), { op: "sch_edit", verb: "edit_text", id: "txt_a", angle: 0 });
   assert.equal(textEditCmd({ ...t, angle: 180 }, { content: "hello", sizeUm: 1270, vertical: false }), null, "a text at 180 degrees that is still 'horizontal' is left at 180");
   assert.equal(textEditCmd(t, { content: "hello", sizeUm: null, vertical: false }), null, "a size that is not a number is not sent");
+});
+
+test("a text dialog sends the justification when it differs from how the text lies (left and bottom for a text that was never justified)", () => {
+  const t = { id: "txt_a", content: "hello", size_um: 1270, angle: 0 };
+  // nothing picked differently
+  assert.equal(textEditCmd(t, { content: "hello", sizeUm: 1270, vertical: false, h: "left", v: "bottom" }), null);
+  assert.deepEqual(textEditCmd(t, { content: "hello", sizeUm: 1270, vertical: false, h: "center", v: "bottom" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", h: "center" });
+  assert.deepEqual(textEditCmd(t, { content: "hello", sizeUm: 1270, vertical: false, h: "right", v: "top" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", h: "right", v: "top" });
+  // a text the backend says is centred and vertical
+  const centred = { ...t, angle: 90, vertical: true, h: "center" as const, v: "center" as const };
+  assert.equal(textEditCmd(centred, { content: "hello", sizeUm: 1270, vertical: true, h: "center", v: "center" }), null);
+  assert.deepEqual(textEditCmd(centred, { content: "hello", sizeUm: 1270, vertical: false, h: "center", v: "center" }), { op: "sch_edit", verb: "edit_text", id: "txt_a", angle: 0 });
+  // a legacy angle of 270 is a vertical text (KeepUpright)
+  assert.equal(textEditCmd({ ...t, angle: 270 }, { content: "hello", sizeUm: 1270, vertical: true }), null);
+});
+
+test("a label dialog sends the Auto check when it changed, and the spin only while Auto is off", () => {
+  const global = { id: "lbl_g", net: "B", scope: "global" as const, shape: "input" as const };
+  const local = { id: "lbl_a", net: "A", scope: "local" as const, shape: null };
+  // Auto turned on: the flag is sent, the spin picked is not (the connection decides)
+  assert.deepEqual(labelEditCmd(global, "left", { text: "B", shape: "input", spin: "up", autoRotate: true }), { op: "sch_edit", verb: "edit_label", id: "lbl_g", auto_rotate: true });
+  // Auto turned off with a spin picked: both
+  assert.deepEqual(labelEditCmd({ ...global, auto_rotate: true }, "left", { text: "B", shape: "input", spin: "up", autoRotate: false }), { op: "sch_edit", verb: "edit_label", id: "lbl_g", auto_rotate: false, spin: "up" });
+  // Auto already on and left on: nothing to send, whatever the radio shows
+  assert.equal(labelEditCmd({ ...global, auto_rotate: true }, "left", { text: "B", shape: "input", spin: "up", autoRotate: true }), null);
+  // a local label has no such check
+  assert.equal(labelEditCmd(local, "right", { text: "A", shape: "input", spin: "right", autoRotate: true }), null);
+  assert.deepEqual(labelEditCmd(local, "right", { text: "A", shape: "input", spin: "up", autoRotate: true }), { op: "sch_edit", verb: "edit_label", id: "lbl_a", spin: "up" });
 });
 
 test("a sheet dialog is one command: the name and file, and the page number", () => {
@@ -150,4 +179,23 @@ test("a graphic that spells out its defaults is the same graphic as one that lea
   // a colour of every channel zero is "no colour"
   assert.ok(graphicsEqual(box, { ...box, color: { r: 0, g: 0, b: 0, a: 0 } }));
   assert.ok(!graphicsEqual(box, { ...box, color: { r: 255, g: 0, b: 0, a: 255 } }));
+});
+
+test("a power symbol's dialog sends the new Value and the Show checks that changed, as one command", () => {
+  const power = { id: "#PWR01", net: "GND", fields: [{ name: "Reference", visible: false }, { name: "Value", visible: true }] };
+  const same = { net: "GND", showReference: false, showValue: true };
+  assert.equal(powerEditCmd(power, same), null, "nothing changed: nothing to send");
+  assert.deepEqual(powerEditCmd(power, { ...same, net: " AGND " }), { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Value", text: "AGND" });
+  assert.deepEqual(powerEditCmd(power, { ...same, showValue: false }), { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Value", visible: false });
+  assert.deepEqual(powerEditCmd(power, { ...same, showReference: true }), { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Reference", visible: true });
+  // the text and the Show check of the Value are one edit; the Reference is another, and two edits are one command
+  assert.deepEqual(powerEditCmd(power, { net: "VCC", showReference: true, showValue: false }), {
+    op: "batch",
+    cmds: [
+      { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Value", text: "VCC", visible: false },
+      { op: "sch_edit", verb: "edit_field", id: "fld:#PWR01:Reference", visible: true },
+    ],
+  });
+  // a backend that sent no fields has no Show to change
+  assert.equal(powerEditCmd({ id: "#PWR01", net: "GND" }, { net: "GND", showReference: true, showValue: true }), null);
 });

@@ -47,3 +47,12 @@ test("a shown field stays selected across a refresh, a hidden or emptied one doe
   const kept = keepOnSheet(new Set(["R1", "fld:R1:Reference", "fld:R1:Value", "fld:R1:Footprint", "fld:R1:Datasheet", "fld:R2:Value"]), sch);
   assert.deepEqual([...kept].sort(), ["R1", "fld:R1:Reference", "fld:R1:Value"]);
 });
+
+test("the pins of sheets and of symbols stay selected while they are on the sheet", () => {
+  const sch = sheet({
+    symbols: [{ id: "R1", lib_id: "Dev:R", at: [0, 0], rot: 0, mirror: null, unit: 1, body_style: 1, pins: [{ number: "1", name: null, kind: "passive" }] }],
+    lib_symbols: { "Dev:R": { graphics: [], pins: [{ number: "1", name: null, electrical_type: "passive", shape: "line", at: [0, 0], angle_deg: 0, length_mm: 2.54, unit: 1, body_style: 1, hidden: false }] } },
+    sheets: [{ id: "sh_1", pins: [{ id: "shpin_1" }] }],
+  });
+  assert.deepEqual([...keepOnSheet(new Set(["pin:R1:1", "pin:R1:7", "shpin_1", "shpin_x"]), sch)].sort(), ["pin:R1:1", "shpin_1"]);
+});

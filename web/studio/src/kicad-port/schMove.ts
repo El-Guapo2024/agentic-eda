@@ -114,7 +114,8 @@ export function applyPatch(sch: Schematic, p: SchMovePatch): Schematic {
     }),
     texts: sch.texts.map((t) => {
       const q = texts.get(t.id);
-      return q ? { ...t, at: q.at, angle: q.angle } : t;
+      // a turn or a mirror flips the justification as well (`SCH_TEXT::Rotate90`, `MirrorSpinStyle`): the patch carries it with the angle
+      return q ? { ...t, at: q.at, angle: q.angle, ...(q.vertical !== undefined ? { vertical: q.vertical } : {}), ...(q.h ? { h: q.h } : {}), ...(q.v ? { v: q.v } : {}) } : t;
     }),
     no_connects: p.no_connects.map((n) => ({ ...(ncOld.get(n.id) ?? { id: n.id }), id: n.id, at: n.at })),
     bus_entries: p.bus_entries.map((b) => ({ ...entriesOld.get(b.id), id: b.id, at: b.at, size: b.size })),

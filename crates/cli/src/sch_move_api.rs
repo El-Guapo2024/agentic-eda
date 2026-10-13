@@ -39,7 +39,15 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         b.apply(&cmd)?;
     }
     let (sch, _) = crate::studio::resolve_sheet(b.design(), &sheet);
-    Ok(patch_json(&sch, &model))
+    let mut patch = patch_json(&sch, &model);
+    // what the net-collision monitor draws for the held selection (`SCH_DRAG_NET_COLLISION_MONITOR`): where the move would join two nets and where it pulls a connection apart
+    if let Some(o) = b.net_collision() {
+        patch["net_collision"] = json!({
+            "collisions": o.collisions.iter().map(|m| json!({ "at": pt(m.at), "radius_um": m.radius_um })).collect::<Vec<_>>(),
+            "disconnections": o.disconnections.iter().map(|d| json!({ "a": pt(d.a), "b": pt(d.b), "radius_um": d.radius_um })).collect::<Vec<_>>(),
+        });
+    }
+    Ok(patch)
 }
 
 fn pt(p: eda_model::ir::Point) -> Value {
@@ -65,7 +73,7 @@ pub(crate) fn patch_json(sch: &SchematicSection, model: &eda_model::ConstraintMo
         "power_symbols": sch.power_symbols.iter().map(|p| json!({ "id": p.id, "at": pt(p.at), "rot": p.rot as f64 / 1000.0, "fields": eda_engine::fields::power_fields(sch, p).iter().map(|f| page_field_json(&p.id, f)).collect::<Vec<_>>() })).collect::<Vec<_>>(),
         "wires": sch.wires.iter().map(|w| json!({ "id": w.id, "net": w.net, "pts": w.pts.iter().map(|p| pt(*p)).collect::<Vec<_>>(), "bus": w.bus })).collect::<Vec<_>>(),
         "labels": labels,
-        "texts": sch.texts.iter().map(|t| json!({ "id": t.id, "at": pt(t.at), "angle": t.angle as f64 / 1000.0 })).collect::<Vec<_>>(),
+        "texts": sch.texts.iter().map(|t| crate::studio::text_json(sch, t)).collect::<Vec<_>>(),
         "no_connects": sch.no_connects.iter().map(|n| json!({ "id": n.id, "at": pt(n.at) })).collect::<Vec<_>>(),
         "bus_entries": sch.bus_entries.iter().map(|b| json!({ "id": b.id, "at": pt(b.at), "size": pt(b.size) })).collect::<Vec<_>>(),
         "junctions": sch.junctions.iter().map(|j| json!({ "id": j.id, "at": pt(j.at) })).collect::<Vec<_>>(),

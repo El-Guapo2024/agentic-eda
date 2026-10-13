@@ -22,7 +22,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { LabelScope, Schematic } from "../api/types";
 import { useStudioApi, useStudioDispatch, useStudioState, type ToolId } from "../state/store";
 import { boundsOfPoints, fitTransform } from "./canvas/view";
-import { handleWheel, type WheelInput } from "../kicad-port/viewControls";
+import { computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, handleWheel, type WheelInput } from "../kicad-port/viewControls";
+import { panByWorldDelta } from "../kicad-port/view";
 import { useWheelPrefs } from "../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../hooks/useNonPassiveWheel";
 import { paintSchematic } from "./schematic/painter";
@@ -40,12 +41,16 @@ import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, a
 import { isMac } from "../platform";
 import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
 import { applyPatch, heldCmd, holdPoint, pickedVertices, previewBody, wirePick } from "../kicad-port/schMove";
+import { paintNetCollision } from "./schematic/netCollisionPainter";
+import { hasNetCollision } from "../kicad-port/schNetCollision";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
 import type { SchMovePatch } from "../api/schEditTypes";
 import { nextReference } from "../kicad-port/nextReference";
 import { wireTail } from "../kicad-port/schLineMode";
-import { boxItems, hitItems } from "./schematic/schItems";
+import { boxItems } from "./schematic/schItems";
+import { pickItem } from "./schematic/schPick";
+import { isPinItemId, promoteLonePin } from "../kicad-port/schPins";
 import { openSchProperties } from "./schematic/schPropertiesOpen";
 import { SchContextMenu } from "./schematic/SchContextMenu";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
@@ -62,9 +67,7 @@ import { finishShapeDraw, isSchShapeTool, paintShapePreview, shapeToolClick } fr
 import { breakPreviewSheet, commitBreak } from "./schematic/schBreakTool";
 import { paintPinPreview, placePinClick } from "./schematic/schPinTool";
 import type { MenuNode } from "../kicad/types";
-import { hitSymbol, hitWire, schematicBounds } from "./schematic/schHit";
-import { hitField } from "../kicad-port/schFieldEdit";
-import { measureStrokeText } from "./text/strokeFont";
+import { schematicBounds } from "./schematic/schHit";
 import { isExplicitJunctionAllowed, junctionCandidates, type JunctionSchematic } from "../kicad-port/schJunction";
 import { sheetSize } from "../kicad-port/schSheet";
 import { importSheetClick } from "./schematic/schImportTool";
@@ -79,7 +82,10 @@ import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
 import "../styles/canvas.css";
 
 type DragState =
-  | { kind: "pan"; startScreen: [number, number]; startView: [number, number] }
+  /** `WX_VIEW_CONTROLS` DRAG_PANNING by the middle (1) or right (2) button, as `input.drag_middle` / `drag_right` say; `moved`: the press has become a drag (a right press that never did opens the context menu). */
+  | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number]; moved: boolean }
+  /** DRAG_ZOOMING: the view is scaled about the press point (`anchor`, canvas pixels) as the pointer goes up and down (`lastY` is where it was at the last motion). */
+  | { kind: "zoom"; button: 1 | 2; anchor: { x: number; y: number }; lastY: number; moved: boolean }
   | { kind: "box"; startWorld: [number, number]; startScreen: [number, number] }
   /**
    * A plain click-and-drag on any item, started without `M`/`G` armed
@@ -152,6 +158,12 @@ export function SchematicView() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
+  /** Set when a right-button drag that panned or zoomed the view has just ended, so the `contextmenu` event the browser sends after it does not open the menu (a click does). */
+  const justPannedRef = useRef(false);
+  /** `WX_VIEW_CONTROLS::handleAutoPanning`: the last pointer position (canvas pixels and client), and the sheet and what is going on, as the animation frame reads them. */
+  const lastPointerRef = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
+  /** Set by an auto-pan step: the pointer has not moved but the sheet under it has, so the motion is replayed once the view is redrawn (`WX_VIEW_CONTROLS::refreshMouse`). */
+  const autoPannedRef = useRef(false);
   /** The pressed button's `BUTTON_STATE` (tool_dispatcher.cpp): whether the press has become a drag. Made at every press. */
   const gestureRef = useRef<ClickDragGesture | null>(null);
   const userMovedRef = useRef(false);
@@ -166,6 +178,9 @@ export function SchematicView() {
   /** The menu of an ERC marker the last right click was on (kicad-port/rcItems.ts `rcMenu`). */
   const [markerMenu, setMarkerMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
   const sch = state.schematic;
+  /** What the auto-pan frame loop below reads each frame, kept fresh by every render so the loop is made once. */
+  const live = useRef({ state, paste, size: containerSize, marquee });
+  live.current = { state, paste, size: containerSize, marquee };
   /** `SCH_SELECTION_TOOL::itemPassesFilter`: an item of a category the selection filter has off, or a locked one without its "Locked items", cannot be picked. */
   const selectable = sch ? schSelectable(sch, state.schSelectionFilter) : () => true;
   const pickable = (id: string | null): string | null => (id && selectable(id) ? id : null);
@@ -317,7 +332,10 @@ export function SchematicView() {
       },
       page
     );
+    // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)
+    const collisionOverlay = held && patch ? patch.net_collision : undefined;
     paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display });
+    if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
       // rubber band from the last click to the cursor is two segments (an
@@ -382,7 +400,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
+  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -472,21 +490,66 @@ export function SchematicView() {
   // React's own onWheel is passive, so its `preventDefault()` was ignored (and logged on every tick) while the page scrolled under the zoom.
   useNonPassiveWheel(containerRef, onWheel);
 
+  // `WX_VIEW_CONTROLS::handleAutoPanning` / `onTimer`: while the pointer is in the border of the canvas during an interaction -- a wire, bus, line, shape or sheet being drawn, items
+  // held by M, G or a drag, a paste being carried, a box being dragged -- the view pans every frame, faster the further into the border the pointer is. Off unless Preferences >
+  // Mouse and Touchpad has "Automatically pan while moving object" on (KiCad's own default, and what the PCB canvas does); one frame loop, reading what it needs from refs.
+  useEffect(() => {
+    let raf = 0;
+    const tick = () => {
+      raf = requestAnimationFrame(tick);
+      const { state: s, paste: carried, size, marquee: box } = live.current;
+      if (!s.prefs.autoPan || s.tab !== "schematic") return;
+      const drag = dragRef.current;
+      const interactive = drag?.kind === "box" || (drag?.kind === "move" && drag.moved) || s.drawState != null || s.movePreview != null || carried != null;
+      const pointer = lastPointerRef.current;
+      if (!interactive || !pointer || !(s.schematicView.scale > 0)) return;
+      const dir = computeAutoPanDirection(pointer, size, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin);
+      const step = computeAutoPanStep(dir, size, s.schematicView.scale, DEFAULT_VIEW_CONTROL_SETTINGS.autoPanMargin, s.prefs.autoPanAcceleration);
+      if (!step) return;
+      userMovedRef.current = true;
+      autoPannedRef.current = true;
+      // a box being dragged keeps the corner it started at where it is on the sheet: its screen start moves by what the sheet did
+      if (box && drag?.kind === "box") setMarquee({ ...box, x0: box.x0 - step.x * s.schematicView.scale, y0: box.y0 - step.y * s.schematicView.scale });
+      dispatch({ type: "SET_SCHEMATIC_VIEW", view: panByWorldDelta(s.schematicView, step.x, step.y) });
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [dispatch]);
+  // After a pan step the pointer is over a different place of the sheet: replay its last position so what is held, drawn or boxed follows (`WX_VIEW_CONTROLS::refreshMouse`).
+  useEffect(() => {
+    if (!autoPannedRef.current) return;
+    autoPannedRef.current = false;
+    const pointer = lastPointerRef.current;
+    const container = containerRef.current;
+    if (!pointer || !container) return;
+    container.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: pointer.clientX, clientY: pointer.clientY, pointerId: 1, pointerType: "mouse", buttons: dragRef.current ? 1 : 0 }));
+  }, [state.schematicView]);
+
   return (
     <div
       ref={containerRef}
       className="pcb-canvas-container"
-      style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
+      style={{ cursor: dragRef.current?.kind === "pan" || dragRef.current?.kind === "zoom" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
         modsRef.current = { ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey };
         const gesture = new ClickDragGesture(dragRuleFor(isMac()));
         gesture.down(e.clientX, e.clientY, e.timeStamp);
         gestureRef.current = gesture;
-        if (e.button === 1) {
+        justPannedRef.current = false; // a new press: the last right-drag no longer vetoes the menu
+        if (e.button === 1 || e.button === 2) {
+          // `WX_VIEW_CONTROLS::onButton`: the middle and the right button pan, zoom or do nothing as Preferences > Mouse and Touchpad say. A right press that does
+          // not become a drag is a click, and the context menu opens (`onContextMenu`).
+          const action = dragActionOf(e.button, wheelPrefs.settings);
+          if (action === "none") return;
           userMovedRef.current = true;
           (e.target as Element).setPointerCapture(e.pointerId);
-          dragRef.current = { kind: "pan", startScreen: [e.clientX, e.clientY], startView: [state.schematicView.x, state.schematicView.y] };
+          if (action === "pan") {
+            dragRef.current = { kind: "pan", button: e.button, startScreen: [e.clientX, e.clientY], startView: [state.schematicView.x, state.schematicView.y], moved: false };
+          } else {
+            const rect = containerRef.current!.getBoundingClientRect();
+            dragRef.current = { kind: "zoom", button: e.button, anchor: { x: e.clientX - rect.left, y: e.clientY - rect.top }, lastY: e.clientY, moved: false };
+          }
           return;
         }
         if (e.button !== 0) return;
@@ -501,7 +564,7 @@ export function SchematicView() {
         // Highlight Nets (`SCH_EDITOR_CONTROL::HighlightNetCursor`'s picker): a click is `highlightNet` at that point -- the net of the wire, label or power symbol there,
         // or, over nothing, the highlight cleared. The tool stays armed.
         if (state.activeTool === "sch_highlight_net") {
-          dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, wx, wy, state.schematicView.scale) });
+          dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, wx, wy, state.schematicView.scale, state.schGridUm) });
           return;
         }
 
@@ -652,21 +715,23 @@ export function SchematicView() {
         const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
         const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
         const tolerance = 6 / (state.schematicView.scale || 1);
-        // The item under the pointer, topmost first: a symbol, any other placed item (a label, text, power symbol, junction, no-connect, bus entry,
-        // sheet or drawn shape -- tight, screen-sized tolerance) and last a wire (`SCH_SELECTION_TOOL::selectPoint`: a click on a wire selects it;
-        // the net highlight is a tool of its own). Every kind of item is picked up and dragged the same way.
-        // A shown field (the Reference, the Value, ...) is picked before the symbol whose box it may sit over: its own text box is what a click hits.
-        const fieldId = pickable(hitField(sch, wx, wy, tolerance / 2, measureStrokeText));
-        const symId = fieldId ? null : pickable(hitSymbol(sch, wx, wy));
-        const placedItem = fieldId || symId ? null : (hitItems(sch, wx, wy, tolerance).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? null);
-        const wireId = fieldId || symId || placedItem ? null : pickable(hitWire(sch, wx, wy, tolerance));
-        const picked = fieldId ?? symId ?? placedItem ?? wireId;
+        // The item under the pointer (components/schematic/schPick.ts): a pin the pointer is on, a shown field, a symbol, any other placed item (a label, text, power symbol,
+        // junction, no-connect, bus entry, sheet or drawn shape -- tight, screen-sized tolerance) and last a wire (`SCH_SELECTION_TOOL::selectPoint`: a click on a wire
+        // selects it; the net highlight is a tool of its own). Every kind of item but a pin is picked up and dragged the same way.
+        const picked = pickItem(sch, wx, wy, state.schematicView.scale, selectable, "first");
+        const wireId = picked && sch.wires.some((w) => w.id === picked) ? picked : null;
         if (picked) {
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
           if (hasModifier(modifiers)) {
             // A modified click always applies immediately, never starts a drag -- real sch_selection_tool.cpp routes a modified drag to
             // box-select instead, even one starting on a hit item (see this file's "nothing hit" box-select branch below).
             dispatch({ type: "SET_SELECTION", refs: applySingleClickModifier(state.selection, picked, modifiers) });
+            dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
+            return;
+          }
+          // A pin is selected and acted on (Swap Pins, a net highlight), never picked up: `SCH_PIN_T` is no movable item, so a drag that starts on one moves nothing.
+          if (isPinItemId(picked)) {
+            dispatch({ type: "SET_SELECTION", refs: [picked] });
             dispatch({ type: "SET_SCH_WIRE_PICK", pick: null });
             return;
           }
@@ -701,6 +766,8 @@ export function SchematicView() {
         if (!hasModifier(modifiers)) dispatch({ type: "CLEAR_SELECTION" });
       }}
       onPointerMove={(e) => {
+        const bounds = containerRef.current?.getBoundingClientRect();
+        if (bounds) lastPointerRef.current = { x: e.clientX - bounds.left, y: e.clientY - bounds.top, clientX: e.clientX, clientY: e.clientY };
         if (!sch) return;
         const [wx, wy] = toWorld(e.clientX, e.clientY);
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
@@ -728,9 +795,16 @@ export function SchematicView() {
         if (!drag) return;
         if (drag.kind === "pan") {
           userMovedRef.current = true;
+          if (motion?.dragging) drag.moved = true;
           const dx = e.clientX - drag.startScreen[0];
           const dy = e.clientY - drag.startScreen[1];
           dispatch({ type: "SET_SCHEMATIC_VIEW", view: { ...state.schematicView, x: drag.startView[0] + dx, y: drag.startView[1] + dy } });
+        } else if (drag.kind === "zoom") {
+          // `onMotion`'s DRAG_ZOOMING: the view is scaled about the press point by how far the pointer went down the screen since the last motion
+          userMovedRef.current = true;
+          if (motion?.dragging) drag.moved = true;
+          dispatch({ type: "SET_SCHEMATIC_VIEW", view: dragZoomView(state.schematicView, drag.anchor, e.clientY - drag.lastY, state.prefs.zoomSpeed) });
+          drag.lastY = e.clientY;
         } else if (drag.kind === "box") {
           if (!motion?.dragging) return; // a click with a little jitter, not a rectangle
           const rect = containerRef.current!.getBoundingClientRect();
@@ -748,8 +822,17 @@ export function SchematicView() {
           dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "sch_drag", dxUm: Math.round(sx - drag.origin[0]), dyUm: Math.round(sy - drag.origin[1]), holdUm: [sx, sy], vertices: drag.vertices, turns: state.movePreview?.turns } });
         }
       }}
+      onPointerLeave={() => {
+        // a pointer that has left the canvas no longer pans it (a drag keeps the pointer captured, so this does not fire during one)
+        lastPointerRef.current = null;
+      }}
       onContextMenu={(e) => {
         e.preventDefault();
+        // `WX_VIEW_CONTROLS::onButton`: a right-drag pans (or zooms) rather than opening anything -- the browser's own `contextmenu` event still follows the button-up
+        if (justPannedRef.current) {
+          justPannedRef.current = false;
+          return;
+        }
         if (!sch || paste) return;
         // `SCH_SELECTION_TOOL`: a right-click on an item that is not selected selects it first, on empty space clears the selection; then the
         // menu for whatever is selected (kicad-port/schContextMenu.ts).
@@ -775,12 +858,12 @@ export function SchematicView() {
         // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
         const scale = state.schematicView.scale || 1;
-        const hit = pickable(hitField(sch, wx, wy, 3 / scale, measureStrokeText)) ?? pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
+        const hit = pickItem(sch, wx, wy, scale, selectable, "first");
         let ids = [...state.selection];
         if (hit && !state.selection.has(hit)) ids = [hit];
         else if (!hit && ids.length > 0) ids = [];
         if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale)) });
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps })) });
       }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties
@@ -793,8 +876,8 @@ export function SchematicView() {
             return;
           }
           const scale = state.schematicView.scale || 1;
-          const under = pickable(hitField(sch, wx, wy, 3 / scale, measureStrokeText)) ?? pickable(hitSymbol(sch, wx, wy)) ?? hitItems(sch, wx, wy, 6 / scale).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pickable(r.id))?.id ?? pickable(hitWire(sch, wx, wy, 400 / scale));
-          const ids = state.selection.size > 0 ? [...state.selection] : under ? [under] : [];
+          const under = pickItem(sch, wx, wy, scale, selectable, "none");
+          const ids = promoteLonePin(state.selection.size > 0 ? [...state.selection] : under ? [under] : []);
           if (openSchProperties(sch, ids, dispatch)) return;
         }
         const draw = state.drawState;
@@ -813,6 +896,10 @@ export function SchematicView() {
         const drag = dragRef.current;
         dragRef.current = null;
         if (!drag) return;
+        if (drag.kind === "pan" || drag.kind === "zoom") {
+          justPannedRef.current = drag.button === 2 && drag.moved;
+          return;
+        }
         if (drag.kind === "move") {
           if (drag.moved && state.movePreview) {
             void api.commitSchHeld(state.movePreview);
@@ -838,7 +925,7 @@ export function SchematicView() {
             const [x1, y1] = toWorld(e.clientX, e.clientY);
             const [x0, y0] = drag.startWorld;
             const box: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-            const hits = boxItems(sch, box, marquee.crossing).filter((id) => pickable(id));
+            const hits = boxItems(sch, box, marquee.crossing, (id) => pickable(id) !== null);
             if (hits.length > 0 || hasModifier(modifiers)) {
               dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, modifiers) });
             }

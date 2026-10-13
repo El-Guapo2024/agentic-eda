@@ -3,6 +3,7 @@ import type { Schematic } from "../../api/types";
 import { emptySummary, type SchSelectionSummary } from "../../kicad-port/schContextMenu";
 import { canAddCorner, canRemoveCorner, type P, type PolyKind } from "../../kicad-port/schPolyCorners";
 import { isFieldId } from "../../kicad-port/schFieldEdit";
+import { isPinItemId } from "../../kicad-port/schPins";
 import { singleMultiBodyStyleSymbol } from "../../kicad-port/schBodyStyle";
 
 /** The outline of a drawn polygon or rule area, or null for anything else. */
@@ -14,8 +15,9 @@ export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pt
 }
 
 /** `cursor` (um) and `tolUm` (the point editor's handle size at this zoom) decide the corner entries, which depend on where the pointer is. */
-export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolUm = 0): SchSelectionSummary {
+export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolUm = 0, opts: { allowPinSwaps?: boolean } = {}): SchSelectionSummary {
   const s = emptySummary();
+  s.allowPinSwaps = opts.allowPinSwaps ?? false;
   const locked = new Set(sch.locked ?? []);
   const wire = new Map(sch.wires.map((w) => [w.id, w]));
   const label = new Map(sch.labels.map((l) => [l.id, l]));
@@ -27,6 +29,7 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
   const line = new Set((sch.lines ?? []).map((l) => l.id));
   const graphic = new Map((sch.graphics ?? []).map((g) => [g.id, g]));
   const sheet = new Set(sch.sheets.map((x) => x.id));
+  const sheetPin = new Set(sch.sheets.flatMap((x) => (x.pins ?? []).map((p) => p.id)));
   const symbolUnits = new Map<string, number>();
   for (const sym of sch.symbols) symbolUnits.set(sym.id, (symbolUnits.get(sym.id) ?? 0) + 1);
 
@@ -48,12 +51,14 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
     else if (junction.has(id)) s.junctions++;
     else if (line.has(id)) s.lines++;
     else if (sheet.has(id)) s.sheets++;
+    else if (sheetPin.has(id)) s.sheetPins++;
     else if (g) {
       if (g.shape.type === "text_box") s.textBoxes++;
       else if (g.shape.type === "directive") s.directiveLabels++;
       else if (g.shape.type === "rule_area") s.ruleAreas++;
       else s.shapes++;
     } else if (isFieldId(id)) s.fields++;
+    else if (isPinItemId(id)) s.pins++;
     else known = false;
     if (!known) continue;
     s.total++;

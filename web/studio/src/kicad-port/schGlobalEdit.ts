@@ -64,8 +64,8 @@ export function planGlobalEdit(sch: Schematic, selected: ReadonlySet<string>, sp
   if (spec.kinds.texts && spec.textSize !== null) {
     for (const t of sch.texts) {
       if (!wanted(t.id) || t.size_um === spec.textSize) continue;
-      // A text's size cannot be edited in place: it is replaced by one of the new size at the same spot (its id follows its content and place, so it keeps it).
-      cmds.push({ op: "delete_sch_text", id: t.id }, { op: "add_sch_text", content: t.content, at: { x: t.at[0], y: t.at[1] }, angle_millideg: Math.round(t.angle * 1000), size_um: spec.textSize });
+      // Text Properties' own verb: the text keeps its id, its place and its justification
+      cmds.push({ op: "sch_edit", verb: "edit_text", id: t.id, size_um: spec.textSize });
     }
   }
   for (const g of sch.graphics ?? []) {

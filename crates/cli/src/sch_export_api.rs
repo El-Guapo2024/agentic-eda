@@ -76,7 +76,8 @@ pub(crate) fn bom_presets(req: &Value) -> Result<(Value, Value), String> {
         "sort_asc": flag(spec, "sort_asc", true),
         "filter_string": spec.get("filter").and_then(Value::as_str).unwrap_or(""),
         "group_symbols": flag(spec, "group_symbols", true),
-        "exclude_dnp": false,
+        // the table's "Include 'DNP' Symbols" off is `--exclude-dnp`; a symbol excluded from the BOM is never in an export
+        "exclude_dnp": flag(spec, "exclude_dnp", false),
         "include_excluded_from_bom": false,
     });
     let fmt = req.get("fmt").cloned().unwrap_or(Value::Null);

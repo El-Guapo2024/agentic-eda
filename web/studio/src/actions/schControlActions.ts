@@ -15,6 +15,8 @@ import { fetchHierarchy } from "../api/schControlClient";
 import { neighbourSheet, samePath } from "../kicad-port/sheetPages";
 import { ATTRIBUTE_ACTIONS, attributeChecked, hitSheet, INCREMENT_PARAMS, nearestTextItem, nextAttributeState, planIncrement, type IncrementTarget, type SymbolAttrKey } from "../kicad-port/schControl";
 import { netAtPoint } from "../kicad-port/schNetAtPoint";
+import { pinDistance, pinItems } from "../kicad-port/schPins";
+import { measureStrokeText } from "../components/text/strokeFont";
 import { copySheetImage, exportSymbolSvg, saveSheetCopy } from "./schControlExports";
 import { importFootprintAssignments } from "./schControlImports";
 import { openAssignNetclass } from "./assignNetclass";
@@ -316,12 +318,15 @@ function incrementTargets(ctx: SchControlContext): IncrementTarget[] {
 }
 
 /** The net a Highlight Nets click lands on: the nearest wire, or label / power symbol anchor, within the pick radius; none clears the highlight (`highlightNet` with no connection). */
-export function netAtClick(sch: NonNullable<StudioState["schematic"]>, x: number, y: number, scale: number): string | null {
+export function netAtClick(sch: NonNullable<StudioState["schematic"]>, x: number, y: number, scale: number, gridUm = 1270): string | null {
   return netAtPoint(
     sch.wires,
     [...sch.labels.map((l) => ({ net: l.net, at: l.at })), ...sch.power_symbols.map((p) => ({ net: p.net, at: p.at }))],
     x,
     y,
-    400 / (scale || 1)
+    // `GetNode`: the larger of five pixels and the length of the grid's diagonal (`GetGridSize().EuclideanNorm()`), tried from nothing up (kicad-port/schNetAtPoint.ts)
+    Math.max(5 / (scale || 1), gridUm * Math.SQRT2),
+    // a pin is hit through its box (the line, the name and the number), and its net is the one the sheet says
+    pinItems(sch).map((pin) => ({ net: pin.net, distUm: pinDistance(pin, [x, y], measureStrokeText) }))
   );
 }

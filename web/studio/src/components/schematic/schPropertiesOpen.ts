@@ -19,6 +19,9 @@ export function openSchProperties(sch: Schematic, ids: readonly string[], dispat
     case "symbol":
       dispatch({ type: "SET_SYMBOL_PROPERTIES", value: { id: target.id, field: null } });
       return true;
+    case "power":
+      dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_power", id: target.id } });
+      return true;
     case "label":
       dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_label", id: target.id } });
       return true;
@@ -27,6 +30,9 @@ export function openSchProperties(sch: Schematic, ids: readonly string[], dispat
       return true;
     case "sheet":
       dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_sheet", id: target.id } });
+      return true;
+    case "sheet_pin":
+      dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_sheet_pin", id: target.id } });
       return true;
     case "graphic":
       dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: { kind: "props_graphic", id: target.id } });

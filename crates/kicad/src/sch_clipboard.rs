@@ -534,9 +534,11 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     }
     for t in &texts {
         let (x, y) = (mm(t.at.x), mm(t.at.y));
-        let size = mm(t.size_um);
         let uuid = duid_plain(&format!("clipboard:text:{}:{}:{}", t.content, t.at.x, t.at.y));
-        let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim no)\n\t\t(at {x} {y} {})\n\t\t(effects (font (size {size} {size})) (justify left bottom))\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), fmt_mm_f(t.angle as f64 / 1000.0));
+        // upright angle and the justification, as the file writes them (`KeepUpright`, `EDA_TEXT::Format`)
+        let angle = if eda_model::kicad_geom::keep_upright_is_vertical(t.angle as f64 / 1000.0) { 90.0 } else { 0.0 };
+        let effects = crate::sch_extras_io::text_effects_str(t.size_um, sch.extras.text_justify_of(&t.id));
+        let _ = writeln!(out, "\t(text {}\n\t\t(exclude_from_sim no)\n\t\t(at {x} {y} {})\n\t\t{effects}\n\t\t(uuid \"{uuid}\")\n\t)", sexpr_str(&t.content), fmt_mm_f(angle));
     }
 
     // Hierarchical sheets: the sheet symbols, with their pins; their screens are not in the text.

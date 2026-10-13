@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { FieldsTableSpec } from "../api/types";
-import { bomFmtPresets, matchingBomPreset, emptyChanges, isEditableColumn, isEmptyChanges, specAddColumn, specRemoveColumn, specRenameColumn, stageAddField, stageEdit, stageRemoveField, stageRenameField, validNewFieldName } from "./fieldsTableStage";
+import { attributeState, bomFmtPresets, isAttributeColumn, matchingBomPreset, emptyChanges, isEditableColumn, isEmptyChanges, toggledAttribute, specAddColumn, specRemoveColumn, specRenameColumn, stageAddField, stageEdit, stageRemoveField, stageRenameField, validNewFieldName } from "./fieldsTableStage";
 
 const spec = (): FieldsTableSpec => ({
   columns: [
@@ -101,4 +101,28 @@ test("BOM format presets are KiCad CSV / TSV / Semicolons and are recognised aga
   assert.equal(semi?.string_delimiter, "'");
   assert.equal(matchingBomPreset({ ...tsv!, name: "whatever" })?.name, "TSV");
   assert.equal(matchingBomPreset({ ...csv!, keep_tabs: true }), null, "a tweaked preset is custom");
+});
+
+test("the attribute columns are generated names but cells to edit: a click on a checkbox stages 1 or 0, and a mixed group is set for all its symbols", () => {
+  for (const name of ["${DNP}", "${EXCLUDE_FROM_BOM}", "${EXCLUDE_FROM_BOARD}", "${EXCLUDE_FROM_SIM}"]) {
+    assert.equal(isAttributeColumn(name), true, name);
+    assert.equal(isEditableColumn(name), true, name);
+  }
+  // the other generated columns and the reference stay read-only, a user field is typed into
+  assert.equal(isAttributeColumn("${QUANTITY}"), false);
+  assert.equal(isEditableColumn("${QUANTITY}"), false);
+  assert.equal(isEditableColumn("${ITEM_NUMBER}"), false);
+  assert.equal(isEditableColumn("Reference"), false);
+  assert.equal(isEditableColumn("MPN"), true);
+  // a click
+  assert.equal(toggledAttribute("0", false), "1");
+  assert.equal(toggledAttribute("1", false), "0");
+  assert.equal(toggledAttribute("-- mixed values --", true), "1");
+  assert.equal(attributeState("1", false), "checked");
+  assert.equal(attributeState("0", false), "unchecked");
+  assert.equal(attributeState("-- mixed values --", true), "mixed");
+  // it is staged like any cell, one entry per symbol of the row
+  let c = emptyChanges();
+  for (const ref of ["R1", "R2"]) c = stageEdit(c, ref, "${DNP}", toggledAttribute("0", false));
+  assert.deepEqual(c.edits, [{ id: "R1", field: "${DNP}", value: "1" }, { id: "R2", field: "${DNP}", value: "1" }]);
 });

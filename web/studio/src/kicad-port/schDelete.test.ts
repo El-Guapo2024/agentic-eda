@@ -13,7 +13,7 @@ const sch: SchIds = {
   junctions: [{ id: "jct_a" }],
   lines: [{ id: "sln_a" }],
   graphics: [{ id: "shp_a" }, { id: "tbox_a" }],
-  sheets: [{ id: "sheet_a" }],
+  sheets: [{ id: "sheet_a", pins: [] }, { id: "sheet_b", pins: [{ id: "shpin_a" }, { id: "shpin_b" }] }],
 };
 
 test("every item kind has its own delete verb", () => {
@@ -27,4 +27,11 @@ test("every item kind has its own delete verb", () => {
 test("locked items and unknown ids are skipped", () => {
   const cmds = deleteCmds(sch, ["U1", "txt_a", "nope"], new Set(["txt_a"]));
   assert.deepEqual(cmds, [{ op: "delete_symbol", id: "U1" }]);
+});
+
+test("a pin of a sheet is deleted on its own; with its sheet it goes with it; a locked sheet keeps its pins", () => {
+  assert.deepEqual(deleteCmds(sch, ["shpin_a"], new Set()), [{ op: "sch_edit", verb: "delete_sheet_pin", id: "shpin_a" }]);
+  assert.deepEqual(deleteCmds(sch, ["shpin_a", "shpin_b"], new Set()).map((c) => (c.op === "sch_edit" ? c.verb : c.op)), ["delete_sheet_pin", "delete_sheet_pin"]);
+  assert.deepEqual(deleteCmds(sch, ["sheet_b", "shpin_a"], new Set()).map((c) => (c.op === "sch_edit" ? `${c.verb}` : c.op)), ["delete_sheet"], "the sheet takes its pins with it");
+  assert.deepEqual(deleteCmds(sch, ["shpin_a"], new Set(["sheet_b"])), [], "a pin of a locked sheet is locked");
 });

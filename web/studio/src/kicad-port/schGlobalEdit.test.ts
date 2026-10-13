@@ -35,21 +35,22 @@ test("an arc has no fill to set", () => {
   assert.equal(editedGraphic(arc, { ...emptyEdit(), fill: "outline" }), null);
 });
 
-test("selected-only restricts the edit; texts and lines are replaced to change their size and width", () => {
+test("selected-only restricts the edit; a text's size is edited in place and a line is replaced to change its width", () => {
   const sch = sheet({
     texts: [{ id: "txt_1", content: "a", at: [100, 200], angle: 90, size_um: 1270 }, { id: "txt_2", content: "b", at: [0, 0], angle: 0, size_um: 1270 }],
     graphics: [rect, area],
     lines: [{ id: "sln_1", pts: [[0, 0], [10, 0]], width_um: 0 }],
   });
   const all = planGlobalEdit(sch, new Set(), { ...emptyEdit(), textSize: 2000, lineWidth: 250 });
-  assert.equal(all.filter((c) => c.op === "delete_sch_text").length, 2);
-  assert.equal(all.filter((c) => c.op === "sch_edit").length, 2);
+  const verb = (cmds: typeof all, v: string) => cmds.filter((c) => c.op === "sch_edit" && c.verb === v);
+  assert.deepEqual(verb(all, "edit_text"), [{ op: "sch_edit", verb: "edit_text", id: "txt_1", size_um: 2000 }, { op: "sch_edit", verb: "edit_text", id: "txt_2", size_um: 2000 }]);
+  assert.equal(all.some((c) => c.op === "delete_sch_text" || c.op === "add_sch_text"), false, "a text is not deleted and put back: it would lose its id and its justification");
+  assert.equal(verb(all, "edit_graphic").length, 2);
   assert.deepEqual(all.find((c) => c.op === "add_sch_line"), { op: "add_sch_line", pts: [{ x: 0, y: 0 }, { x: 10, y: 0 }], width_um: 250 });
   const some = planGlobalEdit(sch, new Set(["txt_2", "shp_1"]), { ...emptyEdit(), selectedOnly: true, textSize: 2000, lineWidth: 250 });
-  assert.deepEqual(some.filter((c) => c.op === "delete_sch_text"), [{ op: "delete_sch_text", id: "txt_2" }]);
-  assert.equal(some.filter((c) => c.op === "sch_edit").length, 1);
+  assert.deepEqual(verb(some, "edit_text"), [{ op: "sch_edit", verb: "edit_text", id: "txt_2", size_um: 2000 }]);
+  assert.equal(verb(some, "edit_graphic").length, 1);
   assert.equal(some.some((c) => c.op === "add_sch_line"), false, "the line is not selected");
-  assert.deepEqual(some.find((c) => c.op === "add_sch_text"), { op: "add_sch_text", content: "b", at: { x: 0, y: 0 }, angle_millideg: 0, size_um: 2000 });
 });
 
 test("a text already of the size is left alone", () => {

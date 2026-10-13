@@ -6,21 +6,24 @@
 //   * the scroll-wheel gestures: which modifier key (none / Ctrl / Shift / Alt) zooms, pans left/right and pans
 //     up/down, one action per column, and whether zoom and left/right pan run reversed;
 //   * "Automatically pan while moving object" and its speed (`input.auto_pan`, `input.auto_pan_acceleration`);
+//   * what dragging with the middle and the right button does -- pan, zoom or nothing (`input.drag_middle`, `input.drag_right`), which the schematic canvas honours;
 //   * "Use zoom acceleration" and the zoom speed with its "Automatic" switch (`input.zoom_acceleration`,
 //     `input.zoom_speed`, `input.zoom_speed_auto` -> `WX_VIEW_CONTROLS::LoadSettings`);
 //   * the board editor's magnetic points (`PCBNEW_SETTINGS::m_MagneticItems`, "Snap to Pads", "Snap to Tracks and Vias", "Snap to graphics": the board editor's
 //     Preferences > Editing Options), which decide what the drawing and move tools snap to (kicad-port/snapAnchors.ts);
 //   * the board editor's "Step for rotate commands" (`PCBNEW_SETTINGS::m_RotationAngle`, `editing.rotation_angle`) and "Flip board items" (`m_FlipDirection`,
-//     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts).
+//     `editing.flip_left_right`), which R / Shift+R and F (and the menu's Rotate and Flip) read (kicad-port/pcbTransform.ts);
+//   * the schematic editor's "Allow unconstrained pin swaps" (`EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps`), without which Swap Pins is not offered.
 // Not offered: "Center and warp cursor on zoom" (it moves the real pointer, which a page may not and this studio
-// never does), the drag gestures and "Pan on mouse movement with key" (the canvases' own drag handling is not
-// configurable), and "Pan left/right with horizontal movement" (stored by KiCad but never read by the wheel code).
-import { DEFAULT_VIEW_CONTROL_SETTINGS, type ScrollModifier, type ViewControlSettings } from "./viewControls";
+// never does), the left button's drag (box select, drag selected, drag any: the canvases' own handling is not configurable), the middle and right drags
+// on the board and the library canvases (they pan with both buttons), "Pan on mouse movement with key", and "Pan left/right with horizontal movement" (stored
+// by KiCad but never read by the wheel code).
+import { DEFAULT_VIEW_CONTROL_SETTINGS, type DragAction, type ScrollModifier, type ViewControlSettings } from "./viewControls";
 import type { MagneticOption, PcbMagnetic } from "./snapAnchors";
 import type { FlipDirection } from "./pcbTransform";
 import { AcceleratingZoomController, CONSTANT_SCALE, ConstantZoomController, pickDefaultZoomController, type ZoomController } from "./zoomController";
 
-export type { ScrollModifier, FlipDirection };
+export type { DragAction, ScrollModifier, FlipDirection };
 export type ScrollRow = "zoom" | "panH" | "panV";
 
 export interface Preferences {
@@ -35,6 +38,9 @@ export interface Preferences {
   autoPan: boolean;
   /** `input.auto_pan_acceleration`, 1..10, default 5. */
   autoPanAcceleration: number;
+  /** `input.drag_middle` / `input.drag_right` (`MOUSE_DRAG_ACTION`): what dragging with that button does. Default pan for both. */
+  dragMiddle: DragAction;
+  dragRight: DragAction;
   /** `input.zoom_acceleration`, default off (the platform controller ignores it on macOS, as in KiCad). */
   zoomAcceleration: boolean;
   /** `input.zoom_speed_auto`, default on; `input.zoom_speed` 1..10, default 5, used when it is off. */
@@ -50,6 +56,8 @@ export interface Preferences {
   rotationStepDeg: number;
   /** `PCBNEW_SETTINGS::m_FlipDirection` ("Flip board items"): which way F turns a board item over. Default left/right (the `editing.flip_left_right` default). */
   flipDirection: FlipDirection;
+  /** `EESCHEMA_SETTINGS::m_Input.allow_unconstrained_pin_swaps` ("Allow unconstrained pin swaps", Preferences > Schematic Editor > Editing Options): Swap Pins is offered and runs only with it on. Default off. */
+  allowUnconstrainedPinSwaps: boolean;
 }
 
 /**
@@ -72,6 +80,8 @@ export const DEFAULT_PREFERENCES: Preferences = {
   reverseScrollPanH: false,
   autoPan: false,
   autoPanAcceleration: 5,
+  dragMiddle: "pan",
+  dragRight: "pan",
   zoomAcceleration: false,
   zoomSpeedAuto: true,
   zoomSpeed: 5,
@@ -80,6 +90,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   magneticGraphics: false,
   rotationStepDeg: 90,
   flipDirection: "left_right",
+  allowUnconstrainedPinSwaps: false,
 };
 
 type ScrollSet = Pick<Preferences, "scrollModifierZoom" | "scrollModifierPanH" | "scrollModifierPanV" | "reverseScrollZoom" | "reverseScrollPanH">;
@@ -122,6 +133,8 @@ export function toViewControlSettings(p: Preferences): ViewControlSettings {
     ...DEFAULT_VIEW_CONTROL_SETTINGS,
     autoPanEnabled: p.autoPan,
     autoPanAcceleration: p.autoPanAcceleration,
+    dragMiddle: p.dragMiddle,
+    dragRight: p.dragRight,
     scrollModifierZoom: p.scrollModifierZoom,
     scrollModifierPanH: p.scrollModifierPanH,
     reverseScrollZoom: p.reverseScrollZoom,
@@ -145,6 +158,7 @@ export const PREFERENCES_STORAGE_KEY = "eda-studio.preferences.v1";
 
 const MODIFIERS: readonly ScrollModifier[] = ["none", "ctrl", "shift", "alt"];
 const isModifier = (v: unknown): v is ScrollModifier => typeof v === "string" && (MODIFIERS as readonly string[]).includes(v);
+const dragAction = (v: unknown, fallback: DragAction): DragAction => (v === "pan" || v === "zoom" || v === "none" ? v : fallback);
 const clampInt = (v: unknown, lo: number, hi: number, fallback: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : fallback);
 const bool = (v: unknown, fallback: boolean) => (typeof v === "boolean" ? v : fallback);
 const magnetic = (v: unknown, fallback: MagneticOption): MagneticOption => (v === "never" || v === "track-tool" || v === "always" ? v : fallback);
@@ -166,6 +180,8 @@ export function sanitizePreferences(raw: unknown): Preferences {
     reverseScrollPanH: bool(o.reverseScrollPanH, d.reverseScrollPanH),
     autoPan: bool(o.autoPan, d.autoPan),
     autoPanAcceleration: clampInt(o.autoPanAcceleration, 1, 10, d.autoPanAcceleration),
+    dragMiddle: dragAction(o.dragMiddle, d.dragMiddle),
+    dragRight: dragAction(o.dragRight, d.dragRight),
     zoomAcceleration: bool(o.zoomAcceleration, d.zoomAcceleration),
     zoomSpeedAuto: bool(o.zoomSpeedAuto, d.zoomSpeedAuto),
     zoomSpeed: clampInt(o.zoomSpeed, 1, 10, d.zoomSpeed),
@@ -174,6 +190,7 @@ export function sanitizePreferences(raw: unknown): Preferences {
     magneticGraphics: bool(o.magneticGraphics, d.magneticGraphics),
     rotationStepDeg: sanitizeRotationStep(o.rotationStepDeg, d.rotationStepDeg),
     flipDirection: o.flipDirection === "top_bottom" ? "top_bottom" : d.flipDirection,
+    allowUnconstrainedPinSwaps: bool(o.allowUnconstrainedPinSwaps, d.allowUnconstrainedPinSwaps),
   };
   return scrollModSetValid(p) ? p : { ...p, ...MOUSE_SCROLL_DEFAULTS };
 }

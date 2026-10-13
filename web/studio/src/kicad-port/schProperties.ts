@@ -8,17 +8,18 @@
 //
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
 import type { Cmd, LabelShape, Schematic, SchematicLabel, SchematicText, Sheet } from "../api/types";
-import type { SchColor, SchGraphic, SchLineStyle } from "../api/schEditTypes";
+import type { SchColor, SchGraphic, SchHAlign, SchLineStyle, SchVAlign } from "../api/schEditTypes";
+import { textLie } from "./schTextItem";
 
 export type LabelSpinName = "right" | "up" | "left" | "bottom";
 
 /** What `E` opens for a selection. */
 export type PropertiesTarget =
-  | { kind: "symbol" | "label" | "text" | "sheet" | "graphic"; id: string }
+  | { kind: "symbol" | "power" | "label" | "text" | "sheet" | "sheet_pin" | "graphic"; id: string }
   /** Wire/Bus Properties, Line Properties or Junction Properties: one dialog for the lines, bus entries and junctions named. */
   | { kind: "stroke"; ids: string[] };
 
-type Kind = "symbol" | "power" | "wire" | "bus" | "bus_entry" | "junction" | "line" | "label" | "text" | "no_connect" | "sheet" | "graphic";
+type Kind = "symbol" | "power" | "wire" | "bus" | "bus_entry" | "junction" | "line" | "label" | "text" | "no_connect" | "sheet" | "sheet_pin" | "graphic";
 
 function kinds(sch: Schematic, ids: readonly string[]): Array<{ id: string; kind: Kind }> {
   const wire = new Map(sch.wires.map((w) => [w.id, w]));
@@ -31,6 +32,7 @@ function kinds(sch: Schematic, ids: readonly string[]): Array<{ id: string; kind
   const line = new Set((sch.lines ?? []).map((l) => l.id));
   const graphic = new Set((sch.graphics ?? []).map((g) => g.id));
   const sheet = new Set(sch.sheets.map((s) => s.id));
+  const sheetPin = new Set(sch.sheets.flatMap((s) => (s.pins ?? []).map((p) => p.id)));
   const symbol = new Set(sch.symbols.map((s) => s.id));
   const out: Array<{ id: string; kind: Kind }> = [];
   for (const id of ids) {
@@ -57,9 +59,11 @@ function kinds(sch: Schematic, ids: readonly string[]): Array<{ id: string; kind
                       ? "line"
                       : sheet.has(id)
                         ? "sheet"
-                        : graphic.has(id)
-                          ? "graphic"
-                          : null;
+                        : sheetPin.has(id)
+                          ? "sheet_pin"
+                          : graphic.has(id)
+                            ? "graphic"
+                            : null;
     if (kind) out.push({ id, kind });
   }
   return out;
@@ -80,14 +84,17 @@ export function propertiesTarget(sch: Schematic, ids: readonly string[]): Proper
   // `default: if( selection.Size() > 1 ) return 0;`
   if (items.length > 1) return null;
   switch (front.kind) {
+    // a power symbol is a symbol in KiCad: `SCH_SYMBOL_T` opens `DIALOG_SYMBOL_PROPERTIES` (with the Spice button hidden for a power one)
     case "symbol":
+    case "power":
     case "label":
     case "text":
     case "sheet":
+    case "sheet_pin":
     case "graphic":
       return { kind: front.kind, id: front.id };
     default:
-      // A power symbol is a symbol in KiCad (its Value is the rail); this studio's symbol dialog has no power symbol yet. A no-connect has no properties (`case SCH_NO_CONNECT_T: break;`).
+      // A no-connect has no properties (`case SCH_NO_CONNECT_T: break;`).
       return null;
   }
 }
@@ -133,15 +140,18 @@ export function sameColor(a: SchColor | null | undefined, b: SchColor | null | u
 
 /** Label Properties: only the fields that differ from the label as it is (`spin` is the label's current spin, stored or read off its wire). */
 export function labelEditCmd(
-  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic">>,
+  label: Pick<SchematicLabel, "id" | "net" | "scope" | "shape"> & Partial<Pick<SchematicLabel, "size_um" | "bold" | "italic" | "auto_rotate">>,
   spin: LabelSpinName,
-  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean }
+  next: { text: string; shape: LabelShape; spin: LabelSpinName; sizeUm?: number | null; bold?: boolean; italic?: boolean; autoRotate?: boolean }
 ): Cmd | null {
-  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean } = {};
+  const edit: { text?: string; shape?: LabelShape; spin?: LabelSpinName; size_um?: number; bold?: boolean; italic?: boolean; auto_rotate?: boolean } = {};
   const text = next.text.trim();
   if (text !== label.net) edit.text = text;
   if (label.scope !== "local" && next.shape !== label.shape) edit.shape = next.shape;
-  if (next.spin !== spin) edit.spin = next.spin;
+  // the "Auto" check (`SetAutoRotateOnPlacement`) is for global and hierarchical labels; while it is on the spin is the connection's, not the radio button's
+  const auto = label.scope !== "local" && (next.autoRotate ?? !!label.auto_rotate);
+  if (label.scope !== "local" && next.autoRotate !== undefined && next.autoRotate !== !!label.auto_rotate) edit.auto_rotate = next.autoRotate;
+  if (!auto && next.spin !== spin) edit.spin = next.spin;
   // the size, bold and italic of the text (`SetTextSize`, `SetBold`, `SetItalic`); a label that was never edited has the default size, regular
   if (next.sizeUm !== undefined && next.sizeUm !== null && next.sizeUm !== (label.size_um && label.size_um > 0 ? label.size_um : 1270)) edit.size_um = next.sizeUm;
   if (next.bold !== undefined && next.bold !== !!label.bold) edit.bold = next.bold;
@@ -149,14 +159,43 @@ export function labelEditCmd(
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_label", id: label.id, ...edit } : null;
 }
 
+/**
+ * Symbol Properties of a power symbol (`DIALOG_SYMBOL_PROPERTIES::TransferDataFromWindow` for a symbol whose Value is the net it asserts): the new Value (an empty one is not
+ * sent: the backend refuses it) and whether the Reference and the Value are shown. One `edit_field` per field that changed, in one command when there are two or more, so the
+ * dialog's OK is one undo step; null when nothing changed.
+ */
+export function powerEditCmd(
+  power: { id: string; net: string; fields?: ReadonlyArray<{ name: string; visible: boolean }> },
+  next: { net: string; showReference: boolean; showValue: boolean }
+): Cmd | null {
+  const cmds: Cmd[] = [];
+  const field = (name: string) => `fld:${power.id}:${name}`;
+  const visible = (name: string) => power.fields?.find((f) => f.name === name)?.visible;
+  const edit = (name: string, change: { text?: string; visible?: boolean }): Cmd => ({ op: "sch_edit", verb: "edit_field", id: field(name), ...change });
+  const net = next.net.trim();
+  const valueChange: { text?: string; visible?: boolean } = {};
+  if (net !== power.net) valueChange.text = net;
+  if (visible("Value") !== undefined && visible("Value") !== next.showValue) valueChange.visible = next.showValue;
+  if (Object.keys(valueChange).length > 0) cmds.push(edit("Value", valueChange));
+  if (visible("Reference") !== undefined && visible("Reference") !== next.showReference) cmds.push(edit("Reference", { visible: next.showReference }));
+  if (cmds.length === 0) return null;
+  return cmds.length === 1 ? cmds[0]! : { op: "batch", cmds };
+}
+
 /** Text Properties of a free text: only what differs. `sizeUm` null (not a number) is left out; the backend refuses a size outside 0.01 to 1000 mm. */
-export function textEditCmd(text: Pick<SchematicText, "id" | "content" | "size_um" | "angle">, next: { content: string; sizeUm: number | null; vertical: boolean }): Cmd | null {
-  const edit: { text?: string; size_um?: number; angle?: number } = {};
+export function textEditCmd(
+  text: Pick<SchematicText, "id" | "content" | "size_um" | "angle"> & Partial<Pick<SchematicText, "h" | "v" | "vertical">>,
+  next: { content: string; sizeUm: number | null; vertical: boolean; h?: SchHAlign; v?: SchVAlign }
+): Cmd | null {
+  const edit: { text?: string; size_um?: number; angle?: number; h?: SchHAlign; v?: SchVAlign } = {};
   if (next.content !== text.content) edit.text = next.content;
   if (next.sizeUm !== null && next.sizeUm !== text.size_um) edit.size_um = next.sizeUm;
-  // KiCad offers horizontal and vertical (`m_vertical`); a text at some other angle keeps it until the user picks the other orientation.
-  const wasVertical = Math.round(text.angle) === 90;
-  if (next.vertical !== wasVertical) edit.angle = next.vertical ? 90_000 : 0;
+  // KiCad offers horizontal and vertical (`m_vertical`); a text is only ever one of the two (`KeepUpright`), so a legacy angle reads as the nearer.
+  const lie = textLie(text);
+  if (next.vertical !== lie.vertical) edit.angle = next.vertical ? 90_000 : 0;
+  // how it is justified about its anchor, in its own axes (`m_hAlign*`, `m_vAlign*`)
+  if (next.h !== undefined && next.h !== lie.h) edit.h = next.h;
+  if (next.v !== undefined && next.v !== lie.v) edit.v = next.v;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_text", id: text.id, ...edit } : null;
 }
 

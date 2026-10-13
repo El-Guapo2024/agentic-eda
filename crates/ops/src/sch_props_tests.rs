@@ -61,7 +61,7 @@ fn labels() -> SchematicSection {
 }
 
 fn label(id: &str, text: Option<&str>, shape: Option<LabelShape>, spin: Option<LabelSpin>) -> SchCmd {
-    SchCmd::EditLabel { id: id.into(), text: text.map(str::to_string), shape, spin, size_um: None, bold: None, italic: None }
+    SchCmd::EditLabel { id: id.into(), text: text.map(str::to_string), shape, spin, size_um: None, bold: None, italic: None, auto_rotate: None }
 }
 
 #[test]
@@ -107,7 +107,7 @@ fn text_sheet() -> SchematicSection {
 }
 
 fn text(id: &str, t: Option<&str>, size: Option<Um>, angle: Option<Millideg>) -> SchCmd {
-    SchCmd::EditText { id: id.into(), text: t.map(str::to_string), size_um: size, angle }
+    SchCmd::EditText { id: id.into(), text: t.map(str::to_string), size_um: size, angle, h: None, v: None }
 }
 
 #[test]

@@ -90,6 +90,13 @@ test("the board and the schematic lists carry every kind the editors select", ()
   const s = schematicLists({ symbols: [{ id: "R1" }], wires: [{ id: "w" }], labels: [{ id: "l" }] });
   assert.deepEqual([s.symbol, s.wire, s.label], [["R1"], ["w"], ["l"]]);
   assert.deepEqual(Object.values(schematicLists(undefined)).flat(), []);
+  // a sheet's pins are items of their own, and a pin of a symbol is named by its id
+  assert.deepEqual(schematicLists({ sheets: [{ id: "sh", pins: [{ id: "p1" }, { id: "p2" }] }] }).sheet_pin, ["p1", "p2"]);
+  assert.deepEqual(selectionWithKinds(["pin:R1:2", "R1", "other"], kindIndex(schematicLists({ symbols: [{ id: "R1" }] }))), [
+    { id: "R1", kind: "symbol" },
+    { id: "other", kind: "unknown" },
+    { id: "pin:R1:2", kind: "pin" },
+  ]);
 });
 
 test("the library editors' lists leave out items that have no id", () => {

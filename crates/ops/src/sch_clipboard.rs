@@ -198,6 +198,7 @@ impl<'a> Board<'a> {
         sch.wires.extend(new_wires);
         let first_label = sch.labels.len();
         sch.labels.extend(new_labels);
+        let first_text = sch.texts.len();
         sch.texts.extend(new_texts);
         sch.no_connects.extend(new_ncs);
         sch.bus_entries.extend(new_entries);
@@ -228,6 +229,13 @@ impl<'a> Board<'a> {
             }
             if let Some(look) = src.extras.label_looks.get(&l.id) {
                 sch.extras.label_looks.insert(new_id, *look);
+            }
+        }
+        // a pasted text keeps its justification
+        for (k, t) in src.texts.iter().enumerate() {
+            let Some(new_id) = sch.texts.get(first_text + k).map(|n| n.id.clone()) else { continue };
+            if let Some(j) = src.extras.text_justify.get(&t.id) {
+                sch.extras.text_justify.insert(new_id, *j);
             }
         }
         // hierarchical sheets: each a new sheet, with copies of the screens it shows (the sheet part of `SCH_EDITOR_CONTROL::Paste`)

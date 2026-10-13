@@ -26,7 +26,7 @@ import { routeMove, routeToggleVia, routeUndoSegment, dpMove, dpUndoSegment, fet
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { cursorMove, panByGrid, viewCenter, viewCenteredOn, warpViewToInclude, type CursorDir } from "../kicad-port/cursorControl";
 import { nextMarker } from "../kicad-port/markerNav";
-import { selectionAsText, datasheetTarget } from "../kicad-port/itemText";
+import { selectionAsText, datasheetTarget, schSelectionTexts } from "../kicad-port/itemText";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad-port/pcbTransform";
 import { itemKind, padParent } from "../kicad-port/pcbItems";
@@ -49,7 +49,6 @@ import { boardDeleteCmds } from "../kicad-port/deleteCmds";
 import { resolveLibSymbol } from "../components/schematic/libSymbol";
 import { symbolBounds } from "../components/schematic/painter";
 import { alignToGrid } from "../kicad-port/gridSnap";
-import { netAtPoint } from "../kicad-port/schNetAtPoint";
 import { selectConnection, selectNodeAt } from "../kicad-port/schConnection";
 import { goBack, goForward } from "../kicad-port/navHistory";
 import { nextLineMode, LINE_MODE_FREE, LINE_MODE_90, LINE_MODE_45 } from "../kicad-port/schLineMode";
@@ -71,14 +70,16 @@ import { commonChecked } from "../kicad-port/commonChecked";
 import { useCommonOptions } from "../state/commonOptions";
 import { registerEditorFrameActions } from "./editorFrameActions";
 import { getDockLayout, setDockColumnCollapsed, toggleDockPane } from "../state/dockLayoutStore";
-import { registerSchControlActions, schControlChecked } from "./schControlActions";
+import { netAtClick, registerSchControlActions, schControlChecked } from "./schControlActions";
 import { registerSchSheetFileActions } from "./schSheetFileActions";
 import { useSchControlDispatch, useSchControlState } from "../state/schControlStore";
 import { arcClickPoints } from "../components/canvas/curveTools";
-import { hitBus, hitSymbol, hitWire, schematicBounds } from "../components/schematic/schHit";
+import { hitBus, hitSymbol, schematicBounds } from "../components/schematic/schHit";
 import { hitField } from "../kicad-port/schFieldEdit";
 import { measureStrokeText } from "../components/text/strokeFont";
-import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
+import { allItems, itemBounds } from "../components/schematic/schItems";
+import { pickItem } from "../components/schematic/schPick";
+import { isPinItemId, pinItems, promoteLonePin } from "../kicad-port/schPins";
 import { deleteCmds } from "../kicad-port/schDelete";
 import { withoutLocked } from "../kicad-port/schLock";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
@@ -164,24 +165,16 @@ export function useActionRunner() {
      * so hover + key works without a prior click.
      */
     const requestSelection = (): string[] => {
-      if (state.selection.size > 0) return [...state.selection];
+      // `RequestSelection` with the tool's scan types: a pin is no item of the tools that move, turn or edit, so a selection of pins is trimmed to nothing (a selection that was not empty is
+      // not replaced by what is under the cursor); `requestPins` asks for the pins.
+      if (state.selection.size > 0) return state.tab === "schematic" ? [...state.selection].filter((id) => !isPinItemId(id)) : [...state.selection];
       if (!state.cursorUm) return [];
       if (state.tab === "schematic") {
         const sch = state.schematic;
         if (!sch) return [];
         // `itemPassesFilter`: an item the selection filter keeps out (a category that is off, a locked item without "Locked items") cannot be picked up by the cursor.
-        const selectable = schSelectable(sch, state.schSelectionFilter);
-        const pick = (id: string | null | undefined): string | null => (id && selectable(id) ? id : null);
-        // a shown field under the cursor (the Reference, the Value, ...) is what a key acts on before the symbol whose box it may sit over
-        const field = pick(hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText));
-        if (field) return [field];
-        const sym = pick(hitSymbol(sch, state.cursorUm.x, state.cursorUm.y));
-        if (sym) return [sym];
-        // Any other placed item (label, text, power symbol, sheet, shape, junction, ...) under the cursor, then a wire.
-        const other = hitItems(sch, state.cursorUm.x, state.cursorUm.y, 6 / (state.schematicView.scale || 1)).find((r) => r.kind !== "symbol" && r.kind !== "wire" && pick(r.id));
-        if (other) return [other.id];
-        const wire = pick(hitWire(sch, state.cursorUm.x, state.cursorUm.y, 400 / (state.schematicView.scale || 1)));
-        return wire ? [wire] : [];
+        const hit = pickItem(sch, state.cursorUm.x, state.cursorUm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "none");
+        return hit ? [hit] : [];
       }
       if (state.tab !== "pcb" || !state.board) return [];
       const toleranceUm = Math.max(150, 6 / state.view.scale);
@@ -189,6 +182,14 @@ export function useActionRunner() {
       const hit = cands[0];
       // `FilterCollectorForFreePads`: a pad under the cursor stands for its footprint -- the edit tools work on that.
       return hit ? [hit.kind === "pad" ? (padParent(state.board, hit.id) ?? hit.id) : hit.id] : [];
+    };
+    /** `RequestSelection( { SCH_PIN_T } )` (Swap Pins, Swap Pin Labels): the selected pins in selection order, or the pin under the cursor when nothing is selected. */
+    const requestPins = (): string[] => {
+      if (state.selection.size > 0) return [...state.selection].filter(isPinItemId);
+      const sch = state.schematic;
+      if (state.tab !== "schematic" || !sch || !state.cursorUm) return [];
+      const hit = pickItem(sch, state.cursorUm.x, state.cursorUm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "only");
+      return hit ? [hit] : [];
     };
     /** RequestSelection for dialog/tool hand-offs that read `state.selection`: adopt the hovered item as the selection first. */
     const adoptHovered = (): string[] => {
@@ -1131,7 +1132,7 @@ export function useActionRunner() {
     // shared dialog for all four -- see SymbolPropertiesDialog.tsx's own
     // header comment on why U/V/F don't get source's own separate, far
     // smaller single-field dialog.
-    const schSymbols = () => schItems().filter((id) => api.symbolById(id));
+    const schSymbols = () => promoteLonePin(state.selection.size > 0 ? [...state.selection] : requestSelection()).filter((id) => api.symbolById(id) && !schLocked().has(id));
     const openSymbolProperties = (field: "reference" | "value" | "footprint" | "datasheet" | null) =>
       schematicOnly(() => {
         const id = schSymbols()[0];
@@ -1142,7 +1143,8 @@ export function useActionRunner() {
     m.set(
       "eeschema.InteractiveEdit.properties",
       schematicOnly(() => {
-        if (state.schematic) openSchProperties(state.schematic, requestSelection(), dispatch);
+        // a single selected pin stands for its symbol (`Properties`: "If a single pin is selected, promote to its parent symbol")
+        if (state.schematic) openSchProperties(state.schematic, promoteLonePin(state.selection.size > 0 ? [...state.selection] : requestSelection()), dispatch);
       })
     );
     m.set("eeschema.InteractiveEdit.symbolProperties", openSymbolProperties(null));
@@ -1250,6 +1252,7 @@ export function useActionRunner() {
         ...(sch?.power_symbols ?? []).map((ps) => ps.at),
       ] as [number, number][],
       noConnectPoints: (sch?.no_connects ?? []).map((n) => [n.at[0], n.at[1]] as [number, number]),
+      pins: sch ? pinItems(sch).map((p) => ({ id: p.id, at: p.tip })) : [],
     });
     const cursorSnapped = (): [number, number] | null => {
       if (!state.cursorUm) return null;
@@ -1265,14 +1268,7 @@ export function useActionRunner() {
       schematicOnly(() => {
         const c = cursorSnapped();
         if (!sch || !c) return;
-        const net = netAtPoint(
-          sch.wires,
-          [...sch.labels.map((l) => ({ net: l.net, at: l.at })), ...sch.power_symbols.map((p) => ({ net: p.net, at: p.at }))],
-          c[0],
-          c[1],
-          400 / state.schematicView.scale
-        );
-        dispatch({ type: "SET_NET_HIGHLIGHT", net });
+        dispatch({ type: "SET_NET_HIGHLIGHT", net: netAtClick(sch, c[0], c[1], state.schematicView.scale, state.schGridUm) });
       })
     );
     // `~` -- SCH_EDITOR_CONTROL::ClearHighlight: highlightNet(toolMgr, CLEAR).
@@ -1575,11 +1571,14 @@ export function useActionRunner() {
     m.set(
       "common.Interactive.copyAsText",
       canvasOnly(() => {
-        const ids = [...state.selection];
-        const texts =
-          state.tab === "schematic"
-            ? ids.map((id) => sch?.labels.find((l) => l.id === id)?.net ?? sch?.texts.find((t) => t.id === id)?.content)
-            : ids.map((id) => api.textById(id)?.content ?? api.dimensionById(id)?.text);
+        // `RequestSelection()`: the selection, or the item under the cursor when nothing is selected (a pin is one of the things it can pick)
+        const hovered = (): string[] => {
+          if (!sch || !state.cursorUm) return [];
+          const hit = pickItem(sch, state.cursorUm.x, state.cursorUm.y, state.schematicView.scale, schSelectable(sch, state.schSelectionFilter), "first");
+          return hit ? [hit] : [];
+        };
+        const ids = state.selection.size > 0 || state.tab !== "schematic" ? [...state.selection] : hovered();
+        const texts = state.tab === "schematic" ? (sch ? schSelectionTexts(sch, ids) : []) : ids.map((id) => api.textById(id)?.content ?? api.dimensionById(id)?.text);
         const text = selectionAsText(texts);
         if (text === "") return;
         navigator.clipboard.writeText(text).catch(() => dispatch({ type: "TOAST", message: "Could not write to the clipboard.", kind: "error" }));
@@ -2133,7 +2132,7 @@ export function useActionRunner() {
         "eeschema.InteractiveEdit.swap",
         schematicOnly(() => {
           if (!sch) return;
-          const swappable = (id: string) => Boolean(api.symbolById(id) || sch.labels.some((l) => l.id === id) || sch.texts.some((t) => t.id === id) || sch.power_symbols.some((p) => p.id === id));
+          const swappable = (id: string) => Boolean(api.symbolById(id) || sch.labels.some((l) => l.id === id) || sch.texts.some((t) => t.id === id) || sch.power_symbols.some((p) => p.id === id) || sch.sheets.some((s) => s.pins.some((p) => p.id === id)));
           const ids = [...state.selection].filter(swappable);
           if (ids.length < 2) return;
           void api.cmdBatch(ids.slice(0, -1).map((a, i) => ({ op: "swap_sch_items" as const, a, b: ids[i + 1]! })));
@@ -2171,9 +2170,9 @@ export function useActionRunner() {
 
     // The schematic edit and drawing tools (Lock, Change To, Break, shapes, sheet pins, ...) -- actions/schEditActions.ts. Registered before the library editors'
     // below: both chain on a name they share (drawRectangle, drawCircle, drawArc) so each editor keeps its own tab's handler, in either order.
-    registerSchEditActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
+    registerSchEditActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, requestPins, adoptHovered, cursorSnapped });
     // Cut, Copy, Paste, Paste Special and Duplicate on the Schematic tab, in KiCad's clipboard format -- actions/schClipboardActions.ts.
-    registerSchClipboardActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, adoptHovered, cursorSnapped });
+    registerSchClipboardActions(m, { state, dispatch, api, symApi, symDispatch, requestSelection, requestPins, adoptHovered, cursorSnapped });
     // The pcbnew edit-tool rows (router modes, Mirror, Fillet/Chamfer/Dogbone/Extend Lines, polygon booleans, ...): actions/pcbEditSweep.ts.
     registerPcbEditSweep(m, { state, dispatch, api, requestSelection });
     registerPcbMenuActions(m, { state, dispatch, api, requestSelection });
@@ -2261,7 +2260,7 @@ export function useActionRunner() {
       return schControlChecked(name, {
         control: schControl,
         state,
-        requestSelection: () => (selection.size > 0 ? [...selection] : sch && state.cursorUm ? [hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText) ?? hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
+        requestSelection: () => (selection.size > 0 ? [...selection].filter((id) => !isPinItemId(id)) : sch && state.cursorUm ? [hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText) ?? hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
       });
     },
     [registry, schControl, state, commonOptions]

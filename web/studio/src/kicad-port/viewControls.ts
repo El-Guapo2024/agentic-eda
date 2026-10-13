@@ -165,6 +165,28 @@ export function handleWheel(view: ViewTransform, screenSize: ScreenSize, input: 
   return { view: panByWorldDelta(view, dx, dy), kind: "pan" };
 }
 
+// ---------------------------------------------------------------- drag actions
+
+/**
+ * `WX_VIEW_CONTROLS::onButton`: what pressing `button` (the DOM's 1 is the middle one, 2 the right one) starts in an idle view -- DRAG_PANNING or DRAG_ZOOMING, as
+ * `m_dragMiddle` / `m_dragRight` say, or nothing. The left button (0) is not a view control: `drag_left` decides between box selection and dragging items.
+ */
+export function dragActionOf(button: number, settings: Pick<ViewControlSettings, "dragMiddle" | "dragRight">): DragAction {
+  if (button === 1) return settings.dragMiddle;
+  if (button === 2) return settings.dragRight;
+  return "none";
+}
+
+/**
+ * `WX_VIEW_CONTROLS::onMotion` in DRAG_ZOOMING: the pointer moved `dyPx` pixels down the screen since the last motion event (`d.y = m_dragStartPoint.y - mousePos.y` is positive for
+ * a move up, so dragging up zooms in) and the view is scaled by `exp( d.y * zoomSpeed * 0.001 )` about the point the press was at (`m_zoomStartPoint`), which stays where it is
+ * on the screen. `zoomSpeed` is `input.zoom_speed`, 5 by default.
+ */
+export function dragZoomView(view: ViewTransform, anchorPx: { x: number; y: number }, dyPx: number, zoomSpeed: number): ViewTransform {
+  const scale = Math.exp(-dyPx * zoomSpeed * 0.001);
+  return zoomAbout(view, anchorPx.x, anchorPx.y, scale);
+}
+
 // ---------------------------------------------------------------- autopan
 
 export interface AutoPanState {

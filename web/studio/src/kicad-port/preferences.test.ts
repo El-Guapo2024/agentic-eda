@@ -135,3 +135,18 @@ test("the rotation step and the flip direction are KiCad's settings: 90 degrees,
   savePreferences(storage, { ...DEFAULT_PREFERENCES, rotationStepDeg: 45, flipDirection: "top_bottom" });
   assert.deepEqual([loadPreferences(storage).rotationStepDeg, loadPreferences(storage).flipDirection], [45, "top_bottom"], "they persist with the other preferences");
 });
+
+test("the middle and right drags are pan by default, read from storage, and reach the view controls; anything else falls back", () => {
+  assert.equal(DEFAULT_PREFERENCES.dragMiddle, "pan");
+  assert.equal(DEFAULT_PREFERENCES.dragRight, "pan");
+  const p = sanitizePreferences({ dragMiddle: "zoom", dragRight: "none" });
+  assert.deepEqual([p.dragMiddle, p.dragRight], ["zoom", "none"]);
+  assert.deepEqual([sanitizePreferences({ dragMiddle: "rotate" }).dragMiddle, sanitizePreferences({ dragRight: 3 }).dragRight, sanitizePreferences({}).dragRight], ["pan", "pan", "pan"]);
+  const v = toViewControlSettings(p);
+  assert.deepEqual([v.dragMiddle, v.dragRight], ["zoom", "none"]);
+  // saved with the rest of the preferences
+  const store: Record<string, string> = {};
+  const storage = { getItem: (k: string) => store[k] ?? null, setItem: (k: string, val: string) => void (store[k] = val) };
+  savePreferences(storage, p);
+  assert.deepEqual([loadPreferences(storage).dragMiddle, loadPreferences(storage).dragRight], ["zoom", "none"]);
+});

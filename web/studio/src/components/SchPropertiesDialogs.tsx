@@ -6,12 +6,15 @@
 // Each OK sends one command (kicad-port/schProperties.ts builds it from what the user changed), so it is one undo step; nothing is sent when nothing changed.
 // What the drawing model has no place for is not offered: fonts, bold/italic and text colours, a sheet's border and fill and extra fields, a label's fields.
 import { useState, type ReactNode } from "react";
-import type { LabelShape, SchematicLabel } from "../api/types";
+import type { LabelShape, Schematic, SchematicLabel, SchematicText } from "../api/types";
 import type { SchColor, SchFill, SchGraphic, SchLineStyle } from "../api/schEditTypes";
 import { colorToHex, graphicsEqual, hexToColor, isUnspecified, labelEditCmd, mmToUm, sheetEditCmd, strokeEditCmd, strokeView, textEditCmd, UNSPECIFIED_COLOR, umToMm, type LabelSpinName, type StrokeChange } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { inferSpin } from "./schematic/labelShape";
+import { labelOrientationForPoint, orientationSceneOf } from "../kicad-port/schAutoRotate";
+import { textLie } from "../kicad-port/schTextItem";
+import type { SchHAlign, SchVAlign } from "../api/schEditTypes";
 
 const LABEL_SHAPES: Array<{ value: LabelShape; label: string }> = [
   { value: "input", label: "Input" },
@@ -65,15 +68,18 @@ export function LabelPropertiesDialog({ id }: { id: string }) {
   const sch = useStudioState().schematic;
   const label = sch?.labels.find((l) => l.id === id);
   if (!sch || !label) return null;
-  return <LabelForm label={label} spin={label.spin ?? inferSpin(sch.wires, label.at)} />;
+  return <LabelForm label={label} spin={label.spin ?? inferSpin(sch.wires, label.at)} sch={sch} />;
 }
 
-function LabelForm({ label, spin }: { label: SchematicLabel; spin: LabelSpinName }) {
+function LabelForm({ label, spin, sch }: { label: SchematicLabel; spin: LabelSpinName; sch: Schematic }) {
   const close = useClose();
   const send = useSend(close);
   const [text, setText] = useState(label.net);
   const [shape, setShape] = useState<LabelShape>(label.shape ?? "input");
   const [turn, setTurn] = useState<LabelSpinName>(spin);
+  // the "Auto" check of a global or hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`; a plain label does not have it)
+  const supportsAuto = label.scope !== "local";
+  const [auto, setAuto] = useState(supportsAuto && !!label.auto_rotate);
   const [size, setSize] = useState(umToMm(label.size_um && label.size_um > 0 ? label.size_um : 1270));
   const [bold, setBold] = useState(!!label.bold);
   const [italic, setItalic] = useState(!!label.italic);
@@ -83,7 +89,9 @@ function LabelForm({ label, spin }: { label: SchematicLabel; spin: LabelSpinName
   const sizeOk = sizeUm !== null && sizeUm >= 10 && sizeUm <= 1_000_000;
   // "Label can not be empty." (`DIALOG_LABEL_PROPERTIES::TransferDataFromWindow`)
   const canOk = text.trim().length > 0 && sizeOk;
-  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeUm, bold, italic }));
+  // while "Auto" is on the label takes the spin of what it is connected to (`AutoRotateItem`): the select shows the one it will get
+  const autoSpin = auto ? labelOrientationForPoint(orientationSceneOf(sch), label.at, turn) : null;
+  const submit = () => canOk && void send(labelEditCmd(label, spin, { text, shape, spin: turn, sizeUm, bold, italic, autoRotate: supportsAuto ? auto : undefined }));
   return (
     <SchDialogShell title={title} width={380} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -102,13 +110,21 @@ function LabelForm({ label, spin }: { label: SchematicLabel; spin: LabelSpinName
           </>
         )}
         <span>Orientation</span>
-        <select value={turn} onChange={(e) => setTurn(e.target.value as LabelSpinName)}>
+        <select aria-label="Orientation" value={autoSpin ?? turn} disabled={auto} title={auto ? "Auto: the label takes the spin of what it is connected to" : undefined} onChange={(e) => setTurn(e.target.value as LabelSpinName)}>
           {SPINS.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
             </option>
           ))}
         </select>
+        {supportsAuto && (
+          <>
+            <span>Auto</span>
+            <label>
+              <input type="checkbox" aria-label="Auto" checked={auto} onChange={(e) => setAuto(e.target.checked)} /> Rotate to what it is connected to
+            </label>
+          </>
+        )}
         <span>Text size (mm)</span>
         <input value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Style</span>
@@ -132,17 +148,21 @@ export function TextPropertiesDialog({ id }: { id: string }) {
   return text ? <TextForm key={id} text={text} /> : null;
 }
 
-function TextForm({ text }: { text: { id: string; content: string; size_um: number; angle: number } }) {
+function TextForm({ text }: { text: SchematicText }) {
   const close = useClose();
   const send = useSend(close);
+  const lie = textLie(text);
   const [content, setContent] = useState(text.content);
   const [size, setSize] = useState(umToMm(text.size_um));
-  const [vertical, setVertical] = useState(Math.round(text.angle) === 90);
+  const [vertical, setVertical] = useState(lie.vertical);
+  // how the text sits on its anchor, in its own axes (`m_hAlignLeft` ... `m_vAlignBottom`)
+  const [h, setH] = useState<SchHAlign>(lie.h);
+  const [v, setV] = useState<SchVAlign>(lie.v);
   const sizeUm = mmToUm(size);
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
   const sizeOk = sizeUm !== null && sizeUm >= 10 && sizeUm <= 1_000_000;
   const canOk = content.length > 0 && sizeOk;
-  const submit = () => canOk && void send(textEditCmd(text, { content, sizeUm, vertical }));
+  const submit = () => canOk && void send(textEditCmd(text, { content, sizeUm, vertical, h, v }));
   return (
     <SchDialogShell title="Text Properties" width={420} onCancel={close} onOk={submit} okLabel="OK" canOk={canOk}>
       <Grid>
@@ -151,9 +171,21 @@ function TextForm({ text }: { text: { id: string; content: string; size_um: numb
         <span>Text size (mm)</span>
         <input value={size} onChange={(e) => setSize(e.target.value)} style={sizeOk ? undefined : { outline: "1px solid var(--error, #d33)" }} title="0.01 to 1000 mm" />
         <span>Orientation</span>
-        <select value={vertical ? "v" : "h"} onChange={(e) => setVertical(e.target.value === "v")}>
+        <select aria-label="Orientation" value={vertical ? "v" : "h"} onChange={(e) => setVertical(e.target.value === "v")}>
           <option value="h">Horizontal</option>
           <option value="v">Vertical</option>
+        </select>
+        <span>Horizontal justification</span>
+        <select aria-label="Horizontal justification" value={h} onChange={(e) => setH(e.target.value as SchHAlign)}>
+          <option value="left">Left</option>
+          <option value="center">Center</option>
+          <option value="right">Right</option>
+        </select>
+        <span>Vertical justification</span>
+        <select aria-label="Vertical justification" value={v} onChange={(e) => setV(e.target.value as SchVAlign)}>
+          <option value="top">Top</option>
+          <option value="center">Center</option>
+          <option value="bottom">Bottom</option>
         </select>
       </Grid>
     </SchDialogShell>

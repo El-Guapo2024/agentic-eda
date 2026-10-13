@@ -91,3 +91,10 @@ test("a selection offers the clipboard group in KiCad's order: Cut, Copy, Paste,
   const tail = a.slice(a.indexOf("common.Interactive.cut"));
   assert.deepEqual(tail, ["common.Interactive.cut", "common.Interactive.copy", "common.Interactive.paste", "common.Interactive.pasteSpecial", "common.Interactive.delete", "common.Interactive.duplicate", "common.Interactive.selectAll"]);
 });
+
+test("a single power symbol offers Properties, as the one symbol it is in KiCad does; two of them do not", () => {
+  assert.ok(actionsOf(schContextMenu(sel({ powerSymbols: 1 }))).includes("eeschema.InteractiveEdit.properties"));
+  assert.ok(actionsOf(schContextMenu(sel({ symbols: 1 }))).includes("eeschema.InteractiveEdit.properties"));
+  assert.ok(!actionsOf(schContextMenu(sel({ powerSymbols: 2 }))).includes("eeschema.InteractiveEdit.properties"));
+  assert.ok(!actionsOf(schContextMenu(sel({ powerSymbols: 1, symbols: 1 }))).includes("eeschema.InteractiveEdit.properties"));
+});

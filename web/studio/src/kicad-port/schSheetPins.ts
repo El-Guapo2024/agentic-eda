@@ -3,7 +3,7 @@
 // eeschema/sch_sheet_pin.cpp, sch_sheet.cpp, tools/sch_drawing_tools.cpp at 8303b2ad).
 //
 // A sheet pin stands for a hierarchical label of the same name inside the sheet's own file; the two are tied by name alone.
-import type { LabelShape } from "../api/types";
+import type { Cmd, LabelShape } from "../api/types";
 
 export type P = readonly [number, number];
 export type Side = "top" | "right" | "bottom" | "left";
@@ -198,4 +198,25 @@ export function autoplacePins(sheet: SheetRect, existing: readonly PinLike[], la
     last = { at, extent: current };
   }
   return out;
+}
+
+/** The shapes of `DIALOG_SHEET_PIN_PROPERTIES`'s radio buttons (a hierarchical label's five), in its order. */
+export const SHEET_PIN_SHAPES: ReadonlyArray<{ value: LabelShape; label: string }> = [
+  { value: "input", label: "Input" },
+  { value: "output", label: "Output" },
+  { value: "bidirectional", label: "Bidirectional" },
+  { value: "tri_state", label: "Tri-state" },
+  { value: "passive", label: "Passive" },
+];
+
+/**
+ * What OK sends in `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow`: the pin's name and shape as they were typed and picked. Only what changed goes, as one `edit_sheet_pin`
+ * (a verb that would change nothing is refused and the undo stack never records a step that did nothing); null when nothing did.
+ */
+export function sheetPinEditCmd(pin: { id: string; name: string; shape: LabelShape }, next: { name: string; shape: LabelShape }): Cmd | null {
+  const name = next.name.trim();
+  const edit: { name?: string; shape?: LabelShape } = {};
+  if (name !== pin.name) edit.name = name;
+  if (next.shape !== pin.shape) edit.shape = next.shape;
+  return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_sheet_pin", id: pin.id, ...edit } : null;
 }

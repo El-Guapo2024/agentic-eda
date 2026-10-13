@@ -561,6 +561,7 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     let mut layout = Vec::new();
     let mut autoplaced = Vec::new();
     let mut styles = Vec::new();
+    let mut swaps = Vec::new();
     for r in renames {
         let (old_key, new_key) = (field_key(&r.old, r.unit), field_key(&r.new, r.unit));
         if let Some(v) = sch.field_layout.remove(&old_key) {
@@ -570,12 +571,16 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
             autoplaced.push((new_key.clone(), v));
         }
         if let Some(v) = sch.extras.body_styles.remove(&old_key) {
-            styles.push((new_key, v));
+            styles.push((new_key.clone(), v));
+        }
+        if let Some(v) = sch.extras.pin_swaps.remove(&old_key) {
+            swaps.push((new_key, v));
         }
     }
     sch.field_layout.extend(layout);
     sch.extras.fields_autoplaced.extend(autoplaced);
     sch.extras.body_styles.extend(styles);
+    sch.extras.pin_swaps.extend(swaps);
     // the user fields and the lock belong to the part: they move with a reference renamed as a whole
     let mut fields = Vec::new();
     for (old, new) in &whole {

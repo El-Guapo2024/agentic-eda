@@ -669,9 +669,9 @@ export interface StagedFieldChanges {
   remove_fields: string[];
 }
 
-/** POST /api/sch/fields_table: omit `spec` for the dialog's initial view. */
-export function fetchFieldsTable(spec: FieldsTableSpec | null, changes: StagedFieldChanges | null): Promise<FieldsTableReply> {
-  return postJson("/api/sch/fields_table", { spec, changes });
+/** POST /api/sch/fields_table: omit `spec` for the dialog's initial view; `preset` names one of KiCad's built-in views to apply to it first (`ApplyBomPreset`). */
+export function fetchFieldsTable(spec: FieldsTableSpec | null, changes: StagedFieldChanges | null, preset?: string): Promise<FieldsTableReply> {
+  return postJson("/api/sch/fields_table", { spec, changes, ...(preset ? { preset } : {}) });
 }
 
 /** POST /api/sch/bom_export: `path` (relative to the board directory) omitted = preview text only; `preview: true` with a path also skips writing. */

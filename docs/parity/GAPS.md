@@ -105,7 +105,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview | mostly done | S |
 | 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
-| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | pins cannot be selected (Swap Pins), no net-collision overlay, no schematic groups, pan and auto-pan | open | M-L |
+| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | no schematic groups, a user-defined field has no place on the sheet, no Pin Helpers menu (done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
 | 11 | P11 Search and inspection | 21, 29 | Find by Properties, Clearance Resolution, Footprint Checker; Find ignores user fields and zone names | open | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
 | 13 | P13 Zone leftovers | 13 | non-copper zones, multi-layer zones, `connect_nearby_polys`, mask-only NPTH knockouts | open | L |
@@ -123,7 +123,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 "Port from" paths are under the KiCad source root. Each item says what is done (with the merge), what is still missing, and its package.
 
 ### 1. Schematic edit tools act on every item kind
-**Closed 2026-10-08** (`2a8bf8f`; fields and labels `2d92851`). Hit: every schematic session. What is left is package P10.
+**Closed 2026-10-08** (`2a8bf8f`; fields and labels `2d92851`); the details it left are done on `task-sch-details` (2026-10-12, not merged: P10). Hit: every schematic session.
 - Done (`crates/ops/src/{sch_move,sch_drag,sch_scene,sch_props}.rs`, `kicad-port/{schMove,schAlign,schProperties}.ts`, `components/{SchematicView,SchPropertiesDialogs}.tsx`):
   one verb family, `Cmd::SchMove`, moves, drags, turns, mirrors and aligns any set of symbols, power symbols, wires and bus wires, labels of every kind,
   free text, text boxes, shapes, rule areas, directive labels, junctions, no-connects, bus entries, graphic lines and sheets (with their pins), as one
@@ -135,9 +135,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   shapes, rule areas, text boxes, directive labels); strokes and junction looks are drawn and written to the `.kicad_sch` as KiCad writes them, and read back.
 - Measured: 49 Rust tests for the move family, 17 for Properties, 4 in `board.rs` (each verb is one undo step, the nets untouched), 19 `node --test` cases;
   clicked through on a copy of mcu30. No browser check script yet (item 33).
-- Missing: the net-collision overlay of a drag (`sch_drag_net_collision.cpp`); `AutoRotateItem` after a label lands; a text has no justification to flip
-  when it is mirrored; a sheet's border and fill; a user-defined field has no place on the sheet; sheet pins cannot be selected one by one; a power symbol has no
-  Properties dialog (its Value is edited in Field Properties); symbols this project drew (not imported) and turned or mirrored place their pins by
+- Done 2026-10-12 (`task-sch-details`; `PARITY-sch.md` sections 21 to 26): a symbol's pins are items (hover, click, box, the Pins filter, the summary; the net highlight and Select Node start from one) with Swap Pins, Swap Pin Labels and Swap Unit Labels
+  (`SchExtras::pin_swaps`, three `SchEdit` verbs, one undo step each); a sheet's pins are items one by one (moved along the border, Sheet Pin Properties, Delete, Alt+S swap; the hierarchy's nets follow); a global or hierarchical label with Auto rotates
+  itself when it is placed, edited in Label Properties, moved and dragged (`AutoRotateItem`); a free text has a justification (`SchExtras::text_justify`) that is written, read back and flipped by Rotate and Mirror as `SCH_TEXT` flips it;
+  the net-collision overlay of a Move or Drag (`SCH_DRAG_NET_COLLISION_MONITOR`: circles at the junctions the held items would make between two nets, marks where a connection is pulled apart, the warning cursor); the Symbol Fields Table's attribute
+  columns (DNP, Exclude from BOM, board, simulation), Include 'DNP' / 'Exclude from BOM' symbols and KiCad's four built-in views; a power symbol's Symbol Properties (Reference, Value as the net, Show checks); Copy as Text.
+- Measured on `task-sch-details`: 76 new Rust tests (ops 62: pins 13, sheet pins 8, labels and text 26, net collision 9, fields table 6; kicad 5, one slow with kicad-cli; model 4; cli 5) and about 50 new `node --test` cases; the kicad-cli proof
+  (`crates/kicad/tests/sch_details.rs`, `EDA_SLOW_TESTS=1`: a file with swapped pins, a sheet pin moved to the top edge and justified texts loads, its ERC reports the sheet pin at the moved place, and `kicad-cli sch upgrade` writes the justification,
+  the angle, the pin and the cached copy of the symbol back as we wrote them); `web/studio/e2e/sch-details.check.js` (nine scenarios through `window.__eda`, 72 checks, every scenario undoes itself).
+- Missing: Pin Helpers (`PIN_TRICKS_MENU`: Wire, No Connect, Net Label, Hierarchical Label and Global Label on a selected pin or sheet pin); a sheet's border and fill; a user-defined field has no place on the sheet (`FieldPlacement::name` can name one in `SchematicSection::field_layout`, but the editor
+  lists, draws and autoplaces only the standard fields and `user_fields` holds values only: package P10 step 8, not reached); a sheet pin's font, size, bold, italic and colour have no place in the IR; a power symbol's Properties has no footprint, datasheet, exclusion flags or
+  pin table; Autoplace Fields does not read the swapped pin places and the reader does not turn a `lib_name` copy back into a swap (so a copy, paste or duplicate of a symbol with swapped pins has the library's pins); the Symbol Fields Table has no variants and no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
   `eda_engine::placed` (older note, not re-checked since the overlap fix, `f24fa31`, which made generated symbols draw their pins as KiCad's do).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
@@ -330,15 +338,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `common/rc_item.cpp`, `common/dialogs/panel_setup_severities.cpp`.
 
 ### 12. Schematic symbols, fields and labels carry per-instance geometry
-**Done (2026-10-09, `2d92851`)**, limits below. Hit: every schematic cleanup. Blocks: no. Package P10 for the limits.
+**Done (2026-10-09, `2d92851`)**, limits below; a free text's justification and pin selection added 2026-10-12 (`task-sch-details`). Hit: every schematic cleanup. Blocks: no. Package P10 for the limits.
 - Done (`PARITY-sch.md` sections 1, 15): the Reference, Value, Footprint and Datasheet of every symbol, the Value of a power symbol and the name and file of a sheet each have a position, orientation,
   justification and visibility of their own (`SchematicSection::field_layout`, in the item's own frame), placed by a port of Autoplace Fields (`eeschema/autoplace_fields.cpp`, `crates/engine/src/fields.rs`)
   and written to the `.kicad_sch`. Fields are items: picked, moved (`M`, a drag), turned, mirrored, hidden with Delete and edited in Field Properties; `O` runs Autoplace Fields; a turn re-autoplaces
   (`SchExtras::fields_autoplaced`). A label's spin, size, bold and italic are stored and edited. A placed symbol in the alternate ("De Morgan") body style is drawn, written and read back (`LibSymbol::alternate`,
   `SchExtras::body_styles`, Cycle Body Style). 44 Rust tests, 17 `node --test` cases.
-- Missing: a field's font face and colour, a free text's justification, a label's own fields (netclass, intersheet references) and a user-defined field's place on the sheet have no place in the IR; the
-  fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
-  label's spin; only the normal and the De Morgan body style are modelled; pins cannot be selected (Swap Pins, pin-level highlight).
+- Done 2026-10-12 (`PARITY-sch.md` sections 21 and 23): a free text's justification (`SchExtras::text_justify`: stored when it is not left and bottom, written as `(justify ..)`, read back, flipped by Rotate and Mirror, carried by copy and paste); a label's Auto
+  (`LabelLook::auto_rotate`); a symbol's pins are items, and Swap Pins keeps each pin's place in `SchExtras::pin_swaps`.
+- Missing: a field's font face and colour, a label's own fields (netclass, intersheet references) and a user-defined field's place on the sheet have no place in the IR; the
+  fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
+  label's spin; only the normal and the De Morgan body style are modelled.
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
 ### 13. Zones: fill fidelity and settings
@@ -372,8 +382,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`6611ade`) and `toggleLastNetHighlight` is wired. Fixed 2026-10-10 on the board (`task-pcb-edit-details`, `PARITY-pcb.md` section 22): Select Connection with nothing selected takes the connected item under the cursor
   (a pad starts a connection; a chain of graphic lines is not followed), Ctrl+U returns to the imperial unit last used, Alt+` (`toggleNetHighlight`) turns the highlight off and on from the net it remembers, and Add Corner
   puts the corner at the nearest point of the edge (zone, polygon, line, arc). Carried forward from 2026-10-07 and not re-checked: Enter during a PCB route finishes it instead of clicking (`common.Control.cursorClick`),
-  Route From Other End only before the first fix and `V` does nothing outside a route (all three belong to the router, package P5); Select Connection needs a selection on the schematic; schematic net highlight and Select Node
-  miss pins; Mirror X then Y collapses to one flag.
+  Route From Other End only before the first fix and `V` does nothing outside a route (all three belong to the router, package P5); Select Connection needs a selection on the schematic; Mirror X then Y collapses to one flag.
+  Fixed 2026-10-12 on the schematic (`task-sch-details`, `PARITY-sch.md` sections 21 to 27): the net highlight and Select Node start from a pin; a label's Auto-rotate; Copy as Text; Repeat Last Item repeats a label and a text with their properties;
+  Global Edit's text size edits the text in place instead of replacing it (which dropped its id and justification); the schematic pans with the middle and right buttons as the preferences say and auto-pans while drawing and moving.
 
 ### 16. The PCB context menu
 **Mostly done (2026-10-08/09, `4c041a6`).** Hit: constantly. Blocks: no.
@@ -389,7 +400,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`Cmd::EditGroup`); groups nest (`EDA_GROUP`; `crates/model/src/groups.rs`,
   `crates/ops/src/pcb_groups.rs`); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree; the entered group is drawn with its box and name; the `.kicad_pcb` file and the clipboard hold the tree.
 - Done 2026-10-10 (`task-pcb-edit-details`): items drawn, pasted, duplicated or arrayed while a group is entered join it (`BOARD_COMMIT::Push`; `Cmd::InGroup`, `crates/ops/src/pcb_groups.rs`; `PARITY-pcb.md` section 16).
-- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the schematic or the footprint editor.
+- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the schematic (P10's last step, `sch_group_tool.cpp`: not reached on `task-sch-details`) or the footprint editor.
 - Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
 
 ### 18. Appearance and display options
@@ -410,10 +421,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls
-**Partial, unchanged.** Hit: constantly. Blocks: no. Package P10.
-- The PCB canvas pans with the middle or right button and auto-pans at the edge (opt-in, as in KiCad; `Canvas.tsx`). The footprint and symbol canvases pan with either button but never auto-pan. The schematic
-  canvas pans with the middle button only (`components/SchematicView.tsx` handles button 1) and does not auto-pan while drawing a wire. The native pinch gesture is not ported on any canvas
-  (`PARITY-pcb.md` section 1).
+**Mostly done on the schematic (2026-10-12, `task-sch-details`, not merged).** Hit: constantly. Blocks: no. Package P10.
+- Done 2026-10-12 (`PARITY-sch.md` section 27): the schematic canvas pans, zooms or does nothing with the middle and the right button as Preferences > Mouse and Touchpad say (`input.drag_middle`, `input.drag_right`; a right press that is no drag still
+  opens the context menu), and with Automatically pan while moving object on it auto-pans at the edge while a wire, bus, line, shape or sheet is drawn, items are held by M, G or a drag, a paste is carried or a box is dragged
+  (`kicad-port/viewControls.ts`, `SchematicView.tsx`).
+- Missing: the PCB canvas pans with the middle or right button and auto-pans at the edge (opt-in, as in KiCad; `Canvas.tsx`) but does not read the drag settings, and the footprint and symbol canvases pan with either button, ignore the settings and never auto-pan;
+  the left button's drag setting (`input.drag_left`) is not offered. The native pinch gesture is not ported on any canvas (`PARITY-pcb.md` section 1).
 - Port from: `common/view/wx_view_controls.cpp`.
 
 ### 21. Find on the PCB
@@ -551,7 +564,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 33. Browser-check coverage
 **New, standing.** Package P20.
-- `web/studio/e2e/*.check.js` exist for the Appearance panel, the DRC and ERC review, footprint edit and arrays, the Properties panel, snap and grid, and the 3D viewer. Not covered: schematic editing and the clipboard
+- `web/studio/e2e/*.check.js` exist for the Appearance panel, the DRC and ERC review, footprint edit and arrays, the Properties panel, snap and grid, and the 3D viewer. `sch-details.check.js` (P10, 2026-10-12) covers the schematic's pins and Swap Pins, sheet pins, auto-rotating labels and
+  justified text, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text and the pan buttons and auto-pan. Not covered: the rest of schematic editing and the clipboard
   (items 1, 6, 12), the hierarchy (4), Board Setup (3), the library choosers (5), the router (7), PCB move, rotate, flip and clipboard (8), zones (13), groups (17), Find (21), the context menu (16). The rule in
   force: a fix counts when the C++ function is named in the code, the logic has a `kicad-port/*.test.ts`, one user action is one undo step, and a browser check ran.
 
@@ -833,10 +847,11 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `common/dialogs/{panel_text_variables,panel_setup_netclasses}.cpp`, `common/project/component_class_settings.cpp`, `pcbnew/drc/rule_editor/` (82 files), `pcbnew/tools/drc_rule_editor_tool.cpp`.
 - Conflicts: P15 (the project writer in `kicad-engine`: a hunk); `ops`, `runner` hunks.
 
-### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10.
-- Pin selection (`SCH_PIN_T`: Swap Pins, Swap Pin Labels, pin-level highlight), sheet pins selectable one by one, the net-collision overlay of a drag, `AutoRotateItem` after a label lands, a power symbol's Properties dialog,
-  text justification flipping on a mirror, schematic groups, pan with the left or right button and auto-pan while drawing, the Symbol Fields Table's attribute columns and Exclude DNP filter (the flags exist:
-  `SymbolInstance::{dnp, exclude_from_bom, exclude_from_sim}`), user-defined fields' places, Copy as Text, the item 15 schematic list.
+### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged); schematic groups, a user-defined field's place and Pin Helpers are left.**
+- Done there: pin selection (`SCH_PIN_T`: Swap Pins, Swap Pin Labels, Swap Unit Labels, the pin-level highlight and Select Node), sheet pins one by one, the net-collision overlay of a drag, `AutoRotateItem` after a label lands, a power symbol's Properties dialog,
+  text justification flipping on a mirror, pan with the middle and right button and auto-pan while drawing and moving, the Symbol Fields Table's attribute columns and Exclude DNP filter, Copy as Text, part of the item 15 schematic list. `PARITY-sch.md` sections 21 to 27;
+  `web/studio/e2e/sch-details.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_details.rs`.
+- Left: schematic groups (`sch_group_tool.cpp`), a user-defined field's place on the sheet (`SchematicSection::field_layout`), Pin Helpers, a sheet pin's text look, a label's own fields.
 - Files: `web/studio/src/components/SchematicView.tsx`, `components/schematic/{schItems,schHit,schSelectionSummary}.ts`, `kicad-port/{schMove,selection,schConnection}.ts`, `components/SymbolFieldsTableDialog.tsx`,
   `crates/ops/src/{sch_move,sch_edit,sch_props,sch_fields,fields_table}.rs`, `crates/model/src/sch_extras.rs`.
 - KiCad: `eeschema/tools/{sch_edit_tool,sch_selection_tool,sch_drag_net_collision,sch_group_tool,sch_move_tool}.cpp`, `sch_label.cpp`, `sch_pin.cpp`, `dialogs/dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`, `common/view/wx_view_controls.cpp`.

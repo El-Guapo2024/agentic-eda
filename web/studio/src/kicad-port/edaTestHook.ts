@@ -123,7 +123,8 @@ export interface SelectedItem {
 
 /** The selection as `{ id, kind }` in id order; an id no list knows is kind "unknown". */
 export function selectionWithKinds(ids: Iterable<string>, index: ReadonlyMap<string, string>): SelectedItem[] {
-  return [...ids].sort().map((id) => ({ id, kind: index.get(id) ?? "unknown" }));
+  // a pin of a placed symbol (`pin:<reference>:<number>`) is an item of the sheet, named by its symbol and number
+  return [...ids].sort().map((id) => ({ id, kind: index.get(id) ?? (id.startsWith("pin:") ? "pin" : "unknown") }));
 }
 
 /** A list of items that carry an id (the library editors' items may lack one: those cannot be selected, so they are left out). */
@@ -146,7 +147,7 @@ export interface SchematicLike {
   no_connects?: IdItems;
   junctions?: IdItems;
   lines?: IdItems;
-  sheets?: readonly { id?: string; fields?: IdItems }[];
+  sheets?: readonly { id?: string; fields?: IdItems; pins?: IdItems }[];
   graphics?: IdItems;
   bus_entries?: IdItems;
 }
@@ -189,6 +190,7 @@ export function schematicLists(sch: SchematicLike | null | undefined): ItemLists
     junction: ids(sch?.junctions),
     line: ids(sch?.lines),
     sheet: ids(sch?.sheets),
+    sheet_pin: (sch?.sheets ?? []).flatMap((s) => ids(s.pins)),
     graphic: ids(sch?.graphics),
     bus_entry: ids(sch?.bus_entries),
   };

@@ -8,6 +8,8 @@ import { SchDialogShell } from "./SchDialogShell";
 import { ChangeSymbolsDialog } from "./SchChangeSymbolsDialog";
 import { FieldPropertiesDialog } from "./SchFieldDialog";
 import { GlobalEditDialog } from "./SchGlobalEditDialog";
+import { PowerSymbolPropertiesDialog } from "./PowerSymbolPropertiesDialog";
+import { SheetPinPropertiesDialog } from "./SheetPinPropertiesDialog";
 import { CleanupPinsDialog, SyncPinsDialog } from "./SchPinDialogs";
 import { LabelPropertiesDialog, SheetPropertiesDialog, ShapePropertiesDialog, StrokePropertiesDialog, TextPropertiesDialog } from "./SchPropertiesDialogs";
 import { commitGraphic } from "./schematic/schShapeTools";
@@ -38,10 +40,14 @@ export function SchToolDialogs() {
       return <LabelPropertiesDialog key={`pl:${dialog.id}`} id={dialog.id} />;
     case "props_field":
       return <FieldPropertiesDialog key={`pf:${dialog.id}`} id={dialog.id} />;
+    case "props_power":
+      return <PowerSymbolPropertiesDialog key={`pw:${dialog.id}`} id={dialog.id} />;
     case "props_text":
       return <TextPropertiesDialog key={`pt:${dialog.id}`} id={dialog.id} />;
     case "props_sheet":
       return <SheetPropertiesDialog key={`ps:${dialog.id}`} id={dialog.id} />;
+    case "props_sheet_pin":
+      return <SheetPinPropertiesDialog key={`psp:${dialog.id}`} id={dialog.id} />;
     case "props_stroke":
       return <StrokePropertiesDialog key={`pk:${dialog.ids.join(",")}`} ids={dialog.ids} />;
     case "props_graphic": {

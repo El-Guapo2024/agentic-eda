@@ -22,10 +22,18 @@
 //!    `Cmd::SetSymbolFields` and the preview/export endpoints use, so what
 //!    the table shows before "Apply" is exactly what Apply then commits.
 //!
+//!  * The attribute columns (`isAttribute`, `getAttributeValue`,
+//!    `setAttributeValue`): `${DNP}`, `${EXCLUDE_FROM_BOM}`,
+//!    `${EXCLUDE_FROM_BOARD}` and `${EXCLUDE_FROM_SIM}` read and write
+//!    `SymbolInstance::{dnp, exclude_from_bom, exclude_from_board,
+//!    exclude_from_sim}` as "1" / "0", and the two filters of the dialog's
+//!    options menu (`SetExcludeDNP`, `SetIncludeExcludedFromBOM`,
+//!    `RebuildRows`): [`TableSpec::exclude_dnp`] and
+//!    [`TableSpec::include_excluded_from_bom`]. The built-in presets carry
+//!    the columns as `BOM_PRESET::BuiltInPresets` does.
+//!
 //! Scope limits (also listed in `web/studio/PARITY-sch.md`): our IR has no
-//! DNP / exclude-from-BOM / exclude-from-board attributes, no field
-//! visibility and no scope selector, so the attribute columns (`${DNP}`,
-//! ...) and the DNP / "include excluded" filters do not exist. The table
+//! field visibility, no design variants and no scope selector. The table
 //! covers the whole design -- every sheet ([`project_view`]).
 
 use std::collections::BTreeMap;
@@ -44,6 +52,44 @@ pub const QUANTITY: &str = "${QUANTITY}";
 pub const ITEM_NUMBER: &str = "${ITEM_NUMBER}";
 /// `INDETERMINATE_STATE` (`include/widgets/ui_common.h`).
 pub const INDETERMINATE: &str = "-- mixed values --";
+/// The attribute columns, as `FIELDS_EDITOR_GRID_DATA_MODEL::isAttribute` names them: a symbol's flags as checkbox cells.
+pub const DNP: &str = "${DNP}";
+pub const EXCLUDE_FROM_BOARD: &str = "${EXCLUDE_FROM_BOARD}";
+pub const EXCLUDE_FROM_BOM: &str = "${EXCLUDE_FROM_BOM}";
+pub const EXCLUDE_FROM_SIM: &str = "${EXCLUDE_FROM_SIM}";
+
+/// `FIELDS_EDITOR_GRID_DATA_MODEL::isAttribute`.
+pub fn is_attribute(name: &str) -> bool {
+    matches!(name, DNP | EXCLUDE_FROM_BOARD | EXCLUDE_FROM_BOM | EXCLUDE_FROM_SIM)
+}
+
+/// `getAttributeValue`: "1" when the symbol has the attribute, "0" when it has not.
+fn attribute_value(sym: &SymbolInstance, name: &str) -> &'static str {
+    let on = match name {
+        DNP => sym.dnp,
+        EXCLUDE_FROM_BOARD => sym.exclude_from_board,
+        EXCLUDE_FROM_BOM => sym.exclude_from_bom,
+        EXCLUDE_FROM_SIM => sym.exclude_from_sim,
+        _ => false,
+    };
+    if on {
+        "1"
+    } else {
+        "0"
+    }
+}
+
+/// `setAttributeValue`: "1" turns the attribute on, any other value off (`newValue = aValue == wxS( "1" )`).
+fn set_attribute(sym: &mut SymbolInstance, name: &str, value: &str) {
+    let on = value == "1";
+    match name {
+        DNP => sym.dnp = on,
+        EXCLUDE_FROM_BOARD => sym.exclude_from_board = on,
+        EXCLUDE_FROM_BOM => sym.exclude_from_bom = on,
+        EXCLUDE_FROM_SIM => sym.exclude_from_sim = on,
+        _ => {}
+    }
+}
 
 /// `IsGeneratedField`: a field whose name is a `${VAR}` expression.
 pub fn is_generated_field(name: &str) -> bool {
@@ -204,33 +250,113 @@ pub struct TableSpec {
     pub sort_asc: bool,
     #[serde(default)]
     pub filter: String,
+    /// `BOM_PRESET::excludeDNP`: symbols marked Do not populate are left out of the table, and of an export ("Include 'DNP' Symbols" off).
+    #[serde(default)]
+    pub exclude_dnp: bool,
+    /// `BOM_PRESET::includeExcludedFromBOM`: symbols marked Exclude from BOM are listed ("Include 'Exclude from BOM' Symbols" on). They are never in an export.
+    #[serde(default)]
+    pub include_excluded_from_bom: bool,
 }
 
 impl TableSpec {
-    /// `BOM_PRESET::GroupedByValueFootprint` (labels as KiCad shows them),
-    /// minus the `${DNP}` column our IR has no attribute for.
+    /// `BOM_PRESET::GroupedByValueFootprint` (labels as KiCad shows them): the dialog's "Grouped By Value and Footprint" view, `${DNP}` last and grouped on, so a part
+    /// marked Do not populate is its own row; the "Exclude from BOM" symbols are not listed.
     pub fn grouped_by_value_footprint() -> TableSpec {
         let col = |name: &str, label: &str, group_by: bool| Column { name: name.into(), label: label.into(), show: true, group_by };
         TableSpec {
-            columns: vec![col(REFERENCE, "Reference", false), col(VALUE, "Value", true), col(DATASHEET, "Datasheet", false), col(FOOTPRINT, "Footprint", true), col(QUANTITY, "Qty", false)],
+            columns: vec![col(REFERENCE, "Reference", false), col(VALUE, "Value", true), col(DATASHEET, "Datasheet", false), col(FOOTPRINT, "Footprint", true), col(QUANTITY, "Qty", false), col(DNP, "DNP", true)],
             group_symbols: true,
             sort_field: REFERENCE.into(),
             sort_asc: true,
             filter: String::new(),
+            exclude_dnp: false,
+            include_excluded_from_bom: false,
         }
     }
-    /// `BOM_PRESET::DefaultEditing`: the dialog's own initial view -- every
-    /// symbol its own row (grouping is on, but nothing is a "Group By"
-    /// column except Value/Footprint, as shipped).
-    pub fn default_editing() -> TableSpec {
+
+    /// `BOM_PRESET::GroupedByValue`.
+    pub fn grouped_by_value() -> TableSpec {
         let col = |name: &str, label: &str, group_by: bool| Column { name: name.into(), label: label.into(), show: true, group_by };
         TableSpec {
-            columns: vec![col(REFERENCE, "Reference", false), col(QUANTITY, "Qty", false), col(VALUE, "Value", true), col(FOOTPRINT, "Footprint", true), col(DATASHEET, "Datasheet", false)],
+            columns: vec![col(REFERENCE, "Reference", false), col(VALUE, "Value", true), col(DATASHEET, "Datasheet", false), col(FOOTPRINT, "Footprint", false), col(QUANTITY, "Qty", false), col(DNP, "DNP", true)],
             group_symbols: true,
             sort_field: REFERENCE.into(),
             sort_asc: true,
             filter: String::new(),
+            exclude_dnp: false,
+            include_excluded_from_bom: false,
         }
+    }
+
+    /// `BOM_PRESET::DefaultEditing`: the dialog's own initial view -- every attribute that decides whether a part is on the BOM and the board is a column and a "Group By",
+    /// and the symbols excluded from the BOM are listed (they can be edited here). `${EXCLUDE_FROM_SIM}` is a column that is not shown until it is asked for (the
+    /// "Attributes" preset shows it).
+    pub fn default_editing() -> TableSpec {
+        let col = |name: &str, label: &str, group_by: bool| Column { name: name.into(), label: label.into(), show: true, group_by };
+        let mut sim = col(EXCLUDE_FROM_SIM, "Exclude from Simulation", false);
+        sim.show = false;
+        TableSpec {
+            columns: vec![
+                col(REFERENCE, "Reference", false),
+                col(QUANTITY, "Qty", false),
+                col(VALUE, "Value", true),
+                col(DNP, "DNP", true),
+                col(EXCLUDE_FROM_BOM, "Exclude from BOM", true),
+                col(EXCLUDE_FROM_BOARD, "Exclude from Board", true),
+                col(FOOTPRINT, "Footprint", true),
+                col(DATASHEET, "Datasheet", false),
+                sim,
+            ],
+            group_symbols: true,
+            sort_field: REFERENCE.into(),
+            sort_asc: true,
+            filter: String::new(),
+            exclude_dnp: false,
+            include_excluded_from_bom: true,
+        }
+    }
+
+    /// `BOM_PRESET::Attributes`: the reference, the value and the four attributes, each a column of its own and none a "Group By" but the value (a column the preset does not
+    /// show stays in the list, hidden).
+    pub fn attributes() -> TableSpec {
+        let col = |name: &str, label: &str, show: bool, group_by: bool| Column { name: name.into(), label: label.into(), show, group_by };
+        TableSpec {
+            columns: vec![
+                col(REFERENCE, "Reference", true, false),
+                col(VALUE, "Value", true, true),
+                col(DATASHEET, "Datasheet", false, false),
+                col(FOOTPRINT, "Footprint", false, true),
+                col(DNP, "Do Not Place", true, false),
+                col(EXCLUDE_FROM_BOM, "Exclude from BOM", true, false),
+                col(EXCLUDE_FROM_BOARD, "Exclude from Board", true, false),
+                col(EXCLUDE_FROM_SIM, "Exclude from Simulation", true, false),
+            ],
+            group_symbols: true,
+            sort_field: REFERENCE.into(),
+            sort_asc: true,
+            filter: String::new(),
+            exclude_dnp: false,
+            include_excluded_from_bom: true,
+        }
+    }
+
+    /// `BOM_PRESET::BuiltInPresets`, by KiCad's names.
+    pub fn built_in() -> Vec<(&'static str, TableSpec)> {
+        vec![("Default Editing", TableSpec::default_editing()), ("Grouped By Value", TableSpec::grouped_by_value()), ("Grouped By Value and Footprint", TableSpec::grouped_by_value_footprint()), ("Attributes", TableSpec::attributes())]
+    }
+
+    /// The columns of the built-in preset `name` applied to this view the way `FIELDS_EDITOR_GRID_DATA_MODEL::ApplyBomPreset` does: the preset's columns come first, in its
+    /// order (a column this view has that the preset has not, a user field, stays after them hidden: "BOM Presets can add, but not remove, columns"), and its grouping,
+    /// sort, filter and the two filters replace this view's.
+    pub fn with_preset(&self, name: &str) -> Option<TableSpec> {
+        let (_, preset) = TableSpec::built_in().into_iter().find(|(n, _)| n.eq_ignore_ascii_case(name))?;
+        let mut out = preset;
+        for c in &self.columns {
+            if !out.columns.iter().any(|o| o.name == c.name) {
+                out.columns.push(Column { show: false, group_by: false, ..c.clone() });
+            }
+        }
+        Some(out)
     }
 }
 
@@ -269,6 +395,8 @@ pub struct Table {
 struct SymRef {
     id: String,
     r: Ref,
+    /// Where the symbol is in the section's list: the filters read the attributes the sheet has (`ref.GetSymbol()->ResolveDNP`), not the staged ones.
+    index: usize,
 }
 
 type Store = BTreeMap<String, BTreeMap<String, String>>;
@@ -288,6 +416,7 @@ fn field_value(sch: &SchematicSection, model: &ConstraintModel, sym: &SymbolInst
         }
         FOOTPRINT => sym.footprint.clone(),
         DATASHEET => sym.datasheet.clone(),
+        attr if is_attribute(attr) => attribute_value(sym, attr).to_string(),
         other => sch.user_fields.get(&sym.id).and_then(|m| m.get(other)).cloned().unwrap_or_default(),
     }
 }
@@ -463,7 +592,7 @@ fn row_value(m: &Model<'_>, refs: &[SymRef], col: usize, ref_delim: &str, range_
 }
 
 fn sym_refs(sch: &SchematicSection) -> Vec<SymRef> {
-    sch.symbols.iter().map(|s| SymRef { id: s.id.clone(), r: Ref::parse(&s.id) }).collect()
+    sch.symbols.iter().enumerate().map(|(index, s)| SymRef { id: s.id.clone(), r: Ref::parse(&s.id), index }).collect()
 }
 
 fn build_store(sch: &SchematicSection, model: &ConstraintModel, spec: &TableSpec) -> Store {
@@ -481,11 +610,24 @@ fn build_store(sch: &SchematicSection, model: &ConstraintModel, spec: &TableSpec
 
 /// `RebuildRows` + `Sort`, then every row's resolved cell text.
 pub fn build_table(sch: &SchematicSection, model: &ConstraintModel, spec: &TableSpec) -> Table {
+    build_table_over(sch, sch, model, spec)
+}
+
+/// [`build_table`] for a table whose cells show `sch` (the schematic with the dialog's staged edits laid over it) while the two attribute filters read `base`, the
+/// schematic as it stands: KiCad's filters ask the symbol itself (`ResolveDNP`, `ResolveExcludedFromBOM`), and an edit sits in the data store until Apply, so a row
+/// someone has just ticked "Exclude from BOM" on does not vanish from under the cursor.
+pub fn build_table_over(sch: &SchematicSection, base: &SchematicSection, model: &ConstraintModel, spec: &TableSpec) -> Table {
     let m = Model { spec, store: build_store(sch, model, spec) };
     let mut rows: Vec<RawRow> = Vec::new();
     'sym: for sr in sym_refs(sch) {
         if !filter_matches(&spec.filter, &sr.r.full()) {
             continue;
+        }
+        // "if( m_excludeDNP ) ... if( isDNP ) continue;" and "if( !m_includeExcluded ) ... if( isExcluded ) continue;"
+        if let Some(sym) = base.symbols.get(sr.index) {
+            if (spec.exclude_dnp && sym.dnp) || (!spec.include_excluded_from_bom && sym.exclude_from_bom) {
+                continue;
+            }
         }
         let multi_unit = sch.symbols.iter().filter(|s| s.id == sr.id).count() > 1;
         if !spec.group_symbols && !multi_unit {
@@ -653,6 +795,15 @@ impl BomFmt {
 /// `ref_delimiter`/`ref_range_delimiter` and mixed values are listed
 /// comma-separated (`GetExportValue`, `listMixedValues = true`).
 pub fn export_bom(sch: &SchematicSection, model: &ConstraintModel, spec: &TableSpec, fmt: &BomFmt) -> String {
+    export_bom_over(sch, sch, model, spec, fmt)
+}
+
+/// [`export_bom`] with the attribute filters read off `base` (see [`build_table_over`]). A symbol marked Exclude from BOM is never exported, whatever the table shows
+/// (`PreviewRefresh`: `SetIncludeExcludedFromBOM( false )` before `Export`); one marked Do not populate is left out when the table leaves it out.
+pub fn export_bom_over(sch: &SchematicSection, base: &SchematicSection, model: &ConstraintModel, spec: &TableSpec, fmt: &BomFmt) -> String {
+    let mut spec = spec.clone();
+    spec.include_excluded_from_bom = false;
+    let spec = &spec;
     let Some(last_col) = spec.columns.iter().rposition(|c| c.show) else { return String::new() };
     let format_field = |mut field: String, last: bool| -> String {
         if !fmt.keep_line_breaks {
@@ -676,7 +827,7 @@ pub fn export_bom(sch: &SchematicSection, model: &ConstraintModel, spec: &TableS
 
     // Rebuild the rows without the dialog's expand state (children are
     // never exported), but with export-style reference/mixed formatting.
-    let table = build_table(sch, model, spec);
+    let table = build_table_over(sch, base, model, spec);
     let mut spec_rows = Vec::new();
     for row in &table.rows {
         spec_rows.push(row.refs.clone());
@@ -745,7 +896,8 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
         if e.field == REFERENCE {
             return Err("the Reference field is not editable from the fields table (use Annotate / the symbol's Rename)".into());
         }
-        if is_generated_field(&e.field) {
+        // the attribute columns are generated names too, but a checkbox in them is a cell to edit (`SetValue`: "!IsGeneratedField( ... ) && !ColIsAttribute( aCol )")
+        if is_generated_field(&e.field) && !is_attribute(&e.field) {
             return Err(format!("{} is a generated field and is read-only", e.field));
         }
         if e.field.trim().is_empty() {
@@ -819,6 +971,12 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
                         FOOTPRINT => s.footprint = e.value.clone(),
                         _ => s.datasheet = e.value.clone(),
                     }
+                }
+            }
+            // `setAttributeValue` on every unit of the symbol ("Attributes bypass the field logic")
+            attr if is_attribute(attr) => {
+                for s in sch.symbols.iter_mut().filter(|s| s.id == e.id) {
+                    set_attribute(s, attr, &e.value);
                 }
             }
             other => {
@@ -986,10 +1144,11 @@ mod tests {
     fn export_csv_matches_kicad_format() {
         let model = ConstraintModel::default();
         let out = export_bom(&demo(), &model, &TableSpec::grouped_by_value_footprint(), &BomFmt::csv());
-        let expected = "\"Reference\",\"Value\",\"Datasheet\",\"Footprint\",\"Qty\"\n\
-                        \"C1\",\"100n\",\"\",\"C_0603\",\"1\"\n\
-                        \"R1,R2,R3,R5\",\"10k\",\"\",\"R_0603\",\"4\"\n\
-                        \"R4\",\"1k\",\"\",\"R_0603\",\"1\"\n";
+        // KiCad's "Grouped By Value and Footprint" ends with the ${DNP} column, "1" for a part marked Do not populate
+        let expected = "\"Reference\",\"Value\",\"Datasheet\",\"Footprint\",\"Qty\",\"DNP\"\n\
+                        \"C1\",\"100n\",\"\",\"C_0603\",\"1\",\"0\"\n\
+                        \"R1,R2,R3,R5\",\"10k\",\"\",\"R_0603\",\"4\",\"0\"\n\
+                        \"R4\",\"1k\",\"\",\"R_0603\",\"1\",\"0\"\n";
         assert_eq!(out, expected);
     }
 
@@ -1000,8 +1159,8 @@ mod tests {
         fmt.ref_range_delimiter = "-".into();
         let out = export_bom(&demo(), &model, &TableSpec::grouped_by_value_footprint(), &fmt);
         let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines[0], "Reference\tValue\tDatasheet\tFootprint\tQty");
-        assert_eq!(lines[2], "R1-R3,R5\t10k\t\tR_0603\t4");
+        assert_eq!(lines[0], "Reference\tValue\tDatasheet\tFootprint\tQty\tDNP");
+        assert_eq!(lines[2], "R1-R3,R5\t10k\t\tR_0603\t4\t0");
     }
 
     #[test]
@@ -1071,5 +1230,150 @@ mod tests {
         assert_eq!(s.symbols[0].value, before.symbols[0].value, "nothing applied");
         assert!(apply_field_changes(&mut s, &FieldChanges { edits: vec![FieldEdit { id: "R1".into(), field: "Reference".into(), value: "X".into() }], ..Default::default() }).is_err());
         assert!(apply_field_changes(&mut s, &FieldChanges { remove_fields: vec!["Value".into()], ..Default::default() }).is_err());
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------------- attributes
+
+    /// The demo parts with R2 marked Do not populate, R3 excluded from the BOM and C1 excluded from the board.
+    fn flagged() -> SchematicSection {
+        let mut s = demo();
+        s.symbols[1].dnp = true; // R2
+        s.symbols[2].exclude_from_bom = true; // R3
+        s.symbols[5].exclude_from_board = true; // C1
+        s
+    }
+
+    fn col(spec: &TableSpec, name: &str) -> usize {
+        spec.columns.iter().position(|c| c.name == name).unwrap_or_else(|| panic!("no column {name}"))
+    }
+
+    #[test]
+    fn the_attribute_columns_show_a_symbols_flags_as_1_and_0() {
+        let model = ConstraintModel::default();
+        let mut spec = TableSpec::default_editing();
+        spec.group_symbols = false;
+        let t = build_table(&flagged(), &model, &spec);
+        let row = |r: &str| t.rows.iter().find(|row| row.cells[0] == r).unwrap_or_else(|| panic!("no row {r}"));
+        let cell = |r: &str, name: &str| row(r).cells[col(&spec, name)].clone();
+        assert_eq!((cell("R1", DNP), cell("R2", DNP)), ("0".to_string(), "1".to_string()));
+        assert_eq!((cell("R3", EXCLUDE_FROM_BOM), cell("R1", EXCLUDE_FROM_BOM)), ("1".to_string(), "0".to_string()));
+        assert_eq!((cell("C1", EXCLUDE_FROM_BOARD), cell("R1", EXCLUDE_FROM_BOARD)), ("1".to_string(), "0".to_string()));
+        assert_eq!(cell("R1", EXCLUDE_FROM_SIM), "0");
+        // the default view lists the symbols excluded from the BOM (it is where they are edited)
+        assert!(t.rows.iter().any(|r| r.cells[0] == "R3"));
+    }
+
+    #[test]
+    fn a_group_by_attribute_column_splits_a_group_and_a_plain_one_shows_mixed_values() {
+        let model = ConstraintModel::default();
+        // "Grouped By Value and Footprint" groups on ${DNP} too: R2 is a row of its own (R3 is excluded from the BOM, which that view does not list)
+        let t = build_table(&flagged(), &model, &TableSpec::grouped_by_value_footprint());
+        let refs: Vec<&str> = t.rows.iter().map(|r| r.cells[0].as_str()).collect();
+        assert_eq!(refs, vec!["C1", "R1, R5", "R2", "R4"]);
+        // with ${DNP} not a Group By column the 10k parts are one row, and the column says they differ
+        let mut spec = TableSpec::grouped_by_value_footprint();
+        spec.include_excluded_from_bom = true;
+        let dnp = col(&spec, DNP);
+        spec.columns[dnp].group_by = false;
+        let t = build_table(&flagged(), &model, &spec);
+        let row = t.rows.iter().find(|r| r.cells[0].starts_with("R1")).unwrap();
+        assert_eq!(row.cells[dnp], INDETERMINATE);
+        assert!(row.mixed[dnp]);
+        // a row whose parts agree shows the one value
+        let r4 = t.rows.iter().find(|r| r.cells[0] == "R4").unwrap();
+        assert_eq!((r4.cells[dnp].as_str(), r4.mixed[dnp]), ("0", false));
+    }
+
+    #[test]
+    fn exclude_dnp_leaves_the_do_not_populate_symbols_out_and_reads_the_sheet_not_the_staged_edit() {
+        let model = ConstraintModel::default();
+        let mut spec = TableSpec::default_editing();
+        spec.group_symbols = false;
+        let listed = |t: &Table| t.rows.iter().map(|r| r.cells[0].clone()).collect::<Vec<_>>();
+        assert!(listed(&build_table(&flagged(), &model, &spec)).contains(&"R2".to_string()), "DNP symbols are listed by default");
+        spec.exclude_dnp = true;
+        let t = build_table(&flagged(), &model, &spec);
+        assert!(!listed(&t).contains(&"R2".to_string()), "{:?}", listed(&t));
+        assert_eq!(t.rows.len(), 5);
+        // an edit that has not been applied does not take a row away: the table shows the staged cell, the filter reads the sheet
+        let mut staged = flagged();
+        apply_field_changes(&mut staged, &FieldChanges { edits: vec![FieldEdit { id: "R1".into(), field: DNP.into(), value: "1".into() }], ..Default::default() }).unwrap();
+        let t = build_table_over(&staged, &flagged(), &model, &spec);
+        let r1 = t.rows.iter().find(|r| r.cells[0] == "R1").expect("R1 is still listed: it is not marked on the sheet yet");
+        assert_eq!(r1.cells[col(&spec, DNP)], "1", "and its cell shows what was ticked");
+    }
+
+    #[test]
+    fn symbols_excluded_from_the_bom_are_listed_only_when_asked_and_never_exported() {
+        let model = ConstraintModel::default();
+        let mut spec = TableSpec::grouped_by_value_footprint();
+        spec.group_symbols = false;
+        let refs = |t: &Table| t.rows.iter().map(|r| r.cells[0].clone()).collect::<Vec<_>>();
+        // KiCad's own default for a view: the excluded ones are hidden
+        assert!(!spec.include_excluded_from_bom);
+        assert!(!refs(&build_table(&flagged(), &model, &spec)).contains(&"R3".to_string()));
+        spec.include_excluded_from_bom = true;
+        assert!(refs(&build_table(&flagged(), &model, &spec)).contains(&"R3".to_string()));
+        // an export leaves them out whatever the table shows ("PreviewRefresh": SetIncludeExcludedFromBOM( false ))
+        let out = export_bom(&flagged(), &model, &spec, &BomFmt::csv());
+        assert!(!out.contains("R3"), "{out}");
+        assert!(out.contains("R2"), "a DNP symbol is exported unless the table leaves it out: {out}");
+        spec.exclude_dnp = true;
+        let out = export_bom(&flagged(), &model, &spec, &BomFmt::csv());
+        assert!(!out.contains("R2") && !out.contains("R3"), "{out}");
+    }
+
+    #[test]
+    fn apply_changes_sets_an_attribute_on_every_unit_and_any_other_value_clears_it() {
+        let mut s = demo();
+        s.symbols.push(sym("U1", "OPA", "SOIC", 1));
+        s.symbols.push(sym("U1", "OPA", "SOIC", 2));
+        let edit = |id: &str, field: &str, value: &str| FieldChanges { edits: vec![FieldEdit { id: id.into(), field: field.into(), value: value.into() }], ..Default::default() };
+        apply_field_changes(&mut s, &edit("U1", DNP, "1")).unwrap();
+        apply_field_changes(&mut s, &edit("U1", EXCLUDE_FROM_SIM, "1")).unwrap();
+        apply_field_changes(&mut s, &edit("R1", EXCLUDE_FROM_BOARD, "1")).unwrap();
+        apply_field_changes(&mut s, &edit("R1", EXCLUDE_FROM_BOM, "1")).unwrap();
+        let units: Vec<(bool, bool)> = s.symbols.iter().filter(|x| x.id == "U1").map(|x| (x.dnp, x.exclude_from_sim)).collect();
+        assert_eq!(units, vec![(true, true), (true, true)], "both units of U1");
+        let r1 = s.symbols.iter().find(|x| x.id == "R1").unwrap();
+        assert_eq!((r1.exclude_from_board, r1.exclude_from_bom, r1.dnp), (true, true, false));
+        // "newValue = aValue == 1": anything else turns it off
+        apply_field_changes(&mut s, &edit("U1", DNP, "0")).unwrap();
+        apply_field_changes(&mut s, &edit("R1", EXCLUDE_FROM_BOM, "no")).unwrap();
+        assert!(s.symbols.iter().filter(|x| x.id == "U1").all(|x| !x.dnp));
+        assert!(!s.symbols.iter().find(|x| x.id == "R1").unwrap().exclude_from_bom);
+        // the other generated fields stay read-only, and an attribute of an unknown symbol is refused as any edit is
+        assert!(apply_field_changes(&mut s, &edit("R1", QUANTITY, "9")).is_err());
+        assert!(apply_field_changes(&mut s, &edit("R404", DNP, "1")).is_err());
+    }
+
+    #[test]
+    fn the_built_in_presets_have_kicads_columns_and_a_preset_keeps_the_view_s_other_columns_hidden() {
+        let names: Vec<&str> = TableSpec::built_in().into_iter().map(|(n, _)| n).collect();
+        assert_eq!(names, vec!["Default Editing", "Grouped By Value", "Grouped By Value and Footprint", "Attributes"]);
+        fn shown(t: &TableSpec) -> Vec<&str> {
+            t.columns.iter().filter(|c| c.show).map(|c| c.name.as_str()).collect()
+        }
+        assert_eq!(shown(&TableSpec::default_editing()), vec![REFERENCE, QUANTITY, VALUE, DNP, EXCLUDE_FROM_BOM, EXCLUDE_FROM_BOARD, FOOTPRINT, DATASHEET]);
+        assert_eq!(shown(&TableSpec::attributes()), vec![REFERENCE, VALUE, DNP, EXCLUDE_FROM_BOM, EXCLUDE_FROM_BOARD, EXCLUDE_FROM_SIM]);
+        // the filters of each: Default Editing and Attributes list the excluded symbols, the two grouped views do not
+        assert_eq!(TableSpec::built_in().into_iter().map(|(_, t)| (t.exclude_dnp, t.include_excluded_from_bom)).collect::<Vec<_>>(), vec![(false, true), (false, false), (false, false), (false, true)]);
+        // a view with a user field and an unrelated filter, with the Attributes preset applied: the preset's columns lead, the user field stays but is hidden, the filter is the preset's
+        let mut view = TableSpec::default_editing();
+        view.columns.push(Column { name: "MPN".into(), label: "MPN".into(), show: true, group_by: true });
+        view.filter = "R*".into();
+        view.exclude_dnp = true;
+        let applied = view.with_preset("attributes").expect("a built-in preset");
+        assert_eq!(shown(&applied), shown(&TableSpec::attributes()));
+        let mpn = applied.columns.iter().find(|c| c.name == "MPN").unwrap();
+        assert!(!mpn.show && !mpn.group_by);
+        assert_eq!((applied.filter.as_str(), applied.exclude_dnp, applied.include_excluded_from_bom), ("", false, true));
+        assert!(view.with_preset("no such preset").is_none());
+        // the names a view is sent with are read back
+        let json = serde_json::to_string(&TableSpec::default_editing()).unwrap();
+        assert_eq!(serde_json::from_str::<TableSpec>(&json).unwrap(), TableSpec::default_editing());
+        // a view from before the filters existed has neither
+        let old: TableSpec = serde_json::from_str(r#"{"columns": [{"name": "Reference"}], "group_symbols": true}"#).unwrap();
+        assert!(!old.exclude_dnp && !old.include_excluded_from_bom);
     }
 }

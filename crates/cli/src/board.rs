@@ -335,7 +335,7 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
             if !sch.imported_from_kicad {
                 if let Some(part) = model.part(&sym.id) {
                     let resolved = model.real_symbol_of_instance(sch, sym, part);
-                    for (number, at) in eda_engine::placed::pin_points(sym, part, resolved.as_ref()) {
+                    for (number, at) in eda_engine::placed::pin_points_in(sch, sym, part, resolved.as_ref()) {
                         pin_world.insert(format!("{}.{number}", sym.id), at);
                     }
                 }
@@ -347,9 +347,17 @@ fn trace_design(design: &mut eda_model::ir::Design, model: &ConstraintModel, nam
             // (plus any `unit == 0` pin, common to every unit) -- a pin of a *different* unit of the same reference is
             // positioned when *that* unit's own `SymbolInstance` is visited, not here.
             let lib = if lib.has_alternate_body() { lib.in_style(sch.body_style_of(sym)).into_owned() } else { lib };
+            let mut placed: Vec<(String, Point)> = Vec::new();
             for p in lib.pins.iter().filter(|p| p.unit == 0 || p.unit == sym.unit) {
                 let world = eda_kicad::transform_local_point(p.at, angle_deg, sym.mirrored, sym.mirror_y);
-                pin_world.insert(format!("{}.{}", sym.id, p.number), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) });
+                placed.push((p.number.clone(), Point { x: sym.at.x + eda_kicad::mm_to_um(world.x), y: sym.at.y + eda_kicad::mm_to_um(world.y) }));
+            }
+            // the places Swap Pins traded
+            if let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&sym.id, sym.unit)) {
+                placed = eda_model::sch_extras::permute_pins(placed, swaps);
+            }
+            for (number, at) in placed {
+                pin_world.insert(format!("{}.{number}", sym.id), at);
             }
         }
         pin_world
@@ -3865,6 +3873,68 @@ mod tests {
         assert!(sch.user_fields.is_empty(), "and the added column");
     }
 
+    /// The Symbol Fields Table's attribute columns: the table shows them, a staged edit regroups the table without taking its row away, Apply sets the flags on the
+    /// symbol as one undo step, and "Include 'DNP' Symbols" off leaves a Do not populate symbol out of the table, an export and kicad-cli's job.
+    #[test]
+    fn the_fields_table_shows_and_edits_the_attribute_columns_and_filters_dnp() {
+        let dir = scratch("sch_fields_table_attrs");
+        setup_schematic(&dir);
+        let table = |req: serde_json::Value| crate::sch_api::fields_table(&dir, req.to_string().as_bytes());
+        let refs = |v: &serde_json::Value| v["rows"].as_array().unwrap().iter().map(|r| r["cells"][0].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let col = |v: &serde_json::Value, name: &str| v["spec"]["columns"].as_array().unwrap().iter().position(|c| c["name"] == name).unwrap_or_else(|| panic!("no column {name}"));
+
+        // the dialog's own view has the attribute columns, grouped on, and every symbol listed
+        let v = table(serde_json::json!({}));
+        assert_eq!(v["ok"], serde_json::json!(true), "{v}");
+        let (dnp, bom) = (col(&v, "${DNP}"), col(&v, "${EXCLUDE_FROM_BOM}"));
+        assert_eq!(v["spec"]["columns"][dnp]["group_by"], serde_json::json!(true));
+        assert_eq!(v["presets"], serde_json::json!(["Default Editing", "Grouped By Value", "Grouped By Value and Footprint", "Attributes"]));
+        assert_eq!(v["spec"]["columns"][bom]["group_by"], serde_json::json!(true));
+        // both symbols have the same value, footprint and attributes: one row
+        assert_eq!(refs(&v), vec!["R1, R2"]);
+
+        // Apply: R2 is marked Do not populate, one undo step
+        use eda_ops::fields_table::FieldEdit;
+        let edit = |id: &str, field: &str, value: &str| Cmd::SetSymbolFields { edits: vec![FieldEdit { id: id.into(), field: field.into(), value: value.into() }], add_fields: vec![], rename_fields: vec![], remove_fields: vec![] };
+        step(&dir, edit("R2", "${DNP}", "1"), false, "test").unwrap();
+        let flags = |dir: &Path| -> Vec<(String, bool, bool)> { load(dir).unwrap().1.schematic.as_ref().unwrap().symbols.iter().map(|s| (s.id.clone(), s.dnp, s.exclude_from_bom)).collect() };
+        assert_eq!(flags(&dir), vec![("R1".to_string(), false, false), ("R2".to_string(), true, false)]);
+        // the two now differ in a Group By column, so they are rows of their own
+        let v = table(serde_json::json!({}));
+        assert_eq!(refs(&v), vec!["R1", "R2"]);
+        assert_eq!(v["rows"][1]["cells"][dnp], serde_json::json!("1"));
+
+        // "Include 'DNP' Symbols" off: R2 is gone from the table and from the export text
+        let mut spec = v["spec"].clone();
+        spec["exclude_dnp"] = serde_json::json!(true);
+        let v = table(serde_json::json!({ "spec": spec }));
+        assert_eq!(refs(&v), vec!["R1"]);
+        let exported = crate::sch_api::bom_export(&dir, serde_json::json!({ "spec": spec }).to_string().as_bytes());
+        assert!(exported["text"].as_str().unwrap().contains("R1") && !exported["text"].as_str().unwrap().contains("R2"), "{exported}");
+        // an edit that is staged and not applied changes the cell but not the rows (the filter reads the sheet): R1 ticked DNP is still listed, as a row of its own
+        let staged = serde_json::json!({ "edits": [{ "id": "R1", "field": "${DNP}", "value": "1" }], "add_fields": [], "rename_fields": [], "remove_fields": [] });
+        let v = table(serde_json::json!({ "spec": spec, "changes": staged }));
+        assert_eq!(refs(&v), vec!["R1"]);
+        assert_eq!(v["rows"][0]["cells"][dnp], serde_json::json!("1"));
+        // kicad-cli is told too
+        let (preset, _) = crate::sch_export_api::bom_presets(&serde_json::json!({ "spec": spec })).unwrap();
+        assert_eq!(preset["exclude_dnp"], serde_json::json!(true));
+
+        // a built-in preset: the Attributes view shows the four attribute columns
+        let v = table(serde_json::json!({ "preset": "Attributes" }));
+        assert_eq!(v["spec"]["columns"][col(&v, "${EXCLUDE_FROM_SIM}")]["show"], serde_json::json!(true));
+        assert_eq!(v["spec"]["include_excluded_from_bom"], serde_json::json!(true));
+        let bad = table(serde_json::json!({ "preset": "Nope" }));
+        assert_eq!(bad["ok"], serde_json::json!(false));
+
+        // one undo puts the flag back
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(flags(&dir), vec![("R1".to_string(), false, false), ("R2".to_string(), false, false)]);
+        // a generated field that is no attribute stays read-only
+        assert!(step(&dir, edit("R1", "${QUANTITY}", "5"), false, "test").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Find and Replace's Replace / Replace All: one undo step each; Replace
     /// can be restricted to one match key; references are only touched with
     /// `replace_references`; nothing matched is refused.
@@ -3975,11 +4045,13 @@ mod tests {
 
         // BOM export: preview, then write; escaping the board dir is refused.
         let p = call(crate::sch_api::bom_export, json!({ "path": "export/bom.csv", "preview": true }));
-        assert!(p["text"].as_str().unwrap().starts_with("\"Reference\",\"Qty\",\"Value\",\"Footprint\",\"Datasheet\"\n"), "{p}");
+        // the dialog's own view is KiCad's "Default Editing" (`BOM_PRESET::DefaultEditing`): the attribute columns that decide whether a part is on the BOM and the board sit
+        // after the value, as 1 or 0 (`getAttributeValue`)
+        assert!(p["text"].as_str().unwrap().starts_with("\"Reference\",\"Qty\",\"Value\",\"DNP\",\"Exclude from BOM\",\"Exclude from Board\",\"Footprint\",\"Datasheet\"\n"), "{p}");
         assert!(!dir.join("export/bom.csv").exists(), "preview writes nothing");
         let w = call(crate::sch_api::bom_export, json!({ "path": "export/bom.csv" }));
         assert_eq!(w["ok"], true, "{w}");
-        assert!(std::fs::read_to_string(dir.join("export/bom.csv")).unwrap().contains("\"R1\",\"1\",\"10k\",\"R_0603\""));
+        assert!(std::fs::read_to_string(dir.join("export/bom.csv")).unwrap().contains("\"R1\",\"1\",\"10k\",\"0\",\"0\",\"0\",\"R_0603\""));
         assert_eq!(call(crate::sch_api::bom_export, json!({ "path": "../evil.csv" }))["ok"], false);
 
         // Find: Value fields are visible, Footprint is hidden until asked for.
@@ -4889,9 +4961,9 @@ mod tests {
         let start = sheet_of(&load(&dir).unwrap().1);
         let red = SchColor { r: 255, g: 0, b: 0, a: 255 };
         let commands = vec![
-            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None },
-            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None },
-            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000) },
+            V::EditLabel { id: "lbl_a".into(), text: Some("VCC".into()), shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: None, bold: None, italic: None, auto_rotate: None },
+            V::EditLabel { id: "lbl_g".into(), text: None, shape: Some(eda_model::ir::LabelShape::Bidirectional), spin: None, size_um: None, bold: None, italic: None, auto_rotate: None },
+            V::EditText { id: "txt_a".into(), text: Some("changed".into()), size_um: Some(2_540), angle: Some(90_000), h: None, v: None },
             V::EditSheet { id: "sheet_a".into(), name: Some("Power".into()), file: Some("power".into()) },
             V::SetStroke { ids: vec!["wire_a".into(), "bent_a".into(), "sln_a".into(), "jct_a".into()], width_um: Some(300), style: Some(SchLineStyle::Dash), color: Some(red), diameter_um: Some(900) },
         ];
@@ -4927,7 +4999,7 @@ mod tests {
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Value"), text: Some("4k7".into()), at: None, vertical: None, h: None, v: None, size_um: Some(2_000), bold: Some(true), italic: None, visible: None, name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::EditField { id: field_id("R1", "Footprint"), text: None, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible: Some(true), name_shown: None, allow_autoplace: None }),
             Cmd::SchEdit(E::AutoplaceFields { ids: vec!["R1".into()] }),
-            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true) }),
+            Cmd::SchEdit(E::EditLabel { id: label, text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Up), size_um: Some(2_000), bold: Some(true), italic: Some(true), auto_rotate: None }),
         ];
         for cmd in commands {
             let wrapped = Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd.clone()) };
@@ -5517,6 +5589,272 @@ mod tests {
         assert!(area(&dir) > relieved + 1_000_000.0, "the footprint's solid connection reaches its pad");
         step(&dir, set(Some(eda_model::ir::PadConnection::Thermal)), false, "ui").unwrap();
         assert!((area(&dir) - relieved).abs() < 1.0, "the pad's own thermal relief beats its footprint's solid one");
+    }
+
+    /// A board whose sheet is drawn in KiCad's frame (a symbol at its library origin): R1, two pins, each on a wire to a label (`A` above it, `B` below),
+    /// and U2, a two-unit part with two pins in each unit, every pin on a wire to a label of its own (`L1`..`L4`). The intent has each pin on a net of its own.
+    fn setup_pin_swap_board(dir: &Path) {
+        let pin = |n: &str| Pin { number: n.into(), name: None, kind: PinKind::Passive };
+        let part = |r: &str, pins: &[&str], symbol: &str| Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: None, footprint: None, symbol: Some(symbol.into()), pins: pins.iter().map(|n| pin(n)).collect(), body_um: None, datasheet: None, edge: None };
+        let lib_pin = |n: &str, y: f64, unit: u32| eda_model::LibPin { number: n.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint::new(0.0, y), angle_deg: 0.0, length_mm: 2.54, unit };
+        let lib = |id: &str, units: u32, pins: Vec<eda_model::LibPin>| eda_model::LibSymbol {
+            lib_id: id.into(),
+            graphics: vec![],
+            pins,
+            power: false,
+            in_bom: true,
+            on_board: true,
+            datasheet: String::new(),
+            description: String::new(),
+            reference_prefix: "U".into(),
+            unit_count: units,
+            pin_names_hidden: false,
+            pin_numbers_hidden: false,
+            pin_name_offset_mm: 0.508,
+            alternate: None,
+        };
+        let model = ConstraintModel {
+            parts: vec![part("R1", &["1", "2"], "TEST:R2"), part("U2", &["1", "2", "3", "4"], "TEST:DUAL")],
+            nets: ["R1.1", "R1.2", "U2.1", "U2.2", "U2.3", "U2.4"].iter().enumerate().map(|(i, p)| Net { name: format!("N{}", i + 1), pins: vec![p.to_string()] }).collect(),
+            symbols: vec![lib("TEST:R2", 1, vec![lib_pin("1", 2.54, 1), lib_pin("2", -2.54, 1)]), lib("TEST:DUAL", 2, vec![lib_pin("1", 2.54, 1), lib_pin("2", -2.54, 1), lib_pin("3", 2.54, 2), lib_pin("4", -2.54, 2)])],
+            ..Default::default()
+        };
+        let intent_path = dir.join("intent.yaml");
+        std::fs::write(&intent_path, serde_yaml::to_string(&model).unwrap()).unwrap();
+
+        let pt = |x: Um, y: Um| Point { x, y };
+        let sym = |id: &str, lib_id: &str, unit: u32, at: Point| eda_model::ir::SymbolInstance { id: id.into(), at, rot: 0, mirrored: false, mirror_y: false, lib_id: lib_id.into(), unit, value: String::new(), footprint: String::new(), datasheet: String::new(), dnp: false, exclude_from_bom: false, exclude_from_board: false, exclude_from_sim: false };
+        let mut sch = eda_model::ir::SchematicSection { symbols: vec![sym("R1", "TEST:R2", 1, pt(20_000, 20_000)), sym("U2", "TEST:DUAL", 1, pt(60_000, 20_000)), sym("U2", "TEST:DUAL", 2, pt(100_000, 20_000))], imported_from_kicad: true, ..Default::default() };
+        // a pin is 2.54 mm above or below its symbol's origin: a wire 10 mm further out to a label
+        let mut wire_to_label = |tip: Point, up: bool, label: &str| {
+            let end = pt(tip.x, tip.y + if up { -10_000 } else { 10_000 });
+            sch.wires.push(eda_model::ir::Wire { id: format!("wire_{label}"), net: label.into(), pins: vec![], pts: vec![tip, end], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: format!("lbl_{label}"), net: label.into(), at: end, kind: eda_model::ir::LabelKind::Local });
+        };
+        wire_to_label(pt(20_000, 17_460), true, "A");
+        wire_to_label(pt(20_000, 22_540), false, "B");
+        wire_to_label(pt(60_000, 17_460), true, "L1");
+        wire_to_label(pt(60_000, 22_540), false, "L2");
+        wire_to_label(pt(100_000, 17_460), true, "L3");
+        wire_to_label(pt(100_000, 22_540), false, "L4");
+        sch.assign_missing_ids();
+        let design = Design {
+            footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
+            schema: 1,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "x".into(), seed: 0, stage_hashes: vec![] },
+            schematic: Some(sch),
+            nets: None,
+            placement: Some(PlacementSection { outline: vec![], footprints: vec![], modules: vec![] }),
+            routing: None,
+            drawings: None,
+        };
+        save(dir, &design).unwrap();
+        let meta = Meta { intent: intent_path.display().to_string(), snap_um: 100, spacing_um: 300 };
+        std::fs::write(meta_path(dir), serde_json::to_string_pretty(&meta).unwrap()).unwrap();
+    }
+
+    /// The pins of a hierarchical sheet, taken one by one -- moved along the border, edited, swapped with another pin of the sheet and deleted -- each make exactly one undo
+    /// step, and one Undo puts the sheet and the net list back exactly.
+    #[test]
+    fn every_sheet_pin_verb_is_one_undo_step() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_sheet_pin_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let pt = |x: Um, y: Um| Point { x, y };
+            let pin = |id: &str, name: &str, at: Point| eda_model::ir::SheetPin { id: id.into(), name: name.into(), shape: eda_model::ir::LabelShape::Input, at };
+            // a sheet 20 x 10 mm at (90, 10) mm with a pin on its left border (to a wire and a label) and one on its right border
+            sch.sheets.push(eda_model::ir::SheetInstance { id: "sheet_a".into(), name: "Sub".into(), file: "sub.kicad_sch".into(), at: pt(90_000, 10_000), size: (20_000, 10_000), pins: vec![pin("shpin_in", "IN", pt(90_000, 15_000)), pin("shpin_out", "OUT", pt(110_000, 14_000))], page: String::new() });
+            sch.wires.push(eda_model::ir::Wire { id: "wire_in".into(), net: "N1".into(), pins: vec![], pts: vec![pt(80_000, 15_000), pt(90_000, 15_000)], bus: false });
+            sch.labels.push(eda_model::ir::NetLabel { id: "lbl_in".into(), net: "N1".into(), at: pt(80_000, 15_000), kind: eda_model::ir::LabelKind::Local });
+            sch.assign_missing_ids();
+        }
+        design.sheet_contents = Some([("sub.kicad_sch".to_string(), eda_model::ir::SchematicSection::default())].into_iter().collect());
+        save(&dir, &design).unwrap();
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.sheet_contents, &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let commands = vec![
+            // along the border, and across to the other one
+            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000, dy: 2_000, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
+            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None }),
+            Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
+            Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Swap Pins, Swap Pin Labels and Swap Unit Labels each make exactly one undo step, and the net list follows what they did to the drawing: the pins end up
+    /// on each other's nets.
+    #[test]
+    fn swap_pins_and_labels_are_one_undo_step_and_the_nets_follow() {
+        use eda_ops::sch_edit::SchCmd as V;
+        let dir = scratch("sch_swap_pins");
+        setup_pin_swap_board(&dir);
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        // net of a pin, by what shares its net
+        let mate = |model: &ConstraintModel, pin: &str| -> String { model.nets.iter().find(|n| n.pins.iter().any(|p| p == pin)).map(|n| n.name.clone()).unwrap_or_default() };
+        let (_, start_design, start_model) = load(&dir).unwrap();
+        // the intent's nets: each pin on its own
+        assert_eq!((mate(&start_model, "R1.1"), mate(&start_model, "R1.2")), ("N1".to_string(), "N2".to_string()), "{:?}", start_model.nets);
+        let start = sheet_of(&start_design);
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let on_sheet = |cmd: V| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(Cmd::SchEdit(cmd)) };
+
+        // Swap Pins: R1's pins trade places, so pin 1 is on the wire to B
+        step(&dir, on_sheet(V::SwapPins { pins: ids(&["pin:R1:1", "pin:R1:2"]) }), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, d, model) = load(&dir).unwrap();
+        assert_ne!(sheet_of(&d), start);
+        assert_eq!(d.schematic.as_ref().unwrap().extras.pin_swaps["R1"].len(), 2);
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("B".to_string(), "A".to_string()), "R1.1 is on the net of the wire to B now: {:?}", model.nets);
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, d, model) = load(&dir).unwrap();
+        assert_eq!(sheet_of(&d), start, "one Undo puts the sheet and its net list back");
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("N1".to_string(), "N2".to_string()));
+
+        // Swap Pin Labels: A and B trade texts, so the pins are on each other's nets again, with the pins where they were
+        step(&dir, on_sheet(V::SwapPinLabels { pins: ids(&["pin:R1:1", "pin:R1:2"]) }), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, d, model) = load(&dir).unwrap();
+        let sch = d.schematic.as_ref().unwrap();
+        assert_eq!(sch.labels.iter().find(|l| l.id == "lbl_A").unwrap().net, "B");
+        assert!(sch.extras.pin_swaps.is_empty(), "the pins did not move");
+        assert_eq!((mate(&model, "R1.1"), mate(&model, "R1.2")), ("B".to_string(), "A".to_string()), "{:?}", model.nets);
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+
+        // Swap Unit Labels: the two units of U2 pass their labels along
+        step(&dir, on_sheet(V::SwapUnitLabels { ids: ids(&["U2"]) }), false, "test").unwrap_or_else(|e| panic!("{}", reasons(&e)));
+        let (_, d, model) = load(&dir).unwrap();
+        let sch = d.schematic.as_ref().unwrap();
+        let text = |id: &str| sch.labels.iter().find(|l| l.id == id).unwrap().net.clone();
+        assert_eq!((text("lbl_L1"), text("lbl_L2"), text("lbl_L3"), text("lbl_L4")), ("L3".into(), "L4".into(), "L1".into(), "L2".into()));
+        assert_eq!((mate(&model, "U2.1"), mate(&model, "U2.3")), ("L3".to_string(), "L1".to_string()), "{:?}", model.nets);
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+
+        // a refused one is no step at all
+        let e = step(&dir, on_sheet(V::SwapPins { pins: ids(&["pin:R1:1"]) }), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("at least two pins"), "{}", reasons(&e));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Placing a label (with "Auto"), placing a text, Label Properties, Text Properties, and turning and mirroring a text each make exactly one undo step, and one Undo puts the
+    /// sheet back exactly.
+    #[test]
+    fn placing_and_editing_labels_and_texts_are_one_undo_step_each() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_label_text_undo");
+        setup_pin_swap_board(&dir);
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let pt = |x: Um, y: Um| Point { x, y };
+        // one step that changes the sheet in the way `after` says, and one Undo that puts it back
+        let check = |cmd: Cmd, after: &dyn Fn(&Design)| {
+            let start = sheet_of(&load(&dir).unwrap().1);
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            let d = load(&dir).unwrap().1;
+            assert_ne!(sheet_of(&d), start, "{cmd:?} changed nothing");
+            after(&d);
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        };
+        let global = eda_model::ir::LabelKind::Global { shape: eda_model::ir::LabelShape::Output };
+        // wire A runs from R1's top pin up to (20, 7.46) mm, where the local label A is
+        let place = V::PlaceLabel { net: "CLK".into(), at: pt(20_000, 7_460), kind: global.clone(), spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(true) };
+        check(Cmd::SchEdit(place.clone()), &|d| {
+            let sch = d.schematic.as_ref().unwrap();
+            let l = sch.labels.iter().find(|l| l.net == "CLK").expect("the label is on the sheet");
+            // "Auto" is on: the wire that ends there decides, not the spin the dialog was left on
+            assert_eq!(sch.extras.label_spins.get(&l.id), Some(&eda_model::sch_extras::LabelSpin::Up));
+            assert!(sch.extras.label_looks[&l.id].auto_rotate);
+        });
+        check(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_um: 1_270, h: None, v: None }), &|d| {
+            let sch = d.schematic.as_ref().unwrap();
+            let t = sch.texts.iter().find(|t| t.content == "note").expect("the text is on the sheet");
+            assert_eq!(sch.extras.text_justify_of(&t.id), eda_model::sch_extras::SchTextJustify::FILE_DEFAULT);
+        });
+        // a refused one is no step at all
+        let before = sheet_of(&load(&dir).unwrap().1);
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PlaceLabel { net: "X".into(), at: pt(0, 0), kind: eda_model::ir::LabelKind::Local, spin: None, size_um: None, bold: None, italic: None, auto_rotate: Some(true) })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("rotate itself"), "{}", reasons(&e));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), before);
+
+        // keep a label and a text on the sheet to edit
+        step(&dir, on_sheet(Cmd::SchEdit(place)), false, "test").unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PlaceText { content: "note".into(), at: pt(50_000, 50_000), angle: 0, size_um: 1_270, h: Some(eda_model::ir::TextJustify::Left), v: Some(eda_model::ir::TextVAlign::Bottom) })), false, "test").unwrap();
+        let (label, text) = {
+            let d = load(&dir).unwrap().1;
+            let sch = d.schematic.unwrap();
+            (sch.labels.iter().find(|l| l.net == "CLK").unwrap().id.clone(), sch.texts[0].id.clone())
+        };
+        // Label Properties with "Auto" off: the spin chosen is kept
+        let l2 = label.clone();
+        check(Cmd::SchEdit(V::EditLabel { id: label.clone(), text: None, shape: None, spin: Some(eda_model::sch_extras::LabelSpin::Left), size_um: None, bold: None, italic: None, auto_rotate: Some(false) }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            assert_eq!(sch.extras.label_spins.get(&l2), Some(&eda_model::sch_extras::LabelSpin::Left));
+            assert!(!sch.extras.label_looks.contains_key(&l2));
+        });
+        let t2 = text.clone();
+        check(Cmd::SchEdit(V::EditText { id: text.clone(), text: None, size_um: None, angle: None, h: Some(eda_model::ir::TextJustify::Right), v: Some(eda_model::ir::TextVAlign::Top) }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            assert_eq!(sch.extras.text_justify_of(&t2), eda_model::sch_extras::SchTextJustify { h: eda_model::ir::TextJustify::Right, v: eda_model::ir::TextVAlign::Top });
+        });
+        // Rotate (counter-clockwise: runs up the sheet, the justification kept) and Mirror (the text ends at its anchor)
+        let t3 = text.clone();
+        check(Cmd::SchMove(M::Rotate { ids: vec![text.clone()], vertices: Default::default(), ccw: true, about: None, grid: 0 }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            let t = sch.texts.iter().find(|t| t.id == t3).unwrap();
+            assert_eq!((t.angle, sch.extras.text_justify_of(&t3)), (90_000, eda_model::sch_extras::SchTextJustify::default()));
+        });
+        let t4 = text.clone();
+        check(Cmd::SchMove(M::Mirror { ids: vec![text.clone()], vertices: Default::default(), vertical: false, about: None, grid: 0 }), &move |d| {
+            let sch = d.schematic.as_ref().unwrap();
+            assert_eq!(sch.extras.text_justify_of(&t4), eda_model::sch_extras::SchTextJustify { h: eda_model::ir::TextJustify::Right, v: eda_model::ir::TextVAlign::Bottom });
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The move preview (`POST /api/sch/move_preview`) carries the net-collision overlay of the held selection: a circle where it would join two nets, a mark where it
+    /// pulls a connection apart.
+    #[test]
+    fn the_move_preview_carries_the_net_collision_overlay() {
+        let dir = scratch("sch_move_preview_collision");
+        setup_pin_swap_board(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            // a wire that stands apart from the others, 25 mm to the right of wire A (which runs up from R1's pin 1 at x = 20 mm)
+            sch.wires.push(eda_model::ir::Wire { id: "wire_h2".into(), net: "H2".into(), pins: vec![], pts: vec![Point { x: 45_000, y: 12_000 }, Point { x: 60_000, y: 12_000 }], bus: false });
+            sch.assign_missing_ids();
+        }
+        save(&dir, &design).unwrap();
+        let preview = |cmd: serde_json::Value| crate::sch_move_api::move_preview(&dir, serde_json::json!({ "sheet": "", "cmds": [cmd] }).to_string().as_bytes());
+        // carried onto wire A's middle: its end makes a T there, and the two are different nets
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -25_000, "dy": 0 }));
+        assert_eq!(v["ok"], serde_json::json!(true), "{v}");
+        assert_eq!(v["net_collision"]["collisions"], serde_json::json!([{ "at": [20_000, 12_000], "radius_um": 914.4 * 1.5 }]), "{v}");
+        assert_eq!(v["net_collision"]["disconnections"], serde_json::json!([]));
+        // short of it nothing is marked, and the patch is there all the same
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -10_000, "dy": 0 }));
+        assert_eq!((v["net_collision"]["collisions"].clone(), v["net_collision"]["disconnections"].clone()), (serde_json::json!([]), serde_json::json!([])), "{v}");
+        assert!(v["wires"].as_array().is_some_and(|w| !w.is_empty()));
+        // R1 carried off its wires: a mark at each pin it left
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["R1"], "dx": 10_000, "dy": 0 }));
+        assert_eq!(v["net_collision"]["disconnections"].as_array().map(Vec::len), Some(2), "{v}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

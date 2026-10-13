@@ -19,11 +19,14 @@ import { incrementLabelText } from "./incrementLabelText";
 /** `eeschema_settings.cpp`: `drawing.default_repeat_offset_x` 0 mil, `default_repeat_offset_y` 100 mil -- um. */
 export const REPEAT_OFFSET_UM: readonly [number, number] = [0, 2540];
 
-type Repeatable = Extract<Cmd, { op: "add_label" | "add_sch_text" | "add_power_symbol" | "add_no_connect" | "add_bus_entry" | "add_wire" | "add_sch_line" | "add_symbol" }>;
+type Repeatable =
+  | Extract<Cmd, { op: "add_label" | "add_sch_text" | "add_power_symbol" | "add_no_connect" | "add_bus_entry" | "add_wire" | "add_sch_line" | "add_symbol" }>
+  // a label or text put down with its dialog's properties (spin, size, "Auto", justification): the same placement, repeated with them
+  | Extract<Cmd, { op: "sch_edit"; verb: "place_label" | "place_text" }>;
 
 const REPEATABLE_OPS = new Set(["add_label", "add_sch_text", "add_power_symbol", "add_no_connect", "add_bus_entry", "add_wire", "add_sch_line", "add_symbol"]);
 
-const isRepeatable = (c: Cmd): c is Repeatable => REPEATABLE_OPS.has(c.op);
+const isRepeatable = (c: Cmd): c is Repeatable => REPEATABLE_OPS.has(c.op) || (c.op === "sch_edit" && (c.verb === "place_label" || c.verb === "place_text"));
 
 /** What a just-run command contributes to "the last placed item(s)": the command itself, or every part of a batch of placements. Null when it is not a placement (the old repeat source stays). */
 export function repeatSource(cmd: Cmd): Cmd[] | null {
@@ -49,6 +52,10 @@ export function repeatCmds(source: readonly Cmd[], ctx: RepeatContext): Cmd[] {
   for (const c of source) {
     if (!isRepeatable(c)) continue;
     switch (c.op) {
+      case "sch_edit":
+        // the dialog's properties come along; a label's text steps on
+        out.push(c.verb === "place_label" ? { ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) } : { ...c, at: shift(c.at) });
+        break;
       case "add_label":
         out.push({ ...c, net: incrementLabelText(c.net, 1), at: shift(c.at) });
         break;

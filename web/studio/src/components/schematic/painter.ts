@@ -42,6 +42,7 @@ import { DEFAULT_PIN_TEXTS, PIN_TEXT_PEN_UM, PIN_TEXT_SIZE_UM, pinTextPlacements
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { defaultPenUm, FIELD_SIZE_UM, textOrigin, type SchField } from "../../kicad-port/schText";
 import { shownText } from "../../kicad-port/schFieldEdit";
+import { schTextLines, textLie } from "../../kicad-port/schTextItem";
 import { ercMarkerPosition } from "./ercMarkerPosition";
 import { junctionPoints } from "./junctions";
 import { unitLetter } from "../../kicad-port/unitLetter";
@@ -52,6 +53,7 @@ import { dashPattern, drawSelectionBox, paintGraphics, rgba } from "./schGraphic
 import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
 import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
+import { isPinItemId, pinById, type PinItem } from "../../kicad-port/schPins";
 
 /**
  * Canvas2D's own `textBaseline: "middle"` centers on the *font's* actual
@@ -712,6 +714,21 @@ function drawPowerSymbol(ctx: CanvasRenderingContext2D, view: ViewTransform, ps:
   drawPowerSymbolText(ctx, ps, resolvedPin, on);
 }
 
+/** `SCH_PAINTER::draw( SCH_PIN )` on the selection layer: the pin line in the selection colour, wider than its pen, with its name and number written in the same colour. */
+function drawSelectedPin(ctx: CanvasRenderingContext2D, view: ViewTransform, pin: PinItem) {
+  const color = layerColor("LAYER_SELECTION_SHADOWS");
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineCap = "round";
+  ctx.lineWidth = Math.max(PIN_TEXT_PEN_UM * 2.5, 3 / view.scale);
+  ctx.beginPath();
+  ctx.moveTo(pin.tip[0], pin.tip[1]);
+  ctx.lineTo(pin.root[0], pin.root[1]);
+  ctx.stroke();
+  ctx.restore();
+  drawPinText(ctx, { pin: { number: pin.number, name: pin.name } as ResolvedPin["pin"], tip: pin.tip, root: pin.root, dir: [0, 0] }, { name: color, number: color }, pin.texts);
+}
+
 // ------------------------------------------------------------- labels / no-connects
 
 function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: SchematicLabel, wires: SchematicWire[], on: boolean) {
@@ -754,9 +771,18 @@ function drawLabel(ctx: CanvasRenderingContext2D, view: ViewTransform, l: Schema
   }
 }
 
-/** `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields). `t.angle` is already world-space (like `SymbolInstance.rot`, not a library-local `LibGraphic.angle_deg`), so it feeds `ctx.rotate`/`angleRad` directly, no Y-flip negation -- see `drawRealSymbol`'s own `ctx.rotate((symbol.rot * Math.PI) / 180)` for the parallel case this mirrors. */
+/**
+ * `T`: free-standing text -- `SCH_TEXT`'s own render, drawn with the Newstroke font like every other schematic text (labels, pin names, fields): justified about its anchor in
+ * its own axes (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`, left and bottom for a text that was never justified), one line after another (`FONT::getLinePositions`),
+ * and a text that runs up the sheet (`ANGLE_VERTICAL`) turned a quarter counter-clockwise about the anchor, the way `drawKicadText` sets a field.
+ */
 function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolean) {
-  drawStrokeText(ctx, t.shown ?? t.content, t.at[0], t.at[1], { sizeUm: t.size_um, angleRad: (t.angle * Math.PI) / 180, justify: "left", color: on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES") });
+  const color = on ? layerColor("LAYER_SELECTION_SHADOWS") : layerColor("LAYER_NOTES");
+  ctx.save();
+  ctx.translate(t.at[0], t.at[1]);
+  if (textLie(t).vertical) ctx.rotate(-Math.PI / 2);
+  for (const line of schTextLines(t, measureStrokeText)) drawStrokeText(ctx, line.text, line.x, line.y, { sizeUm: t.size_um, justify: "left", color });
+  ctx.restore();
 }
 
 /**
@@ -772,7 +798,7 @@ function drawSchText(ctx: CanvasRenderingContext2D, t: SchematicText, on: boolea
  * drew here, the view simply had no sheets to show) rather than full
  * pixel-parity with source's own pin glyphs.
  */
-function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, on: boolean) {
+function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet, on: boolean, selection: ReadonlySet<string> = new Set()) {
   const hair = 1 / view.scale;
   const [x, y] = s.at;
   const [w, h] = s.size;
@@ -792,11 +818,13 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
 
   // A sheet pin sits on the border it names (`SCH_SHEET_PIN::SetSide`): its flag points into the sheet from that edge and its name is
   // written inside, after the flag -- so a wire reaches the pin from outside and the name never runs over it.
-  const pinColor = layerColor("LAYER_SHEETLABEL");
+  const sheetLabelColor = layerColor("LAYER_SHEETLABEL");
   ctx.save();
-  ctx.strokeStyle = pinColor;
   ctx.lineWidth = Math.max(159, hair);
   for (const p of s.pins) {
+    // a selected pin (`SCH_SHEET_PIN_T`) is drawn in the selection colour
+    const pinColor = p.id && selection.has(p.id) ? layerColor("LAYER_SELECTION_SHADOWS") : sheetLabelColor;
+    ctx.strokeStyle = pinColor;
     const [px, py] = p.at;
     const edge = px <= x ? "left" : px >= x + w ? "right" : py <= y ? "top" : "bottom";
     const spin: LabelSpin = edge === "left" ? "right" : edge === "right" ? "left" : edge === "top" ? "bottom" : "up";
@@ -1005,7 +1033,7 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
   // junctions pass above, so a sheet's own local wires/labels/symbols
   // (all drawn later below) read as sitting "on" the page rather than
   // under it.
-  for (const s of sch.sheets) drawSheet(ctx, view, s, opts.selection.has(s.id));
+  for (const s of sch.sheets) drawSheet(ctx, view, s, opts.selection.has(s.id), opts.selection);
 
   // No-connects.
   for (const nc of sch.no_connects) drawNoConnect(ctx, view, nc, opts.selection.has(nc.id));
@@ -1052,6 +1080,14 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
     if (s.dnp || s.exclude_from_sim) {
       const all = real ? real.bbox : libSymbolBounds(s, sch.lib_symbols);
       drawSymbolMarkers(ctx, (real && bodyBoundsOf(real.graphics)) || all, all, s, display.markSimExclusions);
+    }
+  }
+
+  // A selected pin (`SCH_PIN_T`): its line and its decoration over the symbol, in the selection colour, thicker than the pin itself. Its name and number follow it.
+  if (opts.selection.size > 0) {
+    for (const id of opts.selection) {
+      const pin = isPinItemId(id) ? pinById(sch, id) : null;
+      if (pin) drawSelectedPin(ctx, view, pin);
     }
   }
 

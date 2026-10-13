@@ -181,6 +181,8 @@ fn what_is_keyed_by_the_reference_follows_the_new_one() {
         a.user_fields.insert("R9".into(), [("MPN".to_string(), "X".to_string())].into());
         a.field_layout.insert("R9".into(), vec![eda_model::ir::FieldPlacement::at_origin("Reference")]);
         a.extras.locked.push("R9".into());
+        // the places Swap Pins gave the pins of R9 are R9's wherever it is named
+        a.extras.pin_swaps.insert("R9".into(), [("1".to_string(), "2".to_string()), ("2".to_string(), "1".to_string())].into());
     }
     d.nets = Some(vec![eda_model::Net { name: "N".into(), pins: vec!["R9.1".into(), "R5.2".into()] }]);
     let mut b = Board::new(d, &m, 100, 300);
@@ -195,6 +197,7 @@ fn what_is_keyed_by_the_reference_follows_the_new_one() {
     assert!(a.user_fields.contains_key("R2") && !a.user_fields.contains_key("R9"));
     assert!(a.field_layout.contains_key("R2") && !a.field_layout.contains_key("R9"));
     assert_eq!(a.extras.locked, vec!["R2".to_string()]);
+    assert!(a.extras.pin_swaps.contains_key("R2") && !a.extras.pin_swaps.contains_key("R9"), "{:?}", a.extras.pin_swaps);
     assert_eq!(d.nets.as_ref().unwrap()[0].pins, vec!["R2.1".to_string(), "R3.2".to_string()], "the net list keeps its nets through the renumbering");
 }
 

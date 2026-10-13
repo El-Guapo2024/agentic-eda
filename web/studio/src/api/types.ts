@@ -1995,6 +1995,8 @@ export interface SchematicPin {
   number: string;
   name: string | null;
   kind: PinKind;
+  /** The net the pin is on (the netlist: wires, labels, power symbols), absent for a pin on none. */
+  net?: string | null;
 }
 
 /** eeschema's ELECTRICAL_PINTYPE, serialized name per .kicad_sym. */
@@ -2115,6 +2117,8 @@ export interface SchematicSymbol {
   footprint: string | null;
   datasheet: string | null;
   pins: SchematicPin[];
+  /** The places Swap Pins traded (`SwapPinGeometry`): pin number -> the number of the library pin whose place (position, direction, length) it has. Absent or null: every pin is where the library puts it. */
+  pin_swaps?: Record<string, string> | null;
   /** `SCH_SYMBOL::GetDNP` (Do not Populate): the symbol is drawn with a cross over it and left out of the assembly. */
   dnp?: boolean;
   /** Exclude from Bill of Materials / from Board / from Simulation (`SetAttribute`). Absent from a backend built before they existed. */
@@ -2220,9 +2224,15 @@ export interface SchematicLabel {
   size_um?: Um;
   bold?: boolean;
   italic?: boolean;
+  /** The "Auto" check of a global or hierarchical label (`SCH_LABEL_BASE::AutoRotateOnPlacement`): the label takes the spin of what it is connected to when it is placed or moved. */
+  auto_rotate?: boolean;
 }
 
-/** `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, deliberately minimal next to a PCB `BoardText` (no layer/justify/mirror -- a schematic has none of those concepts). */
+/**
+ * `T`: free-standing text -- `crates/model/src/ir.rs`'s `SchematicText`, next to a PCB `BoardText` without a layer, a stroke width or a mirror flag.
+ * `h` and `v` are how it is justified about its anchor in its own axes (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`), `vertical` whether it runs up the sheet
+ * (`ANGLE_VERTICAL`); an older backend sends none of them, which reads as left, bottom and along the sheet.
+ */
 export interface SchematicText {
   /** Stable id (`txt_xxxxxxxxxxxx`) -- for `delete_sch_text`. */
   id: string;
@@ -2232,6 +2242,9 @@ export interface SchematicText {
   at: [Um, Um];
   angle: Degrees;
   size_um: Um;
+  vertical?: boolean;
+  h?: "left" | "center" | "right";
+  v?: "top" | "center" | "bottom";
 }
 
 /** A title block as `GET /api/state` / `GET /api/schematic` report it (`TITLE_BLOCK`): `comments[0]` is KiCad's comment 1, up to nine, trailing empty ones dropped. */
@@ -2719,6 +2732,10 @@ export interface FieldsTableSpec {
   sort_field: string;
   sort_asc: boolean;
   filter: string;
+  /** `BOM_PRESET::excludeDNP`: symbols marked Do not populate are left out of the table and of an export ("Include 'DNP' Symbols" off). Absent from a backend built before it existed. */
+  exclude_dnp?: boolean;
+  /** `BOM_PRESET::includeExcludedFromBOM`: symbols marked Exclude from BOM are listed ("Include 'Exclude from BOM' Symbols" on); they are never in an export. */
+  include_excluded_from_bom?: boolean;
 }
 
 export interface FieldsTableRow {
@@ -2738,6 +2755,8 @@ export interface FieldsTableReply {
   ok: boolean;
   message?: string;
   spec: FieldsTableSpec;
+  /** The names of KiCad's built-in views (`BOM_PRESET::BuiltInPresets`), which a request can apply with `preset`. */
+  presets?: string[];
   user_fields: string[];
   rows: FieldsTableRow[];
 }
