@@ -12,6 +12,7 @@ import { FootprintLibraryPanel } from "./FootprintLibraryPanel";
 import { PadTableDialog } from "./PadTableDialog";
 import { PushPadPropertiesDialog } from "./PushPadPropertiesDialog";
 import { LoadFromBoardDialog } from "./LoadFromBoardDialog";
+import { FootprintCheckerDialog } from "./FootprintCheckerDialog";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn } from "../panels/Dock";
 import { Toolbar } from "../Toolbar";
@@ -110,6 +111,7 @@ export function FootprintEditorView() {
       <PadTableDialog />
       <PushPadPropertiesDialog />
       <LoadFromBoardDialog />
+      <FootprintCheckerDialog />
       <LibraryDialogHost />
       {state.toast && (
         <div

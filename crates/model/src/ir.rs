@@ -2299,6 +2299,11 @@ pub struct DrawingsSection {
     /// Task item 7. See [`Dimension`]'s own doc.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dimensions: Vec<Dimension>,
+    /// The length-tuning patterns (`PCB_TUNING_PATTERN`, a `PCB_GENERATOR`): each lists the tracks of its meander and keeps what it takes to build
+    /// them again -- see [`crate::tuning::TuningPattern`]. Written to the `.kicad_pcb` as `(generated ..)`. Additive: absent in an older
+    /// `design.json` reads as "no patterns". Lives here for the reason [`Group`] does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tuning_patterns: Vec<crate::tuning::TuningPattern>,
     /// `BOARD_DESIGN_SETTINGS`'s dimension-related fields -- the defaults
     /// a freshly drawn [`Dimension`] is styled from (`StyleFromSettings`),
     /// then carries its own copies of afterward (this struct is never
@@ -2755,7 +2760,15 @@ impl DrawingsSection {
     /// whose `id` is still empty. See [`RoutingSection::assign_missing_ids`]
     /// -- same contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
-        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+
+        for i in 0..self.tuning_patterns.len() {
+            if self.tuning_patterns[i].id.is_empty() {
+                let id = next_item_id("tun", &self.tuning_patterns[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.tuning_patterns[i].id = id;
+            }
+        }
 
         let mut order: Vec<usize> = (0..self.shapes.len()).collect();
         order.sort_by(|&a, &b| (self.shapes[a].layer(), self.shapes[a].points().first().copied()).cmp(&(self.shapes[b].layer(), self.shapes[b].points().first().copied())));
@@ -3170,9 +3183,19 @@ pub struct LibraryFootprint {
     #[serde(default)]
     pub courtyard: Option<(Um, Um)>,
     /// `(model "...")` 3D model path -- same field/meaning as
-    /// `crate::footprint::Footprint::model`.
+    /// `crate::footprint::Footprint::model`: the first model's path when
+    /// [`LibraryFootprint::models3d`] is not empty, else the one model of an
+    /// older entry, placed as it comes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Every `(model ...)` of the footprint with the placement KiCad gives it
+    /// (offset, scale, rotation, opacity, shown): the Footprint Properties
+    /// dialog's 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`,
+    /// [`crate::fp_models`]). When it is not empty it is the whole list and
+    /// `model` is only its first path; empty, the footprint has `model` alone
+    /// (or no model).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models3d: Vec<crate::footprint::Model3d>,
     /// KiCad's footprint anchor (`footprint_editor_control.cpp`'s "Place
     /// Footprint Anchor" tool): the local-frame point every pad/graphic/
     /// text coordinate above is relative to. `{0,0}` (KiCad's
@@ -3211,6 +3234,7 @@ impl Default for LibraryFootprint {
             value_visible: true,
             courtyard: None,
             model: None,
+            models3d: Vec::new(),
             anchor: Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
@@ -3245,6 +3269,7 @@ impl LibraryFootprint {
             texts,
             courtyard: fp.courtyard,
             model: fp.model.clone(),
+            models3d: fp.models3d.clone(),
             ..Default::default()
         }
     }
@@ -3262,9 +3287,9 @@ impl LibraryFootprint {
             name: self.name.clone(),
             pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(),
             courtyard: self.courtyard,
-            model: self.model.clone(),
+            model: self.models3d.first().map(|m| m.path.clone()).or_else(|| self.model.clone()),
             courtyard_outlines: vec![],
-            models3d: vec![],
+            models3d: self.models3d.clone(),
             art: crate::fp_art::FpArt::from_library(&self.graphics, &self.texts),
         }
     }

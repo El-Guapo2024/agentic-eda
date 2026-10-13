@@ -34,6 +34,7 @@ use crate::sch_api;
 use crate::sch_export_api;
 use crate::sch_move_api;
 use crate::sch_output_api;
+use crate::inspect_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
@@ -529,6 +530,7 @@ fn read_request(stream: &TcpStream) -> Result<(String, String, Vec<u8>), String>
 ///   - `GET /api/3dmodel?name=..`: one footprint 3D model, read-only, for the 3D view's VRMLLoader: resolved like KiCad does and held to an allow-list; a STEP model is
 ///     converted to VRML by kicad-cli in the background and cached. `&wait=1` holds the request until the model is in.
 ///   - `POST /api/3dmodel/prepare`: every model of the board at once, queued for one conversion run.
+///   - `POST /api/3dmodel/check`, `GET /api/3dmodel/browse`, `/migrate` and `/preview`: what the 3D Models tab of Footprint Properties asks besides the models (crates/cli/src/model3d_tab_api.rs).
 fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8], dir: &Path, lane: &Arc<Lane>, on_own_thread: bool) -> Option<Result<(), String>> {
     match (method, target.split('?').next().unwrap_or("/")) {
         ("GET", "/api/3dmodel") => Some((|| {
@@ -554,6 +556,22 @@ fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8],
                 .map_err(|e| e.to_string())
         })()),
         ("POST", "/api/3dmodel/prepare") => Some(respond(stream, "200 OK", "application/json", crate::model3d_api::prepare(dir, body, &crate::model3d_api::store(lane)).to_string().as_bytes())),
+        ("POST", "/api/3dmodel/check") => {
+            let r = crate::model3d_tab_api::check(dir, body);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
+        ("GET", "/api/3dmodel/browse") => {
+            let r = crate::model3d_tab_api::browse(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
+        ("GET", "/api/3dmodel/migrate") => {
+            let r = crate::model3d_tab_api::migrate(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
+        ("GET", "/api/3dmodel/preview") => {
+            let r = crate::model3d_tab_api::preview(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
         _ => None,
     }
 }
@@ -860,11 +878,24 @@ fn handle(
         ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
-        // 7 (gap #7 task item 4): length tuning. Stateless -- no session
-        // cell, every call re-reads design.json fresh (see tune_api's own
-        // doc comment on why this one differs from route/drag/dp above).
-        ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
+        // 7 / 8 / 9 (P5c): length tuning -- KiCad's tuning pattern tool and its generator items; the session lives in tune_api's own thread-local, not in a cell passed here.
+        ("POST", "/api/tune/hover") => respond(stream, "200 OK", "application/json", tune_api::hover(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/start") => respond(stream, "200 OK", "application/json", tune_api::start(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/move") => respond(stream, "200 OK", "application/json", tune_api::mv(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/step") => respond(stream, "200 OK", "application/json", tune_api::step(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/settings") => respond(stream, "200 OK", "application/json", tune_api::settings(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/fix") => respond(stream, "200 OK", "application/json", tune_api::fix(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/edit_start") => respond(stream, "200 OK", "application/json", tune_api::edit_start(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/edit_move") => respond(stream, "200 OK", "application/json", tune_api::edit_move(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/cancel") => respond(stream, "200 OK", "application/json", tune_api::cancel(dir).to_string().as_bytes()),
+        ("POST", "/api/tune/patterns") => respond(stream, "200 OK", "application/json", tune_api::patterns(dir).to_string().as_bytes()),
+        ("POST", "/api/tune/pattern") => respond(stream, "200 OK", "application/json", tune_api::pattern(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/update") => respond(stream, "200 OK", "application/json", tune_api::update(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/remove") => respond(stream, "200 OK", "application/json", tune_api::remove(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/regenerate") => respond(stream, "200 OK", "application/json", tune_api::regenerate(dir, &body).to_string().as_bytes()),
+        // Inspect > Clearance Resolution / Constraints Resolution: read-only reports on which rule wins (`inspect_api`), no kicad-cli.
+        ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
@@ -875,6 +906,8 @@ fn handle(
         // Board Setup > Custom Rules, "Check syntax": kicad-cli loads the text on a probe board (it has no checker of its own, and
         // drops a rules file it cannot parse without saying so); kicad-cli's, so off the loop like DRC.
         ("POST", "/api/check_rules") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::check_rules),
+        // The Footprint Editor's Footprint Checker: kicad-cli's DRC on a scratch board that holds the footprint being edited; kicad-cli's, so off the loop like DRC.
+        ("POST", "/api/footprint/check") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::footprint_check),
         // Fabrication and schematic outputs (Plot / Generate Drill Files /
         // Footprint Position Files / Plot Schematic / Export Netlist): each
         // dialog's JSON becomes kicad-cli arguments (`crate::fab_api`,
@@ -1160,8 +1193,15 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 },
                 "mirror": t.mirror,
             }))).collect::<Vec<_>>(),
-            // Task item 5 -- see `eda_model::ir::Group`'s own doc.
-            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).collect::<Vec<_>>(),
+            // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
+            // (`generator` names what it is); `tuning_patterns` has the pattern itself.
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
+            "tuning_patterns": d.tuning_patterns.iter().map(|p| {
+                let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
+                v["handles"] = tune_api::handles_json(p);
+                v["info"] = json!(p.tuning_info());
+                v
+            }).collect::<Vec<_>>(),
             // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
             "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
             "dimension_settings": dimension_settings_json(&d.dimension_settings),

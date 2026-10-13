@@ -15,11 +15,17 @@
 
 pub mod board;
 pub mod constraints;
+pub mod dru;
 pub mod fill;
+pub mod inspect;
 mod fp_art;
 pub mod kimath;
 pub mod outline;
 pub mod pad_shape;
+mod known_props;
+pub mod libeval;
 pub mod pcbexpr;
+pub mod rule_board;
+pub mod rule_item;
 pub mod rtree;
 pub mod stroke_font;

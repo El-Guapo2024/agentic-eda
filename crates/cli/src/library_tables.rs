@@ -899,6 +899,9 @@ pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Val
 pub(crate) struct ModelNames {
     vars: Vars,
     pub(crate) folders: Vec<PathBuf>,
+    /// The variables behind [`ModelNames::folders`], by name, with whether the board's own Configure Paths defines them (and not KiCad's): the roots the 3D model chooser lists
+    /// (`DIALOG_SELECT_3DMODEL`'s folder list). A folder two variables name has the first.
+    pub(crate) named: Vec<(String, PathBuf, bool)>,
 }
 
 pub(crate) fn model_names(dir: &Path) -> ModelNames {
@@ -909,14 +912,17 @@ pub(crate) fn model_names_with(env: &Env, dir: &Path) -> ModelNames {
     let project = crate::text_variables::project_variables(dir);
     let vars = env.vars(dir, &project);
     let mut folders: Vec<PathBuf> = Vec::new();
-    for value in project.values().cloned().chain(env.global_vars().into_iter().map(|v| v.value)) {
+    let mut named: Vec<(String, PathBuf, bool)> = Vec::new();
+    let board_vars = project.iter().map(|(k, v)| (k.clone(), v.clone(), true));
+    for (name, value, from_board) in board_vars.chain(env.global_vars().into_iter().map(|v| (v.name, v.value, false))) {
         // an existing folder, but never the whole file system
         let folder = PathBuf::from(vars.expand(&value));
         if folder.is_absolute() && folder.parent().is_some() && folder.is_dir() && !folders.contains(&folder) {
-            folders.push(folder);
+            folders.push(folder.clone());
+            named.push((name, folder, from_board));
         }
     }
-    ModelNames { vars, folders }
+    ModelNames { vars, folders, named }
 }
 
 impl ModelNames {

@@ -2,6 +2,8 @@
 //!
 //! A footprint's `(model ...)` lines are KiCad's: the file, and how it sits on the footprint (offset, scale, rotation). Where they come from, first match
 //! wins:
+//!   0. the list the 3D Models tab of Footprint Properties set on the footprint on the board (`ConstraintModel::edited_models`, `FootprintEdit::models3d`): the whole
+//!      list, which may be empty -- a footprint the person took every model off has none, and is not given the package's generic model;
 //!   1. the footprint the board holds for the part (`ConstraintModel::footprints`: a library footprint read for its pads, an imported board's own
 //!      footprint) -- its `models3d`, else its single `model` path as it comes;
 //!   2. the installed KiCad footprint the part names (`Lib:Name`), read from the library on disk;
@@ -210,6 +212,23 @@ pub fn part_models(model: &ConstraintModel, part: &Part, footprint: &Footprint) 
 
 /// [`part_models`] reading the installed footprints from `root`.
 pub fn part_models_in(root: &std::path::Path, model: &ConstraintModel, part: &Part, footprint: &Footprint) -> Option<PartModels> {
+    if model.edited_models.contains(&part.reference) {
+        // The 3D Models tab set this footprint's list: it is `footprint.models3d`, whole, however short. It sits on the footprint's own pads, as an explicit footprint's do.
+        let installed = [part.footprint.as_deref(), part.package.as_deref()].into_iter().flatten().find_map(|n| n.contains(':').then(|| installed_footprint_in(root, n)).flatten());
+        let kind = installed.map(|i| i.kind).unwrap_or_else(|| ModelKind::of_pads(footprint));
+        return Some(PartModels { models: footprint.models3d.clone(), kind });
+    }
+    default_part_models_in(root, model, part, footprint)
+}
+
+/// The models `part` has without anything the 3D Models tab set: the library's or the board's own, else the package's generic ones. `footprint` is the footprint
+/// before the board's edits (`Board::unedited_footprint`). This is what an edited list is compared with to see that it has come back to the library's.
+pub fn default_part_models(model: &ConstraintModel, part: &Part, footprint: &Footprint) -> Option<PartModels> {
+    default_part_models_in(&default_footprint_library_root(), model, part, footprint)
+}
+
+/// [`default_part_models`] reading the installed footprints from `root`.
+pub fn default_part_models_in(root: &std::path::Path, model: &ConstraintModel, part: &Part, footprint: &Footprint) -> Option<PartModels> {
     let explicit = model.footprints.iter().any(|f| f.name == footprint.name);
     let own: Vec<Model3d> = if !footprint.models3d.is_empty() {
         footprint.models3d.clone()
@@ -342,5 +361,36 @@ mod tests {
         let got = part_models_in(std::path::Path::new("/nonexistent"), &model, &part, &fp).unwrap();
         assert_eq!(got.models.len(), 1);
         assert_eq!(got.models[0].rotate, [90.0, 0.0, 0.0]);
+    }
+
+    /// The 3D Models tab's list is the footprint's whole list: a package that has a generic model of its own (a 0603 on an `R`) keeps none of it once the person took
+    /// every model off, and keeps the list it was given when it was set.
+    #[test]
+    fn a_list_the_board_set_is_the_footprints_whole_list_even_when_it_is_empty() {
+        let nowhere = std::path::Path::new("/nonexistent");
+        let part = Part { reference: "R1".into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![], body_um: None, symbol: None, datasheet: None, edge: None };
+        let mut model = ConstraintModel { parts: vec![part.clone()], ..Default::default() };
+        let plain = model.footprint_of(&part).expect("a built-in footprint");
+        // nothing set: the package's generic model, as the table names it
+        let generic = part_models_in(nowhere, &model, &part, &plain).unwrap();
+        assert_eq!(generic.models.len(), 1);
+        assert!(generic.models[0].path.ends_with("Resistor_SMD.3dshapes/R_0603_1608Metric.step"), "{:?}", generic.models);
+        assert_eq!(default_part_models_in(nowhere, &model, &part, &plain), Some(generic), "no edit: the default is what is shown");
+
+        // every model taken off: none, not the generic one; the default is still the generic one
+        let mut taken_off = plain.clone();
+        eda_model::fp_models::set_models(&mut taken_off, &[]);
+        model.instance_footprints.insert("R1".into(), taken_off.clone());
+        model.edited_models.insert("R1".into());
+        let none = part_models_in(nowhere, &model, &part, &taken_off).unwrap();
+        assert_eq!((none.models.len(), none.kind), (0, ModelKind::Smd));
+        assert_eq!(default_part_models_in(nowhere, &model, &part, &plain).unwrap().models.len(), 1);
+
+        // a list set: it is the footprint's, in order, with its placement
+        let two = [Model3d { offset: [1.0, 0.0, 0.5], opacity: 0.5, ..Model3d::identity("a.step") }, Model3d { rotate: [0.0, 0.0, 90.0], show: false, ..Model3d::identity("b.step") }];
+        let mut listed = plain.clone();
+        eda_model::fp_models::set_models(&mut listed, &two);
+        let got = part_models_in(nowhere, &model, &part, &listed).unwrap();
+        assert_eq!(got.models, two.to_vec());
     }
 }

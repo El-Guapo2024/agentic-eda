@@ -67,8 +67,8 @@ fn mode_of(req: &Value) -> Mode {
 /// - the Interactive Router Settings dialog's switches `shove_vias`, `jump_over_obstacles`, `remove_loops`, `smart_pads`,
 ///   `allow_drc_violations` (`CanViolateDRC`), `free_angle_mode`, `fix_all_segments`, `smooth_dragged_segments`, and
 ///   `snap_to_tracks` (the magnetic setting `checkSnap` hands the router, not a row of the dialog),
-/// - the limits `shove_iteration_limit`, `walkaround_iteration_limit`, `via_force_prop_iteration_limit` and
-///   `walkaround_hug_length_threshold`, which KiCad keeps in the settings file only.
+/// - the limits `shove_iteration_limit`, `shove_time_limit` (milliseconds), `walkaround_iteration_limit`,
+///   `via_force_prop_iteration_limit` and `walkaround_hug_length_threshold`, which KiCad keeps in the settings file only.
 ///
 /// Anything absent is KiCad's default (`RoutingSettings::default()`); `mode` and `remove_loops` also come from the request's
 /// own top level, where they used to be the only two. Read field by field: serde_json's `arbitrary_precision` (starlark turns
@@ -110,6 +110,7 @@ fn settings_over(req: &Value, base: RoutingSettings) -> RoutingSettings {
     flag("smooth_dragged_segments", &mut s.smooth_dragged_segments);
     flag("snap_to_tracks", &mut s.snap_to_tracks);
     limit("shove_iteration_limit", &mut s.shove_iteration_limit);
+    limit("shove_time_limit", &mut s.shove_time_limit_ms);
     limit("walkaround_iteration_limit", &mut s.walkaround_iteration_limit);
     limit("via_force_prop_iteration_limit", &mut s.via_force_prop_iteration_limit);
     if let Some(t) = get("walkaround_hug_length_threshold").and_then(Value::as_f64).filter(|t| t.is_finite()) {
@@ -661,6 +662,7 @@ mod tests {
         let d = RoutingSettings::default();
         assert_eq!((s.mode, s.optimizer_effort, s.shove_vias, s.jump_over_obstacles, s.remove_loops, s.smart_pads, s.can_violate_drc, s.free_angle_mode, s.fix_all_segments), (d.mode, d.optimizer_effort, true, false, true, true, false, false, true));
         assert_eq!((s.shove_iteration_limit, s.walkaround_iteration_limit, s.via_force_prop_iteration_limit, s.walkaround_hug_length_threshold), (250, 40, 40, 1.5));
+        assert_eq!(s.shove_time_limit_ms, 1000, "ROUTING_SETTINGS: m_shoveTimeLimit = 1000");
         // the two a client sent before there was a `settings` object
         let legacy = settings_of(&json!({ "mode": "shove", "remove_loops": false }));
         assert_eq!((legacy.mode, legacy.remove_loops), (Mode::Shove, false));
@@ -671,15 +673,17 @@ mod tests {
         let s = settings_of(&json!({ "settings": {
             "mode": "mark_obstacles", "optimizer_effort": "full", "shove_vias": false, "jump_over_obstacles": true, "remove_loops": false,
             "smart_pads": false, "allow_drc_violations": true, "free_angle_mode": true, "fix_all_segments": false,
-            "shove_iteration_limit": 12, "walkaround_iteration_limit": 7, "via_force_prop_iteration_limit": 9, "walkaround_hug_length_threshold": 3.25,
+            "shove_iteration_limit": 12, "shove_time_limit": 350, "walkaround_iteration_limit": 7, "via_force_prop_iteration_limit": 9, "walkaround_hug_length_threshold": 3.25,
         } }));
         assert_eq!((s.mode, s.optimizer_effort), (Mode::MarkObstacles, OptEffort::Full));
         assert_eq!((s.shove_vias, s.jump_over_obstacles, s.remove_loops, s.smart_pads, s.can_violate_drc, s.free_angle_mode, s.fix_all_segments), (false, true, false, false, true, true, false));
         assert_eq!((s.shove_iteration_limit, s.walkaround_iteration_limit, s.via_force_prop_iteration_limit, s.walkaround_hug_length_threshold), (12, 7, 9, 3.25));
+        assert_eq!(s.shove_time_limit_ms, 350);
         assert!(s.allow_drc_violations() && s.free_angle(), "both only count in Highlight collisions mode");
         // nonsense is clamped, not trusted
-        let wild = settings_of(&json!({ "settings": { "shove_iteration_limit": -5, "via_force_prop_iteration_limit": 0, "walkaround_hug_length_threshold": -1 } }));
+        let wild = settings_of(&json!({ "settings": { "shove_iteration_limit": -5, "via_force_prop_iteration_limit": 0, "walkaround_hug_length_threshold": -1, "shove_time_limit": -40 } }));
         assert_eq!((wild.shove_iteration_limit, wild.via_force_prop_iteration_limit, wild.walkaround_hug_length_threshold), (1, 1, 0.0));
+        assert_eq!(wild.shove_time_limit_ms, 1, "a clock below a millisecond is no clock to shove by");
     }
 
     #[test]

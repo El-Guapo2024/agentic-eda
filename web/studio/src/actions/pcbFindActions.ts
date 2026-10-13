@@ -5,7 +5,7 @@
 //   pcbnew/tools/board_editor_control.cpp  Find / FindNext                 `ACTIONS::find`, `findNext`, `findPrevious` run on the board editor
 //   pcbnew/tools/pcb_selection_tool.cpp    FindItem                         select the hit and bring the view to it (kicad-port/pcbFind.ts `focusView`)
 //
-// Find by Properties (`PCB_ACTIONS::findByProperties`) stays unwired.
+// Find by Properties (`PCB_ACTIONS::findByProperties`, Edit > Find by Properties...) opens its own dialog (components/FindByPropertiesDialog.tsx).
 import type { Dispatch } from "react";
 import type { Action, StudioApi, StudioState } from "../state/store";
 import type { SweepCtx } from "./pcbSweepKit";
@@ -13,6 +13,8 @@ import { findHits, findStatus, focusView, preloadText, stepFind, type PcbHit } f
 import { itemBounds, unionBounds } from "../kicad-port/pcbItems";
 import { netItems } from "../kicad-port/pcbSelectionOps";
 import { getPcbFind, setFindOptions, setPcbFind, withHistory } from "../state/pcbFind";
+import { showFindByProperties } from "./findByPropertiesActions";
+import { registerInspectActions } from "./inspectActions";
 
 type Box = [number, number, number, number];
 
@@ -32,7 +34,7 @@ function netRefs(state: StudioState, net: string): string[] {
 }
 
 /**
- * `PCB_SELECTION_TOOL::FindItem`: a footprint or a text is selected; a net selects its tracks and vias (`SelectAllItemsOnNet`); a marker is the DRC dialog's selected
+ * `PCB_SELECTION_TOOL::FindItem`: a footprint, a text or a zone is selected; a net selects its tracks and vias (`SelectAllItemsOnNet`); a marker is the DRC dialog's selected
  * violation. The view is then brought to it. (The C++ clears the selection first.)
  */
 function showHit(api: StudioApi, dispatch: Dispatch<Action>, hit: PcbHit): void {
@@ -41,7 +43,7 @@ function showHit(api: StudioApi, dispatch: Dispatch<Action>, hit: PcbHit): void 
   if (!board) return;
   let refs: string[] = [];
   let box: Box | null = null;
-  if (hit.kind === "footprint" || hit.kind === "text") {
+  if (hit.kind === "footprint" || hit.kind === "text" || hit.kind === "zone") {
     refs = [hit.id];
     box = itemBounds(board, hit.id);
   } else if (hit.kind === "net") {
@@ -104,4 +106,7 @@ export function registerPcbFindActions(m: Map<string, (param?: unknown) => void>
   m.set("common.Interactive.find", () => showPcbFindDialog(api));
   m.set("common.Interactive.findNext", () => pcbFindNext(api, dispatch, false));
   m.set("common.Interactive.findPrevious", () => pcbFindNext(api, dispatch, true));
+  m.set("pcbnew.EditorControl.findByProperties", () => showFindByProperties(api));
+  // Inspect > Clearance Resolution and Constraints Resolution: the other command that asks which items are meant.
+  registerInspectActions(m, ctx);
 }

@@ -16,6 +16,8 @@
 //! on in-memory designs, use [`drc_scratch`] (a fresh temp directory,
 //! removed afterwards).
 
+pub mod footprint_check;
+
 use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
 use eda_model::ir::{Design, DrcExclusion};
 use eda_model::{CheckResult, ConstraintModel};

@@ -49,3 +49,18 @@ export function pickItem(prompt: string, accept?: (id: string) => boolean): Prom
     });
   });
 }
+
+/** `pickItem` with the point of the click (snapped as the other pickers' points are): what `BOARD_INSPECTION_TOOL::pickItemForInspection` has, to tell which pad or track segment was meant. */
+export function pickItemAt(prompt: string): Promise<{ id: string; at: PickPoint } | null> {
+  return new Promise((resolve) => {
+    picker.start({
+      kind: "item",
+      prompt,
+      onItem: (id, at) => {
+        resolve({ id, at: at ?? { x: 0, y: 0 } });
+        return false;
+      },
+      onCancel: () => resolve(null),
+    });
+  });
+}

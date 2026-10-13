@@ -40,6 +40,11 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   (`PadMaskInfo::art_layers`). The measure: `complex_hierarchy`'s `silk_over_copper` 104 -> 2 became 104 -> 104, `silk_overlap` 199 -> 5 became 199 -> 199, `silk_edge_clearance` 14 -> 2 became 14 -> 14; the re-export of a real board gives kicad-cli
   the original's counts on 7 of 12 boards (was 6). Left: hatch lines, the footprint editor's stroke types and vertical justification, the title block's variables in a footprint text, mask-only pads and a pad on the silkscreen of a library footprint.
   Measured: 33 new Rust tests (three of them slow-tier, with kicad-cli), 9 new `node --test` cases, and `web/studio/e2e/fp-graphics.check.js`, 6 scenarios through `window.__eda` on a served board.
+- **A footprint's 3D models are an edit of their own (2026-10-13, `task-fp-3d`; `PARITY-pcb.md` section 31, `PARITY-fpedit.md` section 11).** `FootprintEdit::models3d` is the whole list on the board, with its verbs (`set_board_models`, `add_board_model`,
+  `remove_board_model`, `move_board_model`, `edit_board_model`, each one undo step, a bad index or file name refused with its reason); the Footprint Properties dialogs of the board and of the Footprint Editor have KiCad's 3D Models tab (the list, the status of each file name,
+  Add, the model chooser, Remove, Scale, Rotation, Offset and Opacity with their steps and the arithmetic of `evaluateTextCtrl`, the preview); the `.kicad_pcb` and `.kicad_mod` carry every `(model ...)` as `pcb_io_kicad_sexpr` writes it (kicad-cli's own rewrite of our board has the same
+  entries character for character and exports the same VRML: slow-tier proof); the Footprint Chooser has the 3D view; Migrate 3D Models works (`pcbnew.GlobalEdit.migrate3DModels` leaves `ui-parity-missing.json`). Left: the Extruded 3D Body, embedded files and Collect and Embed 3D Models, the
+  load-time auto-migration, "Show 3D viewer in own window" in the Footprint Chooser. Measured: 52 new Rust tests (one slow-tier) and 20 `node --test` cases; `web/studio/e2e/fp-models.check.js` runs 11 scenarios (153 checks) through `window.__eda`.
 - **Four findings change the picture.**
   1. *A wired action is not a working feature.* This was the finding of 2026-10-07 and it was fixed where it bit: the schematic edit tools act on
      every item kind (item 1, `2a8bf8f`) and so do the PCB ones (item 8, `88c8c0a`). Before closing any action, run it on every item kind.
@@ -86,6 +91,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 22 | Create Array | Mostly done | `afcb91b` (10-09) |
 | 23 | The 3D viewer: KiCad's models, layer tree, stackup colours | **Done** | `89ff669` (10-10) |
 | 25, 2 | Footprint graphics: silkscreen, fab and assembly drawings and texts are the footprint's own (IR, `.kicad_mod` and `.kicad_pcb`, canvas, 3D, in-house checks) | **Done** (limits in item 25) | `task-fp-graphics` (10-10, not merged) |
+| 30 | The 3D models of a footprint: the 3D Models tab in both Footprint Properties dialogs, the list's verbs and file entries, the Footprint Chooser's 3D view, Migrate 3D Models | **Done** (limits in item 30) | `task-fp-3d` (10-13, not merged) |
 
 Not moved: items 15, 19, 20, 24.
 
@@ -100,16 +106,16 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 2 | P2 Footprint assignment, exchange and reference rename | 26, 9 | the Footprint field of a symbol does nothing on the board; no Change Footprint; a rename leaves the footprint and its routing behind | done 2026-10-12 on `task-fp-assign` (not merged); item 26 lists what is left | L |
 | 3 | P3 Library tables and paths | 5 | a symbol or footprint made in the editors cannot be saved into a table library's file; no Reset or Migrate Libraries; no 3D model search paths | mostly done | S |
 | 4 | P4 Schematic hierarchy: the rest | 4 | Import Sheet, sheets in the clipboard, the last cross-sheet cases | in flight | M |
-| 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | **P5a done on `task-router-drag` (2026-10-10)**: a segment slides, an illegal drag falls back, routes start and end mid-track, Route From Other End after the first fix. **P5b done on `task-diff-pairs` (2026-10-11)**: a pair is KiCad's, walked or shoved as one with its gap, with vias. Left: no U meander, no pair length tuning of KiCad's kind | P5a and P5b done, P5c open | L (1 part left) |
+| 5 | P5 Router: drag, mid-segment, diff pairs, meanders | 7 | **P5a done on `task-router-drag` (2026-10-10)**: a segment slides, an illegal drag falls back, routes start and end mid-track, Route From Other End after the first fix. **P5b done on `task-diff-pairs` (2026-10-11)**: a pair is KiCad's, walked or shoved as one with its gap, with vias. **P5c done on `task-length-tuning` (2026-10-13)**: KiCad's meanders checked against its own code, its tuning tool for a track, a pair and a skew, tuning patterns as generator items written to the board file. Left: arcs as router items (`ARC_T`), mouse-trail posture, springback (`ShoveTimeLimit` is ported: a shove gives up after a second) | P5a, P5b and P5c done; the rest of item 7 open | M (what item 7 lists) |
 | 6 | P6 PCB editing details | 8, 15, 17, 35 | Paste Special, rotation step, bounding boxes, a long tail of tool options | mostly done (merged 2026-10-10); items 8, 15, 17 and 35 list what is left | M, ongoing |
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview | mostly done | S |
 | 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
 | 10 | P10 Schematic details | 1, 12, 15, 17, 20 | no schematic groups, a user-defined field has no place on the sheet, no Pin Helpers menu (done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
-| 11 | P11 Search and inspection | 21, 29 | Find by Properties, Clearance Resolution, Footprint Checker; Find ignores user fields and zone names | open | M-L |
+| 11 | P11 Search and inspection | 21, 29 | **done 2026-10-13 on `task-search-inspect` (not merged)**: Find by Properties (the From Selection tab and the Query tab on KiCad's expression language), Find following user fields, hidden fields and zone names, Clearance Resolution and Constraints Resolution (a rule engine in `crates/drc`: the implicit rules, the `.kicad_dru`, `EvalRules` with KiCad's report text), the Footprint Checker (kicad-cli's DRC on a scratch board). Items 21 and 29 list what is left | done (not merged) | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
 | 13 | P13 Zone leftovers | 13 | non-copper zones, multi-layer zones, `connect_nearby_polys`, mask-only NPTH knockouts | open | L |
-| 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | open | M |
+| 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | done 2026-10-13 on `task-fp-3d` (not merged); item 30 lists what is left | M |
 | 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | open | S-M |
 | 16 | P16 PCB item kinds the IR lacks | 24 | text box, tables (stackup table), barcode, point, reference image, hatch fill | deferred | L |
 | 17 | P17 Library editor leftovers | 19, 22 | no snap to anchors in the editors, no pad array numbering, no derived symbols, no alternate pin functions | open | L |
@@ -258,20 +264,23 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `eeschema/tools/sch_editor_control.cpp` (`doCopy`, `Paste`), `common/clipboard.cpp`, `eeschema/sch_io/kicad_sexpr/`.
 
 ### 7. The router
-**Partial.** Shove near pads, vias and tracks, the board edge, every setting and the via drag are done (2026-10-08, `1e4d7ea`, `03b46de`). **Dragging a segment, a route that starts or ends mid-segment and Route From Other End after the first fix are done too (P5a, 2026-10-10, branch `task-router-drag`: `68eb737`, `c1b409c`, `bae172b`, `0a9290e`, `9dbcd8e`, `77e526e`, `bc573db`). A differential pair is KiCad's too: its gateways, Highlight collisions / Walk around / Shove with the two lines held at the pair's gap, `V` for a pair of vias, the pair optimizer (P5b, 2026-10-11, branch `task-diff-pairs`: `aa48f28`, `8df6fba`, `04c753d`, `cdc464b`, `3de42d5`, `4666af7`, `880ad08`, `708d29c`, `d9c5fe7`).** Hit: the meander of a length-tuned pair or track is not KiCad's. Blocks: partly. Package P5.
+**Partial.** Shove near pads, vias and tracks, the board edge, every setting and the via drag are done (2026-10-08, `1e4d7ea`, `03b46de`). **Dragging a segment, a route that starts or ends mid-segment and Route From Other End after the first fix are done too (P5a, 2026-10-10, branch `task-router-drag`: `68eb737`, `c1b409c`, `bae172b`, `0a9290e`, `9dbcd8e`, `77e526e`, `bc573db`). A differential pair is KiCad's too: its gateways, Highlight collisions / Walk around / Shove with the two lines held at the pair's gap, `V` for a pair of vias, the pair optimizer (P5b, 2026-10-11, branch `task-diff-pairs`: `aa48f28`, `8df6fba`, `04c753d`, `cdc464b`, `3de42d5`, `4666af7`, `880ad08`, `708d29c`, `d9c5fe7`).** **Length tuning is KiCad's too: its meanders, the tuning pattern tool for a track, a pair and a skew, and the pattern as a generator item (P5c, 2026-10-13, branch `task-length-tuning`: `0c3036f`, `efd5d28`, `dd35b60`, `d31692f`, `8d9d4b8`, `c7ab8a1`, `4ee2939`, `fce168d`, `65129b4`, `8bbd7b2`, `db9963a`, `543fa0d`).** Hit: arcs are chords in the router's world, and mouse-trail posture and springback are not ported (`ShoveTimeLimit` is: a shove gives up after a second, as KiCad's, 2026-10-13). Blocks: no. Package P5.
 - Exists: `crates/pns` ports hulls, `LINE::Walkaround`, shove of tracks and vias (a stack of lines with ranks, `onCollidingSolid`, `pushOrShoveVia`, the optimizer over every shoved line),
   the optimizer with smart pads, loop removal, **the differential pair as `DIFF_PAIR_PLACER` (`diff_pair.rs`, `dp_placer.rs`: the gateways of `pns_diff_pair.cpp`, the pair started from a pad pair, a via pair or a pair of track ends and meeting the coupled
   pair under the cursor, walked round what is in its way as one unit and shoved with its lines held at the pair's gap, `V` for a pair of vias with the route going on on the other layer, `/` posture, Backspace, one undo step, the pair optimizer `mergeDpSegments`;
-  kicad-cli's DRC finds no clearance, track width or diff-pair gap violation a placed pair adds)**, single-track and diff-pair length and skew tuning (dialog-driven), `D`/`G` drag of a segment (`DM_SEGMENT`: it slides, its neighbours follow at 45 degrees),
+  kicad-cli's DRC finds no clearance, track width or diff-pair gap violation a placed pair adds)**, **length and skew tuning as KiCad's tool (`7`/`8`/`9`: `meander.rs`, `meander_placer.rs`, `dp_meander_placer.rs`, `tuning_path.rs`, `tuning_commit.rs`, checked against KiCad's own meander code on 100 000 random cases; the status box, `1`-`4`, Ctrl+L, one undo step; a tuning pattern is a generator item, `(generated ..)` in the file, selected, tuned again, removed, dragged by its edit points, listed in the Generators Manager; kicad-cli finds the tuned nets within the length and skew rules they were tuned to)**, `D`/`G` drag of a segment (`DM_SEGMENT`: it slides, its neighbours follow at 45 degrees),
   a corner or a via, with the last valid position restored when the cursor is where the drag cannot be resolved; routes that start and end in the middle of a track (`SplitAdjacentSegments`) and Route From Other End
   before and after the first fix (`ContinueFromEnd`); the clearance gate measures
   pads by their exact outline (`eda_drc::board::placed_pad_copper`); the board outline with its cutouts, arcs and a footprint's own Edge.Cuts are obstacles with the copper-to-edge clearance
   (`PNS_KICAD_IFACE_BASE::syncGraphicalItem`, `crates/pns/src/from_ir.rs`); every `RoutingSettings` field is read and Interactive Router Settings has `dialog_pns_settings.cpp`'s rows
   (`crates/pns/PARITY.md`; `CODE-COMPARE-router.md` D1-D6, D8, D10, D12, D15, D16 fixed).
-- Missing (`CODE-COMPARE-router.md` D18): length tuning is a dialog on straight axis-aligned tracks that builds a 45-degree accordion, not KiCad's U meander (`meander.rs`); no arcs (`ARC_T`: a track that is an arc is not split by a route,
-  `SplitAdjacentArcs`, and `DM_ARC` is not a drag), mouse-trail posture (the dialog's "Use mouse path to set track posture" and "Optimize entire track being dragged" rows are disabled; the second needs the optimizer's
-  `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`), springback or `ShoveTimeLimit`; a single track's head that ends in a via is not shoved with its via (a pair's heads are: `Shove::run_heads`); `findRedundantSegment` and locked joints (`from_ir` never sets `Segment.locked`: a locked
-  track is dragged and shoved all the same); the generators (`PCB_GENERATOR`, 9 rows) that keep a tuning pattern editable.
+- Missing (`CODE-COMPARE-router.md` D18): arcs as router items (`ARC_T`): an arc track is its 32 chords in the world (`from_ir.rs`, since P5c, right to 0.01 % in length and as an obstacle), so a route is not split inside an
+  arc (`SplitAdjacentArcs`), `DM_ARC` is not a drag, a shove or a drag turns an arc into a polyline, a track that is an arc cannot be picked to start a tuning pattern on and a pattern across an arc is tuned along its chords;
+  mouse-trail posture (`pns_mouse_trail_tracer.cpp`: the dialog's "Use mouse path to set track posture" and "Optimize entire track being dragged" rows are disabled; the second needs the optimizer's
+  `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`) or springback; a single track's head that ends in a via is not shoved with its via (a pair's heads are: `Shove::run_heads`); `findRedundantSegment` and locked joints (`from_ir` never sets `Segment.locked`: a locked
+  track is dragged and shoved all the same). **Left of the tuner (P5c): the time domain (a target in picoseconds, the delays of a tuning profile) and the pad-to-die length (the model has neither), the message panel's lines of a pattern (the Generators Manager has its row), the merged
+  outline of a pair's pattern (two capsules are drawn), a pattern moved, turned or flipped like KiCad lets one (here a pattern and its tracks are as good as locked for those: they are changed through its properties and edit points), the router's world cloned once at the start of a tuning where
+  KiCad branches at every move, and a line that stops where the track width changes where KiCad rewrites the whole of it.**
   Browser check of P5a done (2026-10-10, `window.__eda` on the 30-part board: segment drag, 30-degree segment, corner dropped on a pad, route started and ended mid-track, Route From Other End after a fix: item 33 for the rest).
   **Left of the pair (P5b): Route From Other End (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, so KiCad does it for a pair; here only a single track), springback (every move of a pair resolves from the world the last fix left), a pair that fails to walk shows
   the pair as drawn and flags it (KiCad's `tryWalkDp` empties it: `bestScore > 0.0` is always true), two walk attempts where KiCad makes four (it repeats two), Backspace is an extension (`DIFF_PAIR_PLACER` has no `UnfixRoute`); a drag of a pair needs nothing (KiCad's `DRAGGER`
@@ -413,9 +422,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/widgets/appearance_controls.cpp`.
 
 ### 19. Footprint and symbol editor leftovers
-**Partial.** Hit: library work. Blocks: no. Packages P14, P7 and P17.
+**Partial.** Hit: library work. Blocks: no. Packages P7 and P17 (P14, the 3D model tab, is done: item 30).
 - Exists: both editors with library trees, pad and pin tools, dialogs, tables, import and export (`PARITY-fpedit.md`, `PARITY-symedit.md`).
-- Missing: the footprint editor's 3D model panel (it edits one model path while a footprint on a board keeps every `(model ...)`: item 30); Explode and Recombine of a custom pad (item 31); the library editor's Footprint
+- Missing: Explode and Recombine of a custom pad (item 31); the library editor's Footprint
   Properties has no fields grid (the board's has one since 10-09); derived symbols; alternate pin functions; symbol fields on the canvas; a shape properties dialog; snapping to other items' anchors in both
   editors (item 14). (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
@@ -430,13 +439,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `common/view/wx_view_controls.cpp`.
 
 ### 21. Find on the PCB
-**Mostly done (2026-10-08/09, `4c041a6`).** Hit: often on big boards. Blocks: no. Package P11.
+**Done (Find 2026-10-08/09, `4c041a6`; Find by Properties and Find on the IR 2026-10-13 on `task-search-inspect`, not merged).** Hit: often on big boards. Blocks: no. Package P11.
 - Done (`PARITY-pcb.md` section 7a): Find (Ctrl+F), Find Next (F3) and Find Previous (Shift+F3) on the board from `DIALOG_FIND`: history, Match case, Whole words only, Wildcards, Wrap, footprint references, values,
   other texts, DRC markers and net names, in KiCad's order, the hit selected and the view brought to it (`kicad-port/pcbFind.ts`, `components/PcbFindDialog.tsx`).
-- Missing: Find by Properties (stale reason: the property registry exists; Properties tab M, Query tab M more; `STALE-REASONS.md` SR2); **Find does not follow the IR that landed after it**: user fields and hidden
-  fields ("Include hidden fields" does nothing) and zone names (`Zone.name` exists; `pcbFind.ts` still says a zone has no name) are not searched; the dialog's "Show search panel" link
-  (`common.Interactive.search` still jumps to the Activity tab). Find and Replace is the schematic's only, as in KiCad.
-- Port from: `pcbnew/dialogs/dialog_find.cpp`, `dialog_find_by_properties.cpp`.
+- Done (section 32a): Find by Properties, Edit > Find by Properties...: the From Selection tab (the properties the selected items share, a Match mode each, Select Matching with Deselect non-matching items and Zoom to fit) and the Query tab
+  on KiCad's expression language (`kicad-port/{libeval,pcbExpr,findByProperties}.ts`, a port of `libeval_compiler`: lexer, grammar with its precedences, code generator and stack machine), Recently Used, Check Syntax and Create from Selection Tab
+  (`components/FindByPropertiesDialog.tsx`). 57 `node --test` cases and `e2e/search-inspect.check.js`.
+- Done (section 32b): Find follows the IR: a footprint is found by any of its fields (a user field's text) and its own texts, a hidden field only with Include hidden fields, a zone by its name; the dialog opens with a selected field's first line.
+- Missing: the dialog's "Show search panel" link (the studio has no Search panel; `common.Interactive.search` still jumps to the Activity tab); on the Query tab the geometry functions (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea`),
+  `fromTo`, `memberOfSheet` and `hasComponentClass` say false (the rule engine of Clearance Resolution, `crates/drc/src/pcbexpr.rs`, has the geometry ones), `A.Net` is the net's name (KiCad's is the net code) and Recently Used is kept in the browser, not the project file;
+  a footprint's graphics and texts other than its fields are not items of the selection, so a query cannot select them; the nets of the hit list are in name order (KiCad's is by net code). Find and Replace is the schematic's only, as in KiCad.
+- Port from: `pcbnew/dialogs/dialog_find.cpp`, `dialog_find_by_properties.cpp`, `pcbnew/pcbexpr_evaluator.cpp`, `common/libeval_compiler/`.
 
 ### 22. Arrays of footprints
 **Mostly done (2026-10-09, `afcb91b`).** Hit: connector rows, LED grids. Blocks: no.
@@ -456,7 +469,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   moves. The board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts. `e2e/viewer3d.check.js` (50 checks). Two stalls of the request loop were found by measuring and fixed.
 - Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; the Value and user fields (a footprint's own texts and the Reference are drawn since P1), off-board silkscreen, models not
   in the position file and DNP models; X3D and IGES models; per-layer ambient and specular colours of the board; the preferences that set the animation speed; NPTH holes are not cut out of the slab
-  (`aIncludeNPTHAsOutlines`, item 27); the footprint editor's 3D model panel (item 30).
+  (`aIncludeNPTHAsOutlines`, item 27); the Extruded 3D Body of a footprint (item 30).
 
 ### 24. Item kinds the IR does not have
 **Open, deferred.** Backlog; package P16 for the PCB items.
@@ -528,19 +541,39 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `eeschema/import_gfx/`, `pcbnew/tools/pcb_control.cpp` (`AppendBoard`), `board_editor_control.cpp` (`ImportNetlist`), `eeschema/tools/sch_drawing_tools.cpp` (`ImportSheet`).
 
 ### 29. Search and inspection tools
-**New, open.** Hit: occasionally; Clearance Resolution is how a DRC error is understood. Blocks: no. Package P11, size M-L.
-- Find by Properties (the registry exists), Clearance Resolution and Constraints Resolution (`crates/drc/src/constraints.rs` is a partial `EvalRules` the router and the zone filler already use), the Footprint
-  Checker (a scratch board with one footprint through `kicad-cli pcb drc`, filtered), Find following the new IR (item 21), the DRC Rule Editor (item 3). `STALE-REASONS.md` SR2.
-- Port from: `pcbnew/dialogs/dialog_find_by_properties.cpp`, `pcbnew/pcbexpr_evaluator.cpp`, `pcbnew/tools/board_inspection_tool.cpp` (`InspectClearance`, `InspectConstraints`),
-  `pcbnew/drc/drc_engine.cpp` (`EvalRules`), `pcbnew/dialogs/dialog_footprint_checker.cpp`.
+**Done 2026-10-13 on `task-search-inspect` (not merged); what is left below.** Hit: occasionally; Clearance Resolution is how a DRC error is understood. Blocks: no. Package P11, size M-L.
+- Done (`PARITY-pcb.md` sections 32a to 32c, `PARITY-fpedit.md` section 12): Find by Properties and Find following the IR (item 21); **Inspect > Clearance Resolution and Constraints Resolution**: `crates/drc` now holds KiCad's PCB expression language
+  (`libeval.rs`, `pcbexpr.rs`: the lexer and grammar, the code generator, the stack machine and the built-in functions), the `.kicad_dru` parser (`dru.rs`, `DRC_RULES_PARSER`) and `DRC_ENGINE::EvalRules` (`constraints.rs`, `RuleEngine::eval_rules`: the implicit rules
+  of the board setup, the net classes and the composite ones, the diff pairs and the keepout areas, then the rules file in order, the local overrides of a pad and a footprint and a zone's own clearance, net ties, the board minimum and the assertions) in one function that returns
+  the winning constraint and every rule it considered with KiCad's report text; `rule_board.rs` makes the items and the rules of a design, `inspect.rs` the report pages (`reportClearance`, `InspectConstraints`), `crates/cli/src/inspect_api.rs` the route
+  (`POST /api/inspect/{clearance,constraints}`), `components/InspectReportDialog.tsx` the two dialogs and `actions/inspectActions.ts` the commands with KiCad's selection and picker rules. This inspects the rules; kicad-cli stays the only DRC engine.
+  Proof against kicad-cli (`EDA_SLOW_TESTS=1`): for a net class, an explicit rule and a loosening rule the clearance the report resolves is the one kicad-cli's DRC enforces (a violation 10 um under it, none 10 um over); the rule sets of
+  `qa/data/pcbnew` (38 `.kicad_dru` files) parse and four of them resolve to the winner their rules say. **The Footprint Checker** (`pcbnew.ModuleEditor.checkFootprint`): `crates/kicad-engine/src/footprint_check.rs` puts the footprint being edited on a scratch board
+  (its `.kicad_mod`, a net per pad number, the Footprint Editor's severities), runs `kicad-cli pcb drc` on it through the kicad lane and returns the violations of the footprint-level checks (courtyard, attributes, pads, shorting pads, holes, net ties,
+  clipped silk) as markers with the editor's own item ids; the dialog (Show boxes and badges, the marker list, Delete Marker, Delete All Markers, Run Checks) and the markers on the footprint canvas.
+- Missing: the implicit rules of the tuning profiles (`addTuningSingleRule`; the profiles are in the IR since P9a); component classes and sheet paths in a condition (`hasComponentClass`, `memberOfSheet` say false); `fromTo`; a footprint's user fields in `getField`
+  (only Reference, Value and Footprint); properties KiCad has and the IR does not (a rule that names one compiles and reads it as undefined); micro vias (the IR has no via type: a via is through, blind or buried by its layers), a footprint's own paste margin and the net-tie
+  cache of a footprint's copper graphics; text variables and cross references in the rules text are not expanded (`${VAR}` is an unresolved variable here); a footprint field (`REF:Name`) cannot be inspected; the courtyard report notice (`MALFORMED_COURTYARDS`) is never set;
+  the geometry functions treat touching as intersecting (KiCad deflates the area by an epsilon); the DRC Rule Editor (item 3, P9b).
+  The Footprint Checker's markers are where the first item of the violation is (kicad-cli's report has no marker position; KiCad puts a short at the contact point); a footprint's Reference and Value are not on the scratch board (a hidden `REF**` stands in).
+- Port from: `pcbnew/dialogs/dialog_find_by_properties.cpp`, `pcbnew/pcbexpr_evaluator.cpp`, `pcbexpr_functions.cpp`, `common/libeval_compiler/`, `pcbnew/tools/board_inspection_tool.cpp` (`InspectClearance`, `InspectConstraints`),
+  `pcbnew/drc/{drc_engine,drc_rule_parser,drc_rule_condition}.cpp` (`EvalRules`, `loadImplicitRules`), `common/dsnlexer.cpp`, `pcbnew/dialogs/dialog_footprint_checker.cpp`, `pcbnew/footprint.cpp` (`CheckPads`, `CheckShortingPads`, `CheckNetTies`).
 
 ### 30. The 3D models of a footprint
-**New, open.** Hit: whoever makes a footprint or fits a different 3D model. Blocks: no. Package P14, size M. From `PARITY-3d.md` and `PARITY-fpedit.md`.
-- A footprint on a board and in the installed libraries keeps every `(model ...)` with its offset, scale, rotation and opacity (`Footprint.models3d`, `89ff669`), and the 3D viewer, the importer and the writer
-  use them. Nothing edits them: the library editor's Footprint Properties has one text field for a path (`LibraryFootprint.model`, a single `Option<String>`), `FootprintEdit` has no model list, and there is
-  no 3D Models tab, no preview, no model chooser in either dialog. Migrate 3D Models has a stale reason (`STALE-REASONS.md` SR3) and needs the same verb. Collect and Embed 3D Models needs embedded files
-  (zstd, item 24).
-- Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/3d_cache/`.
+**Done (2026-10-13, `task-fp-3d`, not merged yet)**, limits below. Hit: whoever makes a footprint or fits a different 3D model. Blocks: no longer. Package P14, size M. From `PARITY-3d.md` and `PARITY-fpedit.md`.
+- Done (`PARITY-pcb.md` section 31, `PARITY-fpedit.md` section 11; `crates/model/src/{fp_models,model_subst,fp_edit,ir}.rs`, `crates/ops/src/fp_models.rs`, `crates/kicad/src/{footprint_lib,footprint_import,pcb,model3d}.rs`, `crates/cli/src/model3d_tab_api.rs`,
+  `components/{footprint/FootprintModelsPanel,footprint/ModelPreview3D,footprint/Model3dChooserDialog,Migrate3dModelsDialog,FootprintPropertiesDialog,FootprintChooserDialog}.tsx`, `kicad-port/{fpModels,migrate3d}.ts`), the five steps, each its own commit (`233a2af`, `58ee472`, `0ebde56`, `4bb96b8`, `7a327b6` and `3bcf0bc`):
+  (1) `FootprintEdit::models3d`, the whole list on the board (`None` is the footprint's own, `Some` what was set, an emptied list included: `ConstraintModel::edited_models`), laid over the footprint by `edited_footprint` and its verbs (`set_board_models`, `add_board_model`, `remove_board_model`,
+  `move_board_model`, `edit_board_model`, the list in `edit_footprint_properties`), one undo step each, a refusal with its reason (`ops_bad_model`, `ops_bad_model_index`, `ops_nothing_to_change`: no empty step), the file name checked as `FILENAME_RESOLVER::ValidateFileName` checks it and the numbers as
+  the preview panel's fields take them; the `.kicad_pcb` entries as `format( FOOTPRINT )` writes them (hide, opacity, `FormatDouble2Str`) and read back, a bottom-side footprint's placement in KiCad's frame; the 3D viewer and the exports draw the list; (2) the 3D Models tab of the board's Footprint Properties (the grid with the status of each
+  file name, Add, Browse through the model chooser and the library path variables, Remove, Configure Paths..., Scale, Rotation and Offset with their spin buttons, wheel and expressions, the Opacity slider, the preview that reuses `viewer3d/modelCache.ts`) and of the Footprint Editor's; (3) the library footprint keeps a list (`LibraryFootprint::models3d`, `.kicad_mod`
+  import and export, the editor's dialog); (4) the Footprint Chooser's 3D view and a footprint's models reaching the board with it; (5) Migrate 3D Models (`eda_model::model_subst`, `GET /api/3dmodel/migrate`, `migrate_board_models`, the dialog: missing references, ranked STEP candidates, Add Search Directory..., Open External File..., preview, Replace in one step).
+- Measured: 52 new Rust tests (one slow-tier: kicad-cli's `pcb upgrade` writes a board with two models -- offsets, scales, rotations, an opacity, one hidden -- with the same `(model ...)` entries character for character as it reads in ours, and `pcb export vrml` of both is the same) and 20 `node --test` cases;
+  `web/studio/e2e/fp-models.check.js` runs 11 scenarios (153 checks) through `window.__eda` (port 8826, a board made from `examples/mcu_board_30plus.yaml`).
+- Left: the Extruded 3D Body box of the tab (`EXTRUDED_3D_BODY`: a body from the courtyard, fab or silkscreen outline or the pins' box, its height, standoff, material and colour, its STEP export) and the embedded files (`PANEL_EMBEDDED_FILES`, `kicad-embed://`, Collect and Embed 3D Models), which need the zstd of item 24;
+  Migrate 3D Models' load-time half (`AutoMigrateByFilename` and the info bar "N WRL 3D models could not be matched", which `pcb_edit_frame.cpp` runs when a board opens) and a folder picker over the whole disk (the studio lists the folders it may read: KiCad's library, the board's, the path variables'); "Show 3D viewer in own window" of the Footprint Chooser; IGES and X3D models in the
+  viewer and the chooser (a candidate may be an IGES file); for a bottom-side footprint the tab shows the numbers in the footprint's top-side frame where KiCad shows the file's (a half turn about z apart; the file written is KiCad's); a built-in package (`0603`) opened in the Footprint Editor has no model list (the generic model is added only when a footprint is placed).
+- Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/dialogs/{panel_preview_3d_model,dialog_select_3d_model}.cpp`, `3d-viewer/3d_cache/`, `pcbnew/footprint_chooser_frame.cpp`.
 
 ### 31. Custom-shape pads
 **Done (2026-10-10, `task-custom-pads`)**, limits below. Hit: footprints with custom pads, imported boards, the zone fill around them. Blocks: no. Package P7.
@@ -692,9 +725,10 @@ Rules that keep them apart (each is how an earlier package did it):
 Waves:
 
 - **Running now** (2026-10-12): P9a (`task-board-setup`), P10 (`task-sch-details`). P1, P2, P3, P4, P5a, P5b, P6, P7 and P8 are merged; their sections list what is left.
-- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P14, P16, P17 and the Footprint Checker, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
+- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P16 and P17, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
+- **P14** merged 2026-10-13 (the Extruded 3D Body, embedded files and the load-time migration are left: item 30). **P11** merged 2026-10-13 (Find by Properties, Clearance and Constraints Resolution, the Footprint Checker; what is left: items 21 and 29).
 - **P2** merged 2026-10-12 (Compare Footprint with Library included); Swap Pad Nets and Swap Gate Nets are left (item 26).
-- **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
+- **Any time a slot is free**: P12, P15, P6, P9a, P20 (test files only). **P11** is done on `task-search-inspect` (2026-10-13, not merged).
 - **After P7**: P13, P17, and P19's arc stub and function shape.
 - **After P3 and P4**: P18. **P8's PCB half** is independent; its sheet half is P4's.
 - **Last**: P21.
@@ -790,7 +824,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `eeschema/{sch_sheet_path,sch_screen,sch_sheet,connection_graph}.cpp`, `tools/{sch_drawing_tools (ImportSheet, DrawSheet),sch_navigate_tool,sch_editor_control (doCopy, Paste),sch_edit_tool (DdAppendFile)}.cpp`.
 - Conflicts: P2 (`ops/lib.rs`, `board.rs`); P8 (the drop host); P10 (`SchematicView.tsx`); P18 (placing a block is Import Sheet).
 
-### P5. Router: drag, mid-segment, diff pairs, meanders (item 7). Size XL, three parts. Rank 5. Independent of the rest.
+### P5. Router: drag, mid-segment, diff pairs, meanders (item 7). Size XL, three parts. Rank 5. Independent of the rest. **P5a, P5b and P5c done; what item 7 lists as missing is left.**
 - **P5a, M-L. DONE 2026-10-10 on `task-router-drag` (7 commits, `68eb737` to `bc573db`; D7 and its rows in `CODE-COMPARE-router.md` closed).** What is there: `Line::drag_segment45`, `snapToNeighbourSegments` and `snapDraggedCorner` ported and checked against
   KiCad's own functions (80 000 random lines, point for point); `Dragger` with `DM_SEGMENT`/`DM_CORNER`, `dragCorner45`, `SHP_REVERSED`, the last-valid-point restore and the forced Highlight-collisions mode with Ctrl+click;
   `split_segment` and the commit that gives a track a vertex where a route starts or ends in it; `Router::continue_from_end` and `POST /api/route/continue_from_end`; replays of KiCad's `walk_drag_seg_against_board_edge`
@@ -803,8 +837,14 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   the studio's pair tool runs in the router's mode, shows what the shove pushes, takes `V`. Proof: unit tests, `crates/pns/tests/dp_boards.rs` (KiCad's `dp_test.kicad_pcb`: no QA corpus session routes a pair), three HTTP tests, the slow kicad-cli gate
   `a_placed_pair_passes_kicad_clis_clearance_and_diff_pair_gap_checks`, a slow random-board sweep (`whatever_the_cursor_does_an_accepted_pair_leaves_the_board_clean_and_keeps_its_gap`) and the browser check. Left, item 7 lists it: Route From Other End for a pair; nothing for a pair drag (KiCad has none).
   The package as it was planned: `crates/pns/src/{diff_pair,shove,walkaround}.rs`, `diffPairRouting.ts`, `kicad-port/dpTool.ts`.
-- **P5c, L**: the U meander and interactive tuning (`crates/pns/src/{meander,dp_tune}.rs`, `crates/cli/src/tune_api.rs`, `components/LengthTuningDialog.tsx`), arcs (`ARC_T`), mouse-trail posture, springback and `ShoveTimeLimit`,
-  and, if wanted, tuning patterns as items (the nine generator rows).
+- **P5c, L. DONE 2026-10-13 on `task-length-tuning` (`0c3036f` to `543fa0d`: 8 commits before the docs, 4 after them; section J of `CODE-COMPARE-router.md` rewritten: 7 FAITHFUL, 10 ADAPTED, none DIVERGENT or MISSING).** What is there, in the order of the brief: (1) **a single track**: `kigeom.rs` and `chain.rs` (`SEG`, `SHAPE_ARC`, `SHAPE_LINE_CHAIN` with arcs), `meander.rs` (`MEANDER_SETTINGS`, `MEANDER_SHAPE`, `MEANDERED_LINE`, `tuneLineLength`),
+  `tuning_path.rs` (`AssembleTuningPath`, the length with `LENGTH_DELAY_CALCULATION`'s pad and via rules), `meander_placer.rs` (`MEANDER_PLACER`), all checked against KiCad's own `pns_meander.cpp` and `pns_meander_placer_base.cpp` compiled over the real `libs/kimath` (`crates/pns/oracle/`, `tests/meander_oracle.rs`: 100 000 random cases agreed,
+  118 baked into the always-on test); (2) **a pair and a skew**: `dp_meander_placer.rs` (`DP_MEANDER_PLACER`, `AssembleDiffPair`, `CoupledSegmentPairs`) and `MEANDER_SKEW_PLACER`; (3) **a pattern is an item**: `TuningPattern` (`crates/model/src/tuning.rs`, an overlay of `DrawingsSection`), `Cmd::CommitTuning` (one undo step for a new pattern, a pattern tuned again or removed),
+  `crates/kicad/src/pcb_generated.rs` (`(generated ..)` written and read as KiCad does; KiCad's own `tuning_generators_load_save.kicad_pcb` and `issue22536.kicad_pcb` load with their members and write again), `crates/cli/src/{tune_api,tune_edit}.rs` and `crates/pns/src/tuning_commit.rs` (what a tuned line becomes in the IR),
+  the studio's tool (`7`/`8`/`9`, the status box, `1`-`4`, Ctrl+L and E in the Tuning Pattern dialog, selection as a generator, Delete, the four edit points, the Generators Manager, `Generator.*`; `kicad-port/tuneTool.ts`, `components/canvas/tune*.ts`, `TuningPatternDialog.tsx`, `GeneratorsManagerDialog.tsx`),
+  defaults from Board Setup's Length-tuning Patterns and a target from a `.kicad_dru` length or skew rule. The nine `pcbnew.Generator.*` rows are wired and out of `ui-parity-missing.json`. Proof: unit tests in each module, the oracle, 9 HTTP tests in `tune_api.rs` (hover, a track, a pair, a skew, a line of several tracks, tuned again and removed, the edit points, the refusals, a stale session), the slow kicad-cli test
+  (`kicad_cli_finds_the_tuned_nets_within_the_length_and_skew_rules_they_were_tuned_to`: a track tuned to 22 mm within 10 um of its length rule, a pair within 25.9..26.1 mm per net and 0.3 mm of skew, a 1.4 mm skew under a 0.15 mm rule after the skew tuner; the same rules flag the nets before they were tuned) and
+  `web/studio/e2e/length-tuning.check.js` (93 checks through the hotkeys, the canvas and the dialogs on a scratch board built from `examples/mcu_board_30plus.yaml`). After the docs, on KiCad's own boards (these need `KICAD_SRC_DIR`; the sweep is the slow tier): the four patterns of `issue22536` tuned again from their baselines to 76.2 mm exactly over its arcs (`65129b4`), the tuner's length of 8 nets of `length_calculations` within 3 um of kicad-cli's through pads, vias and the stackup (`8bbd7b2`), and 142 tunings of random tracks on eleven QA boards, every one accepted by the board, 41 single ones measured as the placer said, removed to the length they had and tuned again (`db9963a`). From (4): arcs are chords in the world (`from_ir.rs`), and `ShoveTimeLimit` is KiCad's one second (`543fa0d`: `time_limit.rs`, checked after every iteration of the shove, `shove_time_limit` in the router settings). **Left, item 7 lists it: real `ARC_T` items, mouse-trail posture, springback, and the tuner's own gaps (time domain, pad-to-die, a merged outline for a pair, moving a pattern).**
 - KiCad: `pcbnew/router/` (`pns_dragger`, `pns_multi_dragger`, `pns_line_placer`, `pns_diff_pair_placer`, `pns_meander*`, `pns_shove`, `pns_walkaround`, `pns_router`, `router_tool.cpp`), `pcbnew/generators/pcb_tuning_pattern.cpp`,
   `pcbnew/tools/generator_tool.cpp`.
 - Conflicts: only among the three parts (`crates/pns`) and P6 in `Canvas.tsx` handlers. Each part ends with a replay of KiCad's own QA cases (`crates/pns/tests/qa_regressions.rs`) and a browser check.
@@ -857,13 +897,16 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `eeschema/tools/{sch_edit_tool,sch_selection_tool,sch_drag_net_collision,sch_group_tool,sch_move_tool}.cpp`, `sch_label.cpp`, `sch_pin.cpp`, `dialogs/dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`, `common/view/wx_view_controls.cpp`.
 - Conflicts: P4 (`SchematicView.tsx`, `board.rs`), P6 (`store`, `runner` hunks), P16 (the schematic image).
 
-### P11. Search and inspection (items 21, 29; SR2). Size M-L. Rank 11.
-- Find by Properties (the Properties tab over `PCB_PROPERTIES`, then the Query tab), Find following the IR (user fields, hidden fields, zone names), Clearance and Constraints Resolution from `crates/drc/src/constraints.rs`
-  (a function returning the winner and the rules considered), the Footprint Checker as a scratch-board DRC.
-- Files: `web/studio/src/kicad-port/{pcbFind,propertyManager,pcbProperties}.ts` and a new `findByProperties.ts`, `actions/pcbFindActions.ts`, `components/PcbFindDialog.tsx` and new dialogs, `crates/drc/src/{constraints,pcbexpr}.rs`,
-  a new `crates/cli/src/inspect_api.rs`, `crates/kicad-engine/src/lib.rs`.
+### P11. Search and inspection (items 21, 29; SR2). Size M-L. Rank 11. **Done 2026-10-13 on `task-search-inspect` (7 commits, not merged); items 21 and 29 list what is left.**
+- Done there: Find by Properties (the From Selection tab over `PCB_PROPERTIES` and the Query tab on a port of `libeval_compiler`), Find following the IR (user fields, hidden fields, zone names), Clearance and Constraints Resolution (a rule engine in `crates/drc`:
+  the expression language, the `.kicad_dru` parser and `EvalRules` returning the winner and every rule considered, with KiCad's report text, behind `crates/cli/src/inspect_api.rs`) and the Footprint Checker (kicad-cli's DRC on a scratch board of
+  `crates/kicad-engine/src/footprint_check.rs`). `PARITY-pcb.md` section 32, `PARITY-fpedit.md` section 12; `web/studio/e2e/search-inspect.check.js` (11 scenarios, 131 checks); the kicad-cli proofs are `inspect_api::tests::the_resolved_clearance_is_what_kicad_cli_enforces`
+  and `footprint_check::tests::kicad_cli_finds_what_the_footprint_checker_finds` (both behind `EDA_SLOW_TESTS=1`). The four rows are out of `ui-parity-missing.json`.
+- Left: the tuning-profile implicit rules, component classes and sheet paths, a footprint's user fields and paste margin, text variables in the rules text (item 29); the Search panel link and the geometry functions of the Query tab (item 21).
+- Files: `web/studio/src/kicad-port/{libeval,pcbExpr,findByProperties,inspectReport,inspectPick,footprintChecker}.ts`, `actions/{findByPropertiesActions,inspectActions,footprintCheckerActions,pcbFindActions}.ts`, `components/{FindByPropertiesDialog,InspectReportDialog}.tsx`,
+  `components/footprint/FootprintCheckerDialog.tsx`, `crates/drc/src/{libeval,pcbexpr,dru,constraints,rule_item,rule_board,inspect,known_props}.rs`, `crates/cli/src/{inspect_api,kicad_engine}.rs`, `crates/kicad-engine/src/footprint_check.rs`.
 - KiCad: `pcbnew/dialogs/dialog_find_by_properties.cpp`, `pcbexpr_evaluator.cpp`, `tools/board_inspection_tool.cpp` (`InspectClearance`, `InspectConstraints`), `drc/drc_engine.cpp` (`EvalRules`), `dialogs/dialog_footprint_checker.cpp`.
-- Conflicts: none on the Rust hubs; `runner` and `store` for the dialog flags. Compare Footprint with Library belongs to P2.
+- Conflicts: none on the Rust hubs; `runner` and `store` for the dialog flags (none needed: the dialogs keep their own module state). Compare Footprint with Library belongs to P2.
 
 ### P12. Board outline leftovers (item 27). Size M. Rank 12.
 - Files: `crates/place/src/lib.rs` (the region from the outline's bounding box: use the outline with its cutouts, `Region` of `crates/gates/src/pcb.rs`), `crates/ops/src/{lib.rs,outline.rs}` (`Cmd::PlaceAt` and the snap), `crates/freeroute/src/design.rs`
@@ -879,7 +922,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`.
 - Conflicts: P7 (`zone-filler`), P12 (NPTH), `kio` hunk.
 
-### P14. The 3D models of a footprint (item 30; SR3). Size M. Rank 14.
+### P14. The 3D models of a footprint (item 30; SR3). Size M. Rank 14. **Done 2026-10-13 on `task-fp-3d`, waiting for its merge; item 30 lists what is left.**
 - A model list on `FootprintEdit` (`models3d`) with its verb, a 3D Models tab in both Footprint Properties dialogs (`PANEL_FP_PROPERTIES_3D_MODEL`: list, offset, scale, rotation, opacity, show; path chooser through `model3d_api`; a preview that
   reuses `viewer3d/modelCache.ts`), the library editor's `model` becoming a list, Migrate 3D Models, the 3D preview of the Footprint Chooser.
 - Files: `crates/model/src/{fp_edit,ir}.rs`, `crates/ops/src/{fp_edit,library_editors}.rs`, `crates/kicad/src/{footprint_lib,footprint_import,pcb}.rs`, `components/{FootprintPropertiesDialog.tsx,footprint/FootprintPropertiesDialog.tsx}`,

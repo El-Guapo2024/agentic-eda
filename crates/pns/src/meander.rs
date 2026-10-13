@@ -1,658 +1,1274 @@
-//! Port of `PNS::MEANDER_PLACER`/`MEANDER_SHAPE` (`pcbnew/router/
-//! pns_meander_placer.{h,cpp}`, `pns_meander.cpp`), gap #7 task item 4
-//! (length tuning, keys `7`/`8`/`9`): lengthen a track by inserting a
-//! repeating zigzag ("meander"/"accordion") pattern until it reaches a
-//! target length.
+//! `pcbnew/router/pns_meander.{h,cpp}` and the shape-fitting half of `pns_meander_placer_base.cpp`: the meander KiCad's length tuner draws.
 //!
-//! ## Scope -- a dialog-driven amount, not a live mouse-driven session
+//! * [`MeanderSettings`] is `MEANDER_SETTINGS` (amplitude range and step, spacing, corner style and radius, single-sided, the initial side, the
+//!   target length and skew with their tolerances).
+//! * [`MeanderShape`] is `MEANDER_SHAPE`: one U (or half of a turn: `MT_START`, `MT_TURN`, `MT_FINISH`, `MT_SINGLE`) built by a turtle
+//!   (`genMeanderShape`, `uShape`, `miter`, `makeMiterShape`) with rounded or chamfered corners, resized between the minimum and the maximum
+//!   amplitude to fit what the world leaves it ([`MeanderShape::fit`], `Fit`), and dual (two lines at an offset) for a differential pair.
+//! * [`MeanderedLine`] is `MEANDERED_LINE`: the shapes fitted one after the other along a baseline segment (`MeanderSegment`).
+//! * [`tune_line_length`] is `MEANDER_PLACER_BASE::tuneLineLength`: the amplitudes shrunk, shape by shape, until the line is the length wanted
+//!   (`findAmplitudeForLength`, `findAmplitudeBinarySearch`).
 //!
-//! Upstream's length tuner is a full interactive session (`PNS::ROUTER`
-//! drives `MEANDER_PLACER` the same way it drives `LINE_PLACER`/
-//! `DIFF_PAIR_PLACER`): drag the mouse away from the track to grow the
-//! meander live, `1`/`2`/`3`/`4` adjust spacing/amplitude mid-drag, a
-//! status-bar readout tracks the running length. Building a *third*
-//! interactive session type (after route and drag) with its own
-//! mouse-driven preview state was out of proportion to the time this
-//! task had left after items 1-3, so this port instead exposes the same
-//! underlying operation -- "lengthen this track to a target length with
-//! this amplitude/spacing" -- as a one-shot, dialog-driven computation:
-//! `crates/cli/src/tune_api.rs`'s `/api/tune_length/{preview,apply}`,
-//! `web/studio/src/components/LengthTuningDialog.tsx`. The *geometry* is
-//! still the real thing (see below); only the interaction model differs.
-//!
-//! ## Shape and scope
-//!
-//! Only a **straight, axis-aligned (N/E/S/W) two-point baseline** is
-//! supported -- not upstream's own ability to meander within an
-//! arbitrary already-routed multi-corner line. This isn't an arbitrary
-//! cut: the meander construction below builds each zigzag leg as
-//! `direction + perpendicular` (and `direction - perpendicular`), which
-//! is only guaranteed to land on another valid 45-degree octant (a
-//! diagonal one) when `direction` itself is axis-aligned -- for a
-//! diagonal baseline, `direction + perpendicular` degenerates to a
-//! *different* axis-aligned direction at a different effective length,
-//! which would need a separate (correct, but not yet derived) formula.
-//! Given the real-world case this task cares about (length-matching a
-//! fanout that's already a straight axis-aligned run) is exactly the
-//! case this covers, axis-aligned-only is a reasonable, documented
-//! narrowing rather than a silent gap. [`generate_meander`] returns
-//! `None` for anything else, same as it does for a non-straight (more
-//! than 2 points) or too-short baseline.
-//!
-//! The meander itself is a standard alternating accordion: each period
-//! steps diagonally away from the baseline by `amplitude`, runs parallel
-//! to the baseline for `spacing`, then steps diagonally back, alternating
-//! which side of the baseline each successive period swings to (so the
-//! whole shape oscillates across the baseline rather than bulging
-//! entirely to one side). `collision checking is the caller's job
-//! (`crate::node::Node::line_colliding`-equivalent against the generated
-//! points) -- same report-only contract the rest of this scoped-down
-//! router already uses for diff pairs (no automatic avoidance).
+//! The world the shapes have to fit in is the placer's ([`MeanderEnv::check_fit`], `MEANDER_PLACER_BASE::CheckFit`);
+//! see [`crate::meander_placer`]. Nanometres throughout (see [`crate::kigeom`]).
 
-use eda_model::ir::{Point, Um};
+use crate::chain::ShapeLineChain;
+use crate::kigeom::{ki_round, rotate_d, Seg, ShapeArc, V2};
+use eda_model::ir::Point;
 
-/// `sqrt(2) - 1`: how much farther a single 45-degree diagonal leg of
-/// "run" length `amplitude` travels than the straight-line distance it
-/// advances *along the baseline* -- a diagonal leg of `(amplitude,
-/// amplitude)` has length `amplitude * sqrt(2)` but only ever advances
-/// `amplitude` along the baseline axis, so the straight baseline distance
-/// it *replaces* is also `amplitude` (not `amplitude * sqrt(2)`); one full
-/// period uses two such legs (out and back), so the extra length one
-/// period contributes, independent of `spacing` (the straight run at the
-/// peak advances the same amount whichever way you draw it), is
-/// `2 * amplitude * (sqrt(2) - 1)`. Verified directly against a measured
-/// polyline length in this module's own tests, not just trusted.
-const DIAGONAL_OVERHEAD: f64 = std::f64::consts::SQRT_2 - 1.0;
+// ---------------------------------------------------------------------------------------------------------------------
+// MEANDER_SETTINGS
+// ---------------------------------------------------------------------------------------------------------------------
 
-fn extra_per_period(amplitude_um: Um) -> f64 {
-    2.0 * amplitude_um as f64 * DIAGONAL_OVERHEAD
+/// `pcbIUScale.mmToIU( 0.1 )`: `MEANDER_SETTINGS::DEFAULT_LENGTH_TOLERANCE`.
+pub const DEFAULT_LENGTH_TOLERANCE: i64 = 100_000;
+/// `MEANDER_SETTINGS::LENGTH_UNCONSTRAINED`: `1000000 * IU_PER_MM`.
+pub const LENGTH_UNCONSTRAINED: i64 = 1_000_000_000_000;
+/// `MEANDER_SETTINGS::SKEW_UNCONSTRAINED`: `std::numeric_limits<int>::max()`.
+pub const SKEW_UNCONSTRAINED: i64 = i32::MAX as i64;
+
+/// `MINOPTMAX<T>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MinOptMax {
+    min: Option<i64>,
+    opt: Option<i64>,
+    max: Option<i64>,
 }
 
-fn round_pt(x: f64, y: f64) -> Point {
-    Point { x: x.round() as Um, y: y.round() as Um }
+impl MinOptMax {
+    pub fn min(&self) -> i64 {
+        self.min.unwrap_or(0)
+    }
+    pub fn max(&self) -> i64 {
+        self.max.unwrap_or(i64::MAX)
+    }
+    pub fn opt(&self) -> i64 {
+        self.opt.unwrap_or_else(|| self.min())
+    }
+    pub fn has_min(&self) -> bool {
+        self.min.is_some()
+    }
+    pub fn has_max(&self) -> bool {
+        self.max.is_some()
+    }
+    pub fn has_opt(&self) -> bool {
+        self.opt.is_some()
+    }
+    pub fn set_min(&mut self, v: i64) {
+        self.min = Some(v);
+    }
+    pub fn set_max(&mut self, v: i64) {
+        self.max = Some(v);
+    }
+    pub fn set_opt(&mut self, v: i64) {
+        self.opt = Some(v);
+    }
+    /// `IsNull`: nothing was ever set.
+    pub fn is_null(&self) -> bool {
+        self.min.is_none() && self.opt.is_none() && self.max.is_none()
+    }
 }
 
-pub fn polyline_length(pts: &[Point]) -> Um {
-    pts.windows(2).map(|w| (((w[1].x - w[0].x) as f64).powi(2) + ((w[1].y - w[0].y) as f64).powi(2)).sqrt()).sum::<f64>().round() as Um
-}
-
-#[derive(Debug, Clone)]
-pub struct MeanderResult {
-    pub pts: Vec<Point>,
-    /// The generated shape's own real length, *measured* from `pts`
-    /// (never just trusted from the formula that picked each period's
-    /// amplitude) -- this is what a caller should actually display, even
-    /// though it will usually be within a few um of `target_length_um`
-    /// (exactly, modulo integer-micrometer rounding, when the target was
-    /// reachable at all).
-    pub achieved_length: Um,
-}
-
-/// Generate a meandered replacement for the straight baseline `a`-`b`,
-/// alternating sides each period, that reaches as close to
-/// `target_length_um` as the available room (`spacing`-separated periods
-/// along the baseline's own length) allows. `flip` swaps which side the
-/// first period swings to (the second, third, ... alternate from there
-/// regardless). Returns `None` if:
-/// - `a`/`b` aren't axis-aligned (see this module's own doc comment), or
-///   are the same point (zero-length baseline);
-/// - `amplitude`/`spacing` aren't positive;
-/// - `target_length_um` is no greater than the baseline's own straight
-///   length (nothing to add -- not an error, just nothing for this
-///   function to usefully do; the caller already has the plain baseline
-///   in that case).
-pub fn generate_meander(a: Point, b: Point, amplitude_um: Um, spacing_um: Um, target_length_um: Um, flip: bool) -> Option<MeanderResult> {
-    if amplitude_um <= 0 || spacing_um <= 0 {
-        return None;
-    }
-    let (dx, dy) = (b.x - a.x, b.y - a.y);
-    let axis_aligned = (dx == 0) != (dy == 0); // exactly one of dx/dy is zero: pure horizontal or vertical.
-    if !axis_aligned {
-        return None;
-    }
-    let base_len = ((dx as f64).powi(2) + (dy as f64).powi(2)).sqrt();
-    if base_len < 1.0 {
-        return None;
-    }
-    let (ux, uy) = (dx as f64 / base_len, dy as f64 / base_len);
-    // Perpendicular, rotated -90 degrees (board +y is down, so this is a
-    // real on-screen rotation, not just an algebraic convenience) --
-    // `flip` picks the other rotation instead.
-    let (nx, ny) = if flip { (-uy, ux) } else { (uy, -ux) };
-
-    let extra_needed = target_length_um as f64 - base_len;
-    if extra_needed <= 0.0 {
-        return None;
-    }
-    let per_period = extra_per_period(amplitude_um);
-    if per_period <= 0.0 {
-        return None;
-    }
-
-    let mut pts = vec![a];
-    let mut cur = (a.x as f64, a.y as f64);
-    let mut remaining_extra = extra_needed;
-    let mut remaining_room = base_len;
-    let mut side_up = true;
-
-    while remaining_extra > 0.5 {
-        // The last period shrinks its own amplitude to land as close to
-        // the target as this period alone can get, rather than always
-        // using the full requested amplitude and overshooting -- and, if
-        // the *baseline* is what's actually run out (not the requested
-        // extra length), shrinks further still to whatever amplitude the
-        // remaining room can physically fit, so a target right at the
-        // edge of what this amplitude/spacing combination can achieve
-        // over this baseline length gets as close as the geometry
-        // allows instead of stopping one period early.
-        let wanted_amp = if remaining_extra < per_period { (remaining_extra / (2.0 * DIAGONAL_OVERHEAD)).min(amplitude_um as f64) } else { amplitude_um as f64 };
-        let this_amp = wanted_amp.min(remaining_room / 2.0);
-        if this_amp < 1.0 {
-            break; // not even the two diagonal legs fit any more -- genuinely out of room.
-        }
-        // The straight run at the peak shrinks too, down to whatever's
-        // actually left after the two diagonals, rather than a fixed
-        // `spacing` occasionally being the one thing standing between a
-        // final partial period and actually reaching the target.
-        let this_spacing = spacing_um.min((remaining_room - 2.0 * this_amp).round() as Um).max(0);
-        let sign = if side_up { 1.0 } else { -1.0 };
-        let (sx, sy) = (sign * nx, sign * ny);
-        let p1 = (cur.0 + this_amp * (ux + sx), cur.1 + this_amp * (uy + sy));
-        let p2 = (p1.0 + this_spacing as f64 * ux, p1.1 + this_spacing as f64 * uy);
-        let p3 = (p2.0 + this_amp * (ux - sx), p2.1 + this_amp * (uy - sy));
-        pts.push(round_pt(p1.0, p1.1));
-        pts.push(round_pt(p2.0, p2.1));
-        pts.push(round_pt(p3.0, p3.1));
-        remaining_extra -= 2.0 * this_amp * DIAGONAL_OVERHEAD;
-        remaining_room -= 2.0 * this_amp + this_spacing as f64;
-        cur = p3;
-        side_up = !side_up;
-    }
-    if pts.len() < 2 {
-        return None; // not enough room for even one period.
-    }
-    pts.push(b);
-    pts.dedup(); // the trailing straight run to `b` is zero-length when the last period ended exactly at `b`.
-    let achieved_length = polyline_length(&pts);
-    Some(MeanderResult { pts, achieved_length })
-}
-
-/// Drops consecutive duplicate points and every middle point that lies exactly on the straight run
-/// between its neighbours (cross product zero and no reversal), keeping the first and last point
-/// untouched -- a stub and the straight run it joins become one segment.
-pub fn simplify_collinear(pts: Vec<Point>) -> Vec<Point> {
-    let mut deduped: Vec<Point> = Vec::with_capacity(pts.len());
-    for p in pts {
-        if deduped.last() != Some(&p) {
-            deduped.push(p);
-        }
-    }
-    if deduped.len() < 3 {
-        return deduped;
-    }
-    let mut out = vec![deduped[0]];
-    for i in 1..deduped.len() - 1 {
-        let prev = *out.last().expect("out starts non-empty");
-        let (cur, next) = (deduped[i], deduped[i + 1]);
-        let cross = (cur.x - prev.x) as i128 * (next.y - cur.y) as i128 - (cur.y - prev.y) as i128 * (next.x - cur.x) as i128;
-        let dot = (cur.x - prev.x) as i128 * (next.x - cur.x) as i128 + (cur.y - prev.y) as i128 * (next.y - cur.y) as i128;
-        if cross == 0 && dot > 0 {
-            continue; // straight through: this point adds nothing
-        }
-        out.push(cur);
-    }
-    out.push(*deduped.last().expect("len >= 3"));
-    out
-}
-
-// ---------------------------------------------------------------------------------------------
-// Differential-pair ("dual") meander -- `DP_MEANDER_PLACER` (`pns_dp_meander_placer.cpp`).
-// ---------------------------------------------------------------------------------------------
-//
-// Upstream's DP tuner builds one `MEANDERED_LINE( this, true )` ("dual"): the baseline is the midline of the
-// coupled segment pair (`baselineSegment`: the midpoints of the two segments' endpoints), the meander is
-// generated once along it, and each of the pair's two lines is that shape shifted sideways by
-// `(gap + width) / 2` (`SetBaselineOffset`; `pairOrientation` picks which line takes which sign). The two
-// lines are therefore parallel everywhere, with corners mitered -- they differ in length only by what the
-// miters add or take away, and `m_lastLength` reports `max( P, N )`.
-//
-// Same scoping as the single-track tuner above: the baseline is a straight axis-aligned run and the
-// meander is this module's 45-degree trapezoid wave (not upstream's rectangular/rounded bumps). Each line
-// is `offset_polyline` of that centerline by its own signed lateral offset (positive = the direction
-// turned -90 degrees, the convention `crate::diff_pair::offset_polyline` already uses).
-
-/// Why [`generate_dp_meander`] produced nothing, with the sentence a caller shows the user.
+/// `MEANDER_STYLE`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DpMeanderError {
-    /// Not an axis-aligned baseline, non-positive amplitude/spacing, a target that is not longer than the
-    /// baseline, or a baseline too short to fit even a lead-in and a minimal bump.
-    NothingToAdd,
-    /// The shape's two lines (or one of them with itself) would touch: the spacing/amplitude leave no room
-    /// for the pair's own width -- the inner line of a bump folds over itself.
-    Overlap,
+pub enum MeanderStyle {
+    /// `MEANDER_STYLE_ROUND`: a 90-degree arc.
+    Round,
+    /// `MEANDER_STYLE_CHAMFER`: a 45-degree segment.
+    Chamfer,
 }
 
-impl DpMeanderError {
-    pub fn message(self) -> &'static str {
+/// `MEANDER_SIDE`: the side the first meander is put on (`-1` left, `1` right, `0` the side of the cursor).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeanderSide {
+    Left = -1,
+    Default = 0,
+    Right = 1,
+}
+
+impl MeanderSide {
+    pub fn value(self) -> i32 {
+        self as i32
+    }
+
+    /// `(MEANDER_SIDE) -settings.m_initialSide`.
+    pub fn flipped(self) -> MeanderSide {
         match self {
-            DpMeanderError::NothingToAdd => "can't reach that target length -- it may already be at or below the pair's own straight length, or the amplitude/spacing leave no room on this short a run",
-            DpMeanderError::Overlap => "the pair's two lines would overlap at this amplitude/spacing -- increase the spacing (the straight run at each bump must exceed the pair's width) and retry",
+            MeanderSide::Left => MeanderSide::Right,
+            MeanderSide::Right => MeanderSide::Left,
+            MeanderSide::Default => MeanderSide::Default,
         }
     }
 }
 
-/// The tuned lines of a pair, each from its own start to its own end (both run in the baseline's direction).
+/// `MEANDER_SETTINGS` (the net class it carries and the time-domain targets are not modelled).
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeanderSettings {
+    pub min_amplitude: i64,
+    pub max_amplitude: i64,
+    pub spacing: i64,
+    /// "Amplitude/spacing adjustment step".
+    pub step: i64,
+    pub len_pad_to_die: i64,
+    pub target_length: MinOptMax,
+    pub target_skew: MinOptMax,
+    pub override_custom_rules: bool,
+    pub corner_style: MeanderStyle,
+    pub corner_radius_percentage: i64,
+    pub single_sided: bool,
+    pub initial_side: MeanderSide,
+    pub length_tolerance: i64,
+    pub keep_endpoints: bool,
+}
+
+impl Default for MeanderSettings {
+    /// `MEANDER_SETTINGS::MEANDER_SETTINGS()`.
+    fn default() -> Self {
+        let mut s = MeanderSettings {
+            min_amplitude: 200_000,
+            max_amplitude: 1_000_000,
+            spacing: 600_000,
+            step: 50_000,
+            len_pad_to_die: 0,
+            target_length: MinOptMax::default(),
+            target_skew: MinOptMax::default(),
+            override_custom_rules: false,
+            corner_style: MeanderStyle::Round,
+            corner_radius_percentage: 80,
+            single_sided: false,
+            initial_side: MeanderSide::Left,
+            length_tolerance: 0,
+            keep_endpoints: false,
+        };
+        s.set_target_length(LENGTH_UNCONSTRAINED);
+        s.set_target_skew(0);
+        s
+    }
+}
+
+impl MeanderSettings {
+    /// `SetTargetLength( long long )`: the value, with the default tolerance round it (none for "unconstrained").
+    pub fn set_target_length(&mut self, opt: i64) {
+        self.target_length.set_opt(opt);
+        if opt == LENGTH_UNCONSTRAINED {
+            self.target_length.set_min(0);
+            self.target_length.set_max(opt);
+        } else {
+            self.target_length.set_min(opt - DEFAULT_LENGTH_TOLERANCE);
+            self.target_length.set_max(opt + DEFAULT_LENGTH_TOLERANCE);
+        }
+    }
+
+    /// `SetTargetLength( const MINOPTMAX<int>& )`: a constraint's value; its own minimum and maximum win over the default tolerance.
+    pub fn set_target_length_constraint(&mut self, c: &MinOptMax) {
+        self.set_target_length(c.opt());
+        if c.has_min() {
+            self.target_length.set_min(c.min());
+        }
+        if c.has_max() {
+            self.target_length.set_max(c.max());
+        }
+    }
+
+    /// `SetTargetSkew( int )`.
+    pub fn set_target_skew(&mut self, opt: i64) {
+        self.target_skew.set_opt(opt);
+        if opt == SKEW_UNCONSTRAINED {
+            self.target_skew.set_min(0);
+            self.target_skew.set_max(opt);
+        } else {
+            self.target_skew.set_min(opt - DEFAULT_LENGTH_TOLERANCE);
+            self.target_skew.set_max(opt + DEFAULT_LENGTH_TOLERANCE);
+        }
+    }
+
+    /// `SetTargetSkew( const MINOPTMAX<int>& )`.
+    pub fn set_target_skew_constraint(&mut self, c: &MinOptMax) {
+        self.set_target_skew(c.opt());
+        if c.has_min() {
+            self.target_skew.set_min(c.min());
+        }
+        if c.has_max() {
+            self.target_skew.set_max(c.max());
+        }
+    }
+}
+
+/// What the shapes ask the placer (`MEANDER_PLACER_BASE`): its settings (which a fit may flip the initial side of), the clearance of the
+/// line being tuned, and whether a shape fits the board and its own earlier shapes (`CheckFit`).
+pub trait MeanderEnv {
+    fn settings(&self) -> &MeanderSettings;
+    /// `UpdateSettings`.
+    fn update_settings(&mut self, settings: MeanderSettings);
+    /// `MEANDER_PLACER_BASE::Clearance`.
+    fn clearance(&self) -> i64;
+    /// `MEANDER_PLACER_BASE::CheckFit`: `existing` is the line's shapes so far (`m_result`).
+    fn check_fit(&mut self, shape: &MeanderShape, existing: &[MeanderShape]) -> bool;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// MEANDER_SHAPE
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// `MEANDER_TYPE`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MeanderType {
+    /// `_|^|_`, single-sided.
+    Single,
+    /// `_|^|`.
+    Start,
+    /// `|^|_`.
+    Finish,
+    /// `|^|` or `|_|`.
+    Turn,
+    /// Try fitting a start, but produce no line.
+    CheckStart,
+    /// Try fitting a finish, but produce no line.
+    CheckFinish,
+    /// A corner of the line.
+    Corner,
+    /// An arc corner.
+    Arc,
+    /// No meander (a straight line).
+    Empty,
+}
+
+/// `DEG2RAD( 22.5 )`.
+fn deg22_5() -> f64 {
+    22.5 * std::f64::consts::PI / 180.0
+}
+
+/// `MEANDER_SHAPE`: the geometry of one meander. The settings and the clearance the shape reads off its placer are copied when it is made.
 #[derive(Debug, Clone)]
-pub struct DpMeanderResult {
-    pub a: Vec<Point>,
-    pub b: Vec<Point>,
-    pub a_length: Um,
-    pub b_length: Um,
+pub struct MeanderShape {
+    settings: MeanderSettings,
+    clearance: i64,
+    m_type: MeanderType,
+    dual: bool,
+    width: i64,
+    amplitude: i64,
+    baseline_offset: i64,
+    mean_corner_radius: i64,
+    target_base_len: i64,
+    p0: Point,
+    base_seg: Seg,
+    clipped_base_seg: Seg,
+    side: bool,
+    shapes: [ShapeLineChain; 2],
+    base_index: i64,
 }
 
-fn orient(p: Point, q: Point, r: Point) -> i128 {
-    (q.x - p.x) as i128 * (r.y - p.y) as i128 - (q.y - p.y) as i128 * (r.x - p.x) as i128
+/// The turtle `MEANDER_SHAPE::start / forward / turn / miter / uShape` draw with.
+struct Turtle {
+    lc: ShapeLineChain,
+    dir: V2,
+    pos: V2,
 }
 
-fn within_box(p: Point, q: Point, r: Point) -> bool {
-    r.x >= p.x.min(q.x) && r.x <= p.x.max(q.x) && r.y >= p.y.min(q.y) && r.y <= p.y.max(q.y)
-}
-
-/// Do the closed segments `a1-a2` and `b1-b2` share any point (touching and collinear overlap included)?
-fn segments_touch(a1: Point, a2: Point, b1: Point, b2: Point) -> bool {
-    let (o1, o2) = (orient(a1, a2, b1).signum(), orient(a1, a2, b2).signum());
-    let (o3, o4) = (orient(b1, b2, a1).signum(), orient(b1, b2, a2).signum());
-    if o1 != o2 && o3 != o4 {
-        return true;
+impl MeanderShape {
+    /// `MEANDER_SHAPE( aPlacer, aWidth, aIsDual )`.
+    pub fn new(env: &dyn MeanderEnv, width: i64, dual: bool) -> MeanderShape {
+        let zero = Point { x: 0, y: 0 };
+        MeanderShape {
+            settings: env.settings().clone(),
+            clearance: env.clearance(),
+            m_type: MeanderType::Single,
+            dual,
+            width,
+            amplitude: 0,
+            baseline_offset: 0,
+            mean_corner_radius: 0,
+            target_base_len: 0,
+            p0: zero,
+            base_seg: Seg::new(zero, zero),
+            clipped_base_seg: Seg::new(zero, zero),
+            side: false,
+            shapes: [ShapeLineChain::new(), ShapeLineChain::new()],
+            base_index: 0,
+        }
     }
-    (o1 == 0 && within_box(a1, a2, b1)) || (o2 == 0 && within_box(a1, a2, b2)) || (o3 == 0 && within_box(b1, b2, a1)) || (o4 == 0 && within_box(b1, b2, a2))
-}
 
-/// Does `a` touch itself (any two non-adjacent segments), `b` itself, or `a` touch `b`?
-fn lines_conflict(a: &[Point], b: &[Point]) -> bool {
-    let own = |p: &[Point]| {
-        let segs: Vec<(Point, Point)> = p.windows(2).filter(|w| w[0] != w[1]).map(|w| (w[0], w[1])).collect();
-        (0..segs.len()).any(|i| (i + 2..segs.len()).any(|j| segments_touch(segs[i].0, segs[i].1, segs[j].0, segs[j].1)))
-    };
-    if own(a) || own(b) {
-        return true;
+    pub fn set_type(&mut self, t: MeanderType) {
+        self.m_type = t;
     }
-    a.windows(2).any(|sa| b.windows(2).any(|sb| segments_touch(sa[0], sa[1], sb[0], sb[1])))
-}
 
-/// Meander a differential pair along the straight, axis-aligned baseline `base_a`-`base_b` (the midline
-/// between the two coupled lines). `off_a`/`off_b` are the lines' signed lateral offsets from that
-/// baseline (`crate::diff_pair::offset_polyline`'s sign convention); `target_len_um` is the length the
-/// *longer* of the two lines should reach over this stretch (`DP_MEANDER_PLACER` reports `max( P, N )`).
-/// Both lines start and end exactly on the baseline's ends shifted by their own offset, so they stay
-/// joined to whatever the stretch is attached to.
-pub fn generate_dp_meander(base_a: Point, base_b: Point, off_a: Um, off_b: Um, amplitude_um: Um, spacing_um: Um, target_len_um: Um, flip: bool) -> Result<DpMeanderResult, DpMeanderError> {
-    use crate::diff_pair::offset_polyline;
-    let (dx, dy) = (base_b.x - base_a.x, base_b.y - base_a.y);
-    if (dx == 0) == (dy == 0) || amplitude_um <= 0 || spacing_um <= 0 {
-        return Err(DpMeanderError::NothingToAdd);
+    pub fn kind(&self) -> MeanderType {
+        self.m_type
     }
-    let len = dx.abs() + dy.abs();
-    let (ux, uy) = (dx.signum(), dy.signum());
-    // A straight lead-in/out keeps the first/last mitered corner (it sits `|off| * tan(22.5 deg)` back from the
-    // diagonal's own vertex on the inside of the turn) inside the stretch, so each line starts exactly at its
-    // own end point instead of backing up past it.
-    let widest = off_a.abs().max(off_b.abs());
-    let lead = (widest as f64 * (std::f64::consts::FRAC_PI_8).tan()).ceil() as Um + 1;
-    if len <= 2 * lead + 2 || target_len_um <= len {
-        return Err(DpMeanderError::NothingToAdd);
-    }
-    let inner_a = Point { x: base_a.x + ux * lead, y: base_a.y + uy * lead };
-    let inner_b = Point { x: base_b.x - ux * lead, y: base_b.y - uy * lead };
-    let inner_len = (len - 2 * lead) as f64;
-    // `MEANDER_SHAPE::MinAmplitude` (`|baselineOffset| + correction`): below the pair's own half-spacing a bump's
-    // inner line would sit on the wrong side of the baseline. `MEANDER_SHAPE::spacing` for a dual meander
-    // (`width + clearance + 2 * |baselineOffset|`): the straight run at each bump never gets shorter than the two
-    // lines' own span.
-    let min_amp = widest + 1;
-    let amp_max = amplitude_um.max(min_amp);
-    let spacing = spacing_um.max(2 * widest);
 
-    // One pass builds the shape for one target elongation of the longer line; that line's real length differs from
-    // the centerline's by whatever the miters add or take away, so correct the elongation by the miss and go again
-    // (a pass or two settles it).
-    let mut want_extra = (target_len_um - len) as f64;
-    let mut best: Option<(Um, DpMeanderResult)> = None;
-    for pass in 0..5 {
-        let Some((count, amp_sum)) = pick_periods(want_extra, inner_len, spacing as f64, amp_max, min_amp) else {
-            if pass == 0 {
-                return Err(DpMeanderError::NothingToAdd);
-            }
-            break;
+    pub fn set_base_index(&mut self, i: i64) {
+        self.base_index = i;
+    }
+
+    pub fn base_index(&self) -> i64 {
+        self.base_index
+    }
+
+    pub fn amplitude(&self) -> i64 {
+        self.amplitude
+    }
+
+    pub fn is_dual(&self) -> bool {
+        self.dual
+    }
+
+    pub fn side(&self) -> bool {
+        self.side
+    }
+
+    /// `End`: the end of the base segment of the shape.
+    pub fn end(&self) -> Point {
+        self.clipped_base_seg.b
+    }
+
+    /// `CLine( aShape )`.
+    pub fn c_line(&self, which: usize) -> &ShapeLineChain {
+        &self.shapes[which]
+    }
+
+    pub fn base_segment(&self) -> Seg {
+        self.clipped_base_seg
+    }
+
+    pub fn width(&self) -> i64 {
+        self.width
+    }
+
+    pub fn set_baseline_offset(&mut self, offset: i64) {
+        self.baseline_offset = offset;
+    }
+
+    pub fn baseline_offset(&self) -> i64 {
+        self.baseline_offset
+    }
+
+    /// `SetTargetBaselineLength`.
+    pub fn set_target_baseline_length(&mut self, len: i64) {
+        self.target_base_len = len;
+    }
+
+    /// `MakeCorner`: a dummy shape for a corner of the line (the second point is the other line's, for a pair).
+    pub fn make_corner(&mut self, p1: Point, p2: Point) {
+        self.m_type = MeanderType::Corner;
+        self.shapes[0] = ShapeLineChain::from_points(&[p1]);
+        self.shapes[1] = ShapeLineChain::from_points(&[p2]);
+        self.clipped_base_seg = Seg::new(p1, p1);
+    }
+
+    /// `MakeArc`: a dummy shape for an arc of the line.
+    pub fn make_arc(&mut self, a1: &ShapeArc, a2: &ShapeArc) {
+        self.m_type = MeanderType::Corner;
+        self.shapes[0].clear();
+        self.shapes[1].clear();
+        self.shapes[0].append_arc(a1);
+        self.shapes[1].append_arc(a2);
+        self.clipped_base_seg = Seg::new(a1.start, a1.start);
+    }
+
+    // ----------------------------------------------------------------------------------------------- sizes
+
+    /// `MinAmplitude`.
+    pub fn min_amplitude(&self) -> i64 {
+        let mut min_amplitude = self.settings.min_amplitude;
+        if self.settings.corner_style == MeanderStyle::Round {
+            min_amplitude = min_amplitude.max(self.baseline_offset.abs() + self.width);
+        } else {
+            // `int correction = m_width * tan( 1 - tan( DEG2RAD( 22.5 ) ) )`: the expression is KiCad's.
+            let correction = (self.width as f64 * (1.0 - deg22_5().tan()).tan()) as i64;
+            min_amplitude = min_amplitude.max(self.baseline_offset.abs() + correction);
+        }
+        min_amplitude
+    }
+
+    /// `spacing`.
+    pub fn spacing(&self) -> i64 {
+        if !self.dual {
+            (self.width + self.clearance).max(self.settings.spacing)
+        } else {
+            let sp = self.width + self.clearance + 2 * self.baseline_offset.abs();
+            sp.max(self.settings.spacing)
+        }
+    }
+
+    /// `cornerRadius`.
+    pub fn corner_radius(&self) -> i64 {
+        if self.amplitude == 0 {
+            return 0;
+        }
+        let min_cr: i64 = if self.settings.corner_style == MeanderStyle::Round {
+            self.baseline_offset.abs() + self.width / 2
+        } else {
+            (self.baseline_offset.abs() as f64 + (self.width / 2) as f64 * (1.0 - deg22_5().tan())) as i64
         };
-        let Some(zig) = zigzag(inner_a, inner_b, count, amp_sum, spacing, flip) else {
-            if pass == 0 {
-                return Err(DpMeanderError::NothingToAdd);
+        let max_cr1 = (self.amplitude + self.baseline_offset.abs()) / 2;
+        let max_cr2 = self.spacing() / 2;
+        let max_cr = max_cr1.min(max_cr2);
+        // `wxCHECK2_MSG( maxCr >= minCr, return maxCr, ... )`
+        if max_cr < min_cr {
+            return max_cr;
+        }
+        let r_percent = self.settings.corner_radius_percentage;
+        let opt_cr = (self.spacing() as i128 * r_percent as i128 / 200) as i64;
+        opt_cr.clamp(min_cr, max_cr)
+    }
+
+    // ----------------------------------------------------------------------------------------------- turtle
+
+    fn start(t: &mut Turtle, where_: V2, dir: V2) {
+        t.lc.clear();
+        t.lc.append_point(where_.trunc());
+        t.dir = dir;
+        t.pos = where_;
+    }
+
+    /// `forward`: "Very small segments cause problems."
+    fn forward(t: &mut Turtle, length: i64) {
+        if length < 5 {
+            return;
+        }
+        t.pos = t.pos.add(t.dir.resize(length as f64));
+        t.lc.append_point(t.pos.trunc());
+    }
+
+    fn turn(t: &mut Turtle, angle_deg: f64) {
+        t.dir = rotate_d(t.dir, angle_deg);
+    }
+
+    /// `makeMiterShape`.
+    fn make_miter_shape(&self, p: V2, dir: V2, side: bool) -> ShapeLineChain {
+        let mut lc = ShapeLineChain::new();
+        if dir.norm() == 0.0 {
+            lc.append_point(p.trunc());
+            return lc;
+        }
+        let dir_u = dir;
+        let dir_v = dir.perpendicular();
+        let sgn = if side { -1.0 } else { 1.0 };
+        let end_point = p.add(dir_u).add(dir_v.scale(sgn));
+        lc.append_point(p.trunc());
+        match self.settings.corner_style {
+            MeanderStyle::Round => {
+                let arc_end = end_point.trunc();
+                let arc = ShapeArc::from_start_end_angle(p.trunc(), arc_end, if side { -90.0 } else { 90.0 }, 0);
+                lc.append_arc(&arc);
             }
-            break;
+            MeanderStyle::Chamfer => {
+                let radius = dir.norm();
+                let mut correction = 0.0;
+                if self.dual && radius > self.mean_corner_radius as f64 {
+                    correction = (-2 * self.baseline_offset.abs()) as f64 * deg22_5().tan();
+                }
+                let dir_cu = dir_u.resize(correction);
+                let dir_cv = dir_v.resize(correction);
+                let pt = p.sub(dir_cu);
+                lc.append_point(pt.trunc());
+                let pt = p.add(dir_u).add(dir_v.add(dir_cv).scale(sgn));
+                lc.append_point(pt.trunc());
+                lc.append_point(end_point.trunc());
+            }
+        }
+        lc
+    }
+
+    /// `miter`.
+    fn miter(&self, t: &mut Turtle, radius: i64, side: bool) {
+        if radius <= 0 {
+            Self::turn(t, if side { 90.0 } else { -90.0 });
+            return;
+        }
+        let dir = t.dir.resize(radius as f64);
+        let lc = self.make_miter_shape(t.pos, dir, side);
+        t.pos = V2::of(lc.c_last_point());
+        Self::turn(t, if side { 90.0 } else { -90.0 });
+        t.lc.append_chain(&lc);
+    }
+
+    /// `uShape`.
+    fn u_shape(&self, t: &mut Turtle, sides: i64, corner: i64, top: i64) {
+        Self::forward(t, sides);
+        self.miter(t, corner, true);
+        Self::forward(t, top);
+        self.miter(t, corner, true);
+        Self::forward(t, sides);
+    }
+
+    /// `genMeanderShape`: the line of one meander of type `ty` that starts at `p` and goes along `dir`, on `side` (true: the right) of it; the
+    /// line is `baseline_offset` off the baseline (the lines of a pair).
+    fn gen_meander_shape(&mut self, p: V2, dir: V2, side: bool, ty: MeanderType, baseline_offset: i64) -> ShapeLineChain {
+        let mut cr = self.corner_radius();
+        let mut offset = baseline_offset;
+        let spc = self.spacing();
+        let amplitude = self.amplitude;
+        let target_base_len = self.target_base_len;
+
+        if side {
+            offset *= -1;
+        }
+
+        let dir_u_b = dir.resize(offset as f64);
+        let dir_v_b = dir_u_b.perpendicular();
+
+        if 2 * cr > amplitude + offset.abs() {
+            cr = (amplitude + offset.abs()) / 2;
+        }
+        if 2 * cr > spc {
+            cr = spc / 2;
+        }
+        if cr - offset < 0 {
+            cr = offset;
+        }
+        self.mean_corner_radius = cr;
+
+        let s_corner = cr - offset;
+        let u_corner = cr + offset;
+        let start_side = amplitude - 2 * cr + offset.abs();
+        let turn_side = amplitude - cr;
+        let mut top = spc - 2 * cr;
+
+        let mut t = Turtle { lc: ShapeLineChain::new(), dir, pos: p };
+        Self::start(&mut t, p.add(dir_v_b), dir);
+
+        match ty {
+            MeanderType::Empty => {
+                t.lc.append_point(p.add(dir_v_b).add(dir).trunc());
+            }
+            MeanderType::Start => {
+                if target_base_len != 0 {
+                    top = top.max(target_base_len - s_corner - u_corner * 2 + offset);
+                }
+                self.miter(&mut t, s_corner, false);
+                self.u_shape(&mut t, start_side, u_corner, top);
+                Self::forward(&mut t, s_corner.min(u_corner));
+                Self::forward(&mut t, offset.abs());
+            }
+            MeanderType::Finish => {
+                if target_base_len != 0 {
+                    top = top.max(target_base_len - cr - spc);
+                }
+                Self::start(&mut t, p.sub(dir_u_b), dir);
+                Self::turn(&mut t, -90.0);
+                Self::forward(&mut t, s_corner.min(u_corner));
+                Self::forward(&mut t, offset.abs());
+                self.u_shape(&mut t, start_side, u_corner, top);
+                self.miter(&mut t, s_corner, false);
+                if target_base_len >= spc + cr {
+                    t.lc.append_point(p.add(dir_v_b).add(dir.resize(target_base_len as f64)).trunc());
+                } else {
+                    t.lc.append_point(p.add(dir_v_b).add(dir.resize((2 * spc - cr) as f64)).trunc());
+                }
+            }
+            MeanderType::Turn => {
+                if target_base_len != 0 {
+                    top = top.max(target_base_len - u_corner * 2 + offset * 2);
+                }
+                Self::start(&mut t, p.sub(dir_u_b), dir);
+                Self::turn(&mut t, -90.0);
+                Self::forward(&mut t, offset.abs());
+                self.u_shape(&mut t, turn_side, u_corner, top);
+                Self::forward(&mut t, offset.abs());
+            }
+            MeanderType::Single => {
+                if target_base_len != 0 {
+                    top = top.max((target_base_len - s_corner * 2 - u_corner * 2) / 2);
+                }
+                self.miter(&mut t, s_corner, false);
+                self.u_shape(&mut t, start_side, u_corner, top);
+                self.miter(&mut t, s_corner, false);
+                t.lc.append_point(p.add(dir_v_b).add(dir.resize((2 * spc) as f64)).trunc());
+            }
+            _ => {}
+        }
+
+        let mut lc = t.lc;
+        if side {
+            let axis = Seg::new(p.trunc(), p.add(dir).trunc());
+            lc.mirror(&axis);
+        }
+        lc
+    }
+
+    /// `updateBaseSegment`: the part of the base segment the shape covers.
+    fn update_base_segment(&mut self) {
+        if self.dual {
+            // `( CLine( 0 ).CPoint( 0 ) + CLine( 1 ).CPoint( 0 ) ) / 2`: `VECTOR2I::operator/( double )` rounds.
+            let mid = |p: Point, q: Point| Point { x: ki_round((p.x + q.x) as f64 / 2.0), y: ki_round((p.y + q.y) as f64 / 2.0) };
+            let a = mid(self.c_line(0).c_point(0), self.c_line(1).c_point(0));
+            let b = mid(self.c_line(0).c_last_point(), self.c_line(1).c_last_point());
+            self.clipped_base_seg = Seg::new(self.base_seg.line_project(a), self.base_seg.line_project(b));
+        } else {
+            self.clipped_base_seg = Seg::new(self.base_seg.line_project(self.c_line(0).c_point(0)), self.base_seg.line_project(self.c_line(0).c_last_point()));
+        }
+    }
+
+    // ----------------------------------------------------------------------------------------------- fitting
+
+    /// `Fit`: puts a meander of type `ty` on `seg` from `p`, on `side`, as tall as the placer's maximum amplitude lets it fit, shrinking in steps
+    /// to the minimum. `existing` are the line's shapes so far. Returns whether one fit.
+    pub fn fit(&mut self, env: &mut dyn MeanderEnv, existing: &[MeanderShape], ty: MeanderType, seg: Seg, p: Point, side: bool) -> bool {
+        let (prim1, prim2, check_mode) = match ty {
+            MeanderType::CheckStart => (MeanderType::Start, MeanderType::Turn, true),
+            MeanderType::CheckFinish => (MeanderType::Turn, MeanderType::Finish, true),
+            _ => (MeanderType::Empty, MeanderType::Empty, false),
         };
-        let mut centerline = Vec::with_capacity(zig.len() + 2);
-        centerline.push(base_a);
-        centerline.extend_from_slice(&zig);
-        centerline.push(base_b);
-        let a = offset_polyline(&centerline, off_a);
-        let b = offset_polyline(&centerline, off_b);
-        if lines_conflict(&a, &b) {
-            return Err(DpMeanderError::Overlap);
+
+        if check_mode {
+            let mut m1 = MeanderShape::new(&*env, self.width, self.dual);
+            let mut m2 = MeanderShape::new(&*env, self.width, self.dual);
+            m1.set_baseline_offset(self.baseline_offset);
+            m2.set_baseline_offset(self.baseline_offset);
+            let c1 = m1.fit(env, existing, prim1, seg, p, side);
+            let mut c2 = false;
+            if c1 {
+                c2 = m2.fit(env, existing, prim2, seg, m1.end(), !side);
+            }
+            if c1 && c2 {
+                self.m_type = prim1;
+                self.shapes = m1.shapes.clone();
+                self.base_seg = seg;
+                self.p0 = p;
+                self.side = side;
+                self.amplitude = m1.amplitude();
+                self.dual = m1.dual;
+                self.base_seg = m1.base_seg;
+                self.base_index = m1.base_index;
+                self.update_base_segment();
+                self.baseline_offset = m1.baseline_offset;
+                return true;
+            }
+            return false;
         }
-        let (a_length, b_length) = (polyline_length(&a), polyline_length(&b));
-        let miss = target_len_um - a_length.max(b_length);
-        if best.as_ref().is_none_or(|(m, _)| miss.abs() < *m) {
-            best = Some((miss.abs(), DpMeanderResult { a, b, a_length, b_length }));
+
+        let min_ampl = self.min_amplitude();
+        let max_ampl = self.settings.max_amplitude.max(min_ampl);
+        // "Calculate minimum acceptable corner radius for visible rounding": at least half the track width (issue #8629).
+        let min_corner_radius = self.width / 2;
+
+        let mut ampl = max_ampl;
+        while ampl >= min_ampl {
+            self.amplitude = ampl;
+            let d = V2::of(Point { x: seg.b.x - seg.a.x, y: seg.b.y - seg.a.y });
+            if self.dual {
+                let off = self.baseline_offset;
+                self.shapes[0] = self.gen_meander_shape(V2::of(p), d, side, ty, off);
+                self.shapes[1] = self.gen_meander_shape(V2::of(p), d, side, ty, -off);
+            } else {
+                self.shapes[0] = self.gen_meander_shape(V2::of(p), d, side, ty, 0);
+            }
+            self.m_type = ty;
+            self.base_seg = seg;
+            self.p0 = p;
+            self.side = side;
+            self.update_base_segment();
+
+            // "Reject configurations that would result in nearly-square corners (issue #8629)."
+            if self.mean_corner_radius >= min_corner_radius && env.check_fit(self, existing) {
+                return true;
+            }
+            // (a step of nothing would never leave the loop)
+            ampl -= self.settings.step.max(1);
         }
-        if miss.abs() <= 2 {
-            break;
+        false
+    }
+
+    /// `Recalculate`.
+    pub fn recalculate(&mut self) {
+        let d = V2::of(Point { x: self.base_seg.b.x - self.base_seg.a.x, y: self.base_seg.b.y - self.base_seg.a.y });
+        let off = if self.dual { self.baseline_offset } else { 0 };
+        self.shapes[0] = self.gen_meander_shape(V2::of(self.p0), d, self.side, self.m_type, off);
+        if self.dual {
+            self.shapes[1] = self.gen_meander_shape(V2::of(self.p0), d, self.side, self.m_type, -self.baseline_offset);
         }
-        want_extra += miss as f64;
-        if want_extra <= 0.0 {
-            break;
+        self.update_base_segment();
+    }
+
+    /// `Resize`: the amplitude, no lower than the minimum "needed for proper corner radii".
+    pub fn resize(&mut self, ampl: i64) {
+        if ampl < 0 {
+            return;
+        }
+        let min_ampl = self.min_amplitude();
+        self.amplitude = ampl.max(min_ampl);
+        self.recalculate();
+    }
+
+    /// `MakeEmpty`: the shape becomes the straight bypass.
+    pub fn make_empty(&mut self) {
+        self.update_base_segment();
+        let dir = V2::of(Point { x: self.clipped_base_seg.b.x - self.clipped_base_seg.a.x, y: self.clipped_base_seg.b.y - self.clipped_base_seg.a.y });
+        self.m_type = MeanderType::Empty;
+        self.amplitude = 0;
+        let off = if self.dual { self.baseline_offset } else { 0 };
+        self.shapes[0] = self.gen_meander_shape(V2::of(self.p0), dir, self.side, self.m_type, off);
+        if self.dual {
+            self.shapes[1] = self.gen_meander_shape(V2::of(self.p0), dir, self.side, self.m_type, -self.baseline_offset);
         }
     }
-    best.map(|(_, r)| r).ok_or(DpMeanderError::NothingToAdd)
+
+    /// `BaselineLength`.
+    pub fn baseline_length(&self) -> i64 {
+        self.clipped_base_seg.length()
+    }
+
+    /// `CurrentLength`.
+    pub fn current_length(&self) -> i64 {
+        self.c_line(0).length()
+    }
+
+    /// `MinTunableLength`: the length of the shape at its minimum amplitude.
+    pub fn min_tunable_length(&self) -> i64 {
+        let mut copy = self.clone();
+        copy.set_target_baseline_length(self.baseline_length());
+        let min = copy.min_amplitude();
+        copy.resize(min);
+        copy.current_length()
+    }
 }
 
-/// How many bumps, and the sum of their amplitudes, give `extra` um of added length over `room` um of straight
-/// run -- the uniform amplitude `MEANDER_PLACER_BASE::tuneLineLength` ends up with (`findAmplitudeForLength` spreads
-/// the elongation evenly over the meanders it keeps) instead of a few full-size bumps and one tiny remainder. One
-/// period of amplitude `a` adds `2 * a * (sqrt 2 - 1)` and uses `2 * a + spacing` of the run, so `n` bumps of
-/// summed amplitude `T` add `2 * (sqrt 2 - 1) * T`, use `2 * T + n * spacing`, and can only be as small as
-/// `n * min_amp` or as large as `n * amp_max`. Every `n` that fits is tried with the summed amplitude closest to
-/// what the target wants; the least miss wins, the fewest bumps (so the biggest amplitude) on a tie. A pick that
-/// misses by more than adding nothing would is no pick (`None`).
-fn pick_periods(extra: f64, room: f64, spacing: f64, amp_max: Um, min_amp: Um) -> Option<(usize, Um)> {
-    if extra <= 0.0 {
-        return None;
-    }
-    let k = 2.0 * DIAGONAL_OVERHEAD;
-    let wanted = (extra / k).round() as Um;
-    let mut best: Option<(f64, usize, Um)> = None;
-    let mut n = 1usize;
-    loop {
-        let lo = n as Um * min_amp;
-        if 2.0 * lo as f64 + n as f64 * spacing > room {
-            break; // even the smallest bumps overrun the run
-        }
-        let by_room = ((room - n as f64 * spacing) / 2.0).floor() as Um;
-        let sum = wanted.clamp(lo, n as Um * amp_max).min(by_room).max(lo);
-        let miss = (k * sum as f64 - extra).abs();
-        if best.is_none_or(|(m, _, _)| miss < m - 1e-9) {
-            best = Some((miss, n, sum));
-        }
-        n += 1;
-    }
-    best.filter(|&(miss, _, _)| miss < extra).map(|(_, n, sum)| (n, sum))
+// ---------------------------------------------------------------------------------------------------------------------
+// MEANDERED_LINE
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// `MEANDERED_LINE`: the meanders (and the corners and arcs between them) of a line, in order.
+#[derive(Debug, Clone, Default)]
+pub struct MeanderedLine {
+    last: Point,
+    meanders: Vec<MeanderShape>,
+    dual: bool,
+    width: i64,
+    baseline_offset: i64,
 }
 
-/// `count` trapezoid bumps (45-degree legs, `spacing` straight at the top), alternating sides, along the
-/// axis-aligned run `a`-`b`, from `a` onward; the amplitudes sum to `amp_sum` (as even as whole um allow) and
-/// the rest of the run is straight to `b`. Legs are exactly 45 degrees. `None` when the bumps overrun `b`.
-fn zigzag(a: Point, b: Point, count: usize, amp_sum: Um, spacing: Um, flip: bool) -> Option<Vec<Point>> {
-    let (dx, dy) = (b.x - a.x, b.y - a.y);
-    let (ux, uy) = (dx.signum(), dy.signum());
-    let (nx, ny) = if flip { (-uy, ux) } else { (uy, -ux) };
-    let (base, rem) = (amp_sum / count as Um, (amp_sum % count as Um) as usize);
-    let mut pts = vec![a];
-    let (mut x, mut y) = (a.x, a.y);
-    let mut side = 1;
-    for i in 0..count {
-        let amp = base + Um::from(i < rem);
-        let (sx, sy) = (side * nx, side * ny);
-        let p1 = Point { x: x + amp * (ux + sx), y: y + amp * (uy + sy) };
-        let p2 = Point { x: p1.x + spacing * ux, y: p1.y + spacing * uy };
-        let p3 = Point { x: p2.x + amp * (ux - sx), y: p2.y + amp * (uy - sy) };
-        pts.extend([p1, p2, p3]);
-        (x, y) = (p3.x, p3.y);
-        side = -side;
+impl MeanderedLine {
+    /// `MEANDERED_LINE( aPlacer, aIsDual )`.
+    pub fn new(dual: bool) -> MeanderedLine {
+        MeanderedLine { last: Point { x: 0, y: 0 }, meanders: Vec::new(), dual, width: 0, baseline_offset: 0 }
     }
-    // along-run progress: the last point must still be short of (or on) `b`
-    if (x - a.x) * ux + (y - a.y) * uy > dx.abs() + dy.abs() {
-        return None;
+
+    pub fn set_width(&mut self, w: i64) {
+        self.width = w;
     }
-    pts.push(b);
-    pts.dedup();
-    Some(pts)
+
+    pub fn set_baseline_offset(&mut self, o: i64) {
+        self.baseline_offset = o;
+    }
+
+    pub fn meanders(&self) -> &[MeanderShape] {
+        &self.meanders
+    }
+
+    pub fn meanders_mut(&mut self) -> &mut [MeanderShape] {
+        &mut self.meanders
+    }
+
+    /// `AddCorner`.
+    pub fn add_corner(&mut self, env: &dyn MeanderEnv, a: Point, b: Point) {
+        let mut m = MeanderShape::new(env, self.width, self.dual);
+        m.make_corner(a, b);
+        self.last = a;
+        self.meanders.push(m);
+    }
+
+    /// `AddArc`.
+    pub fn add_arc(&mut self, env: &dyn MeanderEnv, a1: &ShapeArc, a2: &ShapeArc) {
+        let mut m = MeanderShape::new(env, self.width, self.dual);
+        m.make_arc(a1, a2);
+        self.last = a1.start;
+        self.meanders.push(m);
+    }
+
+    /// `AddMeander`.
+    pub fn add_meander(&mut self, shape: MeanderShape) {
+        self.last = shape.base_segment().b;
+        self.meanders.push(shape);
+    }
+
+    /// `CheckSelfIntersections`: does `shape` keep `clearance` from the line's earlier meanders (those not parallel to it)?
+    pub fn check_self_intersections(meanders: &[MeanderShape], shape: &MeanderShape, clearance: i64) -> bool {
+        for m in meanders.iter().rev() {
+            if m.kind() == MeanderType::Empty || m.kind() == MeanderType::Corner {
+                continue;
+            }
+            let b1 = shape.base_segment();
+            let b2 = m.base_segment();
+            if b1.approx_parallel(&b2, 1) {
+                continue;
+            }
+            let n = m.c_line(0).segment_count();
+            for j in (0..n).rev() {
+                if shape.c_line(0).collides_seg(&m.c_line(0).c_segment(j), clearance) {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// `MeanderSegment`: fits maximum-amplitude meanders on the base segment `base`, starting on `side`.
+    pub fn meander_segment(&mut self, env: &mut dyn MeanderEnv, base: Seg, side_in: bool, base_index: i64) {
+        let base_len = base.length() as f64;
+        let single_sided = env.settings().single_sided;
+        let mut side = side_in;
+        let dir = V2::of(Point { x: base.b.x - base.a.x, y: base.b.y - base.a.y });
+
+        if !self.dual {
+            self.add_corner(&*env, base.a, Point { x: 0, y: 0 });
+        }
+
+        let mut turning = false;
+        let mut started = false;
+        self.last = base.a;
+
+        loop {
+            let mut m = MeanderShape::new(&*env, self.width, self.dual);
+            m.set_baseline_offset(self.baseline_offset);
+            m.set_base_index(base_index);
+
+            let thr = m.spacing() as f64;
+            let mut fail = false;
+            let mut remaining = base_len - crate::kigeom::norm_i(self.last.x - base.a.x, self.last.y - base.a.y) as f64;
+
+            if (remaining as f64) < env.settings().step as f64 {
+                break;
+            }
+
+            // `addSingleIfFits`
+            macro_rules! add_single_if_fits {
+                () => {{
+                    fail = true;
+                    if m.fit(env, &self.meanders, MeanderType::Single, base, self.last, side) {
+                        self.add_meander(m.clone());
+                        fail = false;
+                        started = false;
+                    }
+                    if fail && !single_sided && m.fit(env, &self.meanders, MeanderType::Single, base, self.last, !side) {
+                        if !started {
+                            flip_initial_side(env);
+                        }
+                        self.add_meander(m.clone());
+                        fail = false;
+                        started = false;
+                        side = !side;
+                    }
+                }};
+            }
+
+            if !single_sided && remaining > 3.0 * thr {
+                if !turning {
+                    for i in 0..2 {
+                        let check_side = if i == 0 { side } else { !side };
+                        if m.fit(env, &self.meanders, MeanderType::CheckStart, base, self.last, check_side) {
+                            if !started && check_side != side {
+                                flip_initial_side(env);
+                            }
+                            turning = true;
+                            self.add_meander(m.clone());
+                            side = !check_side;
+                            started = true;
+                            break;
+                        }
+                    }
+                    if !turning {
+                        add_single_if_fits!();
+                    }
+                } else {
+                    let rv = m.fit(env, &self.meanders, MeanderType::CheckFinish, base, self.last, side);
+                    if rv {
+                        m.fit(env, &self.meanders, MeanderType::Turn, base, self.last, side);
+                        self.add_meander(m.clone());
+                        side = !side;
+                        started = true;
+                    } else {
+                        m.fit(env, &self.meanders, MeanderType::Finish, base, self.last, side);
+                        started = false;
+                        self.add_meander(m.clone());
+                        turning = false;
+                    }
+                }
+            } else if !single_sided && started {
+                let rv = m.fit(env, &self.meanders, MeanderType::Finish, base, self.last, side);
+                if rv {
+                    self.add_meander(m.clone());
+                }
+                break;
+            } else if !turning && remaining > thr * 2.0 {
+                add_single_if_fits!();
+            } else {
+                fail = true;
+            }
+
+            remaining = base_len - crate::kigeom::norm_i(self.last.x - base.a.x, self.last.y - base.a.y) as f64;
+            if remaining < env.settings().step as f64 {
+                break;
+            }
+
+            if fail {
+                let mut tmp = MeanderShape::new(&*env, self.width, self.dual);
+                tmp.set_baseline_offset(self.baseline_offset);
+                tmp.set_base_index(base_index);
+                let next_p = tmp.spacing() - 2 * tmp.corner_radius() + env.settings().step;
+                // `VECTOR2I pn = m_last + dir.Resize( nextP )`: the sum is a `VECTOR2D`, truncated to integers.
+                let step = dir.resize(next_p as f64);
+                let pn = Point { x: (self.last.x as f64 + step.x) as i64, y: (self.last.y as f64 + step.y) as i64 };
+                if base.contains(pn) && !self.dual {
+                    self.add_corner(&*env, pn, Point { x: 0, y: 0 });
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if !self.dual {
+            self.add_corner(&*env, base.b, Point { x: 0, y: 0 });
+        }
+    }
+}
+
+/// `flipInitialSide`: `settings.m_initialSide = -settings.m_initialSide` and `UpdateSettings`.
+fn flip_initial_side(env: &mut dyn MeanderEnv) {
+    let mut s = env.settings().clone();
+    s.initial_side = s.initial_side.flipped();
+    env.update_settings(s);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// tuneLineLength
+// ---------------------------------------------------------------------------------------------------------------------
+
+/// `LENGTH_TARGET_TOLERANCE`: nanometres.
+pub const LENGTH_TARGET_TOLERANCE: i64 = 20;
+
+/// `findAmplitudeBinarySearch`.
+fn find_amplitude_binary_search(copy: &mut MeanderShape, target_length: i64, min_amp: i64, max_amp: i64) -> i64 {
+    if min_amp == max_amp {
+        return max_amp;
+    }
+    copy.resize(min_amp);
+    // `int minLen = aCopy.CurrentLength();` (a `long long` narrowed to `int`)
+    let min_len = copy.current_length() as i32 as i64;
+    copy.resize(max_amp);
+    let max_len = copy.current_length() as i32 as i64;
+
+    if min_len > target_length {
+        return 0;
+    }
+    if max_len < target_length {
+        return 0;
+    }
+    let min_error = min_len - target_length;
+    let max_error = max_len - target_length;
+
+    if min_error.abs() < LENGTH_TARGET_TOLERANCE || max_error.abs() < LENGTH_TARGET_TOLERANCE {
+        return if min_error.abs() < max_error.abs() { min_amp } else { max_amp };
+    }
+    let left = find_amplitude_binary_search(copy, target_length, min_amp, (min_amp + max_amp) / 2);
+    if left != 0 {
+        return left;
+    }
+    let right = find_amplitude_binary_search(copy, target_length, (min_amp + max_amp) / 2, max_amp);
+    if right != 0 {
+        return right;
+    }
+    0
+}
+
+/// `findAmplitudeForLength`.
+fn find_amplitude_for_length(m: &MeanderShape, target_length: i64, min_amp: i64, max_amp: i64) -> i64 {
+    let mut copy = m.clone();
+    // "Try to keep the same baseline length"
+    copy.set_target_baseline_length(m.baseline_length());
+    let initial_guess = m.amplitude() - (m.current_length() - target_length) / 2;
+    if initial_guess >= min_amp && initial_guess <= max_amp {
+        copy.resize(min_amp);
+        if (copy.current_length() - target_length).abs() < LENGTH_TARGET_TOLERANCE {
+            return initial_guess;
+        }
+    }
+    // "The length is non-trivial, use binary search"
+    find_amplitude_binary_search(&mut copy, target_length, min_amp, max_amp)
+}
+
+/// `MEANDER_PLACER_BASE::tuneLineLength`: the meanders of `tuned` made to lengthen the line by `elongation`: the shapes the elongation cannot
+/// use are emptied (the last one that is needed is turned into an end shape), the others shrunk in amplitude, one by one, until the sum is right.
+pub fn tune_line_length(tuned: &mut MeanderedLine, elongation: i64) {
+    let mut max_elongation: i64 = 0;
+    let mut min_elongation: i64 = 0;
+    let mut finished = false;
+
+    for m in tuned.meanders_mut() {
+        if m.kind() != MeanderType::Corner && m.kind() != MeanderType::Arc {
+            let mut end = m.clone();
+            let end_type = if m.kind() == MeanderType::Start || m.kind() == MeanderType::Single { MeanderType::Single } else { MeanderType::Finish };
+            end.set_type(end_type);
+            end.recalculate();
+
+            let max_end_elongation = end.current_length() - end.baseline_length();
+
+            if max_elongation + max_end_elongation > elongation {
+                if !finished {
+                    m.set_type(end_type);
+                    m.recalculate();
+
+                    if end_type == MeanderType::Single {
+                        // "Check if we need to fit this meander"
+                        let end_min_elongation = m.min_tunable_length() - m.baseline_length();
+                        if min_elongation + end_min_elongation >= elongation {
+                            m.make_empty();
+                        }
+                    }
+                    finished = true;
+                } else {
+                    m.make_empty();
+                }
+            }
+
+            max_elongation += m.current_length() - m.baseline_length();
+            min_elongation += m.min_tunable_length() - m.baseline_length();
+        }
+    }
+
+    let mut remaining_elongation = elongation;
+    let mut meander_count: i64 = 0;
+    for m in tuned.meanders() {
+        if m.kind() != MeanderType::Corner && m.kind() != MeanderType::Arc && m.kind() != MeanderType::Empty {
+            remaining_elongation -= m.current_length() - m.baseline_length();
+            meander_count += 1;
+        }
+    }
+
+    let mut len_reduction_left = -remaining_elongation;
+    let mut meanders_left = meander_count;
+
+    if len_reduction_left < 0 || meanders_left == 0 {
+        return;
+    }
+
+    for m in tuned.meanders_mut() {
+        if m.kind() != MeanderType::Corner && m.kind() != MeanderType::Arc && m.kind() != MeanderType::Empty {
+            let len_reduction_here = len_reduction_left / meanders_left;
+            let initial_len = m.current_length();
+            let min_ampl = m.min_amplitude();
+
+            // `findAmplitudeForLength( m, int targetLength, int minAmp, int maxAmp )`: the arguments are `int`s.
+            let mut amp = find_amplitude_for_length(m, (initial_len - len_reduction_here) as i32 as i64, min_ampl, m.amplitude());
+            if amp < min_ampl {
+                amp = min_ampl;
+            }
+
+            m.set_target_baseline_length(m.baseline_length());
+            m.resize(amp);
+
+            len_reduction_left -= initial_len - m.current_length();
+            meanders_left -= 1;
+
+            if meanders_left == 0 {
+                break;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn extra_per_period_matches_a_directly_measured_single_hump() {
-        // A target comfortably reached by exactly one *full-amplitude*
-        // period (well above it, so the "shrink the last period" branch
-        // never engages) -- then measure the actual generated shape
-        // directly rather than trusting the formula.
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 10_000, y: 0 };
-        let amplitude = 500;
-        let spacing = 1000;
-        let target = a.x + (b.x - a.x) + (extra_per_period(amplitude).round() as Um) * 2;
-        let result = generate_meander(a, b, amplitude, spacing, target, false).expect("must generate a meander");
-        // The first period must be full-amplitude: its own diagonal leg
-        // covers exactly `amplitude` in both x and y.
-        let p1 = result.pts[1];
-        assert_eq!(p1.x, amplitude);
-        assert_eq!(p1.y.unsigned_abs(), amplitude as u64);
-        let measured_first_leg = (((p1.x - a.x) as f64).powi(2) + ((p1.y - a.y) as f64).powi(2)).sqrt();
-        assert!((measured_first_leg - amplitude as f64 * std::f64::consts::SQRT_2).abs() < 1.0, "first leg length {measured_first_leg}");
+    /// A placer with nothing in the way and a fixed clearance.
+    struct Free {
+        settings: MeanderSettings,
+        clearance: i64,
+        fits: usize,
     }
 
-    #[test]
-    fn reaches_the_requested_target_length_within_rounding() {
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 20_000, y: 0 };
-        let target = 24_000;
-        let result = generate_meander(a, b, 400, 800, target, false).expect("plenty of room for this target");
-        assert!((result.achieved_length - target).abs() <= 2, "achieved {} vs target {target}", result.achieved_length);
-        assert_eq!(result.pts.first(), Some(&a));
-        assert_eq!(result.pts.last(), Some(&b));
+    impl MeanderEnv for Free {
+        fn settings(&self) -> &MeanderSettings {
+            &self.settings
+        }
+        fn update_settings(&mut self, s: MeanderSettings) {
+            self.settings = s;
+        }
+        fn clearance(&self) -> i64 {
+            self.clearance
+        }
+        fn check_fit(&mut self, shape: &MeanderShape, existing: &[MeanderShape]) -> bool {
+            self.fits += 1;
+            let clearance = shape.width() + self.settings.spacing;
+            MeanderedLine::check_self_intersections(existing, shape, clearance)
+        }
     }
 
-    #[test]
-    fn alternates_sides_so_the_shape_actually_oscillates() {
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 20_000, y: 0 };
-        let result = generate_meander(a, b, 500, 500, 26_000, false).unwrap();
-        // Interior points (excluding the fixed start/end) should include
-        // both positive and negative y -- a real accordion, not a bulge
-        // all to one side.
-        let ys: Vec<i64> = result.pts[1..result.pts.len() - 1].iter().map(|p| p.y).collect();
-        assert!(ys.iter().any(|&y| y > 0), "{ys:?}");
-        assert!(ys.iter().any(|&y| y < 0), "{ys:?}");
+    fn free() -> Free {
+        Free { settings: MeanderSettings::default(), clearance: 200_000, fits: 0 }
     }
 
-    #[test]
-    fn flip_swaps_the_first_periods_side() {
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 10_000, y: 0 };
-        let target = a.x + (b.x - a.x) + (extra_per_period(500) as Um) - 10;
-        let normal = generate_meander(a, b, 500, 1000, target, false).unwrap();
-        let flipped = generate_meander(a, b, 500, 1000, target, true).unwrap();
-        assert_eq!(normal.pts[1].y, -flipped.pts[1].y);
-    }
-
-    #[test]
-    fn refuses_a_diagonal_baseline() {
-        assert!(generate_meander(Point { x: 0, y: 0 }, Point { x: 1000, y: 1000 }, 200, 400, 2000, false).is_none());
-    }
-
-    #[test]
-    fn refuses_a_target_no_longer_than_the_baseline_itself() {
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 10_000, y: 0 };
-        assert!(generate_meander(a, b, 200, 400, 10_000, false).is_none());
-        assert!(generate_meander(a, b, 200, 400, 9_000, false).is_none());
-    }
-
-    #[test]
-    fn shrinks_amplitude_to_whatever_the_baseline_can_actually_fit() {
-        // Far shorter than one period's own nominal `2*amplitude+spacing`
-        // advance -- rather than refusing outright, the amplitude itself
-        // shrinks to whatever this short a baseline can physically fit
-        // (here, at most `base_len / 2`), getting as close to the
-        // requested target as the geometry allows.
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 500, y: 0 };
-        let result = generate_meander(a, b, 500, 1000, 5000, false).expect("must still fit a shrunk period");
-        assert!(result.achieved_length > 500, "must add at least some length: {}", result.achieved_length);
-    }
-
-    #[test]
-    fn refuses_a_baseline_too_short_for_even_a_minimal_amplitude() {
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 1, y: 0 }; // 1um -- room/2 rounds to 0, below the 1um amplitude floor.
-        assert!(generate_meander(a, b, 500, 1000, 5000, false).is_none());
-    }
-
-    #[test]
-    fn vertical_baseline_meanders_the_same_way_as_horizontal() {
-        // Same shape of request as `reaches_the_requested_target_length_
-        // within_rounding` (well inside what this amplitude/spacing can
-        // fit along a 20mm baseline -- see that test), just rotated 90
-        // degrees, to confirm the construction isn't secretly biased
-        // toward one axis.
-        let a = Point { x: 0, y: 0 };
-        let b = Point { x: 0, y: 20_000 };
-        let target = 24_000;
-        let result = generate_meander(a, b, 400, 800, target, false).unwrap();
-        let xs: Vec<i64> = result.pts[1..result.pts.len() - 1].iter().map(|p| p.x).collect();
-        assert!(xs.iter().any(|&x| x > 0), "{xs:?}");
-        assert!(xs.iter().any(|&x| x < 0), "{xs:?}");
-        assert!((result.achieved_length - target).abs() <= 2, "achieved {}", result.achieved_length);
-    }
-
-    fn p(x: Um, y: Um) -> Point {
+    fn p(x: i64, y: i64) -> Point {
         Point { x, y }
     }
 
-    /// Distance from `q` to the segment `a`-`b`.
-    fn dist_to_segment(q: Point, a: Point, b: Point) -> f64 {
-        let (abx, aby) = ((b.x - a.x) as f64, (b.y - a.y) as f64);
-        let len2 = abx * abx + aby * aby;
-        let t = if len2 == 0.0 { 0.0 } else { ((((q.x - a.x) as f64) * abx + ((q.y - a.y) as f64) * aby) / len2).clamp(0.0, 1.0) };
-        let (cx, cy) = (a.x as f64 + t * abx, a.y as f64 + t * aby);
-        ((q.x as f64 - cx).powi(2) + (q.y as f64 - cy).powi(2)).sqrt()
-    }
-
-    fn min_distance(a: &[Point], b: &[Point]) -> f64 {
-        a.iter().flat_map(|&q| b.windows(2).map(move |s| dist_to_segment(q, s[0], s[1]))).chain(b.iter().flat_map(|&q| a.windows(2).map(move |s| dist_to_segment(q, s[0], s[1])))).fold(f64::MAX, f64::min)
+    #[test]
+    fn the_settings_start_as_kicads_and_a_target_gets_its_default_tolerance() {
+        let s = MeanderSettings::default();
+        assert_eq!((s.min_amplitude, s.max_amplitude, s.spacing, s.step), (200_000, 1_000_000, 600_000, 50_000));
+        assert_eq!((s.corner_style, s.corner_radius_percentage, s.single_sided, s.initial_side), (MeanderStyle::Round, 80, false, MeanderSide::Left));
+        assert_eq!((s.target_length.min(), s.target_length.opt(), s.target_length.max()), (0, LENGTH_UNCONSTRAINED, LENGTH_UNCONSTRAINED));
+        assert_eq!(s.target_skew.opt(), 0);
+        let mut s = s;
+        s.set_target_length(50_000_000);
+        assert_eq!((s.target_length.min(), s.target_length.opt(), s.target_length.max()), (49_900_000, 50_000_000, 50_100_000));
+        let mut c = MinOptMax::default();
+        c.set_min(48_000_000);
+        c.set_opt(50_000_000);
+        s.set_target_length_constraint(&c);
+        assert_eq!((s.target_length.min(), s.target_length.max()), (48_000_000, 50_100_000), "a constraint's own minimum wins, its missing maximum is the default tolerance");
     }
 
     #[test]
-    fn dp_meander_lines_start_and_end_on_their_own_offset_baseline_ends_and_reach_the_target() {
-        // Baseline along +x, pair centres 300 um apart: A above (offset +150, since +offset turns the direction -90
-        // degrees, i.e. towards -y), B below.
-        let (a, b) = (p(0, 0), p(20_000, 0));
-        let r = generate_dp_meander(a, b, 150, -150, 400, 800, 23_000, false).expect("room for this");
-        assert_eq!((r.a.first(), r.a.last()), (Some(&p(0, -150)), Some(&p(20_000, -150))));
-        assert_eq!((r.b.first(), r.b.last()), (Some(&p(0, 150)), Some(&p(20_000, 150))));
-        let longest = r.a_length.max(r.b_length);
-        assert!((longest - 23_000).abs() <= 3, "longest line {longest} vs target 23000");
-        // the miters only trade a little length between the lines
-        assert!((r.a_length - r.b_length).abs() < 450, "a {} b {}", r.a_length, r.b_length);
-        assert_eq!(r.a_length, polyline_length(&r.a));
+    fn a_single_meander_is_a_u_with_rounded_corners_on_the_side_asked() {
+        let mut env = free();
+        let mut m = MeanderShape::new(&env, 200_000, false);
+        let base = Seg::new(p(0, 0), p(20_000_000, 0));
+        assert!(m.fit(&mut env, &[], MeanderType::Single, base, p(0, 0), false));
+        let line = m.c_line(0);
+        assert_eq!(line.c_point(0), p(0, 0));
+        // it climbs to the maximum amplitude on the side a "false" side is, and comes back to the baseline
+        let ys: Vec<i64> = line.points().iter().map(|q| q.y).collect();
+        let (lo, hi) = (*ys.iter().min().unwrap(), *ys.iter().max().unwrap());
+        assert_eq!((lo, hi), (0, 1_000_000), "amplitude 1 mm up (y grows downward: the left of a line along +x is +y)");
+        assert_eq!(line.arcs().len(), 4, "four rounded corners");
+        assert_eq!(line.c_last_point().y, 0);
+        // the right side is the mirror image
+        let mut right = MeanderShape::new(&env, 200_000, false);
+        assert!(right.fit(&mut env, &[], MeanderType::Single, base, p(0, 0), true));
+        let ys: Vec<i64> = right.c_line(0).points().iter().map(|q| q.y).collect();
+        assert_eq!((*ys.iter().min().unwrap(), *ys.iter().max().unwrap()), (-1_000_000, 0));
+        assert_eq!(right.c_line(0).length(), m.c_line(0).length());
+        assert_eq!(m.baseline_length(), m.end().x);
     }
 
     #[test]
-    fn dp_meander_lines_stay_one_pair_spacing_apart_everywhere() {
-        let r = generate_dp_meander(p(0, 0), p(20_000, 0), 150, -150, 400, 800, 23_000, false).unwrap();
-        let d = min_distance(&r.a, &r.b);
-        assert!((299.0..=303.0).contains(&d), "closest approach {d} um, expected the 300 um centre spacing");
-    }
-
-    #[test]
-    fn dp_meander_works_down_a_vertical_baseline_and_with_asymmetric_offsets() {
-        // +y baseline: +offset turns the direction (0,1) -90 degrees to (1,0), so A is on the +x side.
-        let r = generate_dp_meander(p(0, 0), p(0, 20_000), 200, -100, 400, 800, 23_000, true).expect("vertical pair");
-        assert_eq!((r.a.first(), r.a.last()), (Some(&p(200, 0)), Some(&p(200, 20_000))));
-        assert_eq!((r.b.first(), r.b.last()), (Some(&p(-100, 0)), Some(&p(-100, 20_000))));
-        assert!((r.a_length.max(r.b_length) - 23_000).abs() <= 3);
-    }
-
-    #[test]
-    fn dp_meander_raises_a_too_small_amplitude_and_spacing_to_what_the_pair_can_fold() {
-        // 2 mm between the lines but only 100 um straight asked for: the dual `spacing()` (2 * |offset| at least) takes
-        // over, and bumps never get shallower than `MinAmplitude` (|offset| + ...), so the lines fold cleanly instead of
-        // overlapping.
-        let r = generate_dp_meander(p(0, 0), p(40_000, 0), 1000, -1000, 1500, 100, 48_000, false).expect("a clean fold");
-        let ys: Vec<Um> = r.a.iter().map(|q| q.y).collect();
-        let swing = ys.iter().max().unwrap() - ys.iter().min().unwrap();
-        assert!(swing >= 2 * 1000, "line A swings {swing} um end to end -- every bump at least |offset| tall each way");
-        assert!(!lines_conflict(&r.a, &r.b));
-        assert!((r.a_length.max(r.b_length) - 48_000).abs() <= 3);
-    }
-
-    #[test]
-    fn lines_conflict_flags_a_crossing_pair_and_a_folded_line() {
-        // two lines that cross
-        assert!(lines_conflict(&[p(0, 0), p(10, 10)], &[p(0, 10), p(10, 0)]));
-        // one line that folds back over itself (a bow-tie)
-        assert!(lines_conflict(&[p(0, 0), p(10, 10), p(10, 0), p(0, 10)], &[p(100, 100), p(110, 100)]));
-        // parallel runs never conflict, and neither does a line meeting its own neighbour at a corner
-        assert!(!lines_conflict(&[p(0, 0), p(10, 0), p(10, 10)], &[p(0, 5), p(5, 5), p(5, 20)]));
-    }
-
-    #[test]
-    fn pick_periods_prefers_the_fewest_biggest_bumps_and_degrades_at_the_edges() {
-        // 4828 um of summed amplitude over 19.8 mm of run with 800 um spacing: 13 full bumps would need 20 mm -- too
-        // long -- so 12 bumps of the full 400 um amplitude come closest (it falls 23 um short).
-        assert_eq!(pick_periods(4000.0, 19_872.0, 800.0, 400, 151), Some((12, 4800)));
-        // plenty of room: the fewest bumps whose amplitude stays within the cap (3000 um extra -> 3622 summed -> 10 bumps)
-        assert_eq!(pick_periods(3000.0, 19_872.0, 800.0, 400, 151), Some((10, 3621)));
-        // less than one minimum-size bump adds, but at least half of it: take the one bump
-        assert_eq!(pick_periods(100.0, 19_872.0, 800.0, 400, 151), Some((1, 151)));
-        // and less than half of it: nothing
-        assert_eq!(pick_periods(40.0, 19_872.0, 800.0, 400, 151), None);
-        assert_eq!(pick_periods(-5.0, 19_872.0, 800.0, 400, 151), None);
-    }
-
-    #[test]
-    fn zigzag_alternates_sides_with_exact_45_degree_legs_and_amplitudes_summing_to_the_request() {
-        let z = zigzag(p(0, 0), p(10_000, 0), 4, 1_002, 500, false).expect("fits");
-        // amplitudes 251, 251, 250, 250 (the remainder goes to the first bumps)
-        assert_eq!(&z[..4], &[p(0, 0), p(251, -251), p(751, -251), p(1_002, 0)]);
-        assert_eq!(z[4], p(1_253, 251), "second bump swings the other way");
-        assert_eq!(z.last(), Some(&p(10_000, 0)));
-        for w in z.windows(2) {
-            let (dx, dy) = ((w[1].x - w[0].x).abs(), (w[1].y - w[0].y).abs());
-            assert!(dx == 0 || dy == 0 || dx == dy, "{w:?} is not axis-aligned or 45 degrees");
+    fn a_chamfered_meander_has_forty_five_degree_corners_and_no_arcs() {
+        let mut env = free();
+        env.settings.corner_style = MeanderStyle::Chamfer;
+        let mut m = MeanderShape::new(&env, 200_000, false);
+        assert!(m.fit(&mut env, &[], MeanderType::Single, Seg::new(p(0, 0), p(20_000_000, 0)), p(0, 0), false));
+        assert_eq!(m.c_line(0).arcs().len(), 0);
+        let mut diagonals = 0;
+        for i in 0..m.c_line(0).segment_count() {
+            let s = m.c_line(0).c_segment(i);
+            let (dx, dy) = ((s.b.x - s.a.x).abs(), (s.b.y - s.a.y).abs());
+            assert!(dx == 0 || dy == 0 || dx == dy || (dx - dy).abs() <= 2, "segment {i} {s:?} is not on a 45-degree heading");
+            diagonals += (dx != 0 && dy != 0) as usize;
         }
-        // bumps that overrun the run are refused
-        assert!(zigzag(p(0, 0), p(1_000, 0), 4, 1_002, 500, false).is_none());
+        assert_eq!(diagonals, 4);
     }
 
     #[test]
-    fn dp_meander_has_nothing_to_add_for_a_diagonal_baseline_or_a_target_that_is_not_longer() {
-        assert_eq!(generate_dp_meander(p(0, 0), p(10_000, 10_000), 150, -150, 400, 800, 30_000, false).unwrap_err(), DpMeanderError::NothingToAdd);
-        assert_eq!(generate_dp_meander(p(0, 0), p(10_000, 0), 150, -150, 400, 800, 10_000, false).unwrap_err(), DpMeanderError::NothingToAdd);
-        assert_eq!(generate_dp_meander(p(0, 0), p(10_000, 0), 150, -150, 0, 800, 12_000, false).unwrap_err(), DpMeanderError::NothingToAdd);
-        // shorter than the lead-in the offset needs
-        assert_eq!(generate_dp_meander(p(0, 0), p(60, 0), 150, -150, 400, 800, 400, false).unwrap_err(), DpMeanderError::NothingToAdd);
+    fn the_amplitude_steps_down_to_what_the_room_allows_and_no_lower_than_the_minimum() {
+        // a placer that only lets a shape through that stays within 0.4 mm of the baseline
+        struct Narrow(Free);
+        impl MeanderEnv for Narrow {
+            fn settings(&self) -> &MeanderSettings {
+                self.0.settings()
+            }
+            fn update_settings(&mut self, s: MeanderSettings) {
+                self.0.update_settings(s)
+            }
+            fn clearance(&self) -> i64 {
+                self.0.clearance()
+            }
+            fn check_fit(&mut self, shape: &MeanderShape, _: &[MeanderShape]) -> bool {
+                shape.c_line(0).points().iter().all(|q| q.y.abs() <= 401_000)
+            }
+        }
+        let mut env = Narrow(free());
+        let mut m = MeanderShape::new(&env, 200_000, false);
+        assert!(m.fit(&mut env, &[], MeanderType::Single, Seg::new(p(0, 0), p(20_000_000, 0)), p(0, 0), false));
+        assert_eq!(m.amplitude(), 400_000, "1 mm, 0.95, ... down to the first step that fits");
+        let mut env = Narrow(free());
+        env.0.settings.min_amplitude = 500_000;
+        let mut m = MeanderShape::new(&env, 200_000, false);
+        assert!(!m.fit(&mut env, &[], MeanderType::Single, Seg::new(p(0, 0), p(20_000_000, 0)), p(0, 0), false), "nothing fits above the minimum");
     }
 
     #[test]
-    fn simplify_collinear_merges_straight_runs_but_keeps_corners_and_reversals() {
-        let pts = vec![p(0, 0), p(0, 0), p(10, 0), p(20, 0), p(20, 10), p(20, 20), p(20, 10)];
-        // (0,0),(0,0) dedup; (10,0) is on the run; (20,0) is a corner; (20,10) is on the run up but the last leg
-        // doubles back, so (20,20) is a real reversal and stays.
-        assert_eq!(simplify_collinear(pts), vec![p(0, 0), p(20, 0), p(20, 20), p(20, 10)]);
-        assert_eq!(simplify_collinear(vec![p(0, 0), p(5, 5)]), vec![p(0, 0), p(5, 5)]);
-        assert_eq!(simplify_collinear(vec![p(1, 1), p(1, 1)]), vec![p(1, 1)]);
+    fn a_line_is_meandered_from_one_end_to_the_other_on_alternating_sides() {
+        let mut env = free();
+        let mut line = MeanderedLine::new(false);
+        line.set_width(200_000);
+        let base = Seg::new(p(0, 0), p(30_000_000, 0));
+        line.meander_segment(&mut env, base, false, 0);
+        let kinds: Vec<MeanderType> = line.meanders().iter().map(|m| m.kind()).collect();
+        assert_eq!(kinds[0], MeanderType::Corner);
+        assert_eq!(*kinds.last().unwrap(), MeanderType::Corner);
+        assert!(kinds.iter().filter(|&&k| k == MeanderType::Start).count() == 1 && kinds.contains(&MeanderType::Turn) && kinds.contains(&MeanderType::Finish), "{kinds:?}");
+        // the shapes follow each other along the baseline without overlapping
+        let mut at = 0;
+        for m in line.meanders() {
+            if matches!(m.kind(), MeanderType::Corner) {
+                continue;
+            }
+            assert!(m.base_segment().a.x >= at, "{:?} starts before the last one ended at {at}", m.base_segment());
+            at = m.base_segment().b.x;
+        }
+        assert!(at <= 30_000_000);
+        // it is a clear line: no two meanders of it come closer than the spacing
+        let mut chain = ShapeLineChain::new();
+        for m in line.meanders() {
+            chain.append_chain(m.c_line(0));
+        }
+        assert!(chain.length() > 30_000_000 + 10_000_000, "{}", chain.length());
     }
 
     #[test]
-    fn segments_touch_covers_crossings_endpoint_contact_and_collinear_overlap() {
-        assert!(segments_touch(p(0, 0), p(10, 10), p(0, 10), p(10, 0)), "X crossing");
-        assert!(segments_touch(p(0, 0), p(10, 0), p(10, 0), p(10, 10)), "shared endpoint");
-        assert!(segments_touch(p(0, 0), p(10, 0), p(5, 0), p(15, 0)), "collinear overlap");
-        assert!(!segments_touch(p(0, 0), p(10, 0), p(11, 0), p(20, 0)), "collinear but apart");
-        assert!(!segments_touch(p(0, 0), p(10, 0), p(0, 5), p(10, 5)), "parallel");
-        assert!(!segments_touch(p(0, 0), p(10, 0), p(5, 5), p(5, 1)), "stops short of the line");
+    fn single_sided_keeps_every_meander_on_one_side() {
+        let mut env = free();
+        env.settings.single_sided = true;
+        let mut line = MeanderedLine::new(false);
+        line.set_width(200_000);
+        line.meander_segment(&mut env, Seg::new(p(0, 0), p(30_000_000, 0)), false, 0);
+        let mut ys = Vec::new();
+        for m in line.meanders() {
+            ys.extend(m.c_line(0).points().iter().map(|q| q.y));
+        }
+        assert!(ys.iter().all(|&y| y >= 0), "all on the left");
+        assert!(line.meanders().iter().filter(|m| m.kind() == MeanderType::Single).count() > 5);
+    }
+
+    fn tuned_line(env: &mut Free, length: i64, elongation: i64) -> (MeanderedLine, ShapeLineChain) {
+        let mut line = MeanderedLine::new(false);
+        line.set_width(200_000);
+        line.meander_segment(env, Seg::new(p(0, 0), p(length, 0)), false, 0);
+        tune_line_length(&mut line, elongation);
+        let mut chain = ShapeLineChain::new();
+        for m in line.meanders() {
+            if m.kind() != MeanderType::Empty {
+                chain.append_chain(m.c_line(0));
+            }
+        }
+        (line, chain)
+    }
+
+    #[test]
+    fn tuning_a_line_lands_within_the_tolerance_of_the_length_asked() {
+        for (length, elongation) in [(30_000_000, 3_000_000), (30_000_000, 12_000_000), (20_000_000, 1_500_000), (50_000_000, 25_000_000)] {
+            let mut env = free();
+            let (_, chain) = tuned_line(&mut env, length, elongation);
+            let got = chain.length() - length;
+            assert!((got - elongation).abs() < 2_000, "asked {elongation} of elongation on {length}, got {got}");
+        }
+    }
+
+    #[test]
+    fn an_elongation_too_small_for_the_first_meander_leaves_the_line_straight() {
+        let mut env = free();
+        let (line, chain) = tuned_line(&mut env, 30_000_000, 100);
+        assert!(line.meanders().iter().all(|m| matches!(m.kind(), MeanderType::Corner | MeanderType::Empty)));
+        assert_eq!(chain.length(), 30_000_000);
+    }
+
+    #[test]
+    fn an_elongation_more_than_the_room_gives_stays_at_the_longest_the_room_allows() {
+        let mut env = free();
+        let (_, chain) = tuned_line(&mut env, 10_000_000, 80_000_000);
+        let gain = chain.length() - 10_000_000;
+        assert!(gain > 5_000_000 && gain < 80_000_000, "{gain}");
     }
 }

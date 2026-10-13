@@ -43,7 +43,8 @@ import { PcbSweepDialogs } from "./components/PcbSweepDialogs";
 import { VertexEditorPane } from "./components/PcbPointEditDialogs";
 import { PcbPickerPrompt } from "./components/PcbPickerPrompt";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
-import { LengthTuningDialog } from "./components/LengthTuningDialog";
+import { TuningPatternDialog } from "./components/TuningPatternDialog";
+import { GeneratorsManagerDialog } from "./components/GeneratorsManagerDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
 import { BoardStatisticsDialog } from "./components/BoardStatisticsDialog";
 import { SwapLayersDialog } from "./components/SwapLayersDialog";
@@ -64,6 +65,8 @@ import { SymbolPropertiesDialog } from "./components/SymbolPropertiesDialog";
 import { AnnotateDialog } from "./components/AnnotateDialog";
 import { SymbolFieldsTableDialog } from "./components/SymbolFieldsTableDialog";
 import { FindReplaceDialog } from "./components/FindReplaceDialog";
+import { FindByPropertiesDialog } from "./components/FindByPropertiesDialog";
+import { InspectReportDialog } from "./components/InspectReportDialog";
 import { PcbFindDialog } from "./components/PcbFindDialog";
 import { SchematicSetupDialog } from "./components/SchematicSetupDialog";
 import { PlotDialog } from "./components/PlotDialog";
@@ -248,7 +251,8 @@ function StudioFrame() {
       <VertexEditorPane />
       <PcbPickerPrompt />
       <RouterSettingsDialog />
-      <LengthTuningDialog />
+      <TuningPatternDialog />
+      <GeneratorsManagerDialog />
       <CleanupTracksDialog />
       <BoardStatisticsDialog />
       <SwapLayersDialog />
@@ -270,6 +274,9 @@ function StudioFrame() {
       <SymbolFieldsTableDialog />
       <FindReplaceDialog />
       <PcbFindDialog />
+      <FindByPropertiesDialog />
+      <InspectReportDialog kind="clearance" />
+      <InspectReportDialog kind="constraints" />
       <SchematicSetupDialog />
       <PlotDialog />
       <PlotSchematicDialog />

@@ -2,16 +2,23 @@
 // footprint libraries with a search box, the footprint's drawing and its description beside it, and, when it is opened for a symbol, the two filters of
 // `FOOTPRINT_CHOOSER_FRAME::filterFootprint` -- "Filter by pin count" and "Apply footprint filters" (the symbol's `ki_fp_filters`).
 //
+// The preview pane has KiCad's two switches (`FOOTPRINT_CHOOSER_FRAME`: "Show/hide footprint view panel" and "Show/hide 3D view panel", at least one of them on): the footprint's drawing, and
+// its 3D view -- the footprint with the models its file lists on it, placed the way KiCad places them (components/footprint/ModelPreview3D.tsx, the preview of the 3D Models tab).
+// "Show 3D viewer in own window" (the second frame of `FOOTPRINT_CHOOSER_FRAME`) is not ported.
+//
 // Two places use it: Place Footprint (`BOARD_EDITOR_CONTROL::PlaceFootprint`: a footprint of its own on the board -- a mounting hole, a fiducial -- beside
 // the unplaced parts of the schematic) and the Footprint field of a symbol (`SelectFootprintFromLibrary`, assigning a footprint). The dialog only
 // chooses; what is done with the choice is the caller's.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchFootprintDetails, fetchProjectFootprintDrawing, type FootprintDetails } from "../api/libraryChooserClient";
-import type { LibraryFootprint } from "../api/types";
+import { fetchPreviewPart } from "../api/model3dClient";
+import type { LibraryFootprint, Part } from "../api/types";
+import { rowsOfLibrary } from "../kicad-port/fpModels";
 import { chosenOf, footprintFilterPatterns, passesFootprintFilters, urlIn, type ChooserItem, type ChooserRow } from "../kicad-port/libChooser";
 import { recentItems, rememberChosen } from "../state/chooserRecent";
 import { ChooserDetails, Linkified } from "./chooser/ChooserDetails";
 import { FootprintPreview } from "./chooser/ChooserPreview";
+import { ModelPreview3D } from "./footprint/ModelPreview3D";
 import { LibChooserTree } from "./chooser/LibChooserTree";
 import { chooserFocusGuard, useChooser } from "./chooser/useChooser";
 import "../styles/chooser.css";
@@ -33,6 +40,26 @@ export interface FootprintChooserProps {
 }
 
 const FILTERS_KEY = "eda-studio.footprint-chooser-filters";
+const VIEWS_KEY = "eda-studio.footprint-chooser-views";
+
+/** `m_showFpMode` / `m_show3DMode`: which of the two previews are shown, kept between uses (the footprint's drawing starts on, the 3D view off, as in KiCad). */
+function savedViews(): { fp: boolean; view3d: boolean } {
+  try {
+    const raw = JSON.parse(localStorage.getItem(VIEWS_KEY) ?? "{}") as { fp?: boolean; view3d?: boolean };
+    const view3d = raw.view3d === true;
+    return { fp: raw.fp !== false || !view3d, view3d };
+  } catch {
+    return { fp: true, view3d: false };
+  }
+}
+
+function saveViews(v: { fp: boolean; view3d: boolean }): void {
+  try {
+    localStorage.setItem(VIEWS_KEY, JSON.stringify(v));
+  } catch {
+    /* it is a convenience */
+  }
+}
 
 /** `m_FootprintChooser.filter_on_pin_count` / `use_fp_filters`, kept between uses (both start off, as in KiCad). */
 function savedFilters(): { pins: boolean; patterns: boolean } {
@@ -54,6 +81,14 @@ function saveFilters(f: { pins: boolean; patterns: boolean }): void {
 
 export function FootprintChooserDialog({ title = "Footprint Chooser", preselect = null, pinCount, fpFilters, unplaced, onChoose, onCancel }: FootprintChooserProps) {
   const initial = useMemo(savedFilters, []);
+  const [views, setViews] = useState(savedViews);
+  const toggleView = (which: "fp" | "view3d") => {
+    // `on3DviewReq` / `onFpViewReq`: a view is switched off only when the other one is on
+    const next = { ...views, [which]: !views[which] };
+    if (!next.fp && !next.view3d) return;
+    setViews(next);
+    saveViews(next);
+  };
   const [byPins, setByPins] = useState(initial.pins);
   const [byPatterns, setByPatterns] = useState(initial.patterns);
   const patterns = useMemo(() => footprintFilterPatterns(fpFilters), [fpFilters]);
@@ -99,6 +134,20 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
     };
   }, [selectedId]);
   const shown = details && details.id === selectedId ? details : null;
+  // The 3D view of the selected footprint: its own geometry under its models, the way the tab of Footprint Properties shows them.
+  const [preview3d, setPreview3d] = useState<{ id: string; part: Part | null } | null>(null);
+  useEffect(() => {
+    if (!views.view3d || !selectedId) {
+      setPreview3d(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchPreviewPart({ footprint: selectedId }).then((part) => !cancelled && setPreview3d({ id: selectedId, part }));
+    return () => {
+      cancelled = true;
+    };
+  }, [views.view3d, selectedId]);
+  const models3d = useMemo(() => (shown?.drawing ? rowsOfLibrary(shown.drawing) : []), [shown?.drawing]);
 
   const choose = useCallback(
     (row: ChooserRow | undefined) => {
@@ -197,7 +246,35 @@ export function FootprintChooserDialog({ title = "Footprint Chooser", preselect 
             />
           </div>
           <div className="chooser-right">
-            <FootprintPreview footprint={shown?.drawing ?? null} status={!selectedId ? (chosen ? "Unplaced part from the schematic" : "No footprint selected") : shown?.error ? shown.error : shown ? "" : "Loading…"} />
+            <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", fontSize: 11 }} data-chooser-views>
+              <button
+                title="Show/hide 3D view panel"
+                aria-pressed={views.view3d}
+                style={{ fontWeight: views.view3d ? 700 : 400, borderBottom: views.view3d ? "2px solid var(--chrome-accent, #4a90e2)" : "2px solid transparent" }}
+                onClick={() => toggleView("view3d")}
+                data-chooser-view-3d
+              >
+                3D
+              </button>
+              <button
+                title="Show/hide footprint view panel"
+                aria-pressed={views.fp}
+                style={{ fontWeight: views.fp ? 700 : 400, borderBottom: views.fp ? "2px solid var(--chrome-accent, #4a90e2)" : "2px solid transparent" }}
+                onClick={() => toggleView("fp")}
+                data-chooser-view-fp
+              >
+                Footprint
+              </button>
+            </div>
+            {views.fp && <FootprintPreview footprint={shown?.drawing ?? null} status={!selectedId ? (chosen ? "Unplaced part from the schematic" : "No footprint selected") : shown?.error ? shown.error : shown ? "" : "Loading…"} />}
+            {views.view3d &&
+              (selectedId ? (
+                <ModelPreview3D part={preview3d && preview3d.id === selectedId ? preview3d.part : null} rows={models3d} height={230} testId="chooser-preview-3d" />
+              ) : (
+                <div style={{ height: 230, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid var(--chrome-border)", fontSize: 12, color: "var(--chrome-text-dim)" }} data-chooser-3d-empty>
+                  No footprint selected
+                </div>
+              ))}
             {chosen && chosen.item.id.startsWith("ref:") ? (
               <ChooserDetails name={chosen.item.name} description={chosen.item.description} rows={[]} />
             ) : selectedId && chosen ? (

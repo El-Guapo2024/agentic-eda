@@ -43,7 +43,7 @@ pub enum OptEffort {
 /// constructor (`pns_routing_settings.cpp`) for every field this port has.
 ///
 /// Every field is read by the router: `mode`, `optimizer_effort`,
-/// `shove_vias`, `jump_over_obstacles`, `shove_iteration_limit` and
+/// `shove_vias`, `jump_over_obstacles`, `shove_iteration_limit`, `shove_time_limit_ms` and
 /// `via_force_prop_iteration_limit` by the shove and the via placement,
 /// `walkaround_iteration_limit` and `walkaround_hug_length_threshold` by the
 /// walkaround, `smart_pads` and `optimizer_effort` by the optimizer,
@@ -57,8 +57,8 @@ pub enum OptEffort {
 /// `/` key's), `m_suggestFinish` (KiCad hides it: "not implemented"),
 /// `m_followMouse`, `m_snapToPads`, `m_cornerMode` (only the mitered 45-degree
 /// corner is built), `m_optimizeEntireDraggedTrack` (`DRAGGER::optimizeAndUpdateDraggedLine`
-/// needs the optimizer's `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`, which are not ported) and the time
-/// limits (every call branches fresh from the world, there is no springback).
+/// needs the optimizer's `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`, which are not ported) and the walkaround's time limit
+/// (`m_walkaroundTimeLimit`: KiCad declares it and nothing reads it).
 #[derive(Debug, Clone)]
 pub struct RoutingSettings {
     pub mode: Mode,
@@ -76,6 +76,10 @@ pub struct RoutingSettings {
     /// it (rank - 1) instead of being "reflected" back at the pusher.
     pub jump_over_obstacles: bool,
     pub shove_iteration_limit: i32,
+    /// `ShoveTimeLimit()` (`shove_time_limit` in the settings file), in milliseconds: `SHOVE::shoveMainLoop` gives up (`SH_INCOMPLETE`)
+    /// once a shove has run this long, whatever it has left to push. Checked after each iteration, like the iteration limit; the
+    /// clock starts with each loop. Default 1000.
+    pub shove_time_limit_ms: i32,
     pub walkaround_iteration_limit: i32,
     /// `ViaForcePropIterationLimit()`: how many steps `VIA::PushoutForce`
     /// takes to get a via off what it sits on.
@@ -129,6 +133,7 @@ impl Default for RoutingSettings {
             smart_pads: true,
             jump_over_obstacles: false,
             shove_iteration_limit: 250,
+            shove_time_limit_ms: 1000,
             walkaround_iteration_limit: 40,
             via_force_prop_iteration_limit: 40,
             fix_all_segments: true,

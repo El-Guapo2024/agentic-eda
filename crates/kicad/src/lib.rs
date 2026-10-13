@@ -25,6 +25,7 @@ mod fp_art_io;
 mod fp_fields;
 mod pad_shape;
 mod pcb;
+mod pcb_generated;
 mod pcb_items;
 mod clipboard;
 pub use clipboard::{export_pcb_clipboard, parse_pcb_clipboard, ClipFootprint, ClipGroup, ClipRef, Clipboard};
@@ -46,7 +47,7 @@ mod footprint_lib;
 pub use footprint_lib::{default_footprint_library_root, export_kicad_mod, find_footprint_file, footprint_attributes, footprint_models, parse_footprint_file, resolve_library_footprints, resolve_library_footprints_with, LIBRARY_ROOT_ENV};
 
 mod model3d;
-pub use model3d::{fit_pads, installed_footprint, installed_footprint_in, part_models, part_models_in, Fit, InstalledFootprint, ModelKind, PartModels};
+pub use model3d::{default_part_models, default_part_models_in, fit_pads, installed_footprint, installed_footprint_in, part_models, part_models_in, Fit, InstalledFootprint, ModelKind, PartModels};
 
 mod symbol_import;
 pub use symbol_import::{parse_library_symbols, ParsedSymbols};
@@ -1367,6 +1368,35 @@ pub(crate) fn fmt_mm_f(v: f64) -> String {
     if s.is_empty() || s == "-0" { "0".to_string() } else { s.to_string() }
 }
 
+/// `FormatDouble2Str` (`common/string_utils.cpp`), which writes a footprint's 3D model offset, scale and rotation: ten significant digits (`{:.10g}`), trailing zeros
+/// taken off; a value of 0.0001 or less in magnitude is written with sixteen decimals and the zeros taken off, so a scale of 0.00001 is not 0. Negative zero is 0.
+pub(crate) fn fmt_double_2_str(v: f64) -> String {
+    fn trimmed(mut s: String) -> String {
+        if s.contains('.') {
+            while s.ends_with('0') {
+                s.pop();
+            }
+            if s.ends_with('.') {
+                s.pop();
+            }
+        }
+        s
+    }
+    let s = if v != 0.0 && v.abs() <= 0.0001 {
+        trimmed(format!("{v:.16}"))
+    } else {
+        // `%g` with ten digits: the decimals left after the digits before the point; a number of ten digits or more has none
+        let before = if v == 0.0 { 1 } else { v.abs().log10().floor() as i32 + 1 };
+        let decimals = (10 - before).max(0) as usize;
+        trimmed(format!("{v:.decimals$}"))
+    };
+    if s == "-0" || s.is_empty() {
+        "0".to_string()
+    } else {
+        s
+    }
+}
+
 pub(crate) fn sexpr_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -1484,6 +1514,40 @@ mod tests {
     use super::*;
     use eda_engine::{derive_schematic, EngineOptions};
     use eda_model::{Net, Pin};
+
+    /// `FormatDouble2Str` (`common/string_utils.cpp`): `{:.10g}` with the zeros taken off, and sixteen decimals for a value of 0.0001 or less.
+    #[test]
+    fn a_double_is_written_with_ten_significant_digits_as_format_double_2_str_does() {
+        for (v, want) in [
+            (0.0, "0"),
+            (-0.0, "0"),
+            (1.0, "1"),
+            (-2.0, "-2"),
+            (1.27, "1.27"),
+            (0.5, "0.5"),
+            (90.0, "90"),
+            (-30.5, "-30.5"),
+            (100.0, "100"),
+            (1.0 / 3.0, "0.3333333333"),
+            (2.0 / 3.0, "0.6666666667"),
+            (123.456789012345, "123.456789"),
+            (1234567.891, "1234567.891"),
+            (9.99999999999, "10"),
+            (0.0254 * 25.4, "0.64516"),
+            (0.00010000001, "0.00010000001"),
+            // 0.0001 and under: sixteen decimals, zeros off, so a tiny scale is not 0
+            (0.0001, "0.0001"),
+            (0.00001, "0.00001"),
+            (-0.00002, "-0.00002"),
+            (0.000012345, "0.000012345"),
+            (1e-17, "0"),
+        ] {
+            assert_eq!(fmt_double_2_str(v), want, "{v:e}");
+        }
+        // the old writer's rounding to 0.1 um is not in this one
+        assert_eq!(fmt_double_2_str(0.12345678), "0.12345678");
+        assert_eq!(fmt_mm_f(0.12345678), "0.1235");
+    }
 
     fn pin(number: &str, name: &str, kind: PinKind) -> Pin {
         Pin { number: number.into(), name: Some(name.into()), kind }

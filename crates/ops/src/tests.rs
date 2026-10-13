@@ -1810,6 +1810,7 @@ fn edit_footprint_properties_replaces_the_whole_panel() {
         reference_visible: false,
         value_visible: true,
         model: Some("${KICAD10_3DMODEL_DIR}/x.step".into()),
+        models3d: None,
         zone_connection: Some(PadConnection::Full),
     })
     .unwrap();
@@ -1819,6 +1820,55 @@ fn edit_footprint_properties_replaces_the_whole_panel() {
     assert!(fp.attributes.smd);
     assert!(!fp.reference_visible);
     assert_eq!(fp.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/x.step"));
+}
+
+/// The Footprint Editor's Footprint Properties sends its whole panel, 3D Models tab included (`dialog_footprint_properties_fp_editor.cpp`): the list is the footprint's, in order,
+/// with the placement of each; the one `model` path follows its first model; an empty list is no model.
+#[test]
+fn edit_footprint_properties_takes_the_whole_list_of_3d_models() {
+    use eda_model::footprint::Model3d;
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::OpenFootprintForEdit { name: "Test:FP".into() }).unwrap();
+    let props = |model: Option<&str>, models3d: Option<Vec<Model3d>>| Cmd::EditFootprintProperties {
+        name: "Test:FP".into(),
+        description: "d".into(),
+        keywords: String::new(),
+        attributes: FootprintAttributes::default(),
+        reference_visible: true,
+        value_visible: true,
+        model: model.map(str::to_string),
+        models3d,
+        zone_connection: None,
+    };
+    let two = vec![Model3d { offset: [1.0, 2.0, 0.5], rotate: [90.0, 0.0, 0.0], opacity: 0.5, ..Model3d::identity("a.step") }, Model3d { show: false, scale: [2.0, 2.0, 2.0], ..Model3d::identity("b.step") }];
+    b.apply(&props(None, Some(two.clone()))).unwrap();
+    let fp = |b: &Board<'_>| b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap().clone();
+    assert_eq!((fp(&b).models3d.clone(), fp(&b).model.clone()), (two.clone(), Some("a.step".to_string())), "the list is the footprint's and `model` is its first path");
+
+    // an old-style call that echoes the path it was given leaves the list alone
+    b.apply(&props(Some("a.step"), None)).unwrap();
+    assert_eq!(fp(&b).models3d, two);
+    // one that names another path makes it the footprint's one model, as before the list existed
+    b.apply(&props(Some("c.step"), None)).unwrap();
+    assert_eq!((fp(&b).models3d.len(), fp(&b).model), (0, Some("c.step".to_string())));
+    // none at all
+    b.apply(&props(None, Some(two.clone()))).unwrap();
+    b.apply(&props(None, Some(vec![]))).unwrap();
+    assert_eq!((fp(&b).models3d.len(), fp(&b).model), (0, None), "an empty list is no model, and the path goes with it");
+    b.apply(&props(None, Some(two.clone()))).unwrap();
+    b.apply(&props(None, None)).unwrap();
+    assert_eq!((fp(&b).models3d.len(), fp(&b).model), (0, None), "no list and no path: the one model is taken away");
+
+    // a row the tab would not take is refused, named, and nothing of the panel is taken
+    b.apply(&props(None, Some(two.clone()))).unwrap();
+    let mut changed = props(None, Some(vec![Model3d::identity("ok.step"), Model3d::identity("bad?.step")]));
+    if let Cmd::EditFootprintProperties { description, .. } = &mut changed {
+        *description = "changed".into();
+    }
+    let e = b.apply(&changed).unwrap_err();
+    assert_eq!((e[0].check.as_str(), e[0].hint.as_deref()), ("ops_bad_model", Some("model 2: Illegal filename: \"bad?.step\"")));
+    assert_eq!((fp(&b).description, fp(&b).models3d), ("d".to_string(), two));
 }
 
 #[test]

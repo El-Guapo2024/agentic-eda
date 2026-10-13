@@ -51,6 +51,8 @@ import { routeMove, routeDragMove, dpMove } from "../../api/client";
 import { finishInlineDrag } from "./dragging";
 import { dragStateFromPreview } from "../../kicad-port/dragTool";
 import { startDiffPairRoute, fixDiffPairRoute, finishDiffPairRoute } from "./diffPairRouting";
+import { finishEditPattern, fixTune, hoverTune, moveTune, startTune, TuneHandleDrag } from "./tuneRouting";
+import { handleAt } from "../../kicad-port/tuneTool";
 import { dpStateFromPreview } from "../../kicad-port/dpTool";
 import { ContextMenu, type MenuEntry } from "./ContextMenu";
 import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "../../kicad-port/viewControls";
@@ -93,7 +95,7 @@ function zoneSettingsOf(zone: Zone): ZoneSettingsFields & RuleAreaFields {
 const DRAGGABLE_KINDS = new Set<SelectableKind>(["part", "track", "via", "zone", "shape", "text", "dimension", "pad", "field"]);
 
 /** The tools whose clicks go through a grid helper: `BestSnapAnchor` on every event, or the router's `snapToItem`. */
-const PLACING_TOOLS = new Set<string>(["route", "diffpair", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "measure", "drill_origin", "local_ratsnest", "picker"]);
+const PLACING_TOOLS = new Set<string>(["route", "diffpair", "tune", "drag", "via", "zone", "draw_segment", "draw_arc", "draw_bezier", "draw_rect", "draw_circle", "draw_polygon", "text", "dimension", "measure", "drill_origin", "local_ratsnest", "picker"]);
 
 /** wx_view_controls.cpp onButton: MiddleDown/RightDown both start DRAG_PANNING by default (m_dragMiddle/m_dragRight == MOUSE_DRAG_ACTION::PAN). A plain click (no real movement) of the right button still opens the context menu -- see onContextMenu's `justPanned` check -- same as source's right button also being each platform's native context-menu trigger. */
 const PAN_BUTTONS = new Set([1, 2]);
@@ -155,7 +157,9 @@ type DragState =
   /** pcb_point_editor.cpp: dragging one corner of the single selected zone's outline. `baseOutline` is a snapshot at drag-start, so every move computes fresh from it (no cumulative drift) -- same "delta from start" shape the move tool's own drag already uses. */
   | { kind: "zoneCorner"; zoneId: string; cornerIndex: number; baseOutline: [number, number][] }
   /** The same for a graphic shape's handle (kicad-port/pcbPointEdit.ts): `base` is the shape at drag-start, every move recomputes from it. */
-  | { kind: "shapePoint"; shapeId: string; base: Shape; point: EditPoint };
+  | { kind: "shapePoint"; shapeId: string; base: Shape; point: EditPoint }
+  /** A selected tuning pattern's edit point (`PCB_TUNING_PATTERN::MakeEditPoints`) being dragged: the pattern is tuned again through an edit session (`genStartEdit` .. `genFinishEdit`). */
+  | { kind: "tuneHandle"; drag: TuneHandleDrag };
 
 /** A click/double-click/right-click within this many board µm of a zone corner counts as landing on it -- same generous, zoom-aware tolerance `ANCHOR_SNAP_UM`-adjacent code elsewhere in this file already uses. */
 function zoneCornerToleranceUm(viewScale: number): number {
@@ -372,6 +376,7 @@ export function Canvas() {
             visibleLayers: new Set(board.layers.flatMap((l, i) => ((state.highContrast && state.appearance.contrastHidden && state.activeLayer ? l === state.activeLayer : state.layerVisible[l] !== false) ? [i] : []))),
           })
         : null,
+      tuneHover: state.pcbx.tuneHover,
       drcViolations: state.drc?.violations ?? null,
       drcStale: isStale(state.drcVersion, state.version),
       drcSelected: state.drcSelected,
@@ -430,7 +435,7 @@ export function Canvas() {
 
     // The cursor crosshair is drawn by CommonOverlay (small, full-window or 45 degree; every editor shares it, and it follows the flipped board view).
     ctx.restore();
-  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
+  }, [board, state.view, state.selection, state.hot, state.netHighlight, state.showRatsnest, state.ratsnestCurved, state.ratsnest, state.drc, state.drcVersion, state.version, state.drcSelected, state.drcDialogOpen, state.lint, state.drcLintSelected, state.layerVisible, state.layerOpacity, state.activeLayer, state.highContrast, state.gridUm, state.gridVisible, state.movePreview, state.cursorUm, state.fullscreenCrosshair, state.sketchPads, state.sketchTracks, state.sketchVias, state.drawState, state.activeTool, state.pcbx.angleSnapMode, state.pcbx.tuneHover, state.zoneFill, state.zoneDisplayMode, state.currentViaPreset, state.units, state.bcx, state.enteredGroupId, paintAppearance, marquee, zoneCornerPreview, shapePointPreview, containerSize]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -451,6 +456,8 @@ export function Canvas() {
   const toolPoint = (tool: string, wx: number, wy: number, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): [number, number] => {
     const mods = snapMods(e);
     const draw = state.drawState;
+    // `PlaceTuningPattern` reads `controls->GetMousePosition()`: the pattern follows the pointer, not the grid.
+    if (tool === "tune") return [wx, wy];
     if (tool === "route" || tool === "diffpair" || tool === "drag") {
       const started = draw?.kind === "route" || draw?.kind === "diffpair" || draw?.kind === "drag";
       // what the cursor does not snap onto: the line a drag is dragging (`checkSnap`), the item a route started on (`pickSingleItem( .., { m_startItem } )`)
@@ -732,6 +739,15 @@ export function Canvas() {
         return;
       }
 
+      // `7` / `8` / `9` (P5c, `DRAWING_TOOL::PlaceTuningPattern`): the first click starts a tuning pattern on the track under the cursor, the second puts it on the
+      // board (or, for a pattern of the board being edited through its edit points, finishes the edit).
+      if (state.activeTool === "tune") {
+        const draw = state.drawState;
+        if (draw?.kind === "tune") void (draw.editing ? finishEditPattern(dispatch, api) : fixTune(state, dispatch, api, wx, wy));
+        else void startTune(state, dispatch, wx, wy);
+        return;
+      }
+
       // `D` (gap #7 stage 5, pcbnew.InteractiveRouter.Drag45Degree): the
       // drag session itself is started by the hotkey the moment it's
       // pressed (useActionRunner.ts -- there's no separate "click to
@@ -859,6 +875,15 @@ export function Canvas() {
         if (idx != null) {
           dragRef.current = { kind: "zoneCorner", zoneId: zone.id, cornerIndex: idx, baseOutline: zone.outline };
           setZoneCornerPreview({ zoneId: zone.id, outline: zone.outline });
+          return;
+        }
+      }
+      // A selected tuning pattern's four edit points: the start, the end, the width of the meanders and their spacing -- dragging one tunes the pattern again.
+      const pattern = board.drawings?.tuning_patterns?.find((p) => p.id === soleId);
+      if (pattern?.handles) {
+        const h = handleAt(pattern.handles, { x: wx, y: wy }, zoneCornerToleranceUm(state.view.scale));
+        if (h != null) {
+          dragRef.current = { kind: "tuneHandle", drag: new TuneHandleDrag(dispatch, pattern, h) };
           return;
         }
       }
@@ -1058,6 +1083,14 @@ export function Canvas() {
       }
     }
 
+    // `7` / `8` / `9`: the status box of the track under the cursor, or -- with a pattern started -- the meander fitted from its start to the cursor (same throttle and
+    // guard as the router's previews above).
+    if (board && state.activeTool === "tune" && routeMoveThrottleRef.current.shouldSend(performance.now())) {
+      const token = routeMoveGuardRef.current.next();
+      if (state.drawState?.kind === "tune") void moveTune(state, dispatch, wx, wy, () => routeMoveGuardRef.current.isCurrent(token));
+      else void hoverTune(state, dispatch, wx, wy);
+    }
+
     // `D`'s own live preview -- same throttle/guard pair as the route tool
     // above (never both active at once: `Router` keeps a route session and
     // a drag session mutually exclusive, see crates/pns/src/router.rs).
@@ -1136,6 +1169,9 @@ export function Canvas() {
       const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set((([zone]) => (zone ? zoneLayers(zone) : [state.activeLayer ?? "F.Cu"]))([board?.routing?.zones.find((z) => z.id === drag.zoneId)])), category: "current", skip: new Set([drag.zoneId]) });
       const [sx, sy] = [p[0], p[1]];
       setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
+    } else if (drag.kind === "tuneHandle") {
+      if (!motion?.dragging) return;
+      drag.drag.move(wx, wy);
     } else if (drag.kind === "shapePoint") {
       if (!motion?.dragging) return;
       const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([drag.base.layer]), category: "graphics", skip: new Set([drag.shapeId]) });
@@ -1213,6 +1249,8 @@ export function Canvas() {
         api.cmd({ op: "set_zone_outline", id: drag.zoneId, outline: (zoneCornerPreview?.outline ?? drag.baseOutline).map(([x, y]) => ({ x, y })) });
       }
       setZoneCornerPreview(null);
+    } else if (drag.kind === "tuneHandle") {
+      void drag.drag.finish(api);
     } else if (drag.kind === "shapePoint") {
       // A shape's id is its geometry's: dropping the handle makes a new shape (selected) in place of the old one, one undo step.
       const preview = shapePointPreview;

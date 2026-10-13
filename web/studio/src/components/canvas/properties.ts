@@ -10,6 +10,12 @@ import { padById } from "../../kicad-port/pcbItems";
 import { fieldById } from "../../kicad-port/fpFields";
 
 export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch<Action>): void {
+  // A tuning pattern (`PCB_TUNING_PATTERN::ShowPropertiesDialog`): the Tuning Pattern dialog, which tunes it again.
+  if (api.getState().board?.drawings?.tuning_patterns?.some((p) => p.id === id)) {
+    dispatch({ type: "PCBX", patch: { tuneDialogPattern: id } });
+    dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
+    return;
+  }
   if (api.textById(id)) dispatch({ type: "SET_TEXT_DIALOG", dialog: { mode: "edit", id } });
   // A zone gets the full dialog_copper_zones.cpp port (ZoneDialog.tsx),
   // same as "Add Zone" -- not the plain read-only-ish ItemPropertiesDialog

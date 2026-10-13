@@ -58,6 +58,7 @@ mod array;
 pub use array::ArrayGeometry;
 mod fix_shapes;
 mod fp_edit;
+mod fp_models;
 mod import_graphics;
 pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, ImportGraphics};
 mod import_graphics_sch;
@@ -74,6 +75,7 @@ mod pcb_paste;
 mod pcb_paste_special;
 mod pcb_props;
 mod pcb_transform;
+mod tuning;
 mod zone_overrides;
 mod sch_annotate;
 mod sch_clipboard;
@@ -809,6 +811,24 @@ pub enum Cmd {
         vias: Vec<Via>,
     },
 
+    /// What the length tuner (`crates/pns`'s `MeanderPlacer`, `GENERATOR_TOOL::GenEditAction`) makes, as one undo step: remove the tracks of
+    /// the line it tuned (`remove_track_ids`, the old pattern's members among them) and the pattern `remove_pattern`, add `tracks`, and add
+    /// `pattern` with the tracks of `member_indices` (indices into `tracks`) as its members -- see [`eda_model::tuning::TuningPattern`]. A new
+    /// pattern has an empty id; re-tuning one removes it and adds the new record under the same id; removing a pattern is `pattern: None` with the
+    /// baseline put back as `tracks`. Unknown track ids are tolerated, as `CommitRoute`'s are.
+    CommitTuning {
+        #[serde(default)]
+        pattern: Option<eda_model::tuning::TuningPattern>,
+        #[serde(default)]
+        remove_pattern: Option<String>,
+        #[serde(default)]
+        remove_track_ids: Vec<String>,
+        #[serde(default)]
+        tracks: Vec<Track>,
+        #[serde(default)]
+        member_indices: Vec<usize>,
+    },
+
     /// Move/rotate one or more placed parts by an exact cartesian offset
     /// and angle -- pcbnew's "Move Exactly..." (Shift+M) dialog.
     /// `rotate_millideg` adds to each part's own orientation regardless
@@ -891,6 +911,43 @@ pub enum Cmd {
     /// share it) gets `edit` as its changes -- shape, size, hole, offset, corner radius, clearance and solder mask and paste margins. An
     /// edit that changes nothing puts the pad back as the library has it.
     EditBoardPad { part: String, edit: eda_model::fp_edit::PadEdit },
+    /// The 3D Models tab of Footprint Properties (`PANEL_FP_PROPERTIES_3D_MODEL`, [`fp_models`]): the footprint `part`'s whole list of `(model ...)` entries becomes `models`, in
+    /// order -- the dialog's OK, and what Migrate 3D Models sends. An empty list is a footprint with no model. A list that comes to what the library gives takes the edit away.
+    /// Refused for a file name that is empty or illegal (`FILENAME_RESOLVER::ValidateFileName`) and for numbers the preview panel does not take; one undo step.
+    SetBoardModels { part: String, models: Vec<eda_model::footprint::Model3d> },
+    /// "Add 3D model" (`OnAdd3DModel`): `model` joins the footprint's list at the end, or before position `at` (0-based). One undo step.
+    AddBoardModel {
+        part: String,
+        model: eda_model::footprint::Model3d,
+        #[serde(default)]
+        at: Option<usize>,
+    },
+    /// "Remove 3D model" (`OnRemove3DModel`): the model at `index` (0-based) leaves the list. Refused for a position the list has none at.
+    RemoveBoardModel { part: String, index: usize },
+    /// Put the model at `from` where `to` is (0-based), the others keeping their order; refused for a position the list has none at.
+    MoveBoardModel { part: String, from: usize, to: usize },
+    /// Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): every model of every footprint on the board whose file name is a key of `replacements` takes the name it maps to --
+    /// the placement stays -- as the 3D Models tab's lists, one undo step ("Migrate 3D model references"). Refused for a new name the tab would not take, for no replacement at all
+    /// and when no footprint has a model of those names.
+    MigrateBoardModels { replacements: BTreeMap<String, String> },
+    /// The file name, offset, scale, rotation, opacity and Show cell of the model at `index` (0-based): what is left out stays. The numbers are KiCad's file's -- millimetres and
+    /// degrees, the rotation clockwise as the file stores it (the dialog shows it the other way round).
+    EditBoardModel {
+        part: String,
+        index: usize,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        offset: Option<[f64; 3]>,
+        #[serde(default)]
+        scale: Option<[f64; 3]>,
+        #[serde(default)]
+        rotate: Option<[f64; 3]>,
+        #[serde(default)]
+        opacity: Option<f64>,
+        #[serde(default)]
+        show: Option<bool>,
+    },
 
     /// Apply `cmds` in order as ONE command: one undo step, one activity
     /// entry, all-or-nothing (the first refused sub-command restores the
@@ -1363,8 +1420,15 @@ pub enum Cmd {
         attributes: FootprintAttributes,
         reference_visible: bool,
         value_visible: bool,
-        /// `(model "...")` 3D model path; `None` clears it.
+        /// `(model "...")` 3D model path; `None` clears it. The path of the one model of an older entry: a command that sends the footprint's
+        /// whole list ([`Cmd::EditFootprintProperties::models3d`]) has it follow the list's first model.
         model: Option<String>,
+        /// The 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`): the footprint's whole list of models, in order, each with its offset, scale, rotation, opacity and Show
+        /// switch ([`fp_models`]); an empty list is a footprint with no model. Refused for an empty or illegal file name and for numbers the preview panel does not
+        /// take. Left out, the footprint keeps the list it has -- unless `model` names another path than its first model's, which is then its one model, as it was
+        /// before the list existed.
+        #[serde(default)]
+        models3d: Option<Vec<eda_model::footprint::Model3d>>,
         /// The Clearances tab's "Zone connection" (`FOOTPRINT::SetLocalZoneConnection`); `None` is "inherited". Part of the
         /// whole panel, so a command that leaves it out clears it.
         #[serde(default)]
@@ -1813,6 +1877,7 @@ impl Cmd {
             Cmd::ExchangeFootprints { references, .. } => references.iter().map(String::as_str).collect(),
             Cmd::ReannotateBoard { .. } => vec!["reannotate"],
             Cmd::CommitRoute { .. } => vec!["route"],
+            Cmd::CommitTuning { pattern, remove_pattern, .. } => remove_pattern.iter().map(String::as_str).chain(pattern.iter().map(|p| p.layer.as_str())).collect(),
             Cmd::Batch { cmds } => cmds.iter().flat_map(Cmd::subjects).collect(),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.subjects(),
             Cmd::ReorganizeSheets => vec!["sheets"],
@@ -1820,6 +1885,8 @@ impl Cmd {
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
+            Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
+            Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2225,9 +2292,11 @@ impl<'a> Board<'a> {
     /// Apply a command, or refuse it. A group keeps only the members that are still on the board afterwards (`pcb_groups.rs`).
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         let groups_before = self.group_universe();
+        let patterns_before = self.tuning_universe();
         let edge_before = outline::snapshot(&self.design);
         self.apply_cmd(cmd)?;
         self.tidy_groups(groups_before);
+        self.tidy_tuning_patterns(patterns_before);
         outline::refresh_if_changed(&mut self.design, edge_before);
         Ok(())
     }
@@ -2404,6 +2473,7 @@ impl<'a> Board<'a> {
             Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
             Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
+            Cmd::CommitTuning { pattern, remove_pattern, remove_track_ids, tracks, member_indices } => self.commit_tuning(pattern.as_ref(), remove_pattern.as_deref(), remove_track_ids, tracks.clone(), member_indices),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
             Cmd::RotateItems { ids, pivot, angle_millideg } => self.rotate_items(ids, *pivot, *angle_millideg),
@@ -2411,6 +2481,14 @@ impl<'a> Board<'a> {
             Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
             Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
+            Cmd::MigrateBoardModels { replacements } => self.migrate_board_models(replacements),
+            Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
+            Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
+            Cmd::RemoveBoardModel { part, index } => self.remove_board_model(part, *index),
+            Cmd::MoveBoardModel { part, from, to } => self.move_board_model(part, *from, *to),
+            Cmd::EditBoardModel { part, index, path, offset, scale, rotate, opacity, show } => {
+                self.edit_board_model(part, *index, &eda_model::fp_models::ModelPatch { path: path.clone(), offset: *offset, scale: *scale, rotate: *rotate, opacity: *opacity, show: *show })
+            }
             Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
@@ -2484,8 +2562,8 @@ impl<'a> Board<'a> {
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
-            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, zone_connection } => {
-                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), *zone_connection)
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection } => {
+                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), models3d.as_deref(), *zone_connection)
             }
             Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
             Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
@@ -4716,15 +4794,31 @@ impl<'a> Board<'a> {
         reference_visible: bool,
         value_visible: bool,
         model: Option<String>,
+        models3d: Option<&[eda_model::footprint::Model3d]>,
         zone_connection: Option<PadConnection>,
     ) -> Result<(), Vec<CheckResult>> {
+        // The 3D Models tab's list is judged before anything of the panel is taken (`panel_fp_properties_3d_model.cpp`), and refused with the row it is wrong at.
+        let list = models3d.map(eda_model::fp_models::checked_models).transpose().map_err(|p| vec![CheckResult::fail(p.check, name, p.reason)])?;
         let fp = self.library_footprint_mut(name)?;
         fp.description = description;
         fp.keywords = keywords;
         fp.attributes = attributes;
         fp.reference_visible = reference_visible;
         fp.value_visible = value_visible;
-        fp.model = model;
+        match list {
+            // the whole list; `model` is its first path
+            Some(list) => {
+                fp.model = list.first().map(|m| m.path.clone());
+                fp.models3d = list;
+            }
+            // no list sent: the footprint keeps its own, unless the one path was changed -- then that path is its one model, as it was before the list existed
+            None => {
+                if model != fp.models3d.first().map(|m| m.path.clone()).or_else(|| fp.model.clone()) {
+                    fp.models3d.clear();
+                    fp.model = model;
+                }
+            }
+        }
         fp.zone_connection = zone_connection;
         Ok(())
     }
@@ -5275,6 +5369,8 @@ mod array_tests;
 #[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]
+mod fp_models_tests;
+#[cfg(test)]
 mod pcb_props_tests;
 #[cfg(test)]
 mod pcb_paste_tests;
@@ -5284,6 +5380,8 @@ mod import_graphics_tests;
 mod import_graphics_sch_tests;
 #[cfg(test)]
 mod pcb_groups_tests;
+#[cfg(test)]
+mod tuning_tests;
 #[cfg(test)]
 pub(crate) mod sch_annotate_tests;
 #[cfg(test)]
