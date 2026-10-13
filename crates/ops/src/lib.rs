@@ -58,6 +58,7 @@ mod array;
 pub use array::ArrayGeometry;
 mod fix_shapes;
 mod fp_edit;
+mod fp_models;
 mod import_graphics;
 pub use import_graphics::{board_items as graphics_board_items, GraphicsFormat, ImportGraphics};
 mod import_graphics_sch;
@@ -886,6 +887,39 @@ pub enum Cmd {
     /// share it) gets `edit` as its changes -- shape, size, hole, offset, corner radius, clearance and solder mask and paste margins. An
     /// edit that changes nothing puts the pad back as the library has it.
     EditBoardPad { part: String, edit: eda_model::fp_edit::PadEdit },
+    /// The 3D Models tab of Footprint Properties (`PANEL_FP_PROPERTIES_3D_MODEL`, [`fp_models`]): the footprint `part`'s whole list of `(model ...)` entries becomes `models`, in
+    /// order -- the dialog's OK, and what Migrate 3D Models sends. An empty list is a footprint with no model. A list that comes to what the library gives takes the edit away.
+    /// Refused for a file name that is empty or illegal (`FILENAME_RESOLVER::ValidateFileName`) and for numbers the preview panel does not take; one undo step.
+    SetBoardModels { part: String, models: Vec<eda_model::footprint::Model3d> },
+    /// "Add 3D model" (`OnAdd3DModel`): `model` joins the footprint's list at the end, or before position `at` (0-based). One undo step.
+    AddBoardModel {
+        part: String,
+        model: eda_model::footprint::Model3d,
+        #[serde(default)]
+        at: Option<usize>,
+    },
+    /// "Remove 3D model" (`OnRemove3DModel`): the model at `index` (0-based) leaves the list. Refused for a position the list has none at.
+    RemoveBoardModel { part: String, index: usize },
+    /// Put the model at `from` where `to` is (0-based), the others keeping their order; refused for a position the list has none at.
+    MoveBoardModel { part: String, from: usize, to: usize },
+    /// The file name, offset, scale, rotation, opacity and Show cell of the model at `index` (0-based): what is left out stays. The numbers are KiCad's file's -- millimetres and
+    /// degrees, the rotation clockwise as the file stores it (the dialog shows it the other way round).
+    EditBoardModel {
+        part: String,
+        index: usize,
+        #[serde(default)]
+        path: Option<String>,
+        #[serde(default)]
+        offset: Option<[f64; 3]>,
+        #[serde(default)]
+        scale: Option<[f64; 3]>,
+        #[serde(default)]
+        rotate: Option<[f64; 3]>,
+        #[serde(default)]
+        opacity: Option<f64>,
+        #[serde(default)]
+        show: Option<bool>,
+    },
 
     /// Apply `cmds` in order as ONE command: one undo step, one activity
     /// entry, all-or-nothing (the first refused sub-command restores the
@@ -1815,6 +1849,7 @@ impl Cmd {
             Cmd::MoveItems { ids, .. } | Cmd::RotateItems { ids, .. } | Cmd::FlipItems { ids, .. } | Cmd::SetItemNet { ids, .. } => ids.iter().map(String::as_str).collect(),
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
+            Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2404,6 +2439,13 @@ impl<'a> Board<'a> {
             Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
             Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
+            Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
+            Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
+            Cmd::RemoveBoardModel { part, index } => self.remove_board_model(part, *index),
+            Cmd::MoveBoardModel { part, from, to } => self.move_board_model(part, *from, *to),
+            Cmd::EditBoardModel { part, index, path, offset, scale, rotate, opacity, show } => {
+                self.edit_board_model(part, *index, &eda_model::fp_models::ModelPatch { path: path.clone(), offset: *offset, scale: *scale, rotate: *rotate, opacity: *opacity, show: *show })
+            }
             Cmd::EditTrack { id, start, end } => self.edit_track(id, *start, *end),
             Cmd::SetItemNet { ids, net } => self.set_item_net(ids, net),
             Cmd::SetZoneName { id, name } => self.set_zone_name(id, name),
@@ -5236,6 +5278,8 @@ mod pcb_transform_tests;
 mod array_tests;
 #[cfg(test)]
 mod fp_edit_tests;
+#[cfg(test)]
+mod fp_models_tests;
 #[cfg(test)]
 mod pcb_props_tests;
 #[cfg(test)]

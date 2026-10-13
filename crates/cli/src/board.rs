@@ -57,6 +57,9 @@ mod fp_assign_tests;
 #[cfg(test)]
 #[path = "fp_library_tests.rs"]
 mod fp_library_tests;
+#[cfg(test)]
+#[path = "fp_models_tests.rs"]
+mod fp_models_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -179,10 +182,12 @@ pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Desig
 }
 
 /// `model.instance_footprints` for every footprint whose pad edits change the geometry the engine knows (shape, size, hole, type,
-/// rotation, corner radius): the library footprint with the edits laid on ([`eda_model::fp_edit::patched_footprint`]). [`load`] calls it
-/// after the parts are all there; what the engine has no field for (a pad's offset and margins) stays in the design for the writer.
+/// rotation, corner radius) or whose list of 3D models was set: the library footprint with the edits laid on ([`eda_model::fp_edit::edited_footprint`]).
+/// [`load`] calls it after the parts are all there; what the engine has no field for (a pad's offset and margins) stays in the design for the writer. A list of 3D
+/// models that was set also puts the reference in `model.edited_models`, so that an empty list is read as no model and not as no list.
 pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     model.instance_footprints.clear();
+    model.edited_models.clear();
     let Some(dr) = design.drawings.as_ref() else { return };
     // the footprint a part was exchanged for, where the board keeps its own copy of it (`FootprintAssignment::definition`)
     for a in &dr.footprint_assignments {
@@ -190,11 +195,14 @@ pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut C
             model.instance_footprints.insert(a.reference.clone(), def.clone());
         }
     }
-    for edit in dr.footprint_edits.iter().filter(|e| e.pads.iter().any(eda_model::fp_edit::PadEdit::changes_engine_pad)) {
+    for edit in dr.footprint_edits.iter().filter(|e| e.models3d.is_some() || e.pads.iter().any(eda_model::fp_edit::PadEdit::changes_engine_pad)) {
         let Some(part) = model.part(&edit.id).cloned() else { continue };
         // the edits are laid on the copy the board keeps, else on what the model resolves
         let Some(library) = model.instance_footprints.get(&edit.id).cloned().or_else(|| model.library_footprint_of(&part)) else { continue };
-        model.instance_footprints.insert(edit.id.clone(), eda_model::fp_edit::patched_footprint(&library, &edit.pads));
+        model.instance_footprints.insert(edit.id.clone(), eda_model::fp_edit::edited_footprint(&library, edit));
+        if edit.models3d.is_some() {
+            model.edited_models.insert(edit.id.clone());
+        }
     }
 }
 
@@ -1009,7 +1017,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // the board that results is judged against a model that has them, as the next load will have.
     let board_parts = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.board_parts.clone()).unwrap_or_default();
     // Likewise a pad edit changes the footprint its part has (`fold_footprint_edits`).
-    let pad_edits = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.footprint_edits.iter().map(|e| (e.id.clone(), e.pads.clone())).collect::<Vec<_>>()).unwrap_or_default();
+    let pad_edits = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| dr.footprint_edits.iter().map(|e| (e.id.clone(), e.pads.clone(), e.models3d.clone())).collect::<Vec<_>>()).unwrap_or_default();
     // A rename moves the intent's part under a new reference and an exchange puts a part on another footprint: the model is built again for the design that
     // results, as the next load will build it.
     let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone())).unwrap_or_default();
@@ -1281,6 +1289,11 @@ fn cmd_line(c: &Cmd) -> String {
         }
         Cmd::EditBoardField { part, name, .. } => format!("field edit {part}:{name}"),
         Cmd::EditBoardPad { part, edit } => format!("pad edit {}", edit.pad_id(part)),
+        Cmd::SetBoardModels { part, models } => format!("3d models {part} ({} model(s))", models.len()),
+        Cmd::AddBoardModel { part, model, .. } => format!("3d model add {part} {}", model.path),
+        Cmd::RemoveBoardModel { part, index } => format!("3d model remove {part} {}", index + 1),
+        Cmd::MoveBoardModel { part, from, to } => format!("3d model move {part} {} -> {}", from + 1, to + 1),
+        Cmd::EditBoardModel { part, index, .. } => format!("3d model edit {part} {}", index + 1),
 
         // No real `eda board` CLI subcommand parses these yet (the studio
         // UI is their only caller so far) -- this text exists purely for
@@ -1533,6 +1546,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
         Cmd::EditBoardField { .. } => "field-edit",
         Cmd::EditBoardPad { .. } => "pad-edit",
+        Cmd::SetBoardModels { .. } | Cmd::AddBoardModel { .. } | Cmd::RemoveBoardModel { .. } | Cmd::MoveBoardModel { .. } | Cmd::EditBoardModel { .. } => "3d-models",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",

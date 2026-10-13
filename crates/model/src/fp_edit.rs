@@ -27,8 +27,13 @@
 //! [`patched_footprint`] lays the edits on a library footprint; `ConstraintModel::instance_footprints` carries the result so
 //! every reader of `footprint_of` (the gates, the router, the exports) sees the pad as edited. What the engine's [`Pad`] has no
 //! field for (the margins) is read from the edit by the `.kicad_pcb` writer.
+//!
+//! # 3D models
+//!
+//! [`FootprintEdit::models3d`] is the footprint's whole list of `(model ...)` entries when the 3D Models tab of Footprint Properties set it ([`crate::fp_models`]); [`edited_footprint`]
+//! lays it over the library footprint beside the pad edits. `None` is the footprint's own list, which an update from the library brings.
 
-use crate::footprint::{to_board, Footprint, Pad, PadCustom, PadKind, PadShape};
+use crate::footprint::{to_board, Footprint, Model3d, Pad, PadCustom, PadKind, PadShape};
 use crate::ir::{ChamferCorners, Design, FootprintInstance, LabelSide, Millideg, Point, Side, Um};
 use serde::{Deserialize, Serialize};
 
@@ -428,6 +433,11 @@ pub struct FootprintEdit {
     /// Pad edits, sorted by `(number, nth)`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadEdit>,
+    /// The footprint's 3D models, when the 3D Models tab set them: the whole list, in order (`FOOTPRINT::Models()`), in the frame of the footprint on the top side
+    /// (`Model3d::flipped_frame` turns it for a bottom-side file). `None` is the list the footprint has from its library or its board; `Some` of an empty list is a
+    /// footprint with no 3D model at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models3d: Option<Vec<Model3d>>,
 }
 
 impl FootprintEdit {
@@ -437,7 +447,7 @@ impl FootprintEdit {
 
     /// Whether nothing is edited (the entry is then dropped).
     pub fn is_empty(&self) -> bool {
-        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty()
+        self.reference.is_none() && self.value.is_none() && self.fields.is_empty() && self.attrs.is_none() && self.pads.is_empty() && self.models3d.is_none()
     }
 
     /// The edit of the `nth` pad numbered `number`.
@@ -704,6 +714,15 @@ pub fn patched_footprint(footprint: &Footprint, edits: &[PadEdit]) -> Footprint 
         if let Some(i) = pad_index(footprint, &e.number, e.nth) {
             apply_pad_edit(&mut out.pads[i], e);
         }
+    }
+    out
+}
+
+/// `footprint` as the board has it with `edit` laid on: the pad edits ([`patched_footprint`]) and the list of 3D models the edit sets.
+pub fn edited_footprint(footprint: &Footprint, edit: &FootprintEdit) -> Footprint {
+    let mut out = patched_footprint(footprint, &edit.pads);
+    if let Some(models) = &edit.models3d {
+        crate::fp_models::set_models(&mut out, models);
     }
     out
 }

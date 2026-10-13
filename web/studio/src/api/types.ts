@@ -1147,6 +1147,19 @@ export interface FootprintAttrsCmd {
   dnp: boolean;
   allow_missing_courtyard: boolean;
 }
+/**
+ * `eda_model::footprint::Model3d`: one `(model ...)` of a footprint, as the 3D Models tab edits it (crates/model/src/fp_models.rs). The placement is the footprint file's, in the
+ * frame of the footprint on the top side: millimetres and degrees, the rotation as the file stores it (clockwise; the dialog shows it the other way round). A key left out is KiCad's
+ * default: offset 0, scale 1, rotation 0, opaque, shown. `GET /api/state` sends the same model as `Part.models` entry, which names its file `name`.
+ */
+export interface Model3dCmd {
+  path: string;
+  offset?: [number, number, number];
+  scale?: [number, number, number];
+  rotate?: [number, number, number];
+  opacity?: number;
+  show?: boolean;
+}
 /** `eda_model::fp_edit::PadEdit`: the changes to one pad; a key left out is the pad as the library has it. */
 export interface PadEditCmd {
   number: string;
@@ -1434,6 +1447,17 @@ export type Cmd =
   | { op: "edit_board_footprint"; part: string; reference?: FieldLayoutCmd; value?: FieldLayoutCmd; fields?: UserFieldCmd[]; attrs?: FootprintAttrsCmd }
   | { op: "edit_board_field"; part: string; name: string; layout?: FieldLayoutCmd; text?: string }
   | { op: "edit_board_pad"; part: string; edit: PadEditCmd }
+  /**
+   * The 3D Models tab of Footprint Properties (crates/ops/src/fp_models.rs): `set_board_models` makes the footprint's whole list the one given (the dialog's OK; an empty list is a
+   * footprint with no model); the others are the tab's Add, Remove and cell edits and the order of the rows, one at a time, by 0-based position (`edit_board_model` leaves a key
+   * out to leave it). A bad position, an empty or illegal file name or a number the preview panel does not take is refused with its reason; a command that changes nothing is
+   * refused too. One undo step each.
+   */
+  | { op: "set_board_models"; part: string; models: Model3dCmd[] }
+  | { op: "add_board_model"; part: string; model: Model3dCmd; at?: number }
+  | { op: "remove_board_model"; part: string; index: number }
+  | { op: "move_board_model"; part: string; from: number; to: number }
+  | { op: "edit_board_model"; part: string; index: number; path?: string; offset?: [number, number, number]; scale?: [number, number, number]; rotate?: [number, number, number]; opacity?: number; show?: boolean }
   /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
   | { op: "batch"; cmds: Cmd[] }
   /** `Cmd::OnSheet`: run a schematic command on the sheet at `sheet` (the `/`-joined `SheetInstance::id`s from the root, what `GET /api/schematic?sheet=` takes) instead of the root. */

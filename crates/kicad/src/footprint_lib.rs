@@ -122,6 +122,28 @@ pub fn models_from(root: &[Sexpr]) -> Vec<Model3d> {
         .collect()
 }
 
+/// The `(model ...)` entries of a footprint, `tabs` deep, as `PCB_IO_KICAD_SEXPR::format( FOOTPRINT )` writes them: the file name, `(hide yes)` for a model that is not shown,
+/// `(opacity v)` with four decimals when it is not 1, then the offset, the scale and the rotation as `(offset (xyz x y z))` with `FormatDouble2Str`'s numbers. A model
+/// with no file name is not written (`if( !bs3D->m_Filename.IsEmpty() )`). The placement is written as it is held: a bottom-side footprint's is turned by
+/// [`Model3d::flipped_frame`] before this.
+pub(crate) fn write_models(out: &mut String, models: &[Model3d], tabs: usize) {
+    use std::fmt::Write as _;
+    let t = "\t".repeat(tabs);
+    for m in models.iter().filter(|m| !m.path.is_empty()) {
+        writeln!(out, "{t}(model {}", crate::sexpr_str(&m.path)).unwrap();
+        if !m.show {
+            writeln!(out, "{t}\t(hide yes)").unwrap();
+        }
+        if m.opacity != 1.0 {
+            writeln!(out, "{t}\t(opacity {:.4})", m.opacity).unwrap();
+        }
+        for (tag, v) in [("offset", m.offset), ("scale", m.scale), ("rotate", m.rotate)] {
+            writeln!(out, "{t}\t({tag}\n{t}\t\t(xyz {} {} {})\n{t}\t)", crate::fmt_double_2_str(v[0]), crate::fmt_double_2_str(v[1]), crate::fmt_double_2_str(v[2])).unwrap();
+        }
+        writeln!(out, "{t})").unwrap();
+    }
+}
+
 /// [`models_from`] for the text of a `.kicad_mod` file; empty when the text is no footprint.
 pub fn footprint_models(text: &str) -> Vec<Model3d> {
     let Ok(tree) = sexpr::parse(text) else { return Vec::new() };
@@ -429,13 +451,9 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
-    if let Some(model_path) = &fp.model {
-        writeln!(out, "\t(model {}", crate::sexpr_str(model_path)).unwrap();
-        writeln!(out, "\t\t(offset\n\t\t\t(xyz 0 0 0)\n\t\t)").unwrap();
-        writeln!(out, "\t\t(scale\n\t\t\t(xyz 1 1 1)\n\t\t)").unwrap();
-        writeln!(out, "\t\t(rotate\n\t\t\t(xyz 0 0 0)\n\t\t)").unwrap();
-        writeln!(out, "\t)").unwrap();
-    }
+    // The 3D model: the one path of the entry, placed as it comes.
+    let models: Vec<Model3d> = fp.model.iter().map(Model3d::identity).collect();
+    write_models(&mut out, &models, 1);
     writeln!(out, ")").unwrap();
     out
 }
@@ -716,5 +734,25 @@ mod tests {
         let parsed = parse_footprint_file(text, "Test:X").expect("a loadable footprint");
         assert_eq!(parsed.models3d.len(), 4);
         assert_eq!(parsed.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/A.3dshapes/a.step"), "`model` stays the first path");
+    }
+
+    /// `PCB_IO_KICAD_SEXPR::format( FOOTPRINT )`'s model entries: the hide flag, the opacity with four decimals, then the offset, the scale and the rotation in `FormatDouble2Str`'s
+    /// numbers, in that order; a model with no name is not written. What is written reads back as the list it was written from.
+    #[test]
+    fn the_models_are_written_as_kicad_writes_them_and_read_back() {
+        let list = vec![
+            Model3d { path: "${KICAD10_3DMODEL_DIR}/A.3dshapes/a.step".into(), offset: [1.27, -2.0, 0.5], scale: [1.0, 1.0, 1.5], rotate: [90.0, 0.0, -30.5], opacity: 0.65, show: true },
+            Model3d { path: "b.wrl".into(), offset: [0.0, 0.00001, -0.0], scale: [0.00002, 1.0, 1.0], rotate: [0.0, 0.0, 180.0], opacity: 1.0, show: false },
+            Model3d::identity(""),
+        ];
+        let mut out = String::new();
+        write_models(&mut out, &list, 2);
+        let want = "\t\t(model \"${KICAD10_3DMODEL_DIR}/A.3dshapes/a.step\"\n\t\t\t(opacity 0.6500)\n\t\t\t(offset\n\t\t\t\t(xyz 1.27 -2 0.5)\n\t\t\t)\n\t\t\t(scale\n\t\t\t\t(xyz 1 1 1.5)\n\t\t\t)\n\t\t\t(rotate\n\t\t\t\t(xyz 90 0 -30.5)\n\t\t\t)\n\t\t)\n\t\t(model \"b.wrl\"\n\t\t\t(hide yes)\n\t\t\t(offset\n\t\t\t\t(xyz 0 0.00001 0)\n\t\t\t)\n\t\t\t(scale\n\t\t\t\t(xyz 0.00002 1 1)\n\t\t\t)\n\t\t\t(rotate\n\t\t\t\t(xyz 0 0 180)\n\t\t\t)\n\t\t)\n";
+        assert_eq!(out, want);
+        // and read as a footprint's models
+        let back = footprint_models(&format!("(footprint \"T:X\"\n{out})"));
+        assert_eq!(back.len(), 2);
+        assert_eq!(back[0], list[0]);
+        assert_eq!(back[1], Model3d { offset: [0.0, 0.00001, 0.0], ..list[1].clone() }, "a negative zero comes back as zero");
     }
 }

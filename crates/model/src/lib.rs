@@ -14,6 +14,7 @@ pub mod fp_assign;
 pub mod fp_compare;
 pub mod fp_edit;
 pub mod fp_exchange;
+pub mod fp_models;
 pub mod gensym;
 mod groups;
 pub mod ir;
@@ -66,6 +67,11 @@ pub struct ConstraintModel {
     /// answers with it first, so the gates, the router and the exports all see the edited pad. Never part of an intent.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub instance_footprints: BTreeMap<String, Footprint>,
+    /// The references of the footprints whose 3D models the board edited (the 3D Models tab: `FootprintEdit::models3d`). The list is then the footprint's own in
+    /// `instance_footprints`, whole, and an empty one means no model at all -- not the generic model of the package, which a footprint with no list of its own
+    /// is shown with (`eda_kicad::part_models`). Filled by the board's loader beside `instance_footprints`. Never part of an intent.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub edited_models: std::collections::BTreeSet<String>,
     /// The silkscreen, fab body and texts of the installed KiCad footprint a part's *built-in* package stands for, fitted onto the built-in pads
     /// (reference -> [`fp_art::FpArt`]): `0603` on an `R` is `Resistor_SMD:R_0603_1608Metric`, and the built-in pads have no outline of their own. Filled by the
     /// library loader (`eda_kicad::resolve_library_footprints_with`), the way the 3D model of such a part is found; [`ConstraintModel::library_footprint_of`]

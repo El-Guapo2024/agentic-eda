@@ -1042,21 +1042,8 @@ pub(crate) fn write_footprint(
     // A bottom-side footprint is written the way KiCad stores one: mirrored in y and turned by `Ry(pi) Rz(pi)` in 3D, where this studio mirrors x. The
     // half turn between the two goes into the model's own placement (`Model3d::flipped_frame`), so the model stands on the pads in KiCad's render as it
     // does in the studio's. The path is written exactly as stored (`${KICADn_3DMODEL_DIR}/Lib.3dshapes/File.step`).
-    for m in crate::part_models(model, part, footprint).map(|p| p.models).unwrap_or_default() {
-        let m = if fp.side == Side::Bottom { m.flipped_frame() } else { m };
-        writeln!(out, "\t\t(model {}", sexpr_str(&m.path)).unwrap();
-        if !m.show {
-            writeln!(out, "\t\t\t(hide yes)").unwrap();
-        }
-        if m.opacity != 1.0 {
-            writeln!(out, "\t\t\t(opacity {})", fmt_mm_f(m.opacity)).unwrap();
-        }
-        let xyz = |tag: &str, v: [f64; 3]| format!("\t\t\t({tag}\n\t\t\t\t(xyz {} {} {})\n\t\t\t)", fmt_mm_f(v[0]), fmt_mm_f(v[1]), fmt_mm_f(v[2]));
-        writeln!(out, "{}", xyz("offset", m.offset)).unwrap();
-        writeln!(out, "{}", xyz("scale", m.scale)).unwrap();
-        writeln!(out, "{}", xyz("rotate", m.rotate)).unwrap();
-        writeln!(out, "\t\t)").unwrap();
-    }
+    let placed: Vec<eda_model::footprint::Model3d> = crate::part_models(model, part, footprint).map(|p| p.models).unwrap_or_default().into_iter().map(|m| if fp.side == Side::Bottom { m.flipped_frame() } else { m }).collect();
+    crate::footprint_lib::write_models(out, &placed, 2);
 
     // The footprint's own zones (rule areas it carries), after its pads and graphics as KiCad writes them.
     out.push_str(zones);
