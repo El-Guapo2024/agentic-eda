@@ -44,6 +44,10 @@ s = open(K + "/pcbnew/router/pns_meander_placer_base.cpp").read()
 tol = "const int LENGTH_TARGET_TOLERANCE = 20;"
 body = s[s.index("int findAmplitudeBinarySearch"):s.index("const MEANDER_SETTINGS& MEANDER_PLACER_BASE::MeanderSettings()")]
 amp = s[s.index("void MEANDER_PLACER_BASE::AmplitudeStep"):s.index("int MEANDER_PLACER_BASE::Clearance()")]
+d = open(K + "/pcbnew/router/pns_diff_pair.cpp").read()
+cpp = d[d.index("bool commonParallelProjection( SEG p, SEG n, SEG &pClip, SEG& nClip )\n{"):d.index("double DIFF_PAIR::Skew() const")]
+csp = d[d.index("void DIFF_PAIR::CoupledSegmentPairs( COUPLED_SEGMENTS_VEC& aPairs ) const"):d.index("int64_t DIFF_PAIR::CoupledLength( const SHAPE_LINE_CHAIN& aP")].replace("void DIFF_PAIR::CoupledSegmentPairs", "void DP_STAND_IN::CoupledSegmentPairs")
+open(out + "/oracle_dp.cpp", "w").write('// Verbatim from pcbnew/router/pns_diff_pair.cpp: commonParallelProjection and DIFF_PAIR::CoupledSegmentPairs (of a stand-in pair).\n#include "oracle_dp.h"\nnamespace PNS {\n' + cpp + "\n" + csp + "\n}\n")
 open(out + "/oracle_tune.cpp", "w").write('// Verbatim from pcbnew/router/pns_meander_placer_base.cpp: LENGTH_TARGET_TOLERANCE, findAmplitudeBinarySearch, findAmplitudeForLength,\n// MEANDER_PLACER_BASE::tuneLineLength, AmplitudeStep and SpacingStep.\n#include "pns_meander_placer_base.h"\nnamespace PNS {\n' + tol + "\n\n" + body + "\n" + amp + "\n}\n")
 PY
 cp "$K/pcbnew/router/pns_meander.cpp" "$out/pns_meander.cpp"
@@ -57,6 +61,7 @@ cxx "$here/standins/poly_stubs.cpp" "$out/obj/poly_stubs.o"
 cxx "$out/shape_line_chain_patched.cpp" "$out/obj/slc.o"
 cxx "$out/pns_meander.cpp" "$out/obj/pns_meander.o"
 cxx "$out/oracle_tune.cpp" "$out/obj/oracle_tune.o"
+cxx "$out/oracle_dp.cpp" "$out/obj/oracle_dp.o"
 cxx "$here/oracle_main.cpp" "$out/obj/oracle_main.o"
 
 # link; every symbol of KiCad's that the real objects name and the oracle never runs (the polygon conversions, circle collisions of shapes it

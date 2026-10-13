@@ -28,6 +28,7 @@
 
 pub mod chain;
 pub mod diff_pair;
+pub mod dp_meander_placer;
 pub mod dp_placer;
 pub mod dp_tune;
 pub mod direction45;
@@ -43,11 +44,13 @@ pub mod line;
 pub mod line_placer;
 pub mod meander;
 pub mod meander_legacy;
+pub mod meander_placer;
 pub mod node;
 pub mod optimizer;
 pub mod router;
 pub mod seg_ops;
 pub mod settings;
 pub mod shove;
+pub mod tuning_path;
 pub mod line_walk;
 pub mod walkaround;

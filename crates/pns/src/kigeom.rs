@@ -330,6 +330,16 @@ impl Seg {
         Point { x: self.a.x + rescale(t, dx, l_squared) as i64, y: self.a.y + rescale(t, dy, l_squared) as i64 }
     }
 
+    /// `SEG::TCoef`: the dot product of the segment's direction with the vector from its start to `p`.
+    pub fn t_coef(&self, p: Point) -> i128 {
+        (self.b.x - self.a.x) as i128 * (p.x - self.a.x) as i128 + (self.b.y - self.a.y) as i128 * (p.y - self.a.y) as i128
+    }
+
+    /// `SEG::Distance( SEG )`.
+    pub fn distance_seg(&self, o: &Seg) -> i64 {
+        isqrt(self.squared_distance_seg(o))
+    }
+
     /// `SEG::SquaredDistance( VECTOR2I )`.
     pub fn squared_distance(&self, p: Point) -> i128 {
         let ab = ((self.b.x - self.a.x) as i128, (self.b.y - self.a.y) as i128);
@@ -406,6 +416,31 @@ impl Seg {
         let Some((d1, d2)) = self.mutual_distance_squared(o) else { return false };
         (d1 - d2).abs() <= (threshold as i128) * (threshold as i128)
     }
+}
+
+/// `commonParallelProjection( p, n, pClip, nClip )` (`pns_diff_pair.cpp`): the stretch of `p` that `n` faces, and the stretch of `n` that
+/// is that one's projection; `None` when they do not overlap.
+pub fn common_parallel_projection(p: Seg, n: Seg) -> Option<(Seg, Seg)> {
+    let n_proj_p = Seg::new(p.line_project(n.a), p.line_project(n.b));
+    let (mut t_a, mut t_b) = (0i128, p.t_coef(p.b));
+    let (mut tproj_a, mut tproj_b) = (p.t_coef(n_proj_p.a), p.t_coef(n_proj_p.b));
+    if t_b < t_a {
+        std::mem::swap(&mut t_b, &mut t_a);
+    }
+    if tproj_b < tproj_a {
+        std::mem::swap(&mut tproj_b, &mut tproj_a);
+    }
+    if t_b <= tproj_a || t_a >= tproj_b {
+        return None;
+    }
+    let mut tv = [0i128, p.t_coef(p.b), p.t_coef(n_proj_p.a), p.t_coef(n_proj_p.b)];
+    tv.sort_unstable(); // "fixme: awful and disgusting way of finding 2 midpoints"
+    let p_len_sq = (p.b.x - p.a.x) as i128 * (p.b.x - p.a.x) as i128 + (p.b.y - p.a.y) as i128 * (p.b.y - p.a.y) as i128;
+    let dp = (p.b.x - p.a.x, p.b.y - p.a.y);
+    let clip = |t: i128| Point { x: p.a.x + rescale(dp.0 as i128, t, p_len_sq) as i64, y: p.a.y + rescale(dp.1 as i128, t, p_len_sq) as i64 };
+    let p_clip = Seg::new(clip(tv[1]), clip(tv[2]));
+    let n_clip = Seg::new(n.line_project(p_clip.a), n.line_project(p_clip.b));
+    Some((p_clip, n_clip))
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

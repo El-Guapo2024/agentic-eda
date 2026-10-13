@@ -7,6 +7,8 @@
 //   CHAIN n x y x y ...                      -> Simplify, Length, Split(a, b) with the last four numbers
 //   SHAPE type ax ay bx by px py side width clearance dual offset min max spacing step style radius single tbl amp nobs [cx cy r]...
 //   LINE ax ay bx by side width clearance min max spacing step style radius single initial_side elong nobs [cx cy r]...
+//   COUPLED np x y .. nn x y .. width gap    -> DIFF_PAIR::CoupledSegmentPairs
+//   DLINE <the same> offset                  (a pair: MEANDERED_LINE( .., true ) with the baseline offset, the corners left to the caller)
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -19,6 +21,7 @@
 #include <math/vector2d.h>
 #include "pns_meander.h"
 #include "pns_meander_placer_base.h"
+#include "oracle_dp.h"
 
 using namespace PNS;
 
@@ -138,7 +141,33 @@ int main()
             VECTOR2I np = c.NearestPoint( VECTOR2I( ax, ay ), false );
             printf( " nearest %d,%d\n", np.x, np.y );
         }
-        else if( cmd == "SHAPE" || cmd == "LINE" )
+        else if( cmd == "COUPLED" )
+        {
+            DP_STAND_IN dp;
+            int         counts[2];
+            for( int k = 0; k < 2; k++ )
+            {
+                in >> counts[k];
+                SHAPE_LINE_CHAIN& c = k == 0 ? dp.m_p : dp.m_n;
+                for( int i = 0; i < counts[k]; i++ )
+                {
+                    long long x, y;
+                    in >> x >> y;
+                    c.Append( VECTOR2I( x, y ) );
+                }
+            }
+            int gap;
+            in >> dp.m_width >> gap;
+            dp.m_gapConstraint = RANGED_NUM<int>( gap, 10000, 10000 );
+            COUPLED_SEGMENTS_VEC pairs;
+            dp.CoupledSegmentPairs( pairs );
+            printf( "COUPLED n %d", (int) pairs.size() );
+            for( const COUPLED_SEGMENTS& c : pairs )
+                printf( " p %d,%d,%d,%d n %d,%d,%d,%d i %d,%d", c.coupledP.A.x, c.coupledP.A.y, c.coupledP.B.x, c.coupledP.B.y, c.coupledN.A.x, c.coupledN.A.y,
+                        c.coupledN.B.x, c.coupledN.B.y, c.indexP, c.indexN );
+            printf( "\n" );
+        }
+        else if( cmd == "SHAPE" || cmd == "LINE" || cmd == "DLINE" )
         {
             MEANDER_PLACER_BASE placer;
             placer.m_fit = fitRule;
@@ -154,6 +183,8 @@ int main()
             else
             {
                 in >> ax >> ay >> bx >> by >> side >> width >> clearance >> mn >> mx >> spacing >> step >> style >> radius >> single >> initialSide >> elong;
+                if( cmd == "DLINE" )
+                    in >> offset;
             }
             readObstacles( in );
 
@@ -186,6 +217,36 @@ int main()
                     if( dual )
                         printChain( "l1", m.CLine( 1 ) );
                 }
+                printf( "\n" );
+            }
+            else if( cmd == "DLINE" )
+            {
+                MEANDERED_LINE result( &placer, true );
+                placer.m_result = &result;
+                placer.m_dualFit = true;
+                result.SetWidth( width );
+                result.SetBaselineOffset( offset );
+                result.AddCorner( base.A, base.A );
+                result.MeanderSegment( base, side != 0 );
+                result.AddCorner( base.B, base.B );
+                placer.tuneLineLength( result, elong );
+                int n = 0;
+                SHAPE_LINE_CHAIN tunedP, tunedN;
+                std::string kinds, amps;
+                for( MEANDER_SHAPE* m : result.Meanders() )
+                {
+                    n++;
+                    kinds += std::to_string( (int) m->Type() ) + ",";
+                    amps += std::to_string( m->Amplitude() ) + ",";
+                    if( m->Type() != MT_EMPTY )
+                    {
+                        tunedP.Append( m->CLine( 0 ) );
+                        tunedN.Append( m->CLine( 1 ) );
+                    }
+                }
+                printf( "DLINE n %d kinds %s amps %s side %d", n, kinds.c_str(), amps.c_str(), (int) placer.m_settings.m_initialSide );
+                printChain( "p", tunedP );
+                printChain( "n", tunedN );
                 printf( "\n" );
             }
             else

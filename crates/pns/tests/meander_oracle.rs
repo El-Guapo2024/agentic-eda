@@ -12,6 +12,7 @@
 
 use eda_model::ir::Point;
 use eda_pns::chain::ShapeLineChain;
+use eda_pns::dp_meander_placer::coupled_segment_pairs;
 use eda_pns::kigeom::{Seg, ShapeArc, ARC_POLYGONIZATION_MAX_ERROR_NM};
 use eda_pns::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape, MeanderSide, MeanderStyle, MeanderType, MeanderedLine};
 use std::io::Write;
@@ -53,6 +54,8 @@ struct Env {
     clearance: i64,
     obstacles: Vec<Circle>,
     line: bool,
+    /// `DP_MEANDER_PLACER::CheckFit` keeps four widths from the earlier shapes, not `width + spacing`.
+    dual_fit: bool,
 }
 
 impl MeanderEnv for Env {
@@ -72,7 +75,8 @@ impl MeanderEnv for Env {
         if !self.line {
             return true;
         }
-        MeanderedLine::check_self_intersections(existing, shape, shape.width() + self.settings.spacing)
+        let w = shape.width();
+        MeanderedLine::check_self_intersections(existing, shape, if self.dual_fit { w + w * 3 } else { w + self.settings.spacing })
     }
 }
 
@@ -186,7 +190,7 @@ fn evaluate(input: &str) -> String {
             let (min, max, spacing, step, style, radius, single) = (n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next());
             let (tbl, amp) = (n.next(), n.next());
             let obstacles = n.obstacles();
-            let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, 0), clearance, obstacles, line: false };
+            let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, 0), clearance, obstacles, line: false, dual_fit: false };
             let mut m = MeanderShape::new(&env, width, dual);
             m.set_baseline_offset(offset);
             m.set_target_baseline_length(tbl);
@@ -210,7 +214,7 @@ fn evaluate(input: &str) -> String {
             let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next());
             let elong = n.next();
             let obstacles = n.obstacles();
-            let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, initial), clearance, obstacles, line: true };
+            let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, initial), clearance, obstacles, line: true, dual_fit: false };
             let mut result = MeanderedLine::new(false);
             result.set_width(width);
             result.set_baseline_offset(0);
@@ -232,6 +236,49 @@ fn evaluate(input: &str) -> String {
             let mut out = format!("LINE n {} kinds {kinds} amps {amps} side {}", result.meanders().len(), env.settings.initial_side.value());
             out += &render_chain("tuned", &tuned);
             out + &render_chain("simp", &simple)
+        }
+        "COUPLED" => {
+            let np = n.next() as usize;
+            let pp: Vec<Point> = (0..np).map(|_| n.point()).collect();
+            let nn = n.next() as usize;
+            let nt: Vec<Point> = (0..nn).map(|_| n.point()).collect();
+            let (width, gap) = (n.next(), n.next());
+            let pairs = coupled_segment_pairs(&ShapeLineChain::from_points(&pp), &ShapeLineChain::from_points(&nt), width, gap);
+            let mut out = format!("COUPLED n {}", pairs.len());
+            for c in &pairs {
+                out += &format!(" p {},{},{},{} n {},{},{},{} i {},{}", c.coupled_p.a.x, c.coupled_p.a.y, c.coupled_p.b.x, c.coupled_p.b.y, c.coupled_n.a.x, c.coupled_n.a.y, c.coupled_n.b.x, c.coupled_n.b.y, c.index_p, c.index_n);
+            }
+            out
+        }
+        "DLINE" => {
+            let base = Seg::new(n.point(), n.point());
+            let side = n.next() != 0;
+            let (width, clearance) = (n.next(), n.next());
+            let (min, max, spacing, step, style, radius, single, initial) = (n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next(), n.next());
+            let elong = n.next();
+            let offset = n.next();
+            let obstacles = n.obstacles();
+            let mut env = Env { settings: settings_from(min, max, spacing, step, style, radius, single, initial), clearance, obstacles, line: true, dual_fit: true };
+            let mut result = MeanderedLine::new(true);
+            result.set_width(width);
+            result.set_baseline_offset(offset);
+            result.add_corner(&env, base.a, base.a);
+            result.meander_segment(&mut env, base, side, 0);
+            result.add_corner(&env, base.b, base.b);
+            tune_line_length(&mut result, elong);
+            let (mut kinds, mut amps) = (String::new(), String::new());
+            let (mut tuned_p, mut tuned_n) = (ShapeLineChain::new(), ShapeLineChain::new());
+            for m in result.meanders() {
+                kinds += &format!("{},", code(m.kind()));
+                amps += &format!("{},", m.amplitude());
+                if m.kind() != MeanderType::Empty {
+                    tuned_p.append_chain(m.c_line(0));
+                    tuned_n.append_chain(m.c_line(1));
+                }
+            }
+            let mut out = format!("DLINE n {} kinds {kinds} amps {amps} side {}", result.meanders().len(), env.settings.initial_side.value());
+            out += &render_chain("p", &tuned_p);
+            out + &render_chain("n", &tuned_n)
         }
         other => panic!("unknown case {other}"),
     }
@@ -383,6 +430,62 @@ fn line_case(r: &mut Rng) -> String {
     format!("LINE {} {} {} {} {} {width} {clearance} {settings} {initial} {elong}{obstacles}", base.a.x, base.a.y, base.b.x, base.b.y, side as i32)
 }
 
+/// Two lines that run beside each other here and there: the second is the first moved by a vector (and cut or bent now and then), with a gap
+/// asked for that is one the lines really have, give or take the tolerance.
+fn coupled_case(r: &mut Rng) -> String {
+    let n = r.range(2, 6) as usize;
+    let mut pts = vec![p(r.range(-5_000_000, 5_000_000), r.range(-5_000_000, 5_000_000))];
+    while pts.len() < n {
+        let last = *pts.last().unwrap();
+        let len = r.range(500_000, 8_000_000);
+        let (dx, dy) = match r.range(0, 3) {
+            0 => (r.pick(&[-1, 1]) * len, 0),
+            1 => (0, r.pick(&[-1, 1]) * len),
+            2 => (r.pick(&[-1, 1]) * len, r.pick(&[-1, 1]) * len),
+            _ => (r.range(-8_000_000, 8_000_000), r.range(-8_000_000, 8_000_000)),
+        };
+        let q = p(last.x + dx, last.y + dy);
+        if q != last {
+            pts.push(q);
+        }
+    }
+    let (tx, ty) = (r.range(-700_000, 700_000), r.range(-700_000, 700_000));
+    let mut other: Vec<Point> = pts.iter().map(|q| p(q.x + tx, q.y + ty)).collect();
+    if r.chance(40) {
+        let k = r.range(0, other.len() as i64 - 1) as usize;
+        other[k] = p(other[k].x + r.range(-300_000, 300_000), other[k].y + r.range(-300_000, 300_000));
+    }
+    if r.chance(30) && other.len() > 2 {
+        other.pop();
+    }
+    let width = r.pick(&[100_000, 200_000, 250_000]);
+    let i = r.range(0, pts.len() as i64 - 2) as usize;
+    let j = r.range(0, other.len() as i64 - 2) as usize;
+    let real = ((Seg::new(pts[i], pts[i + 1]).distance_seg(&Seg::new(other[j], other[j + 1]))) - width).abs();
+    let gap = real + r.pick(&[0, 0, 0, 5_000, 9_999, 10_001, -9_000, -11_000, 40_000]);
+    let mut input = format!("COUPLED {}", pts.len());
+    for q in &pts {
+        input += &format!(" {} {}", q.x, q.y);
+    }
+    input += &format!(" {}", other.len());
+    for q in &other {
+        input += &format!(" {} {}", q.x, q.y);
+    }
+    input + &format!(" {width} {gap}")
+}
+
+fn dline_case(r: &mut Rng) -> String {
+    let base = base_segment(r);
+    let (settings, initial) = settings_text(r);
+    let (width, clearance) = (r.range(100_000, 400_000), r.range(100_000, 400_000));
+    let side = r.chance(50);
+    let elong = r.range(0, 30_000_000) * r.pick(&[1, 1, 1, -1]) / 3;
+    let offset = r.range(100_000, 700_000) * r.pick(&[-1, 1]);
+    let nobs = r.range(0, 3);
+    let obstacles = obstacle_text(r, &base, nobs);
+    format!("DLINE {} {} {} {} {} {width} {clearance} {settings} {initial} {elong} {offset}{obstacles}", base.a.x, base.a.y, base.b.x, base.b.y, side as i32)
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------- the tests
 
 fn ask_oracle(oracle: &str, inputs: &[String]) -> Vec<String> {
@@ -421,6 +524,8 @@ fn run_kind(name: &str, oracle: &str, inputs: &[String]) -> usize {
     // how much of the code the cases reached
     let reached = |needle: &str| ported.iter().filter(|c| c.contains(needle)).count();
     let coverage = match name {
+        "DLINE" => format!(" ({} with a start, {} with a turn, {} left straight)", reached("kinds 6,1,"), reached(",3,"), reached("kinds 6,6,")),
+        "COUPLED" => format!(" ({} with a coupled pair, {} with two or more)", ported.iter().filter(|c| !c.starts_with("COUPLED n 0")).count(), ported.iter().filter(|c| !c.starts_with("COUPLED n 0") && !c.starts_with("COUPLED n 1")).count()),
         "LINE" => format!(" ({} with a start, {} with a turn, {} left straight, {} with the first side flipped)", reached("kinds 6,6,1,"), reached(",3,"), reached("kinds 6,6,8,") + reached("kinds 6,6,6,6"), reached("side -1") + reached("side 1")),
         "SHAPE" => format!(" ({} fitted, {} dual, {} with arcs)", reached("ok 1"), reached(" l1 "), reached("arcs 4") + reached("arcs 2") + reached("arcs 1")),
         _ => String::new(),
@@ -460,6 +565,8 @@ oracle_test!(arcs_agree_with_shape_arc, "ARC", arc_case, 0x9E3779B97F4A7C15, 4);
 oracle_test!(chains_agree_with_shape_line_chain, "CHAIN", chain_case, 0xD1B54A32D192ED03, 4);
 oracle_test!(shapes_agree_with_meander_shape, "SHAPE", shape_case, 0x8CB92BA72F3D8DD7, 10);
 oracle_test!(lines_agree_with_meandered_line_and_tune_line_length, "LINE", line_case, 0xA0761D6478BD642F, 2);
+oracle_test!(pairs_agree_with_a_dual_meandered_line, "DLINE", dline_case, 0xE7037ED1A0B428DB, 2);
+oracle_test!(coupled_segments_agree_with_coupled_segment_pairs, "COUPLED", coupled_case, 0xC2B2AE3D27D4EB4F, 4);
 
 /// The cases KiCad's code was asked, with its answers (`tests/data/meander_kicad_cases.txt`: a case line, its answer line, a blank line).
 #[test]
@@ -490,17 +597,22 @@ fn bake() {
     inputs.extend((0..8).map(|_| chain_case(&mut r)));
     inputs.extend((0..80).map(|_| shape_case(&mut r)));
     inputs.extend((0..80).map(|_| line_case(&mut r)));
+    inputs.extend((0..40).map(|_| dline_case(&mut r)));
+    inputs.extend((0..20).map(|_| coupled_case(&mut r)));
     let answers = ask_oracle(&oracle, &inputs);
     let mut kept = String::from("# Cases and the answers pcbnew/router/pns_meander.cpp (KiCad 8303b2ad) gave them, nanometres; see tests/meander_oracle.rs.\n\n");
-    let (mut shapes, mut lines, mut arcs, mut chains) = (0, 0, 0, 0);
+    let (mut shapes, mut lines, mut arcs, mut chains, mut dlines) = (0, 0, 0, 0, 0);
+    let mut coupleds = 0;
     for (i, a) in inputs.iter().zip(&answers) {
         let (count, cap) = match i.split_whitespace().next().unwrap() {
             "ARC" => (&mut arcs, 3),
             "CHAIN" => (&mut chains, 5),
             "SHAPE" => (&mut shapes, 14),
+            "DLINE" => (&mut dlines, 5),
+            "COUPLED" => (&mut coupleds, 6),
             _ => (&mut lines, 6),
         };
-        let limit = if i.starts_with("LINE") { 6000 } else { 2600 };
+        let limit = if i.starts_with("LINE") || i.starts_with("DLINE") { 6000 } else { 2600 };
         if *count < cap && a.len() < limit && !a.contains("ok 0") {
             kept += &format!("{i}\n{a}\n\n");
             *count += 1;

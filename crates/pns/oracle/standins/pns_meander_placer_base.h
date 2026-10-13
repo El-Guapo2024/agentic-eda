@@ -21,8 +21,9 @@ public:
         if( !m_result )
             return true;
 
+        // MEANDER_PLACER::CheckFit keeps width + spacing from the earlier shapes, DP_MEANDER_PLACER::CheckFit four widths
         int w = aShape->Width();
-        int clearance = w + m_settings.m_spacing;
+        int clearance = m_dualFit ? w + w * 3 : w + m_settings.m_spacing;
         return m_result->CheckSelfIntersections( aShape, clearance );
     }
     void tuneLineLength( MEANDERED_LINE& aTuned, long long int aElongation );
@@ -34,6 +35,7 @@ public:
     int m_clearance = 0;
     bool ( *m_fit )( MEANDER_SHAPE* ) = nullptr;
     MEANDERED_LINE* m_result = nullptr;
+    bool m_dualFit = false;
 };
 
 }
