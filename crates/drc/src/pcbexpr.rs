@@ -547,6 +547,8 @@ impl VarRef {
         // conditions like "A.Reference == 'J1'" match pads and graphics belonging to J1."
         let prop = match item.prop(name) {
             Some(p) => Some(p.clone()),
+            // `Net`: the net's name, for the items that have one.
+            None if name.eq_ignore_ascii_case("net") && item.is_connected() => Some(Prop::Enum(item.net.clone())),
             None => item.footprint.as_ref().filter(|_| item.class != Class::Footprint).and_then(|fp| footprint_prop(fp, name)),
         };
         match prop {

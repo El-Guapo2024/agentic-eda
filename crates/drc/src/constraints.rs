@@ -2074,4 +2074,124 @@ mod tests {
         assert_eq!(string_from_value(0.0, Units::Mm, true), "0 mm");
         assert_eq!(string_from_value(-100_000.0, Units::Mm, false), "-0.1");
     }
+
+    // ----------------------------------------------------------------------------------------------- KiCad's own rule sets (qa/data/pcbnew)
+
+    fn qa_rules(name: &str) -> Option<String> {
+        std::fs::read_to_string(format!("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data/pcbnew/{name}")).ok()
+    }
+
+    #[test]
+    fn issue16566_an_oval_pad_has_a_five_millimetre_clearance_and_no_other_pad_does() {
+        let Some(dru) = qa_rules("issue16566.kicad_dru") else { return };
+        let rules = BoardRules::default();
+        let (eng, err) = engine(&rules, &["A", "B"], Some(&dru), &[]);
+        assert!(err.is_none(), "{err:?}");
+        let mut oval = (*pad("U1", "1", "A", "F.Cu")).clone();
+        oval.set("Pad Shape", Prop::Enum("Oval".into()));
+        let oval = Rc::new(oval);
+        let mut rect = (*pad("U1", "2", "B", "F.Cu")).clone();
+        rect.set("Pad Shape", Prop::Enum("Rectangle".into()));
+        let rect = Rc::new(rect);
+        let mut report = Report::default();
+        let c = eng.eval_rules(CType::Clearance, Some(&oval), Some(&rect), Some("F.Cu"), Some(&mut report));
+        assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(5_000_000), "rule 'oval_clearance'".to_string()));
+        // the rule list: the Default class's implicit rule, then the file's rule
+        let list: Vec<_> = report.considered.iter().map(|c| (c.rule.clone(), c.applied)).collect();
+        assert_eq!(list.last().unwrap(), &("rule 'oval_clearance'".to_string(), true), "{list:?}");
+        // the order does not matter: the condition is commutative
+        assert_eq!(eng.eval_rules(CType::Clearance, Some(&rect), Some(&oval), Some("F.Cu"), None).value.min, Some(5_000_000));
+        // two rectangular pads: the default
+        let rect2 = pad("U2", "1", "A", "F.Cu");
+        let c = eng.eval_rules(CType::Clearance, Some(&rect), Some(&rect2), Some("F.Cu"), None);
+        assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(200_000), "netclass 'Default'".to_string()));
+    }
+
+    #[test]
+    fn issue6879_hole_rules_by_pad_type_and_the_deprecated_hole_constraint() {
+        let Some(dru) = qa_rules("issue6879.kicad_dru") else { return };
+        let rules = BoardRules::default();
+        let (eng, err) = engine(&rules, &["A"], Some(&dru), &[]);
+        assert!(err.is_none(), "{err:?}");
+        let mut pth = (*pad("J1", "1", "A", "F.Cu")).clone();
+        pth.set("Pad Type", Prop::Enum("Through-hole".into()));
+        pth.pad_attribute = "PTH";
+        pth.drill = 800_000;
+        pth.has_hole = true;
+        pth.has_drilled_hole = true;
+        let pth = Rc::new(pth);
+        let t = track("A", "F.Cu", 200_000);
+        let mut report = Report::default();
+        let c = eng.eval_rules(CType::HoleClearance, Some(&pth), Some(&t), Some("F.Cu"), Some(&mut report));
+        assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(1_000_000), "rule 'PTH to Track Clearance'".to_string()));
+        // an SMD pad does not match either hole rule: the board's hole clearance (0.25 mm)
+        let smd = pad("U1", "1", "A", "F.Cu");
+        let c = eng.eval_rules(CType::HoleClearance, Some(&smd), Some(&t), Some("F.Cu"), None);
+        assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(250_000), "board setup constraints hole".to_string()));
+        // `(constraint hole (max 2.0mm))` is `hole_size`: a maximum on top of the board's minimum drill
+        let c = eng.eval_rules(CType::HoleSize, Some(&pth), None, None, None);
+        assert_eq!((c.value.min, c.value.max), (Some(300_000), Some(2_000_000)));
+        assert_eq!(eng.constraint_name(&c), "rule 'Max Drill Hole Size Mechanical'");
+    }
+
+    #[test]
+    fn multinetclasses_a_track_width_maximum_per_class_and_the_composite_class_name() {
+        let Some(dru) = qa_rules("multinetclasses_drc.kicad_dru") else { return };
+        let mk = |name: &str, nets: &[&str]| NetClass { name: name.into(), nets: nets.iter().map(|s| s.to_string()).collect(), track_width: None, clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let rules = BoardRules { net_classes: vec![mk("CLASS1", &["N1"]), mk("CLASS2", &["N2"]), mk("BOTH", &["N3"])], ..BoardRules::default() };
+        let (eng, err) = engine(&rules, &["N1", "N2", "N3", "OTHER"], Some(&dru), &[]);
+        assert!(err.is_none(), "{err:?}");
+        let width = |net: &str| {
+            let t = track(net, "F.Cu", 200_000);
+            let c = eng.eval_rules(CType::TrackWidth, Some(&t), None, Some("F.Cu"), None);
+            (c.value.max, eng.constraint_name(&c))
+        };
+        // `A.NetClass == 'Default'` is true of a composite class that has the Default class among its constituents (`PCBEXPR_NETCLASS_VALUE::EqualTo`), and the
+        // later rule wins: rule_3's 5 mil is the maximum of every net whose class takes anything from Default -- N1 ("CLASS1,Default"), N2 and OTHER alike.
+        assert_eq!(width("N1"), (Some(127_000), "rule 'rule_3'".to_string()));
+        assert_eq!(width("N2"), (Some(127_000), "rule 'rule_3'".to_string()));
+        assert_eq!(width("OTHER"), (Some(127_000), "rule 'rule_3'".to_string()));
+        // a class that sets every setting itself is not in the Default class: rule_1 is its rule
+        let full = NetClass { name: "FULL".into(), nets: vec!["N4".into()], track_width: Some(300), clearance: Some(250), via_diameter: Some(600), via_drill: Some(300), microvia_diameter: Some(300), microvia_drill: Some(100), diff_pair_width: Some(200), diff_pair_gap: Some(250), diff_pair_via_gap: Some(250), priority: 0 };
+        let two = BoardRules { net_classes: vec![full, mk("CLASS2", &["N2"])], ..BoardRules::default() };
+        let (eng2, _) = engine(&two, &["N2", "N4"], Some(&dru), &[]);
+        let t4 = track("N4", "F.Cu", 200_000);
+        let c = eng2.eval_rules(CType::TrackWidth, Some(&t4), None, Some("F.Cu"), None);
+        assert_eq!(c.value.max, None, "none of the three rules names the FULL class");
+        // the rule list for N1 holds the implicit width rules and the three of the file
+        let t = track("N1", "F.Cu", 200_000);
+        let mut report = Report::default();
+        eng.eval_rules(CType::TrackWidth, Some(&t), None, Some("F.Cu"), Some(&mut report));
+        let file_rules: Vec<_> = report.considered.iter().filter(|c| !c.implicit).map(|c| (c.rule.as_str(), c.applied)).collect();
+        assert_eq!(file_rules, [("rule 'rule_1'", false), ("rule 'rule_2'", true), ("rule 'rule_3'", true)]);
+    }
+
+    #[test]
+    fn issue11814_the_pad_to_track_and_via_to_track_rules() {
+        let Some(dru) = qa_rules("issue11814.kicad_dru") else { return };
+        let rules = BoardRules::default();
+        let (eng, err) = engine(&rules, &["A", "B"], Some(&dru), &[]);
+        assert!(err.is_none(), "{err:?}");
+        let p = pad("U1", "1", "A", "F.Cu");
+        let t = track("B", "F.Cu", 200_000);
+        let c = eng.eval_rules(CType::Clearance, Some(&p), Some(&t), Some("F.Cu"), None);
+        assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(200_000), "rule 'PadToTrack'".to_string()));
+        let mut via = RuleItem::new("v1", Class::Via);
+        via.net = "A".into();
+        via.layers = vec!["F.Cu".into(), "B.Cu".into()];
+        via.layer = Some("F.Cu".into());
+        via.via_type = Some("Through");
+        via.has_hole = true;
+        via.has_drilled_hole = true;
+        via.description = "Via [A] on all copper layers".into();
+        let via = Rc::new(via);
+        let c = eng.eval_rules(CType::HoleClearance, Some(&via), Some(&t), Some("F.Cu"), None);
+        assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(254_000), "rule 'ViaToTrack'".to_string()));
+        // two vias of one net: the same-net hole to hole rule
+        let mut via2 = (*via).clone();
+        via2.id = "v2".into();
+        let via2 = Rc::new(via2);
+        let c = eng.eval_rules(CType::HoleToHole, Some(&via), Some(&via2), None, None);
+        assert_eq!((c.value.min, eng.constraint_name(&c)), (Some(254_000), "rule 'ViaToVia_SameNet'".to_string()));
+    }
 }

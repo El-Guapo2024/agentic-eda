@@ -34,6 +34,7 @@ use crate::sch_api;
 use crate::sch_export_api;
 use crate::sch_move_api;
 use crate::sch_output_api;
+use crate::inspect_api;
 use crate::tune_api;
 use eda_model::footprint::{placed_courtyard, placed_pads};
 use eda_model::ir::{LabelSide, Shape, Side};
@@ -865,6 +866,9 @@ fn handle(
         // doc comment on why this one differs from route/drag/dp above).
         ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
+        // Inspect > Clearance Resolution / Constraints Resolution: read-only reports on which rule wins (`inspect_api`), no kicad-cli.
+        ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),
