@@ -860,11 +860,19 @@ fn handle(
         ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
-        // 7 (gap #7 task item 4): length tuning. Stateless -- no session
-        // cell, every call re-reads design.json fresh (see tune_api's own
-        // doc comment on why this one differs from route/drag/dp above).
-        ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
+        // 7 / 8 / 9 (P5c): length tuning -- KiCad's tuning pattern tool and its generator items; the session lives in tune_api's own thread-local, not in a cell passed here.
+        ("POST", "/api/tune/hover") => respond(stream, "200 OK", "application/json", tune_api::hover(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/start") => respond(stream, "200 OK", "application/json", tune_api::start(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/move") => respond(stream, "200 OK", "application/json", tune_api::mv(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/step") => respond(stream, "200 OK", "application/json", tune_api::step(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/settings") => respond(stream, "200 OK", "application/json", tune_api::settings(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/fix") => respond(stream, "200 OK", "application/json", tune_api::fix(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/cancel") => respond(stream, "200 OK", "application/json", tune_api::cancel(dir).to_string().as_bytes()),
+        ("POST", "/api/tune/patterns") => respond(stream, "200 OK", "application/json", tune_api::patterns(dir).to_string().as_bytes()),
+        ("POST", "/api/tune/pattern") => respond(stream, "200 OK", "application/json", tune_api::pattern(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/update") => respond(stream, "200 OK", "application/json", tune_api::update(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/remove") => respond(stream, "200 OK", "application/json", tune_api::remove(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/regenerate") => respond(stream, "200 OK", "application/json", tune_api::regenerate(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/preview") => respond(stream, "200 OK", "application/json", cleanup_api::preview(dir, &body).to_string().as_bytes()),
         ("POST", "/api/convert/polys") => respond(stream, "200 OK", "application/json", convert_api::polys(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cleanup_tracks/apply") => respond(stream, "200 OK", "application/json", cleanup_api::apply(dir, &body).to_string().as_bytes()),

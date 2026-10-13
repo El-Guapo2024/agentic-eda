@@ -125,15 +125,20 @@ pub struct MeanderPlacer {
     last_length: i64,
     last_status: TuningStatus,
     pre: ShapeLineChain,
+    raw: ShapeLineChain,
     tuned: ShapeLineChain,
     post: ShapeLineChain,
     final_shape: ShapeLineChain,
 }
 
-/// The pieces a placer's last move left, for whoever commits them.
-#[derive(Debug, Clone)]
+/// The pieces a placer's last move left, for whoever commits them (`crate::tuning_commit`): what comes before the pattern, the stretch the
+/// pattern is on as the line had it (`raw`, before it was meandered), the meander, and what comes after. The pieces run from the start of the
+/// pattern outwards -- `pre` ends where the pattern starts, `post` starts where it ends -- which is the line's own direction or its reverse
+/// (`SHAPE_LINE_CHAIN::Split` turns the chain round when the end of the pattern is before its start).
+#[derive(Debug, Clone, Default)]
 pub struct Tuned {
     pub pre: ShapeLineChain,
+    pub raw: ShapeLineChain,
     pub tuned: ShapeLineChain,
     pub post: ShapeLineChain,
 }
@@ -164,6 +169,7 @@ impl MeanderPlacer {
             last_length: 0,
             last_status: TuningStatus::TooShort,
             pre: ShapeLineChain::new(),
+            raw: ShapeLineChain::new(),
             tuned: ShapeLineChain::new(),
             post: ShapeLineChain::new(),
             final_shape: ShapeLineChain::new(),
@@ -275,6 +281,7 @@ impl MeanderPlacer {
             return false;
         }
         let (pre, mut tuned, post) = self.origin_chain.split3(self.current_start, p);
+        let raw = tuned.clone();
 
         let clearance = Node::clearance(&self.env.rules, &self.origin_line.net, &None) * 1000;
         let mut env = FitEnv { settings: self.settings.clone(), clearance, world: &self.world, rules: &self.env.rules, net: self.origin_line.net.clone(), layer: self.origin_line.layer, width_um: self.origin_line.width };
@@ -342,6 +349,7 @@ impl MeanderPlacer {
             final_shape.simplify();
         }
         self.pre = pre;
+        self.raw = raw;
         self.tuned = tuned;
         self.post = post;
         self.final_shape = final_shape;
@@ -350,7 +358,7 @@ impl MeanderPlacer {
 
     /// The pieces of the last move.
     pub fn tuned(&self) -> Tuned {
-        Tuned { pre: self.pre.clone(), tuned: self.tuned.clone(), post: self.post.clone() }
+        Tuned { pre: self.pre.clone(), raw: self.raw.clone(), tuned: self.tuned.clone(), post: self.post.clone() }
     }
 
     /// `m_finalShape`.

@@ -74,6 +74,11 @@ impl ShapeLineChain {
         *self.points.last().expect("a chain with a point")
     }
 
+    /// `SetPoint( aIndex, aPos )`: moves vertex `i` (an arc that has the vertex as an end keeps its own ends).
+    pub fn set_point(&mut self, i: usize, p: Point) {
+        self.points[i] = p;
+    }
+
     pub fn points(&self) -> &[Point] {
         &self.points
     }

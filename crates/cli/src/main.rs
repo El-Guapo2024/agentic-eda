@@ -60,6 +60,7 @@ mod appearance_api;
 mod kicad_engine;
 mod kicad_lane;
 mod tune_api;
+mod tune_edit;
 
 use eda::prelude::*;
 use eda::{export_kicad_pcb, export_kicad_sch, hpwl, lint, place, render_schematic, to_circuit_json, PlaceOptions, Placer};

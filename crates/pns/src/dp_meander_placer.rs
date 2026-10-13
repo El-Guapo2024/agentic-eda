@@ -19,7 +19,7 @@ use crate::item::{net_of, Item, ItemId, Net};
 use crate::kigeom::{common_parallel_projection, ki_round, to_nm, to_um, Seg};
 use crate::line::Line;
 use crate::meander::{tune_line_length, MeanderEnv, MeanderSettings, MeanderShape, MeanderSide, MeanderType, MeanderedLine};
-use crate::meander_placer::{chain_collides, chain_of, TuningStatus};
+use crate::meander_placer::{chain_collides, chain_of, Tuned, TuningStatus};
 use crate::node::Node;
 use crate::tuning_path::{assemble_opts, assemble_tuning_path, LengthEnv, TuningPath};
 use eda_model::ir::{Point, Um};
@@ -244,24 +244,40 @@ pub struct DpMeanderPlacer {
     last_length: i64,
     last_status: TuningStatus,
     pre_p: ShapeLineChain,
+    raw_p: ShapeLineChain,
     tuned_p: ShapeLineChain,
     post_p: ShapeLineChain,
     pre_n: ShapeLineChain,
+    raw_n: ShapeLineChain,
     tuned_n: ShapeLineChain,
     post_n: ShapeLineChain,
     final_p: ShapeLineChain,
     final_n: ShapeLineChain,
 }
 
-/// The pieces of the last move of a pair.
-#[derive(Debug, Clone)]
+/// The pieces of the last move of a pair: each line's, as [`Tuned`] has them for a single one.
+#[derive(Debug, Clone, Default)]
 pub struct TunedPair {
     pub pre_p: ShapeLineChain,
+    pub raw_p: ShapeLineChain,
     pub tuned_p: ShapeLineChain,
     pub post_p: ShapeLineChain,
     pub pre_n: ShapeLineChain,
+    pub raw_n: ShapeLineChain,
     pub tuned_n: ShapeLineChain,
     pub post_n: ShapeLineChain,
+}
+
+impl TunedPair {
+    /// The P line's pieces.
+    pub fn p(&self) -> Tuned {
+        Tuned { pre: self.pre_p.clone(), raw: self.raw_p.clone(), tuned: self.tuned_p.clone(), post: self.post_p.clone() }
+    }
+
+    /// The N line's pieces.
+    pub fn n(&self) -> Tuned {
+        Tuned { pre: self.pre_n.clone(), raw: self.raw_n.clone(), tuned: self.tuned_n.clone(), post: self.post_n.clone() }
+    }
 }
 
 /// `MEANDER_SKEW_PLACER::Start`'s refusal of a net that is not half of a pair.
@@ -328,9 +344,11 @@ impl DpMeanderPlacer {
             last_length: 0,
             last_status: TuningStatus::TooShort,
             pre_p: ShapeLineChain::new(),
+            raw_p: ShapeLineChain::new(),
             tuned_p: ShapeLineChain::new(),
             post_p: ShapeLineChain::new(),
             pre_n: ShapeLineChain::new(),
+            raw_n: ShapeLineChain::new(),
             tuned_n: ShapeLineChain::new(),
             post_n: ShapeLineChain::new(),
             final_p: ShapeLineChain::new(),
@@ -402,7 +420,16 @@ impl DpMeanderPlacer {
     }
 
     pub fn tuned(&self) -> TunedPair {
-        TunedPair { pre_p: self.pre_p.clone(), tuned_p: self.tuned_p.clone(), post_p: self.post_p.clone(), pre_n: self.pre_n.clone(), tuned_n: self.tuned_n.clone(), post_n: self.post_n.clone() }
+        TunedPair {
+            pre_p: self.pre_p.clone(),
+            raw_p: self.raw_p.clone(),
+            tuned_p: self.tuned_p.clone(),
+            post_p: self.post_p.clone(),
+            pre_n: self.pre_n.clone(),
+            raw_n: self.raw_n.clone(),
+            tuned_n: self.tuned_n.clone(),
+            post_n: self.post_n.clone(),
+        }
     }
 
     pub fn final_shapes(&self) -> (&ShapeLineChain, &ShapeLineChain) {
@@ -427,6 +454,7 @@ impl DpMeanderPlacer {
         }
         let (mut pre_p, mut tuned_p, mut post_p) = self.cp.split3(self.current_start, p);
         let (mut pre_n, mut tuned_n, mut post_n) = self.cn.split3(self.current_start, p);
+        let (raw_p, raw_n) = (tuned_p.clone(), tuned_n.clone());
         tuned_p.simplify();
         tuned_n.simplify();
 
@@ -545,9 +573,11 @@ impl DpMeanderPlacer {
             final_n.simplify();
         }
         self.pre_p = pre_p;
+        self.raw_p = raw_p;
         self.tuned_p = tuned_p;
         self.post_p = post_p;
         self.pre_n = pre_n;
+        self.raw_n = raw_n;
         self.tuned_n = tuned_n;
         self.post_n = post_n;
         self.final_p = final_p;
