@@ -88,8 +88,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.text", "text");
   // Load footprint from current PCB -- FOOTPRINT_EDIT_FRAME::LoadFootprintFromBoard: pick a board footprint by reference (`SelectFootprintFromBoard`).
   m.set("pcbnew.ModuleEditor.loadFootprintFromBoard", fpTab(() => (ctx.boardParts.some((p) => p.footprint) ? ctx.fpDispatch({ type: "SET_LOAD_FROM_BOARD_OPEN", open: true }) : fpToast("The board has no footprint to load."))));
-  // Insert footprint into PCB -- FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard.
-  m.set("pcbnew.ModuleEditor.saveFootprintToBoard", fpTab(() => fpLib.saveFootprintToBoard(fpc, ctx.boardParts)));
+  // Insert footprint into PCB -- FOOTPRINT_EDIT_FRAME::SaveFootprintToBoard: updates the parts that name the footprint, or inserts it as a part of its own.
+  m.set("pcbnew.ModuleEditor.saveFootprintToBoard", fpTab(() => fpLib.saveFootprintToBoard(fpc, ctx.boardParts, ctx.studioDispatch)));
 
   // Add Pad -- PAD_TOOL::PlacePad (`doInteractiveItemPlacement`, `IPO_REPEAT | IPO_SINGLE_CLICK`): arms the pad tool; every click places a pad made from the default pad.
   m.set(

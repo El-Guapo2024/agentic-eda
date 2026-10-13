@@ -462,3 +462,39 @@ fn kicad_cli_finds_the_footprints_under_the_symbols_references_after_a_reannotat
     };
     assert!(at_of("U1") < at_of("U2"), "U1 is the left footprint: {} {}", at_of("U1"), at_of("U2"));
 }
+
+// ------------------------------------------------------------------------------------------------ Insert footprint into PCB
+
+/// A footprint as the Footprint Editor holds it, not in any library of the tables.
+const CHIP: &str = r#"(footprint "Chip" (version 20240108) (layer "F.Cu") (attr smd)
+    (fp_line (start -1.5 -0.8) (end 1.5 -0.8) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+    (pad "1" smd rect (at -1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at 1 0) (size 0.8 0.8) (layers "F.Cu" "F.Paste" "F.Mask")))"#;
+
+#[test]
+fn inserting_the_editors_footprint_adds_a_part_of_its_own_with_the_edited_pads_and_one_undo_takes_it_away() {
+    let dir = board_with_schematic("insert_footprint");
+    let mut chip = eda_kicad::parse_library_footprint(CHIP).unwrap().footprint;
+    chip.name = "Mine:Chip".into();
+    // the Footprint Editor's entry: in the project's library, not published, so nothing on the board names it
+    step(&dir, Cmd::PutLibraryFootprint { footprint: chip.clone(), overwrite: false }, false, "test").unwrap();
+    assert_eq!(load(&dir).unwrap().2.parts.iter().filter(|p| p.footprint.as_deref() == Some("Mine:Chip")).count(), 0);
+    // Insert footprint into PCB where no part names it: the part and the published entry in one step (what the studio's action sends)
+    let place = Cmd::PlaceFootprint { footprint: "Mine:Chip".into(), at: eda_model::ir::Point { x: 10_000, y: 15_000 }, reference: String::new(), value: String::new(), definition: Some(chip) };
+    step(&dir, Cmd::Batch { cmds: vec![place, Cmd::UpdateFootprintOnBoard { name: "Mine:Chip".into() }] }, false, "test").unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    let part = model.parts.iter().find(|p| p.footprint.as_deref() == Some("Mine:Chip")).expect("a part of its own names the footprint");
+    assert!(part.reference.starts_with("REF"), "the next free reference of the footprint's usual prefix: {}", part.reference);
+    assert_eq!(model.footprint_of(part).unwrap().pads.len(), 2, "with the editor's pads");
+    assert_eq!(model.footprint_of(part).unwrap().art.shapes.len(), 1, "and its silkscreen");
+    assert_eq!(pose_x(&dir, &part.reference), Some(10_000), "at the point it was sent to");
+    assert!(design.footprint_library.as_ref().unwrap().by_name("Mine:Chip").unwrap().published, "the entry follows the board by its name from here on");
+    let reference = part.reference.clone();
+    // one Ctrl+Z on the PCB tab takes the part away; the Footprint Editor's entry stays
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    let (_, design, model) = load(&dir).unwrap();
+    assert!(model.part(&reference).is_none() && design.placement.as_ref().unwrap().footprints.iter().all(|f| f.id != reference));
+    assert!(design.footprint_library.as_ref().unwrap().by_name("Mine:Chip").is_some());
+    redo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert!(load(&dir).unwrap().2.part(&reference).is_some());
+}
