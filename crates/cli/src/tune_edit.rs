@@ -1137,4 +1137,41 @@ mod tests {
         assert_eq!((ms.max_amplitude, ms.spacing, ms.corner_style, ms.keep_endpoints), (1_500_000, 800_000, MeanderStyle::Chamfer, true));
         assert_eq!(ms.target_length.opt(), LENGTH_UNCONSTRAINED);
     }
+
+    /// KiCad's own board with tuning patterns (`qa/data/pcbnew/issue22536.kicad_pcb`: four patterns made by KiCad on three copper layers, each tuned to 3000 mil): every one is
+    /// tuned again from the baseline it was made on and comes out within the range it was made to -- the placer reproduces what KiCad's did, over KiCad's own arcs. Runs
+    /// when the KiCad source is at `KICAD_SRC_DIR`.
+    #[test]
+    fn the_tuning_patterns_of_a_board_kicad_made_are_tuned_again_to_the_range_they_were_made_to() {
+        let Ok(dir) = std::env::var("KICAD_SRC_DIR") else { return };
+        let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join("qa/data/pcbnew/issue22536.kicad_pcb")) else { return };
+        let (design, model, _) = eda_kicad::import_kicad_pcb(&text).unwrap();
+        let scene = Scene::of(design, model);
+        let patterns = patterns_of(&scene.design);
+        assert_eq!(patterns.len(), 4);
+        let mut tuned_again = 0;
+        for p in &patterns {
+            let (lo, hi) = (p.target_length.min as f64 / 1000.0, p.target_length.max as f64 / 1000.0);
+            let cmds = match retune_cmds(&scene, p, &Value::Null) {
+                Ok(c) => c,
+                Err(e) => panic!("pattern {} ({}, {} members): {e}", p.id, p.layer, p.member_ids.len()),
+            };
+            let after = apply_all(&scene, &cmds).expect("the commands apply");
+            let q = patterns_of(&after.design).into_iter().find(|q| q.id == p.id).expect("the pattern is still there");
+            let mm = q.last_tuning_length as f64 / 1e6;
+            eprintln!("pattern {} on {}: {} members -> {} after, {mm:.4} mm, made to {lo:.4}..{hi:.4} ({})", p.id, p.layer, p.member_ids.len(), q.member_ids.len(), q.last_status);
+            assert!(mm >= lo && mm <= hi, "pattern {} on {}: {mm:.4} mm, made to {lo:.4}..{hi:.4}", p.id, p.layer);
+            // and the board's own measure of the net agrees with the placer's
+            let seg = after.world.iter().find_map(|(id, it)| match it {
+                Item::Segment(s) if s.net.as_deref() == Some(q.last_netname.as_str()) && after.layers.name_of(s.layer) == q.layer => Some(id),
+                _ => None,
+            });
+            if let Some(seg) = seg {
+                let len = assemble_tuning_path(&after.world, seg).map(|t| t.length(&after.world, &after.env)).unwrap_or(0) as f64 / 1e6;
+                assert!((len - mm).abs() < 0.06, "pattern {}: the net is {len:.4} mm on the board, the placer said {mm:.4}", p.id);
+            }
+            tuned_again += 1;
+        }
+        assert_eq!(tuned_again, 4);
+    }
 }
