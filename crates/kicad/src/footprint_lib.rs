@@ -451,8 +451,8 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
-    // The 3D model: the one path of the entry, placed as it comes.
-    let models: Vec<Model3d> = fp.model.iter().map(Model3d::identity).collect();
+    // The 3D models: the list, else the one path of an older entry, placed as it comes.
+    let models: Vec<Model3d> = if fp.models3d.is_empty() { fp.model.iter().map(Model3d::identity).collect() } else { fp.models3d.clone() };
     write_models(&mut out, &models, 1);
     writeln!(out, ")").unwrap();
     out
@@ -654,6 +654,7 @@ mod tests {
             value_visible: true,
             courtyard: None,
             model: Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step".into()),
+            models3d: vec![],
             anchor: eda_model::ir::Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
@@ -734,6 +735,41 @@ mod tests {
         let parsed = parse_footprint_file(text, "Test:X").expect("a loadable footprint");
         assert_eq!(parsed.models3d.len(), 4);
         assert_eq!(parsed.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/A.3dshapes/a.step"), "`model` stays the first path");
+    }
+
+    /// The Footprint Editor's footprint keeps every model with its placement: the file it writes has them all, in order, and its own reader and the library
+    /// importer give the same list back; an older entry that has only the path is written, and read, as the one model it was.
+    #[test]
+    fn a_library_footprint_exports_its_whole_list_of_models_and_reads_it_back() {
+        let list = vec![
+            Model3d { path: "${KICAD10_3DMODEL_DIR}/One.3dshapes/one.step".into(), offset: [1.0, 2.0, 3.0], scale: [1.0, 1.5, 1.0], rotate: [90.0, 0.0, -45.0], opacity: 1.0, show: true },
+            Model3d { path: "two.wrl".into(), offset: [0.0, 0.0, 0.0], scale: [1.0, 1.0, 1.0], rotate: [0.0, 0.0, 0.0], opacity: 0.25, show: false },
+        ];
+        let mut fp = eda_model::ir::LibraryFootprint::new_empty("Test:Two");
+        fp.pads.push(lib_pad("1", 0, 0, eda_model::ir::LibraryPadShape::Rect, PadKind::Smd));
+        fp.models3d = list.clone();
+        fp.model = Some(list[0].path.clone());
+        let text = export_kicad_mod(&fp);
+        assert_eq!(text.matches("(model ").count(), 2, "{text}");
+        assert_eq!(footprint_models(&text), list, "the file's models, in order, with their placement");
+        // the engine footprint the same file gives, and the Footprint Editor's own reader
+        let engine = parse_footprint_file(&text, "Test:Two").expect("a loadable footprint");
+        assert_eq!((engine.models3d.clone(), engine.model.clone()), (list.clone(), Some(list[0].path.clone())));
+        let editor = crate::parse_library_footprint(&text).unwrap().footprint;
+        assert_eq!((editor.models3d.clone(), editor.model.clone()), (list.clone(), Some(list[0].path.clone())));
+        // and what the editor makes of a footprint the board can use keeps them: the engine's footprint is the same list
+        assert_eq!(editor.to_engine_footprint().models3d, list);
+        assert_eq!(eda_model::ir::LibraryFootprint::from_engine_footprint(&engine).models3d, list);
+
+        // an older entry: the one path
+        let mut old = eda_model::ir::LibraryFootprint::new_empty("Test:One");
+        old.pads.push(lib_pad("1", 0, 0, eda_model::ir::LibraryPadShape::Rect, PadKind::Smd));
+        old.model = Some("old.step".into());
+        assert_eq!(footprint_models(&export_kicad_mod(&old)), vec![Model3d::identity("old.step")]);
+        assert_eq!(old.to_engine_footprint().model.as_deref(), Some("old.step"));
+        // an entry with no model writes none
+        old.model = None;
+        assert!(!export_kicad_mod(&old).contains("(model "));
     }
 
     /// `PCB_IO_KICAD_SEXPR::format( FOOTPRINT )`'s model entries: the hide flag, the opacity with four decimals, then the offset, the scale and the rotation in `FormatDouble2Str`'s

@@ -1392,8 +1392,15 @@ pub enum Cmd {
         attributes: FootprintAttributes,
         reference_visible: bool,
         value_visible: bool,
-        /// `(model "...")` 3D model path; `None` clears it.
+        /// `(model "...")` 3D model path; `None` clears it. The path of the one model of an older entry: a command that sends the footprint's
+        /// whole list ([`Cmd::EditFootprintProperties::models3d`]) has it follow the list's first model.
         model: Option<String>,
+        /// The 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`): the footprint's whole list of models, in order, each with its offset, scale, rotation, opacity and Show
+        /// switch ([`fp_models`]); an empty list is a footprint with no model. Refused for an empty or illegal file name and for numbers the preview panel does not
+        /// take. Left out, the footprint keeps the list it has -- unless `model` names another path than its first model's, which is then its one model, as it was
+        /// before the list existed.
+        #[serde(default)]
+        models3d: Option<Vec<eda_model::footprint::Model3d>>,
         /// The Clearances tab's "Zone connection" (`FOOTPRINT::SetLocalZoneConnection`); `None` is "inherited". Part of the
         /// whole panel, so a command that leaves it out clears it.
         #[serde(default)]
@@ -2519,8 +2526,8 @@ impl<'a> Board<'a> {
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
-            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, zone_connection } => {
-                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), *zone_connection)
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection } => {
+                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), models3d.as_deref(), *zone_connection)
             }
             Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
             Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
@@ -4720,15 +4727,31 @@ impl<'a> Board<'a> {
         reference_visible: bool,
         value_visible: bool,
         model: Option<String>,
+        models3d: Option<&[eda_model::footprint::Model3d]>,
         zone_connection: Option<PadConnection>,
     ) -> Result<(), Vec<CheckResult>> {
+        // The 3D Models tab's list is judged before anything of the panel is taken (`panel_fp_properties_3d_model.cpp`), and refused with the row it is wrong at.
+        let list = models3d.map(eda_model::fp_models::checked_models).transpose().map_err(|p| vec![CheckResult::fail(p.check, name, p.reason)])?;
         let fp = self.library_footprint_mut(name)?;
         fp.description = description;
         fp.keywords = keywords;
         fp.attributes = attributes;
         fp.reference_visible = reference_visible;
         fp.value_visible = value_visible;
-        fp.model = model;
+        match list {
+            // the whole list; `model` is its first path
+            Some(list) => {
+                fp.model = list.first().map(|m| m.path.clone());
+                fp.models3d = list;
+            }
+            // no list sent: the footprint keeps its own, unless the one path was changed -- then that path is its one model, as it was before the list existed
+            None => {
+                if model != fp.models3d.first().map(|m| m.path.clone()).or_else(|| fp.model.clone()) {
+                    fp.models3d.clear();
+                    fp.model = model;
+                }
+            }
+        }
         fp.zone_connection = zone_connection;
         Ok(())
     }

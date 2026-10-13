@@ -3102,9 +3102,19 @@ pub struct LibraryFootprint {
     #[serde(default)]
     pub courtyard: Option<(Um, Um)>,
     /// `(model "...")` 3D model path -- same field/meaning as
-    /// `crate::footprint::Footprint::model`.
+    /// `crate::footprint::Footprint::model`: the first model's path when
+    /// [`LibraryFootprint::models3d`] is not empty, else the one model of an
+    /// older entry, placed as it comes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Every `(model ...)` of the footprint with the placement KiCad gives it
+    /// (offset, scale, rotation, opacity, shown): the Footprint Properties
+    /// dialog's 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`,
+    /// [`crate::fp_models`]). When it is not empty it is the whole list and
+    /// `model` is only its first path; empty, the footprint has `model` alone
+    /// (or no model).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub models3d: Vec<crate::footprint::Model3d>,
     /// KiCad's footprint anchor (`footprint_editor_control.cpp`'s "Place
     /// Footprint Anchor" tool): the local-frame point every pad/graphic/
     /// text coordinate above is relative to. `{0,0}` (KiCad's
@@ -3143,6 +3153,7 @@ impl Default for LibraryFootprint {
             value_visible: true,
             courtyard: None,
             model: None,
+            models3d: Vec::new(),
             anchor: Point { x: 0, y: 0 },
             published: false,
             zone_connection: None,
@@ -3177,6 +3188,7 @@ impl LibraryFootprint {
             texts,
             courtyard: fp.courtyard,
             model: fp.model.clone(),
+            models3d: fp.models3d.clone(),
             ..Default::default()
         }
     }
@@ -3194,9 +3206,9 @@ impl LibraryFootprint {
             name: self.name.clone(),
             pads: self.pads.iter().map(LibraryPad::to_engine_pad).collect(),
             courtyard: self.courtyard,
-            model: self.model.clone(),
+            model: self.models3d.first().map(|m| m.path.clone()).or_else(|| self.model.clone()),
             courtyard_outlines: vec![],
-            models3d: vec![],
+            models3d: self.models3d.clone(),
             art: crate::fp_art::FpArt::from_library(&self.graphics, &self.texts),
         }
     }

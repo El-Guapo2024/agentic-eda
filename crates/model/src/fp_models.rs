@@ -380,6 +380,28 @@ mod tests {
     }
 
     #[test]
+    fn a_library_footprint_keeps_its_list_and_one_from_before_the_list_reads_as_it_did() {
+        use crate::ir::LibraryFootprint;
+        // a design.json from before the list: the one path
+        let old: LibraryFootprint = serde_json::from_str(r#"{"name":"Lib:X","model":"a.step"}"#).unwrap();
+        assert_eq!((old.model.as_deref(), old.models3d.len()), (Some("a.step"), 0));
+        assert!(!serde_json::to_string(&old).unwrap().contains("models3d"), "nothing to write when there is no list");
+        assert_eq!(old.to_engine_footprint().model.as_deref(), Some("a.step"));
+        // a list goes through the file and comes back, and through the engine's footprint and back
+        let mut fp = LibraryFootprint::new_empty("Lib:Y");
+        fp.models3d = vec![Model3d { offset: [1.5, 0.0, 0.25], rotate: [90.0, 0.0, 0.0], opacity: 0.5, ..m("a.step") }, Model3d { show: false, ..m("b.step") }];
+        fp.model = Some("a.step".into());
+        let text = serde_json::to_string(&fp).unwrap();
+        assert_eq!(serde_json::from_str::<LibraryFootprint>(&text).unwrap().models3d, fp.models3d);
+        let engine = fp.to_engine_footprint();
+        assert_eq!((engine.models3d.clone(), engine.model.clone()), (fp.models3d.clone(), Some("a.step".to_string())));
+        assert_eq!(LibraryFootprint::from_engine_footprint(&engine).models3d, fp.models3d);
+        // the list leads: `model` follows its first path even when the entry says another
+        fp.model = Some("stale.step".into());
+        assert_eq!(fp.to_engine_footprint().model.as_deref(), Some("a.step"));
+    }
+
+    #[test]
     fn a_footprint_given_a_list_has_it_whole_and_its_first_path_as_the_single_model() {
         let mut fp = Footprint { name: "X".into(), pads: vec![], courtyard: None, courtyard_outlines: vec![], model: Some("old.step".into()), models3d: vec![], art: Default::default() };
         set_models(&mut fp, &[m("a.step"), m("b.step")]);
