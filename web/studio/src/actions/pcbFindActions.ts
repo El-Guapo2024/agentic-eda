@@ -33,7 +33,7 @@ function netRefs(state: StudioState, net: string): string[] {
 }
 
 /**
- * `PCB_SELECTION_TOOL::FindItem`: a footprint or a text is selected; a net selects its tracks and vias (`SelectAllItemsOnNet`); a marker is the DRC dialog's selected
+ * `PCB_SELECTION_TOOL::FindItem`: a footprint, a text or a zone is selected; a net selects its tracks and vias (`SelectAllItemsOnNet`); a marker is the DRC dialog's selected
  * violation. The view is then brought to it. (The C++ clears the selection first.)
  */
 function showHit(api: StudioApi, dispatch: Dispatch<Action>, hit: PcbHit): void {
@@ -42,7 +42,7 @@ function showHit(api: StudioApi, dispatch: Dispatch<Action>, hit: PcbHit): void 
   if (!board) return;
   let refs: string[] = [];
   let box: Box | null = null;
-  if (hit.kind === "footprint" || hit.kind === "text") {
+  if (hit.kind === "footprint" || hit.kind === "text" || hit.kind === "zone") {
     refs = [hit.id];
     box = itemBounds(board, hit.id);
   } else if (hit.kind === "net") {

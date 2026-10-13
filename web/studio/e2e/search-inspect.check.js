@@ -233,6 +233,76 @@
     t(!!dialog("fbp-suggestions") && /Position_X/.test(text("fbp-suggestions")), `after A.: ${text("fbp-suggestions").replace(/\n/g, " ")}`);
   });
 
+  await scenario("Find follows the IR: a user field, a hidden field only with Include hidden fields, a zone by its name", async (t) => {
+    const cmd = async (c) => (await fetch("/api/cmd", { method: "POST", body: JSON.stringify({ strict: false, cmd: c }) })).json();
+    const layout = (visible) => ({ at: { x: 0, y: 1500 }, size: [1000, 1000], thickness: 150, layer: "F.Fab", visible });
+    let steps = 0;
+    const findBox = (label) => [...document.querySelectorAll('[data-testid="pcb-find-dialog"] label.toggle')].find((l) => l.textContent.includes(label))?.querySelector("input");
+    const setBox = async (label, on) => { const el = findBox(label); if (el && el.checked !== on) { el.click(); await sleep(120); } };
+    const findFor = async (needle) => {
+      const input = dialog("pcb-find-text");
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(input, needle);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      await sleep(120);
+      button("pcb-find-dialog", "Restart Search").click();
+      await sleep(450);
+      return { status: text("pcb-find-status"), selection: selection() };
+    };
+    try {
+      let res = await cmd({ op: "edit_board_footprint", part: c1.ref, fields: [{ name: "Supplier", text: "ACME-4711", layout: layout(true) }, { name: "Batch", text: "LOT-77", layout: layout(false) }] });
+      t(res.ok, `${c1.ref} has two user fields, one hidden: ${res.message ?? ""}`);
+      if (res.ok) steps++;
+      const outline = [{ x: 1000, y: 1000 }, { x: 5000, y: 1000 }, { x: 5000, y: 5000 }];
+      res = await cmd({ op: "add_zone", net: "GND", layer: "F.Cu", outline });
+      t(res.ok, `a zone: ${res.message ?? ""}`);
+      if (res.ok) steps++;
+      const zones = (await state()).routing?.zones ?? [];
+      const zone = zones[zones.length - 1];
+      res = await cmd({ op: "set_zone_name", id: zone.id, name: "keepout-e2e" });
+      t(res.ok, `named keepout-e2e: ${res.message ?? ""}`);
+      if (res.ok) steps++;
+      await select([]);
+      await __eda.run("common.Interactive.find");
+      await sleep(350);
+      t(!!dialog("pcb-find-dialog"), "Find (Ctrl+F) is open");
+      await setBox("Match case", false);
+      await setBox("Search other text items", true);
+      await setBox("Include hidden fields", false);
+
+      let r = await findFor("ACME-4711");
+      t(JSON.stringify(r.selection) === JSON.stringify([c1.ref]) && r.status === "Hit(s): 1 / 1", `a user field finds its footprint: ${r.selection.join()} ${r.status}`);
+      await setBox("Search other text items", false);
+      r = await findFor("ACME-4711");
+      t(r.selection.length === 0 && /not found/.test(r.status), `with other text items off nothing: ${r.status}`);
+      await setBox("Search other text items", true);
+
+      r = await findFor("LOT-77");
+      t(r.selection.length === 0 && /not found/.test(r.status), `a hidden field is not searched: ${r.status}`);
+      await setBox("Include hidden fields", true);
+      r = await findFor("LOT-77");
+      t(JSON.stringify(r.selection) === JSON.stringify([c1.ref]), `Include hidden fields finds it: ${r.selection.join()} ${r.status}`);
+      await setBox("Include hidden fields", false);
+
+      r = await findFor("keepout-e2e");
+      t(JSON.stringify(r.selection) === JSON.stringify([zone.id]) && r.status === "Hit(s): 1 / 1", `a zone is found by its name: ${r.selection.join()} ${r.status}`);
+      await setBox("Search other text items", false);
+      r = await findFor("keepout-e2e");
+      t(r.selection.length === 0, `zones are other text items: ${r.status}`);
+      await setBox("Search other text items", true);
+      // a field selected on the board is what the dialog opens with
+      await closeDialogs();
+      await select([`${c1.ref}:Supplier`]);
+      await __eda.run("common.Interactive.find");
+      await sleep(350);
+      t(dialog("pcb-find-text")?.value === "ACME-4711", `Find opens with the text of the selected field: ${dialog("pcb-find-text")?.value}`);
+    } finally {
+      await closeDialogs();
+      for (let i = 0; i < steps; i++) { await __eda.run("common.Interactive.undo"); await sleep(700); }
+    }
+    const left = (await state()).routing?.zones ?? [];
+    t(left.every((z) => z.name !== "keepout-e2e") && ((await state()).parts.find((p) => p.ref === c1.ref).fields ?? []).every((f) => f.name !== "Supplier"), "the undos take the zone and the fields away");
+  });
+
   await scenario("the board is as it was and nothing broke", async (t) => {
     await select([]);
     const after = JSON.stringify((await placed()).map((p) => [p.ref, p.at, p.rot, p.side]).sort());

@@ -38,6 +38,7 @@ export function PcbFindDialog() {
       className="dialog"
       role="dialog"
       aria-label="Find"
+      data-testid="pcb-find-dialog"
       style={{ position: "fixed", top: 110, left: "50%", transform: "translateX(-50%)", width: "min(660px, calc(100vw - 24px))", zIndex: 1900 }}
       onKeyDown={(e) => {
         if (e.key === "Escape") close();
@@ -56,6 +57,7 @@ export function PcbFindDialog() {
               <span>Search for:</span>
               <input
                 ref={input}
+                data-testid="pcb-find-text"
                 list="pcb-find-history"
                 title="Text with optional wildcards"
                 value={o.text}
@@ -98,7 +100,9 @@ export function PcbFindDialog() {
             <button onClick={close}>Close</button>
           </div>
         </div>
-        <div style={{ marginTop: 10, minHeight: 16, fontSize: 11, color: "var(--chrome-text-dim)" }}>{find.status}</div>
+        <div data-testid="pcb-find-status" style={{ marginTop: 10, minHeight: 16, fontSize: 11, color: "var(--chrome-text-dim)" }}>
+          {find.status}
+        </div>
       </div>
     </div>
   );

@@ -4,14 +4,17 @@
 //   pcbnew/dialogs/dialog_find.cpp      DIALOG_FIND::search          the hit list (footprints, then texts and zones, then markers, then nets) and the iterator
 //   common/eda_item.cpp                 EDA_ITEM::Matches            plain, whole word and wildcard matching of one text
 //   pcbnew/pcb_field.cpp                PCB_FIELD::Matches           a hidden field is searched only with "Include hidden fields"
+//   pcbnew/pcb_text.cpp, zone.h         PCB_TEXT::Matches, ZONE::Matches   a text is searched as `UnescapeString( GetText() )`, a zone by its name
 //   pcbnew/tools/pcb_selection_tool.cpp PCB_SELECTION_TOOL::FindItem  what showing a hit does: select it, focus on it, zoom out if it is big
 //   common/eda_draw_frame.cpp           EDA_DRAW_FRAME::FocusOnLocation   the view is only moved when the point is outside the middle 80% of it
 //
-// What this board has to search: footprint references and values (the footprints this studio writes carry those two fields, both visible), the board's own
-// texts, DRC markers (their message), and the nets (their names). A zone has no name in the IR, so none matches (`ZONE::Matches` reads `GetZoneName()`).
+// What this board has to search: a footprint's fields (the Reference and the Value, which each have a visibility, and its user fields: `Part.fields`) and its own texts
+// (`Part.texts`: the fab text of `${REFERENCE}`), the board's texts, its zones by name (`Zone.name`; a rule area is a zone), DRC markers (their message), and the nets (their names).
 // Pure: no store, no DOM. Unit-tested in pcbFind.test.ts.
-import type { BoardState } from "../api/types";
+import type { BoardState, FieldInfo, FpTextInfo } from "../api/types";
+import { unescapeString } from "./schNetName";
 import { boxCentre, centerViewOn, setScaleAboutCentre } from "./zoomFit";
+import { fieldById } from "./fpFields";
 import type { ViewTransform } from "./view";
 
 /** The dialog's checkboxes (`m_matchCase` ... `m_includeNets`) and the text (`m_searchCombo`). */
@@ -78,8 +81,8 @@ export function textMatches(aText: string, o: Pick<PcbFindOptions, "text" | "mat
 
 // ---------------------------------------------------------------------------------------------------------------------------------------------------- the hits
 
-/** One thing the search found: a footprint (by reference), a board text (by id), a DRC marker (by its index in the last run) or a net (by name). */
-export type PcbHit = { kind: "footprint"; id: string } | { kind: "text"; id: string } | { kind: "marker"; index: number } | { kind: "net"; id: string };
+/** One thing the search found: a footprint (by reference), a board text or a zone (by id), a DRC marker (by its index in the last run) or a net (by name). */
+export type PcbHit = { kind: "footprint"; id: string } | { kind: "text"; id: string } | { kind: "zone"; id: string } | { kind: "marker"; index: number } | { kind: "net"; id: string };
 
 /** Every net the board knows: those its pads, tracks, vias and zones are on, sorted by name. */
 export function boardNetNames(board: BoardState): string[] {
@@ -91,9 +94,33 @@ export function boardNetNames(board: BoardState): string[] {
   return [...nets].sort();
 }
 
+/** `PCB_FIELD::Matches`: a field that is not visible is searched only with "Include hidden fields"; its text is `UnescapeString( GetText() )`. */
+function fieldMatches(field: Pick<FieldInfo, "text" | "visible">, o: PcbFindOptions): boolean {
+  if (!field.visible && !o.hidden) return false;
+  return textMatches(unescapeString(field.text), o);
+}
+
+/** The text of a footprint's own text as KiCad searches it (`PCB_TEXT::GetText`): the variable it is made of when it shows the reference or the value, else what it says. */
+const rawFpText = (t: Pick<FpTextInfo, "text" | "role">): string => (t.role === "reference" ? "${REFERENCE}" : t.role === "value" ? "${VALUE}" : t.text);
+
 /**
- * `DIALOG_FIND::search`'s list: when texts, values or references are on, each footprint whose reference (if on) or value (if on) matches; then, with texts on,
- * the board's texts; then the markers whose message matches; then the nets whose name does. In that order, the footprints in the board's order.
+ * Does the footprint `part` come into the list? `DIALOG_FIND::search`: its Reference field when references are on, else its Value field when values are on, else (texts on) one of its
+ * own texts, else (texts on) any of its fields, a user field among them; a field that is hidden counts only with "Include hidden fields".
+ */
+function footprintHit(part: BoardState["parts"][number], o: PcbFindOptions): boolean {
+  const fields = part.fields ?? [];
+  const reference: Pick<FieldInfo, "text" | "visible"> = fields.find((f) => f.name === "Reference") ?? { text: part.ref, visible: true };
+  const value: Pick<FieldInfo, "text" | "visible"> | null = fields.find((f) => f.name === "Value") ?? (part.value != null ? { text: part.value, visible: true } : null);
+  let found = o.references && fieldMatches(reference, o);
+  if (!found && o.values && value) found = fieldMatches(value, o);
+  if (!found && o.texts) found = (part.texts ?? []).some((t) => textMatches(unescapeString(rawFpText(t)), o));
+  if (!found && o.texts) found = fields.some((f) => fieldMatches(f, o));
+  return found;
+}
+
+/**
+ * `DIALOG_FIND::search`'s list: when texts, values or references are on, each footprint that comes in (`footprintHit`); then, with texts on, the board's texts and the zones whose
+ * name matches; then the markers whose message matches; then the nets whose name does. In that order, each in the board's own order.
  */
 export function findHits(board: BoardState, markers: readonly { description: string }[], o: PcbFindOptions): PcbHit[] {
   if (o.text === "") return [];
@@ -101,9 +128,13 @@ export function findHits(board: BoardState, markers: readonly { description: str
   if (o.texts || o.values || o.references) {
     for (const part of board.parts) {
       if (!part.placed) continue;
-      if ((o.references && textMatches(part.ref, o)) || (o.values && part.value != null && textMatches(part.value, o))) hits.push({ kind: "footprint", id: part.ref });
+      if (footprintHit(part, o)) hits.push({ kind: "footprint", id: part.ref });
     }
-    if (o.texts) for (const text of board.drawings?.texts ?? []) if (textMatches(text.content, o)) hits.push({ kind: "text", id: text.id });
+    if (o.texts) {
+      for (const text of board.drawings?.texts ?? []) if (textMatches(unescapeString(text.content), o)) hits.push({ kind: "text", id: text.id });
+      // `ZONE::Matches`: the zone's name (an unnamed zone has the empty one, which a mask of `*` matches)
+      for (const zone of board.routing?.zones ?? []) if (textMatches(zone.name ?? "", o)) hits.push({ kind: "zone", id: zone.id });
+    }
   }
   if (o.markers) markers.forEach((m, index) => textMatches(m.description, o) && hits.push({ kind: "marker", index }));
   if (o.nets) for (const net of boardNetNames(board)) if (textMatches(net, o)) hits.push({ kind: "net", id: net });
@@ -160,16 +191,18 @@ export function findStatus(text: string, hits: readonly PcbHit[], step: FindStep
 // ------------------------------------------------------------------------------------------------------------------------------------------------ the preload
 
 /**
- * `PCB_EDIT_FRAME::ShowFindDialog`'s `findString`: with one item selected, a footprint's value, or the first line of a text; otherwise nothing (the search text
- * of the last time stays).
+ * `PCB_EDIT_FRAME::ShowFindDialog`'s `findString`: with one item selected, a footprint's value, or the first line of a text or of a field (all `UnescapeString`ed); otherwise
+ * nothing (the search text of the last time stays).
  */
 export function preloadText(board: BoardState | null, selection: ReadonlySet<string>): string {
   if (!board || selection.size !== 1) return "";
   const id = [...selection][0]!;
   const part = board.parts.find((p) => p.ref === id && p.placed);
-  if (part) return part.value ?? "";
+  if (part) return unescapeString(part.value ?? "");
   const text = board.drawings?.texts.find((t) => t.id === id);
-  return text ? (text.content.split("\n")[0] ?? "") : "";
+  if (text) return unescapeString(text.content).split("\n")[0] ?? "";
+  const field = fieldById(board, id);
+  return field ? (unescapeString(field.field.text).split("\n")[0] ?? "") : "";
 }
 
 // -------------------------------------------------------------------------------------------------------------------------------------------- the view
