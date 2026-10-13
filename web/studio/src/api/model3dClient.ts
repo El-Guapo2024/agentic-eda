@@ -1,6 +1,7 @@
 // What the 3D Models tab of the Footprint Properties dialogs asks the server besides the models themselves (`GET /api/3dmodel`, components/viewer3d/modelCache.ts):
 // the status of each row's file name, the model chooser's folders and files, and the footprint to show beside the models (crates/cli/src/model3d_tab_api.rs).
 import type { ModelCheck } from "../kicad-port/fpModels";
+import type { Migration } from "../kicad-port/migrate3d";
 import type { Part } from "./types";
 
 /** `POST /api/3dmodel/check`: the status of each name, in order (`validateModelExists`). An answer that does not come leaves the cells empty: a status is a hint, not a gate. */
@@ -61,4 +62,16 @@ export async function fetchPreviewPart(of: PreviewOf): Promise<Part | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * `GET /api/3dmodel/migrate`: the VRML models the board's footprints name that no search finds, each with the STEP files that could stand for it (ranked), and how many files the folders
+ * held (`scanMissing`, `buildCatalog`, `rankCandidatesFor`). `dirs` are the folders added by hand ("Add Search Directory..."), in the form the chooser gives. Throws with the server's reason.
+ */
+export async function fetchMigration(dirs: readonly string[]): Promise<Migration> {
+  const q = dirs.length > 0 ? `?dirs=${encodeURIComponent(dirs.join("|"))}` : "";
+  const r = await fetch(`/api/3dmodel/migrate${q}`, { cache: "no-store" });
+  const j = (await r.json().catch(() => ({}))) as Partial<Migration> & { error?: string };
+  if (!r.ok || j.error) throw new Error(j.error ?? `HTTP ${r.status}`);
+  return { missing: j.missing ?? [], scanned: j.scanned ?? 0, dirs: j.dirs ?? [] };
 }

@@ -1460,6 +1460,8 @@ export type Cmd =
   | { op: "add_board_model"; part: string; model: Model3dCmd; at?: number }
   | { op: "remove_board_model"; part: string; index: number }
   | { op: "move_board_model"; part: string; from: number; to: number }
+  /** Migrate 3D Models' Replace (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): every model of every footprint on the board under one of the keys' file names takes the name it maps to, the placement as it was; one undo step. */
+  | { op: "migrate_board_models"; replacements: Record<string, string> }
   | { op: "edit_board_model"; part: string; index: number; path?: string; offset?: [number, number, number]; scale?: [number, number, number]; rotate?: [number, number, number]; opacity?: number; show?: boolean }
   /** `Cmd::Batch`: the sub-commands as ONE undo step, all-or-nothing. */
   | { op: "batch"; cmds: Cmd[] }

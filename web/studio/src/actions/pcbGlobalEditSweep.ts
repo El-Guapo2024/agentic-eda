@@ -2,7 +2,7 @@
 // Cleanup Graphics, Change Footprint(s) and Update Footprint(s) from Library. Each cites GLOBAL_EDIT_TOOL
 // (pcbnew/tools/global_edit_tool.cpp at 8303b2ad); the logic is kicad-port/pcbGlobalEdit.ts and the
 // dialogs components/PcbGlobalEditDialogs.tsx. Also the Inspect menu's Compare Footprint with Library
-// (BOARD_INSPECTION_TOOL::DiffFootprint), which ends in the update dialog, and Geographical Reannotate (BOARD_REANNOTATE_TOOL). Called from `registerPcbEditSweep`.
+// (BOARD_INSPECTION_TOOL::DiffFootprint), which ends in the update dialog, Geographical Reannotate (BOARD_REANNOTATE_TOOL) and Migrate 3D Models. Called from `registerPcbEditSweep`.
 
 import { createElement } from "react";
 import type { Cmd } from "../api/types";
@@ -11,6 +11,7 @@ import { CHANGE_OPTIONS, UPDATE_OPTIONS, exchangeCmd, exchangeReport, isLibraryI
 import { postExchangePlan } from "../api/fpAssign";
 import { CleanupGraphicsDialog, ExchangeFootprintsDialog, GlobalDeletionDialog, type ExchangeState } from "../components/PcbGlobalEditDialogs";
 import { FootprintDiffDialog } from "../components/FootprintDiffDialog";
+import { Migrate3dModelsDialog } from "../components/Migrate3dModelsDialog";
 import { ReannotateDialog } from "../components/ReannotateDialog";
 import { closeSweepDialog, openSweepDialog } from "./pcbSweepDialogs";
 import { createSweepHelpers, type SweepCtx } from "./pcbSweepKit";
@@ -183,6 +184,17 @@ export function registerPcbGlobalEditSweep(m: Map<string, () => void>, ctx: Swee
       if (!board) return;
       const footprints = [...state.selection].filter((id) => board.parts.some((p) => p.ref === id && p.placed));
       openSweepDialog({ kind: "element", element: createElement(ReannotateDialog, { selection: footprints }) });
+    })
+  );
+
+  // ----------------------------------------------------------------- Migrate 3D Models
+  // GLOBAL_EDIT_TOOL::Migrate3DModels -> DIALOG_MIGRATE_3D_MODELS: always opens (empty lists when no model is missing). The dialog is components/Migrate3dModelsDialog.tsx; Replace Models is
+  // `migrate_board_models` (crates/ops/src/fp_models.rs), one undo step.
+  m.set(
+    "pcbnew.GlobalEdit.migrate3DModels",
+    pcbOnly(() => {
+      if (!board) return;
+      openSweepDialog({ kind: "element", element: createElement(Migrate3dModelsDialog) });
     })
   );
 }
