@@ -39,7 +39,15 @@ fn preview(dir: &Path, body: &[u8]) -> Result<Value, Vec<CheckResult>> {
         b.apply(&cmd)?;
     }
     let (sch, _) = crate::studio::resolve_sheet(b.design(), &sheet);
-    Ok(patch_json(&sch, &model))
+    let mut patch = patch_json(&sch, &model);
+    // what the net-collision monitor draws for the held selection (`SCH_DRAG_NET_COLLISION_MONITOR`): where the move would join two nets and where it pulls a connection apart
+    if let Some(o) = b.net_collision() {
+        patch["net_collision"] = json!({
+            "collisions": o.collisions.iter().map(|m| json!({ "at": pt(m.at), "radius_um": m.radius_um })).collect::<Vec<_>>(),
+            "disconnections": o.disconnections.iter().map(|d| json!({ "a": pt(d.a), "b": pt(d.b), "radius_um": d.radius_um })).collect::<Vec<_>>(),
+        });
+    }
+    Ok(patch)
 }
 
 fn pt(p: eda_model::ir::Point) -> Value {

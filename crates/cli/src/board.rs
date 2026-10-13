@@ -4930,6 +4930,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The move preview (`POST /api/sch/move_preview`) carries the net-collision overlay of the held selection: a circle where it would join two nets, a mark where it
+    /// pulls a connection apart.
+    #[test]
+    fn the_move_preview_carries_the_net_collision_overlay() {
+        let dir = scratch("sch_move_preview_collision");
+        setup_pin_swap_board(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            // a wire that stands apart from the others, 25 mm to the right of wire A (which runs up from R1's pin 1 at x = 20 mm)
+            sch.wires.push(eda_model::ir::Wire { id: "wire_h2".into(), net: "H2".into(), pins: vec![], pts: vec![Point { x: 45_000, y: 12_000 }, Point { x: 60_000, y: 12_000 }], bus: false });
+            sch.assign_missing_ids();
+        }
+        save(&dir, &design).unwrap();
+        let preview = |cmd: serde_json::Value| crate::sch_move_api::move_preview(&dir, serde_json::json!({ "sheet": "", "cmds": [cmd] }).to_string().as_bytes());
+        // carried onto wire A's middle: its end makes a T there, and the two are different nets
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -25_000, "dy": 0 }));
+        assert_eq!(v["ok"], serde_json::json!(true), "{v}");
+        assert_eq!(v["net_collision"]["collisions"], serde_json::json!([{ "at": [20_000, 12_000], "radius_um": 914.4 * 1.5 }]), "{v}");
+        assert_eq!(v["net_collision"]["disconnections"], serde_json::json!([]));
+        // short of it nothing is marked, and the patch is there all the same
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["wire_h2"], "dx": -10_000, "dy": 0 }));
+        assert_eq!((v["net_collision"]["collisions"].clone(), v["net_collision"]["disconnections"].clone()), (serde_json::json!([]), serde_json::json!([])), "{v}");
+        assert!(v["wires"].as_array().is_some_and(|w| !w.is_empty()));
+        // R1 carried off its wires: a mark at each pin it left
+        let v = preview(serde_json::json!({ "op": "sch_move", "verb": "move", "ids": ["R1"], "dx": 10_000, "dy": 0 }));
+        assert_eq!(v["net_collision"]["disconnections"].as_array().map(Vec::len), Some(2), "{v}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn reasons_says_a_repeated_sentence_once_with_how_many() {
         let track = |net: &str| CheckResult::fail("kicad.unknown_net", net.to_string(), format!("a track is on net {net:?}, which is not in the netlist"));

@@ -12,6 +12,8 @@
 //!   with the other end on its anchor;
 //! - `AutoRotateItem` (a global or hierarchical label with its "Auto" check on takes the spin of what it is connected to) runs after a move or a
 //!   drag, on every moved label (`sch_labels.rs`);
+//! - the net-collision overlay (`SCH_DRAG_NET_COLLISION_MONITOR`, `sch_net_collision.rs`) is read in the same call and returned beside the sheet, for the
+//!   preview: [`run_with_overlay`];
 //! - a symbol's box for the centre of a selection is its body and pins, without its fields.
 
 use crate::sch_drag::{constrain_on_edge, Drag};
@@ -167,11 +169,12 @@ impl<'a> Board<'a> {
     /// Apply one [`SchMoveCmd`] to the schematic in view.
     pub(crate) fn apply_sch_move(&mut self, cmd: &SchMoveCmd) -> Result<(), Vec<CheckResult>> {
         let model = self.model;
-        let out = {
+        let (out, overlay) = {
             let sch = self.schematic()?;
-            run(sch, model, cmd)?
+            run_with_overlay(sch, model, cmd)?
         };
         *self.schematic_mut()? = out;
+        self.net_collision = Some(overlay);
         Ok(())
     }
 }
@@ -180,17 +183,18 @@ fn fail(check: &str, subject: &str, why: impl Into<String>) -> Vec<CheckResult> 
     vec![CheckResult::fail(check, subject, why)]
 }
 
-/// The edited section.
-pub(crate) fn run(sch: &SchematicSection, model: &ConstraintModel, cmd: &SchMoveCmd) -> Result<SchematicSection, Vec<CheckResult>> {
+/// The edited section, and what the net-collision monitor draws for it (nothing for a turn, a mirror or an alignment: only a held selection has one).
+pub(crate) fn run_with_overlay(sch: &SchematicSection, model: &ConstraintModel, cmd: &SchMoveCmd) -> Result<(SchematicSection, crate::sch_net_collision::NetCollision), Vec<CheckResult>> {
     let mut scene = Scene::new(sch, model);
+    let mut overlay = crate::sch_net_collision::NetCollision::default();
     match cmd {
         SchMoveCmd::Move { ids, dx, dy, turns, about } => {
             select(&mut scene, ids, &BTreeMap::new())?;
-            move_selection(&mut scene, Point { x: *dx, y: *dy }, turns, *about);
+            overlay = move_selection(&mut scene, Point { x: *dx, y: *dy }, turns, *about);
         }
         SchMoveCmd::Drag { ids, vertices, dx, dy, ortho, grid, turns, about } => {
             select(&mut scene, ids, vertices)?;
-            drag_selection(&mut scene, Point { x: *dx, y: *dy }, *ortho, grid_of(*grid), turns, *about);
+            overlay = drag_selection(&mut scene, Point { x: *dx, y: *dy }, *ortho, grid_of(*grid), turns, *about);
         }
         SchMoveCmd::Rotate { ids, vertices, ccw, about, grid } => {
             select(&mut scene, ids, vertices)?;
@@ -208,7 +212,7 @@ pub(crate) fn run(sch: &SchematicSection, model: &ConstraintModel, cmd: &SchMove
         }
         SchMoveCmd::Align { moves, grid } => align(&mut scene, moves, grid_of(*grid))?,
     }
-    Ok(scene.finish())
+    Ok((scene.finish(), overlay))
 }
 
 fn grid_of(g: Um) -> Um {
@@ -347,7 +351,9 @@ fn remove_orphaned_junctions(scene: &mut Scene) {
     }
 }
 
-fn move_selection(scene: &mut Scene, delta: Point, turns: &[Turn], about: Option<Point>) {
+fn move_selection(scene: &mut Scene, delta: Point, turns: &[Turn], about: Option<Point>) -> crate::sch_net_collision::NetCollision {
+    // `SCH_MOVE_TOOL::Main`: the monitor is initialised with the selection before anything moves
+    let monitor = crate::sch_net_collision::Monitor::initialize(scene);
     let internal = internal_points(scene);
     remove_orphaned_junctions(scene);
     for it in scene.in_selection() {
@@ -360,10 +366,14 @@ fn move_selection(scene: &mut Scene, delta: Point, turns: &[Turn], about: Option
     for &t in turns {
         turn_selection(scene, t, about, GRID_UM, true);
     }
+    // `netCollisionMonitor->Update( previewJunctions, selection )`, after `performItemMove`
+    let overlay = monitor.update(scene, None);
     scene.finalize(None, &internal);
+    overlay
 }
 
-fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um, turns: &[Turn], about: Option<Point>) {
+fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um, turns: &[Turn], about: Option<Point>) -> crate::sch_net_collision::NetCollision {
+    let monitor = crate::sch_net_collision::Monitor::initialize(scene);
     let mut st = Drag { ortho, grid, ..Default::default() };
     scene.setup_items_for_drag(&mut st);
     let internal = internal_points(scene);
@@ -375,7 +385,9 @@ fn drag_selection(scene: &mut Scene, delta: Point, ortho: bool, grid: Um, turns:
     for &t in turns {
         turn_selection(scene, t, about, GRID_UM, true);
     }
+    let overlay = monitor.update(scene, Some(&st));
     scene.finalize(Some(&st), &internal);
+    overlay
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

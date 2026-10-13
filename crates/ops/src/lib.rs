@@ -1914,6 +1914,8 @@ pub struct Board<'a> {
     /// The intent's own nets, when the caller supplied them (`Board::with_intent_nets`): lets Reorganize give a net its declared
     /// name back. `None` for every board built without them.
     intent_nets: Option<Vec<eda_model::Net>>,
+    /// What the net-collision monitor drew for the last Move or Drag this board applied (`sch_net_collision.rs`): the studio's move preview reads it with the sheet.
+    net_collision: Option<sch_net_collision::NetCollision>,
 }
 
 /// Decoupling pairs `(cap, ic)` that no proximity rule already places --
@@ -1957,7 +1959,12 @@ impl<'a> Board<'a> {
             decoupling.entry(cap.clone()).or_default().insert(ic.clone());
             decoupling.entry(ic).or_default().insert(cap);
         }
-        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None }
+        Board { model, design, snap, spacing, decoupling: Arc::new(decoupling), focus: None, intent_nets: None, net_collision: None }
+    }
+
+    /// The net-collision overlay of the last Move or Drag applied (see `sch_net_collision.rs`); `None` when none was.
+    pub fn net_collision(&self) -> Option<&sch_net_collision::NetCollision> {
+        self.net_collision.as_ref()
     }
 
     pub fn design(&self) -> &Design {
@@ -1995,6 +2002,7 @@ impl<'a> Board<'a> {
             decoupling: Arc::clone(&self.decoupling),
             focus: self.focus.clone(),
             intent_nets: self.intent_nets.clone(),
+            net_collision: None,
         }
     }
 
@@ -5118,6 +5126,7 @@ pub mod sch_edit;
 pub mod sch_move;
 mod sch_pins;
 mod sch_labels;
+pub mod sch_net_collision;
 mod sch_drag;
 mod sch_props;
 mod sch_scene;
@@ -5134,5 +5143,7 @@ mod sch_props_tests;
 mod sch_pins_tests;
 #[cfg(test)]
 mod sch_labels_tests;
+#[cfg(test)]
+mod sch_net_collision_tests;
 #[cfg(test)]
 mod sch_sheet_pin_tests;
