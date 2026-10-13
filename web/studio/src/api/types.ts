@@ -679,7 +679,10 @@ export interface FootprintPropertiesFields {
   attributes: FootprintAttributes;
   reference_visible: boolean;
   value_visible: boolean;
+  /** The first model's path (the one model of an older entry). The 3D Models tab sends the whole list in `models3d`, and this follows its first path. */
   model: string | null;
+  /** The 3D Models tab: the footprint's whole list of models (`PANEL_FP_PROPERTIES_3D_MODEL`). Left out of the JSON when the footprint has none; a key left out of a model is KiCad's default. */
+  models3d?: Model3dCmd[];
   /** The Clearances tab's "Zone connection" (`FOOTPRINT::GetLocalZoneConnection`); absent/`null` is "inherited". */
   zone_connection?: PadConnection | null;
 }

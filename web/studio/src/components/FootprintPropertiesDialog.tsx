@@ -13,7 +13,10 @@
 // Update Footprint... and Change Footprint... (`FP_PROPS_UPDATE_FP`, `FP_PROPS_CHANGE_FP`) close the dialog and open the exchange dialog on this footprint
 // (components/PcbGlobalEditDialogs.tsx, `ShowExchangeFootprintsDialog( aFootprint, updateMode, true )`).
 //
-// Not ported: the footprint's own mask/paste margins, the 3D models and embedded files, jumper pad groups. The Reference and Value texts come from the schematic and the
+// The 3D Models tab (`PANEL_FP_PROPERTIES_3D_MODEL`, components/footprint/FootprintModelsPanel.tsx) edits a copy of the footprint's list of models; OK sends it as one
+// `set_board_models` in the same batch when it differs (kicad-port/fpModels.ts `boardModelsCmds`).
+//
+// Not ported: the footprint's own mask/paste margins, the embedded files and the extruded 3D body, jumper pad groups. The Reference and Value texts come from the schematic and the
 // intent: they are shown, not edited.
 import { useEffect, useMemo, useState } from "react";
 import type { Cmd, FieldInfo, FieldLayoutCmd, FootprintAttrsCmd, PadConnection, Part } from "../api/types";
@@ -24,6 +27,8 @@ import { useActionRunner } from "../actions/useActionRunner";
 import { boardLayerList, layerDisplayName } from "../kicad-port/boardLayers";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { formatLength, umFrom, umTo } from "../state/units";
+import { boardModelsCmds, rowsOf, type ModelRow } from "../kicad-port/fpModels";
+import { FootprintModelsPanel } from "./footprint/FootprintModelsPanel";
 import { AngleOverrideInput, OverrideInput } from "./footprint/PadPropertiesDialog";
 
 /** One row of the grid. `from` is the field it started as (null for a row added here). */
@@ -68,6 +73,9 @@ export function FootprintPropertiesDialog() {
   const [fpZone, setFpZone] = useState<FootprintZoneForm>({ connection: null, clearance: null });
   const [padNum, setPadNum] = useState("");
   const [padZones, setPadZones] = useState<Record<string, PadZoneForm>>({});
+  // The 3D Models tab: a copy of the footprint's list, which OK sends when it differs.
+  const [tab, setTab] = useState<"general" | "models">("general");
+  const [models, setModels] = useState<ModelRow[]>([]);
 
   // Fill the form when the dialog opens on a footprint -- not on every poll, or a keystroke would be lost to the next refresh.
   useEffect(() => {
@@ -86,6 +94,8 @@ export function FootprintPropertiesDialog() {
     setFpZone(footprintZoneForm(part));
     setPadNum(padNumbers(part)[0] ?? "");
     setPadZones({});
+    setModels(rowsOf(part.models));
+    setTab("general");
     setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, part?.ref]);
@@ -145,6 +155,8 @@ export function FootprintPropertiesDialog() {
     if (!same(userFields, before)) edit.fields = userFields;
     if (!same(attrs, attrsOf(part))) edit.attrs = attrs;
     if (edit.reference || edit.value || edit.fields || edit.attrs) cmds.push(edit);
+    // The 3D Models tab: the whole list, when it is not the footprint's own (`m_footprint->Models() = ...` in `TransferDataFromWindow`).
+    cmds.push(...boardModelsCmds(part, models));
 
     // The pose, as the move, rotate, flip and lock tools do it (the footprint's own position and side; the fields follow).
     const at = part.at ?? [0, 0];
@@ -187,6 +199,27 @@ export function FootprintPropertiesDialog() {
           <span>{part.ref}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "74vh", overflowY: "auto" }} data-testid="footprint-properties">
+          <div style={{ display: "flex", gap: 2, borderBottom: "1px solid var(--chrome-border, #444)", marginBottom: 8 }} role="tablist">
+            {(
+              [
+                ["general", "General"],
+                ["models", "3D Models"],
+              ] as const
+            ).map(([id, label]) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => setTab(id)}
+                style={{ borderBottom: tab === id ? "2px solid var(--chrome-accent, #4a90e2)" : "2px solid transparent", fontWeight: tab === id ? 600 : 400, borderRadius: 0 }}
+                data-testid={`footprint-properties-tab-${id}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {tab === "models" && <FootprintModelsPanel rows={models} onRows={setModels} previewOf={{ part: part.ref }} units={units} />}
+          <div style={{ display: tab === "general" ? undefined : "none" }}>
           <div style={{ overflowX: "auto" }}>
             <table style={{ borderCollapse: "collapse", fontSize: 12 }} data-testid="footprint-fields-grid">
               <thead>
@@ -429,14 +462,17 @@ export function FootprintPropertiesDialog() {
               )}
             </div>
           )}
+          </div>
           {error && (
             <p style={{ color: "var(--chrome-danger, #e5534b)", margin: "10px 0 0", fontSize: 12, whiteSpace: "pre-line" }} data-testid="footprint-properties-error">
               {error}
             </p>
           )}
-          <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>
-            The Reference and Value come from the schematic. A footprint&apos;s position lands on the placement grid. Do not populate and exclude from BOM also set the schematic symbol.
-          </p>
+          {tab === "general" && (
+            <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, marginTop: 10 }}>
+              The Reference and Value come from the schematic. A footprint&apos;s position lands on the placement grid. Do not populate and exclude from BOM also set the schematic symbol.
+            </p>
+          )}
         </div>
         <div className="dialog-footer">
           <button onClick={() => dispatch({ type: "SET_MOVE_EXACT_DIALOG_OPEN", open: true })}>Move Exactly...</button>

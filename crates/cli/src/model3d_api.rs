@@ -76,7 +76,7 @@ pub struct Resolved {
 /// KiCad's variable expansion for a model path (`KIwxExpandEnvVars`, `common/common.cpp`): `${NAME}` and `$(NAME)`. A name resolves, in order, to the board's
 /// directory (`KIPRJMOD`), to the process environment, and -- for `KISYS3DMOD` and any `KICAD<n>_3DMODEL_DIR`, however old -- to the model library of the KiCad
 /// that is installed ("replace unmatched older variables with current locations"). Anything else is left as written, and then names no file.
-fn expand(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> String {
+pub(crate) fn expand(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(name.len());
     let mut rest = name;
     while let Some(at) = rest.find('$') {
@@ -140,7 +140,7 @@ fn step_for_missing_wrl(wrl: &Path) -> Option<PathBuf> {
     std::fs::read_dir(wrl.parent()?).ok()?.flatten().map(|e| e.path()).find(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "step" | "stp")) && p.file_name().and_then(|n| n.to_str()).is_some_and(|n| normalized_stem(n) == want))
 }
 
-fn format_of(path: &Path) -> Option<Format> {
+pub(crate) fn format_of(path: &Path) -> Option<Format> {
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "wrl" => Some(Format::Vrml),
         "step" | "stp" => Some(Format::Step),
@@ -464,7 +464,7 @@ pub fn reply(dir: &Path, target: &str, store: &Arc<Store>) -> Reply {
 
 /// Where the board in `dir` may read models from: KiCad's library, its own folder and the folders its path variables name. A name's `${VARIABLE}` is asked of
 /// `names` (the board's variables, KiCad's, the environment), so a variable that gives a library its folder gives the 3D models theirs.
-fn board_roots(dir: &Path, names: &crate::library_tables::ModelNames) -> Roots {
+pub(crate) fn board_roots(dir: &Path, names: &crate::library_tables::ModelNames) -> Roots {
     Roots { models: models_dir(), project: dir.to_path_buf(), extra: names.folders.clone() }
 }
 
