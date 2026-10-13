@@ -39,6 +39,8 @@ import { computeClickModifiers, applySingleClickModifier, isCrossingSelection, a
 import { isMac } from "../platform";
 import { ClickDragGesture, dragRuleFor } from "../kicad-port/dragThreshold";
 import { applyPatch, heldCmd, holdPoint, pickedVertices, previewBody, wirePick } from "../kicad-port/schMove";
+import { paintNetCollision } from "./schematic/netCollisionPainter";
+import { hasNetCollision } from "../kicad-port/schNetCollision";
 import { LINE_MODE_FREE } from "../kicad-port/schLineMode";
 import { postMovePreview } from "../api/client";
 import type { SchMovePatch } from "../api/schEditTypes";
@@ -316,7 +318,10 @@ export function SchematicView() {
       },
       page
     );
+    // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)
+    const collisionOverlay = held && patch ? patch.net_collision : undefined;
     paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display });
+    if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
       // rubber band from the last click to the cursor is two segments (an
@@ -381,7 +386,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
+  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -475,7 +480,7 @@ export function SchematicView() {
     <div
       ref={containerRef}
       className="pcb-canvas-container"
-      style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
+      style={{ cursor: dragRef.current?.kind === "pan" ? "grabbing" : held && hasNetCollision(patch?.net_collision) ? "not-allowed" : moveMode || dragMode || dragRef.current?.kind === "move" ? "move" : "default" }}
       onPointerDown={(e) => {
         if (!sch) return;
         modsRef.current = { ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey };

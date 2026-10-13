@@ -198,6 +198,15 @@ export type SchMoveCmd =
  * sheet it already has. Collections with ids replace the item of that id; `wires`, `junctions`, `no_connects` and `bus_entries` are the
  * whole list, since a drag adds and removes some.
  */
+/**
+ * What the net-collision monitor draws for a held selection (`SCH_DRAG_NET_COLLISION_MONITOR`, crates/ops/src/sch_net_collision.rs): a circle at each place the move would join two
+ * nets, and for each connection it would pull apart a circle at each of the two points and the line between them. Micrometres on the sheet.
+ */
+export interface SchNetCollision {
+  collisions: Array<{ at: [number, number]; radius_um: number }>;
+  disconnections: Array<{ a: [number, number]; b: [number, number]; radius_um: number }>;
+}
+
 export interface SchMovePatch {
   /** `fields`: where the symbol's fields would be (absent from a backend built before fields were items). */
   symbols: Array<{ id: string; unit: number; at: [number, number]; rot: number; mirror: "x" | "y" | null; fields?: SchField[] }>;
@@ -211,4 +220,6 @@ export interface SchMovePatch {
   lines: Array<{ id: string; pts: Array<[number, number]> }>;
   graphics: SchGraphic[];
   sheets: Array<{ id: string; at: [number, number]; size: [number, number]; pins: Array<{ id: string; at: [number, number] }>; fields?: SchField[] }>;
+  /** The overlay of a Move or a Drag (absent from a backend built before it existed, and for a turn or a mirror). */
+  net_collision?: SchNetCollision;
 }
