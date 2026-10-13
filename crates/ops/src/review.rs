@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 
 use eda_model::ir::{Design, DrawingsSection, DrcExclusion, DrcExclusionKey};
+use eda_model::sch_extras::{DEFAULT_CONNECTION_GRID_MILS, MAX_CONNECTION_GRID_MILS, MIN_CONNECTION_GRID_MILS};
 use eda_model::{CheckResult, erc_checks, rules};
 
 type Done = Result<(), Vec<CheckResult>>;
@@ -78,5 +79,16 @@ pub(crate) fn set_erc_severities(design: &mut Design, severities: &BTreeMap<Stri
     }
     let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
     sch.extras.erc_severities = severities.clone();
+    Ok(())
+}
+
+/// `Cmd::SetConnectionGrid`: Schematic Setup > Formatting > Connection grid spacing (`PANEL_SETUP_FORMATTING::TransferDataFromWindow` validates the value
+/// between `MIN_CONNECTION_GRID_MILS` and 10000 mils). KiCad's default, 50 mils, is the absence of a setting.
+pub(crate) fn set_connection_grid(design: &mut Design, mils: u32) -> Done {
+    if !(MIN_CONNECTION_GRID_MILS..=MAX_CONNECTION_GRID_MILS).contains(&mils) {
+        return Err(vec![CheckResult::fail("ops_bad_connection_grid", format!("{mils}"), format!("the connection grid is from {MIN_CONNECTION_GRID_MILS} to {MAX_CONNECTION_GRID_MILS} mils"))]);
+    }
+    let sch = design.schematic.get_or_insert_with(crate::empty_schematic_section);
+    sch.extras.connection_grid_mils = (mils != DEFAULT_CONNECTION_GRID_MILS).then_some(mils);
     Ok(())
 }

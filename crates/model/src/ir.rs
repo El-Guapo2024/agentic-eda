@@ -682,7 +682,7 @@ pub const DEFAULT_ERC_PIN_MAP: [[u8; 12]; 12] = [
 /// derive one from, and the `(check, location)` pair is already a stable,
 /// natural key (unlike those others, there is never more than one
 /// exclusion for the same finding to disambiguate between).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ErcExclusion {
     /// kicad-cli's own ERC check name ("pin_not_connected", ...).
@@ -692,6 +692,18 @@ pub struct ErcExclusion {
     /// excluded (nothing to key on), same limitation `Exclusions` itself
     /// already has.
     pub location: String,
+    /// `SCH_MARKER::GetComment`: why it was waived ("Exclude with comment...", "Edit exclusion comment..."). Empty for none. Written to the
+    /// derived project beside [`marker`](Self::marker), so kicad-cli's report carries it back. Additive.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub comment: String,
+    /// The marker as KiCad keeps an exclusion: `SCH_MARKER::SerializeToString` (`<key>|<x>|<y>|<main uuid>|<aux uuid>|<sheet path>|<main item's
+    /// sheet path>|<aux item's sheet path>`), as the studio worked it out from kicad-cli's report when the finding was waived
+    /// (`eda_kicad::erc_exclusions::marker_text`). `SCHEMATIC::ResolveERCExclusions` matches a marker to its exclusion by this exact text, and
+    /// turns one that matches nothing into an excluded marker of its own, so the derived project lists it only when it is known to the letter.
+    /// Empty: the exclusion is the studio's alone (its marker sits somewhere kicad-cli's report cannot tell, or its check is not one the
+    /// text is known for). Additive.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub marker: String,
 }
 
 /// A waived DRC violation: `BOARD_DESIGN_SETTINGS::m_DrcExclusions` with its `m_DrcExclusionComments`

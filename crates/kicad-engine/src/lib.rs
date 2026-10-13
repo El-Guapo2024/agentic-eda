@@ -19,7 +19,7 @@
 pub mod footprint_check;
 
 use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
-use eda_model::ir::{Design, DrcExclusion};
+use eda_model::ir::{Design, DrcExclusion, ErcExclusion};
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -425,6 +425,11 @@ pub struct Violation {
     /// Where the violation's marker may sit, in nanometres: the positions worth writing an exclusion for ([`marker_candidates`]).
     /// kicad-cli's report does not give the marker's position, only its items'.
     pub markers_nm: Vec<(i64, i64)>,
+    /// An ERC violation's sheet: the path (`ERC_SHEET::uuid_path`) of the sheet kicad-cli's report lists it under. Empty for a DRC one.
+    pub sheet: String,
+    /// An ERC violation's marker as KiCad keeps an exclusion, `SCH_MARKER::SerializeToString`, when the report says enough to write it to the letter
+    /// ([`eda_kicad::erc_exclusions::marker_text`]); empty when it does not. Empty for a DRC violation.
+    pub marker: String,
 }
 
 impl Violation {
@@ -456,7 +461,32 @@ impl Violation {
             excluded: v["excluded"].as_bool().unwrap_or(false),
             comment: v["comment"].as_str().unwrap_or("").to_string(),
             markers_nm: marker_candidates(&at_nm),
+            sheet: String::new(),
+            marker: String::new(),
         }
+    }
+
+    /// The items of an ERC violation as `SCH_MARKER::SerializeToString` wants them: uuid, position in schematic units (100 nm) and name. kicad-cli's
+    /// ERC report prints these positions with the board's scale (`ERC_REPORT::WriteJsonReport` builds its `UNITS_PROVIDER` on `pcbIUScale`), so a position
+    /// of 1.1557 "mm" is 1155700 schematic units. Nothing when the report is not in millimetres.
+    fn marker_items(v: &Value, units_mm: bool) -> Vec<eda_kicad::erc_exclusions::MarkerItem> {
+        if !units_mm {
+            return Vec::new();
+        }
+        let iu = |x: f64| (x * 1_000_000.0).round() as i64;
+        v["items"]
+            .as_array()
+            .map(|is| {
+                is.iter()
+                    .map(|it| eda_kicad::erc_exclusions::MarkerItem {
+                        uuid: it["uuid"].as_str().unwrap_or("").to_string(),
+                        x: iu(it["pos"]["x"].as_f64().unwrap_or(0.0)),
+                        y: iu(it["pos"]["y"].as_f64().unwrap_or(0.0)),
+                        description: it["description"].as_str().unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The studio's DRC shape: `type`, `description`, `severity`, `items`
@@ -754,31 +784,70 @@ pub struct ErcReport {
 }
 
 impl ErcReport {
+    /// The violations the studio lists: kicad-cli's, without the markers its own exclusions made that are not violations. KiCad turns an exclusion
+    /// that matches no marker into an excluded marker of its own (`SCHEMATIC::ResolveERCExclusions`), so the report can hold an excluded entry
+    /// that no check found: one of an item that is gone (no items), a copy of a violation whose own marker the exclusion did not match (the same
+    /// items, and the real one listed beside it, not excluded), or a second marker for one. What is left of those is the one stale marker KiCad
+    /// would show -- an exclusion whose violation is gone -- and a check set to Ignore has none.
+    fn listed(&self) -> Vec<&Violation> {
+        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>());
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for v in &self.violations {
+            if v.excluded {
+                let k = key(v);
+                let ignored = self.ignored_checks.iter().any(|c| c.key == v.kind);
+                let copy = self.violations.iter().any(|w| !w.excluded && key(w) == k);
+                if v.items.is_empty() || ignored || copy || !seen.insert(k) {
+                    continue;
+                }
+            }
+            out.push(v);
+        }
+        out
+    }
+
     /// The studio's ERC shape: `check`, `severity`, `location` (the first
-    /// item's id), `hint`, plus the full `items` list. A finding whose
-    /// `(check, location)` is in `exclusions` reports as `"excluded"`: still
-    /// listed, no longer an error or a warning.
-    pub fn to_json(&self, exclusions: &[(String, String)]) -> Value {
+    /// item's id), `hint`, plus the full `items` list. A finding that kicad-cli
+    /// reports as excluded -- the project lists its marker (`erc.erc_exclusions`) -- or whose
+    /// `(check, location)` is in `exclusions` reports as `"excluded"`: still listed, no longer an
+    /// error or a warning, with the exclusion's `comment`; `kicad_matched` says whether kicad-cli
+    /// itself matched it. `marker` is the text its exclusion would go into the project as, when the
+    /// report says enough to write it (`eda_kicad::erc_exclusions`), and `sheet` the sheet the
+    /// report lists it under.
+    pub fn to_json(&self, exclusions: &[ErcExclusion]) -> Value {
         let mut counts = BTreeMap::<String, usize>::new();
         let violations: Vec<Value> = self
-            .violations
-            .iter()
+            .listed()
+            .into_iter()
             .map(|v| {
                 let location = v.items.iter().find_map(|i| i.id.clone()).unwrap_or_default();
-                let excluded = !location.is_empty() && exclusions.iter().any(|(c, l)| *c == v.kind && *l == location);
+                let studio = if location.is_empty() { None } else { exclusions.iter().find(|e| e.check == v.kind && e.location == location) };
+                let by_kicad = v.excluded || v.severity == "exclusion";
+                let excluded = by_kicad || studio.is_some();
                 if !excluded {
                     *counts.entry(v.kind.clone()).or_default() += 1;
                 }
+                let comment = studio.map(|e| e.comment.as_str()).unwrap_or(v.comment.as_str());
                 let item_desc: Vec<&str> = v.items.iter().map(|i| i.description.as_str()).filter(|d| !d.is_empty()).collect();
-                json!({
+                let mut j = json!({
                     "check": v.kind,
-                    "severity": if excluded || v.excluded || v.severity == "exclusion" { "excluded" } else { v.severity.as_str() },
+                    "severity": if excluded { "excluded" } else { v.severity.as_str() },
                     // What the finding is when it is not excluded: the report folds the two together, and un-excluding must give the severity back.
                     "base_severity": if v.severity == "warning" { "warning" } else { "error" },
                     "location": location,
                     "hint": format!("{}{}{}", v.description, if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
                     "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
-                })
+                    "comment": if excluded { comment } else { "" },
+                    "kicad_matched": by_kicad,
+                });
+                if !v.marker.is_empty() {
+                    j["marker"] = json!(v.marker);
+                }
+                if !v.sheet.is_empty() {
+                    j["sheet"] = json!(v.sheet);
+                }
+                j
             })
             .collect();
         json!({ "engine": self.engine, "violations": violations, "counts": counts, "ignored_checks": self.ignored_checks.iter().map(IgnoredCheck::to_json).collect::<Vec<_>>() })
@@ -794,10 +863,15 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     cmd.args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(&sch);
     let raw = run_report(cmd, &report, "erc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
+    let sheet_count = raw["sheets"].as_array().map_or(0, Vec::len);
     let mut violations = Vec::new();
     for sheet in raw["sheets"].as_array().into_iter().flatten() {
+        let path = sheet["uuid_path"].as_str().unwrap_or("");
         for v in sheet["violations"].as_array().into_iter().flatten() {
-            violations.push(Violation::from_json(v, &map, units_mm));
+            let mut violation = Violation::from_json(v, &map, units_mm);
+            violation.sheet = path.to_string();
+            violation.marker = eda_kicad::erc_exclusions::marker_text(&violation.kind, &Violation::marker_items(v, units_mm), path, sheet_count).unwrap_or_default();
+            violations.push(violation);
         }
     }
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
@@ -1424,13 +1498,72 @@ mod tests {
             ],
             ignored_checks: vec![],
         };
-        let j = rep.to_json(&[("pin_not_connected".into(), "U1.2".into())]);
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.2".into(), comment: "unused".into(), ..Default::default() }]);
         assert_eq!(j["violations"][0]["severity"], "error");
         assert_eq!(j["violations"][1]["severity"], "excluded");
         assert_eq!(j["counts"]["pin_not_connected"], 1);
         assert_eq!(j["violations"][0]["location"], "U1.1");
         assert_eq!(j["violations"][1]["base_severity"], "error", "an excluded finding says what it is when it is not");
         assert_eq!(j["violations"][0]["hint"], "Pin not connected: Pin 1");
+        assert_eq!(j["violations"][1]["comment"], "unused", "the exclusion's comment comes with it");
+        assert_eq!(j["violations"][1]["kicad_matched"], false, "the studio's own exclusion: kicad-cli's project did not hold it");
+        assert_eq!(j["violations"][0]["comment"], "");
+    }
+
+    /// kicad-cli's own ERC report items for the tests below.
+    fn erc_item(desc: &str, id: Option<&str>, uuid: &str) -> Item {
+        Item { description: desc.into(), pos: (0, 0), id: id.map(str::to_string), uuid: uuid.into() }
+    }
+
+    fn erc_violation(kind: &str, items: Vec<Item>, excluded: bool) -> Violation {
+        Violation { kind: kind.into(), description: "x".into(), severity: "error".into(), items, excluded, comment: if excluded { "from kicad".into() } else { String::new() }, ..Default::default() }
+    }
+
+    #[test]
+    fn a_finding_kicad_cli_matched_is_excluded_with_its_comment_and_counted_by_nobody() {
+        let a = erc_item("Pin 1", Some("U1.1"), "u-a");
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![erc_violation("pin_not_connected", vec![a.clone()], true), erc_violation("pin_not_connected", vec![erc_item("Pin 2", Some("U1.2"), "u-b")], false)], ignored_checks: vec![] };
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.1".into(), comment: "reviewed".into(), marker: "pin_not_connected|1|2|u-a|n|/r|/r|".into() }]);
+        assert_eq!(j["violations"][0]["severity"], "excluded");
+        assert_eq!(j["violations"][0]["kicad_matched"], true, "kicad-cli itself matched the marker text");
+        assert_eq!(j["violations"][0]["comment"], "reviewed", "the studio's comment is the exclusion's");
+        assert_eq!(j["counts"]["pin_not_connected"], 1, "only the other one counts");
+        // A finding kicad-cli excluded with no exclusion of the studio's behind it (a foreign project) keeps kicad-cli's comment.
+        let j = rep.to_json(&[]);
+        assert_eq!((j["violations"][0]["severity"].as_str(), j["violations"][0]["comment"].as_str()), (Some("excluded"), Some("from kicad")));
+    }
+
+    /// `SCHEMATIC::ResolveERCExclusions` makes an excluded marker of a text that matched nothing, and kicad-cli's report lists it: it is no violation.
+    #[test]
+    fn the_markers_an_unmatched_exclusion_made_are_not_findings() {
+        let real = erc_violation("footprint_link_issues", vec![erc_item("Symbol C1", Some("C1"), "u-c1")], false);
+        let copy = erc_violation("footprint_link_issues", vec![erc_item("Symbol C1", Some("C1"), "u-c1")], true);
+        let gone = erc_violation("pin_not_connected", vec![], true);
+        let stale = erc_violation("wire_dangling", vec![erc_item("Wire", Some("w9"), "u-w")], true);
+        let stale_twice = erc_violation("wire_dangling", vec![erc_item("Wire", Some("w9"), "u-w")], true);
+        let ignored = erc_violation("simulation_model_issue", vec![erc_item("Symbol R1", Some("R1"), "u-r1")], true);
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![real, copy, gone, stale, stale_twice, ignored], ignored_checks: vec![IgnoredCheck { key: "simulation_model_issue".into(), description: "x".into() }] };
+        let j = rep.to_json(&[ErcExclusion { check: "footprint_link_issues".into(), location: "C1".into(), ..Default::default() }]);
+        let listed: Vec<(&str, &str)> = j["violations"].as_array().unwrap().iter().map(|v| (v["check"].as_str().unwrap(), v["severity"].as_str().unwrap())).collect();
+        assert_eq!(listed, vec![("footprint_link_issues", "excluded"), ("wire_dangling", "excluded")], "the real finding (waived by the studio), and the one stale marker of an exclusion whose violation is gone");
+        assert_eq!(j["counts"].as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn an_erc_entry_offers_the_text_of_the_marker_its_exclusion_would_be_and_the_sheet_it_is_under() {
+        // The report's positions are in the board's scale (1/100 of a schematic unit's millimetre): 1.1557 "mm" is schematic unit 1155700.
+        let v = json!({ "type": "pin_not_connected", "description": "Pin not connected", "severity": "error",
+            "items": [{ "description": "Symbol #PWR03 Pin 1 [Power input, Line]", "pos": { "x": 1.1557, "y": 1.1049 }, "uuid": "693a38f5-591c-4c06-9786-e8973d13af99" }] });
+        let items = Violation::marker_items(&v, true);
+        assert_eq!((items[0].x, items[0].y), (1_155_700, 1_104_900));
+        assert!(Violation::marker_items(&v, false).is_empty(), "inches: not known");
+        let mut violation = Violation::from_json(&v, &HashMap::new(), true);
+        violation.sheet = "/r".into();
+        violation.marker = eda_kicad::erc_exclusions::marker_text("pin_not_connected", &items, "/r", 1).unwrap();
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![violation], ignored_checks: vec![] };
+        let j = rep.to_json(&[]);
+        assert_eq!(j["violations"][0]["marker"], "pin_not_connected|1155700|1104900|693a38f5-591c-4c06-9786-e8973d13af99|00000000-0000-0000-0000-000000000000|/r|/r|");
+        assert_eq!(j["violations"][0]["sheet"], "/r");
     }
 
     #[test]

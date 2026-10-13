@@ -794,6 +794,8 @@ pub fn effective_erc_severities(design: &Design) -> BTreeMap<String, String> {
 ///
 /// - `erc`: the design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix the user set up and not only by KiCad's
 ///   default, and the per-check severities ([`effective_erc_severities`]);
+/// - `schematic.connection_grid_size`: Schematic Setup's connection grid, in mils, when it is not KiCad's default;
+/// - `erc.erc_exclusions`: the ERC findings the user waived, whose marker text is known ([`crate::erc_exclusions`]), with their comments;
 /// - `board.design_settings.drc_exclusions`: the violations the user waived ([`crate::drc_exclusions`]), so kicad-cli reports each as
 ///   excluded and leaves it out of a report that does not ask for exclusions.
 pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String {
@@ -801,6 +803,14 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
     if let Some(m) = custom_erc_pin_map(design) {
         erc["pin_map"] = serde_json::json!(m);
+    }
+    // Schematic Setup > Formatting: the connection grid ERC's `endpoint_off_grid` judges by (`schematic.connection_grid_size`, in mils).
+    if let Some(mils) = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils) {
+        project["schematic"]["connection_grid_size"] = serde_json::json!(f64::from(mils));
+    }
+    let waived_erc = crate::erc_exclusions::project_entries(design.schematic.as_ref().map_or(&[][..], |s| s.erc_exclusions.as_slice()));
+    if !waived_erc.is_empty() {
+        erc["erc_exclusions"] = serde_json::Value::Array(waived_erc);
     }
     project["erc"] = erc;
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
@@ -1412,7 +1422,12 @@ mod tests {
             ..Default::default()
         });
         design.schematic = Some(eda_model::ir::SchematicSection {
-            symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None,
+            symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![],
+            erc_exclusions: vec![
+                eda_model::ir::ErcExclusion { check: "footprint_link_issues".into(), location: "R1".into(), comment: "bare footprint on purpose".into(), marker: "footprint_link_issues|1130300|1003300|a4f97020-e09b-4e24-b611-b376f3c27df7|00000000-0000-0000-0000-000000000000|||".into() },
+                eda_model::ir::ErcExclusion { check: "wire_dangling".into(), location: "W1".into(), ..Default::default() },
+            ],
+            erc_pin_map: None,
             user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![],
             extras: eda_model::sch_extras::SchExtras { erc_severities: [("pin_not_connected".to_string(), "warning".to_string()), ("lib_symbol_mismatch".to_string(), "warning".to_string())].into(), ..Default::default() },
             imported_from_kicad: false,
@@ -1423,10 +1438,32 @@ mod tests {
         assert_eq!(entries.len(), 1, "an exclusion with no position to try is the studio's alone: {entries:?}");
         assert_eq!(entries[0][0], "annular_width|12459000|18390000|via-uuid|00000000-0000-0000-0000-000000000000");
         assert_eq!(entries[0][1], "tight on purpose");
+        assert!(json["schematic"]["connection_grid_size"].is_null(), "KiCad's default grid is not written");
+        let waived = json["erc"]["erc_exclusions"].as_array().expect("a list");
+        assert_eq!(waived.len(), 1, "an ERC exclusion whose marker text is not known is the studio's alone: {waived:?}");
+        assert_eq!(waived[0][0], "footprint_link_issues|1130300|1003300|a4f97020-e09b-4e24-b611-b376f3c27df7|00000000-0000-0000-0000-000000000000|||");
+        assert_eq!(waived[0][1], "bare footprint on purpose");
         assert_eq!(json["erc"]["rule_severities"]["pin_not_connected"], "warning", "the schematic's own choice");
         assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "warning", "and it can undo the embedded-library default");
         assert_eq!(json["erc"]["rule_severities"]["lib_symbol_issues"], "ignore");
         assert!(json["board"]["design_settings"]["rules"]["min_clearance"].is_number(), "the board half is untouched");
+    }
+
+    #[test]
+    fn the_project_carries_the_connection_grid_the_schematic_setup_chose() {
+        let (mut design, model) = fixture();
+        let mut sch = eda_model::ir::SchematicSection {
+            symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![], erc_exclusions: vec![], erc_pin_map: None,
+            user_fields: Default::default(), title_block: None, sheets: vec![], instance_overrides: vec![], junctions: vec![], lines: vec![], extras: Default::default(), imported_from_kicad: false,
+            field_layout: Default::default(),
+        };
+        design.schematic = Some(sch.clone());
+        let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+        assert!(plain["schematic"].is_null(), "nothing chosen: KiCad's own 50 mils applies and the project says nothing");
+        sch.extras.connection_grid_mils = Some(25);
+        design.schematic = Some(sch);
+        let json: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).unwrap();
+        assert_eq!(json["schematic"]["connection_grid_size"], 25.0, "in mils, as `connection_grid_size` is in the project file");
     }
 
     #[test]

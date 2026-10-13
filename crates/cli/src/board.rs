@@ -60,6 +60,9 @@ mod fp_library_tests;
 #[cfg(test)]
 #[path = "fp_models_tests.rs"]
 mod fp_models_tests;
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod review_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -1323,8 +1326,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
-        Cmd::AddErcExclusion { check, location } => format!("schematic erc-exclude {check:?} {location:?}"),
+        Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
+        Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
+        Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
         Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -1574,7 +1579,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::PasteSch { .. } => "schematic-paste",
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
-        Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } => "schematic-erc-exclusion",
+        Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
+        Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
@@ -3667,14 +3673,14 @@ mod tests {
         setup_schematic(&dir);
 
         assert!(
-            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into() }, false, "test").is_err(),
+            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into(), comment: String::new(), marker: String::new() }, false, "test").is_err(),
             "a blank location is refused -- nothing to key an exclusion on"
         );
 
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }, false, "test").unwrap();
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), comment: String::new(), marker: String::new() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: String::new() }, false, "test").unwrap();
         // Adding the same one again is a harmless no-op, not a duplicate.
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: String::new() }, false, "test").unwrap();
 
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
@@ -3682,8 +3688,8 @@ mod tests {
         assert_eq!(
             exclusions,
             &vec![
-                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() },
-                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() },
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), ..Default::default() },
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), ..Default::default() },
             ],
             "sorted by (check, location), not insertion order"
         );
@@ -3695,7 +3701,7 @@ mod tests {
         step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
-        assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }]);
+        assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), ..Default::default() }]);
     }
 
     /// A DRC exclusion from the report's own violation: what the studio sends when the user excludes it.

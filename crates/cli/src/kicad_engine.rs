@@ -55,10 +55,12 @@ pub fn drc_with(dir: &Path, refill_zones: bool, schematic_parity: bool) -> Resul
 /// `kicad-cli sch erc` on the current schematic, in the studio's ERC shape
 /// (`check`, `severity`, `location` = the first item's id, `hint`) plus the
 /// full mapped `items` list. A finding the schematic's own exclusion list
-/// accepts reports as `excluded`.
+/// accepts reports as `excluded`, with its comment; the ones whose marker text
+/// is known are in the derived project (`erc.erc_exclusions`), so kicad-cli
+/// matches them itself (`ErcViolation::kicad_matched`).
 pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (design, model) = load_with_schematic(dir)?;
-    let exclusions: Vec<(String, String)> = design.schematic.as_ref().map(|s| s.erc_exclusions.iter().map(|e| (e.check.clone(), e.location.clone())).collect()).unwrap_or_default();
+    let exclusions = design.schematic.as_ref().map(|s| s.erc_exclusions.clone()).unwrap_or_default();
     Ok(eda_kicad_engine::erc(&design, &model, &work(dir))?.to_json(&exclusions))
 }
 
