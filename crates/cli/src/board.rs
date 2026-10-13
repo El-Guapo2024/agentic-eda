@@ -1146,6 +1146,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetCustomRules { .. } => "board-setup custom-rules".to_string(),
         Cmd::SetTextVariables { variables } => format!("board-setup text-variables ({} variables)", variables.len()),
         Cmd::SetBoardLayers { settings } => format!("board-setup layers ({} enabled)", settings.enabled.len()),
+        Cmd::SetFormatting { .. } => "board-setup formatting".to_string(),
+        Cmd::SetZoneHatchOffsets { offsets } => format!("board-setup zone-hatch-offsets ({} layers)", offsets.len()),
+        Cmd::SetTuningPatterns { .. } => "board-setup tuning-patterns".to_string(),
+        Cmd::SetTuningProfiles { settings } => format!("board-setup tuning-profiles ({} profiles)", settings.profiles.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
@@ -1422,6 +1426,10 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetCustomRules { .. } => "custom-rules",
         Cmd::SetTextVariables { .. } => "text-variables",
         Cmd::SetBoardLayers { .. } => "board-layers",
+        Cmd::SetFormatting { .. } => "formatting",
+        Cmd::SetZoneHatchOffsets { .. } => "zone-hatch-offsets",
+        Cmd::SetTuningPatterns { .. } => "tuning-patterns",
+        Cmd::SetTuningProfiles { .. } => "tuning-profiles",
         Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
@@ -2247,6 +2255,147 @@ mod tests {
         assert_eq!(entry("User.3").1, "back");
         assert_eq!(entry("F.SilkS").2.as_deref(), Some("Top art"));
         assert!(entries.iter().any(|e| e.0 == "Dwgs.User") && entries.iter().any(|e| e.0 == "Margin"), "the standard technical layers are all there");
+    }
+
+    fn a_tuning_profile(name: &str) -> eda_model::setup_pages::TuningProfile {
+        use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile};
+        TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("B.Cu".into()), width_um: 130, diff_pair_gap_um: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+    }
+
+    /// Formatting, Zone Hatch Offsets, Length-tuning Patterns and Tuning Profiles: each a page of one undo step, in the state the studio reads, and in the derived board file and project
+    /// kicad-cli reads (`pcbplotparams`, `zone_defaults`, `defaults.apply_defaults_to_fp_*`, `tuning_pattern_settings`, `tuning_profiles`, and the net classes in the project when one names a profile).
+    #[test]
+    fn the_smaller_setup_pages_are_one_undo_step_each_and_reach_the_state_the_board_file_and_the_project() {
+        use eda_model::setup_pages::{CornerStyle, FormattingSettings, HatchOffset, TuningPatterns, TuningProfiles};
+        let dir = scratch("setup_pages_undo");
+        setup(&dir);
+        let job: std::sync::Arc<std::sync::Mutex<String>> = Default::default();
+        let clock = crate::text_vars_json::clock_of("/api/state");
+        let rules = |dir: &Path| crate::studio::state(dir, &job, clock.clone()).unwrap()["board_rules"].clone();
+        let files = |dir: &Path| {
+            let (_, design, model) = load(dir).unwrap();
+            (eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap(), serde_json::from_str::<serde_json::Value>(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap())
+        };
+        let before = rules(&dir);
+        assert_eq!((before["formatting"]["dash_length_ratio"].as_f64(), before["tuning_patterns"]["diff_pair"]["spacing_um"].as_i64(), before["zone_hatch_offsets"].as_object().map(|o| o.len()), before["tuning_profiles"]["profiles"].as_array().map(|a| a.len())), (Some(12.0), Some(1_000), Some(0), Some(0)));
+
+        let formatting = FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.0, apply_to_fp_fields: true, ..Default::default() };
+        step(&dir, Cmd::SetFormatting { settings: formatting.clone() }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), HatchOffset { x_um: 1_500, y_um: -2_000 })].into() }, false, "ui").unwrap();
+        let mut patterns = TuningPatterns::default();
+        patterns.diff_pair.corner_style = CornerStyle::Chamfer;
+        patterns.single_track.max_amplitude_um = 1_500;
+        step(&dir, Cmd::SetTuningPatterns { settings: patterns.clone() }, false, "ui").unwrap();
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "ui").unwrap();
+        let profiles = TuningProfiles { profiles: vec![a_tuning_profile("USB 90")], class_profiles: [("power".to_string(), "USB 90".to_string())].into() };
+        step(&dir, Cmd::SetTuningProfiles { settings: profiles.clone() }, false, "ui").unwrap();
+
+        let after = rules(&dir);
+        assert_eq!(after["formatting"], serde_json::to_value(&formatting).unwrap());
+        assert_eq!(after["zone_hatch_offsets"], serde_json::json!({ "F.Cu": { "x_um": 1_500, "y_um": -2_000 } }));
+        assert_eq!(after["tuning_patterns"], serde_json::to_value(&patterns).unwrap());
+        assert_eq!(after["tuning_profiles"]["class_profiles"], serde_json::json!({ "power": "USB 90" }));
+        for page in ["formatting", "zone_hatch_offsets", "tuning_patterns", "tuning_profiles"] {
+            assert!(after["overlay"].as_array().unwrap().iter().any(|o| o == page), "{page} is marked as set");
+        }
+        let (pcb, pro) = files(&dir);
+        assert!(pcb.contains("(dashed_line_dash_ratio 8.000000)") && pcb.contains("(dashed_line_gap_ratio 2.000000)"));
+        assert!(pcb.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))))"));
+        assert!(!pcb.contains("(net_class "), "the net classes are the project's when one names a profile");
+        let ds = &pro["board"]["design_settings"];
+        assert_eq!(ds["defaults"]["apply_defaults_to_fp_fields"], true);
+        assert_eq!(ds["tuning_pattern_settings"]["diff_pair_defaults"]["corner_style"], 0);
+        assert_eq!(ds["tuning_pattern_settings"]["single_track_defaults"]["max_amplitude"], 1.5);
+        assert_eq!(pro["tuning_profiles"]["tuning_profiles_impedance_geometric"][0]["profile_name"], "USB 90");
+        let classes = pro["net_settings"]["classes"].as_array().unwrap();
+        assert!(classes.iter().any(|c| c["name"] == "power" && c["tuning_profile"] == "USB 90" && c["track_width"] == 0.25), "{classes:?}");
+        assert_eq!(pro["net_settings"]["netclass_patterns"], serde_json::json!([{ "netclass": "power", "pattern": "VCC" }]));
+
+        // A bad page is refused with the setting's name and stores nothing.
+        let mut bad = patterns.clone();
+        bad.diff_pair_skew.corner_radius_percentage = 120;
+        assert!(format!("{:?}", step(&dir, Cmd::SetTuningPatterns { settings: bad }, false, "ui").unwrap_err()).contains("diff_pair_skew.corner_radius_percentage"));
+        assert!(format!("{:?}", step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![a_tuning_profile("")], ..Default::default() } }, false, "ui").unwrap_err()).contains("profile 1"));
+        assert_eq!(rules(&dir)["tuning_patterns"], serde_json::to_value(&patterns).unwrap());
+
+        // Each Undo takes one page back: the profiles (and the board file's own net classes with them), the net classes, the patterns, the offsets, the formatting.
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert!(rules(&dir)["tuning_profiles"]["class_profiles"].is_null() && files(&dir).0.contains("(net_class \"power\""), "no class names a profile, so the board file has the classes again");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(rules(&dir)["tuning_patterns"], before["tuning_patterns"]);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(rules(&dir)["zone_hatch_offsets"], before["zone_hatch_offsets"]);
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        let back = rules(&dir);
+        assert_eq!((&back["formatting"], &back["overlay"]), (&before["formatting"], &before["overlay"]));
+        let (pcb, pro) = files(&dir);
+        assert!(pcb.contains("(dashed_line_dash_ratio 12.000000)") && !pcb.contains("zone_defaults") && pro.get("tuning_profiles").is_none() && pro.get("net_settings").is_none());
+    }
+
+    /// kicad-cli reads the dash ratios of the derived board and loads it with its hatch offsets: its own rewrite of the file (`pcb upgrade`) keeps the ratios (slow tier).
+    #[test]
+    fn kicad_cli_keeps_the_dash_ratios_of_the_board_and_loads_it_with_its_hatch_offsets() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        let Some(cli) = eda_kicad_engine::find_cli() else {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        };
+        let dir = scratch("setup_pages_cli_board");
+        setup(&dir);
+        step(&dir, Cmd::SetFormatting { settings: eda_model::setup_pages::FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.5, ..Default::default() } }, false, "ui").unwrap();
+        step(&dir, Cmd::SetZoneHatchOffsets { offsets: [("F.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_um: 1_500, y_um: -2_000 }), ("B.Cu".to_string(), eda_model::setup_pages::HatchOffset { x_um: 0, y_um: 700 })].into() }, false, "ui").unwrap();
+        let (_, design, model) = load(&dir).unwrap();
+        let copy = dir.join("upgraded.kicad_pcb");
+        std::fs::write(&copy, eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap()).unwrap();
+        let out = std::process::Command::new(&cli).args(["pcb", "upgrade", "--force"]).arg(&copy).output().expect("kicad-cli runs");
+        assert!(out.status.success(), "pcb upgrade: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let text = std::fs::read_to_string(&copy).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
+        let number_after = |key: &str| -> f64 { let i = text.find(key).unwrap_or_else(|| panic!("{key} in the file kicad-cli wrote")); text[i + key.len()..].trim_start().split(|c: char| c == ')' || c.is_whitespace()).next().unwrap().parse().unwrap() };
+        assert_eq!((number_after("(dashed_line_dash_ratio"), number_after("(dashed_line_gap_ratio")), (8.0, 2.5), "kicad-cli read the ratios");
+        // The offsets: kicad-cli parses `(zone_defaults (property (layer ..) (hatch_position (xy ..))))` without complaint, but at the KiCad snapshot this studio follows the parser
+        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what the filler reads, and the
+        // file writer is the only thing that fills those). The studio's filler applies them (`eda_zone_filler::hatch`), and the derived file has KiCad's own text for them.
+        let (_, design, model) = load(&dir).unwrap();
+        let derived = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(derived.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))) (property (layer \"B.Cu\") (hatch_position (xy 0 0.7))))"), "{derived}");
+    }
+
+    /// kicad-cli's DRC reports `missing_tuning_profile` for a net class that names a profile the project does not have, and stops when the profile is defined (slow tier).
+    #[test]
+    fn kicad_cli_reports_a_net_class_that_names_a_tuning_profile_the_project_does_not_have() {
+        use eda_model::setup_pages::TuningProfiles;
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
+        let dir = scratch("setup_pages_cli_profiles");
+        setup(&dir);
+        let count = |dir: &Path| drc_counts(dir).get("missing_tuning_profile").copied().unwrap_or(0);
+        assert_eq!(count(&dir), 0);
+        let power = eda_model::NetClass { name: "power".into(), nets: vec!["VCC".into()], track_width: Some(250), clearance: None, via_diameter: None, via_drill: None, microvia_diameter: None, microvia_drill: None, diff_pair_width: None, diff_pair_gap: None, diff_pair_via_gap: None, priority: 0 };
+        let defaults = eda_model::rules::net_class_settings_of(&load(&dir).unwrap().2.board);
+        step(&dir, Cmd::SetNetClasses { settings: eda_model::rules::NetClassSettings { classes: vec![power], ..defaults } }, false, "ui").unwrap();
+        assert_eq!(count(&dir), 0, "a class that names no profile is fine");
+
+        step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![], class_profiles: [("power".to_string(), "USB 90".to_string())].into() } }, false, "ui").unwrap();
+        assert_eq!(count(&dir), 1, "the class names a profile the project does not have");
+        step(&dir, Cmd::SetTuningProfiles { settings: TuningProfiles { profiles: vec![a_tuning_profile("USB 90")], class_profiles: [("power".to_string(), "USB 90".to_string())].into() } }, false, "ui").unwrap();
+        assert_eq!(count(&dir), 0, "the profile is defined");
+        // The classes moved into the project did not change what kicad-cli judges the board by: the class's own 250 um track width is read from the project.
+        let report = crate::kicad_engine::drc_with(&dir, false, false).unwrap();
+        assert!(report["counts"].get("clearance").is_none() || report["counts"]["clearance"] == 0, "{report}");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(count(&dir), 1, "Undo takes the profile back");
     }
 
     /// `eda board shape add` and `text add` without a width or a size take what Text & Graphics > Defaults gives the layer's class, and follow the page.

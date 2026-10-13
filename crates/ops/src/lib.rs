@@ -531,6 +531,14 @@ pub enum Cmd {
     /// names the user gave its layers and their types. The whole page; refused with the layer's name when a name or type is out of the panel's rules or
     /// a layer is turned off while items are on it.
     SetBoardLayers { settings: eda_model::layers::LayerSetup },
+    /// Text & Graphics > Formatting (`panel_setup_formatting.cpp`): the dash and gap ratios of dashed lines and the "apply board defaults to footprint .." boxes.
+    SetFormatting { settings: eda_model::setup_pages::FormattingSettings },
+    /// Board Stackup > Zone Hatch Offsets (`panel_setup_zone_hatch_offsets.cpp`): the whole page, copper layer -> the offset of a hatched zone's pattern (a layer left out has none).
+    SetZoneHatchOffsets { offsets: eda_model::setup_pages::HatchOffsets },
+    /// Design Rules > Length-tuning Patterns (`panel_setup_tuning_patterns.cpp`): what a tuning pattern of each kind starts from.
+    SetTuningPatterns { settings: eda_model::setup_pages::TuningPatterns },
+    /// Design Rules > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the profiles and the profile each net class names.
+    SetTuningProfiles { settings: eda_model::setup_pages::TuningProfiles },
     /// Text Variables (`panel_text_variables.cpp`): the project's variables, name -> value, the whole set. `${NAME}` in a text, a field or the title
     /// block shows the value, and the derived `.kicad_pro` carries them (`text_variables`) so kicad-cli's plots show the same.
     SetTextVariables { variables: BTreeMap<String, String> },
@@ -1755,6 +1763,10 @@ impl Cmd {
             Cmd::SetCustomRules { .. } => vec!["custom_rules"],
             Cmd::SetTextVariables { .. } => vec!["text_variables"],
             Cmd::SetBoardLayers { .. } => vec!["board_layers"],
+            Cmd::SetFormatting { .. } => vec!["formatting"],
+            Cmd::SetZoneHatchOffsets { .. } => vec!["zone_hatch_offsets"],
+            Cmd::SetTuningPatterns { .. } => vec!["tuning_patterns"],
+            Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
@@ -2193,6 +2205,10 @@ impl<'a> Board<'a> {
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
+            Cmd::SetFormatting { settings } => board_setup::set_formatting(&mut self.design, settings),
+            Cmd::SetZoneHatchOffsets { offsets } => board_setup::set_zone_hatch_offsets(&mut self.design, self.model, offsets),
+            Cmd::SetTuningPatterns { settings } => board_setup::set_tuning_patterns(&mut self.design, settings),
+            Cmd::SetTuningProfiles { settings } => board_setup::set_tuning_profiles(&mut self.design, self.model, settings),
             Cmd::SwapLayers { mapping } => self.swap_layers(mapping),
             Cmd::SetLocked { ids, locked } => self.set_locked(ids, *locked),
             Cmd::SwapChain { parts } => self.swap_chain(parts),

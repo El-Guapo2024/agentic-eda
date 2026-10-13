@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use eda_model::ir::Design;
 use eda_model::layers::LayerSetup;
 use eda_model::rules::{self, Constraints, MaskPaste, NetClassSettings, RulesOverlay, StackupSettings, TextGraphicsDefaults};
+use eda_model::setup_pages::{self, FormattingSettings, HatchOffsets, TuningPatterns, TuningProfiles};
 use eda_model::{CheckResult, ConstraintModel};
 
 type Done = Result<(), Vec<CheckResult>>;
@@ -85,6 +86,34 @@ pub(crate) fn set_board_layers(design: &mut Design, model: &ConstraintModel, set
         }
     }
     overlay(design).board_layers = Some(next);
+    Ok(())
+}
+
+/// `Cmd::SetFormatting`: Text & Graphics > Formatting.
+pub(crate) fn set_formatting(design: &mut Design, settings: &FormattingSettings) -> Done {
+    settings.validate().map_err(|c| vec![c])?;
+    overlay(design).formatting = Some(settings.clone());
+    Ok(())
+}
+
+/// `Cmd::SetZoneHatchOffsets`: Board Stackup > Zone Hatch Offsets. The page is the layers that have an offset; a layer set to 0, 0 has none.
+pub(crate) fn set_zone_hatch_offsets(design: &mut Design, model: &ConstraintModel, offsets: &HatchOffsets) -> Done {
+    setup_pages::validate_hatch_offsets(offsets, &model.board.layers).map_err(|c| vec![c])?;
+    overlay(design).zone_hatch_offsets = Some(setup_pages::canonical_hatch_offsets(offsets));
+    Ok(())
+}
+
+/// `Cmd::SetTuningPatterns`: Design Rules > Length-tuning Patterns.
+pub(crate) fn set_tuning_patterns(design: &mut Design, settings: &TuningPatterns) -> Done {
+    settings.validate().map_err(|c| vec![c])?;
+    overlay(design).tuning_patterns = Some(settings.clone());
+    Ok(())
+}
+
+/// `Cmd::SetTuningProfiles`: Design Rules > Tuning Profiles, and the profile each net class names.
+pub(crate) fn set_tuning_profiles(design: &mut Design, model: &ConstraintModel, settings: &TuningProfiles) -> Done {
+    settings.validate(&model.board.layers).map_err(|c| vec![c])?;
+    overlay(design).tuning_profiles = Some(settings.canonical());
     Ok(())
 }
 

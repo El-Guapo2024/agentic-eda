@@ -95,6 +95,18 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     }
     writeln!(out, "\t\t(allow_soldermask_bridges_in_footprints {})", if sm.allow_bridges_in_footprints { "yes" } else { "no" }).unwrap();
     writeln!(out, "\t\t(tenting (front {}) (back {}))", if sm.tent_vias_front { "yes" } else { "no" }, if sm.tent_vias_back { "yes" } else { "no" }).unwrap();
+    // Zone Hatch Offsets (`formatSetup`'s `(zone_defaults (property (layer ..) (hatch_position (xy x y))))`), in `PCB_LAYER_ID` order, for the copper layers the board has.
+    {
+        let mut offsets: Vec<(&String, &eda_model::setup_pages::HatchOffset)> = model.board.hatch_offsets.iter().filter(|(l, o)| !o.is_zero() && model.board.layers.contains(l)).collect();
+        offsets.sort_by_key(|(l, _)| eda_model::layers::pcb_layer_id(l));
+        if !offsets.is_empty() {
+            write!(out, "\t\t(zone_defaults").unwrap();
+            for (layer, o) in offsets {
+                write!(out, " (property (layer {}) (hatch_position (xy {} {})))", sexpr_str(layer), mm(o.x_um), mm(o.y_um)).unwrap();
+            }
+            writeln!(out, ")").unwrap();
+        }
+    }
     // The drill/place file origin (`pcbnew.EditorControl.drillOrigin`): what kicad-cli measures drill, position and
     // (when asked) Gerber coordinates from.
     let aux = design.drawings.as_ref().and_then(|d| d.aux_origin).unwrap_or(eda_model::ir::Point { x: 0, y: 0 });
@@ -110,8 +122,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     writeln!(out, "\t\t\t(usegerberattributes yes)").unwrap();
     writeln!(out, "\t\t\t(usegerberadvancedattributes yes)").unwrap();
     writeln!(out, "\t\t\t(creategerberjobfile yes)").unwrap();
-    writeln!(out, "\t\t\t(dashed_line_dash_ratio 12.000000)").unwrap();
-    writeln!(out, "\t\t\t(dashed_line_gap_ratio 3.000000)").unwrap();
+    // Text & Graphics > Formatting: the dash and the gap of a dashed line, in line widths.
+    writeln!(out, "\t\t\t(dashed_line_dash_ratio {:.6})", model.board.formatting.dash_length_ratio).unwrap();
+    writeln!(out, "\t\t\t(dashed_line_gap_ratio {:.6})", model.board.formatting.gap_length_ratio).unwrap();
     writeln!(out, "\t\t\t(svgprecision 4)").unwrap();
     writeln!(out, "\t\t\t(plotframeref no)").unwrap();
     writeln!(out, "\t\t\t(mode 1)").unwrap();
@@ -156,6 +169,12 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     // thinks its nets need: the file we write still tells `kicad-cli pcb
     // drc` that every net wants the board's width/clearance, and it
     // fails every track the escape class routed narrower than that.
+    // A board whose net classes name tuning profiles has none of these blocks: KiCad moves a board's legacy classes into the project, replacing the project's own and with
+    // them the profile each names, so the classes are the project's then (`project_net_settings`).
+    'legacy_net_classes: {
+        if net_classes_in_project(model) {
+            break 'legacy_net_classes;
+        }
     let default_nets: Vec<&str> = net_names.iter().copied().filter(|n| model.board.class_of(n).is_none()).collect();
     writeln!(out, "\t(net_class \"Default\" \"This is the default net class.\"").unwrap();
     writeln!(out, "\t\t(clearance {clearance_mm})").unwrap();
@@ -191,6 +210,7 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             writeln!(out, "\t\t(add_net {})", sexpr_str(name)).unwrap();
         }
         writeln!(out, "\t)").unwrap();
+    }
     }
 
     // `BOARD_ITEM::IsLocked()`: every locked item's id (`DrawingsSection::locked_ids`). Each item kind
@@ -607,14 +627,113 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     defaults.insert("board_outline_line_width".into(), serde_json::json!(mm_f(t.edge_cuts_line_width_um)));
     defaults.insert("courtyard_line_width".into(), serde_json::json!(mm_f(t.courtyard_line_width_um)));
 
+    // Text & Graphics > Formatting: the "apply board defaults to footprint .." boxes (`defaults.apply_defaults_to_fp_*`).
+    let f = &b.formatting;
+    if f.applies_any() {
+        for (key, on) in [("fields", f.apply_to_fp_fields), ("text", f.apply_to_fp_text), ("shapes", f.apply_to_fp_shapes), ("dimensions", f.apply_to_fp_dimensions), ("barcodes", f.apply_to_fp_barcodes)] {
+            defaults.insert(format!("apply_defaults_to_fp_{key}"), serde_json::json!(on));
+        }
+    }
     let mut design_settings = serde_json::json!({ "rule_severities": effective_rule_severities(model), "rules": rules });
-    if b.constraints_explicit || !t.is_default() {
+    if b.constraints_explicit || !t.is_default() || f.applies_any() {
         design_settings["defaults"] = serde_json::Value::Object(defaults);
     }
-    let project = serde_json::json!({ "board": { "design_settings": design_settings } });
+    // Design Rules > Length-tuning Patterns (`tuning_pattern_settings`).
+    if !b.tuning_patterns.is_default() {
+        let group = |m: &eda_model::setup_pages::MeanderSettings| {
+            serde_json::json!({
+                "min_amplitude": mm_f(m.min_amplitude_um),
+                "max_amplitude": mm_f(m.max_amplitude_um),
+                "spacing": mm_f(m.spacing_um),
+                "corner_style": m.corner_style.code(),
+                "corner_radius_percentage": m.corner_radius_percentage,
+                "single_sided": m.single_sided,
+            })
+        };
+        design_settings["tuning_pattern_settings"] = serde_json::json!({ "single_track_defaults": group(&b.tuning_patterns.single_track), "diff_pair_defaults": group(&b.tuning_patterns.diff_pair), "diff_pair_skew_defaults": group(&b.tuning_patterns.diff_pair_skew) });
+    }
+    let mut project = serde_json::json!({ "board": { "design_settings": design_settings } });
+    // Design Rules > Tuning Profiles: the project's `tuning_profiles` (`common/project/tuning_profiles.cpp`), and the net classes when they name one.
+    if !b.tuning_profiles.profiles.is_empty() {
+        project["tuning_profiles"] = serde_json::json!({ "meta": { "version": 0 }, "tuning_profiles_impedance_geometric": b.tuning_profiles.profiles.iter().map(project_tuning_profile).collect::<Vec<_>>() });
+    }
+    if net_classes_in_project(model) {
+        project["net_settings"] = project_net_settings(model);
+    }
     let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
     text.push('\n');
     text
+}
+
+/// Whether the derived project carries the net classes (`net_settings`) in place of the board file's legacy `(net_class ..)` blocks. It has to when a class names a tuning
+/// profile, which only the project form can say: KiCad moves the legacy classes of a board into the project, replacing the project's own.
+pub(crate) fn net_classes_in_project(model: &ConstraintModel) -> bool {
+    !model.board.tuning_profiles.class_profiles.is_empty()
+}
+
+/// One `TUNING_PROFILE` as the project file keeps it (`common/project/tuning_profiles.cpp`): widths and gaps in nanometres, delays in attoseconds per millimetre, via delays in
+/// attoseconds, layers by the names the board file writes (`UNDEFINED` for a reference layer a row leaves out).
+fn project_tuning_profile(p: &eda_model::setup_pages::TuningProfile) -> serde_json::Value {
+    serde_json::json!({
+        "profile_name": p.name,
+        "type": p.profile_type.code(),
+        "target_impedance": p.target_impedance,
+        "enable_time_domain_tuning": p.enable_time_domain_tuning,
+        "layer_entries": p.layer_entries.iter().map(|e| serde_json::json!({
+            "signal_layer": e.signal_layer,
+            "top_reference_layer": e.top_reference_layer.as_deref().unwrap_or("UNDEFINED"),
+            "bottom_reference_layer": e.bottom_reference_layer.as_deref().unwrap_or("UNDEFINED"),
+            "width": e.width_um * 1000,
+            "diff_pair_gap": e.diff_pair_gap_um * 1000,
+            "delay": e.delay_as_per_mm,
+        })).collect::<Vec<_>>(),
+        "via_prop_delay": p.via_propagation_delay_as,
+        "via_overrides": p.via_overrides.iter().map(|v| serde_json::json!({
+            "signal_layer_from": v.signal_layer_from,
+            "signal_layer_to": v.signal_layer_to,
+            "via_layer_from": v.via_layer_from,
+            "via_layer_to": v.via_layer_to,
+            "delay": v.delay_as,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// The project's `net_settings` (`common/project/net_settings.cpp`): the Default class and every other class with the tuning profile each names, and one pattern per net that
+/// has a class (the nets a class's patterns match, as the board file's `add_net` lists name them). A class that only exists because a profile is named for it is a class of its own.
+fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
+    let b = &model.board;
+    let mm_f = |um: Um| um as f64 / 1000.0;
+    let profile_of = |class: &str| b.tuning_profiles.class_profiles.get(class).cloned().unwrap_or_default();
+    let mut classes = Vec::new();
+    let mut default = serde_json::json!({ "name": "Default", "priority": i32::MAX, "tuning_profile": profile_of("Default"), "clearance": mm_f(b.clearance), "track_width": mm_f(b.track_width), "via_diameter": mm_f(b.via_diameter), "via_drill": mm_f(b.via_drill) });
+    if let Some(d) = &b.default_class {
+        for (key, v) in [("microvia_diameter", d.microvia_diameter), ("microvia_drill", d.microvia_drill), ("diff_pair_width", d.diff_pair_width), ("diff_pair_gap", d.diff_pair_gap), ("diff_pair_via_gap", d.diff_pair_via_gap)] {
+            if let Some(v) = v {
+                default[key] = serde_json::json!(mm_f(v));
+            }
+        }
+    }
+    classes.push(default);
+    for c in &b.net_classes {
+        let mut j = serde_json::json!({ "name": c.name, "priority": c.priority, "tuning_profile": profile_of(&c.name) });
+        for (key, v) in [("clearance", c.clearance), ("track_width", c.track_width), ("via_diameter", c.via_diameter), ("via_drill", c.via_drill), ("microvia_diameter", c.microvia_diameter), ("microvia_drill", c.microvia_drill), ("diff_pair_width", c.diff_pair_width), ("diff_pair_gap", c.diff_pair_gap), ("diff_pair_via_gap", c.diff_pair_via_gap)] {
+            if let Some(v) = v {
+                j[key] = serde_json::json!(mm_f(v));
+            }
+        }
+        classes.push(j);
+    }
+    // A class the project names a profile for that the board has no class of (an imported project's unused class).
+    for (class, _) in &b.tuning_profiles.class_profiles {
+        if class != "Default" && !b.net_classes.iter().any(|c| &c.name == class) {
+            classes.push(serde_json::json!({ "name": class, "priority": classes.len() as i32 - 1, "tuning_profile": profile_of(class) }));
+        }
+    }
+    let mut net_names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+    net_names.sort();
+    net_names.dedup();
+    let patterns: Vec<serde_json::Value> = net_names.iter().filter_map(|n| b.class_of(n).map(|c| serde_json::json!({ "netclass": c.name, "pattern": n }))).collect();
+    serde_json::json!({ "classes": classes, "meta": { "version": 5 }, "net_colors": null, "netclass_assignments": null, "netclass_patterns": patterns })
 }
 
 /// The per-type DRC severities the derived project holds: the imported project's own or Board Setup's, with "ignore"

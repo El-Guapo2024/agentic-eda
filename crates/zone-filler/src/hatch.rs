@@ -152,8 +152,9 @@ fn chains_intersect(a: &LineChain, b: &LineChain) -> bool {
 
 /// `ZONE_FILLER::addHatchFillTypeOnZone`: cuts the hatch holes out of `fill` (which has already been deflated by half the
 /// minimum thickness). `rings` are the thermal rings and the clearance holes of unconnected pads, which keep the holes
-/// from swallowing them.
-pub fn add_hatch_fill(zone: &Zone, fill: &mut ShapePolySet, rings: &ShapePolySet, max_error: i64) {
+/// from swallowing them. `offset` is the layer's hatch offset (Board Setup > Zone Hatch Offsets, `ZONE_LAYER_PROPERTIES::hatching_offset`): the pattern is moved by it
+/// modulo its pitch. (The zone's own per-layer offset, which wins over the board's in KiCad, is not modelled.)
+pub fn add_hatch_fill(zone: &Zone, fill: &mut ShapePolySet, rings: &ShapePolySet, max_error: i64, offset: (i64, i64)) {
     // The line thickness must exceed the zone's minimum thickness; one micron more keeps rounding from collapsing it.
     let thickness = zone.hatch_thickness.max(zone.min_thickness + 1);
     let gridsize = (thickness + zone.hatch_gap).max(1);
@@ -225,7 +226,8 @@ pub fn add_hatch_fill(zone: &Zone, fill: &mut ShapePolySet, rings: &ShapePolySet
         }
     }
 
-    // Build the holes. (The per-layer `hatching_offset` of board and zone is not modelled: no offset.)
+    // Build the holes, moved by the layer's hatch offset.
+    let (shift_x, shift_y) = (offset.0 % gridsize, offset.1 % gridsize);
     let mut holes = ShapePolySet::new();
     let x_offset = bx0 - (bx0 % gridsize) - gridsize;
     let y_offset = by0 - (by0 % gridsize) - gridsize;
@@ -236,6 +238,9 @@ pub fn add_hatch_fill(zone: &Zone, fill: &mut ShapePolySet, rings: &ShapePolySet
             let mut hole: LineChain = hole_base.iter().map(|p| Point64::new(p.x + xx, p.y + yy)).collect();
             if orientation != 0 {
                 hole = rotate_chain(&hole, orientation);
+            }
+            if shift_x != 0 || shift_y != 0 {
+                hole = hole.iter().map(|p| Point64::new(p.x + shift_x, p.y + shift_y)).collect();
             }
             holes.add_outline(hole);
             yy += gridsize;
@@ -326,12 +331,31 @@ mod tests {
         let zone = square_zone();
         let mut fill = ShapePolySet::from_outline(vec![Point64::new(125, 125), Point64::new(19_875, 125), Point64::new(19_875, 19_875), Point64::new(125, 19_875)]);
         let before = fill.area();
-        add_hatch_fill(&zone, &mut fill, &ShapePolySet::new(), 5);
+        add_hatch_fill(&zone, &mut fill, &ShapePolySet::new(), 5, (0, 0));
         let after = fill.area();
         assert!(after < before * 0.8, "holes must remove a good part: {after} of {before}");
         assert!(after > before * 0.25, "the webbing and the border stay: {after} of {before}");
         // the zone border is solid: a point just inside the corner is copper, the middle of a window is not
         assert!(spokes::poly_set_contains(&fill, Point64::new(300, 300)));
+    }
+
+    /// The pattern of the holes moves with the layer's hatch offset, by the offset modulo the pitch: the same area is cut, from other places.
+    #[test]
+    fn the_hatch_offset_moves_the_pattern_modulo_its_pitch() {
+        let zone = square_zone();
+        let outline = || ShapePolySet::from_outline(vec![Point64::new(125, 125), Point64::new(19_875, 125), Point64::new(19_875, 19_875), Point64::new(125, 19_875)]);
+        let cut = |offset: (i64, i64)| {
+            let mut fill = outline();
+            add_hatch_fill(&zone, &mut fill, &ShapePolySet::new(), 5, offset);
+            fill
+        };
+        let (plain, moved) = (cut((0, 0)), cut((700, 300)));
+        let pitch = 1_000 + 1_500;
+        assert!(plain.polys != moved.polys, "another place for the holes");
+        assert!((plain.area() - moved.area()).abs() < plain.area() * 0.1, "about the same copper: {} and {}", plain.area(), moved.area());
+        assert!(cut((pitch, 2 * pitch)).polys == plain.polys, "a whole pitch is no offset");
+        // (As in KiCad the shift is `offset % pitch`, and a negative remainder moves the grid the other way round its edge, so the equivalence is for offsets of one sign.)
+        assert!(cut((700 + pitch, 300 + 2 * pitch)).polys == moved.polys, "the offset counts modulo the pitch");
     }
 
     #[test]

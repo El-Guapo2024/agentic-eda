@@ -426,7 +426,158 @@ fn import_board_rules(root: &[Sexpr], layers: &[String]) -> BoardRules {
         .collect();
     import_legacy_setup_minimums(root, &mut board);
     import_solder_mask_setup(root, &mut board);
+    import_formatting_and_hatch_offsets(root, &mut board);
     board
+}
+
+/// `(setup (pcbplotparams (dashed_line_dash_ratio ..) (dashed_line_gap_ratio ..)))` (Text & Graphics > Formatting) and `(setup (zone_defaults (property (layer ..) (hatch_position (xy ..)))))`
+/// (Board Stackup > Zone Hatch Offsets): `parsePCB_PLOT_PARAMS`, `parseZoneLayerProperty`. A ratio that is not a positive number is left at the default; an offset of a layer the board has no copper on is dropped.
+fn import_formatting_and_hatch_offsets(root: &[Sexpr], board: &mut BoardRules) {
+    let Some(setup) = sexpr::find(root, "setup") else { return };
+    let ratio = |p: &[Sexpr], key: &str| sexpr::find(p, key).and_then(|f| sexpr::num(f, 1)).filter(|v| v.is_finite() && *v > 0.0 && *v <= eda_model::setup_pages::MAX_DASH_RATIO);
+    if let Some(plot) = sexpr::find(setup, "pcbplotparams") {
+        if let Some(v) = ratio(plot, "dashed_line_dash_ratio") {
+            board.formatting.dash_length_ratio = v;
+        }
+        if let Some(v) = ratio(plot, "dashed_line_gap_ratio") {
+            board.formatting.gap_length_ratio = v;
+        }
+    }
+    if let Some(defaults) = sexpr::find(setup, "zone_defaults") {
+        for prop in sexpr::find_all(defaults, "property") {
+            let (Some(layer), Some(xy)) = (sexpr::find(prop, "layer").and_then(|l| sexpr::txt(l, 1)), sexpr::find(prop, "hatch_position").and_then(|h| sexpr::find(h, "xy"))) else { continue };
+            let (Some(x), Some(y)) = (sexpr::num(xy, 1), sexpr::num(xy, 2)) else { continue };
+            let offset = eda_model::setup_pages::HatchOffset { x_um: mm_to_um(x), y_um: mm_to_um(y) };
+            if !offset.is_zero() && board.layers.iter().any(|l| l == layer) && offset.x_um.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_UM && offset.y_um.abs() <= eda_model::setup_pages::MAX_HATCH_OFFSET_UM {
+                board.hatch_offsets.insert(layer.to_string(), offset);
+            }
+        }
+    }
+}
+
+/// A `.kicad_pro`'s Board Setup pages that hold a handful of settings (`eda_model::setup_pages`): `board.design_settings.defaults.apply_defaults_to_fp_*` (Formatting),
+/// `board.design_settings.tuning_pattern_settings` (Length-tuning Patterns), the top-level `tuning_profiles` and each net class's `tuning_profile` (Tuning Profiles). Absent
+/// or unrecognised JSON is a no-op, as in the project's other readers; an entry the pages would refuse (a negative delay, a name with a control character) is left out.
+pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project_json: &str) {
+    use eda_model::setup_pages::{CornerStyle, MeanderSettings, ProfileLayerEntry, ProfileType, TuningProfile, ViaOverride};
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(project_json) else { return };
+    let b = &mut model.board;
+    let settings = root.get("board").and_then(|b| b.get("design_settings"));
+    if let Some(def) = settings.and_then(|s| s.get("defaults")) {
+        let flag = |key: &str| def.get(key).and_then(|v| v.as_bool());
+        let f = &mut b.formatting;
+        if let Some(v) = flag("apply_defaults_to_fp_fields") {
+            f.apply_to_fp_fields = v;
+        }
+        if let Some(v) = flag("apply_defaults_to_fp_text") {
+            f.apply_to_fp_text = v;
+        }
+        if let Some(v) = flag("apply_defaults_to_fp_shapes") {
+            f.apply_to_fp_shapes = v;
+        }
+        if let Some(v) = flag("apply_defaults_to_fp_dimensions") {
+            f.apply_to_fp_dimensions = v;
+        }
+        if let Some(v) = flag("apply_defaults_to_fp_barcodes") {
+            f.apply_to_fp_barcodes = v;
+        }
+    }
+    if let Some(patterns) = settings.and_then(|s| s.get("tuning_pattern_settings")) {
+        // `read_settings` starts from `PNS::MEANDER_SETTINGS()` whatever the group, so a key the file lacks is that default's.
+        let read = |entry: Option<&serde_json::Value>, current: &MeanderSettings| -> MeanderSettings {
+            let Some(e) = entry else { return current.clone() };
+            let mut m = MeanderSettings::single_track();
+            let um = |key: &str| e.get(key).and_then(|v| v.as_f64()).map(mm_to_um);
+            if let Some(v) = um("min_amplitude") {
+                m.min_amplitude_um = v;
+            }
+            if let Some(v) = um("max_amplitude") {
+                m.max_amplitude_um = v;
+            }
+            if let Some(v) = um("spacing") {
+                m.spacing_um = v;
+            }
+            if let Some(v) = e.get("corner_style").and_then(|v| v.as_i64()) {
+                m.corner_style = CornerStyle::from_code(v);
+            }
+            if let Some(v) = e.get("corner_radius_percentage").and_then(|v| v.as_i64()) {
+                m.corner_radius_percentage = v.clamp(0, 100) as u32;
+            }
+            if let Some(v) = e.get("single_sided").and_then(|v| v.as_bool()) {
+                m.single_sided = v;
+            }
+            m
+        };
+        let next = eda_model::setup_pages::TuningPatterns {
+            single_track: read(patterns.get("single_track_defaults"), &b.tuning_patterns.single_track),
+            diff_pair: read(patterns.get("diff_pair_defaults"), &b.tuning_patterns.diff_pair),
+            diff_pair_skew: read(patterns.get("diff_pair_skew_defaults"), &b.tuning_patterns.diff_pair_skew),
+        };
+        if next.validate().is_ok() {
+            b.tuning_patterns = next;
+        }
+    }
+    let layer_of = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).filter(|s| !s.is_empty() && *s != "UNDEFINED").map(String::from);
+    if let Some(list) = root.get("tuning_profiles").and_then(|t| t.get("tuning_profiles_impedance_geometric")).and_then(|v| v.as_array()) {
+        let mut profiles = Vec::new();
+        for entry in list.iter().filter(|e| e.is_object() && e.get("profile_name").is_some()) {
+            let int = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_i64()).unwrap_or(0);
+            let layer_entries = entry
+                .get("layer_entries")
+                .and_then(|v| v.as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter(|r| r.is_object())
+                        .filter_map(|r| {
+                            Some(ProfileLayerEntry {
+                                signal_layer: layer_of(r, "signal_layer")?,
+                                top_reference_layer: layer_of(r, "top_reference_layer"),
+                                bottom_reference_layer: layer_of(r, "bottom_reference_layer"),
+                                width_um: int(r, "width") / 1000,
+                                diff_pair_gap_um: int(r, "diff_pair_gap") / 1000,
+                                delay_as_per_mm: int(r, "delay"),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let via_overrides = entry
+                .get("via_overrides")
+                .and_then(|v| v.as_array())
+                .map(|rows| {
+                    rows.iter()
+                        .filter(|r| r.is_object())
+                        .filter_map(|r| Some(ViaOverride { signal_layer_from: layer_of(r, "signal_layer_from")?, signal_layer_to: layer_of(r, "signal_layer_to")?, via_layer_from: layer_of(r, "via_layer_from")?, via_layer_to: layer_of(r, "via_layer_to")?, delay_as: int(r, "delay") }))
+                        .collect()
+                })
+                .unwrap_or_default();
+            profiles.push(TuningProfile {
+                name: entry.get("profile_name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                profile_type: ProfileType::from_code(int(entry, "type")),
+                target_impedance: entry.get("target_impedance").and_then(|v| v.as_f64()).unwrap_or(0.0),
+                enable_time_domain_tuning: entry.get("enable_time_domain_tuning").and_then(|v| v.as_bool()).unwrap_or(false),
+                layer_entries,
+                via_propagation_delay_as: int(entry, "via_prop_delay"),
+                via_overrides,
+            });
+        }
+        // A profile the Tuning Profiles page would refuse is not carried (KiCad takes it; the studio keeps its page valid).
+        let copper = b.layers.clone();
+        let candidate = eda_model::setup_pages::TuningProfiles { profiles: profiles.clone(), class_profiles: b.tuning_profiles.class_profiles.clone() };
+        if candidate.validate(&copper).is_ok() {
+            b.tuning_profiles.profiles = profiles;
+        } else {
+            b.tuning_profiles.profiles = profiles.into_iter().filter(|p| eda_model::setup_pages::TuningProfiles { profiles: vec![p.clone()], class_profiles: Default::default() }.validate(&copper).is_ok()).collect();
+        }
+    }
+    if let Some(classes) = root.get("net_settings").and_then(|n| n.get("classes")).and_then(|v| v.as_array()) {
+        for class in classes {
+            let (Some(name), Some(profile)) = (class.get("name").and_then(|v| v.as_str()), class.get("tuning_profile").and_then(|v| v.as_str())) else { continue };
+            if !name.is_empty() && !profile.is_empty() && !profile.chars().any(|c| c.is_control()) && profile.len() <= eda_model::setup_pages::MAX_PROFILE_NAME {
+                b.tuning_profiles.class_profiles.insert(name.to_string(), profile.to_string());
+            }
+        }
+    }
 }
 
 /// A `(net_class ..)` block's microvia size and differential-pair sizes (`uvia_dia`, `uvia_drill`, `diff_pair_width`,

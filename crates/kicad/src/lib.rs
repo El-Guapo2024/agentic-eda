@@ -33,7 +33,7 @@ mod sexpr;
 mod page;
 mod import;
 mod import_items;
-pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
+pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, merge_project_setup_pages, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
 
 mod custom_rules;
 pub use custom_rules::{merge_custom_rules, parse_custom_rules};

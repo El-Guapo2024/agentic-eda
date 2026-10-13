@@ -23,6 +23,7 @@ pub mod page;
 pub mod rules;
 pub mod sch_clipboard;
 pub mod sch_extras;
+pub mod setup_pages;
 pub mod sheet_file;
 pub mod sheet_list;
 pub mod symbol;
@@ -329,6 +330,18 @@ pub struct BoardRules {
     /// KiCad's own start (every standard technical layer, nothing renamed) when nobody opened the page.
     #[serde(default, skip_serializing_if = "layers::LayerSetup::is_default")]
     pub layer_setup: layers::LayerSetup,
+    /// Text & Graphics > Formatting: the dash and gap ratios of dashed lines and the "apply board defaults to footprint .." boxes.
+    #[serde(default, skip_serializing_if = "setup_pages::FormattingSettings::is_default")]
+    pub formatting: setup_pages::FormattingSettings,
+    /// Board Stackup > Zone Hatch Offsets: per copper layer, how far a hatched zone's pattern is moved. Only the layers that have an offset.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub hatch_offsets: setup_pages::HatchOffsets,
+    /// Design Rules > Length-tuning Patterns: what a tuning pattern of each kind starts from.
+    #[serde(default, skip_serializing_if = "setup_pages::TuningPatterns::is_default")]
+    pub tuning_patterns: setup_pages::TuningPatterns,
+    /// Design Rules > Tuning Profiles: the profiles and the profile each net class names.
+    #[serde(default, skip_serializing_if = "setup_pages::TuningProfiles::is_empty")]
+    pub tuning_profiles: setup_pages::TuningProfiles,
 }
 
 fn is_zero_um(v: &ir::Um) -> bool {
@@ -786,6 +799,7 @@ impl Default for BoardRules {
             min_resolved_spokes: d_min_resolved_spokes(), max_error_um: d_max_error(), use_height_for_length_calcs: true, zones_allow_external_fillets: false,
             constraints_explicit: false, board_thickness_um: d_board_thickness(), text_graphics: rules::TextGraphicsDefaults::default(), default_class: None,
             layer_setup: layers::LayerSetup::default(),
+            formatting: setup_pages::FormattingSettings::default(), hatch_offsets: Default::default(), tuning_patterns: setup_pages::TuningPatterns::default(), tuning_profiles: Default::default(),
         }
     }
 }

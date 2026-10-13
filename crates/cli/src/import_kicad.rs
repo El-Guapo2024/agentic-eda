@@ -58,6 +58,8 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
         // carry nominal/default values, never a DRC minimum. See
         // `eda_kicad::merge_project_design_rules`'s doc comment (GAPS.md #10).
         eda::merge_project_design_rules(&mut model, &pro_text);
+        // Board Setup's smaller pages: Formatting's footprint boxes, the Length-tuning Patterns, the Tuning Profiles and the profile each net class names.
+        eda::merge_project_setup_pages(&mut model, &pro_text);
     }
     // A `.kicad_dru` custom-rule file (task item 4) is its own sibling
     // file, not a section inside `.kicad_pro`.

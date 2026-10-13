@@ -49,6 +49,18 @@ pub struct RulesOverlay {
     /// Board Stackup > Board Editor Layers (`panel_setup_layers.cpp`): the non-copper layers the board has, the names the user gave its layers and their types.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub board_layers: Option<crate::layers::LayerSetup>,
+    /// Text & Graphics > Formatting (`panel_setup_formatting.cpp`): the dash and gap ratios of dashed lines and the "apply board defaults to footprint .." boxes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formatting: Option<crate::setup_pages::FormattingSettings>,
+    /// Board Stackup > Zone Hatch Offsets (`panel_setup_zone_hatch_offsets.cpp`): copper layer -> the offset of a hatched zone's pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_hatch_offsets: Option<crate::setup_pages::HatchOffsets>,
+    /// Design Rules > Length-tuning Patterns (`panel_setup_tuning_patterns.cpp`): what a tuning pattern of each kind starts from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuning_patterns: Option<crate::setup_pages::TuningPatterns>,
+    /// Design Rules > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the profiles and the profile each net class names.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tuning_profiles: Option<crate::setup_pages::TuningProfiles>,
     /// Text Variables (`common/dialogs/panel_text_variables.cpp`): the project's `text_variables`, name -> value, as the page's OK leaves them
     /// (`PROJECT::GetTextVars`). Once the page has been used this is the whole set and the board folder's `path-variables.json` (the variables an
     /// imported project came with and Configure Paths kept before there was a page) is only the seed it started from: see [`effective_text_variables`].
@@ -591,6 +603,18 @@ impl RulesOverlay {
         }
         if let Some(l) = &self.board_layers {
             model.board.layer_setup = l.canonical();
+        }
+        if let Some(f) = &self.formatting {
+            model.board.formatting = f.clone();
+        }
+        if let Some(h) = &self.zone_hatch_offsets {
+            model.board.hatch_offsets = crate::setup_pages::canonical_hatch_offsets(h);
+        }
+        if let Some(t) = &self.tuning_patterns {
+            model.board.tuning_patterns = t.clone();
+        }
+        if let Some(t) = &self.tuning_profiles {
+            model.board.tuning_profiles = t.canonical();
         }
         if let Some(sev) = &self.severities {
             model.board.rule_severities = sev.clone();

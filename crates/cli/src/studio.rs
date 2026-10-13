@@ -1205,13 +1205,18 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             "layer_names": model.board.layers,
             // Board Editor Layers (`eda_model::layers`): the non-copper layers the board has in KiCad's order, the names the user gave its layers and the types that are not the default's.
             "layer_setup": model.board.layer_setup.canonical(),
+            // The smaller pages (`eda_model::setup_pages`): Formatting, Zone Hatch Offsets (copper layer -> offset), Length-tuning Patterns and Tuning Profiles (with the profile each net class names).
+            "formatting": model.board.formatting,
+            "zone_hatch_offsets": model.board.hatch_offsets,
+            "tuning_patterns": model.board.tuning_patterns,
+            "tuning_profiles": model.board.tuning_profiles,
             "severities": eda_kicad::effective_rule_severities(&model),
             "custom_rules_text": model.board.custom_rules_text,
             // Text Variables (`PROJECT::GetTextVars`): the project's variables as `${NAME}` reads them, name -> value -- the page's rows once it has been used, else the
             // board folder's `path-variables.json` (`crate::text_variables`).
             "text_variables": crate::text_variables::project_variables(dir),
             "overlay": design.drawings.as_ref().and_then(|d| d.rules.as_ref()).map(|r| {
-                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some()), ("board_layers", r.board_layers.is_some())]
+                [("net_classes", r.net_classes.is_some()), ("constraints", r.constraints.is_some()), ("mask_paste", r.mask_paste.is_some()), ("text_graphics", r.text_graphics.is_some()), ("stackup", r.stackup.is_some()), ("severities", r.severities.is_some()), ("custom_rules", r.custom_rules.is_some()), ("text_variables", r.text_variables.is_some()), ("board_layers", r.board_layers.is_some()), ("formatting", r.formatting.is_some()), ("zone_hatch_offsets", r.zone_hatch_offsets.is_some()), ("tuning_patterns", r.tuning_patterns.is_some()), ("tuning_profiles", r.tuning_profiles.is_some())]
                     .iter()
                     .filter(|(_, set)| *set)
                     .map(|(name, _)| *name)

@@ -4,6 +4,7 @@
 use super::*;
 use eda_model::ir::{PlacementSection, Provenance, RoutingSection, Shape, Text};
 use eda_model::layers::{LayerSetup, LayerType};
+use eda_model::setup_pages::{CornerStyle, FormattingSettings, HatchOffset, HatchOffsets, ProfileLayerEntry, ProfileType, TuningPatterns, TuningProfile, TuningProfiles};
 use eda_model::rules::{self, copper_layer_names, RulesOverlay};
 use eda_model::{Net, NetClass};
 
@@ -325,6 +326,83 @@ fn nothing_new_goes_on_a_layer_the_board_has_turned_off_and_user_layers_that_are
 }
 
 #[test]
+fn formatting_is_stored_as_a_whole_page_and_a_dash_ratio_a_line_cannot_have_is_refused() {
+    let base = four_layer_model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    assert_eq!(overlay_of(&b).formatting, None);
+    let page = FormattingSettings { dash_length_ratio: 8.0, gap_length_ratio: 2.5, apply_to_fp_fields: true, apply_to_fp_shapes: true, ..FormattingSettings::default() };
+    b.apply(&Cmd::SetFormatting { settings: page.clone() }).unwrap();
+    assert_eq!(overlay_of(&b).formatting, Some(page.clone()));
+    assert_eq!(effective(&b, &base).board.formatting, page);
+    for (bad, location) in [(FormattingSettings { dash_length_ratio: 0.0, ..page.clone() }, "dash_length_ratio"), (FormattingSettings { gap_length_ratio: 5_000.0, ..page.clone() }, "gap_length_ratio")] {
+        let e = b.apply(&Cmd::SetFormatting { settings: bad }).unwrap_err();
+        assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_formatting", Some(location)));
+        assert_eq!(overlay_of(&b).formatting, Some(page.clone()), "a refused page changes nothing");
+    }
+    b.apply(&Cmd::SetFormatting { settings: FormattingSettings::default() }).unwrap();
+    assert_eq!(overlay_of(&b).formatting, Some(FormattingSettings::default()), "the default is a page too");
+}
+
+#[test]
+fn zone_hatch_offsets_are_the_layers_that_have_one_and_only_copper_layers() {
+    let base = four_layer_model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    let offsets: HatchOffsets = [("F.Cu".to_string(), HatchOffset { x_um: 1_500, y_um: -2_000 }), ("In1.Cu".to_string(), HatchOffset::default()), ("B.Cu".to_string(), HatchOffset { x_um: 0, y_um: 300 })].into();
+    b.apply(&Cmd::SetZoneHatchOffsets { offsets }).unwrap();
+    let stored = overlay_of(&b).zone_hatch_offsets.unwrap();
+    assert_eq!(stored.keys().collect::<Vec<_>>(), ["B.Cu", "F.Cu"], "a layer set to 0, 0 has none");
+    assert_eq!(effective(&b, &base).board.hatch_offsets, stored);
+    for (bad, location) in [(HatchOffsets::from([("F.SilkS".to_string(), HatchOffset { x_um: 1, y_um: 0 })]), "F.SilkS"), (HatchOffsets::from([("In9.Cu".to_string(), HatchOffset { x_um: 1, y_um: 0 })]), "In9.Cu"), (HatchOffsets::from([("F.Cu".to_string(), HatchOffset { x_um: 2_000_000, y_um: 0 })]), "F.Cu")] {
+        let e = b.apply(&Cmd::SetZoneHatchOffsets { offsets: bad }).unwrap_err();
+        assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_hatch_offsets", Some(location)));
+        assert_eq!(overlay_of(&b).zone_hatch_offsets.as_ref(), Some(&stored), "a refused page changes nothing");
+    }
+}
+
+#[test]
+fn tuning_patterns_are_stored_as_a_page_and_refused_with_the_setting_they_break() {
+    let base = four_layer_model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    let mut page = TuningPatterns::default();
+    page.diff_pair.spacing_um = 1_200;
+    page.single_track.corner_style = CornerStyle::Chamfer;
+    page.diff_pair_skew.single_sided = true;
+    b.apply(&Cmd::SetTuningPatterns { settings: page.clone() }).unwrap();
+    assert_eq!(effective(&b, &base).board.tuning_patterns, page);
+    let mut bad = page.clone();
+    bad.single_track.min_amplitude_um = 2_000;
+    let e = b.apply(&Cmd::SetTuningPatterns { settings: bad }).unwrap_err();
+    assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_tuning_patterns", Some("single_track.min_amplitude")));
+    assert_eq!(overlay_of(&b).tuning_patterns, Some(page), "a refused page changes nothing");
+}
+
+fn a_profile(name: &str) -> TuningProfile {
+    TuningProfile { name: name.into(), profile_type: ProfileType::Differential, target_impedance: 90.0, enable_time_domain_tuning: true, layer_entries: vec![ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: Some("In1.Cu".into()), width_um: 130, diff_pair_gap_um: 150, delay_as_per_mm: 6_100_000 }], via_propagation_delay_as: 25_000_000, via_overrides: vec![] }
+}
+
+#[test]
+fn tuning_profiles_and_the_profile_each_class_names_are_one_page() {
+    let base = four_layer_model();
+    let mut b = Board::new(design(), &base, 100, 300);
+    let page = TuningProfiles { profiles: vec![a_profile("USB 90")], class_profiles: [("USB".to_string(), "USB 90".to_string()), ("Power".to_string(), String::new()), ("Default".to_string(), "Gone".to_string())].into() };
+    b.apply(&Cmd::SetTuningProfiles { settings: page.clone() }).unwrap();
+    let stored = overlay_of(&b).tuning_profiles.unwrap();
+    assert_eq!(stored.class_profiles.len(), 2, "a class that names no profile is not stored");
+    assert_eq!(stored.missing(), vec![("Default", "Gone")], "a class may name a profile the page does not have: that is what kicad-cli reports as missing_tuning_profile");
+    assert_eq!(effective(&b, &base).board.tuning_profiles, stored);
+    for (bad, location, why) in [
+        (TuningProfiles { profiles: vec![a_profile("")], ..Default::default() }, "profile 1", "must have a name"),
+        (TuningProfiles { profiles: vec![{ let mut p = a_profile("X"); p.layer_entries.push(p.layer_entries[0].clone()); p }], ..Default::default() }, "X", "Duplicated signal layer"),
+        (TuningProfiles { profiles: vec![{ let mut p = a_profile("Y"); p.layer_entries[0].signal_layer = "B.SilkS".into(); p }], ..Default::default() }, "Y", "not a copper layer"),
+    ] {
+        let e = b.apply(&Cmd::SetTuningProfiles { settings: bad }).unwrap_err();
+        assert_eq!((e[0].check.as_str(), e[0].location.as_deref()), ("ops_bad_tuning_profiles", Some(location)));
+        assert!(e[0].hint.as_deref().unwrap().contains(why), "{e:?}");
+        assert_eq!(overlay_of(&b).tuning_profiles.as_ref(), Some(&stored), "a refused page changes nothing");
+    }
+}
+
+#[test]
 fn the_verbs_read_from_the_json_the_studio_sends() {
     let cmd: Cmd = serde_json::from_value(serde_json::json!({
         "op": "set_constraints",
@@ -340,6 +418,14 @@ fn the_verbs_read_from_the_json_the_studio_sends() {
     assert!(matches!(cmd, Cmd::SetConstraints { .. }));
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_mask_paste", "settings": { "expansion_um": 0, "paste_margin_um": 0, "paste_margin_ratio": -0.05 } })).unwrap();
     assert!(matches!(cmd, Cmd::SetMaskPaste { settings } if settings.paste_margin_ratio == -0.05));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_formatting", "settings": { "dash_length_ratio": 10.5, "apply_to_fp_text": true } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetFormatting { settings } if settings.dash_length_ratio == 10.5 && settings.gap_length_ratio == 3.0 && settings.apply_to_fp_text && !settings.apply_to_fp_fields), "what a page leaves out is the default");
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_zone_hatch_offsets", "offsets": { "F.Cu": { "x_um": 100, "y_um": -50 } } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetZoneHatchOffsets { offsets } if offsets["F.Cu"] == HatchOffset { x_um: 100, y_um: -50 }));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_tuning_patterns", "settings": { "diff_pair": { "min_amplitude_um": 200, "max_amplitude_um": 900, "spacing_um": 1100, "corner_style": "chamfer", "corner_radius_percentage": 50, "single_sided": true } } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetTuningPatterns { settings } if settings.diff_pair.corner_style == CornerStyle::Chamfer && settings.diff_pair.max_amplitude_um == 900 && settings.single_track == eda_model::setup_pages::MeanderSettings::single_track()));
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_tuning_profiles", "settings": { "profiles": [{ "name": "50 ohm", "profile_type": "single", "layer_entries": [{ "signal_layer": "F.Cu", "delay_as_per_mm": 5600000 }] }], "class_profiles": { "Default": "50 ohm" } } })).unwrap();
+    assert!(matches!(&cmd, Cmd::SetTuningProfiles { settings } if settings.profiles[0].layer_entries[0].delay_as_per_mm == 5_600_000 && settings.class_profiles["Default"] == "50 ohm"));
     let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "set_board_layers", "settings": { "enabled": ["Edge.Cuts", "Margin", "F.CrtYd", "B.CrtYd", "User.1"], "names": { "User.1": "Notes" }, "types": { "In1.Cu": "power", "User.2": "front" } } })).unwrap();
     assert!(matches!(&cmd, Cmd::SetBoardLayers { settings } if settings.enabled.len() == 5 && settings.names["User.1"] == "Notes" && settings.types["In1.Cu"] == LayerType::Power && settings.types["User.2"] == LayerType::Front));
     assert_eq!(cmd.domain(), Domain::Pcb);
