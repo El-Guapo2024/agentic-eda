@@ -2446,6 +2446,10 @@ export interface FieldsTableSpec {
   sort_field: string;
   sort_asc: boolean;
   filter: string;
+  /** `BOM_PRESET::excludeDNP`: symbols marked Do not populate are left out of the table and of an export ("Include 'DNP' Symbols" off). Absent from a backend built before it existed. */
+  exclude_dnp?: boolean;
+  /** `BOM_PRESET::includeExcludedFromBOM`: symbols marked Exclude from BOM are listed ("Include 'Exclude from BOM' Symbols" on); they are never in an export. */
+  include_excluded_from_bom?: boolean;
 }
 
 export interface FieldsTableRow {
@@ -2465,6 +2469,8 @@ export interface FieldsTableReply {
   ok: boolean;
   message?: string;
   spec: FieldsTableSpec;
+  /** The names of KiCad's built-in views (`BOM_PRESET::BuiltInPresets`), which a request can apply with `preset`. */
+  presets?: string[];
   user_fields: string[];
   rows: FieldsTableRow[];
 }

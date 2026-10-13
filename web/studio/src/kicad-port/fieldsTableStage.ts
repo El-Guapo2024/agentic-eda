@@ -101,9 +101,34 @@ export function validNewFieldName(spec: FieldsTableSpec, name: string): string |
   return null;
 }
 
-/** The cells of the grid a user can type into: not Reference (`ColIsReference`), not generated (`IsGeneratedField`, e.g. `${QUANTITY}`). */
+/** The attribute columns (`FIELDS_EDITOR_GRID_DATA_MODEL::isAttribute`): a symbol's flags as checkbox cells, "1" or "0". */
+export const ATTRIBUTE_COLUMNS = ["${DNP}", "${EXCLUDE_FROM_BOM}", "${EXCLUDE_FROM_BOARD}", "${EXCLUDE_FROM_SIM}"] as const;
+
+export function isAttributeColumn(name: string): boolean {
+  return (ATTRIBUTE_COLUMNS as readonly string[]).includes(name);
+}
+
+/**
+ * The cells of the grid a user can type into: not Reference (`ColIsReference`), not generated (`IsGeneratedField`, e.g. `${QUANTITY}`) -- but an attribute column is a cell to edit
+ * (`SetValue` refuses "IsGeneratedField && !ColIsAttribute"), by its checkbox rather than by typing.
+ */
 export function isEditableColumn(name: string): boolean {
-  return name !== "Reference" && !(name.startsWith("${") && name.endsWith("}"));
+  return name !== "Reference" && (isAttributeColumn(name) || !(name.startsWith("${") && name.endsWith("}")));
+}
+
+/**
+ * What clicking an attribute cell stages (`GRID_CELL_CHECKBOX_RENDERER` through `GRID_TRICKS`): a checked cell is cleared, an unchecked one set, and a cell that is
+ * "-- mixed values --" (a group whose symbols differ) is set for all of them.
+ */
+export function toggledAttribute(text: string, mixed: boolean): "0" | "1" {
+  if (mixed) return "1";
+  return text === "1" ? "0" : "1";
+}
+
+/** How a checkbox cell stands: checked, unchecked, or indeterminate for a group whose symbols differ. */
+export function attributeState(text: string, mixed: boolean): "checked" | "unchecked" | "mixed" {
+  if (mixed) return "mixed";
+  return text === "1" ? "checked" : "unchecked";
 }
 
 // ---- BOM export format presets (common/settings/bom_settings.cpp)
