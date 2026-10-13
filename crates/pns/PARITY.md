@@ -31,23 +31,28 @@ exists rather than letting you rediscover it.
    idea of clearance the rules the exported board carries (kicad-cli's
    DRC, the only DRC engine, judges the result).
 3. **No `ARC_T`.** This project's IR represents every track as a
-   straight-segment polyline (`eda_model::ir::Track::pts`); nothing ever
-   constructs an arc item. Every KiCad pass that branches on "does this
-   line contain an arc" takes the non-arc path unconditionally here.
+   polyline (`eda_model::ir::Track::pts`), an arc track (`PCB_ARC`) as the
+   32 chords of its tessellation (`Track::arc`). The router's world has no arc
+   item: `from_ir.rs` puts an arc track's chords in the world (since P5c, one
+   chord from end to end made the world's length of a rounded meander 10 % short
+   and left the arc's bulge unseen as an obstacle), and every KiCad pass that
+   branches on "does this line contain an arc" takes the non-arc path
+   unconditionally here. The length tuner (Stage 8) is the one place that
+   *makes* arcs: `chain.rs` is a `SHAPE_LINE_CHAIN` that holds them, and
+   `tuning_commit.rs` hands them to the IR as arc tracks.
 4. **No component dragger, no multi-selection drag.** Single-item
-   (segment/via) drag only. Diff pairs (Stage 7) and single-track length
-   tuning (Stage 8) *are* ported, the second narrower than upstream --
-   length tuning is scoped to a straight axis-aligned single-segment track
-   and driven by a dialog rather than a live mouse session; see those
-   stages' own sections for exactly why and what each still is.
-   **Status (2026-10-07):** diff-pair length and skew tuning (`8`, `9`) are
-   ported since (Stage 8b below).
+   (segment/via) drag only. Diff pairs (Stage 7) and length tuning
+   (Stage 8: single track, pair and skew, KiCad's placers and tool) are
+   ported; KiCad's dragger has no pair mode, so there is nothing to port for a
+   pair drag.
    **Status (2026-10-11):** the diff pair is KiCad's `DIFF_PAIR_PLACER` now
    (Stage 7): coupled in all three modes, walked and shoved as one unit, with
-   vias. KiCad's dragger has no pair mode, so there is nothing to port for a
-   pair drag.
+   vias.
 5. **Units**: integer micrometers throughout (`eda_model::ir::Um`), like
-   the rest of this workspace, not KiCad's internal nanometers.
+   the rest of this workspace, not KiCad's internal nanometers. The length
+   tuner is the exception inside the crate: its geometry (`kigeom.rs`,
+   `chain.rs`, `meander*.rs`) is nanometres, as KiCad's meanders are, and is
+   rounded to micrometres where it becomes tracks (`tuning_commit.rs`).
 
 ## Stage 1 -- core (done)
 
@@ -515,8 +520,8 @@ row of section D. The short version:
 - **Not done**: Route From Other End for a pair (`ROUTER::ContinueFromEnd`
   restarts the placer of the same mode; here only `Router::continue_from_end`,
   for a single track), a drag of a pair (KiCad's `DRAGGER` has no pair mode:
-  `m_draggedLine` is one `LINE`), length and skew tuning of a pair beyond
-  Stage 8b's dialog.
+  `m_draggedLine` is one `LINE`). Length and skew tuning of a pair is
+  Stage 8's.
 - **Tests**: unit tests in `diff_pair.rs` (the gateways, the pair, the
   coupled length), `dp_placer.rs` (start, a pad pair at 45 degrees, tracks,
   walk, shove, vias, Backspace, the posture, the gap), `optimizer.rs`
@@ -535,108 +540,92 @@ row of section D. The short version:
   through `window.__eda`: the three modes, a pair routed and undone, `V`, `/`,
   Backspace, Escape).
 
-## Stage 8 -- length tuning (single track)
+## Stage 8 -- length tuning (P5c)
 
-`pns_meander_placer.cpp`/`pns_meander.cpp` -> `src/meander.rs`, task item
-4's first key (`7`, Tune Length of a Single Track). See that module's own
-extensive header comment for the full reasoning; short version:
+`pns_meander.cpp`, `pns_meander_placer_base.cpp`, `pns_meander_placer.cpp`,
+`pns_meander_skew_placer.cpp`, `pns_dp_meander_placer.cpp`, the tuning half of
+`pns_topology.cpp` and `LENGTH_DELAY_CALCULATION`, and -- on the other side of
+the HTTP boundary -- `PCB_TUNING_PATTERN` / `GENERATOR_TOOL` / `DRAWING_TOOL::PlaceTuningPattern`.
+KiCad's tool, not a dialog: the first version of this stage was a one-shot dialog for a
+straight, axis-aligned track with a 45-degree accordion; it is gone.
 
-- **One-shot, dialog-driven, not a third interactive session.** Upstream
-  drives `MEANDER_PLACER` the same live, mouse-dragged way `LINE_PLACER`/
-  `DIFF_PAIR_PLACER` are driven -- a status-bar length readout updates as
-  you drag the mouse away from the track. Building a *third* session type
-  (after route and drag) with its own mouse-driven preview state was out
-  of proportion to the time left after items 1-3, so this port exposes
-  the same underlying operation ("lengthen this track to a target length
-  with this amplitude/spacing") as a stateless, one-shot computation --
-  `crates/cli/src/tune_api.rs`'s `/api/tune_length/{preview,apply}` (no
-  `RouteCell`, no session: every call re-reads `design.json` fresh), the
-  length readout the task asked for is `LengthTuningDialog.tsx`'s own
-  current/achieved-length display rather than a canvas/status-bar one.
-- **Shape scope: a straight, axis-aligned (N/E/S/W), single-segment
-  track only.** `generate_meander`'s own doc comment explains exactly why
-  the construction (`direction + perpendicular` / `direction -
-  perpendicular` as the two diagonal legs of each zigzag) only produces a
-  provably-correct, uniform shape when `direction` itself is axis-
-  aligned -- a diagonal baseline would need a separately-derived formula
-  this session didn't have time to work out and verify. A track with any
-  corner (more than 2 points) or a diagonal run is refused with a plain
-  message, not silently mishandled.
-- **Geometry**: a standard alternating accordion (each period steps
-  diagonally off the baseline by `amplitude`, runs parallel for
-  `spacing`, steps back, alternating sides each period). The extra length
-  one period contributes is `2 * amplitude * (sqrt(2) - 1)`, derived from
-  first principles (each diagonal leg's own length vs. how far it
-  actually advances along the baseline) and cross-checked against a
-  *measured* (not just formula-trusted) polyline length in every test.
-  The final period shrinks its own amplitude -- and, if the baseline
-  itself is what's actually run out of room rather than the requested
-  extra length, shrinks further to whatever the remaining baseline
-  length can physically fit -- to land as close to the requested target
-  as the geometry genuinely allows, rather than always overshooting by a
-  whole period or refusing outright one period early. 9 tests.
-- **Collision**: report-only, same `Mode::MarkObstacles`-style contract
-  every other scoped-down piece of this crate uses -- no automatic
-  rerouting around something the meander would hit, just a `colliding`
-  flag the dialog surfaces before `Apply` is even enabled.
-- **Commit**: needed no new `Cmd` at all -- the generated replacement
-  becomes one `Track` IR entry, removed-and-re-added via the exact same
-  `Cmd::CommitRoute` a finished route/drag/diff-pair already uses
-  (`tune_api::apply`).
+| Module | KiCad | What it is |
+|---|---|---|
+| `kigeom.rs` | `libs/kimath`: `SEG`, `SHAPE_ARC`, `VECTOR2`, `EDA_ANGLE`, `CalcArcCenter`, `trigo` | nanometre geometry with KiCad's own evaluation order and roundings (`KiROUND`, the truncating casts, `EDA_ANGLE`'s special-cased sin/cos) |
+| `chain.rs` | `SHAPE_LINE_CHAIN` | a polyline whose runs of points can be arcs (`m_shapes`), `Append` of a point / an arc / a chain, `Split`, `Slice`, `Simplify`, `Length`, `Mirror`, `Reverse`, `NextShape` |
+| `meander.rs` | `MEANDER_SETTINGS`, `MEANDER_SHAPE`, `MEANDERED_LINE`, `MEANDER_PLACER_BASE::tuneLineLength` | the shapes (single, start, finish, turn, corner, arc, the dual ones of a pair), `Fit` / `Resize` / `Recalculate`, `MeanderSegment`, `CheckSelfIntersections`, the amplitude search |
+| `tuning_path.rs` | `TOPOLOGY::AssembleTuningPath`, `walkTuningPath`, `findLinesFromVia`, `LENGTH_DELAY_CALCULATION` | the lines of a net a pad to a pad (through its vias) and their length: the end of a line on a pad clipped to the pad (`OptimiseTraceInPad`), in a via to its centre, the stackup height a via spans, the via inferred in a pad on the other side |
+| `meander_placer.rs` | `MEANDER_PLACER`, `MEANDER_SKEW_PLACER` | `Start`, `Move` (`doMove`), `CheckFit`, the amplitude and spacing steps, the status (`TUNED` / `TOO_SHORT` / `TOO_LONG`); the skew placer lengthens the clicked line to the partner's length plus the target skew |
+| `dp_meander_placer.rs` | `DP_MEANDER_PLACER`, `TOPOLOGY::AssembleDiffPair`, `DIFF_PAIR::CoupledSegmentPairs` | the pair assembled from a segment, its coupled stretches, `baselineSegment`, `pairOrientation`, `CheckFit` at four widths |
+| `tuning_commit.rs` | `PCB_TUNING_PATTERN::EditFinish`, `resetToBaseline`, `Remove` | what a tuned line becomes in the IR: the tracks with a segment of the stretch are replaced, the runs of them outside it handed back, the line up to the pattern, the pattern (a polyline for each run of segments, an arc for each arc, flagged as members) and the line after it |
 
-The settings dialog's own amplitude/spacing fields (`1`/`2`/`3`/`4`
-upstream) are `LengthTuningDialog.tsx`'s plain number inputs rather than a
-separate `Ctrl+L` settings dialog + live keystroke adjustment -- see that
-component's own header comment.
+**Checked against KiCad's own code.** `crates/pns/oracle/` compiles
+`pns_meander.cpp` and the tuning functions of `pns_meander_placer_base.cpp`
+verbatim over the real `libs/kimath` (clang++, stand-in headers for the
+rest, `KICAD_SRC_DIR=<8303b2ad checkout> crates/pns/oracle/build.sh <dir>`, a
+minute) into a program that answers one line per case; `tests/meander_oracle.rs`
+makes the same cases (arcs, chains, shapes, single and dual lines, coupled
+segment pairs), runs them through this crate and compares the answers line by
+line: 100 000 random cases agreed when it was written (`EDA_PNS_ORACLE=<binary>
+EDA_PNS_ORACLE_CASES=<n>` runs them again; 6 000 arcs, 6 000 chains, 15 000
+shapes and 3 000 lines at `1500` ran green on 2026-10-13), and the answers of 118 of them are
+baked into `tests/data/meander_kicad_cases.txt`, which the always-on test
+`kicad_answers_baked_in` reads. The one disagreement the oracle found (a dual
+shape's baseline midpoint used the truncating `/ 2` where `VECTOR2I::operator/`
+rounds) is fixed.
 
-### Stage 8b -- differential-pair length (`8`) and skew (`9`) tuning
+**The tool** (`crates/cli/src/tune_api.rs`, `tune_edit.rs`; the studio's
+`components/canvas/tuneRouting.ts`): `7` / `8` / `9` arm it; hovering a track
+reads its length against the target (`current length | min | max`, red where it is
+outside), the first click starts a pattern on the track at the point nearest the
+click, the cursor sets where it ends and which side the first meander is on
+(`UpdateSideFromEnd`) and the placer fits the meander, `1`-`4` step the spacing
+and the amplitude, Ctrl+L is the Tuning Pattern dialog (Board Setup's
+Length-tuning Patterns are what it starts from), the second click commits one
+`Cmd::CommitTuning` (one undo step), Escape drops the pattern and then leaves the
+tool. The target is a design rule's `length` (`skew`) constraint for the net
+(`.kicad_dru`, the last rule that applies, `Opt()` being its minimum when it has no
+optimum) unless the pattern overrides the custom rules.
 
-`pns_dp_meander_placer.cpp` / `pns_meander_skew_placer.cpp` ->
-`src/dp_tune.rs` (the pair/skew orchestration) and `src/meander.rs`'s
-`generate_dp_meander` (the dual meander). `tune_api.rs`'s
-`/api/tune_length/{preview,apply}` take a `mode` (`single` | `diffpair` |
-`skew`, default `single`) and `LengthTuningDialog.tsx` is the one dialog
-for all three. Same dialog-driven shape as `7` (no live mouse session) and
-the same scope: both lines of the pair must be a **single straight
-axis-aligned run** (one 2-point track each) side by side on one layer.
+**A pattern is an item** (`eda_model::tuning::TuningPattern`, `DrawingsSection::tuning_patterns`;
+`crates/kicad/src/pcb_generated.rs`): the tracks of the meander are its members,
+it keeps the settings it was made with, the baseline it replaced and (for a pair) the
+partner's, and it is written to the `.kicad_pcb` as `(generated (type tuning_pattern) ..)`
+and read back (KiCad's own `tuning_generators_load_save.kicad_pcb` and `issue22536.kicad_pcb`
+load with their members and write again). It selects as one (the studio lists it
+with the groups, `generator: tuning_pattern`), E / double-click is its dialog and tunes it again
+(`resetToBaseline`, then the placer, one undo step), Delete puts the track back
+(`Remove`), its four edit points (start, end, the width of the meanders and the
+side, their spacing; `MakeEditPoints` / `UpdateFromEditPoints`) can be dragged,
+`Generator.regenerate*` tune patterns again on the board as it is, and the
+Generators Manager lists them.
 
-- **`8` `DP_MEANDER_PLACER`**: the clicked line's partner is the
-  complementary-net track (`dp_coupled_net_name` = `BOARD::MatchDpSuffix`)
-  that runs alongside it (nearest, then longest overlap).
-  `baselineSegment` -> the midline of the stretch both lines share; one
-  trapezoid meander is built along it and each line is that shape shifted
-  by its own signed lateral offset (`SetBaselineOffset`, `offset_polyline`
-  -- corners mitered), so the lines are parallel at the pair's pitch
-  everywhere. Both lines keep their ends exactly where they were (a
-  straight lead-in/out keeps the first/last mitered corner inside the
-  stretch) and the unshared stubs of a longer line stay. The target is the
-  pair's length, `max( P, N )` over the whole nets (`origPathLength`);
-  `tuneLineLength`'s even spread of the elongation over the bumps is
-  `pick_periods` (fewest bumps at the biggest amplitude that fits, the
-  amplitudes of the bumps differing by at most 1 um so the sum is exact);
-  the longer line's real length after the miters is measured and the
-  elongation corrected (a pass or two). `MEANDER_SHAPE::MinAmplitude`
-  (`|offset|`) and the dual `spacing()` (`2 * |offset|`) floors are
-  enforced rather than letting a bump fold its inner line over itself;
-  `lines_conflict` is the safety net (`Overlap`). Both replaced tracks are
-  one `Cmd::CommitRoute` (one undo step).
-- **`9` `MEANDER_SKEW_PLACER`** is not a pair operation upstream either:
-  the single-line placer lengthening the *selected* line until its length
-  is `m_coupledLength + targetSkew` (the partner net's routed length plus
-  the requested skew, default 0). Same here (`tune_skew` ->
-  `generate_meander`); a line that is already long enough is refused with
-  a message (it only lengthens).
-- **Differences from upstream**: the meander is this module's 45-degree
-  trapezoid wave (not upstream's rectangular/rounded bumps, same as `7`);
-  the pair is tuned across the whole shared stretch, not between a click
-  and the cursor; lengths are routed copper only (no pad-to-die length, no
-  via barrels -- the model has none); a pair that already meanders, bends
-  or has vias is refused (`7`'s straight-run scope).
-- Tests: 19 in `meander.rs`/`dp_tune.rs` (geometry: ends on their pads,
-  pitch preserved to the micrometre, target hit within 3 um, reversed
-  point order, partial overlap, vertical pairs, the refusals) and 5 in
-  `tune_api.rs` (preview/apply/undo through a real project directory,
-  collision flagged for a bump toward the partner).
+**Proof.** kicad-cli is the judge (`tune_api::tests::kicad_cli_finds_the_tuned_nets_within_the_length_and_skew_rules_they_were_tuned_to`,
+`EDA_SLOW_TESTS=1`): a track tuned to 22 mm is within 21.99..22.01 mm for a `length` rule,
+a pair tuned to 26 mm within 25.9..26.1 mm per net and 0.3 mm of skew, the skew tuner
+takes a 1.4 mm skew under a 0.15 mm rule -- and the same rules flag the nets before
+they were tuned. `web/studio/e2e/length-tuning.check.js` drives it all through the
+page (93 checks).
+
+**Differences from upstream** (each listed in `docs/parity/GAPS.md` item 7 where it is not final):
+
+- the world has no arc item (decision 3): an arc track is its chords, a track that
+  is an arc cannot be picked to start a pattern on, and a line through an arc is
+  tuned along its chords;
+- the world is cloned once at `Start` (the line taken out of it), not branched at every
+  `Move`: nothing in `Move` writes to it;
+- the line a placer works on stops where the track width changes (KiCad rewrites the
+  whole of it at the first segment's width);
+- no time domain (a target in picoseconds, tuning profiles' delays) and no pad-to-die length:
+  the model has neither;
+- the status box is a box at the cursor in the canvas, not a `ROUTER_PREVIEW_ITEM` list; the
+  tuned path is drawn as the new tracks over the board with the replaced ones hidden;
+- a pattern's outline is the baseline offset round (a capsule); KiCad's merged polygon for a pair
+  is two of them;
+- vertices are micrometres on the board (a meander of 60 segments is within 0.01 mm of the
+  length the placer reports; the proof above is at 10 um);
+- a pattern is moved, turned and flipped as locked (it and its tracks): KiCad lets them move
+  and leaves the baseline behind.
 
 ## Known gaps vs. upstream (won't-fix for this task, tracked for later)
 
@@ -682,8 +671,9 @@ axis-aligned run** (one 2-point track each) side by side on one layer.
 - `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` optimizer constraints
   (every candidate is still collision-checked, which is the one
   constraint that must never be skipped; the others are refinements).
-- Rounded (arc-filleted) corners -- no arc geometry in this port's `Item`
-  at all (decision #3).
+- Rounded (arc-filleted) corners and arcs as router items -- no arc geometry
+  in this port's `Item` (decision #3): the tuner makes arcs (Stage 8) and the router
+  sees them as chords.
 - ~~`VIA::PushoutForce`~~ is ported (2026-10-08, `shove::via_pushout_force`); the
   second lead KiCad tries (`m_last_p_end`) is not kept.
 - `MOUSE_TRAIL_TRACER` (posture guessed from the swept mouse trail) and

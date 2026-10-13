@@ -1911,7 +1911,10 @@ export function useActionRunner() {
       // `DRAWING_TOOL::PlaceTuningPattern`'s handlers: they act on the pattern being placed (the server's placer steps its own settings and fits the meander again), and warn
       // "Select a track to tune first." without one. Only while the tuner is armed, as the keys are the tool's.
       if (state.activeTool === "tune") {
-        for (const name of ["pcbnew.lengthTuner.AmplIncrease", "pcbnew.lengthTuner.AmplDecrease", "pcbnew.lengthTuner.SpacingIncrease", "pcbnew.lengthTuner.SpacingDecrease"]) m.set(name, pcbOnly(() => void stepTune(state, dispatch, name)));
+        m.set("pcbnew.lengthTuner.AmplIncrease", pcbOnly(() => void stepTune(state, dispatch, "pcbnew.lengthTuner.AmplIncrease")));
+        m.set("pcbnew.lengthTuner.AmplDecrease", pcbOnly(() => void stepTune(state, dispatch, "pcbnew.lengthTuner.AmplDecrease")));
+        m.set("pcbnew.lengthTuner.SpacingIncrease", pcbOnly(() => void stepTune(state, dispatch, "pcbnew.lengthTuner.SpacingIncrease")));
+        m.set("pcbnew.lengthTuner.SpacingDecrease", pcbOnly(() => void stepTune(state, dispatch, "pcbnew.lengthTuner.SpacingDecrease")));
       }
       // ---- LengthTuner.Settings (Ctrl+L) -- `lengthTunerSettings`: the Tuning Pattern dialog for the tool (its settings, and the pattern being placed) while the tuner is armed;
       // a tuning pattern that is selected has its own (E): that dialog tunes it again.
