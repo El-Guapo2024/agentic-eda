@@ -1,6 +1,6 @@
 //! Differential-pair length tuning -- keys `8` (`pcbnew.LengthTuner.TuneDiffPair`) and `9`
 //! (`pcbnew.LengthTuner.TuneDiffPairSkew`), the two siblings of the single-track tuner in
-//! [`crate::meander`] (key `7`).
+//! [`crate::meander_legacy`] (key `7`).
 //!
 //! * **`8`, `PNS::DP_MEANDER_PLACER`** (`pns_dp_meander_placer.cpp`): the clicked line's coupled partner is found
 //!   (`TOPOLOGY::AssembleDiffPair`: the track of the complementary net -- [`dp_coupled_net_name`], i.e.
@@ -14,7 +14,7 @@
 //!   (`m_coupledLength`) plus the target skew (`doMove( aP, aEndItem, m_coupledLength + m_settings.m_targetSkew.
 //!   Opt(), ... )`). Skew is `own - coupled`.
 //!
-//! Scope, the same as [`crate::meander`] (see there for why this is dialog-driven rather than a live mouse
+//! Scope, the same as [`crate::meander_legacy`] (see there for why this is dialog-driven rather than a live mouse
 //! session): the tuned stretch is a **single straight axis-aligned run per line** -- both lines of the pair
 //! being one 2-point track each, side by side on one layer -- and the lengths are the whole nets' routed copper
 //! (`lineLength` over `AssembleTuningPath`, without pad-to-die lengths or via barrels, which this model has no
@@ -22,7 +22,7 @@
 //! tune_api.rs` is the collision check, the JSON and the commit.
 
 use crate::diff_pair::dp_coupled_net_name;
-use crate::meander::{generate_dp_meander, generate_meander, polyline_length, simplify_collinear};
+use crate::meander_legacy::{generate_dp_meander, generate_meander, polyline_length, simplify_collinear};
 use eda_model::ir::{Point, Track, Um};
 
 /// `DP_MEANDER_PLACER::Start`'s own failure reason for a track whose net has no complement.

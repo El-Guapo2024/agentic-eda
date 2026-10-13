@@ -26,6 +26,7 @@
 //! layer or the JSON `Cmd` wire format. `crates/cli/src/studio.rs` is the
 //! only place that imports both this crate and `eda_ops`.
 
+pub mod chain;
 pub mod diff_pair;
 pub mod dp_placer;
 pub mod dp_tune;
@@ -36,10 +37,12 @@ pub mod hull;
 pub mod index;
 pub mod item;
 pub mod joint;
+pub mod kigeom;
 pub mod layer;
 pub mod line;
 pub mod line_placer;
 pub mod meander;
+pub mod meander_legacy;
 pub mod node;
 pub mod optimizer;
 pub mod router;

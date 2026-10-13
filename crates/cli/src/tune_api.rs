@@ -35,7 +35,7 @@ use crate::board;
 use eda_model::ir::{Design, Point, Track, Um};
 use eda_pns::dp_tune::{net_length, tune_diff_pair, tune_skew};
 use eda_pns::item::Item;
-use eda_pns::meander::{generate_meander, polyline_length};
+use eda_pns::meander_legacy::{generate_meander, polyline_length};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
