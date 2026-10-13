@@ -2659,6 +2659,18 @@ pub struct FootprintGraphic {
     pub pin_type: String,
 }
 
+/// A non-plated hole whose `(layers ..)` name no copper layer (`issue5990`'s mounting holes and `issue14559`'s plugs are `*.Mask` only): the pad has no copper, but it is a drilled
+/// hole that zones and tracks keep clear of on every copper layer (`ZONE_FILLER::knockoutThermalReliefs`: `npthWithHole`). It is in the footprint's frame, as [`crate::Pad`] has it
+/// (`at`, `drill` or `drill_slot`, `rot`; `size` is the mask opening, which the mask graphics of [`FootprintExtra::graphics`] keep), so it follows the footprint when it moves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintHole {
+    pub pad: crate::footprint::Pad,
+    /// The pad's own `(clearance ..)` (`PAD::GetLocalClearance`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+}
+
 /// See [`DrawingsSection::footprint_extras`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2684,6 +2696,9 @@ pub struct FootprintExtra {
     pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
+    /// The non-plated holes of the footprint that are on no copper layer ([`FootprintHole`]). Not in `Footprint::pads`: they have no copper to measure, draw or route round.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<FootprintHole>,
     /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
     /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
     /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them

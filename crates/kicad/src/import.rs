@@ -1372,6 +1372,9 @@ fn import_footprints(
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
                     extra.graphics.extend(g);
                 }
+                if let Some(h) = layerless_hole(pad, side, rot, file_version, notes) {
+                    extra.holes.push(h);
+                }
                 continue;
             };
             extra.pads.push(pad_mask_info(pad, layers, file_version, side));
@@ -1536,6 +1539,21 @@ fn rotated_extent(rot_millideg: i64, size: (i64, i64)) -> (i64, i64) {
     let (sin, cos) = rad.sin_cos();
     let (w, h) = (size.0 as f64, size.1 as f64);
     ((w * cos.abs() + h * sin.abs()).round() as i64, (w * sin.abs() + h * cos.abs()).round() as i64)
+}
+
+/// A non-plated hole whose `(layers ..)` name no copper layer (the mounting holes and plugs of `*.Mask`-only pads): no pad copper, but a drilled hole that zones keep clear of
+/// on every copper layer (`ZONE_FILLER::knockoutThermalReliefs`'s `npthWithHole`). `None` for any other pad.
+fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, notes: &mut ImportNotes) -> Option<eda_model::ir::FootprintHole> {
+    if sexpr::txt(pad, 2) != Some("np_thru_hole") {
+        return None;
+    }
+    let p = parse_pad_geometry_opt(pad, fp_side, fp_rot, notes, true)?;
+    if p.drill.is_none() && p.drill_slot.is_none() {
+        return None;
+    }
+    // `(clearance C)` on the pad (`PAD::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
+    let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um).filter(|&c| !(file_version <= 20240201 && c == 0));
+    Some(eda_model::ir::FootprintHole { pad: p, clearance })
 }
 
 /// A pad with no copper layer but a mask layer is a pure mask aperture

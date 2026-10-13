@@ -885,6 +885,16 @@ pub(crate) fn write_footprint(
         }
     }
 
+    // `(net_tie_pad_groups "1, 2" "3")` (`FOOTPRINT::SetNetTiePadGroups`): the pads a net tie joins. Without it KiCad's DRC reports the tie's short, and its zone fill keeps
+    // clear of the tie's copper (`buildCopperItemClearances` exempts the tie from the zones of the nets it joins).
+    if let Some(groups) = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).map(|e| e.net_tie_pad_groups.as_slice()).filter(|g| !g.is_empty()) {
+        write!(out, "\t\t(net_tie_pad_groups").unwrap();
+        for group in groups {
+            write!(out, " {}", sexpr_str(group)).unwrap();
+        }
+        writeln!(out, ")").unwrap();
+    }
+
     // The footprint's silkscreen, fab drawings and texts (`fp_line`, `fp_arc`, ..., `fp_text user`), in its own frame -- a bottom-side footprint's mirrored
     // like its pads and on the other side's layers: after the fields and before the pads, where `format( FOOTPRINT )` writes the drawings.
     crate::fp_art_io::write_art(out, &footprint.art, fp);
@@ -1010,6 +1020,29 @@ pub(crate) fn write_footprint(
             write!(out, " (thermal_gap {})", mm(g)).unwrap();
         }
         out.push_str(&shape_text.custom);
+        writeln!(out, " (uuid \"{uuid}\"))").unwrap();
+    }
+
+    // The non-plated holes the footprint has on no copper layer (`FootprintExtra::holes`: a `*.Mask`-only pad), as the pads they are: without them the board would lose its drilled holes,
+    // and kicad-cli's zone fill would not keep clear of them.
+    let holes: &[eda_model::ir::FootprintHole] = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id)).map(|e| e.holes.as_slice()).unwrap_or_default();
+    for (i, hole) in holes.iter().enumerate() {
+        let pad = &hole.pad;
+        let drill = match (pad.drill, pad.drill_slot) {
+            (Some(d), _) => format!("(drill {})", mm(d)),
+            (None, Some((w, h))) => format!("(drill oval {} {})", mm(w), mm(h)),
+            (None, None) => continue,
+        };
+        let px = mm(if fp.side == Side::Bottom { -pad.at.0 } else { pad.at.0 });
+        let shape_text = crate::pad_shape::write_pad_shape(pad.shape, pad.roundrect_ratio, &pad.ext, fp.side);
+        let uuid = crate::duid_for(&format!("hole:{}:{i}:{}:{}", fp.id, pad.at.0, pad.at.1), &format!("{}.hole{i}", fp.id));
+        write!(out, "\t\t(pad {} np_thru_hole {} (at {px} {} {}) (size {} {})", sexpr_str(&pad.number), crate::pad_shape::shape_token(pad.shape), mm(pad.at.1), crate::pad_file_angle(fp.side, fp.rot, pad.rot), mm(pad.size.0), mm(pad.size.1)).unwrap();
+        out.push_str(&shape_text.delta);
+        out.push_str(&shape_text.corners);
+        write!(out, " {drill} (layers \"*.Mask\")").unwrap();
+        if let Some(c) = hole.clearance {
+            write!(out, " (clearance {})", mm(c)).unwrap();
+        }
         writeln!(out, " (uuid \"{uuid}\"))").unwrap();
     }
 
@@ -1658,6 +1691,50 @@ mod tests {
         &rest[..rest.find("\n\t(").map_or(rest.len(), |i| i + 1)]
     }
 
+    /// A non-plated hole on no copper layer (`issue5990`'s mounting holes are `*.Mask` only) and a net tie's pad groups are the board's, not the zone filler's: they reach the
+    /// derived board, so the fill kicad-cli makes of it keeps clear of the hole and exempts the tie, and the drill file has the hole.
+    #[test]
+    fn a_hole_on_no_copper_layer_and_a_net_ties_pad_groups_are_written_and_read_back() {
+        let (mut design, model) = fixture();
+        let hole = eda_model::Pad {
+            number: String::new(),
+            at: (1_500, -2_000),
+            size: (3_400, 3_400),
+            shape: eda_model::PadShape::Circle,
+            kind: PadKind::NonPlatedHole,
+            drill: Some(3_200),
+            drill_slot: None,
+            rot: 0,
+            roundrect_ratio: None,
+            opposite_side: false,
+            ext: Default::default(),
+        };
+        let extra = eda_model::ir::FootprintExtra {
+            id: "U1".into(),
+            holes: vec![eda_model::ir::FootprintHole { pad: hole.clone(), clearance: Some(1_200) }],
+            net_tie_pad_groups: vec!["1, 2".into(), "3".into()],
+            ..Default::default()
+        };
+        design.drawings = Some(eda_model::ir::DrawingsSection { footprint_extras: vec![extra], ..Default::default() });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let u1 = &out[out.find("(footprint \"eda:SOT-23\"").expect("U1")..];
+        let u1 = &u1[..u1.find("\n\t(footprint").map_or(u1.len(), |i| i + 1)];
+        assert!(u1.contains("(net_tie_pad_groups \"1, 2\" \"3\")"), "{u1}");
+        let pad = u1.lines().find(|l| l.contains("np_thru_hole")).expect("the hole as a pad");
+        for want in ["(at 1.5 -2 ", "(drill 3.2)", "(layers \"*.Mask\")", "(clearance 1.2)"] {
+            assert!(pad.contains(want), "{want} in {pad}");
+        }
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let e = back.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == "U1")).expect("U1's extras");
+        assert_eq!(e.net_tie_pad_groups, vec!["1, 2".to_string(), "3".to_string()]);
+        assert_eq!(e.holes.len(), 1, "the hole comes back as the footprint's own, not as a pad with copper");
+        assert_eq!((e.holes[0].pad.at, e.holes[0].pad.drill, e.holes[0].clearance), (hole.at, Some(3_200), Some(1_200)));
+        // A footprint with neither writes neither.
+        let plain = export_kicad_pcb(&fixture().0, &model, &meta()).unwrap();
+        assert!(!plain.contains("np_thru_hole") && !plain.contains("net_tie_pad_groups"));
+    }
+
     #[test]
     fn every_zone_is_written_with_its_own_settings_and_reads_back_the_same() {
         // `pcb_io_kicad_sexpr.cpp` `format( const ZONE* )`: the zone's own priority, clearance, minimum width,
@@ -1800,7 +1877,8 @@ mod tests {
     fn a_zone_on_a_four_layer_stack_keeps_its_layers_in_both_orders() {
         let (mut design, mut model) = fixture();
         model.board.layers = eda_model::rules::copper_layer_names(4);
-        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
+        // Islands kept: the inner layers have no GND pad or via of their own to hold a fill that islands are removed from.
+        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), island_removal_mode: eda_model::ir::IslandRemovalMode::Never, ..Default::default() };
         pour.set_layer_set(&["In2.Cu", "B.Cu", "F.Cu", "In1.Cu"]);
         assert_eq!(pour.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
         design.routing.as_mut().unwrap().zones = vec![pour];
