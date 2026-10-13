@@ -342,7 +342,8 @@ pub(crate) fn transform_zone(z: &mut Zone, x: Xform, copper: usize) {
         *p = x.point(*p);
     }
     if x.is_flip() {
-        z.layer = flip_layer(&z.layer, copper);
+        // `ZONE::Flip`: every layer of the zone's set goes to the other side.
+        z.map_layers(|l| flip_layer(l, copper));
     }
 }
 

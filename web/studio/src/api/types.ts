@@ -380,7 +380,14 @@ export interface RuleAreaFields {
 export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   id: string;
   net: string;
+  /** The zone's first layer (`ZONE::GetFirstLayer`): the front-most copper layer of its set, else its first technical layer. */
   layer: string;
+  /**
+   * `ZONE::GetLayerSet()`: every layer the zone is on, `layer` first, in the order the Layers tab lists them (the copper stack from the front, then the technical layers) --
+   * one layer for a zone on one. A zone with no copper layer in it is a non-copper zone (`fillNonCopperZone`: silkscreen, mask, paste and user layers; no net).
+   * Absent from a backend that predates layer sets: read it with `zoneLayers` (`kicad-port/zoneLayers.ts`).
+   */
+  layers?: string[];
   /** Task item 4: true for a generated teardrop (`eda_model::ir::Zone::teardrop`), never a hand-drawn zone. */
   teardrop: boolean;
   /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
@@ -1365,7 +1372,7 @@ export type Cmd =
    * one field of the panel, the whole thing commits together. Outline is
    * untouched (no point editor yet, see PARITY-pcb.md).
    */
-  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields & RuleAreaFields)
+  | ({ op: "edit_zone"; id: string; net: string; layer: string; /** The layers the zone is on (`ZONE_SETTINGS::m_Layers`); absent leaves a set that holds `layer` as it is. */ layers?: string[] } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
   | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }

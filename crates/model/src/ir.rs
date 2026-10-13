@@ -1422,6 +1422,13 @@ pub struct Zone {
     pub net: String,
     pub layer: String,
     pub outline: Vec<Point>,
+    /// `ZONE::GetLayerSet()` of a zone on more than one layer (`(layers "F.Cu" "B.Cu")`): the whole set in the UI order (`LSET::UIOrder`: the copper
+    /// stack from the front, then the technical layers), `layer` being its first (`ZONE::GetFirstLayer`). Empty for a zone on one layer, which `layer` names
+    /// alone: a design written before zones had layer sets reads as it was. A zone whose set has no copper layer is a non-copper zone
+    /// (`fillNonCopperZone`: silkscreen, mask, paste and user layers; no net). The fill is one per layer, derived. Read the set with
+    /// [`Zone::layer_set`], change it with [`Zone::set_layer_set`] so `layer` stays its first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<String>,
 
     // ---- fill settings (ZONE_SETTINGS), added additively with KiCad's own
     // defaults so existing design.json files without these fields keep
@@ -1548,6 +1555,51 @@ impl Zone {
         let pts: Vec<String> = self.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
         format!("{}|{}|{}", self.net, self.layer, pts.join(";"))
     }
+
+    /// `ZONE::GetLayerSet()`: the layers the zone is on, in the UI order, `layer` first. A zone on one layer is `[layer]`.
+    pub fn layer_set(&self) -> Vec<&str> {
+        if self.layers.len() > 1 {
+            self.layers.iter().map(String::as_str).collect()
+        } else {
+            vec![self.layer.as_str()]
+        }
+    }
+
+    /// `ZONE::IsOnLayer` (`GetLayerSet().test( aLayer )`).
+    pub fn is_on_layer(&self, layer: &str) -> bool {
+        if self.layers.len() > 1 {
+            self.layers.iter().any(|l| l == layer)
+        } else {
+            self.layer == layer
+        }
+    }
+
+    /// `ZONE::IsOnCopperLayer`: some layer of the set is copper. A zone with none is a non-copper zone.
+    pub fn is_on_copper_layer(&self) -> bool {
+        self.layer_set().into_iter().any(crate::layers::is_copper_layer_name)
+    }
+
+    /// The copper layers of the set, in the UI order.
+    pub fn copper_layers(&self) -> Vec<&str> {
+        self.layer_set().into_iter().filter(|l| crate::layers::is_copper_layer_name(l)).collect()
+    }
+
+    /// `ZONE::SetLayerSet`: the zone is on exactly these layers (nothing changes for an empty list). They are kept once each in the UI order and
+    /// `layer` is the first of them (`GetFirstLayer`); a set of one layer is the plain `layer`.
+    pub fn set_layer_set<S: AsRef<str>>(&mut self, layers: &[S]) {
+        let mut set: Vec<String> = layers.iter().map(|l| l.as_ref().to_string()).collect();
+        set.sort_by_key(|l| (crate::layers::ui_order_rank(l), l.clone()));
+        set.dedup();
+        let Some(first) = set.first() else { return };
+        self.layer = first.clone();
+        self.layers = if set.len() > 1 { set } else { Vec::new() };
+    }
+
+    /// `ZONE::Flip`'s layer half: every layer of the set goes to the one `map` names.
+    pub fn map_layers(&mut self, map: impl Fn(&str) -> String) {
+        let set: Vec<String> = self.layer_set().into_iter().map(|l| map(l)).collect();
+        self.set_layer_set(&set);
+    }
 }
 
 impl Default for Zone {
@@ -1560,6 +1612,7 @@ impl Default for Zone {
             net: String::new(),
             layer: String::new(),
             outline: Vec::new(),
+            layers: Vec::new(),
             clearance: default_zone_clearance(),
             min_thickness: default_zone_min_thickness(),
             thermal_gap: default_thermal_gap(),

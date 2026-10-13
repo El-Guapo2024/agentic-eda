@@ -1724,7 +1724,7 @@ export interface StudioApi {
    * `Cmd::AddZone` with inline settings, so every existing caller of that
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
-  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields & RuleAreaFields) => Promise<void>;
+  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }) => Promise<void>;
   /** B ("Fill All Zones"): GET /api/fill now, and keep it live-updated (state.zoneFill) until `unfillZones`. */
   fillZones: () => Promise<void>;
   /** Ctrl+B ("Unfill All Zones"): back to outline-only, same as a zone that was never filled. */
@@ -2329,7 +2329,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!ok) return;
       dispatch({ type: "SET_SELECTION", refs: members, raw: true });
     },
-    addZone: async (net, layer, outline, settings) => {
+    addZone: async (net, layer, outline, settings, extra) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
       const board = await fetchState().catch(() => null);
       if (!board) return;
@@ -2346,7 +2346,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // already landed on exactly that.
       const defaults = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
-      if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
+      // The layer list (`ZONE_SETTINGS::m_Layers`), the name and the lock ride on the zone just made, in one undo step with the settings.
+      const layers = extra?.layers && extra.layers.length > 1 ? extra.layers : undefined;
+      const follow: Cmd[] = [];
+      if (!unchanged || layers) follow.push({ op: "edit_zone", ...settings, id: newId, net, layer, ...(layers ? { layers } : {}) });
+      if (extra?.name) follow.push({ op: "set_zone_name", id: newId, name: extra.name });
+      if (extra?.locked) follow.push({ op: "set_locked", ids: [newId], locked: true });
+      if (follow.length > 0) await runBatch(follow);
     },
     // edit_tool.cpp copyToClipboard: the selection (a pad stands for its footprint, a locked item is copied) as KiCad's own clipboard text, measured
     // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.

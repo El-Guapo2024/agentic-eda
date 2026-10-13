@@ -1094,6 +1094,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             })).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
+                // `ZONE::GetLayerSet()`: the zone's layers, `layer` first -- one for a zone on one layer.
+                "layers": z.layer_set(),
                 "outline": z.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
                 // Full `ZONE_SETTINGS` (crates/model/src/ir.rs's `Zone`),
                 // for ZoneDialog's edit mode (dialog_copper_zones.cpp) --
@@ -2226,15 +2228,17 @@ fn fill_json(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckResult>> {
     let drc_board = eda_drc::board::build(&design, &model);
     let results = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
 
+    // One entry per zone and layer: a zone on several layers (`Zone::layers`) has a fill on each, under the same id.
     let zones_json: Vec<Value> = zones
         .iter()
-        .map(|z| {
-            let fill = results.get(&z.id);
+        .flat_map(|z| z.layer_set().into_iter().map(move |layer| (z, layer)))
+        .map(|(z, layer)| {
+            let fill = results.get(&z.id, layer);
             let fragments: Vec<Value> = fill
                 .map(|f| f.polys.iter().map(|poly| json!(poly[0].iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())).collect())
                 .unwrap_or_default();
             let mut zone = json!({
-                "id": z.id, "net": z.net, "layer": z.layer,
+                "id": z.id, "net": z.net, "layer": layer,
                 "area_um2": fill.map(|f| f.area()).unwrap_or(0.0),
                 "fragments": fragments,
             });

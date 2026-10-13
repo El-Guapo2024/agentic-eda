@@ -587,23 +587,26 @@ fn print_fill(design: &eda_model::ir::Design, model: &ConstraintModel, want_zone
     let mut matched = 0usize;
     let mut json_zones = Vec::new();
     for z in zones {
-        if want_zone.is_some_and(|id| id != z.id) || want_layer.is_some_and(|l| l != z.layer) {
-            continue;
-        }
-        matched += 1;
-        let fill = results.get(&z.id);
-        let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
-        let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
+        // A zone on several layers has a fill on each (`Zone::layers`): one line, one JSON entry, per layer.
+        for layer in z.layer_set() {
+            if want_zone.is_some_and(|id| id != z.id) || want_layer.is_some_and(|l| l != layer) {
+                continue;
+            }
+            matched += 1;
+            let fill = results.get(&z.id, layer);
+            let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
+            let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
 
-        if as_json {
-            let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
-            json_zones.push(serde_json::json!({
-                "id": z.id, "net": z.net, "layer": z.layer,
-                "area_mm2": area_mm2, "islands": fragments.len(),
-                "fragments": frags_json,
-            }));
-        } else {
-            println!("zone {} net={} layer={} area={:.4}mm^2 islands={}", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, z.layer, area_mm2, fragments.len());
+            if as_json {
+                let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
+                json_zones.push(serde_json::json!({
+                    "id": z.id, "net": z.net, "layer": layer,
+                    "area_mm2": area_mm2, "islands": fragments.len(),
+                    "fragments": frags_json,
+                }));
+            } else {
+                println!("zone {} net={} layer={} area={:.4}mm^2 islands={}", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, layer, area_mm2, fragments.len());
+            }
         }
     }
 

@@ -25,7 +25,10 @@
 //!   same-net higher-priority subtraction, and a final `Fracture()`;
 //! * island removal by connectivity (`ISLAND_REMOVAL_MODE`, [`islands`]) and the whole-board `ZONE_FILLER::Fill`
 //!   ([`orchestrate`]): zones filled from the highest priority down and knocked out by each other's *fills*, islands removed
-//!   by copper clusters, and the iterative refill of the zones below a zone that lost islands.
+//!   by copper clusters, and the iterative refill of the zones below a zone that lost islands;
+//! * the fill of a zone on a technical or user layer (`fillNonCopperZone`, [`fill_non_copper_zone`]): the zone's smoothed
+//!   outline less the knockout texts and the copper-pour keepouts on its layer, pruned to the minimum width. A zone on several
+//!   layers is filled once per layer ([`fill_board_layers`]).
 //!
 //! Not ported, each a documented, bounded cut: `connect_nearby_polys` (a
 //! robustness pass for concave near-touching geometry); per-item DRC-rule
@@ -45,7 +48,7 @@ pub mod shape;
 pub mod smoothed;
 pub mod spokes;
 
-pub use orchestrate::fill_board;
+pub use orchestrate::{fill_board, fill_board_layers, LayerFill};
 
 use eda_clipper2::Point64;
 use eda_model::ir::{FillMode, IslandRemovalMode, PadConnection, Point, Zone};
@@ -229,6 +232,14 @@ pub struct FillEdge {
     pub filled: bool,
 }
 
+/// A knockout text of the board and the layer it is on (`fillNonCopperZone`'s `knockoutGraphicItem`): the glyphs themselves are left out of the fill, not the
+/// copper round them.
+#[derive(Debug, Clone)]
+pub struct FillKnockout {
+    pub layer: String,
+    pub shape: Shape,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct FillInput {
     pub pads: Vec<FillPad>,
@@ -243,6 +254,8 @@ pub struct FillInput {
     pub board_outline_invalid: bool,
     /// The board's Edge.Cuts items, for the knockout at [`Self::edge_clearance`].
     pub edge_cuts: Vec<FillEdge>,
+    /// The knockout texts of the board (`BOARD_ITEM::IsKnockout`) with the layer each is on: what `fillNonCopperZone` cuts out of a non-copper zone.
+    pub knockouts: Vec<FillKnockout>,
     /// Copper-pour keepouts on this layer. Unconditional knockout, no net/
     /// priority test (`other_zones`' own gate) -- a rule area wins against
     /// every zone regardless of net or priority, matching
@@ -373,9 +386,54 @@ pub fn fill_zone<F>(zone: &Zone, layer: &str, input: &FillInput, clearance_fn: F
 where
     F: Fn(Option<&str>, Option<&str>) -> i64,
 {
-    let mut fill = fill_copper_zone(zone, layer, input, clearance_fn, max_error).fill;
+    // `fillSingleZone`: a copper layer is `fillCopperZone`, any other `fillNonCopperZone`.
+    let mut fill = if eda_model::layers::is_copper_layer_name(layer) { fill_copper_zone(zone, layer, input, clearance_fn, max_error).fill } else { fill_non_copper_zone(zone, layer, input, max_error).fill };
     apply_island_removal(&mut fill, zone, input, layer);
     fill
+}
+
+/// `ZONE_FILLER::fillNonCopperZone`: the fill of a zone on a technical or user layer (silkscreen, mask, paste, a user layer).
+///
+/// The zone's smoothed outline (`BuildSmoothedPoly`, the apron one `fillSingleZone` hands over), less
+/// * the knockout texts on the layer (`knockoutGraphicItem`: the glyphs only, no clearance),
+/// * the rule areas that disallow copper pours and are on the layer (`isZoneFillKeepout`, by outline),
+///
+/// pruned to the minimum width (deflated by half of it less an epsilon, with the hatch pattern cut while deflated, and inflated again) and fractured. There are no
+/// pads, tracks, vias, clearances or thermal reliefs, no other zone's priority, and no net.
+pub fn fill_non_copper_zone(zone: &Zone, layer: &str, input: &FillInput, max_error: i64) -> ZoneFillStage1 {
+    let zone_bbox = chain_bbox(&chain_from_ir(&zone.outline));
+    let mut fill = smoothed::build_smoothed_poly(zone, layer, input, max_error).with_apron;
+
+    let mut clearance_holes = ShapePolySet::new();
+    for knockout in input.knockouts.iter().filter(|k| k.layer == layer && bboxes_intersect(bbox_of(&k.shape), zone_bbox)) {
+        add_knockout_exact(&mut clearance_holes, &knockout.shape, 0, max_error);
+    }
+    fill.boolean_subtract(&clearance_holes);
+
+    let mut keepout_holes = ShapePolySet::new();
+    for keepout in input.keepouts.iter().filter(|k| k.layer == layer && bboxes_intersect(chain_bbox(&k.outline), zone_bbox)) {
+        keepout_holes.add_outline(keepout.outline.clone());
+    }
+    if keepout_holes.outline_count() > 0 {
+        fill.boolean_subtract(&keepout_holes);
+    }
+
+    // Features which are min_width should survive pruning; features that are *less* than min_width should not (`epsilon` off the half).
+    let half_min_width = zone.min_thickness / 2;
+    let epsilon = 1; // pcbIUScale.mmToIU(0.001) in um
+    fill.deflate(half_min_width - epsilon, CornerStrategy::ChamferAllCorners, max_error as i32);
+
+    // The hatch pattern is cut while deflated; a non-copper zone has no thermal rings.
+    if zone.fill_mode == FillMode::HatchPattern {
+        hatch::add_hatch_fill(zone, &mut fill, &ShapePolySet::new(), max_error, input.hatch_offsets.get(layer).copied().unwrap_or((0, 0)));
+    }
+
+    // Re-inflate after pruning of areas that don't meet minimum-width criteria.
+    if half_min_width - epsilon > epsilon {
+        fill.inflate(half_min_width - epsilon, CornerStrategy::RoundAllCorners, max_error as i32, false);
+    }
+    fill.fracture(true);
+    ZoneFillStage1 { pre_knockout: fill.clone(), fill }
 }
 
 /// `ZONE_FILLER::fillCopperZone`.

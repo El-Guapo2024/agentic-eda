@@ -272,6 +272,16 @@ pub struct MaskData {
     /// `true` when `silk` was built from imported footprint silk (as opposed
     /// to this workspace's own exported refdes-label approximation).
     pub has_footprint_silk: bool,
+    /// The visible knockout texts of the footprints (`BOARD_ITEM::IsKnockout`) on a non-copper layer: a non-copper zone on the layer is cut where their glyphs are.
+    pub knockouts: Vec<DrcKnockout>,
+}
+
+/// A knockout text and the layer it is on.
+#[derive(Clone)]
+pub struct DrcKnockout {
+    pub layer: String,
+    /// The text's glyph strokes (`EDA_TEXT::GetEffectiveTextShape`).
+    pub shape: Shape,
 }
 
 /// A silkscreen `PCB_SHAPE` or text.
@@ -361,6 +371,9 @@ pub struct DrcBoard {
     pub tracks: Vec<DrcTrackSeg>,
     pub vias: Vec<DrcVia>,
     pub zones: Vec<DrcZone>,
+    /// The non-copper zones (`ZONE::IsOnCopperLayer` false: silkscreen, mask, paste and user layers), one per layer of each: filled by
+    /// `fillNonCopperZone`, never read as copper by a provider, hence apart from [`Self::zones`].
+    pub non_copper_zones: Vec<DrcZone>,
     pub keepouts: Vec<DrcKeepout>,
     pub footprints: Vec<DrcFootprint>,
     pub shapes: Vec<IrShape>,
@@ -665,6 +678,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
     let mut tracks = Vec::new();
     let mut vias = Vec::new();
     let mut zones = Vec::new();
+    let mut non_copper_zones = Vec::new();
     let mut keepouts = Vec::new();
     if let Some(rt) = &design.routing {
         for t in &rt.tracks {
@@ -690,48 +704,67 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             }
             // A rule area is not copper -- it never becomes a `DrcZone`
             // (every provider that already iterates `board.zones` assumes
-            // "this is a real copper pour"), only a `DrcKeepout`. See
+            // "this is a real copper pour"), only a `DrcKeepout`: one per layer
+            // of its set (`isZoneFillKeepout`: `IsOnLayer( aLayer )`, a
+            // non-copper zone is knocked out by one on its layer too). See
             // task item 3 / `DrcKeepout`'s own doc.
             if z.is_rule_area {
-                keepouts.push(DrcKeepout {
-                    id: z.id.clone(),
-                    layer: z.layer.clone(),
-                    outline: z.outline.clone(),
-                    no_tracks: z.keepout_tracks,
-                    no_vias: z.keepout_vias,
-                    no_pads: z.keepout_pads,
-                    no_copper_pour: z.keepout_copper_pour,
-                    no_footprints: z.keepout_footprints,
-                    parent_footprint: z.parent_footprint.clone(),
-                });
+                for layer in z.layer_set() {
+                    keepouts.push(DrcKeepout {
+                        id: z.id.clone(),
+                        layer: layer.to_string(),
+                        outline: z.outline.clone(),
+                        no_tracks: z.keepout_tracks,
+                        no_vias: z.keepout_vias,
+                        no_pads: z.keepout_pads,
+                        no_copper_pour: z.keepout_copper_pour,
+                        no_footprints: z.keepout_footprints,
+                        parent_footprint: z.parent_footprint.clone(),
+                    });
+                }
                 continue;
             }
             let net = if z.net.is_empty() { None } else { Some(z.net.clone()) };
-            zones.push(DrcZone {
-                id: z.id.clone(),
-                net,
-                layer: z.layer.clone(),
-                outline: z.outline.clone(),
-                priority: z.priority,
-                clearance: z.clearance,
-                min_thickness: z.min_thickness,
-                thermal_gap: z.thermal_gap,
-                thermal_spoke_width: z.thermal_spoke_width,
-                pad_connection: z.pad_connection,
-                island_removal_mode: z.island_removal_mode,
-                min_island_area: z.min_island_area,
-                teardrop: z.teardrop,
-                fill_mode: z.fill_mode,
-                hatch_thickness: z.hatch_thickness,
-                hatch_gap: z.hatch_gap,
-                hatch_orientation_mdeg: z.hatch_orientation_mdeg,
-                hatch_smoothing_level: z.hatch_smoothing_level,
-                hatch_smoothing_value: z.hatch_smoothing_value,
-                hatch_hole_min_area: z.hatch_hole_min_area,
-                hatch_border_algorithm: z.hatch_border_algorithm,
-                smoothing: z.smoothing,
-                corner_radius: z.corner_radius,
-            });
+            // One `DrcZone` per layer of the zone's set (`ZONE_FILLER::Fill` fills each of them on its own). A zone with a copper layer is a copper pour on
+            // the copper layers the board has (`IsOnCopperLayer`; any other layer of its set is ignored); one with none is a non-copper zone
+            // (`fillNonCopperZone`), kept apart so no provider that assumes copper reads it.
+            let copper_zone = z.is_on_copper_layer();
+            for layer in z.layer_set() {
+                let is_copper_layer = eda_model::layers::is_copper_layer_name(layer);
+                if copper_zone && (!is_copper_layer || !layers.iter().any(|l| l == layer)) {
+                    continue;
+                }
+                let zone = DrcZone {
+                    id: z.id.clone(),
+                    net: if copper_zone { net.clone() } else { None },
+                    layer: layer.to_string(),
+                    outline: z.outline.clone(),
+                    priority: z.priority,
+                    clearance: z.clearance,
+                    min_thickness: z.min_thickness,
+                    thermal_gap: z.thermal_gap,
+                    thermal_spoke_width: z.thermal_spoke_width,
+                    pad_connection: z.pad_connection,
+                    island_removal_mode: z.island_removal_mode,
+                    min_island_area: z.min_island_area,
+                    teardrop: z.teardrop,
+                    fill_mode: z.fill_mode,
+                    hatch_thickness: z.hatch_thickness,
+                    hatch_gap: z.hatch_gap,
+                    hatch_orientation_mdeg: z.hatch_orientation_mdeg,
+                    hatch_smoothing_level: z.hatch_smoothing_level,
+                    hatch_smoothing_value: z.hatch_smoothing_value,
+                    hatch_hole_min_area: z.hatch_hole_min_area,
+                    hatch_border_algorithm: z.hatch_border_algorithm,
+                    smoothing: z.smoothing,
+                    corner_radius: z.corner_radius,
+                };
+                if copper_zone {
+                    zones.push(zone);
+                } else {
+                    non_copper_zones.push(zone);
+                }
+            }
         }
     }
 
@@ -831,7 +864,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         .filter_map(|(i, t)| footprint_text_shape(t).map(|shape| DrcCopperGraphic { id: format!("ctxt{i}"), desc: format!("Text '{}' on {}", t.text.replace('\n', " "), t.layer), layer: t.layer.clone(), pos: t.at, shape }))
         .collect();
     copper_graphics.extend(footprint_copper);
-    DrcBoard { layers, outline, board_outline, edge_cuts, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
+    DrcBoard { layers, outline, board_outline, edge_cuts, pads, tracks, vias, zones, non_copper_zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
 }
 
 impl DrcVia {

@@ -11,13 +11,15 @@ import { useEffect, useMemo, useState } from "react";
 import type { Cmd } from "../api/types";
 import { filterZones, moveZone, rankPriorities, zoneOrder, type ZoneMove } from "../kicad-port/boardControl";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
+import { zoneIsOnCopper, zoneLayers } from "../kicad-port/zoneLayers";
 
 export function ZoneManagerDialog() {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const open = state.bcx.zoneManagerOpen;
-  const zones = useMemo(() => (state.board?.routing?.zones ?? []).filter((z) => !z.is_rule_area && !z.teardrop), [state.board]);
+  // `ZONE_SETTINGS_BAG`: the copper pours -- no rule area, no teardrop, no zone without a copper layer.
+  const zones = useMemo(() => (state.board?.routing?.zones ?? []).filter((z) => !z.is_rule_area && !z.teardrop && zoneIsOnCopper(z)), [state.board]);
   const [staged, setStaged] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [text, setText] = useState("");
@@ -44,7 +46,7 @@ export function ZoneManagerDialog() {
   const shown = filterZones(order.map((id) => byId.get(id)!), text, byName, byNet, layer || null);
   const shownIds = shown.map((z) => z.id);
   const filledIds = new Set(state.zoneFill?.zones.filter((f) => f.fragments.length > 0).map((f) => f.id));
-  const usedLayers = [...new Set(zones.map((z) => z.layer))];
+  const usedLayers = [...new Set(zones.flatMap((z) => zoneLayers(z)))];
   const changed = zones.filter((z) => rank[z.id] !== z.priority);
 
   const close = () => dispatch({ type: "BCX", patch: { zoneManagerOpen: false } });
@@ -113,7 +115,7 @@ export function ZoneManagerDialog() {
                     <tr key={z.id} onClick={() => pickRow(z.id)} style={{ cursor: "default", background: z.id === selected ? "var(--chrome-accent-dim, rgba(74,163,255,0.25))" : undefined }}>
                       <td style={{ padding: "2px 6px" }}>{z.id}</td>
                       <td style={{ padding: "2px 6px" }}>{z.net || "(no net)"}</td>
-                      <td style={{ padding: "2px 6px" }}>{z.layer}</td>
+                      <td style={{ padding: "2px 6px" }}>{zoneLayers(z).join(", ")}</td>
                       <td style={{ padding: "2px 6px", textAlign: "right" }}>{rank[z.id]}</td>
                       <td style={{ padding: "2px 6px" }}>{filledIds.has(z.id) ? "filled" : ""}</td>
                     </tr>

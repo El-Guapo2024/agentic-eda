@@ -325,6 +325,24 @@ fn flip_items_mirrors_copper_across_the_axis_and_puts_it_on_the_other_layer() {
     assert_eq!(routing(&b).tracks[0].pts, vec![p(10_000, 40_000), p(20_000, 40_000), p(20_000, 30_000)]);
 }
 
+/// `ZONE::Flip`: every layer of a zone's set goes to the other side, inner layers mirrored through the stack; a technical zone swaps its front and back layer.
+#[test]
+fn a_flipped_zone_flips_each_layer_of_its_set() {
+    let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "B.Cu"]);
+    let mut d = design();
+    let mut inner = zone("zone_in", "F.Cu", &[(0, 0), (1_000, 0), (1_000, 1_000)]);
+    inner.set_layer_set(&["F.Cu", "In1.Cu", "In2.Cu"]);
+    let mut silk = zone("zone_silk", "F.SilkS", &[(0, 0), (1_000, 0), (1_000, 1_000)]);
+    silk.net = String::new();
+    silk.set_layer_set(&["F.SilkS", "F.Mask"]);
+    d.routing.as_mut().unwrap().zones = vec![inner, silk];
+    let mut b = Board::new(d, &m, 100, 300);
+    b.apply(&Cmd::FlipItems { ids: ids(&["zone_in", "zone_silk"]), pivot: p(0, 0), direction: FlipDirection::LeftRight }).unwrap();
+    let zones = &routing(&b).zones;
+    assert_eq!(zones[0].layer_set(), vec!["In3.Cu", "In4.Cu", "B.Cu"], "F.Cu to B.Cu, In1.Cu to In4.Cu and In2.Cu to In3.Cu on six layers, in the order of the stack");
+    assert_eq!((zones[0].layer.as_str(), zones[1].layer_set()), ("In3.Cu", vec!["B.SilkS", "B.Mask"]));
+}
+
 #[test]
 fn a_flipped_blind_via_changes_its_layer_pair_and_inner_layers_mirror_through_the_stack() {
     let m = model(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);

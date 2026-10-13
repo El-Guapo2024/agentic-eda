@@ -31,8 +31,32 @@ pub(crate) struct ZoneArgs<'a> {
     pub net: usize,
     pub locked: bool,
     pub uuid: &'a str,
-    /// The fill the studio's own filler computed, one ring per `(filled_polygon ..)`, in µm.
-    pub fill: &'a [Vec<(i64, i64)>],
+    /// The fill the studio's own filler computed on each layer of the zone, one ring per `(filled_polygon ..)`, in µm. A layer that is not here has no fill.
+    pub fills: &'a [(String, Vec<Vec<(i64, i64)>>)],
+    /// `BOARD::GetEnabledLayers`: the layers the board has. The zone is written on the ones of its layer set that are in this list (`format( const ZONE* )`'s
+    /// `layers &= aZone->GetBoard()->GetEnabledLayers()`); `None` is every layer.
+    pub enabled_layers: Option<&'a std::collections::BTreeSet<String>>,
+}
+
+/// `PCB_IO_KICAD_SEXPR::formatLayers( layers, aEnumerateLayers, aIsZone )` for a zone: `(layers "F.Cu" "B.Cu")`. A zone on copper layers lists each of them
+/// (`aEnumerateLayers` is `IsOnCopperLayer`); a non-copper zone folds the front and back pair of a technical layer into its wildcard (`"*.Mask"`), the
+/// pairs in KiCad's order and the rest one by one, in `PCB_LAYER_ID` order.
+pub(crate) fn zone_layers_token(set: &[&str], copper_zone: bool) -> String {
+    let mut left: Vec<&str> = set.to_vec();
+    let mut out = String::new();
+    if !copper_zone {
+        for (pair, wildcard) in [(["B.Adhes", "F.Adhes"], "*.Adhes"), (["B.Paste", "F.Paste"], "*.Paste"), (["B.SilkS", "F.SilkS"], "*.SilkS"), (["B.Mask", "F.Mask"], "*.Mask"), (["B.CrtYd", "F.CrtYd"], "*.CrtYd"), (["B.Fab", "F.Fab"], "*.Fab")] {
+            if pair.iter().all(|l| left.contains(l)) {
+                write!(out, " {}", sexpr_str(wildcard)).unwrap();
+                left.retain(|l| !pair.contains(l));
+            }
+        }
+    }
+    left.sort_by_key(|l| (eda_model::layers::pcb_layer_id(l).unwrap_or(u32::MAX), l.to_string()));
+    for l in left {
+        write!(out, " {}", sexpr_str(l)).unwrap();
+    }
+    format!("(layers{out})")
 }
 
 /// `PCB_IO_KICAD_SEXPR::format( const ZONE* )`.
@@ -43,15 +67,23 @@ pub(crate) struct ZoneArgs<'a> {
 /// carries `(attr (teardrop ..))` and the settings KiCad's teardrop manager gives its own.
 pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     let rule_area = z.is_rule_area;
+    let copper_zone = z.is_on_copper_layer();
     write!(out, "\t(zone").unwrap();
     // Only a pour on a copper layer has a net (`aZone->IsOnCopperLayer() && !aZone->GetIsRuleArea() && GetNetCode() > 0`).
-    if !rule_area && a.net > 0 {
+    if !rule_area && copper_zone && a.net > 0 {
         write!(out, " (net {}) (net_name {})", a.net, sexpr_str(&z.net)).unwrap();
     }
     if a.locked {
         write!(out, " (locked yes)").unwrap();
     }
-    writeln!(out, " (layer {}) (uuid \"{}\")", sexpr_str(&z.layer), a.uuid).unwrap();
+    // The layer set, on the layers the board has: `(layers ..)` for more than one, else `(layer <the first layer of the set>)`.
+    let set = z.layer_set();
+    let shown: Vec<&str> = set.iter().copied().filter(|l| a.enabled_layers.map_or(true, |e| e.contains(*l))).collect();
+    if shown.len() > 1 {
+        writeln!(out, " {} (uuid \"{}\")", zone_layers_token(&shown, copper_zone), a.uuid).unwrap();
+    } else {
+        writeln!(out, " (layer {}) (uuid \"{}\")", sexpr_str(&z.layer), a.uuid).unwrap();
+    }
     if !z.name.is_empty() && !z.teardrop {
         writeln!(out, "\t\t(name {})", sexpr_str(&z.name)).unwrap();
     }
@@ -157,18 +189,24 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
     writeln!(out, "\t\t))").unwrap();
 
     if !rule_area {
-        for ring in a.fill {
-            if ring.len() < 3 {
-                continue;
+        // `for( PCB_LAYER_ID layer : aZone->GetLayerSet().Seq() )`: each layer's fill, in `PCB_LAYER_ID` order.
+        let mut layers: Vec<&str> = set.clone();
+        layers.sort_by_key(|l| (eda_model::layers::pcb_layer_id(l).unwrap_or(u32::MAX), l.to_string()));
+        for layer in layers {
+            let Some((_, rings)) = a.fills.iter().find(|(l, _)| l == layer) else { continue };
+            for ring in rings {
+                if ring.len() < 3 {
+                    continue;
+                }
+                writeln!(out, "\t\t(filled_polygon").unwrap();
+                writeln!(out, "\t\t\t(layer {})", sexpr_str(layer)).unwrap();
+                writeln!(out, "\t\t\t(pts").unwrap();
+                for &(x, y) in ring {
+                    writeln!(out, "\t\t\t\t(xy {} {})", mm(x), mm(y)).unwrap();
+                }
+                writeln!(out, "\t\t\t)").unwrap();
+                writeln!(out, "\t\t)").unwrap();
             }
-            writeln!(out, "\t\t(filled_polygon").unwrap();
-            writeln!(out, "\t\t\t(layer {})", sexpr_str(&z.layer)).unwrap();
-            writeln!(out, "\t\t\t(pts").unwrap();
-            for &(x, y) in ring {
-                writeln!(out, "\t\t\t\t(xy {} {})", mm(x), mm(y)).unwrap();
-            }
-            writeln!(out, "\t\t\t)").unwrap();
-            writeln!(out, "\t\t)").unwrap();
         }
     }
     writeln!(out, "\t)").unwrap();
@@ -344,4 +382,24 @@ pub(crate) fn write_group(out: &mut String, g: &Group, uuid: &str, locked: bool,
         write!(out, " \"{m}\"").unwrap();
     }
     writeln!(out, "))").unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::zone_layers_token;
+
+    /// `formatLayers( .., aEnumerateLayers = IsOnCopperLayer, aIsZone )`: a zone on copper layers lists every layer, in `PCB_LAYER_ID` order (F.Cu 0, B.Cu 2, In1.Cu 4 ..);
+    /// one with none folds a front and back pair of a technical layer into its wildcard, the pairs in KiCad's order (adhesive, paste, silkscreen, mask, courtyard, fab) and
+    /// the layers left over by id.
+    #[test]
+    fn a_zones_layer_list_is_enumerated_for_copper_and_folded_into_wildcards_for_the_rest() {
+        assert_eq!(zone_layers_token(&["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"], true), r#"(layers "F.Cu" "B.Cu" "In1.Cu" "In2.Cu")"#);
+        // A rule area on copper and technical layers lists them all, one by one: it is "on a copper layer".
+        assert_eq!(zone_layers_token(&["F.Cu", "F.Mask", "B.Mask", "F.SilkS"], true), r#"(layers "F.Cu" "F.Mask" "B.Mask" "F.SilkS")"#);
+        assert_eq!(zone_layers_token(&["F.Mask", "B.Mask"], false), r#"(layers "*.Mask")"#);
+        assert_eq!(zone_layers_token(&["F.Fab", "B.Paste", "F.Paste", "B.Mask", "F.SilkS", "B.Fab", "User.1"], false), r#"(layers "*.Paste" "*.Fab" "B.Mask" "F.SilkS" "User.1")"#);
+        assert_eq!(zone_layers_token(&["B.CrtYd", "F.CrtYd", "Dwgs.User", "Edge.Cuts"], false), r#"(layers "*.CrtYd" "Dwgs.User" "Edge.Cuts")"#);
+        // One side of a pair is no pair.
+        assert_eq!(zone_layers_token(&["F.SilkS", "B.Mask"], false), r#"(layers "B.Mask" "F.SilkS")"#);
+    }
 }

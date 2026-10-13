@@ -1096,12 +1096,12 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         let zone_base = via_base + vias.len();
         for (zi, z) in zones.iter().enumerate() {
             for (pi, pad) in net_pads.iter().enumerate() {
-                if pad.layers.iter().any(|l| *l == z.layer) && point_in_polygon(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, &z.outline) {
+                if pad.layers.iter().any(|l| z.is_on_layer(l)) && point_in_polygon(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, &z.outline) {
                     uf.union(pi, zone_base + zi);
                 }
             }
             for (vi, v) in vias.iter().enumerate() {
-                let spans = v.from_layer == z.layer || v.to_layer == z.layer;
+                let spans = z.is_on_layer(&v.from_layer) || z.is_on_layer(&v.to_layer);
                 if spans && point_in_polygon(v.at, &z.outline) {
                     uf.union(via_base + vi, zone_base + zi);
                 }

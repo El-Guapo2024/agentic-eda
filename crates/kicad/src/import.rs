@@ -1943,10 +1943,11 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseZONE`, for board-level `(zone ...)`s:
 /// copper pours, teardrops (`(attr (teardrop ...))`) and rule areas
-/// (`(keepout ...)`/`(placement ...)`). This IR's `Zone` is single-layer
-/// and single-outline, so a zone on several layers (`(layers ...)`) or
-/// with several `(polygon ...)` outlines becomes one `Zone` per
-/// (layer, outline). The stored `(filled_polygon ...)`s are not read --
+/// (`(keepout ...)`/`(placement ...)`). A zone keeps its layer set
+/// (`Zone::layers`: `(layers "F.Cu" "B.Cu")`, `*.Cu`, `F&B.Cu`, `*.Mask`), and a zone
+/// with no copper layer in it is a non-copper zone. This IR's `Zone` has a single
+/// outline, so a zone with several `(polygon ...)` outlines (the first is the outline,
+/// the others its holes) becomes one `Zone` per `(polygon ...)`. The stored `(filled_polygon ...)`s are not read --
 /// fills are always derived (`eda_zone_filler`), which is also what
 /// kicad-cli's own `pcb drc --refill-zones` run does. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
@@ -1985,20 +1986,15 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
                 zone.net = sexpr::txt(n, 1).unwrap_or("").to_string();
             }
         }
-        let mut layers: Vec<String> = Vec::new();
+        // `T_layer` (a zone on one layer) and `T_layers` (`parseBoardItemLayersAsMask`: the wildcards `*.Cu`, `F&B.Cu` and `*.Mask` stand for the layers they name).
+        let mut names: Vec<&str> = Vec::new();
         if let Some(l) = sexpr::find(z, "layer") {
-            layers.extend(sexpr::txt(l, 1).map(str::to_string));
+            names.extend(sexpr::txt(l, 1));
         }
         if let Some(l) = sexpr::find(z, "layers") {
-            for i in 1..l.len() {
-                match sexpr::txt(l, i) {
-                    Some("*.Cu") => layers.extend(copper_layers.iter().cloned()),
-                    Some("F&B.Cu") => layers.extend(["F.Cu".to_string(), "B.Cu".to_string()]),
-                    Some(name) => layers.push(name.to_string()),
-                    None => {}
-                }
-            }
+            names.extend((1..l.len()).filter_map(|i| sexpr::txt(l, i)));
         }
+        let mut layers: Vec<String> = expand_layer_names(&names, copper_layers);
         if let Some(p) = sexpr::find(z, "priority") {
             zone.priority = sexpr::num(p, 1).unwrap_or(0.0).max(0.0) as u32;
         }
@@ -2102,20 +2098,23 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             zone.teardrop = sexpr::find(a, "teardrop").is_some();
         }
 
-        // Only copper layers make a copper zone (`GetLayerSet() & boardCopperLayers`).
-        layers.retain(|l| copper_layers.contains(l));
-        layers.dedup();
+        // The zone keeps its whole layer set (`ZONE::SetLayerSet`): the copper layers the board has and the technical and user layers KiCad names. A copper layer the
+        // board lacks is dropped (`GetLayerSet() & boardCopperLayers`); a set with no copper layer left is a non-copper zone (`fillNonCopperZone`), which has no net
+        // (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
+        layers.retain(|l| if eda_model::layers::is_copper_layer_name(l) { copper_layers.contains(l) } else { eda_model::layers::is_optional_layer(l) });
         let outlines: Vec<Vec<Point>> = sexpr::find_all(z, "polygon").filter_map(poly_points).collect();
         if outlines.is_empty() || layers.is_empty() {
             notes.zones_skipped += 1;
             continue;
         }
+        zone.set_layer_set(&layers);
+        if !zone.is_on_copper_layer() {
+            zone.net = String::new();
+        }
         let item_ref = ItemRef::of(z);
-        for layer in &layers {
-            for outline in &outlines {
-                out.push(Zone { layer: layer.clone(), outline: outline.clone(), ..zone.clone() });
-                refs.zones.push(item_ref.clone());
-            }
+        for outline in &outlines {
+            out.push(Zone { outline: outline.clone(), ..zone.clone() });
+            refs.zones.push(item_ref.clone());
         }
     }
     out

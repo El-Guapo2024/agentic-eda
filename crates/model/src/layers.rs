@@ -64,6 +64,27 @@ pub fn pcb_layer_id(file_name: &str) -> Option<u32> {
     is_copper_layer_name(file_name).then_some(2 + 2 * inner)
 }
 
+/// Where `LSET::UIOrder` puts a layer: the copper stack from the front (`F.Cu`, `In1.Cu` .. `In30.Cu`, `B.Cu`), then `TechAndUserUIOrder` (the technical layers of
+/// [`TECH_LAYERS`], then `User.1` ..). A zone's first layer (`ZONE::GetFirstLayer`) is the one of its set that ranks lowest. A name that is no layer ranks last.
+pub fn ui_order_rank(file_name: &str) -> u32 {
+    if file_name == "F.Cu" {
+        return 0;
+    }
+    if file_name == "B.Cu" {
+        return 31;
+    }
+    if let Some(n) = file_name.strip_prefix("In").and_then(|r| r.strip_suffix(".Cu")).and_then(|n| n.parse::<u32>().ok()).filter(|n| (1..=30).contains(n)) {
+        return n;
+    }
+    if let Some(i) = TECH_LAYERS.iter().position(|l| *l == file_name) {
+        return 100 + i as u32;
+    }
+    if let Some(n) = user_layer_number(file_name) {
+        return 200 + n;
+    }
+    1000
+}
+
 /// `User.7` -> 7.
 pub fn user_layer_number(file_name: &str) -> Option<u32> {
     let n: u32 = file_name.strip_prefix("User.")?.parse().ok()?;

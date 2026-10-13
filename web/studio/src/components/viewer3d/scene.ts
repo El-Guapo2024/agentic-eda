@@ -61,6 +61,7 @@ import { fallbackBodyHeightMm, partBodyBoxUm } from "../../kicad-port/partBody";
 import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { artTextAsField, graphicsOf, layersOf } from "../../kicad-port/fpArt";
 import { fieldAsText } from "../../kicad-port/fpFields";
+import { zoneCopperLayers } from "../../kicad-port/zoneLayers";
 
 // ---------------------------------------------------------------------
 // Units
@@ -977,10 +978,12 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     // `render.show_zones` (Preferences > 3D Viewer > Display Options), and the copper layer of the zone.
     if (board.routing.zones.length > 0 && shown("zones")) {
       for (const zone of board.routing.zones) {
-        if (!copperShown(zone.layer)) continue;
-        const y = zoneY(zone.layer, layerOrder);
         const outlineMm: Array<[number, number]> = zone.outline.map(([x, yy]) => [mm(x), mm(yy)]);
-        addZoneFill(group, outlineMm, y, zoneMat[silkSide(zone.layer)]);
+        // A zone on several layers is on each of its copper layers; one on no copper layer (silkscreen, mask) is not copper.
+        for (const layer of zoneCopperLayers(zone)) {
+          if (!copperShown(layer)) continue;
+          addZoneFill(group, outlineMm, zoneY(layer, layerOrder), zoneMat[silkSide(layer)]);
+        }
       }
     }
   }

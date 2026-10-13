@@ -209,39 +209,42 @@ pub fn build_items(design: &Design, model: &ConstraintModel) -> Vec<CnItem> {
             let drc_board = eda_drc::board::build(design, model);
             let fills = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
 
+            // One set of items per copper layer of a zone (`CN_ZONE_LAYER`); a non-copper zone is not in the connectivity at all.
             for z in &rt.zones {
-                let layer = layer_index(layers, &z.layer);
-                let fragments: Vec<Vec<Point>> = match fills.get(&z.id) {
-                    Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect()).collect(),
-                    // No stable id to look fills up by (e.g. not yet run
-                    // through `assign_missing_ids`): fall back to the raw
-                    // outline rather than silently dropping the zone.
-                    None if !z.id.is_empty() => Vec::new(),
-                    None => {
-                        if z.outline.len() >= 3 {
-                            vec![z.outline.clone()]
-                        } else {
-                            Vec::new()
+                for layer_name in z.copper_layers() {
+                    let layer = layer_index(layers, layer_name);
+                    let fragments: Vec<Vec<Point>> = match fills.get(&z.id, layer_name) {
+                        Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect()).collect(),
+                        // No stable id to look fills up by (e.g. not yet run
+                        // through `assign_missing_ids`): fall back to the raw
+                        // outline rather than silently dropping the zone.
+                        None if !z.id.is_empty() => Vec::new(),
+                        None => {
+                            if z.outline.len() >= 3 {
+                                vec![z.outline.clone()]
+                            } else {
+                                Vec::new()
+                            }
                         }
-                    }
-                };
+                    };
 
-                for outline in fragments {
-                    if outline.len() < 3 {
-                        continue;
+                    for outline in fragments {
+                        if outline.len() < 3 {
+                            continue;
+                        }
+                        let bbox = bbox_of(&outline);
+                        items.push(CnItem {
+                            item: ItemRef::ZoneOutline { zone_id: z.id.clone() },
+                            net: z.net.clone(),
+                            can_change_net: false,
+                            layer_lo: layer,
+                            layer_hi: layer,
+                            anchors: outline.clone(),
+                            shape: ItemShape::Zone { outline },
+                            bbox,
+                            connected: Vec::new(),
+                        });
                     }
-                    let bbox = bbox_of(&outline);
-                    items.push(CnItem {
-                        item: ItemRef::ZoneOutline { zone_id: z.id.clone() },
-                        net: z.net.clone(),
-                        can_change_net: false,
-                        layer_lo: layer,
-                        layer_hi: layer,
-                        anchors: outline.clone(),
-                        shape: ItemShape::Zone { outline },
-                        bbox,
-                        connected: Vec::new(),
-                    });
                 }
             }
         }

@@ -301,6 +301,15 @@ fn find_after_block_for<'a>(after_blocks: &[&'a str], used: &mut Vec<usize>, z: 
         if zone_net_name(b).unwrap_or_default() != z.net {
             continue;
         }
+        // A rule area can share a pour's first corner: it is its twin only if this one is a rule area too. Two zones can share the outline and the net
+        // on different layers (the mask zones of `issue6284`): the twin is on the same layers (a `*.Cu` set is the board's, which `import_kicad_pcb` expanded).
+        if b.contains("(keepout") != z.is_rule_area {
+            continue;
+        }
+        let layers = block_layers(b);
+        if !layers.contains("*.Cu") && layers != z.layer_set().into_iter().map(String::from).collect() {
+            continue;
+        }
         let prio = extract_num_after(b, "(priority").unwrap_or(0.0) as u32;
         if prio != z.priority {
             continue;
@@ -309,11 +318,30 @@ fn find_after_block_for<'a>(after_blocks: &[&'a str], used: &mut Vec<usize>, z: 
         break;
     }
     let (i, b) = best?;
-    // A multi-layer zone is one block read once per layer: only a single-layer block is claimed.
-    let layer_count = b.matches("(filled_polygon").count();
-    let _ = layer_count;
     used.push(i);
     Some(b)
+}
+
+/// The layers a zone block is on, wildcards expanded: `(layer "F.Cu")`, or `(layers "F.Cu" "B.Cu")`, `(layers "*.Mask")`, `(layers "F&B.Cu")`.
+fn block_layers(block: &str) -> std::collections::BTreeSet<String> {
+    let head = &block[..block.find("(polygon").unwrap_or(block.len())];
+    let mut out = std::collections::BTreeSet::new();
+    for key in ["(layers", "(layer "] {
+        let Some(i) = head.find(key) else { continue };
+        let rest = &head[i + key.len()..];
+        let list = &rest[..rest.find(')').unwrap_or(rest.len())];
+        for name in list.split('"').skip(1).step_by(2) {
+            match name {
+                "F&B.Cu" => out.extend(["F.Cu".to_string(), "B.Cu".to_string()]),
+                w if w.starts_with("*.") && w != "*.Cu" => out.extend([format!("F.{}", &w[2..]), format!("B.{}", &w[2..])]),
+                other => {
+                    out.insert(other.to_string());
+                }
+            }
+        }
+        break;
+    }
+    out
 }
 
 fn outline_first_pt(block: &str) -> Option<(f64, f64)> {
@@ -380,7 +408,7 @@ fn check_board(cli: &Path, board_name: &str) -> Vec<ParityRow> {
     let mut rows = Vec::new();
     for (i, z) in parsed_zones.iter().enumerate() {
         let our_zone = &design.routing.as_ref().unwrap().zones[i];
-        let our_fill = fills.get(&our_zone.id);
+        let our_fill = fills.get(&our_zone.id, &z.layer);
         let our_paths: Paths64 = our_fill.map(|f| f.polys.iter().filter_map(|p| p.first()).cloned().collect()).unwrap_or_default();
         let our_area = our_fill.map(|f| f.area()).unwrap_or(0.0);
 
@@ -563,53 +591,44 @@ fn check_board_imported(cli: &Path, rel: &str) -> Vec<ParityRow> {
     let Some(routing) = design.routing.as_ref() else { return rows };
     let mut used: Vec<usize> = Vec::new();
     for z in routing.zones.iter().filter(|z| !z.is_rule_area && !z.teardrop && z.parent_footprint.is_none()) {
-        let our_fill = fills.get(&z.id);
-        let our_paths: Paths64 = our_fill.map(|f| f.polys.iter().filter_map(|p| p.first()).cloned().collect()).unwrap_or_default();
-        let our_area = our_fill.map(|f| f.area()).unwrap_or(0.0);
-
-        let outline_mm: Vec<(f64, f64)> = z.outline.iter().map(|p| (p.x as f64 / 1000.0, p.y as f64 / 1000.0)).collect();
-        let _ = &outline_mm;
-        // A zone on several layers appears once per layer with the same block: only claim a block on its first layer.
-        let block_after = {
-            let mut probe = used.clone();
-            let found = find_after_block_for(&after_blocks, &mut probe, z);
-            match found {
-                Some(b) => {
-                    let multi = b.contains("(layers");
-                    if !multi {
-                        used = probe;
-                    }
-                    Some(b)
-                }
-                None => {
-                    // a multi-layer zone's block was already used by its first layer: look it up again without the claim
-                    let mut none: Vec<usize> = Vec::new();
-                    find_after_block_for(&after_blocks, &mut none, z)
-                }
-            }
-        };
-        let Some(zone_block_after) = block_after else {
+        // The refilled twin of the zone is one block, with a fill per layer of the zone's set (`(layers ..)`).
+        let Some(zone_block_after) = find_after_block_for(&after_blocks, &mut used, z) else {
             eprintln!("{rel}: zone net={} layer={} priority={} had no matching outline after refill, skipping", z.net, z.layer, z.priority);
             continue;
         };
-        let kicad_paths = extract_filled_polygons(zone_block_after, &z.layer);
-        let kicad_area = area_paths(&kicad_paths).abs();
-        let xor = xor_paths(&our_paths, &kicad_paths, FillRule::NonZero);
-        let xor_area = area_paths(&xor).abs();
+        for layer in z.layer_set() {
+            let our_fill = fills.get(&z.id, layer);
+            let our_paths: Paths64 = our_fill.map(|f| f.polys.iter().filter_map(|p| p.first()).cloned().collect()).unwrap_or_default();
+            let our_area = our_fill.map(|f| f.area()).unwrap_or(0.0);
+            let kicad_paths = extract_filled_polygons(zone_block_after, layer);
+            let kicad_area = area_paths(&kicad_paths).abs();
+            let xor = xor_paths(&our_paths, &kicad_paths, FillRule::NonZero);
+            let xor_area = area_paths(&xor).abs();
 
-        write_svg(&format!("{}-{}-{}", name, z.layer.replace('.', "_"), rows.len()), &our_paths, &kicad_paths);
-        rows.push(ParityRow {
-            board: rel.to_string(),
-            net: format!("{} (prio {}{})", z.net, z.priority, if z.fill_mode == FillMode::HatchPattern { ", hatch" } else { "" }),
-            layer: z.layer.clone(),
-            our_area_mm2: our_area / 1_000_000.0,
-            kicad_area_mm2: kicad_area / 1_000_000.0,
-            area_pct_diff: if kicad_area > 0.0 { 100.0 * (our_area - kicad_area).abs() / kicad_area } else { 0.0 },
-            xor_area_mm2: xor_area / 1_000_000.0,
-            our_islands: our_paths.len(),
-            kicad_islands: kicad_paths.len(),
-            hot_spots: hot_spots(&xor),
-        });
+            write_svg(&format!("{}-{}-{}", name, layer.replace('.', "_"), rows.len()), &our_paths, &kicad_paths);
+            // `PARITY_ORDER=1`: the order of the islands in both fills (the centre of each one's box, mm), for a zone that loses its first island.
+            if std::env::var_os("PARITY_ORDER").is_some() {
+                let centre = |paths: &Paths64| -> Vec<(i64, i64)> {
+                    paths.iter().map(|p| (p.iter().map(|q| q.x).min().unwrap() / 2 + p.iter().map(|q| q.x).max().unwrap() / 2, p.iter().map(|q| q.y).min().unwrap() / 2 + p.iter().map(|q| q.y).max().unwrap() / 2)).map(|(x, y)| (x / 1000, y / 1000)).collect()
+                };
+                eprintln!("ORDER {rel} {} {layer}\n  ours  {:?}\n  kicad {:?}", z.net, centre(&our_paths), centre(&kicad_paths));
+                // The bottom-most vertex of each island (largest y, then smallest x): where Clipper2's sweep meets it first.
+                let bottom = |paths: &Paths64| -> Vec<(i64, i64)> { paths.iter().map(|p| p.iter().map(|q| (q.y, -q.x)).max().map(|(y, nx)| (-nx, y)).unwrap()).collect() };
+                eprintln!("  ours bottoms  {:?}\n  kicad bottoms {:?}", bottom(&our_paths), bottom(&kicad_paths));
+            }
+            rows.push(ParityRow {
+                board: rel.to_string(),
+                net: format!("{} (prio {}{})", z.net, z.priority, if z.fill_mode == FillMode::HatchPattern { ", hatch" } else { "" }),
+                layer: layer.to_string(),
+                our_area_mm2: our_area / 1_000_000.0,
+                kicad_area_mm2: kicad_area / 1_000_000.0,
+                area_pct_diff: if kicad_area > 0.0 { 100.0 * (our_area - kicad_area).abs() / kicad_area } else { 0.0 },
+                xor_area_mm2: xor_area / 1_000_000.0,
+                our_islands: our_paths.len(),
+                kicad_islands: kicad_paths.len(),
+                hot_spots: hot_spots(&xor),
+            });
+        }
     }
     rows
 }
@@ -724,4 +743,93 @@ fn kicad_cli_zone_fill_knocks_out_the_shapes_of_custom_pads() {
     let r = right[0];
     let xor_pct = 100.0 * r.xor_area_mm2 / r.kicad_area_mm2;
     assert!(r.area_pct_diff <= 2.5 && xor_pct <= 7.0, "the /right/GND fill drifts from kicad's by {:.2}% of the area and {xor_pct:.2}% XOR (the custom pads are their anchors again?):\n{}", r.area_pct_diff, parity_table(&rows));
+}
+
+/// Non-copper zones (`fillNonCopperZone`) and zones on several layers, against kicad-cli's own refill. `issue6260` has a zone on F.Mask, `issue6284` four (two on each mask
+/// layer), `issue22826` two on `*.Mask` (F.Mask and B.Mask at once, locked, with a minimum width of 0) next to copper zones on six layers at a time (`F.Cu` .. `In4.Cu`, `B.Cu`)
+/// and rule areas across copper, silkscreen, mask and paste. The non-copper fills are the outline pruned by the minimum width and cut by the rule areas that disallow
+/// pours: within 0.1% of kicad's, and the island count is kicad's, including the island kicad's refill drops from a non-copper zone with two (`FillIsolatedIslandsMap` reports
+/// the first polygon of a zone that is not in the connectivity as isolated). Slow tier: kicad-cli fills the boards too.
+#[test]
+fn kicad_cli_zone_fill_matches_on_non_copper_zones_and_zones_on_several_layers() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let mut rows = Vec::new();
+    for rel in ["issue6260.kicad_pcb", "issue22826/issue22826.kicad_pcb"] {
+        rows.extend(check_board_imported(&cli, rel));
+    }
+    println!("\n{}", parity_table(&rows));
+    let xor_pct = |r: &ParityRow| if r.kicad_area_mm2 > 0.0 { 100.0 * r.xor_area_mm2 / r.kicad_area_mm2 } else { 0.0 };
+    let non_copper: Vec<&ParityRow> = rows.iter().filter(|r| !r.layer.ends_with(".Cu")).collect();
+    assert!(non_copper.len() >= 5, "the non-copper zones were not compared: {} rows of {}", non_copper.len(), rows.len());
+    let off: Vec<ParityRow> = non_copper.iter().filter(|r| r.area_pct_diff > 0.1 || xor_pct(r) > 0.1 || r.our_islands != r.kicad_islands).map(|r| (*r).clone()).collect();
+    assert!(off.is_empty(), "a non-copper fill differs from kicad's:\n{}", parity_table(&off));
+
+    // The copper zones on several layers are one zone each now, with a row per layer: all of them within the tolerance of every other fill.
+    let copper: Vec<&ParityRow> = rows.iter().filter(|r| r.layer.ends_with(".Cu")).collect();
+    assert!(copper.iter().filter(|r| r.layer.starts_with("In")).count() >= 10, "the inner layers of the multi-layer zones were compared");
+    let worse: Vec<ParityRow> = copper.iter().filter(|r| r.area_pct_diff > MAX_AREA_DIFF_PCT || xor_pct(r) > MAX_XOR_PCT).map(|r| (*r).clone()).collect();
+    assert!(worse.is_empty(), "fills that differ from kicad's by more than {MAX_AREA_DIFF_PCT}% of the area or {MAX_XOR_PCT}% XOR:\n{}", parity_table(&worse));
+}
+
+/// The board we write loads in kicad-cli with its zones: a zone on two copper layers, a zone on a pair of silkscreen layers and a zone on one mask layer are written next to
+/// the board's own, `kicad-cli pcb drc --refill-zones --save-board` reads the file (KiCad's own parser, which also checks that a zone with no copper layer has no net) and writes
+/// it back (KiCad's own writer), and every zone is in what it wrote with the layers we gave it and a fill on each. The layers come back as `(layers ..)` of KiCad's own, so a
+/// file that parses but reads the set differently (one layer, or the wrong wildcard) fails here.
+#[test]
+fn kicad_cli_loads_the_non_copper_and_multi_layer_zones_we_write() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("kicad-cli not found; skipping");
+        return;
+    };
+    let src = qa_boards_dir().join("issue6260.kicad_pcb");
+    let (mut design, model, _) = import_kicad_pcb(&std::fs::read_to_string(&src).unwrap()).expect("import issue6260");
+    let rt = design.routing.get_or_insert_with(|| eda_model::ir::RoutingSection { tracks: vec![], vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() });
+    let square = |x: i64, y: i64, side: i64| vec![Point { x, y }, Point { x: x + side, y }, Point { x: x + side, y: y + side }, Point { x, y: y + side }];
+    let gnd = rt.zones.iter().find(|z| z.net == "GND").expect("the board's GND pour").net.clone();
+    // The board's own zones fill x 140..150 (the mask zone) and the copper around it; ours sit in the free area at x 100..110.
+    let mut both = Zone { id: "two_layers".into(), net: gnd, outline: square(101_000, 61_000, 8_000), priority: 7, ..Zone::default() };
+    both.set_layer_set(&["B.Cu", "F.Cu"]);
+    let mut silk = Zone { id: "silk_pair".into(), outline: square(101_000, 71_000, 8_000), min_thickness: 200, ..Zone::default() };
+    silk.set_layer_set(&["B.SilkS", "F.SilkS"]);
+    let mask = Zone { id: "mask_one".into(), layer: "F.Mask".into(), outline: square(101_000, 81_000, 8_000), min_thickness: 254, ..Zone::default() };
+    rt.zones.extend([both.clone(), silk.clone(), mask.clone()]);
+    rt.assign_missing_ids();
+
+    let dir = std::env::var_os("PARITY_TMP").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("eda_zone_filler_parity"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let work = dir.join("zones_we_write.kicad_pcb");
+    let written = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "zones" }).unwrap_or_else(|e| panic!("export: {e:?}"));
+    // What we wrote, before kicad-cli sees it.
+    assert!(written.contains("(layers \"F.Cu\" \"B.Cu\")") && written.contains("(layers \"*.SilkS\")"), "the layer sets are in the file");
+    std::fs::write(&work, &written).unwrap();
+    let out = Command::new(&cli).args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "report", "--output"]).arg(dir.join("zones_we_write.report")).arg(&work).output().expect("run kicad-cli");
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    eprintln!("kicad-cli stderr:\n{stderr}");
+    let after = std::fs::read_to_string(&work).unwrap();
+    assert!(after.contains("generator \"pcbnew\""), "kicad-cli read the board and saved it with its own writer");
+    let blocks = all_zone_blocks(&after);
+
+    for z in [&both, &silk, &mask] {
+        let first = (z.outline[0].x as f64 / 1000.0, z.outline[0].y as f64 / 1000.0);
+        let block = blocks.iter().find(|b| outline_first_pt(b).is_some_and(|p| dist2(p, first) < 1e-4)).unwrap_or_else(|| panic!("zone {} is not in what kicad-cli saved", z.id));
+        let layers = block_layers(block);
+        let want: std::collections::BTreeSet<String> = z.layer_set().into_iter().map(String::from).collect();
+        assert_eq!(layers, want, "zone {}: the layers kicad-cli read", z.id);
+        assert!(!z.layer_set().iter().all(|l| l.ends_with(".Cu")) == !block.contains("(net "), "zone {}: a zone with a copper layer has a net, one without has none:\n{block}", z.id);
+        for layer in z.layer_set() {
+            let fill = extract_filled_polygons(block, layer);
+            assert!(!fill.is_empty() && area_paths(&fill).abs() > 1.0e6, "zone {} has a fill on {layer} after kicad-cli's refill", z.id);
+        }
+    }
 }

@@ -261,23 +261,30 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
         zones.sort_by(|a, b| (&a.net, &a.layer).cmp(&(&b.net, &b.layer)));
         let drc_board_for_fill = eda_drc::board::build(design, model);
         let fills = eda_drc::fill::fill_all_zones(&drc_board_for_fill, &model.board);
+        // `BOARD::GetEnabledLayers`: the copper layers of the stackup and the technical and user layers Board Setup has on. A zone is written on those of its layer set.
+        let enabled: std::collections::BTreeSet<String> = model.board.layers.iter().chain(model.board.layer_setup.enabled.iter()).cloned().collect();
         for z in &zones {
             if z.outline.len() < 3 {
                 continue;
             }
             // A rule area has no net at all, whatever its `net` says (`ZONE::GetIsRuleArea()`); asking the
-            // net check about it rejected the whole export with `kicad.unknown_net`.
-            let n = if z.is_rule_area { 0 } else { net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net) };
+            // net check about it rejected the whole export with `kicad.unknown_net`. Neither has a zone on no
+            // copper layer (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
+            let n = if z.is_rule_area || !z.is_on_copper_layer() { 0 } else { net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net) };
             // Seeded by the zone's own id: two pours on one net and layer must not share a uuid.
             let uuid = crate::duid_for(&if z.id.is_empty() { format!("zone:{}:{}", z.net, z.layer) } else { format!("zone:{}", z.id) }, &z.id);
             written.entry(z.id.clone()).or_default().push(uuid.clone());
-            // Every disjoint fragment of the fill, as the one ring `(filled_polygon ..)` stores.
-            let fill: Vec<Vec<(i64, i64)>> = fills
-                .get(&z.id)
-                .map(|f| f.polys.iter().filter_map(|poly| poly.first()).filter(|ring| ring.len() >= 3).map(|ring| ring.iter().map(|p| (p.x, p.y)).collect()).collect())
-                .unwrap_or_default();
+            // Every disjoint fragment of the fill on each layer of the zone, as the one ring `(filled_polygon ..)` stores.
+            let layer_fills: Vec<(String, Vec<Vec<(i64, i64)>>)> = z
+                .layer_set()
+                .into_iter()
+                .filter_map(|layer| {
+                    let f = fills.get(&z.id, layer)?;
+                    Some((layer.to_string(), f.polys.iter().filter_map(|poly| poly.first()).filter(|ring| ring.len() >= 3).map(|ring| ring.iter().map(|p| (p.x, p.y)).collect()).collect()))
+                })
+                .collect();
             let mut block = String::new();
-            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fill: &fill });
+            write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, enabled_layers: Some(&enabled) });
             zone_blocks.push((z.parent_footprint.clone(), block));
         }
     }
@@ -1720,6 +1727,109 @@ mod tests {
         assert_eq!(*got, pour);
         assert_eq!(zones.iter().find(|z| z.net == "VIN").unwrap().pad_connection, eda_model::ir::PadConnection::ThtThermal);
         assert!(back.drawings.as_ref().unwrap().locked_ids.contains(&got.id), "the zone comes back locked");
+    }
+
+    /// `ZONE::GetLayerSet()` (`format( const ZONE* )` / `parseZONE`): a zone on the front and back copper is one `(zone ..)` with `(layers "F.Cu" "B.Cu")` and a
+    /// `(filled_polygon (layer ..))` per layer; it reads back as one zone with its layer set, not as two zones.
+    #[test]
+    fn a_zone_on_two_copper_layers_is_one_zone_with_a_fill_on_each_layer_and_reads_back_as_one() {
+        let (mut design, model) = fixture();
+        let mut pour = Zone { id: "zl".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
+        pour.set_layer_set(&["B.Cu", "F.Cu"]);
+        assert_eq!((pour.layer.as_str(), pour.layers.clone()), ("F.Cu", vec!["F.Cu".to_string(), "B.Cu".to_string()]), "the set is kept in UI order, the front first");
+        design.routing.as_mut().unwrap().zones = vec![pour.clone()];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("\t(zone").count(), 1, "one zone, not one per layer:\n{out}");
+        let zone = first_zone(&out);
+        assert!(zone.contains("(layers \"F.Cu\" \"B.Cu\")") && !zone.contains("(layer \"F.Cu\") (uuid"), "{zone}");
+        assert!(zone.contains("(net 1) (net_name \"GND\")"), "{zone}");
+        for layer in ["F.Cu", "B.Cu"] {
+            assert!(zone.contains(&format!("(filled_polygon\n\t\t\t(layer \"{layer}\")")), "a fill on {layer}:\n{zone}");
+        }
+        // The front's fill comes first, `GetLayerSet().Seq()` being in `PCB_LAYER_ID` order (F.Cu 0, B.Cu 2).
+        assert!(zone.find("(layer \"F.Cu\")\n").unwrap() < zone.find("(layer \"B.Cu\")\n").unwrap());
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let zones = &back.routing.as_ref().unwrap().zones;
+        assert_eq!(zones.len(), 1, "one zone comes back");
+        assert_eq!((zones[0].layer.as_str(), zones[0].layer_set()), ("F.Cu", vec!["F.Cu", "B.Cu"]));
+        assert_eq!(zones[0].net, "GND");
+    }
+
+    /// A zone with no copper layer (`ZONE::IsOnCopperLayer` false) has no net and, on a front and back pair of one technical layer, is written with the wildcard
+    /// `formatLayers` folds the pair into; `*.Mask`, `F&B.Cu` and `*.Cu` are all read back to the layers they stand for.
+    #[test]
+    fn a_non_copper_zone_has_no_net_is_written_with_its_wildcard_and_reads_back_with_its_layers() {
+        let (mut design, model) = fixture();
+        let silk = Zone { id: "zs".into(), net: "GND".into(), layer: "F.SilkS".into(), outline: square(1_000, 1_000, 6_000), ..Default::default() };
+        let mut mask = Zone { id: "zm".into(), outline: square(8_000, 1_000, 6_000), ..Default::default() };
+        mask.set_layer_set(&["B.Mask", "F.Mask"]);
+        design.routing.as_mut().unwrap().zones = vec![silk, mask];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let silk_block = out.split("\t(zone").skip(1).find(|z| z.contains("(layer \"F.SilkS\")")).expect("the silkscreen zone");
+        assert!(!silk_block.contains("(net ") && !silk_block.contains("(net_name"), "a non-copper zone has no net, whatever its net says: {silk_block}");
+        assert!(silk_block.contains("(filled_polygon") && silk_block.contains("(layer \"F.SilkS\")"), "and it is filled on its layer: {silk_block}");
+        let mask_block = out.split("\t(zone").skip(1).find(|z| z.contains("*.Mask")).expect("the mask zone");
+        assert!(mask_block.contains("(layers \"*.Mask\")"), "{mask_block}");
+        for layer in ["F.Mask", "B.Mask"] {
+            assert!(mask_block.contains(&format!("(layer \"{layer}\")")), "a fill on {layer}:\n{mask_block}");
+        }
+
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let zones = &back.routing.as_ref().unwrap().zones;
+        assert_eq!(zones.len(), 2, "both come back: a zone on a technical layer is no longer left out");
+        let silk = zones.iter().find(|z| z.layer == "F.SilkS").unwrap();
+        assert!(!silk.is_on_copper_layer() && silk.net.is_empty());
+        let mask = zones.iter().find(|z| z.layer == "F.Mask").unwrap();
+        assert_eq!(mask.layer_set(), vec!["F.Mask", "B.Mask"]);
+
+        // The other spellings of a layer set: `F&B.Cu` and `*.Cu` on this two-layer board, and a copper layer the board does not have is left out.
+        let wild = out.replace("(layers \"*.Mask\")", "(layers \"F&B.Cu\" \"In1.Cu\")");
+        let (back, _, _) = crate::import_kicad_pcb(&wild).unwrap();
+        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.id == "zm" || z.outline[0].x == 8_000).unwrap().clone();
+        assert_eq!(zone.layer_set(), vec!["F.Cu", "B.Cu"], "In1.Cu is not a layer of this board");
+        let all = out.replace("(layers \"*.Mask\")", "(layers \"*.Cu\")");
+        let (back, _, _) = crate::import_kicad_pcb(&all).unwrap();
+        let zone = back.routing.as_ref().unwrap().zones.iter().find(|z| z.outline[0].x == 8_000).unwrap().clone();
+        assert_eq!(zone.layer_set(), vec!["F.Cu", "B.Cu"]);
+    }
+
+    /// On a four-layer board a zone on all of them is written layer by layer in `PCB_LAYER_ID` order (F.Cu 0, B.Cu 2, In1.Cu 4, In2.Cu 6) and read back in the order
+    /// the Zone Manager lists them (the copper stack from the front); a fill is written for each layer that has one, whatever order the set is in.
+    #[test]
+    fn a_zone_on_a_four_layer_stack_keeps_its_layers_in_both_orders() {
+        let (mut design, mut model) = fixture();
+        model.board.layers = eda_model::rules::copper_layer_names(4);
+        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
+        pour.set_layer_set(&["In2.Cu", "B.Cu", "F.Cu", "In1.Cu"]);
+        assert_eq!(pour.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+        design.routing.as_mut().unwrap().zones = vec![pour];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(layers \"F.Cu\" \"B.Cu\" \"In1.Cu\" \"In2.Cu\")"), "{}", first_zone(&out));
+        let order: Vec<&str> = first_zone(&out).lines().filter(|l| l.contains("(layer \"") && !l.contains("(zone")).map(|l| l.trim()).collect();
+        assert_eq!(order, vec!["(layer \"F.Cu\")", "(layer \"B.Cu\")", "(layer \"In1.Cu\")", "(layer \"In2.Cu\")"], "one fill per layer, in file order");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let zones = &back.routing.as_ref().unwrap().zones;
+        assert_eq!(zones.len(), 1);
+        assert_eq!(zones[0].layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
+    }
+
+    /// A rule area spans the layers it is drawn on, copper or not (`issue22826`'s keepouts are on copper, silkscreen, mask and paste at once): the set is kept as it is
+    /// written, and the technical layers on a board that has turned them off are left out of the file, as `format( const ZONE* )` masks the set with the enabled layers.
+    #[test]
+    fn a_rule_area_keeps_its_technical_layers_and_the_file_leaves_out_the_ones_the_board_has_off() {
+        let (mut design, mut model) = fixture();
+        let mut keepout = Zone { id: "ka".into(), outline: square(1_000, 1_000, 6_000), is_rule_area: true, keepout_copper_pour: true, ..Default::default() };
+        keepout.set_layer_set(&["F.Cu", "B.Cu", "F.SilkS", "F.Mask"]);
+        design.routing.as_mut().unwrap().zones = vec![keepout.clone()];
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(layers \"F.Cu\" \"F.Mask\" \"B.Cu\" \"F.SilkS\")"), "KiCad's PCB_LAYER_ID order:\n{}", first_zone(&out));
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.routing.as_ref().unwrap().zones[0].layer_set(), vec!["F.Cu", "B.Cu", "F.SilkS", "F.Mask"]);
+
+        model.board.layer_setup.enabled.retain(|l| l != "F.SilkS");
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(layers \"F.Cu\" \"F.Mask\" \"B.Cu\")"), "F.SilkS is not a layer of this board:\n{}", first_zone(&out));
     }
 
     #[test]

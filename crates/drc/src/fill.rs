@@ -75,39 +75,45 @@ fn fill_pad(p: &crate::board::DrcPad) -> FillPad {
     }
 }
 
-/// One zone's computed fill.
+/// One zone's computed fill on one layer.
 pub struct ZoneFill {
     pub fill: ShapePolySet,
 }
 
 pub struct FillResults {
-    /// Keyed by `Zone::id` (every zone filled here is expected to already
-    /// have one -- see `RoutingSection::assign_missing_ids`).
-    pub zones: HashMap<String, ZoneFill>,
+    /// Keyed by `(Zone::id, layer)`: a zone on several layers (`Zone::layers`) has a fill on each (every zone filled here is expected to
+    /// already have an id -- see `RoutingSection::assign_missing_ids`).
+    pub zones: HashMap<(String, String), ZoneFill>,
 }
 
 impl FillResults {
-    pub fn get(&self, zone_id: &str) -> Option<&ShapePolySet> {
-        self.zones.get(zone_id).map(|z| &z.fill)
+    /// The fill of `zone_id` on `layer` (`ZONE::GetFilledPolysList( layer )`); `None` when the zone has none there.
+    pub fn get(&self, zone_id: &str, layer: &str) -> Option<&ShapePolySet> {
+        self.zones.get(&(zone_id.to_string(), layer.to_string())).map(|z| &z.fill)
     }
 
-    /// Every disjoint fragment of `zone_id`'s fill as a `Shape::Polygon`,
+    /// The fills of `zone_id`, one per layer it has one on, in no particular order.
+    pub fn layers_of<'a>(&'a self, zone_id: &'a str) -> impl Iterator<Item = (&'a str, &'a ShapePolySet)> + 'a {
+        self.zones.iter().filter(move |((id, _), _)| id == zone_id).map(|((_, layer), z)| (layer.as_str(), &z.fill))
+    }
+
+    /// Every disjoint fragment of `zone_id`'s fill on `layer` as a `Shape::Polygon`,
     /// for a clearance/collision test -- `fallback` (typically the zone's
     /// raw outline) when there's no fill on record for it (no stable id, or
     /// the zone wasn't included in this `FillResults`).
-    pub fn fragments_or(&self, zone_id: &str, fallback: DrcShape) -> Vec<DrcShape> {
+    pub fn fragments_or(&self, zone_id: &str, layer: &str, fallback: DrcShape) -> Vec<DrcShape> {
         // A zone that *was* filled but came out empty (every island removed,
         // or fully knocked out) has no copper to collide with -- `ZONE::
         // GetFill()` is an empty `SHAPE_POLY_SET`, never the outline.
-        match self.get(zone_id) {
+        match self.get(zone_id, layer) {
             Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).filter(|c| c.len() >= 3).map(|chain| DrcShape::Polygon { pts: chain.iter().map(|p| Point { x: p.x, y: p.y }).collect() }).collect(),
             None => vec![fallback],
         }
     }
 }
 
-/// `ZONE_FILLER::Fill`, for every zone in `board.zones`: each zone's own
-/// layer (this model has no multi-layer zones) via `eda_zone_filler::fill_board` -- zones filled from the highest priority
+/// `ZONE_FILLER::Fill`, for every zone in `board.zones` (a copper pour on each of its layers, `DrcBoard::zones` having one entry per layer) and every non-copper
+/// zone of `board.non_copper_zones`, via `eda_zone_filler::fill_board` -- zones filled from the highest priority
 /// down and knocked out by each other's copper, islands removed by connectivity, lower-priority zones refilled when a
 /// zone above them loses islands.
 pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
@@ -162,6 +168,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
         board_outline,
         board_outline_invalid,
         edge_cuts,
+        knockouts: board.mask.knockouts.iter().map(|k| eda_zone_filler::FillKnockout { layer: k.layer.clone(), shape: convert_shape(&k.shape) }).collect(),
         keepouts,
         hole_clearance: crate::constraints::hole_clearance_min(rules),
         worst_clearance,
@@ -173,6 +180,7 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
     let zones: Vec<Zone> = board
         .zones
         .iter()
+        .chain(board.non_copper_zones.iter())
         .map(|z| Zone {
             id: z.id.clone(),
             net: z.net.clone().unwrap_or_default(),
@@ -205,8 +213,8 @@ pub fn fill_all_zones(board: &DrcBoard, rules: &BoardRules) -> FillResults {
     let fills = eda_zone_filler::fill_board(&zones, &input, clearance_fn, DEFAULT_MAX_ERROR);
 
     let mut out = FillResults { zones: HashMap::new() };
-    for (z, fill) in board.zones.iter().zip(fills) {
-        out.zones.insert(z.id.clone(), ZoneFill { fill });
+    for (z, fill) in board.zones.iter().chain(board.non_copper_zones.iter()).zip(fills) {
+        out.zones.insert((z.id.clone(), z.layer.clone()), ZoneFill { fill });
     }
     out
 }

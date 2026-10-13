@@ -218,10 +218,10 @@ export function moveZone(order: readonly string[], visible: readonly string[], i
 }
 
 /** `MODEL_ZONES_OVERVIEW::ApplyFilter`: the zones whose name and/or net contain the text (case-insensitive) and that are on `layer` (null = any). */
-export function filterZones<Z extends { id: string; net: string; layer: string }>(zones: readonly Z[], text: string, byName: boolean, byNet: boolean, layer: string | null): Z[] {
+export function filterZones<Z extends { id: string; net: string; layer: string; layers?: readonly string[] }>(zones: readonly Z[], text: string, byName: boolean, byNet: boolean, layer: string | null): Z[] {
   const needle = text.trim().toLowerCase();
   return zones.filter((z) => {
-    if (layer && z.layer !== layer) return false;
+    if (layer && !(z.layers && z.layers.length > 0 ? z.layers.includes(layer) : z.layer === layer)) return false;
     if (!needle) return true;
     return (byName && z.id.toLowerCase().includes(needle)) || (byNet && z.net.toLowerCase().includes(needle));
   });

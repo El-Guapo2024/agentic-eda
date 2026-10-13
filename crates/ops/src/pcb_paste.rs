@@ -422,7 +422,7 @@ impl Board<'_> {
         }
         let mut zone_ix: Vec<Option<usize>> = Vec::new();
         for z in &clip.zones {
-            if !copper_ok(&z.layer) {
+            if !z.layer_set().into_iter().all(copper_ok) {
                 zone_ix.push(None);
                 continue;
             }

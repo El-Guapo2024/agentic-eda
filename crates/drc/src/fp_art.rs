@@ -5,7 +5,7 @@
 //!
 //! The text shapes are the ones `eda_drc::stroke_font` lays out (`EDA_TEXT::GetEffectiveTextShape`); a graphic is `PCB_SHAPE::GetEffectiveShape` ([`crate::board::effective_shapes`]).
 
-use crate::board::{effective_shapes, footprint_text_shape, DrcCopperGraphic, DrcGraphic, DrcSilk, MaskData};
+use crate::board::{effective_shapes, footprint_text_shape, DrcCopperGraphic, DrcGraphic, DrcKnockout, DrcSilk, MaskData};
 use crate::kimath::{Seg, Shape};
 use eda_model::fp_art::TextVars;
 use eda_model::fp_edit::{effective_reference, effective_value, FieldLayout, REFERENCE, VALUE};
@@ -68,6 +68,11 @@ pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInst
         fields.push((f.name.as_str(), f.layout.clone(), f.text.clone()));
     }
     for (name, layout, shown) in fields {
+        if layout.visible && layout.knockout && !shown.is_empty() && !layout.layer.ends_with(".Cu") {
+            if let Some(shape) = footprint_text_shape(&field_text(&layout, &shown, fp)) {
+                mask.knockouts.push(DrcKnockout { layer: layout.layer.clone(), shape });
+            }
+        }
         if !layout.visible || shown.is_empty() || !silk(&layout.layer) {
             continue;
         }
@@ -81,10 +86,18 @@ pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInst
     let vars = TextVars { reference: &fp.id, value, footprint: part.footprint.as_deref().or(part.package.as_deref()).unwrap_or("") };
     for t in &footprint.art.texts {
         let placed = t.placed(fp, &vars);
-        if !silk(&placed.layer) || placed.text.is_empty() {
+        if placed.text.is_empty() {
             continue;
         }
         let text = FootprintText { text: placed.text.clone(), layer: placed.layer.clone(), at: placed.at, angle_file_mdeg: placed.angle, size: placed.size, thickness: placed.thickness, halign: placed.halign, valign: placed.valign, mirror: placed.mirror, keep_upright: placed.keep_upright, bold: placed.bold };
+        if placed.knockout && !placed.layer.ends_with(".Cu") {
+            if let Some(shape) = footprint_text_shape(&text) {
+                mask.knockouts.push(DrcKnockout { layer: placed.layer.clone(), shape });
+            }
+        }
+        if !silk(&placed.layer) {
+            continue;
+        }
         if let Some(shape) = footprint_text_shape(&text) {
             mask.silk.push(DrcSilk { fp: Some(index), id: format!("{}.t{}", fp.id, mask.silk.len()), desc: format!("Footprint text '{}' of {}", placed.text, fp.id), pos: placed.at, layer: placed.layer, shapes: vec![shape], is_shape: false });
         }
