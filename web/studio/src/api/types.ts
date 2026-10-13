@@ -2861,3 +2861,67 @@ export interface ErcPinMapReply {
   /** True when the design stores its own map (`schematic.erc_pin_map`). */
   custom: boolean;
 }
+
+/** `POST /api/inspect/{clearance,constraints}` (Inspect > Clearance Resolution / Constraints Resolution, `BOARD_INSPECTION_TOOL`): the report pages in KiCad's
+ * wording (HTML lines) with the winning constraint of each, as numbers (nanometres), and every rule it considered. Read-only: it shows which rule wins, it checks nothing. */
+export interface InspectConsidered {
+  rule: string;
+  implicit: boolean;
+  constraint: string;
+  condition: string;
+  applied: boolean;
+  note: string;
+}
+
+export interface InspectResolution {
+  constraint: string;
+  layer: string | null;
+  min: number | null;
+  opt: number | null;
+  max: number | null;
+  rule: string;
+  implicit: boolean;
+  null: boolean;
+  zone_connection: string | null;
+  disallowed: boolean;
+  considered: InspectConsidered[];
+}
+
+export interface InspectPage {
+  title: string;
+  lines: string[];
+  /** A page that is one report per copper layer (the "Clearance" page of items that share several): the layer in the board file, its shown name, its lines. */
+  per_layer: { layer: string; name: string; lines: string[] }[];
+  resolutions: InspectResolution[];
+}
+
+export interface InspectReply {
+  ok: boolean;
+  /** Set when `ok` is false: the info bar message (`ShowInfoBarError`). */
+  message?: string;
+  title: string;
+  /** The `.kicad_dru` did not compile: the report is on the implicit rules alone. */
+  compile_error: string | null;
+  pages: InspectPage[];
+}
+
+/** `POST /api/footprint/check` (the Footprint Editor's Footprint Checker, `DIALOG_FOOTPRINT_CHECKER`): the markers kicad-cli's DRC puts on a scratch board that holds the footprint
+ * being edited -- courtyard, attribute, pad, shorting-pad, net-tie and silkscreen checks -- with the editor's own item ids on the items. */
+export interface FpCheckMarker {
+  /** The check, by the board DRC's key: `missing_courtyard`, `malformed_courtyard`, `shorting_items`, `padstack_invalid`, `footprint_type_mismatch`, ... */
+  type: string;
+  description: string;
+  severity: "error" | "warning" | "exclusion" | "ignore";
+  /** Where the marker is drawn, micrometres, the footprint's own frame. */
+  at: [Um, Um];
+  /** The items the violation names: kicad-cli's description, their position, and the editor's id (a pad, a graphic, a text) when it is one of the footprint's. */
+  items: { description: string; pos: [Um, Um]; id: string | null }[];
+}
+
+export interface FpCheckReply {
+  ok: boolean;
+  message?: string;
+  engine?: string;
+  markers?: FpCheckMarker[];
+  counts?: { errors: number; warnings: number };
+}

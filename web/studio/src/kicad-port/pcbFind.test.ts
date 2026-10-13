@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { BoardState, Part } from "../api/types";
+import type { BoardState, FieldInfo, Part, Zone } from "../api/types";
 import { boardNetNames, defaultFindOptions, findHits, findStatus, focusView, preloadText, stepFind, textMatches, type PcbFindOptions, type PcbHit } from "./pcbFind";
 
 const opts = (over: Partial<PcbFindOptions> = {}): PcbFindOptions => ({ ...defaultFindOptions(), ...over });
@@ -87,6 +87,83 @@ test("an empty search finds nothing", () => {
 
 test("the nets of the board are those of its pads, tracks, vias and zones, by name", () => {
   assert.deepEqual(boardNetNames(sample()), ["GND", "SIG", "VCC"]);
+});
+
+// ------------------------------------------------------------------------------------------------------------------- what the IR has since
+
+const fld = (name: string, text: string, visible = true): FieldInfo =>
+  ({ id: `X:${name}`, name, text, x: 0, y: 0, angle: 0, w: 1000, h: 1000, thickness: 150, layer: "F.SilkS", visible, halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: false, knockout: false, lx: 0, ly: 0, langle: 0, custom: false }) as FieldInfo;
+const withFields = (p: Part, fields: FieldInfo[], texts: Part["texts"] = undefined): Part => ({ ...p, fields, ...(texts ? { texts } : {}) });
+const zone = (id: string, name: string | undefined, over: Partial<Zone> = {}): Zone => ({ id, name, net: "GND", layer: "F.Cu", is_rule_area: false, outline: [[0, 0], [1, 0], [1, 1]], ...over }) as unknown as Zone;
+const ids = (hits: PcbHit[]): string[] => hits.map((h) => (h.kind === "marker" ? `marker${h.index}` : h.id));
+
+test("a user field is searched with other text items on, whatever references and values say", () => {
+  const b = board({
+    parts: [
+      withFields(part("R1", "10k"), [fld("Reference", "R1"), fld("Value", "10k"), fld("Supplier", "ACME-4711")]),
+      withFields(part("R2", "10k"), [fld("Reference", "R2"), fld("Value", "10k"), fld("Supplier", "Other")]),
+    ],
+  });
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "acme" }))), ["R1"]);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "acme", texts: false }))), [], "texts off: the field is not looked at");
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "acme", references: false, values: false }))), ["R1"], "references and values off does not matter: it is a field");
+  // KiCad's loop over every field makes the Reference field a hit of "other text items" too
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "R2", references: false, values: false, nets: false }))), ["R2"]);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "R2", references: false, values: false, texts: false, nets: false }))), []);
+});
+
+test("a hidden field is searched only with Include hidden fields; a hidden Reference or Value too", () => {
+  const b = board({
+    parts: [
+      withFields(part("R1", "10k"), [fld("Reference", "R1"), fld("Value", "10k"), fld("Supplier", "ACME", false)]),
+      withFields(part("R2", "47k"), [fld("Reference", "R2", false), fld("Value", "47k", false)]),
+    ],
+  });
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "acme" }))), []);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "acme", hidden: true }))), ["R1"]);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "R2" }))), [], "R2's reference is not shown");
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "R2", hidden: true }))), ["R2"]);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "47k" }))), []);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "47k", hidden: true }))), ["R2"]);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "R2", hidden: true, texts: false }))), ["R2"], "the Reference field counts for references on its own");
+});
+
+test("a footprint's own text is searched as KiCad stores it: the variable, not what it shows", () => {
+  const texts: Part["texts"] = [
+    { id: "U1~t0", text: "U1", x: 0, y: 0, angle: 0, w: 1000, h: 1000, thickness: 150, layer: "F.Fab", halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: false, knockout: false, role: "reference" },
+    { id: "U1~t1", text: "pin 1 here", x: 0, y: 0, angle: 0, w: 1000, h: 1000, thickness: 150, layer: "F.SilkS", halign: 0, valign: 0, mirror: false, bold: false, italic: false, upright: false, knockout: false },
+  ];
+  const b = board({ parts: [withFields(part("U1", "MCU"), [fld("Reference", "U1"), fld("Value", "MCU")], texts), part("U2", "x")] });
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "REFERENCE", references: false, values: false }))), ["U1"], "`${REFERENCE}`");
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "pin 1", references: false, values: false }))), ["U1"]);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "pin 1", references: false, values: false, texts: false }))), []);
+});
+
+test("a zone is found by its name after the board's texts; an unnamed zone has the empty name, which only a mask of * matches", () => {
+  const b = board({
+    parts: [part("R1", "10k")],
+    routing: { tracks: [], vias: [], zones: [zone("z1", "keepout"), zone("z2", undefined, { is_rule_area: true }), zone("z3", "KEEPOUT 2")], track_width_presets: [], via_presets: [], teardrop_settings: {} } as unknown as BoardState["routing"],
+    drawings: drawings([text("x1", "keepout note")]),
+  });
+  assert.deepEqual(ids(findHits(b, [{ description: "keepout marker" }], opts({ text: "keepout", nets: false }))), ["x1", "z1", "z3", "marker0"], "texts, then zones, then markers");
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "keepout", texts: false }))), [], "other text items off: no zones");
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "*", wildcards: true, references: false, values: false, nets: false }))), ["x1", "z1", "z2", "z3"], "every text and every zone, the unnamed one too, match a bare *");
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "keepout", matchCase: true }))), ["x1", "z1"], "Match case");
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "keepout", wholeWord: true, nets: false }))), ["x1", "z1", "z3"], "whole words");
+});
+
+test("a text is searched as UnescapeString( GetText() )", () => {
+  const b = board({ drawings: drawings([text("x1", "a{slash}b"), text("x2", "brace{brace}")]) });
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "a/b" }))), ["x1"]);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "{slash}" }))), []);
+  assert.deepEqual(ids(findHits(b, [], opts({ text: "e{" }))), ["x2"]);
+});
+
+test("the dialog also opens with the first line of the selected field", () => {
+  const b = board({ parts: [withFields(part("R1", "10k"), [{ ...fld("Reference", "R1"), id: "R1:Reference" }, { ...fld("Supplier", "ACME\nLtd"), id: "R1:Supplier" }])] });
+  assert.equal(preloadText(b, new Set(["R1:Supplier"])), "ACME");
+  assert.equal(preloadText(b, new Set(["R1:Reference"])), "R1");
+  assert.equal(preloadText(board({ parts: [part("R1", "a{comma}b")] }), new Set(["R1"])), "a,b", "UnescapeString( GetValue() )");
 });
 
 // ------------------------------------------------------------------------------------------------------------------------------------------ the walk

@@ -16,6 +16,7 @@
 import type { BoardState, BoardText, Cmd, CmdDimension, Dimension, FieldInfo, Group, Pad, PadShapeName, Part, PointXY, Shape, Track, Um, Via, Zone } from "../api/types";
 import type { LengthUnit } from "../state/units";
 import { enabledOptionalLayers, layerDisplayName } from "./boardLayers";
+import { effectiveClassName } from "./boardSetupRules";
 import { toCmdDimension } from "./dimensionConvert";
 import { editAttrsCmd, editFieldCmd, editPadCmd, fieldById, localAngleOf } from "./fpFields";
 import { arcShapeCenter, padById } from "./pcbItems";
@@ -168,6 +169,37 @@ export function pcbItemsOf(board: BoardState, ids: Iterable<string>): PcbItem[] 
 }
 
 const isCopper = (layer: string): boolean => layer.endsWith(".Cu");
+
+/** `ENUM_MAP<KICAD_T>`: the name the language of expressions and Find by Properties know the class of an item by. */
+export function typeName(item: PcbItem): string {
+  switch (item.type) {
+    case "FOOTPRINT":
+      return "Footprint";
+    case "PAD":
+      return "Pad";
+    case "PCB_TRACK":
+    case "PCB_ARC":
+      return "Track";
+    case "PCB_VIA":
+      return "Via";
+    case "ZONE":
+      return "Zone";
+    case "PCB_TEXT":
+    case "PCB_FIELD":
+      return "Text";
+    case "PCB_SHAPE":
+      return "Graphic";
+    case "PCB_DIM_LEADER":
+      return "Leader";
+    case "PCB_GROUP":
+      return "Group";
+    default:
+      return "Dimension";
+  }
+}
+
+/** Every `KICAD_T` name an item here can have (the choices of the Type property). */
+export const TYPE_NAMES: readonly string[] = ["Dimension", "Footprint", "Graphic", "Group", "Leader", "Pad", "Text", "Track", "Via", "Zone"];
 
 /** `GetFriendlyName()`: the caption of a single selected item (`EDA_ITEM::GetFriendlyName`, `PCB_TRACK::`, `ZONE::`). */
 export function pcbFriendlyName(item: PcbItem): string {
@@ -402,8 +434,15 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
   const pm = new PropertyManager<PcbItem, PcbCtx, Cmd>();
   const add = (def: PD, group = "") => pm.addProperty(def, group);
 
+  // ----------------------------------------------------------------------------------------------------------------------- EDA_ITEM
+  // `EDA_ITEM_DESC`: "Type", the class of the item by the name `ENUM_MAP<KICAD_T>` gives it, hidden from the Properties panel (Find by Properties lists it, and so
+  // does the language of expressions: `A.Type == 'Via'`).
+  pm.registerType("EDA_ITEM");
+  add({ owner: "EDA_ITEM", name: "Type", kind: "enum", hidden: true, choices: () => choicesOf(TYPE_NAMES), get: (i) => typeName(i) });
+
   // ---------------------------------------------------------------------------------------------------------------- BOARD_ITEM
   pm.registerType("BOARD_ITEM");
+  pm.inheritsAfter("BOARD_ITEM", "EDA_ITEM");
 
   /** `BOARD_ITEM::GetPosition()` (`pcbItems.ts`'s `itemPosition`, read off the item): a pad's is its own (a pad moves its footprint), a dimension's its first feature point. */
   const position = (i: PcbItem): [number, number] => positionOf(i);
@@ -463,6 +502,8 @@ function build(): PropertyManager<PcbItem, PcbCtx, Cmd> {
     },
   });
   const netOf = (i: PcbItem): string => i.track?.net ?? i.via?.net ?? i.zone?.net ?? i.pad?.net ?? "";
+  // `BOARD_CONNECTED_ITEM_DESC`: "Net Class", the name of the net's effective class, hidden from the panel (it is how a rule says `A.Net_Class`).
+  add({ owner: "BOARD_CONNECTED_ITEM", name: "Net Class", kind: "string", hidden: true, get: (i, c) => (netOf(i) === "" ? "Default" : effectiveClassName(c.board.board_rules?.net_classes ?? [], netOf(i))) });
   add({
     owner: "BOARD_CONNECTED_ITEM",
     name: "Net",

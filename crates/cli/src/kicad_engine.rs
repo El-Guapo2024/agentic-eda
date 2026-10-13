@@ -252,6 +252,21 @@ pub fn check_rules(_dir: &Path, body: &[u8]) -> Value {
     eda_kicad_engine::check_rules(text).map(|c| c.to_json()).unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }))
 }
 
+/// `POST /api/footprint/check` (the Footprint Editor's Inspect > Footprint Checker, `DIALOG_FOOTPRINT_CHECKER`): `{ name }`, the footprint open in the editor (its project
+/// library entry, else what the libraries resolve the name to), checked by kicad-cli's DRC on a scratch board that holds it (`eda_kicad_engine::footprint_check`):
+/// `{ ok, engine, markers: [{ type, description, severity, at, items }], counts }`. Nothing here checks a footprint; the board is not involved.
+pub fn footprint_check(dir: &Path, body: &[u8]) -> Value {
+    let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let Some(name) = req.get("name").and_then(Value::as_str) else {
+        return json!({ "ok": false, "message": "footprint_check needs {\"name\": the footprint}" });
+    };
+    let run = || -> Result<Value, Vec<CheckResult>> {
+        let (fp, _) = crate::library_api::footprint_any(dir, name)?;
+        Ok(eda_kicad_engine::footprint_check::footprint_check(&fp)?.to_json())
+    };
+    run().unwrap_or_else(|e| json!({ "ok": false, "message": board::reasons(&e) }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

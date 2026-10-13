@@ -112,7 +112,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview | mostly done | S |
 | 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
 | 10 | P10 Schematic details | 1, 12, 15, 17, 20 | no schematic groups, a user-defined field has no place on the sheet, no Pin Helpers menu (done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
-| 11 | P11 Search and inspection | 21, 29 | Find by Properties, Clearance Resolution, Footprint Checker; Find ignores user fields and zone names | open | M-L |
+| 11 | P11 Search and inspection | 21, 29 | **done 2026-10-13 on `task-search-inspect` (not merged)**: Find by Properties (the From Selection tab and the Query tab on KiCad's expression language), Find following user fields, hidden fields and zone names, Clearance Resolution and Constraints Resolution (a rule engine in `crates/drc`: the implicit rules, the `.kicad_dru`, `EvalRules` with KiCad's report text), the Footprint Checker (kicad-cli's DRC on a scratch board). Items 21 and 29 list what is left | done (not merged) | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
 | 13 | P13 Zone leftovers | 13 | non-copper zones, multi-layer zones, `connect_nearby_polys`, mask-only NPTH knockouts | open | L |
 | 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | done 2026-10-13 on `task-fp-3d` (not merged); item 30 lists what is left | M |
@@ -436,13 +436,17 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `common/view/wx_view_controls.cpp`.
 
 ### 21. Find on the PCB
-**Mostly done (2026-10-08/09, `4c041a6`).** Hit: often on big boards. Blocks: no. Package P11.
+**Done (Find 2026-10-08/09, `4c041a6`; Find by Properties and Find on the IR 2026-10-13 on `task-search-inspect`, not merged).** Hit: often on big boards. Blocks: no. Package P11.
 - Done (`PARITY-pcb.md` section 7a): Find (Ctrl+F), Find Next (F3) and Find Previous (Shift+F3) on the board from `DIALOG_FIND`: history, Match case, Whole words only, Wildcards, Wrap, footprint references, values,
   other texts, DRC markers and net names, in KiCad's order, the hit selected and the view brought to it (`kicad-port/pcbFind.ts`, `components/PcbFindDialog.tsx`).
-- Missing: Find by Properties (stale reason: the property registry exists; Properties tab M, Query tab M more; `STALE-REASONS.md` SR2); **Find does not follow the IR that landed after it**: user fields and hidden
-  fields ("Include hidden fields" does nothing) and zone names (`Zone.name` exists; `pcbFind.ts` still says a zone has no name) are not searched; the dialog's "Show search panel" link
-  (`common.Interactive.search` still jumps to the Activity tab). Find and Replace is the schematic's only, as in KiCad.
-- Port from: `pcbnew/dialogs/dialog_find.cpp`, `dialog_find_by_properties.cpp`.
+- Done (section 32a): Find by Properties, Edit > Find by Properties...: the From Selection tab (the properties the selected items share, a Match mode each, Select Matching with Deselect non-matching items and Zoom to fit) and the Query tab
+  on KiCad's expression language (`kicad-port/{libeval,pcbExpr,findByProperties}.ts`, a port of `libeval_compiler`: lexer, grammar with its precedences, code generator and stack machine), Recently Used, Check Syntax and Create from Selection Tab
+  (`components/FindByPropertiesDialog.tsx`). 57 `node --test` cases and `e2e/search-inspect.check.js`.
+- Done (section 32b): Find follows the IR: a footprint is found by any of its fields (a user field's text) and its own texts, a hidden field only with Include hidden fields, a zone by its name; the dialog opens with a selected field's first line.
+- Missing: the dialog's "Show search panel" link (the studio has no Search panel; `common.Interactive.search` still jumps to the Activity tab); on the Query tab the geometry functions (`intersectsCourtyard`, `intersectsArea`, `enclosedByArea`),
+  `fromTo`, `memberOfSheet` and `hasComponentClass` say false (the rule engine of Clearance Resolution, `crates/drc/src/pcbexpr.rs`, has the geometry ones), `A.Net` is the net's name (KiCad's is the net code) and Recently Used is kept in the browser, not the project file;
+  a footprint's graphics and texts other than its fields are not items of the selection, so a query cannot select them; the nets of the hit list are in name order (KiCad's is by net code). Find and Replace is the schematic's only, as in KiCad.
+- Port from: `pcbnew/dialogs/dialog_find.cpp`, `dialog_find_by_properties.cpp`, `pcbnew/pcbexpr_evaluator.cpp`, `common/libeval_compiler/`.
 
 ### 22. Arrays of footprints
 **Mostly done (2026-10-09, `afcb91b`).** Hit: connector rows, LED grids. Blocks: no.
@@ -534,11 +538,23 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `eeschema/import_gfx/`, `pcbnew/tools/pcb_control.cpp` (`AppendBoard`), `board_editor_control.cpp` (`ImportNetlist`), `eeschema/tools/sch_drawing_tools.cpp` (`ImportSheet`).
 
 ### 29. Search and inspection tools
-**New, open.** Hit: occasionally; Clearance Resolution is how a DRC error is understood. Blocks: no. Package P11, size M-L.
-- Find by Properties (the registry exists), Clearance Resolution and Constraints Resolution (`crates/drc/src/constraints.rs` is a partial `EvalRules` the router and the zone filler already use), the Footprint
-  Checker (a scratch board with one footprint through `kicad-cli pcb drc`, filtered), Find following the new IR (item 21), the DRC Rule Editor (item 3). `STALE-REASONS.md` SR2.
-- Port from: `pcbnew/dialogs/dialog_find_by_properties.cpp`, `pcbnew/pcbexpr_evaluator.cpp`, `pcbnew/tools/board_inspection_tool.cpp` (`InspectClearance`, `InspectConstraints`),
-  `pcbnew/drc/drc_engine.cpp` (`EvalRules`), `pcbnew/dialogs/dialog_footprint_checker.cpp`.
+**Done 2026-10-13 on `task-search-inspect` (not merged); what is left below.** Hit: occasionally; Clearance Resolution is how a DRC error is understood. Blocks: no. Package P11, size M-L.
+- Done (`PARITY-pcb.md` sections 32a to 32c, `PARITY-fpedit.md` section 12): Find by Properties and Find following the IR (item 21); **Inspect > Clearance Resolution and Constraints Resolution**: `crates/drc` now holds KiCad's PCB expression language
+  (`libeval.rs`, `pcbexpr.rs`: the lexer and grammar, the code generator, the stack machine and the built-in functions), the `.kicad_dru` parser (`dru.rs`, `DRC_RULES_PARSER`) and `DRC_ENGINE::EvalRules` (`constraints.rs`, `RuleEngine::eval_rules`: the implicit rules
+  of the board setup, the net classes and the composite ones, the diff pairs and the keepout areas, then the rules file in order, the local overrides of a pad and a footprint and a zone's own clearance, net ties, the board minimum and the assertions) in one function that returns
+  the winning constraint and every rule it considered with KiCad's report text; `rule_board.rs` makes the items and the rules of a design, `inspect.rs` the report pages (`reportClearance`, `InspectConstraints`), `crates/cli/src/inspect_api.rs` the route
+  (`POST /api/inspect/{clearance,constraints}`), `components/InspectReportDialog.tsx` the two dialogs and `actions/inspectActions.ts` the commands with KiCad's selection and picker rules. This inspects the rules; kicad-cli stays the only DRC engine.
+  Proof against kicad-cli (`EDA_SLOW_TESTS=1`): for a net class, an explicit rule and a loosening rule the clearance the report resolves is the one kicad-cli's DRC enforces (a violation 10 um under it, none 10 um over); the rule sets of
+  `qa/data/pcbnew` (38 `.kicad_dru` files) parse and four of them resolve to the winner their rules say. **The Footprint Checker** (`pcbnew.ModuleEditor.checkFootprint`): `crates/kicad-engine/src/footprint_check.rs` puts the footprint being edited on a scratch board
+  (its `.kicad_mod`, a net per pad number, the Footprint Editor's severities), runs `kicad-cli pcb drc` on it through the kicad lane and returns the violations of the footprint-level checks (courtyard, attributes, pads, shorting pads, holes, net ties,
+  clipped silk) as markers with the editor's own item ids; the dialog (Show boxes and badges, the marker list, Delete Marker, Delete All Markers, Run Checks) and the markers on the footprint canvas.
+- Missing: the implicit rules of the tuning profiles (`addTuningSingleRule`; the profiles are in the IR since P9a); component classes and sheet paths in a condition (`hasComponentClass`, `memberOfSheet` say false); `fromTo`; a footprint's user fields in `getField`
+  (only Reference, Value and Footprint); properties KiCad has and the IR does not (a rule that names one compiles and reads it as undefined); micro vias (the IR has no via type: a via is through, blind or buried by its layers), a footprint's own paste margin and the net-tie
+  cache of a footprint's copper graphics; text variables and cross references in the rules text are not expanded (`${VAR}` is an unresolved variable here); a footprint field (`REF:Name`) cannot be inspected; the courtyard report notice (`MALFORMED_COURTYARDS`) is never set;
+  the geometry functions treat touching as intersecting (KiCad deflates the area by an epsilon); the DRC Rule Editor (item 3, P9b).
+  The Footprint Checker's markers are where the first item of the violation is (kicad-cli's report has no marker position; KiCad puts a short at the contact point); a footprint's Reference and Value are not on the scratch board (a hidden `REF**` stands in).
+- Port from: `pcbnew/dialogs/dialog_find_by_properties.cpp`, `pcbnew/pcbexpr_evaluator.cpp`, `pcbexpr_functions.cpp`, `common/libeval_compiler/`, `pcbnew/tools/board_inspection_tool.cpp` (`InspectClearance`, `InspectConstraints`),
+  `pcbnew/drc/{drc_engine,drc_rule_parser,drc_rule_condition}.cpp` (`EvalRules`, `loadImplicitRules`), `common/dsnlexer.cpp`, `pcbnew/dialogs/dialog_footprint_checker.cpp`, `pcbnew/footprint.cpp` (`CheckPads`, `CheckShortingPads`, `CheckNetTies`).
 
 ### 30. The 3D models of a footprint
 **Done (2026-10-13, `task-fp-3d`, not merged yet)**, limits below. Hit: whoever makes a footprint or fits a different 3D model. Blocks: no longer. Package P14, size M. From `PARITY-3d.md` and `PARITY-fpedit.md`.
@@ -706,10 +722,10 @@ Rules that keep them apart (each is how an earlier package did it):
 Waves:
 
 - **Running now** (2026-10-12): P9a (`task-board-setup`), P10 (`task-sch-details`). P1, P2, P3, P4, P5a, P5b, P6, P7 and P8 are merged; their sections list what is left.
-- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P16, P17 and the Footprint Checker, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
-- **P14** done 2026-10-13 on `task-fp-3d` (waiting for its merge; the Extruded 3D Body, embedded files and the load-time migration are left: item 30). It touched `fp_edit.rs`, `ir.rs`, `pcb.rs` (the `(model ...)` entries only), `import.rs` (the same) and the two Footprint Properties dialogs.
+- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P16 and P17, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
+- **P14** merged 2026-10-13 (the Extruded 3D Body, embedded files and the load-time migration are left: item 30). **P11** merged 2026-10-13 (Find by Properties, Clearance and Constraints Resolution, the Footprint Checker; what is left: items 21 and 29).
 - **P2** merged 2026-10-12 (Compare Footprint with Library included); Swap Pad Nets and Swap Gate Nets are left (item 26).
-- **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
+- **Any time a slot is free**: P12, P15, P6, P9a, P20 (test files only). **P11** is done on `task-search-inspect` (2026-10-13, not merged).
 - **After P7**: P13, P17, and P19's arc stub and function shape.
 - **After P3 and P4**: P18. **P8's PCB half** is independent; its sheet half is P4's.
 - **Last**: P21.
@@ -872,13 +888,16 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `eeschema/tools/{sch_edit_tool,sch_selection_tool,sch_drag_net_collision,sch_group_tool,sch_move_tool}.cpp`, `sch_label.cpp`, `sch_pin.cpp`, `dialogs/dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`, `common/view/wx_view_controls.cpp`.
 - Conflicts: P4 (`SchematicView.tsx`, `board.rs`), P6 (`store`, `runner` hunks), P16 (the schematic image).
 
-### P11. Search and inspection (items 21, 29; SR2). Size M-L. Rank 11.
-- Find by Properties (the Properties tab over `PCB_PROPERTIES`, then the Query tab), Find following the IR (user fields, hidden fields, zone names), Clearance and Constraints Resolution from `crates/drc/src/constraints.rs`
-  (a function returning the winner and the rules considered), the Footprint Checker as a scratch-board DRC.
-- Files: `web/studio/src/kicad-port/{pcbFind,propertyManager,pcbProperties}.ts` and a new `findByProperties.ts`, `actions/pcbFindActions.ts`, `components/PcbFindDialog.tsx` and new dialogs, `crates/drc/src/{constraints,pcbexpr}.rs`,
-  a new `crates/cli/src/inspect_api.rs`, `crates/kicad-engine/src/lib.rs`.
+### P11. Search and inspection (items 21, 29; SR2). Size M-L. Rank 11. **Done 2026-10-13 on `task-search-inspect` (7 commits, not merged); items 21 and 29 list what is left.**
+- Done there: Find by Properties (the From Selection tab over `PCB_PROPERTIES` and the Query tab on a port of `libeval_compiler`), Find following the IR (user fields, hidden fields, zone names), Clearance and Constraints Resolution (a rule engine in `crates/drc`:
+  the expression language, the `.kicad_dru` parser and `EvalRules` returning the winner and every rule considered, with KiCad's report text, behind `crates/cli/src/inspect_api.rs`) and the Footprint Checker (kicad-cli's DRC on a scratch board of
+  `crates/kicad-engine/src/footprint_check.rs`). `PARITY-pcb.md` section 32, `PARITY-fpedit.md` section 12; `web/studio/e2e/search-inspect.check.js` (11 scenarios, 131 checks); the kicad-cli proofs are `inspect_api::tests::the_resolved_clearance_is_what_kicad_cli_enforces`
+  and `footprint_check::tests::kicad_cli_finds_what_the_footprint_checker_finds` (both behind `EDA_SLOW_TESTS=1`). The four rows are out of `ui-parity-missing.json`.
+- Left: the tuning-profile implicit rules, component classes and sheet paths, a footprint's user fields and paste margin, text variables in the rules text (item 29); the Search panel link and the geometry functions of the Query tab (item 21).
+- Files: `web/studio/src/kicad-port/{libeval,pcbExpr,findByProperties,inspectReport,inspectPick,footprintChecker}.ts`, `actions/{findByPropertiesActions,inspectActions,footprintCheckerActions,pcbFindActions}.ts`, `components/{FindByPropertiesDialog,InspectReportDialog}.tsx`,
+  `components/footprint/FootprintCheckerDialog.tsx`, `crates/drc/src/{libeval,pcbexpr,dru,constraints,rule_item,rule_board,inspect,known_props}.rs`, `crates/cli/src/{inspect_api,kicad_engine}.rs`, `crates/kicad-engine/src/footprint_check.rs`.
 - KiCad: `pcbnew/dialogs/dialog_find_by_properties.cpp`, `pcbexpr_evaluator.cpp`, `tools/board_inspection_tool.cpp` (`InspectClearance`, `InspectConstraints`), `drc/drc_engine.cpp` (`EvalRules`), `dialogs/dialog_footprint_checker.cpp`.
-- Conflicts: none on the Rust hubs; `runner` and `store` for the dialog flags. Compare Footprint with Library belongs to P2.
+- Conflicts: none on the Rust hubs; `runner` and `store` for the dialog flags (none needed: the dialogs keep their own module state). Compare Footprint with Library belongs to P2.
 
 ### P12. Board outline leftovers (item 27). Size M. Rank 12.
 - Files: `crates/place/src/lib.rs` (the region from the outline's bounding box: use the outline with its cutouts, `Region` of `crates/gates/src/pcb.rs`), `crates/ops/src/{lib.rs,outline.rs}` (`Cmd::PlaceAt` and the snap), `crates/freeroute/src/design.rs`
