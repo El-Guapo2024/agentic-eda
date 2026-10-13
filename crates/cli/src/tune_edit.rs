@@ -1174,4 +1174,25 @@ mod tests {
         }
         assert_eq!(tuned_again, 4);
     }
+
+    /// kicad-cli's own lengths for the nets of `qa/data/pcbnew/length_calculations.kicad_pcb` (a `.kicad_dru` rule `(constraint length (max 0.001mm))` that nothing can meet
+    /// makes `kicad-cli pcb drc` report each net's actual length; these are what it said): the tuner's measure of the same nets is the same, through pads, vias and the stackup.
+    /// The 1.3 um of `Net-(R10-Pad1)` is its arc, which the world has as 32 chords.
+    #[test]
+    fn the_length_of_a_net_is_what_kicad_cli_measures_on_its_own_length_calculation_board() {
+        let Ok(dir) = std::env::var("KICAD_SRC_DIR") else { return };
+        let Ok(text) = std::fs::read_to_string(std::path::Path::new(&dir).join("qa/data/pcbnew/length_calculations.kicad_pcb")) else { return };
+        let (design, model, _) = eda_kicad::import_kicad_pcb(&text).unwrap();
+        let scene = Scene::of(design, model);
+        for (net, kicad) in [("Net-(R1-Pad2)", 13.3350), ("Net-(R10-Pad1)", 13.5475), ("Net-(R11-Pad2)", 13.3350), ("Net-(R13-Pad2)", 33.5100), ("Net-(R15-Pad2)", 28.4750), ("Net-(R3-Pad2)", 28.4750), ("Net-(R5-Pad2)", 28.4750), ("Net-(R7-Pad2)", 43.6150)] {
+            let seg = scene.world.iter().find_map(|(id, it)| match it {
+                Item::Segment(s) if s.net.as_deref() == Some(net) => Some(id),
+                _ => None,
+            });
+            let Some(seg) = seg else { panic!("no track on {net}") };
+            let path = assemble_tuning_path(&scene.world, seg).unwrap();
+            let ours = path.length(&scene.world, &scene.env) as f64 / 1e6;
+            assert!((ours - kicad).abs() < 0.003, "{net}: kicad-cli says {kicad:.4} mm, the tuner measures {ours:.4} ({} items)", path.items.len());
+        }
+    }
 }
