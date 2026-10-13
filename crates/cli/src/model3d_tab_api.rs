@@ -10,14 +10,19 @@
 //!     `${KIPRJMOD}/models`, a folder one of the board's path variables names); without it, only the roots are answered. Every entry carries the path to write in the footprint:
 //!     the file shortened to the first root that holds it (`FILENAME_RESOLVER::ShortenPath`), so a model chosen in KiCad's library is `${KICAD10_3DMODEL_DIR}/...` and one in
 //!     the board's folder `${KIPRJMOD}/...`. Only the folders `resolve` may read are listed, and only model files (`.wrl`, `.step`, `.stp`) in them.
+//!   - **`GET /api/3dmodel/migrate?dirs=..`**: what Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS`) shows -- the `.wrl` and `.wrz` models of the footprints on the board that are not there
+//!     (`collectMissingModels`), each with the footprints that use it, the first one's placement of it, and the STEP-family files of the folders the resolver searches that could stand
+//!     for it, ranked (`rankCandidatesFor`, [`eda_model::model_subst`]), as the paths to write in the footprint. `dirs` are the folders the person added (`m_Extra3DSearchDirs`), `|`
+//!     between them, each held to what `GET /api/3dmodel` may read. The verb that replaces is `Cmd::MigrateBoardModels`.
 //!   - **`GET /api/3dmodel/preview?part=U1`** (a footprint on the board) **or `?footprint=Lib:Name`** (a library footprint): the footprint as the preview panel shows it
 //!     (`PANEL_PREVIEW_3D_MODEL`: "the footprint is shown like in Fp editor: rot 0, not flipped") -- its pads, graphics and texts in its own frame on the top side, in the
 //!     shape `/api/state` sends a placed part, so the page draws it with the 3D view's own board builder.
 
 use crate::library_tables::{model_names, ModelNames};
-use crate::model3d_api::{board_roots, expand, format_of, models_dir, percent_decode, resolve, Format, Reject, Reply, Roots};
+use crate::model3d_api::{board_roots, expand, finds_file, format_of, models_dir, percent_decode, resolve, Format, Reject, Reply, Roots};
 use eda_model::footprint::placed_pads;
 use eda_model::fp_models::{self, PathProblem};
+use eda_model::model_subst::{self, CatalogEntry};
 use eda_model::ir::{FootprintInstance, LabelSide, Point, Side};
 use eda_model::{ConstraintModel, Part};
 use serde_json::{json, Value};
@@ -73,9 +78,9 @@ pub fn check_in(body: &[u8], roots: &Roots, env: &dyn Fn(&str) -> Option<String>
 // ------------------------------------------------------------------------------------------------------------ the chooser
 
 /// A folder the chooser starts from: the variable that names it (`${NAME}`) and where it is.
-struct Root {
-    name: String,
-    path: PathBuf,
+pub(crate) struct Root {
+    pub(crate) name: String,
+    pub(crate) path: PathBuf,
 }
 
 /// The folders `DIALOG_SELECT_3DMODEL` offers (its "directory" choice lists the resolver's search paths: the project's folder, then the paths the person configured, then
@@ -183,6 +188,114 @@ fn browse_in(asked: &str, filter: &str, allowed: &Roots, listing: &[Root], env: 
             "truncated": truncated,
         }),
     )
+}
+
+// ------------------------------------------------------------------------------------------------------------ Migrate 3D Models
+
+/// The most files the catalog holds and how deep it walks: the model library is 7000 STEP files in a hundred folders; a folder with more than this is not a folder of models.
+const MAX_CATALOG: usize = 200_000;
+const MAX_DEPTH: usize = 12;
+
+/// Every STEP-family file under `root` (`wxDir::GetAllFiles( .., wxDIR_FILES | wxDIR_DIRS )` with `hasStepExtension`), each once whatever the folder it was reached by.
+fn walk_step_files(root: &Path, depth: usize, seen: &mut std::collections::HashSet<PathBuf>, out: &mut Vec<PathBuf>) {
+    if depth > MAX_DEPTH || out.len() >= MAX_CATALOG {
+        return;
+    }
+    let Ok(read) = std::fs::read_dir(root) else { return };
+    let mut entries: Vec<_> = read.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for e in entries {
+        let name = e.file_name().to_string_lossy().into_owned();
+        let path = e.path();
+        if path.is_dir() {
+            if !name.starts_with('.') {
+                walk_step_files(&path, depth + 1, seen, out);
+            }
+        } else if model_subst::has_step_extension(&name) {
+            if let Ok(canonical) = path.canonicalize() {
+                if seen.insert(canonical.clone()) {
+                    out.push(canonical);
+                }
+            }
+        }
+    }
+}
+
+/// `buildCatalog`: the files of the folders the resolver searches (the board's, the ones its path variables name, KiCad's model library), the board's own `3dshapes` folder, and the
+/// folders added by hand -- each of those inside what this route may read.
+fn catalog_of(dir: &Path, listing: &[Root], extra: &[PathBuf]) -> Vec<CatalogEntry> {
+    let mut files: Vec<PathBuf> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let own = dir.join("3dshapes");
+    for root in listing.iter().map(|r| r.path.as_path()).chain(std::iter::once(own.as_path())).chain(extra.iter().map(PathBuf::as_path)) {
+        if root.is_dir() {
+            walk_step_files(root, 0, &mut seen, &mut files);
+        }
+    }
+    files.iter().map(|f| CatalogEntry::of(&shorten(f, listing))).collect()
+}
+
+/// `GET /api/3dmodel/migrate` for the board in `dir`: `{"missing": [{"name", "footprints", "rep", "model", "candidates": [{"path", "display", "score"}]}], "scanned", "dirs"}`.
+pub fn migrate(dir: &Path, target: &str) -> Reply {
+    let names = model_names(dir);
+    migrate_in(dir, target, &board_roots(dir, &names), &listing_roots(dir, &names), &|v| names.get(v))
+}
+
+/// [`migrate`] with the folders it may read, the ones it lists and the variables given (the tests').
+pub(crate) fn migrate_in(dir: &Path, target: &str, allowed: &Roots, listing: &[Root], env: &dyn Fn(&str) -> Option<String>) -> Reply {
+    let (_, design, model) = match crate::board::load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return reply("404 Not Found", json!({ "error": crate::board::reasons(&e) })),
+    };
+    // the folders added by hand: only ones this route may read
+    let mut extra: Vec<PathBuf> = Vec::new();
+    for asked in query_value(target, "dirs").unwrap_or_default().split('|').filter(|d| !d.is_empty()) {
+        let expanded = expand(&asked.replace('\\', "/"), allowed, env);
+        let given = PathBuf::from(&expanded);
+        let found = if given.is_absolute() { given } else { allowed.project.join(given) };
+        let Ok(canonical) = found.canonicalize() else {
+            return reply("404 Not Found", json!({ "error": format!("no folder is named {asked}") }));
+        };
+        let inside = [&allowed.models, &allowed.project].into_iter().chain(&allowed.extra).filter_map(|r| r.canonicalize().ok()).any(|r| canonical.starts_with(&r));
+        if !canonical.is_dir() || !inside {
+            return reply("403 Forbidden", json!({ "error": format!("{asked} is outside KiCad's 3D model directory, the board's directory and the folders its path variables name") }));
+        }
+        extra.push(canonical);
+    }
+
+    // the missing references: a .wrl or .wrz the footprints on the board name that no search finds, each with the first footprint's placement of it
+    struct Missing {
+        footprints: Vec<String>,
+        model: eda_model::footprint::Model3d,
+    }
+    let mut missing: std::collections::BTreeMap<String, Missing> = std::collections::BTreeMap::new();
+    for fp in design.placement.iter().flat_map(|p| p.footprints.iter()) {
+        let Some(part) = model.part(&fp.id) else { continue };
+        let Some(footprint) = model.footprint_of(part) else { continue };
+        for m in eda_kicad::part_models(&model, part, &footprint).map(|p| p.models).unwrap_or_default() {
+            if m.path.is_empty() || !model_subst::is_wrl(&m.path) || finds_file(&m.path, allowed, env) {
+                continue;
+            }
+            let entry = missing.entry(m.path.clone()).or_insert_with(|| Missing { footprints: Vec::new(), model: m.clone() });
+            if !entry.footprints.contains(&fp.id) {
+                entry.footprints.push(fp.id.clone());
+            }
+        }
+    }
+    let catalog = if missing.is_empty() { Vec::new() } else { catalog_of(dir, listing, &extra) };
+    let missing_json: Vec<Value> = missing
+        .iter()
+        .map(|(name, m)| {
+            json!({
+                "name": name,
+                "footprints": m.footprints,
+                "rep": m.footprints.first(),
+                "model": { "name": m.model.path, "offset": m.model.offset, "scale": m.model.scale, "rotate": m.model.rotate, "opacity": m.model.opacity, "show": m.model.show },
+                "candidates": model_subst::rank_candidates(name, &catalog).iter().map(|c| json!({ "path": c.path, "display": c.display, "score": c.score })).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    reply("200 OK", json!({ "missing": missing_json, "scanned": catalog.len(), "dirs": extra.iter().map(|d| shorten(d, listing)).collect::<Vec<_>>() }))
 }
 
 // ------------------------------------------------------------------------------------------------------------ the preview
@@ -388,6 +501,45 @@ mod tests {
         assert_eq!(shorten(&f.project.join("parts"), &listing), "${KIPRJMOD}/parts");
         assert_eq!(shorten(&f.models, &listing), "${KICAD10_3DMODEL_DIR}");
         assert_eq!(shorten(&f.outside.join("secret.wrl"), &listing), f.outside.join("secret.wrl").display().to_string(), "no root: as it is");
+    }
+
+    #[test]
+    fn the_catalog_holds_the_step_files_of_the_folders_once_each_with_the_paths_a_footprint_writes() {
+        let f = fixture("catalog");
+        touch(&f.models.join("Resistor_SMD.3dshapes/R_0603_1608Metric.stp"));
+        touch(&f.models.join("Resistor_SMD.3dshapes/deeper/R_1206.step.gz"));
+        touch(&f.models.join(".hidden/secret.step"));
+        touch(&f.project.join("3dshapes/own.step"));
+        let catalog = catalog_of(&f.project, &f.listing(), &[f.extra.clone()]);
+        let mut paths: Vec<&str> = catalog.iter().map(|c| c.path.as_str()).collect();
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "${KICAD10_3DMODEL_DIR}/Capacitor_SMD.3dshapes/C_0603_1608Metric.stp",
+                "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.stp",
+                "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0805_2012Metric.step",
+                "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/deeper/R_1206.step.gz",
+                "${KIPRJMOD}/3dshapes/own.step",
+                "${MYMODELS}/custom.step",
+            ],
+            "STEP-family files only, no hidden folder, a root named by the first that holds it, nothing twice"
+        );
+        assert_eq!(catalog.iter().find(|c| c.path.ends_with("R_1206.step.gz")).unwrap().stem, "r_1206");
+        assert_eq!(catalog.iter().find(|c| c.path.ends_with("R_1206.step.gz")).unwrap().parent, "deeper");
+    }
+
+    #[test]
+    fn a_name_is_found_when_a_file_by_that_name_is_there_and_a_wrl_is_not_found_by_its_step() {
+        let f = fixture("finds");
+        touch(&f.models.join("Resistor_SMD.3dshapes/R_0402.step"));
+        let ask = |name: &str| finds_file(name, &f.roots(), &env);
+        assert!(ask("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl"));
+        assert!(ask("Resistor_SMD.3dshapes/R_0805_2012Metric.step"), "relative to the model library");
+        assert!(ask("${KIPRJMOD}/parts/chip.wrl"));
+        assert!(!ask("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0402.wrl"), "its STEP is there; the file it names is not (the view's stand-in is not KiCad's resolver)");
+        assert!(!ask("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/nothing.wrl") && !ask("") && !ask("${NO_SUCH}/x.wrl"));
+        assert!(ask(&f.outside.join("secret.wrl").display().to_string()), "a file is there whether the route may serve it or not");
     }
 
     #[test]

@@ -13,6 +13,7 @@
 
 use super::Board;
 use eda_model::footprint::Model3d;
+use std::collections::BTreeMap;
 use eda_model::fp_models::{self, ModelPatch, ModelProblem};
 use eda_model::CheckResult;
 
@@ -79,6 +80,33 @@ impl Board<'_> {
     /// `Cmd::MoveBoardModel`.
     pub(crate) fn move_board_model(&mut self, part: &str, from: usize, to: usize) -> Result<(), Vec<CheckResult>> {
         self.change_models(part, |list| fp_models::move_model(list, from, to))
+    }
+
+    /// `Cmd::MigrateBoardModels` (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): the footprints on the board whose list has a model under one of the old names get it under the new, the
+    /// rest of the placement as it was. A footprint's list is then its own, as the 3D Models tab's: one that comes to the library's takes the edit away.
+    pub(crate) fn migrate_board_models(&mut self, replacements: &BTreeMap<String, String>) -> Result<(), Vec<CheckResult>> {
+        if replacements.is_empty() {
+            return Err(refuse("models", ModelProblem { check: "ops_nothing_to_change", reason: "no model is to be replaced".into() }));
+        }
+        let mut names: BTreeMap<&str, String> = BTreeMap::new();
+        for (old, new) in replacements {
+            let m = fp_models::checked_model(&Model3d::identity(new.as_str())).map_err(|p| refuse(old, ModelProblem { reason: format!("the new name for {old}: {}", p.reason), ..p }))?;
+            names.insert(old.as_str(), m.path);
+        }
+        let parts: Vec<String> = self.design.placement.as_ref().map(|p| p.footprints.iter().map(|f| f.id.clone()).collect()).unwrap_or_default();
+        let mut changed = 0;
+        for part in parts {
+            let now = self.models_now(&part)?;
+            let next: Vec<Model3d> = now.iter().map(|m| names.get(m.path.as_str()).map_or_else(|| m.clone(), |new| Model3d { path: new.clone(), ..m.clone() })).collect();
+            if next != now {
+                self.store_models(&part, next);
+                changed += 1;
+            }
+        }
+        if changed == 0 {
+            return Err(refuse("models", ModelProblem { check: "ops_nothing_to_change", reason: "no footprint on the board has a model under those names".into() }));
+        }
+        Ok(())
     }
 
     /// `Cmd::EditBoardModel`.

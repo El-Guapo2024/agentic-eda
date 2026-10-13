@@ -251,3 +251,166 @@ fn a_footprint_placed_from_the_project_library_brings_its_models() {
     assert_eq!(model.footprint_of(placed).unwrap().models3d, two_models());
     assert_eq!(sent(&dir, &placed.reference), Some(two_models()));
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------- the slow tier (kicad-cli)
+
+/// kicad-cli on `args`, in `work`; the output on failure.
+fn kicad_cli(work: &Path, args: &[&std::ffi::OsStr]) -> Result<String, String> {
+    let cli = eda_kicad_engine::find_cli().ok_or("no kicad-cli")?;
+    let out = std::process::Command::new(cli).args(args).current_dir(work).output().map_err(|e| e.to_string())?;
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    if out.status.success() {
+        Ok(said)
+    } else {
+        Err(said)
+    }
+}
+
+/// `kicad-cli pcb export vrml` of `board`, the file's own name and the path of the models taken out of it, so two boards' exports can be compared.
+fn vrml_of(work: &Path, board: &Path, name: &str) -> String {
+    let out = work.join(format!("{name}.wrl"));
+    let (units, models) = (std::ffi::OsStr::new("mm"), format!("{name}_models"));
+    kicad_cli(work, &["pcb".as_ref(), "export".as_ref(), "vrml".as_ref(), "--units".as_ref(), units, "--models-dir".as_ref(), models.as_ref(), "-f".as_ref(), "-o".as_ref(), out.as_os_str(), board.as_os_str()]).unwrap_or_else(|e| panic!("kicad-cli export vrml {name}: {e}"));
+    let text = std::fs::read_to_string(&out).unwrap();
+    text.lines().filter(|l| !l.trim_start().starts_with("title ")).map(|l| if l.trim_start().starts_with("url ") { "url \"MODEL\"".to_string() } else { l.to_string() }).collect::<Vec<_>>().join("\n")
+}
+
+/// The numbers after `key` on the first line of `text` that starts with it.
+fn numbers_after(text: &str, key: &str) -> Vec<f64> {
+    text.lines().find(|l| l.trim_start().starts_with(key)).map(|l| l.trim_start()[key.len()..].split_whitespace().filter_map(|n| n.parse().ok()).collect()).unwrap_or_default()
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): the board of a footprint that has two models -- offsets, scales, rotations, an opacity, one of them hidden -- on a footprint that is turned.
+/// KiCad reads the `(model ...)` entries this studio writes the way it reads its own: its own copy of the board (`kicad-cli pcb upgrade` writes the board out again as KiCad does)
+/// has the same entries, character for character, and the VRML that `kicad-cli pcb export vrml` makes of the two boards is the same. And what that VRML puts on the board is
+/// what the models say: the shown model once, with its scale, turned by the footprint's turn and its own, at the footprint's place moved by its offset, and not the hidden one.
+#[test]
+fn kicad_cli_reads_the_models_this_studio_writes_as_it_reads_its_own() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let models = eda_kicad_engine::find_cli().map(|_| crate::model3d_api::models_dir());
+    let Some(library) = models.filter(|m| m.join("Resistor_SMD.3dshapes/R_0603_1608Metric.step").is_file() && m.join("Capacitor_SMD.3dshapes/C_0603_1608Metric.step").is_file()) else {
+        eprintln!("skipped: no kicad-cli or no 3D model library");
+        return;
+    };
+    let _ = library;
+    let dir = scratch("models_kicad_cli_proof");
+    setup(&dir);
+    // U1 turned a third of a quarter, with the two models
+    step(&dir, Cmd::RotateItems { ids: vec!["U1".into()], pivot: eda_model::ir::Point { x: 5_000, y: 5_000 }, angle_millideg: 30_000 }, false, "test").unwrap();
+    step(&dir, Cmd::SetBoardModels { part: "U1".into(), models: two_models() }, false, "test").unwrap();
+    let ours = derived_board(&dir);
+
+    let work = dir.join("kicad");
+    std::fs::create_dir_all(&work).unwrap();
+    let (ours_path, theirs_path) = (work.join("ours.kicad_pcb"), work.join("theirs.kicad_pcb"));
+    std::fs::write(&ours_path, &ours).unwrap();
+    std::fs::write(&theirs_path, &ours).unwrap();
+    kicad_cli(&work, &["pcb".as_ref(), "upgrade".as_ref(), theirs_path.as_os_str()]).expect("kicad-cli upgrades the board");
+    let theirs = std::fs::read_to_string(&theirs_path).unwrap();
+
+    // 1. KiCad's own text of the two models is ours, entry for entry
+    let entries = |text: &str| -> String {
+        let block = footprint_block(text, "U1");
+        let from = block.find("\t\t(model ").expect("a model is written");
+        let to = block.rfind("\n\t)").map_or(block.len(), |i| i + 1);
+        block[from..to].to_string()
+    };
+    assert_eq!(entries(&theirs), entries(&ours), "KiCad writes the entries back as this studio wrote them");
+    assert_eq!(entries(&ours).matches("(model ").count(), 2);
+    assert!(entries(&theirs).contains("(opacity 0.6500)") && entries(&theirs).contains("(hide yes)"), "KiCad kept the opacity and the hide switch");
+
+    // 2. the same VRML from both
+    let ours_wrl = vrml_of(&work, &ours_path, "ours");
+    let theirs_wrl = vrml_of(&work, &theirs_path, "theirs");
+    assert_eq!(ours_wrl, theirs_wrl, "kicad-cli exports the two boards the same");
+
+    // 3. the shown model once, where the models say: translation from the footprint's place and the offset turned by the footprint's turn, in the units of the file (2.54 mm)
+    assert_eq!(ours_wrl.matches("Inline {").count(), 1, "the hidden model is not exported: {ours_wrl}");
+    let at_line = footprint_block(&ours, "U1").lines().find(|l| l.trim_start().starts_with("(at ")).expect("the footprint's place").trim().trim_start_matches("(at ").trim_end_matches(')').to_string();
+    let at: Vec<f64> = at_line.split_whitespace().filter_map(|n| n.parse().ok()).collect();
+    let (angle, shown) = (at[2].to_radians(), &two_models()[0]);
+    // the board's centre: the box of Edge.Cuts in `setup` (0..20 mm)
+    let (cx, cy) = (10.0, 10.0);
+    let (s, c) = angle.sin_cos();
+    let want = [(at[0] - cx + shown.offset[0] * c - shown.offset[1] * s) / 2.54, (-(at[1] - cy) + shown.offset[0] * s + shown.offset[1] * c) / 2.54, (0.8 + shown.offset[2]) / 2.54];
+    let got = numbers_after(&ours_wrl, "translation");
+    assert!(got.len() == 3 && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 2e-4), "translation {got:?}, wanted {want:?}\n{ours_wrl}");
+    assert_eq!(numbers_after(&ours_wrl[ours_wrl.find("Inline").map_or(0, |i| ours_wrl[..i].rfind("Transform").unwrap_or(0))..], "scale"), shown.scale.to_vec(), "its own scale");
+    // the turn: about z, the footprint's counter-clockwise turn plus the model's own, which the file counts the other way
+    let rotation = numbers_after(&ours_wrl[ours_wrl.find("rotation").unwrap()..], "rotation");
+    let turned = rotation[2] * rotation[3]; // the axis is (0, 0, -1) for a clockwise turn
+    let want_turn = (at[2] - shown.rotate[2]).to_radians();
+    assert!((turned - want_turn).abs() < 2e-4, "rotation {rotation:?} is {turned} rad, wanted {want_turn}");
+}
+
+/// Migrate 3D Models, through a board directory: the `.wrl` references the footprints on the board name that no search finds, with their candidates among the STEP files of the
+/// folders searched (a library of a test's own here), and the replacement one undo step that keeps each model's placement.
+#[test]
+fn migrate_3d_models_lists_the_missing_vrml_models_with_their_candidates_and_replaces_them_in_one_undo_step() {
+    use crate::model3d_api::Roots;
+    use crate::model3d_tab_api::{migrate_in, Root};
+    let dir = scratch("migrate_models");
+    setup(&dir);
+    // the library the test searches: KiCad's layout, STEP files only
+    let lib = scratch("migrate_models_library");
+    for f in ["Resistor_SMD.3dshapes/R_0603_1608Metric.step", "Resistor_SMD.3dshapes/R_0603_1608Metric_Pad.step", "Capacitor_SMD.3dshapes/R_0603_1608Metric.step", "Resistor_SMD.3dshapes/R_1206_3216Metric.step", "Connector.3dshapes/header.stp"] {
+        std::fs::create_dir_all(lib.join(f).parent().unwrap()).unwrap();
+        std::fs::write(lib.join(f), "ISO-10303-21;").unwrap();
+    }
+    // U1 and U2 are on a footprint with the old VRML model, placed and half transparent, and a STEP that is there
+    let old = "${KICAD6_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.wrl";
+    let there = "${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_1206_3216Metric.step";
+    let placed = Model3d { offset: [0.5, 0.0, 0.25], rotate: [0.0, 0.0, 90.0], scale: [1.0, 1.5, 1.0], opacity: 0.5, ..Model3d::identity(old) };
+    let intent = dir.join("intent.yaml");
+    let mut model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+    eda_model::fp_models::set_models(&mut model.footprints[0], &[placed.clone(), Model3d::identity(there)]);
+    std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+
+    let roots = Roots { models: lib.clone(), project: dir.clone(), extra: vec![] };
+    let listing = vec![Root { name: "KIPRJMOD".into(), path: dir.canonicalize().unwrap() }, Root { name: "KICAD10_3DMODEL_DIR".into(), path: lib.canonicalize().unwrap() }];
+    let answer = migrate_in(&dir, "", &roots, &listing, &|_| None);
+    assert_eq!(answer.status, "200 OK", "{}", String::from_utf8_lossy(&answer.body));
+    let v: serde_json::Value = serde_json::from_slice(&answer.body).unwrap();
+    let missing = v["missing"].as_array().unwrap();
+    assert_eq!(missing.len(), 1, "only the VRML that is not there: the STEP model is there and is not a VRML: {v}");
+    let m = &missing[0];
+    assert_eq!((m["name"].as_str(), m["rep"].as_str()), (Some(old), Some("U1")));
+    assert_eq!(m["footprints"], serde_json::json!(["U1", "U2"]));
+    assert_eq!((m["model"]["offset"].clone(), m["model"]["scale"].clone(), m["model"]["rotate"].clone(), m["model"]["opacity"].clone()), (serde_json::json!([0.5, 0.0, 0.25]), serde_json::json!([1.0, 1.5, 1.0]), serde_json::json!([0.0, 0.0, 90.0]), serde_json::json!(0.5)), "the first footprint's placement of it");
+    let c: Vec<(&str, i64)> = m["candidates"].as_array().unwrap().iter().map(|c| (c["path"].as_str().unwrap(), c["score"].as_i64().unwrap())).collect();
+    assert_eq!(
+        c,
+        [
+            ("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric.step", 1000),
+            ("${KICAD10_3DMODEL_DIR}/Capacitor_SMD.3dshapes/R_0603_1608Metric.step", 800),
+            ("${KICAD10_3DMODEL_DIR}/Resistor_SMD.3dshapes/R_0603_1608Metric_Pad.step", 460),
+        ],
+        "the same stem in the same folder, the same stem in another, the one that is four edits away; the other resistor and the connector are not candidates"
+    );
+    assert_eq!(v["scanned"], 5, "the STEP files of the library");
+
+    // Replace: one command, the placement kept, the STEP model it was not touching left alone
+    let new = c[0].0.to_string();
+    step(&dir, Cmd::MigrateBoardModels { replacements: [(old.to_string(), new.clone())].into() }, false, "test").unwrap();
+    let now = sent(&dir, "U1").unwrap();
+    assert_eq!(now.iter().map(|m| m.path.as_str()).collect::<Vec<_>>(), [new.as_str(), there]);
+    assert_eq!((now[0].offset, now[0].rotate, now[0].scale, now[0].opacity), (placed.offset, placed.rotate, placed.scale, placed.opacity), "the placement stays");
+    assert_eq!(sent(&dir, "U2"), Some(now.clone()), "every footprint that had it");
+    assert!(derived_board(&dir).contains("R_0603_1608Metric.step"), "and the board file names the new model");
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(sent(&dir, "U1").unwrap()[0].path, old, "one undo takes the whole migration back");
+    // a folder added by hand is searched; one the route may not read is refused
+    let extra = dir.join("mine");
+    std::fs::create_dir_all(&extra).unwrap();
+    assert_eq!(listing.len(), 2);
+    std::fs::write(extra.join("R_0603_1608Metric.step"), "ISO-10303-21;").unwrap();
+    let with = migrate_in(&dir, &format!("/api/3dmodel/migrate?dirs={}", extra.display()), &roots, &listing, &|_| None);
+    let w: serde_json::Value = serde_json::from_slice(&with.body).unwrap();
+    assert_eq!(w["scanned"], 6, "{w}");
+    assert_eq!(w["missing"][0]["candidates"].as_array().unwrap().len(), 4);
+    let refused = migrate_in(&dir, "/api/3dmodel/migrate?dirs=/etc", &roots, &listing, &|_| None);
+    assert_eq!(refused.status, "403 Forbidden");
+}

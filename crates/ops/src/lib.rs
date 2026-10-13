@@ -902,6 +902,10 @@ pub enum Cmd {
     RemoveBoardModel { part: String, index: usize },
     /// Put the model at `from` where `to` is (0-based), the others keeping their order; refused for a position the list has none at.
     MoveBoardModel { part: String, from: usize, to: usize },
+    /// Migrate 3D Models (`DIALOG_MIGRATE_3D_MODELS::OnReplaceClick`): every model of every footprint on the board whose file name is a key of `replacements` takes the name it maps to --
+    /// the placement stays -- as the 3D Models tab's lists, one undo step ("Migrate 3D model references"). Refused for a new name the tab would not take, for no replacement at all
+    /// and when no footprint has a model of those names.
+    MigrateBoardModels { replacements: BTreeMap<String, String> },
     /// The file name, offset, scale, rotation, opacity and Show cell of the model at `index` (0-based): what is left out stays. The numbers are KiCad's file's -- millimetres and
     /// degrees, the rotation clockwise as the file stores it (the dialog shows it the other way round).
     EditBoardModel {
@@ -1857,6 +1861,7 @@ impl Cmd {
             Cmd::EditTrack { id, .. } | Cmd::SetZoneName { id, .. } | Cmd::ReplaceShape { id, .. } => vec![id.as_str()],
             Cmd::EditBoardFootprint { part, .. } | Cmd::EditBoardField { part, .. } | Cmd::EditBoardPad { part, .. } => vec![part.as_str()],
             Cmd::SetBoardModels { part, .. } | Cmd::AddBoardModel { part, .. } | Cmd::RemoveBoardModel { part, .. } | Cmd::MoveBoardModel { part, .. } | Cmd::EditBoardModel { part, .. } => vec![part.as_str()],
+            Cmd::MigrateBoardModels { replacements } => replacements.keys().map(String::as_str).collect(),
             Cmd::SetTrackWidthPresets { .. } => vec!["track_width_presets"],
             Cmd::SetViaPresets { .. } => vec!["via_presets"],
             Cmd::EditTracksAndVias { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2446,6 +2451,7 @@ impl<'a> Board<'a> {
             Cmd::EditBoardFootprint { part, reference, value, fields, attrs } => self.edit_board_footprint(part, reference.as_ref(), value.as_ref(), fields.as_deref(), attrs.as_ref()),
             Cmd::EditBoardField { part, name, layout, text } => self.edit_board_field(part, name, layout.as_ref(), text.as_deref()),
             Cmd::EditBoardPad { part, edit } => self.edit_board_pad(part, edit),
+            Cmd::MigrateBoardModels { replacements } => self.migrate_board_models(replacements),
             Cmd::SetBoardModels { part, models } => self.set_board_models(part, models),
             Cmd::AddBoardModel { part, model, at } => self.add_board_model(part, model, *at),
             Cmd::RemoveBoardModel { part, index } => self.remove_board_model(part, *index),

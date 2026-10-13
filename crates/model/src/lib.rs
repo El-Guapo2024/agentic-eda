@@ -21,6 +21,7 @@ pub mod ir;
 pub mod kicad_font;
 pub mod kicad_geom;
 pub mod layers;
+pub mod model_subst;
 pub mod modules;
 pub mod net_pattern;
 pub mod outline;

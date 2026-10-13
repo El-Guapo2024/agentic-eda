@@ -148,6 +148,25 @@ pub(crate) fn format_of(path: &Path) -> Option<Format> {
     }
 }
 
+/// Whether `name` finds a file the way `FILENAME_RESOLVER::ResolvePath` searches for one -- the name with its variables expanded, relative to the project, relative to the model library
+/// -- and nothing else: a `.wrl` that is not there is *not* found because a `.step` of the same name is (that stand-in is [`resolve`]'s, for the 3D view). The Migrate 3D Models dialog's
+/// "missing" is this. The allow-list is not asked: a file that is there is there, whether this route may serve it or not.
+pub(crate) fn finds_file(name: &str, roots: &Roots, env: &dyn Fn(&str) -> Option<String>) -> bool {
+    if name.is_empty() || name.len() > 4096 || name.contains('\0') {
+        return false;
+    }
+    let expanded = expand(&name.replace('\\', "/"), roots, env);
+    if expanded.contains("${") || expanded.contains("$(") {
+        return false;
+    }
+    let given = PathBuf::from(&expanded);
+    if given.is_absolute() {
+        given.is_file()
+    } else {
+        roots.project.join(&given).is_file() || roots.models.join(&given).is_file()
+    }
+}
+
 /// The file a footprint's `(model "name")` names, found the way KiCad's `FILENAME_RESOLVER::ResolvePath` finds it and then held to the allow-list.
 ///
 /// KiCad's search: the name with its variables expanded as it stands (an absolute path), relative to the project's directory, relative to the model library

@@ -1289,6 +1289,7 @@ fn cmd_line(c: &Cmd) -> String {
         }
         Cmd::EditBoardField { part, name, .. } => format!("field edit {part}:{name}"),
         Cmd::EditBoardPad { part, edit } => format!("pad edit {}", edit.pad_id(part)),
+        Cmd::MigrateBoardModels { replacements } => format!("3d models migrate ({} name(s))", replacements.len()),
         Cmd::SetBoardModels { part, models } => format!("3d models {part} ({} model(s))", models.len()),
         Cmd::AddBoardModel { part, model, .. } => format!("3d model add {part} {}", model.path),
         Cmd::RemoveBoardModel { part, index } => format!("3d model remove {part} {}", index + 1),
@@ -1546,7 +1547,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::EditBoardFootprint { .. } => "footprint-edit",
         Cmd::EditBoardField { .. } => "field-edit",
         Cmd::EditBoardPad { .. } => "pad-edit",
-        Cmd::SetBoardModels { .. } | Cmd::AddBoardModel { .. } | Cmd::RemoveBoardModel { .. } | Cmd::MoveBoardModel { .. } | Cmd::EditBoardModel { .. } => "3d-models",
+        Cmd::SetBoardModels { .. } | Cmd::AddBoardModel { .. } | Cmd::RemoveBoardModel { .. } | Cmd::MoveBoardModel { .. } | Cmd::EditBoardModel { .. } | Cmd::MigrateBoardModels { .. } => "3d-models",
 
         Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } => "schematic-move",
         Cmd::RotateSymbol { .. } => "schematic-rotate",

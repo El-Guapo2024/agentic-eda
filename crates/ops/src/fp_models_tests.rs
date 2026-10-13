@@ -308,3 +308,63 @@ fn a_footprint_put_on_another_keeps_the_list_the_board_set_unless_the_models_are
     exchange_for_other(&mut b, ExchangeOptions { reset_3d_models: false, ..ExchangeOptions::change() });
     assert_eq!(listed(&b, "U1"), None);
 }
+
+const OLD: &str = "${KICAD6_3DMODEL_DIR}/Test.3dshapes/Lib.wrl";
+const NEW: &str = "${KICAD10_3DMODEL_DIR}/Test.3dshapes/Lib.step";
+
+/// A board whose two footprints are on a library footprint with an old VRML model.
+fn old_model() -> ConstraintModel {
+    let mut model = model(&["F.Cu", "B.Cu"]);
+    eda_model::fp_models::set_models(&mut model.footprints[0], &[Model3d { offset: [1.0, 0.0, 0.5], rotate: [0.0, 0.0, 90.0], opacity: 0.5, ..m(OLD) }]);
+    model
+}
+
+fn replacing(old: &str, new: &str) -> Cmd {
+    Cmd::MigrateBoardModels { replacements: [(old.to_string(), new.to_string())].into() }
+}
+
+#[test]
+fn migrating_a_model_gives_every_footprint_that_has_it_the_new_name_with_its_placement_in_one_command() {
+    let m0 = old_model();
+    let mut b = board(&m0);
+    b.apply(&replacing(OLD, NEW)).unwrap();
+    let want = vec![Model3d { path: NEW.into(), offset: [1.0, 0.0, 0.5], rotate: [0.0, 0.0, 90.0], opacity: 0.5, ..m(NEW) }];
+    assert_eq!((listed(&b, "U1"), listed(&b, "U2")), (Some(want.clone()), Some(want)), "both footprints are on the footprint that has it: the placement is kept");
+}
+
+#[test]
+fn migrating_changes_only_the_models_under_the_old_names_and_leaves_a_footprints_other_models_alone() {
+    let m0 = old_model();
+    let mut b = board(&m0);
+    // U1 has its own list: the old model with another placement, another model, the old one again
+    let own = vec![Model3d { scale: [2.0, 2.0, 2.0], ..m(OLD) }, m("keep.step"), Model3d { show: false, ..m(OLD) }];
+    b.apply(&Cmd::SetBoardModels { part: "U1".into(), models: own }).unwrap();
+    b.apply(&Cmd::MigrateBoardModels { replacements: [(OLD.to_string(), NEW.to_string()), ("never-used.wrl".to_string(), "x.step".to_string())].into() }).unwrap();
+    let u1 = listed(&b, "U1").unwrap();
+    assert_eq!(paths(&u1), [NEW, "keep.step", NEW]);
+    assert_eq!((u1[0].scale, u1[2].show), ([2.0, 2.0, 2.0], false), "each model keeps its placement");
+    assert_eq!(paths(&listed(&b, "U2").unwrap()), [NEW], "and U2, which had the library's, now has its own");
+    // a second migration finds nothing under those names
+    let e = refusal(&mut b, replacing(OLD, NEW));
+    assert_eq!(e, "ops_nothing_to_change: no footprint on the board has a model under those names");
+}
+
+#[test]
+fn a_migration_the_tab_would_not_take_is_refused_and_changes_nothing() {
+    let m0 = old_model();
+    let mut b = board(&m0);
+    assert_eq!(refusal(&mut b, Cmd::MigrateBoardModels { replacements: Default::default() }), "ops_nothing_to_change: no model is to be replaced");
+    assert!(refusal(&mut b, replacing(OLD, "bad?.step")).starts_with(&format!("ops_bad_model: the new name for {OLD}: Illegal filename")));
+    assert!(refusal(&mut b, replacing(OLD, "")).contains("No filename entered"));
+    assert_eq!(refusal(&mut b, replacing("other.wrl", NEW)), "ops_nothing_to_change: no footprint on the board has a model under those names");
+    assert!(b.design().footprint_edit("U1").is_none() && b.design().footprint_edit("U2").is_none());
+}
+
+#[test]
+fn the_command_reads_from_the_json_the_studio_sends_for_a_migration() {
+    let read = |v: serde_json::Value| -> Cmd { serde_json::from_value(v).unwrap() };
+    let m0 = old_model();
+    let mut b = board(&m0);
+    b.apply(&read(serde_json::json!({ "op": "migrate_board_models", "replacements": { OLD: NEW } }))).unwrap();
+    assert_eq!(paths(&listed(&b, "U1").unwrap()), [NEW]);
+}
