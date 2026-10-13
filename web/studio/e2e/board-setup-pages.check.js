@@ -17,6 +17,10 @@
 //   board layers     Board Editor Layers is a page of Board Setup, in KiCad's row order with the courtyards, the outline, the margin and the copper layers locked; Add User Defined Layer adds a row;
 //                    a name another layer has is marked and stops Apply; Apply stores the layers, the names and the types as one undo step; the Appearance panel's rows, the Text tool's layer list and
 //                    ${LAYER} follow the names; an item can be put on a user layer; a layer that holds an item cannot be turned off; one that does not is gone from the lists and takes no new item
+//   setup pages      the page tree has KiCad's order; Formatting (a ratio of 0 is marked and stops Apply; Apply stores the ratios and the footprint boxes), Zone Hatch Offsets (an offset per copper layer, a
+//                    metre too far is marked), Length-tuning Patterns (a minimum above the maximum is marked; Apply stores the three groups; the length tuner opens at the maximum amplitude and the
+//                    spacing of its kind) and Tuning Profiles (a profile with no name is marked; a new row takes the layers KiCad gives it; a layer named twice stops Apply; a class may name a profile that
+//                    is not defined and the page says so) each store one undo step
 //   end              no console error came up while it ran, and the board is as it was (texts, variables, overlay, shapes, dimensions, title block, footprint fields)
 //
 // A scenario that throws does not stop the run: its section ends with a failed check "<section> ran to the end (stopped at: <step>)" naming the step it was at (and why), the next section
@@ -138,14 +142,21 @@
     await sleep(500);
     return r;
   };
+  /** Press Apply and wait for the page's answer (the board answers slowly when the machine is busy): the message is no longer "Changes not applied yet." and Apply is free again. */
   const apply = async (root) => {
-    await press(root, "Apply", 1000);
+    await press(root, "Apply", 300);
+    for (let i = 0; i < 80; i++) {
+      const msg = root.querySelector(".bs-msg")?.textContent ?? "";
+      if (!button(root, "Apply")?.disabled && msg !== "" && msg !== "Changes not applied yet.") return msg;
+      await sleep(100);
+    }
     return root.querySelector(".bs-msg")?.textContent ?? "";
   };
   /** What the run must put back, as one string. */
   const fingerprint = (s) => JSON.stringify({
     variables: s.board_rules?.text_variables ?? {},
     layers: s.board_rules?.layer_setup ?? null,
+    pages: [s.board_rules?.formatting, s.board_rules?.zone_hatch_offsets, s.board_rules?.tuning_patterns, s.board_rules?.tuning_profiles],
     overlay: s.board_rules?.overlay ?? [],
     texts: (s.drawings?.texts ?? []).length,
     shapes: (s.drawings?.shapes ?? []).length,
@@ -376,6 +387,140 @@
       const options = [...document.querySelectorAll(".dialog .kv-grid select option")].map((o) => `${o.value}=${o.textContent}`);
       check("the Text tool lists the layers the board has by their names: the user layer, not the one turned off", options.includes("User.1=Notes") && options.includes("F.SilkS=Top art") && !options.some((o) => o.startsWith("Eco2.User=")) && options.some((o) => o.startsWith("Dwgs.User=")), options.join(" | "));
       await press(document.querySelector(".dialog"), "Cancel", 300);
+    });
+
+    // ---------------------------------------------------------------------------------------------------------------------------------- the smaller setup pages
+    await section("setup pages", async () => {
+      step("opening Formatting");
+      const nav = () => [...document.querySelectorAll(".bs-nav-item")].map((b) => b.textContent.trim());
+      let p = await openPage("Formatting");
+      const order = nav();
+      const after = (a, b) => order.indexOf(a) >= 0 && order.indexOf(b) === order.indexOf(a) + 1;
+      check("the page tree has KiCad's order for the new pages", after("Defaults", "Formatting") && after("Solder Mask/Paste", "Zone Hatch Offsets") && after("Teardrops", "Length-tuning Patterns") && after("Length-tuning Patterns", "Tuning Profiles") && after("Tuning Profiles", "Net Classes"), order.join(" | "));
+      const stored = async () => (await state()).board_rules;
+      const formattingBefore = JSON.stringify((await stored()).formatting);
+      const dash = () => p.querySelector('input[aria-label="Dash length"]');
+      const gap = () => p.querySelector('input[aria-label="Gap length"]');
+      const box = (text) => [...p.querySelectorAll("label.bs-check")].find((l) => l.textContent.includes(text))?.querySelector("input");
+      step("a dash length of 0");
+      await setText(dash(), "0");
+      const refusedFormatting = await apply(p);
+      check("Formatting: a ratio of 0 is marked and Apply stores nothing", dash().classList.contains("bs-invalid") && /Fix the values marked in red/.test(refusedFormatting) && JSON.stringify((await stored()).formatting) === formattingBefore, refusedFormatting);
+      step("applying Formatting");
+      await setText(dash(), "8");
+      await setText(gap(), "2.5");
+      box("footprint fields").click();
+      box("non-copper footprint shapes").click();
+      const savedFormatting = await apply(p);
+      if (savedFormatting === "Saved.") steps.push("pcb");
+      let rules = await stored();
+      check("Formatting: Apply stores the dash and gap lengths and the footprint boxes, and marks the page as set", savedFormatting === "Saved." && rules.formatting.dash_length_ratio === 8 && rules.formatting.gap_length_ratio === 2.5 && rules.formatting.apply_to_fp_fields === true && rules.formatting.apply_to_fp_shapes === true && rules.formatting.apply_to_fp_text === false && rules.overlay.includes("formatting"), JSON.stringify(rules.formatting));
+
+      step("opening Zone Hatch Offsets");
+      p = await openPage("Zone Hatch Offsets");
+      const layers = [...p.querySelectorAll("tbody tr[data-layer]")].map((tr) => tr.dataset.layer);
+      check("Zone Hatch Offsets: a row for each copper layer, front to back", layers.join() === ((await state()).layers ?? ["F.Cu", "B.Cu"]).join(), layers.join());
+      const hx = (layer) => p.querySelector(`input[aria-label="${layer} hatch offset X"]`);
+      const hy = (layer) => p.querySelector(`input[aria-label="${layer} hatch offset Y"]`);
+      step("a hatch offset a metre too far");
+      await setText(hx("B.Cu"), "2000mm");
+      const hatchBefore = JSON.stringify((await stored()).zone_hatch_offsets);
+      const refusedHatch = await apply(p);
+      check("Zone Hatch Offsets: an offset above a metre is marked and Apply stores nothing", hx("B.Cu").classList.contains("bs-invalid") && /Fix the offsets marked in red/.test(refusedHatch) && JSON.stringify((await stored()).zone_hatch_offsets) === hatchBefore, refusedHatch);
+      step("applying Zone Hatch Offsets");
+      await setText(hx("B.Cu"), "0mm");
+      await setText(hx("F.Cu"), "1.5mm");
+      await setText(hy("F.Cu"), "-2mm");
+      const savedHatch = await apply(p);
+      if (savedHatch === "Saved.") steps.push("pcb");
+      rules = await stored();
+      check("Zone Hatch Offsets: Apply stores the layer that has an offset, in micrometres", savedHatch === "Saved." && JSON.stringify(rules.zone_hatch_offsets) === JSON.stringify({ "F.Cu": { x_um: 1500, y_um: -2000 } }), JSON.stringify(rules.zone_hatch_offsets));
+
+      step("opening Length-tuning Patterns");
+      p = await openPage("Length-tuning Patterns");
+      const field = (group, what) => p.querySelector(`input[aria-label="${group} Tuning Pattern ${what}"]`);
+      const single = "Single Track";
+      const pair = "Differential Pair";
+      const patternsBefore = JSON.stringify((await stored()).tuning_patterns);
+      check("Length-tuning Patterns: three groups that start as KiCad's meander settings", field(single, "Maximum amplitude")?.value && JSON.parse(patternsBefore).single_track.max_amplitude_um === 1000 && JSON.parse(patternsBefore).diff_pair.spacing_um === 1000 && JSON.parse(patternsBefore).diff_pair_skew.spacing_um === 600, patternsBefore);
+      step("a minimum amplitude above the maximum");
+      await setText(field(single, "Minimum amplitude"), "2mm");
+      const refusedPatterns = await apply(p);
+      check("Length-tuning Patterns: a minimum above the maximum is marked and Apply stores nothing", field(single, "Minimum amplitude").classList.contains("bs-invalid") && /Fix the values marked in red/.test(refusedPatterns) && JSON.stringify((await stored()).tuning_patterns) === patternsBefore, refusedPatterns);
+      step("applying Length-tuning Patterns");
+      await setText(field(single, "Minimum amplitude"), "0.3mm");
+      await setText(field(single, "Maximum amplitude"), "1.5mm");
+      await setText(field(pair, "Spacing"), "1.2mm");
+      await setSelect(p.querySelector(`select[aria-label="${single} Tuning Pattern corner style"]`), "chamfer");
+      const savedPatterns = await apply(p);
+      if (savedPatterns === "Saved.") steps.push("pcb");
+      rules = await stored();
+      check("Length-tuning Patterns: Apply stores the groups", savedPatterns === "Saved." && rules.tuning_patterns.single_track.max_amplitude_um === 1500 && rules.tuning_patterns.single_track.min_amplitude_um === 300 && rules.tuning_patterns.single_track.corner_style === "chamfer" && rules.tuning_patterns.diff_pair.spacing_um === 1200 && rules.tuning_patterns.diff_pair_skew.spacing_um === 600, JSON.stringify(rules.tuning_patterns));
+      await closeDialog();
+
+      step("the length tuner");
+      const st = await state();
+      const net = st.parts.flatMap((q) => q.pads ?? []).find((q) => q.net)?.net;
+      const added = await edit({ op: "add_track", net, layer: "F.Cu", width: 200, pts: [{ x: 3000, y: 40000 }, { x: 20000, y: 40000 }] });
+      await sleep(600);
+      const trackId = ((await state()).routing?.tracks ?? []).at(-1)?.id;
+      check("a straight track is added for the tuner", added.ok && !!trackId, JSON.stringify(added).slice(0, 200));
+      const tunerFields = () => [...document.querySelectorAll(".dialog .kv-grid input[type=number]")].map((i) => Number(i.value));
+      await __eda.run("common.InteractiveSelection.clear");
+      await __eda.run("common.InteractiveSelection.selectItems", [trackId]);
+      await sleep(250);
+      await __eda.run("pcbnew.LengthTuner.TuneSingleTrack");
+      await sleep(500);
+      const singleFields = tunerFields();
+      const closeTuner = async () => { [...document.querySelectorAll(".dialog-footer button")].find((b) => b.textContent.trim() === "Cancel")?.click(); await sleep(300); };
+      check("the length tuner opens at the maximum amplitude and the spacing of the single track pattern", singleFields[1] === 1.5 && singleFields[2] === 0.6, JSON.stringify(singleFields));
+      await closeTuner();
+      await __eda.run("pcbnew.LengthTuner.TuneDiffPair");
+      await sleep(500);
+      const pairFields = tunerFields();
+      check("and for a differential pair at that of the pair pattern", pairFields[1] === 1 && pairFields[2] === 1.2, JSON.stringify(pairFields));
+      await closeTuner();
+
+      step("opening Tuning Profiles");
+      p = await openPage("Tuning Profiles");
+      const profilesBefore = JSON.stringify((await stored()).tuning_profiles);
+      await press(p, "Add Tuning Profile");
+      const refusedProfile = await apply(p);
+      check("Tuning Profiles: a profile with no name is said so and Apply stores nothing", /Fix the profile marked in red/.test(refusedProfile) && /must have a name/.test(p.querySelector(".bs-error")?.textContent ?? "") && JSON.stringify((await stored()).tuning_profiles) === profilesBefore, refusedProfile);
+      step("filling a profile");
+      await setText(p.querySelector('input[aria-label="Profile name"]'), "USB 90");
+      await setSelect(p.querySelector('select[aria-label="Profile type"]'), "differential");
+      await setText(p.querySelector('input[aria-label="Target impedance"]'), "90");
+      [...p.querySelectorAll("label.bs-check")].find((l) => l.textContent.includes("Enable time-domain tuning")).querySelector("input").click();
+      await setText(p.querySelector('input[aria-label="Via propagation delay"]'), "25");
+      await press(p, "Add Layer");
+      const row1 = { signal: p.querySelector('select[aria-label="Row 1 signal layer"]')?.value, top: p.querySelector('select[aria-label="Row 1 top reference"]')?.value, bottom: p.querySelector('select[aria-label="Row 1 bottom reference"]')?.value };
+      check("a new track row starts as KiCad's does: the front layer with the next one as its bottom reference", row1.signal === "F.Cu" && row1.top === "" && row1.bottom === "B.Cu", JSON.stringify(row1));
+      await setText(p.querySelector('input[aria-label="Row 1 track width"]'), "0.13mm");
+      await setText(p.querySelector('input[aria-label="Row 1 diff pair gap"]'), "0.15mm");
+      await setText(p.querySelector('input[aria-label="Row 1 delay"]'), "6.1");
+      await press(p, "Add Layer");
+      check("the next row is the layer below, with the one above as its top reference", p.querySelector('select[aria-label="Row 2 signal layer"]')?.value === "B.Cu" && p.querySelector('select[aria-label="Row 2 top reference"]')?.value === "F.Cu", "");
+      await press(p, "Add Via Override");
+      await press(p, "Add Layer");
+      const duplicated = await apply(p);
+      check("a layer named twice stops Apply", /Fix the profile marked in red/.test(duplicated) && /Duplicated signal layer/.test(p.querySelector(".bs-error")?.textContent ?? "") && JSON.stringify((await stored()).tuning_profiles) === profilesBefore, duplicated);
+      p.querySelector('button[aria-label="Remove row 3"]').click();
+      await sleep(150);
+      step("naming a profile for a class");
+      const cls = p.querySelector('input[aria-label="Tuning profile of Default"]');
+      await setText(cls, "Gone");
+      check("a class that names a profile the page does not have is marked and the page says kicad-cli reports it", cls.classList.contains("bs-invalid") && /kicad-cli reports it as missing/.test(p.querySelector('tr[data-class="Default"] td.bs-error')?.textContent ?? ""), p.querySelector('tr[data-class="Default"]')?.textContent);
+      const savedProfiles = await apply(p);
+      if (savedProfiles === "Saved.") steps.push("pcb");
+      rules = await stored();
+      const prof = rules.tuning_profiles.profiles[0];
+      check("Tuning Profiles: Apply stores the profile, its rows, its via override and the class's name for a profile", savedProfiles === "Saved." && prof?.name === "USB 90" && prof.profile_type === "differential" && prof.target_impedance === 90 && prof.enable_time_domain_tuning === true && prof.via_propagation_delay_as === 25000000 && prof.layer_entries.length === 2 && prof.layer_entries[0].width_um === 130 && prof.layer_entries[0].diff_pair_gap_um === 150 && prof.layer_entries[0].delay_as_per_mm === 6100000 && prof.via_overrides.length === 1 && rules.tuning_profiles.class_profiles.Default === "Gone" && rules.overlay.includes("tuning_profiles"), JSON.stringify(rules.tuning_profiles).slice(0, 400));
+      await setText(p.querySelector('input[aria-label="Tuning profile of Default"]'), "USB 90");
+      check("naming a profile the page has clears the mark", !p.querySelector('input[aria-label="Tuning profile of Default"]').classList.contains("bs-invalid"), "");
+      const savedAgain = await apply(p);
+      if (savedAgain === "Saved.") steps.push("pcb");
+      check("and it is stored too", savedAgain === "Saved." && (await stored()).tuning_profiles.class_profiles.Default === "USB 90", savedAgain);
     });
 
     await section("drawing tools", async () => {

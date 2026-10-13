@@ -731,12 +731,92 @@ export interface BoardState {
     text_variables?: Record<string, string>;
     /** Board Editor Layers (`eda_model::layers`): the non-copper layers the board has in KiCad's order, the names the user gave its layers and the types that are not the default's. Absent from an older backend (then a board has the 18 technical layers). */
     layer_setup?: LayerSetup;
-    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`. */
+    /** Text & Graphics > Formatting (`eda_model::setup_pages`). */
+    formatting?: FormattingSettings;
+    /** Board Stackup > Zone Hatch Offsets: copper layer -> the offset of a hatched zone's pattern; only the layers that have one. */
+    zone_hatch_offsets?: HatchOffsets;
+    /** Design Rules > Length-tuning Patterns: what a tuning pattern of each kind starts from. */
+    tuning_patterns?: TuningPatterns;
+    /** Design Rules > Tuning Profiles: the profiles and the profile each net class names. */
+    tuning_profiles?: TuningProfiles;
+    /** The Board Setup pages an edit has replaced: `net_classes`, `constraints`, `mask_paste`, `text_graphics`, `stackup`, `severities`, `custom_rules`, `text_variables`, `board_layers`, `formatting`, `zone_hatch_offsets`, `tuning_patterns`, `tuning_profiles`. */
     overlay?: string[];
   };
 }
 
 export type RuleSeverity = "error" | "warning" | "ignore";
+
+/** `eda_model::setup_pages::FormattingSettings` -- Text & Graphics > Formatting: the dash and gap of dashed lines, in line widths, and the "apply board defaults to footprint .." boxes. */
+export interface FormattingSettings {
+  dash_length_ratio: number;
+  gap_length_ratio: number;
+  apply_to_fp_fields: boolean;
+  apply_to_fp_text: boolean;
+  apply_to_fp_shapes: boolean;
+  apply_to_fp_dimensions: boolean;
+  apply_to_fp_barcodes: boolean;
+}
+
+/** `ZONE_LAYER_PROPERTIES::hatching_offset`, µm. */
+export interface HatchOffset {
+  x_um: Um;
+  y_um: Um;
+}
+export type HatchOffsets = Record<string, HatchOffset>;
+
+export type MeanderCornerStyle = "chamfer" | "round";
+
+/** `PNS::MEANDER_SETTINGS`, the part Board Setup > Length-tuning Patterns edits. */
+export interface MeanderSettings {
+  min_amplitude_um: Um;
+  max_amplitude_um: Um;
+  spacing_um: Um;
+  corner_style: MeanderCornerStyle;
+  corner_radius_percentage: number;
+  single_sided: boolean;
+}
+export interface TuningPatterns {
+  single_track: MeanderSettings;
+  diff_pair: MeanderSettings;
+  diff_pair_skew: MeanderSettings;
+}
+
+export type TuningProfileType = "single" | "differential";
+
+/** One row of a tuning profile's track propagation grid. Delays are KiCad's own unit, attoseconds per millimetre (1 ps/mm is 1,000,000). */
+export interface ProfileLayerEntry {
+  signal_layer: string;
+  top_reference_layer?: string | null;
+  bottom_reference_layer?: string | null;
+  width_um: Um;
+  diff_pair_gap_um: Um;
+  delay_as_per_mm: number;
+}
+
+/** One row of the via overrides grid; the delay is a time in attoseconds (1 ps is 1,000,000). */
+export interface ProfileViaOverride {
+  signal_layer_from: string;
+  signal_layer_to: string;
+  via_layer_from: string;
+  via_layer_to: string;
+  delay_as: number;
+}
+
+export interface TuningProfile {
+  name: string;
+  profile_type: TuningProfileType;
+  target_impedance: number;
+  enable_time_domain_tuning: boolean;
+  layer_entries: ProfileLayerEntry[];
+  via_propagation_delay_as: number;
+  via_overrides: ProfileViaOverride[];
+}
+
+/** Design Rules > Tuning Profiles: the profiles, and the profile each net class (`Default` included) names -- one the project does not have is what kicad-cli reports as `missing_tuning_profile`. */
+export interface TuningProfiles {
+  profiles: TuningProfile[];
+  class_profiles?: Record<string, string>;
+}
 
 /** `LAYER_T`: a copper layer is a signal, a power plane, a mixed or a jumper layer; a user layer is auxiliary (it does not flip with the board) or off-board at the front or the back (it does). */
 export type BoardLayerType = "signal" | "power" | "mixed" | "jumper" | "auxiliary" | "front" | "back";
@@ -1100,6 +1180,14 @@ export type Cmd =
   | { op: "set_text_variables"; variables: Record<string, string> }
   /** Board Setup > Board Editor Layers (`panel_setup_layers.cpp`): the whole page -- the layers the board has, their names and types. Refused with the layer's name when a name or type is out of the panel's rules or a layer is turned off while items are on it. */
   | { op: "set_board_layers"; settings: LayerSetup }
+  /** Board Setup > Formatting (`panel_setup_formatting.cpp`): the whole page. Refused with the setting's name (`dash_length_ratio`) when a ratio is not above 0 and at most 1000. */
+  | { op: "set_formatting"; settings: FormattingSettings }
+  /** Board Setup > Zone Hatch Offsets (`panel_setup_zone_hatch_offsets.cpp`): the whole page, copper layer -> offset; a layer left out (or at 0, 0) has none. */
+  | { op: "set_zone_hatch_offsets"; offsets: HatchOffsets }
+  /** Board Setup > Length-tuning Patterns (`panel_setup_tuning_patterns.cpp`): the whole page. Refused with `group.field` (`diff_pair.min_amplitude`). */
+  | { op: "set_tuning_patterns"; settings: TuningPatterns }
+  /** Board Setup > Tuning Profiles (`panel_setup_tuning_profiles.cpp`): the whole page, with the profile each net class names. Refused with the profile's name. */
+  | { op: "set_tuning_profiles"; settings: TuningProfiles }
   /**
    * `dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", "Edit exclusion comment..." and "Exclude all violations of ..." (and Exclude
    * Marker): waive the DRC violations as one undo step. An exclusion whose `(check, items)` is waived already is replaced (that edits its comment).

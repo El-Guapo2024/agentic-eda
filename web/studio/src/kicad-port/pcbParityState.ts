@@ -45,8 +45,11 @@ export interface PcbParityState {
   drawStrokeStep: DrawStrokeStep | null;
   /** A footprint name waiting to be opened in the Footprint Editor tab (`EditFpInFpEditor`): the Footprint Editor lives in its own store, so the action only records the request and `useFootprintEditHotkey` (mounted where both providers are in scope) performs it. */
   fpEditRequest: string | null;
-  /** `MEANDER_SETTINGS` amplitude/spacing the length-tuning dialog edits (`lengthTuner.Ampl*`/`Spacing*` step them). */
-  lengthTuner: { amplitudeUm: number; spacingUm: number };
+  /**
+   * `MEANDER_SETTINGS` amplitude/spacing the length-tuning dialog edits (`lengthTuner.Ampl*`/`Spacing*` step them). The dialog opens at the maximum amplitude and the spacing of Board
+   * Setup > Length-tuning Patterns for its kind (`tunerStart`); `minAmplitudeUm` is that page's minimum amplitude, the floor `AmplitudeStep` keeps.
+   */
+  lengthTuner: { amplitudeUm: number; spacingUm: number; minAmplitudeUm: number };
   /** Bumped by `closeOutline` to ask the canvas to finish the zone/polygon being drawn with the points placed so far (the canvas owns the draw). */
   drawFinishRequest: number;
   /** `TOOL_MANAGER::GetMenuCursorPos()`: where the context menu was opened. The pointer is over the menu by the time an entry runs, so a cursor-driven action (Break Track) reads this instead of the live cursor; the next canvas press clears it. */
@@ -76,6 +79,10 @@ export interface CustomDiffPair {
   viaGapSameAsTrackGap: boolean;
 }
 
+/** `MEANDER_SETTINGS` constants (pns_meander.cpp): `m_minAmplitude = 200000`, `m_step = 50000` nm. */
+export const TUNER_MIN_AMPLITUDE_UM = 200;
+export const TUNER_STEP_UM = 50;
+
 export const DEFAULT_PCB_PARITY: PcbParityState = {
   moveQueue: [],
   movingIndividually: false,
@@ -84,7 +91,7 @@ export const DEFAULT_PCB_PARITY: PcbParityState = {
   angleSnapMode: "45",
   drawStrokeStep: null,
   fpEditRequest: null,
-  lengthTuner: { amplitudeUm: 200, spacingUm: 400 },
+  lengthTuner: { amplitudeUm: 1000, spacingUm: 600, minAmplitudeUm: TUNER_MIN_AMPLITUDE_UM },
   drawFinishRequest: 0,
   menuCursorUm: null,
   layerPairs: null,
@@ -115,13 +122,9 @@ export function nextAngleSnapMode(mode: AngleSnapMode): AngleSnapMode {
   }
 }
 
-/** `MEANDER_SETTINGS` constants (pns_meander.cpp): `m_minAmplitude = 200000`, `m_step = 50000` nm. */
-export const TUNER_MIN_AMPLITUDE_UM = 200;
-export const TUNER_STEP_UM = 50;
-
-/** `MEANDER_PLACER_BASE::AmplitudeStep`: `max(amplitude + sign*step, minAmplitude)`. */
-export function amplitudeStep(amplitudeUm: number, sign: 1 | -1): number {
-  return Math.max(amplitudeUm + sign * TUNER_STEP_UM, TUNER_MIN_AMPLITUDE_UM);
+/** `MEANDER_PLACER_BASE::AmplitudeStep`: `max(amplitude + sign*step, minAmplitude)`; the minimum is the Length-tuning Patterns page's (KiCad's 0.2 mm until it is known). */
+export function amplitudeStep(amplitudeUm: number, sign: 1 | -1, minAmplitudeUm: number = TUNER_MIN_AMPLITUDE_UM): number {
+  return Math.max(amplitudeUm + sign * TUNER_STEP_UM, minAmplitudeUm);
 }
 
 /** `MEANDER_PLACER_BASE::SpacingStep`: `max(spacing + sign*step, trackWidth + clearance)`. */

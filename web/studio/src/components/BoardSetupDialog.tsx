@@ -7,14 +7,16 @@
 // `board::load` lays it over the board's description, so the router, DRC, the gates and the KiCad project kicad-cli reads all follow it, and
 // Undo takes it back. Pre-defined Sizes, Teardrops and Dimensions edit the design directly (`set_track_width_presets` ...), as before.
 //
-// Board Editor Layers (`set_board_layers`) keeps the technical and user layers a board has, their names and types. Not ported: Zone Hatch Offsets, Formatting,
-// Length-tuning Patterns, Tuning Profiles, Component Classes and Embedded Files -- nothing in the model holds them yet.
+// Board Editor Layers (`set_board_layers`) keeps the technical and user layers a board has, their names and types; Formatting, Zone Hatch Offsets, Length-tuning Patterns and
+// Tuning Profiles (`set_formatting`, `set_zone_hatch_offsets`, `set_tuning_patterns`, `set_tuning_profiles`) are pages of the same kind. Not ported: Component Classes and Embedded
+// Files -- nothing in the model holds them yet.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import type { DimensionSettings, DimensionTextPosition, DimensionUnits, DimensionUnitsFormat, TeardropSettings, Um } from "../api/types";
 import { BoardLayersPage } from "./boardSetup/BoardLayersPage";
 import { ConstraintsPage } from "./boardSetup/ConstraintsPage";
+import { FormattingPage } from "./boardSetup/FormattingPage";
 import { CustomRulesPage } from "./boardSetup/CustomRulesPage";
 import { MaskPastePage } from "./boardSetup/MaskPastePage";
 import { NetClassesPage } from "./boardSetup/NetClassesPage";
@@ -22,9 +24,28 @@ import { SeveritiesPage } from "./boardSetup/SeveritiesPage";
 import { StackupPage } from "./boardSetup/StackupPage";
 import { TextGraphicsPage } from "./boardSetup/TextGraphicsPage";
 import { TextVariablesPage } from "./boardSetup/TextVariablesPage";
+import { TuningPatternsPage } from "./boardSetup/TuningPatternsPage";
+import { TuningProfilesPage } from "./boardSetup/TuningProfilesPage";
+import { ZoneHatchOffsetsPage } from "./boardSetup/ZoneHatchOffsetsPage";
 import "../styles/boardSetup.css";
 
-export type Page = "board_layers" | "stackup" | "mask_paste" | "text_graphics" | "dimensions" | "text_variables" | "constraints" | "tracks_vias" | "teardrops" | "classes" | "custom_rules" | "severities";
+export type Page =
+  | "board_layers"
+  | "stackup"
+  | "mask_paste"
+  | "hatch_offsets"
+  | "text_graphics"
+  | "formatting"
+  | "dimensions"
+  | "text_variables"
+  | "constraints"
+  | "tracks_vias"
+  | "teardrops"
+  | "tuning_patterns"
+  | "tuning_profiles"
+  | "classes"
+  | "custom_rules"
+  | "severities";
 
 /** KiCad's page tree (`DIALOG_BOARD_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
 const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
@@ -34,12 +55,14 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "board_layers", label: "Board Editor Layers" },
       { id: "stackup", label: "Physical Stackup" },
       { id: "mask_paste", label: "Solder Mask/Paste" },
+      { id: "hatch_offsets", label: "Zone Hatch Offsets" },
     ],
   },
   {
     title: "Text & Graphics",
     pages: [
       { id: "text_graphics", label: "Defaults" },
+      { id: "formatting", label: "Formatting" },
       { id: "dimensions", label: "Dimensions" },
       { id: "text_variables", label: "Text Variables" },
     ],
@@ -50,6 +73,8 @@ const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; labe
       { id: "constraints", label: "Constraints" },
       { id: "tracks_vias", label: "Pre-defined Sizes" },
       { id: "teardrops", label: "Teardrops" },
+      { id: "tuning_patterns", label: "Length-tuning Patterns" },
+      { id: "tuning_profiles", label: "Tuning Profiles" },
       { id: "classes", label: "Net Classes" },
       { id: "custom_rules", label: "Custom Rules" },
       { id: "severities", label: "Violation Severity" },
@@ -260,7 +285,11 @@ export function BoardSetupDialog() {
           <BoardLayersPage hidden={page !== "board_layers"} onDirty={markers.board_layers} />
           <StackupPage hidden={page !== "stackup"} onDirty={markers.stackup} />
           <MaskPastePage hidden={page !== "mask_paste"} onDirty={markers.mask_paste} />
+          <ZoneHatchOffsetsPage hidden={page !== "hatch_offsets"} onDirty={markers.hatch_offsets} />
           <TextGraphicsPage hidden={page !== "text_graphics"} onDirty={markers.text_graphics} />
+          <FormattingPage hidden={page !== "formatting"} onDirty={markers.formatting} />
+          <TuningPatternsPage hidden={page !== "tuning_patterns"} onDirty={markers.tuning_patterns} />
+          <TuningProfilesPage hidden={page !== "tuning_profiles"} onDirty={markers.tuning_profiles} />
           <TextVariablesPage hidden={page !== "text_variables"} onDirty={markers.text_variables} />
           <ConstraintsPage hidden={page !== "constraints"} onDirty={markers.constraints} />
           <NetClassesPage hidden={page !== "classes"} onDirty={markers.classes} />

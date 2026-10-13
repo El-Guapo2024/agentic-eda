@@ -32,6 +32,7 @@ import { editableSelection, flipPivot, rotationPivot, wrapTurns } from "../kicad
 import { itemKind, padParent } from "../kicad-port/pcbItems";
 import { grabNearestUnconnectedFootprints, movableItem, resolveToggleLock, routeSelectedAnchors, routeStartLayer, selectUnconnectedFootprints, stepCopperLayer, unrouteSegmentReselect } from "../kicad-port/pcbEditActions";
 import { amplitudeStep, nextAngleSnapMode, spacingStep } from "../kicad-port/pcbParityState";
+import { tunerStart } from "../kicad-port/setupPages";
 import { steppedDrawStroke } from "../kicad-port/layerDefaults";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
@@ -462,6 +463,9 @@ export function useActionRunner() {
         const refs = requestSelection();
         if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
         if (state.selection.size === 0) dispatch({ type: "SET_SELECTION", refs });
+        // The tuner starts from Board Setup > Length-tuning Patterns for its kind (`PCB_TUNING_PATTERN` takes the board's meander defaults).
+        const start = tunerStart(state.board?.board_rules?.tuning_patterns, mode);
+        dispatch({ type: "PCBX", patch: { lengthTuner: { amplitudeUm: start.amplitudeUm, spacingUm: start.spacingUm, minAmplitudeUm: start.minAmplitudeUm } } });
         dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true, mode });
       });
     m.set("pcbnew.LengthTuner.TuneSingleTrack", startTuner("single"));
@@ -1909,8 +1913,8 @@ export function useActionRunner() {
         const trackWidth = selTrack?.width ?? board?.board_rules?.track_width ?? 250;
         const clearance = board?.board_rules?.clearance ?? 0;
         const setTuner = (patch: Partial<typeof tuner>) => dispatch({ type: "PCBX", patch: { lengthTuner: { ...tuner, ...patch } } });
-        m.set("pcbnew.lengthTuner.AmplIncrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, 1) })));
-        m.set("pcbnew.lengthTuner.AmplDecrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, -1) })));
+        m.set("pcbnew.lengthTuner.AmplIncrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, 1, tuner.minAmplitudeUm) })));
+        m.set("pcbnew.lengthTuner.AmplDecrease", pcbOnly(() => setTuner({ amplitudeUm: amplitudeStep(tuner.amplitudeUm, -1, tuner.minAmplitudeUm) })));
         m.set("pcbnew.lengthTuner.SpacingIncrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, 1, trackWidth, clearance) })));
         m.set("pcbnew.lengthTuner.SpacingDecrease", pcbOnly(() => setTuner({ spacingUm: spacingStep(tuner.spacingUm, -1, trackWidth, clearance) })));
       }
@@ -1920,6 +1924,8 @@ export function useActionRunner() {
         pcbOnly(() => {
           const refs = [...state.selection];
           if (refs.length !== 1 || !api.trackById(refs[0]!)) return;
+          const start = tunerStart(state.board?.board_rules?.tuning_patterns, state.lengthTuningMode);
+          dispatch({ type: "PCBX", patch: { lengthTuner: { amplitudeUm: start.amplitudeUm, spacingUm: start.spacingUm, minAmplitudeUm: start.minAmplitudeUm } } });
           dispatch({ type: "SET_LENGTH_TUNING_DIALOG_OPEN", open: true });
         })
       );
