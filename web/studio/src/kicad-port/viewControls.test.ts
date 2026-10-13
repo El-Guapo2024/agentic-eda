@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, type WheelInput } from "./viewControls";
+import { handleWheel, computeAutoPanDirection, computeAutoPanStep, DEFAULT_VIEW_CONTROL_SETTINGS, dragActionOf, dragZoomView, type WheelInput } from "./viewControls";
 import { ConstantZoomController, CONSTANT_SCALE } from "./zoomController";
 import { screenToWorld, type ViewTransform } from "./view";
 
@@ -126,4 +126,31 @@ test("computeAutoPanStep: just barely into the border (<= half border) uses the 
   const tiny = borderSize * 0.3; // < borderSize/2
   const step = computeAutoPanStep({ x: -tiny, y: 0 }, screenSize, 1)!;
   assert.ok(Math.abs(Math.abs(step.x) - tiny) < 1e-9);
+});
+
+test("dragActionOf: the middle and the right button do what the settings say, the left one is no view control", () => {
+  assert.equal(dragActionOf(1, DEFAULT_VIEW_CONTROL_SETTINGS), "pan");
+  assert.equal(dragActionOf(2, DEFAULT_VIEW_CONTROL_SETTINGS), "pan");
+  assert.equal(dragActionOf(0, DEFAULT_VIEW_CONTROL_SETTINGS), "none");
+  const set = { dragMiddle: "zoom" as const, dragRight: "none" as const };
+  assert.equal(dragActionOf(1, set), "zoom");
+  assert.equal(dragActionOf(2, set), "none");
+  assert.equal(dragActionOf(3, set), "none");
+});
+
+test("dragZoomView: dragging up zooms in and down zooms out by exp( d.y * speed * 0.001 ), the press point staying put on the screen", () => {
+  const view: ViewTransform = { scale: 2, x: 30, y: -10 };
+  const anchor = { x: 400, y: 300 };
+  const before = screenToWorld(view, anchor.x, anchor.y);
+  const up = dragZoomView(view, anchor, -20, 5);
+  assert.ok(Math.abs(up.scale - 2 * Math.exp(20 * 5 * 0.001)) < 1e-12, `${up.scale}`);
+  const down = dragZoomView(view, anchor, 20, 5);
+  assert.ok(down.scale < 2 && Math.abs(down.scale - 2 * Math.exp(-20 * 5 * 0.001)) < 1e-12);
+  for (const v of [up, down]) {
+    const after = screenToWorld(v, anchor.x, anchor.y);
+    assert.ok(Math.abs(after[0] - before[0]) < 1e-9 && Math.abs(after[1] - before[1]) < 1e-9, "the world point under the press does not move");
+  }
+  // a faster zoom speed zooms more for the same drag; no movement is no zoom
+  assert.ok(dragZoomView(view, anchor, -20, 10).scale > up.scale);
+  assert.equal(dragZoomView(view, anchor, 0, 5).scale, 2);
 });

@@ -96,6 +96,22 @@ export function PreferencesDialog() {
               Automatic
             </label>
           </div>
+          <div className="filter-row" title="What dragging with the middle mouse button does (schematic editor)">
+            <span style={{ width: 170 }}>Middle button drag:</span>
+            <select aria-label="Middle button drag" data-testid="pref-drag-middle" value={draft.dragMiddle} onChange={(e) => set({ dragMiddle: e.target.value as Preferences["dragMiddle"] })}>
+              <option value="pan">Pan</option>
+              <option value="zoom">Zoom</option>
+              <option value="none">None</option>
+            </select>
+          </div>
+          <div className="filter-row" title="What dragging with the right mouse button does (schematic editor); a click without a drag still opens the context menu">
+            <span style={{ width: 170 }}>Right button drag:</span>
+            <select aria-label="Right button drag" data-testid="pref-drag-right" value={draft.dragRight} onChange={(e) => set({ dragRight: e.target.value as Preferences["dragRight"] })}>
+              <option value="pan">Pan</option>
+              <option value="zoom">Zoom</option>
+              <option value="none">None</option>
+            </select>
+          </div>
           <div className="filter-row" title="How fast to pan when moving an object off the edge of the screen">
             <span style={{ width: 120 }}>Auto pan speed:</span>
             <input type="range" min={1} max={10} step={1} aria-label="Auto pan speed" value={draft.autoPanAcceleration} onChange={(e) => set({ autoPanAcceleration: Number(e.target.value) })} />
