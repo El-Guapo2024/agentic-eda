@@ -229,6 +229,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         impedance_targets: vec![],
         footprints: explicit_footprints.into_values().collect(),
         instance_footprints: Default::default(),
+        edited_models: Default::default(),
         installed_art: Default::default(),
         symbols: vec![],
         board,

@@ -74,7 +74,9 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     fp.keywords = sexpr::find(root, "tags").and_then(|d| sexpr::txt(d, 1)).unwrap_or("").to_string();
     fp.attributes = attributes(root);
     fp.zone_connection = sexpr::find(root, "zone_connect").and_then(|z| sexpr::num(z, 1)).and_then(|v| crate::zone_connection_from_file(v as i64));
-    fp.model = crate::footprint_lib::model_from(root);
+    // Every (model ...) with its placement; `model` is the first path, as `Footprint::model` is.
+    fp.models3d = crate::footprint_lib::models_from(root);
+    fp.model = fp.models3d.first().map(|m| m.path.clone());
     fp.courtyard = crate::footprint_lib::courtyard_from(root);
 
     for child in root.iter().skip(2).filter_map(Sexpr::as_list) {

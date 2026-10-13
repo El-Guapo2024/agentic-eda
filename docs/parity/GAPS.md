@@ -40,6 +40,11 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
   (`PadMaskInfo::art_layers`). The measure: `complex_hierarchy`'s `silk_over_copper` 104 -> 2 became 104 -> 104, `silk_overlap` 199 -> 5 became 199 -> 199, `silk_edge_clearance` 14 -> 2 became 14 -> 14; the re-export of a real board gives kicad-cli
   the original's counts on 7 of 12 boards (was 6). Left: hatch lines, the footprint editor's stroke types and vertical justification, the title block's variables in a footprint text, mask-only pads and a pad on the silkscreen of a library footprint.
   Measured: 33 new Rust tests (three of them slow-tier, with kicad-cli), 9 new `node --test` cases, and `web/studio/e2e/fp-graphics.check.js`, 6 scenarios through `window.__eda` on a served board.
+- **A footprint's 3D models are an edit of their own (2026-10-13, `task-fp-3d`; `PARITY-pcb.md` section 31, `PARITY-fpedit.md` section 11).** `FootprintEdit::models3d` is the whole list on the board, with its verbs (`set_board_models`, `add_board_model`,
+  `remove_board_model`, `move_board_model`, `edit_board_model`, each one undo step, a bad index or file name refused with its reason); the Footprint Properties dialogs of the board and of the Footprint Editor have KiCad's 3D Models tab (the list, the status of each file name,
+  Add, the model chooser, Remove, Scale, Rotation, Offset and Opacity with their steps and the arithmetic of `evaluateTextCtrl`, the preview); the `.kicad_pcb` and `.kicad_mod` carry every `(model ...)` as `pcb_io_kicad_sexpr` writes it (kicad-cli's own rewrite of our board has the same
+  entries character for character and exports the same VRML: slow-tier proof); the Footprint Chooser has the 3D view; Migrate 3D Models works (`pcbnew.GlobalEdit.migrate3DModels` leaves `ui-parity-missing.json`). Left: the Extruded 3D Body, embedded files and Collect and Embed 3D Models, the
+  load-time auto-migration, "Show 3D viewer in own window" in the Footprint Chooser. Measured: 52 new Rust tests (one slow-tier) and 20 `node --test` cases; `web/studio/e2e/fp-models.check.js` runs 11 scenarios (153 checks) through `window.__eda`.
 - **Four findings change the picture.**
   1. *A wired action is not a working feature.* This was the finding of 2026-10-07 and it was fixed where it bit: the schematic edit tools act on
      every item kind (item 1, `2a8bf8f`) and so do the PCB ones (item 8, `88c8c0a`). Before closing any action, run it on every item kind.
@@ -86,6 +91,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 22 | Create Array | Mostly done | `afcb91b` (10-09) |
 | 23 | The 3D viewer: KiCad's models, layer tree, stackup colours | **Done** | `89ff669` (10-10) |
 | 25, 2 | Footprint graphics: silkscreen, fab and assembly drawings and texts are the footprint's own (IR, `.kicad_mod` and `.kicad_pcb`, canvas, 3D, in-house checks) | **Done** (limits in item 25) | `task-fp-graphics` (10-10, not merged) |
+| 30 | The 3D models of a footprint: the 3D Models tab in both Footprint Properties dialogs, the list's verbs and file entries, the Footprint Chooser's 3D view, Migrate 3D Models | **Done** (limits in item 30) | `task-fp-3d` (10-13, not merged) |
 
 Not moved: items 15, 19, 20, 24.
 
@@ -109,7 +115,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 11 | P11 Search and inspection | 21, 29 | Find by Properties, Clearance Resolution, Footprint Checker; Find ignores user fields and zone names | open | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
 | 13 | P13 Zone leftovers | 13 | non-copper zones, multi-layer zones, `connect_nearby_polys`, mask-only NPTH knockouts | open | L |
-| 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | open | M |
+| 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | done 2026-10-13 on `task-fp-3d` (not merged); item 30 lists what is left | M |
 | 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | open | S-M |
 | 16 | P16 PCB item kinds the IR lacks | 24 | text box, tables (stackup table), barcode, point, reference image, hatch fill | deferred | L |
 | 17 | P17 Library editor leftovers | 19, 22 | no snap to anchors in the editors, no pad array numbering, no derived symbols, no alternate pin functions | open | L |
@@ -413,9 +419,9 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/widgets/appearance_controls.cpp`.
 
 ### 19. Footprint and symbol editor leftovers
-**Partial.** Hit: library work. Blocks: no. Packages P14, P7 and P17.
+**Partial.** Hit: library work. Blocks: no. Packages P7 and P17 (P14, the 3D model tab, is done: item 30).
 - Exists: both editors with library trees, pad and pin tools, dialogs, tables, import and export (`PARITY-fpedit.md`, `PARITY-symedit.md`).
-- Missing: the footprint editor's 3D model panel (it edits one model path while a footprint on a board keeps every `(model ...)`: item 30); Explode and Recombine of a custom pad (item 31); the library editor's Footprint
+- Missing: Explode and Recombine of a custom pad (item 31); the library editor's Footprint
   Properties has no fields grid (the board's has one since 10-09); derived symbols; alternate pin functions; symbol fields on the canvas; a shape properties dialog; snapping to other items' anchors in both
   editors (item 14). (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
@@ -456,7 +462,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   moves. The board slab and solder mask are extruded from the outline KiCad builds from Edge.Cuts. `e2e/viewer3d.check.js` (50 checks). Two stalls of the request loop were found by measuring and fixed.
 - Missing: raytracing (out of scope); layer presets and viewports of the 3D viewer; the PCB editor's selection drawn green in the 3D view; the 3D Navigator; the Value and user fields (a footprint's own texts and the Reference are drawn since P1), off-board silkscreen, models not
   in the position file and DNP models; X3D and IGES models; per-layer ambient and specular colours of the board; the preferences that set the animation speed; NPTH holes are not cut out of the slab
-  (`aIncludeNPTHAsOutlines`, item 27); the footprint editor's 3D model panel (item 30).
+  (`aIncludeNPTHAsOutlines`, item 27); the Extruded 3D Body of a footprint (item 30).
 
 ### 24. Item kinds the IR does not have
 **Open, deferred.** Backlog; package P16 for the PCB items.
@@ -535,12 +541,20 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `pcbnew/drc/drc_engine.cpp` (`EvalRules`), `pcbnew/dialogs/dialog_footprint_checker.cpp`.
 
 ### 30. The 3D models of a footprint
-**New, open.** Hit: whoever makes a footprint or fits a different 3D model. Blocks: no. Package P14, size M. From `PARITY-3d.md` and `PARITY-fpedit.md`.
-- A footprint on a board and in the installed libraries keeps every `(model ...)` with its offset, scale, rotation and opacity (`Footprint.models3d`, `89ff669`), and the 3D viewer, the importer and the writer
-  use them. Nothing edits them: the library editor's Footprint Properties has one text field for a path (`LibraryFootprint.model`, a single `Option<String>`), `FootprintEdit` has no model list, and there is
-  no 3D Models tab, no preview, no model chooser in either dialog. Migrate 3D Models has a stale reason (`STALE-REASONS.md` SR3) and needs the same verb. Collect and Embed 3D Models needs embedded files
-  (zstd, item 24).
-- Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/3d_cache/`.
+**Done (2026-10-13, `task-fp-3d`, not merged yet)**, limits below. Hit: whoever makes a footprint or fits a different 3D model. Blocks: no longer. Package P14, size M. From `PARITY-3d.md` and `PARITY-fpedit.md`.
+- Done (`PARITY-pcb.md` section 31, `PARITY-fpedit.md` section 11; `crates/model/src/{fp_models,model_subst,fp_edit,ir}.rs`, `crates/ops/src/fp_models.rs`, `crates/kicad/src/{footprint_lib,footprint_import,pcb,model3d}.rs`, `crates/cli/src/model3d_tab_api.rs`,
+  `components/{footprint/FootprintModelsPanel,footprint/ModelPreview3D,footprint/Model3dChooserDialog,Migrate3dModelsDialog,FootprintPropertiesDialog,FootprintChooserDialog}.tsx`, `kicad-port/{fpModels,migrate3d}.ts`), the five steps, each its own commit (`233a2af`, `58ee472`, `0ebde56`, `4bb96b8`, `7a327b6` and `3bcf0bc`):
+  (1) `FootprintEdit::models3d`, the whole list on the board (`None` is the footprint's own, `Some` what was set, an emptied list included: `ConstraintModel::edited_models`), laid over the footprint by `edited_footprint` and its verbs (`set_board_models`, `add_board_model`, `remove_board_model`,
+  `move_board_model`, `edit_board_model`, the list in `edit_footprint_properties`), one undo step each, a refusal with its reason (`ops_bad_model`, `ops_bad_model_index`, `ops_nothing_to_change`: no empty step), the file name checked as `FILENAME_RESOLVER::ValidateFileName` checks it and the numbers as
+  the preview panel's fields take them; the `.kicad_pcb` entries as `format( FOOTPRINT )` writes them (hide, opacity, `FormatDouble2Str`) and read back, a bottom-side footprint's placement in KiCad's frame; the 3D viewer and the exports draw the list; (2) the 3D Models tab of the board's Footprint Properties (the grid with the status of each
+  file name, Add, Browse through the model chooser and the library path variables, Remove, Configure Paths..., Scale, Rotation and Offset with their spin buttons, wheel and expressions, the Opacity slider, the preview that reuses `viewer3d/modelCache.ts`) and of the Footprint Editor's; (3) the library footprint keeps a list (`LibraryFootprint::models3d`, `.kicad_mod`
+  import and export, the editor's dialog); (4) the Footprint Chooser's 3D view and a footprint's models reaching the board with it; (5) Migrate 3D Models (`eda_model::model_subst`, `GET /api/3dmodel/migrate`, `migrate_board_models`, the dialog: missing references, ranked STEP candidates, Add Search Directory..., Open External File..., preview, Replace in one step).
+- Measured: 52 new Rust tests (one slow-tier: kicad-cli's `pcb upgrade` writes a board with two models -- offsets, scales, rotations, an opacity, one hidden -- with the same `(model ...)` entries character for character as it reads in ours, and `pcb export vrml` of both is the same) and 20 `node --test` cases;
+  `web/studio/e2e/fp-models.check.js` runs 11 scenarios (153 checks) through `window.__eda` (port 8826, a board made from `examples/mcu_board_30plus.yaml`).
+- Left: the Extruded 3D Body box of the tab (`EXTRUDED_3D_BODY`: a body from the courtyard, fab or silkscreen outline or the pins' box, its height, standoff, material and colour, its STEP export) and the embedded files (`PANEL_EMBEDDED_FILES`, `kicad-embed://`, Collect and Embed 3D Models), which need the zstd of item 24;
+  Migrate 3D Models' load-time half (`AutoMigrateByFilename` and the info bar "N WRL 3D models could not be matched", which `pcb_edit_frame.cpp` runs when a board opens) and a folder picker over the whole disk (the studio lists the folders it may read: KiCad's library, the board's, the path variables'); "Show 3D viewer in own window" of the Footprint Chooser; IGES and X3D models in the
+  viewer and the chooser (a candidate may be an IGES file); for a bottom-side footprint the tab shows the numbers in the footprint's top-side frame where KiCad shows the file's (a half turn about z apart; the file written is KiCad's); a built-in package (`0603`) opened in the Footprint Editor has no model list (the generic model is added only when a footprint is placed).
+- Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/dialogs/{panel_preview_3d_model,dialog_select_3d_model}.cpp`, `3d-viewer/3d_cache/`, `pcbnew/footprint_chooser_frame.cpp`.
 
 ### 31. Custom-shape pads
 **Done (2026-10-10, `task-custom-pads`)**, limits below. Hit: footprints with custom pads, imported boards, the zone fill around them. Blocks: no. Package P7.
@@ -692,7 +706,8 @@ Rules that keep them apart (each is how an earlier package did it):
 Waves:
 
 - **Running now** (2026-10-12): P9a (`task-board-setup`), P10 (`task-sch-details`). P1, P2, P3, P4, P5a, P5b, P6, P7 and P8 are merged; their sections list what is left.
-- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P14, P16, P17 and the Footprint Checker, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
+- **Next free slot**: P5c (P5a and P5b are merged), which shares no hub with anything; P16, P17 and the Footprint Checker, which stand on a footprint that carries its graphics (P1, merged 2026-10-11).
+- **P14** done 2026-10-13 on `task-fp-3d` (waiting for its merge; the Extruded 3D Body, embedded files and the load-time migration are left: item 30). It touched `fp_edit.rs`, `ir.rs`, `pcb.rs` (the `(model ...)` entries only), `import.rs` (the same) and the two Footprint Properties dialogs.
 - **P2** merged 2026-10-12 (Compare Footprint with Library included); Swap Pad Nets and Swap Gate Nets are left (item 26).
 - **Any time a slot is free**: P12, P15, P11 (Find by Properties first), P6, P9a, P20 (test files only).
 - **After P7**: P13, P17, and P19's arc stub and function shape.
@@ -879,7 +894,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`.
 - Conflicts: P7 (`zone-filler`), P12 (NPTH), `kio` hunk.
 
-### P14. The 3D models of a footprint (item 30; SR3). Size M. Rank 14.
+### P14. The 3D models of a footprint (item 30; SR3). Size M. Rank 14. **Done 2026-10-13 on `task-fp-3d`, waiting for its merge; item 30 lists what is left.**
 - A model list on `FootprintEdit` (`models3d`) with its verb, a 3D Models tab in both Footprint Properties dialogs (`PANEL_FP_PROPERTIES_3D_MODEL`: list, offset, scale, rotation, opacity, show; path chooser through `model3d_api`; a preview that
   reuses `viewer3d/modelCache.ts`), the library editor's `model` becoming a list, Migrate 3D Models, the 3D preview of the Footprint Chooser.
 - Files: `crates/model/src/{fp_edit,ir}.rs`, `crates/ops/src/{fp_edit,library_editors}.rs`, `crates/kicad/src/{footprint_lib,footprint_import,pcb}.rs`, `components/{FootprintPropertiesDialog.tsx,footprint/FootprintPropertiesDialog.tsx}`,

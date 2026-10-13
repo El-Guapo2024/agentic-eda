@@ -529,6 +529,7 @@ fn read_request(stream: &TcpStream) -> Result<(String, String, Vec<u8>), String>
 ///   - `GET /api/3dmodel?name=..`: one footprint 3D model, read-only, for the 3D view's VRMLLoader: resolved like KiCad does and held to an allow-list; a STEP model is
 ///     converted to VRML by kicad-cli in the background and cached. `&wait=1` holds the request until the model is in.
 ///   - `POST /api/3dmodel/prepare`: every model of the board at once, queued for one conversion run.
+///   - `POST /api/3dmodel/check`, `GET /api/3dmodel/browse`, `/migrate` and `/preview`: what the 3D Models tab of Footprint Properties asks besides the models (crates/cli/src/model3d_tab_api.rs).
 fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8], dir: &Path, lane: &Arc<Lane>, on_own_thread: bool) -> Option<Result<(), String>> {
     match (method, target.split('?').next().unwrap_or("/")) {
         ("GET", "/api/3dmodel") => Some((|| {
@@ -554,6 +555,22 @@ fn model_routes(stream: &mut TcpStream, method: &str, target: &str, body: &[u8],
                 .map_err(|e| e.to_string())
         })()),
         ("POST", "/api/3dmodel/prepare") => Some(respond(stream, "200 OK", "application/json", crate::model3d_api::prepare(dir, body, &crate::model3d_api::store(lane)).to_string().as_bytes())),
+        ("POST", "/api/3dmodel/check") => {
+            let r = crate::model3d_tab_api::check(dir, body);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
+        ("GET", "/api/3dmodel/browse") => {
+            let r = crate::model3d_tab_api::browse(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
+        ("GET", "/api/3dmodel/migrate") => {
+            let r = crate::model3d_tab_api::migrate(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
+        ("GET", "/api/3dmodel/preview") => {
+            let r = crate::model3d_tab_api::preview(dir, target);
+            Some(respond(stream, r.status, r.kind, &r.body))
+        }
         _ => None,
     }
 }

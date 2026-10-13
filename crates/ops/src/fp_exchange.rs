@@ -310,6 +310,9 @@ impl Board<'_> {
         };
         // the pads are the new footprint's
         edit.pads.clear();
+        // the 3D models are the new footprint's own; with "update/reset 3D models" off they are the footprint's as it stood (`new` carries them now), and a list the board had
+        // set stays set -- an empty one too, which is a footprint with no model, not one that has the package's generic one
+        edit.models3d = (!options.reset_3d_models && was.models3d.is_some()).then(|| new.models3d.clone());
 
         // The footprint-level overrides stay with "update/reset clearance overrides" off; the pads' are the old pads'
         let keep_overrides = !options.reset_clearance_overrides;

@@ -65,7 +65,7 @@ impl Board<'_> {
     }
 
     /// The footprint's edit, made if it had none.
-    fn edit_slot(&mut self, id: &str) -> &mut FootprintEdit {
+    pub(crate) fn edit_slot(&mut self, id: &str) -> &mut FootprintEdit {
         let dr = self.drawings_mut();
         let i = match dr.footprint_edits.iter().position(|e| e.id == id) {
             Some(i) => i,
@@ -79,7 +79,7 @@ impl Board<'_> {
     }
 
     /// Drop the footprint's edit when nothing is left in it.
-    fn tidy_edit(&mut self, id: &str) {
+    pub(crate) fn tidy_edit(&mut self, id: &str) {
         if let Some(dr) = self.design.drawings.as_mut() {
             dr.footprint_edits.retain(|e| e.id != id || !e.is_empty());
         }
