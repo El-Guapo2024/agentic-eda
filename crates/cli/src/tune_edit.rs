@@ -12,7 +12,9 @@
 //! The placers are `eda_pns::{meander_placer, dp_meander_placer}`; what they leave on the line becomes tracks through `eda_pns::tuning_commit`, and the
 //! verb is `Cmd::CommitTuning`. A [`Scene`] is a board and the router's world built from it; a [`Tuner`] is a pattern being made on one.
 
-use eda_drc::pcbexpr::{compile, matches_compiled, Facts};
+use eda_drc::constraints::CType;
+use eda_drc::pcbexpr::{Condition, Env};
+use eda_drc::rule_item::{Class, RuleItem};
 use eda_model::ir::{tessellate_arc, Design, Point, Track, Um};
 use eda_model::setup_pages::{CornerStyle, MeanderSettings as PageSettings};
 use eda_model::tuning::{PatternSide, TargetRange, TuningMode, TuningPattern, LENGTH_UNCONSTRAINED_UM};
@@ -31,6 +33,7 @@ use eda_pns::node::Node;
 use eda_pns::tuning_commit::{line_edit, LineEdit, PieceShape};
 use eda_pns::tuning_path::{assemble_tuning_path, LengthEnv};
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 use std::rc::Rc;
 
 /// A board and the router's world built from it.
@@ -254,11 +257,28 @@ pub struct Constraint {
 /// value is what `MEANDER_SETTINGS::SetTargetLength( constraint.GetValue() )` makes of it: the optimum is the rule's, else its minimum, with the default tolerance round it
 /// unless the rule has a minimum or a maximum of its own.
 pub fn constraint_for(rules: &BoardRules, kind: TuningMode, net: &str, partner: Option<&str>, layer: &str) -> Option<Constraint> {
-    let ty = if kind == TuningMode::DiffPairSkew { "skew" } else { "length" };
-    let class_of = |n: &str| rules.class_of(n).map(|c| c.name.clone()).unwrap_or_else(|| "Default".to_string());
-    let (class_a, class_b) = (class_of(net), partner.map(class_of).unwrap_or_else(|| class_of(net)));
-    let a = Facts { item_type: "Track", net_class: &class_a, net_name: net, reference: "", inside_courtyards: &[] };
-    let b = Facts { item_type: "Track", net_class: &class_b, net_name: partner.unwrap_or(net), reference: "", inside_courtyards: &[] };
+    let (ty, ctype) = if kind == TuningMode::DiffPairSkew { ("skew", CType::Skew) } else { ("length", CType::Length) };
+    // The conditions run through the PCBEXPR port (`DRC_RULE_CONDITION::EvaluateFor`, crates/drc/src/pcbexpr.rs) on two track stand-ins: a net and its class are
+    // what a length rule's condition can ask of a track the tuner has not drawn yet.
+    let classes: HashMap<String, String> = [Some(net), partner]
+        .into_iter()
+        .flatten()
+        .map(|n| (n.to_string(), rules.class_of(n).map(|c| c.name.clone()).unwrap_or_else(|| "Default".to_string())))
+        .collect();
+    let mut env = Env::simple(&[layer]);
+    env.nets = classes.keys().cloned().collect();
+    env.classes = Box::new(move |n: &str| {
+        let class = classes.get(n).cloned().unwrap_or_else(|| "Default".to_string());
+        (class.clone(), vec![class])
+    });
+    let env = Rc::new(env);
+    let track = |id: &str, n: &str| {
+        let mut item = RuleItem::new(id, Class::Track);
+        item.net = n.to_string();
+        item.layers = vec![layer.to_string()];
+        Rc::new(item)
+    };
+    let (a, b) = (track("a", net), track("b", partner.unwrap_or(net)));
     let mut won: Option<Constraint> = None;
     for r in rules.custom_rules.iter().filter(|r| r.constraint_type == ty) {
         if r.min.is_none() && r.max.is_none() && r.opt.is_none() {
@@ -269,12 +289,14 @@ pub fn constraint_for(rules: &BoardRules, kind: TuningMode, net: &str, partner: 
                 continue;
             }
         }
-        let condition = r.condition.as_deref().and_then(compile);
-        if r.condition.is_some() && condition.is_none() {
-            continue; // a condition this evaluator cannot read never applies
-        }
-        if !matches_compiled(condition.as_ref(), &a, &b) {
-            continue;
+        if let Some(text) = r.condition.as_deref() {
+            let mut condition = Condition::new(text);
+            if !condition.compile(&env) {
+                continue; // a condition this evaluator cannot read never applies
+            }
+            if !condition.evaluate_for(&env, Some(&a), Some(&b), ctype as u32, Some(layer), None) {
+                continue;
+            }
         }
         let opt = r.opt.or(r.min).unwrap_or(0);
         let tolerance = TargetRange::around(opt);

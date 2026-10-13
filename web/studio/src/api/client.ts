@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, TuneLengthReply, TuneMode, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
