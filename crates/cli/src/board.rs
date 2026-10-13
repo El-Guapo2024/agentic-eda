@@ -3040,6 +3040,68 @@ mod tests {
         assert!(sch.user_fields.is_empty(), "and the added column");
     }
 
+    /// The Symbol Fields Table's attribute columns: the table shows them, a staged edit regroups the table without taking its row away, Apply sets the flags on the
+    /// symbol as one undo step, and "Include 'DNP' Symbols" off leaves a Do not populate symbol out of the table, an export and kicad-cli's job.
+    #[test]
+    fn the_fields_table_shows_and_edits_the_attribute_columns_and_filters_dnp() {
+        let dir = scratch("sch_fields_table_attrs");
+        setup_schematic(&dir);
+        let table = |req: serde_json::Value| crate::sch_api::fields_table(&dir, req.to_string().as_bytes());
+        let refs = |v: &serde_json::Value| v["rows"].as_array().unwrap().iter().map(|r| r["cells"][0].as_str().unwrap().to_string()).collect::<Vec<_>>();
+        let col = |v: &serde_json::Value, name: &str| v["spec"]["columns"].as_array().unwrap().iter().position(|c| c["name"] == name).unwrap_or_else(|| panic!("no column {name}"));
+
+        // the dialog's own view has the attribute columns, grouped on, and every symbol listed
+        let v = table(serde_json::json!({}));
+        assert_eq!(v["ok"], serde_json::json!(true), "{v}");
+        let (dnp, bom) = (col(&v, "${DNP}"), col(&v, "${EXCLUDE_FROM_BOM}"));
+        assert_eq!(v["spec"]["columns"][dnp]["group_by"], serde_json::json!(true));
+        assert_eq!(v["presets"], serde_json::json!(["Default Editing", "Grouped By Value", "Grouped By Value and Footprint", "Attributes"]));
+        assert_eq!(v["spec"]["columns"][bom]["group_by"], serde_json::json!(true));
+        // both symbols have the same value, footprint and attributes: one row
+        assert_eq!(refs(&v), vec!["R1, R2"]);
+
+        // Apply: R2 is marked Do not populate, one undo step
+        use eda_ops::fields_table::FieldEdit;
+        let edit = |id: &str, field: &str, value: &str| Cmd::SetSymbolFields { edits: vec![FieldEdit { id: id.into(), field: field.into(), value: value.into() }], add_fields: vec![], rename_fields: vec![], remove_fields: vec![] };
+        step(&dir, edit("R2", "${DNP}", "1"), false, "test").unwrap();
+        let flags = |dir: &Path| -> Vec<(String, bool, bool)> { load(dir).unwrap().1.schematic.as_ref().unwrap().symbols.iter().map(|s| (s.id.clone(), s.dnp, s.exclude_from_bom)).collect() };
+        assert_eq!(flags(&dir), vec![("R1".to_string(), false, false), ("R2".to_string(), true, false)]);
+        // the two now differ in a Group By column, so they are rows of their own
+        let v = table(serde_json::json!({}));
+        assert_eq!(refs(&v), vec!["R1", "R2"]);
+        assert_eq!(v["rows"][1]["cells"][dnp], serde_json::json!("1"));
+
+        // "Include 'DNP' Symbols" off: R2 is gone from the table and from the export text
+        let mut spec = v["spec"].clone();
+        spec["exclude_dnp"] = serde_json::json!(true);
+        let v = table(serde_json::json!({ "spec": spec }));
+        assert_eq!(refs(&v), vec!["R1"]);
+        let exported = crate::sch_api::bom_export(&dir, serde_json::json!({ "spec": spec }).to_string().as_bytes());
+        assert!(exported["text"].as_str().unwrap().contains("R1") && !exported["text"].as_str().unwrap().contains("R2"), "{exported}");
+        // an edit that is staged and not applied changes the cell but not the rows (the filter reads the sheet): R1 ticked DNP is still listed, as a row of its own
+        let staged = serde_json::json!({ "edits": [{ "id": "R1", "field": "${DNP}", "value": "1" }], "add_fields": [], "rename_fields": [], "remove_fields": [] });
+        let v = table(serde_json::json!({ "spec": spec, "changes": staged }));
+        assert_eq!(refs(&v), vec!["R1"]);
+        assert_eq!(v["rows"][0]["cells"][dnp], serde_json::json!("1"));
+        // kicad-cli is told too
+        let (preset, _) = crate::sch_export_api::bom_presets(&serde_json::json!({ "spec": spec })).unwrap();
+        assert_eq!(preset["exclude_dnp"], serde_json::json!(true));
+
+        // a built-in preset: the Attributes view shows the four attribute columns
+        let v = table(serde_json::json!({ "preset": "Attributes" }));
+        assert_eq!(v["spec"]["columns"][col(&v, "${EXCLUDE_FROM_SIM}")]["show"], serde_json::json!(true));
+        assert_eq!(v["spec"]["include_excluded_from_bom"], serde_json::json!(true));
+        let bad = table(serde_json::json!({ "preset": "Nope" }));
+        assert_eq!(bad["ok"], serde_json::json!(false));
+
+        // one undo puts the flag back
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        assert_eq!(flags(&dir), vec![("R1".to_string(), false, false), ("R2".to_string(), false, false)]);
+        // a generated field that is no attribute stays read-only
+        assert!(step(&dir, edit("R1", "${QUANTITY}", "5"), false, "test").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Find and Replace's Replace / Replace All: one undo step each; Replace
     /// can be restricted to one match key; references are only touched with
     /// `replace_references`; nothing matched is refused.

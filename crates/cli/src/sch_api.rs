@@ -59,35 +59,44 @@ fn loaded(dir: &Path) -> Result<(board::Meta, eda_model::ir::Design, eda_model::
     Ok((meta, design, model))
 }
 
-/// The schematic with the dialog's staged changes (if any) overlaid: every sheet of the design as one section, as KiCad's table covers the
-/// project (`fields_table::project_view`).
-fn staged_schematic(req: &Value, design: &eda_model::ir::Design) -> Result<eda_model::ir::SchematicSection, String> {
-    let mut sch = fields_table::project_view(design).ok_or("this design has no schematic")?;
+/// The schematic with the dialog's staged changes (if any) overlaid, and the schematic as it stands: every sheet of the design as one section, as KiCad's table covers the
+/// project (`fields_table::project_view`). The table shows the first; the DNP and Exclude-from-BOM filters read the second (`fields_table::build_table_over`).
+fn staged_schematic(req: &Value, design: &eda_model::ir::Design) -> Result<(eda_model::ir::SchematicSection, eda_model::ir::SchematicSection), String> {
+    let base = fields_table::project_view(design).ok_or("this design has no schematic")?;
+    let mut sch = base.clone();
     if let Some(c) = req.get("changes").filter(|v| !v.is_null()) {
         let changes: FieldChanges = serde_json::from_value(c.clone()).map_err(|e| format!("bad changes: {e}"))?;
         fields_table::apply_field_changes(&mut sch, &changes)?;
     }
-    Ok(sch)
+    Ok((sch, base))
 }
 
-/// `POST /api/sch/fields_table`: `{spec?, changes?}` ->
-/// `{ok, spec, user_fields, rows: [{refs, flag, item_number, cells, mixed, children}]}`.
+/// `POST /api/sch/fields_table`: `{spec?, changes?, preset?}` ->
+/// `{ok, spec, presets, user_fields, rows: [{refs, flag, item_number, cells, mixed, children}]}`. `preset` is the name of one of KiCad's built-in views
+/// (`BOM_PRESET::BuiltInPresets`, `presets` lists them): it is applied to `spec` (`ApplyBomPreset`) before the table is built, and the spec that comes back is the result.
 pub fn fields_table(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
     let (_, design, model) = match loaded(dir) {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let sch = match staged_schematic(&req, &design) {
+    let (sch, base) = match staged_schematic(&req, &design) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    let spec = match parse_spec(&req, &sch) {
+    let mut spec = match parse_spec(&req, &sch) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
-    let table = fields_table::build_table(&sch, &model, &spec);
-    json!({ "ok": true, "spec": spec, "user_fields": fields_table::user_field_names(&sch), "rows": table.rows })
+    if let Some(name) = req.get("preset").and_then(Value::as_str) {
+        spec = match spec.with_preset(name) {
+            Some(s) => s,
+            None => return err(format!("no built-in preset named '{name}'")),
+        };
+    }
+    let table = fields_table::build_table_over(&sch, &base, &model, &spec);
+    let presets: Vec<&str> = TableSpec::built_in().into_iter().map(|(n, _)| n).collect();
+    json!({ "ok": true, "spec": spec, "presets": presets, "user_fields": fields_table::user_field_names(&sch), "rows": table.rows })
 }
 
 fn fmt_of(req: &Value) -> Result<BomFmt, String> {
@@ -122,7 +131,7 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return e,
     };
-    let sch = match staged_schematic(&req, &design) {
+    let (sch, base) = match staged_schematic(&req, &design) {
         Ok(s) => s,
         Err(e) => return err(e),
     };
@@ -134,7 +143,7 @@ pub fn bom_export(dir: &Path, body: &[u8]) -> Value {
         Ok(f) => f,
         Err(e) => return err(e),
     };
-    let text = fields_table::export_bom(&sch, &model, &spec, &fmt);
+    let text = fields_table::export_bom_over(&sch, &base, &model, &spec, &fmt);
     let preview = req.get("preview").and_then(Value::as_bool).unwrap_or(false);
     let Some(path) = req.get("path").and_then(Value::as_str) else {
         let stem = PathBuf::from(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
