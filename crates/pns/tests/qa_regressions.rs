@@ -48,6 +48,7 @@ fn settings_of(dir: &std::path::Path) -> RoutingSettings {
         smart_pads: j["smart_pads"].as_bool().unwrap(),
         jump_over_obstacles: j["jump_over_obstacles"].as_bool().unwrap(),
         shove_iteration_limit: j["shove_iteration_limit"].as_i64().unwrap() as i32,
+        shove_time_limit_ms: j["shove_time_limit"].as_i64().unwrap() as i32,
         walkaround_iteration_limit: j["walkaround_iteration_limit"].as_i64().unwrap() as i32,
         ..RoutingSettings::default()
     }

@@ -878,11 +878,21 @@ fn handle(
         ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
-        // 7 (gap #7 task item 4): length tuning. Stateless -- no session
-        // cell, every call re-reads design.json fresh (see tune_api's own
-        // doc comment on why this one differs from route/drag/dp above).
-        ("POST", "/api/tune_length/preview") => respond(stream, "200 OK", "application/json", tune_api::preview(dir, &body).to_string().as_bytes()),
-        ("POST", "/api/tune_length/apply") => respond(stream, "200 OK", "application/json", tune_api::apply(dir, &body).to_string().as_bytes()),
+        // 7 / 8 / 9 (P5c): length tuning -- KiCad's tuning pattern tool and its generator items; the session lives in tune_api's own thread-local, not in a cell passed here.
+        ("POST", "/api/tune/hover") => respond(stream, "200 OK", "application/json", tune_api::hover(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/start") => respond(stream, "200 OK", "application/json", tune_api::start(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/move") => respond(stream, "200 OK", "application/json", tune_api::mv(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/step") => respond(stream, "200 OK", "application/json", tune_api::step(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/settings") => respond(stream, "200 OK", "application/json", tune_api::settings(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/fix") => respond(stream, "200 OK", "application/json", tune_api::fix(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/edit_start") => respond(stream, "200 OK", "application/json", tune_api::edit_start(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/edit_move") => respond(stream, "200 OK", "application/json", tune_api::edit_move(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/cancel") => respond(stream, "200 OK", "application/json", tune_api::cancel(dir).to_string().as_bytes()),
+        ("POST", "/api/tune/patterns") => respond(stream, "200 OK", "application/json", tune_api::patterns(dir).to_string().as_bytes()),
+        ("POST", "/api/tune/pattern") => respond(stream, "200 OK", "application/json", tune_api::pattern(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/update") => respond(stream, "200 OK", "application/json", tune_api::update(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/remove") => respond(stream, "200 OK", "application/json", tune_api::remove(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/tune/regenerate") => respond(stream, "200 OK", "application/json", tune_api::regenerate(dir, &body).to_string().as_bytes()),
         // Inspect > Clearance Resolution / Constraints Resolution: read-only reports on which rule wins (`inspect_api`), no kicad-cli.
         ("POST", "/api/inspect/clearance") => respond(stream, "200 OK", "application/json", inspect_api::clearance(dir, &body).to_string().as_bytes()),
         ("POST", "/api/inspect/constraints") => respond(stream, "200 OK", "application/json", inspect_api::constraints(dir, &body).to_string().as_bytes()),
@@ -1181,8 +1191,15 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
                 },
                 "mirror": t.mirror,
             }))).collect::<Vec<_>>(),
-            // Task item 5 -- see `eda_model::ir::Group`'s own doc.
-            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).collect::<Vec<_>>(),
+            // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
+            // (`generator` names what it is); `tuning_patterns` has the pattern itself.
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
+            "tuning_patterns": d.tuning_patterns.iter().map(|p| {
+                let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
+                v["handles"] = tune_api::handles_json(p);
+                v["info"] = json!(p.tuning_info());
+                v
+            }).collect::<Vec<_>>(),
             // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
             "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
             "dimension_settings": dimension_settings_json(&d.dimension_settings),

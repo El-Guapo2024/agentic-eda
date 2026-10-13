@@ -43,7 +43,8 @@ import { PcbSweepDialogs } from "./components/PcbSweepDialogs";
 import { VertexEditorPane } from "./components/PcbPointEditDialogs";
 import { PcbPickerPrompt } from "./components/PcbPickerPrompt";
 import { RouterSettingsDialog } from "./components/RouterSettingsDialog";
-import { LengthTuningDialog } from "./components/LengthTuningDialog";
+import { TuningPatternDialog } from "./components/TuningPatternDialog";
+import { GeneratorsManagerDialog } from "./components/GeneratorsManagerDialog";
 import { CleanupTracksDialog } from "./components/CleanupTracksDialog";
 import { BoardStatisticsDialog } from "./components/BoardStatisticsDialog";
 import { SwapLayersDialog } from "./components/SwapLayersDialog";
@@ -250,7 +251,8 @@ function StudioFrame() {
       <VertexEditorPane />
       <PcbPickerPrompt />
       <RouterSettingsDialog />
-      <LengthTuningDialog />
+      <TuningPatternDialog />
+      <GeneratorsManagerDialog />
       <CleanupTracksDialog />
       <BoardStatisticsDialog />
       <SwapLayersDialog />

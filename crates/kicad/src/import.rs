@@ -220,6 +220,8 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         dr.locked_ids = locked_ids;
         dr.assign_missing_ids();
     }
+    // `(generated ..)`: the tuning patterns, named by the same file uuids.
+    crate::pcb_generated::attach_patterns(&mut design, root, &refs);
     let model = ConstraintModel {
         parts,
         nets,

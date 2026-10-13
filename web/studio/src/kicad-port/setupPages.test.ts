@@ -22,7 +22,6 @@ import {
   sameHatchOffsets,
   sameProfiles,
   sameTuningPatterns,
-  tunerStart,
   tuningPatternsOf,
   tuningPatternsProblems,
 } from "./setupPages";
@@ -72,14 +71,6 @@ test("the tuning patterns start as MEANDER_SETTINGS and are checked like a meand
   assert.deepEqual(Object.keys(with_((q) => (q.diff_pair_skew.corner_radius_percentage = 101))), ["diff_pair_skew.corner_radius_percentage"]);
   assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_um = 200_000))), ["single_track.spacing"]);
   assert.deepEqual(Object.keys(with_((q) => (q.single_track.spacing_um = NaN))), ["single_track.spacing"]);
-});
-
-test("the tuner starts from the page of its kind: the maximum amplitude, the spacing, and a floor at the minimum amplitude", () => {
-  const patterns = tuningPatternsOf({ ...DEFAULT_TUNING_PATTERNS, diff_pair: { ...DEFAULT_TUNING_PATTERNS.diff_pair, max_amplitude_um: 800, min_amplitude_um: 300, spacing_um: 1200 } });
-  assert.deepEqual(tunerStart(patterns, "single"), { amplitudeUm: 1000, spacingUm: 600, minAmplitudeUm: 200 });
-  assert.deepEqual(tunerStart(patterns, "diffpair"), { amplitudeUm: 800, spacingUm: 1200, minAmplitudeUm: 300 });
-  assert.deepEqual(tunerStart(patterns, "skew"), { amplitudeUm: 1000, spacingUm: 600, minAmplitudeUm: 200 });
-  assert.deepEqual(tunerStart(undefined, "diffpair"), { amplitudeUm: 1000, spacingUm: 1000, minAmplitudeUm: 200 }, "a backend that says nothing: KiCad's start");
 });
 
 function profile(name: string): TuningProfile {

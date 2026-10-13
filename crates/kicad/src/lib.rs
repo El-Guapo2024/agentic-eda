@@ -25,6 +25,7 @@ mod fp_art_io;
 mod fp_fields;
 mod pad_shape;
 mod pcb;
+mod pcb_generated;
 mod pcb_items;
 mod clipboard;
 pub use clipboard::{export_pcb_clipboard, parse_pcb_clipboard, ClipFootprint, ClipGroup, ClipRef, Clipboard};

@@ -35,11 +35,12 @@
 //!
 //! What differs, on purpose:
 //!
-//! - **No springback stack, no time limit.** KiCad keeps the branches of
+//! - **No springback stack.** KiCad keeps the branches of
 //!   earlier shoves so an interactive drag can un-shove cheaply; this port is
 //!   driven one HTTP request per mouse sample and re-runs from the committed
-//!   world every time, so there is nothing to pop. The 250-iteration cap
-//!   (`ShoveIterationLimit`) is the only bound (no `ShoveTimeLimit`).
+//!   world every time, so there is nothing to pop. The loop is bounded as
+//!   KiCad's is: the 250-iteration cap (`ShoveIterationLimit`) and the
+//!   one-second clock (`ShoveTimeLimit`, [`crate::time_limit::TimeLimit`]).
 //! - **Widths survive.** `SHOVE::assembleLine` calls `AssembleLine` with the
 //!   default `aAllowSegmentSizeMismatch = true`, so KiCad assembles through a
 //!   change of track width and puts the whole chain back at the width of the
@@ -63,6 +64,7 @@ use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
 use crate::line::Line;
 use crate::node::{kind_bit, AssembleOpts, NearestHit, Node, QueryOpts};
 use crate::settings::{OptEffort, RoutingSettings};
+use crate::time_limit::TimeLimit;
 use crate::walkaround::{self, WalkPolicy, WalkStatus, Walker};
 use eda_drc::kimath::{isqrt, Seg, Shape};
 use eda_model::ir::{Point, Um};
@@ -1415,15 +1417,18 @@ impl<'a> Shove<'a> {
         }
     }
 
-    /// `SHOVE::shoveMainLoop`.
+    /// `SHOVE::shoveMainLoop`: iterate until the stack is empty, or give up (`SH_INCOMPLETE`) when an iteration did, when the time limit
+    /// (`ShoveTimeLimit`, its clock started with the loop) has run out, or when the iteration limit is reached -- the last two checked
+    /// after every iteration, the one that emptied the stack included.
     fn shove_main_loop(&mut self) -> Status {
         let mut st = Status::Ok;
         let iter_limit = self.settings.shove_iteration_limit;
+        let time_limit = TimeLimit::new(self.settings.shove_time_limit_ms);
         self.iter = 0;
         while !self.line_stack.is_empty() {
             st = self.shove_iteration();
             self.iter += 1;
-            if st == Status::Incomplete || self.iter >= iter_limit {
+            if st == Status::Incomplete || time_limit.expired() || self.iter >= iter_limit {
                 st = Status::Incomplete;
                 break;
             }
@@ -1760,6 +1765,24 @@ mod tests {
         // disconnects anything it moves).
         assert_eq!(moved.first(), Some(Point { x: 2500, y: -2000 }));
         assert_eq!(moved.last(), Some(Point { x: 2500, y: 2000 }));
+    }
+
+    /// `SHOVE::shoveMainLoop` checks `timeLimit.Expired()` after every iteration, so a clock that has run out ends the shove as
+    /// `SH_INCOMPLETE` even when the one iteration it got would have finished it -- and the default second never gets in the way of a
+    /// shove this small.
+    #[test]
+    fn a_shove_whose_time_limit_has_run_out_is_incomplete() {
+        let mut node = Node::new();
+        node.add(Item::Segment(Segment { net: net_of("GND"), layer: 0, a: Point { x: 2500, y: -2000 }, b: Point { x: 2500, y: 2000 }, width: 200, source_track: Some(("trkA".into(), 0)), locked: false }));
+        let rules = rules();
+        let raw = vec![Point { x: 0, y: 0 }, Point { x: 5000, y: 0 }];
+        let default = RoutingSettings::default();
+        assert_eq!(default.shove_time_limit_ms, 1000, "ROUTING_SETTINGS: m_shoveTimeLimit = 1000");
+        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, 200, &rules, &default).is_some());
+        let out_of_time = RoutingSettings { shove_time_limit_ms: 0, ..RoutingSettings::default() };
+        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, 200, &rules, &out_of_time).is_none(), "an expired clock fails the shove");
+        let plenty = RoutingSettings { shove_time_limit_ms: 60_000, ..RoutingSettings::default() };
+        assert!(shove_line(&node, &raw, &net_of("SIG"), 0, 200, &rules, &plenty).is_some());
     }
 
     #[test]
