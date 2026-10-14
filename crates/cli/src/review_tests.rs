@@ -179,3 +179,45 @@ fn an_erc_exclusion_is_one_undo_step_and_its_marker_is_in_the_derived_project() 
     undo(&dir, "test", Some(Domain::Schematic)).unwrap();
     assert!(load(&dir).unwrap().1.schematic.unwrap().erc_exclusions.is_empty());
 }
+
+/// The dialogs' "Save..." (slow tier): the report is kicad-cli's own file -- `ERC.rpt` text, `ERC.json` -- for the severities the Show boxes list, with the
+/// exclusion and its comment in it when that box is on; a run that fails says why.
+#[test]
+fn a_saved_report_is_the_file_kicad_cli_writes_for_the_severities_the_dialog_shows() {
+    if slow_tests_off() {
+        return;
+    }
+    let dir = board_with_schematic("review_saved_report");
+    let first = crate::kicad_engine::erc(&dir).expect("kicad-cli ran");
+    let marker = marker_of(&finding(&first, "footprint_link_issues", "U1"));
+    step(&dir, add("footprint_link_issues", "U1", "bare footprint on purpose", Some(marker)), false, "ui").unwrap();
+
+    let body = |format: &str, errors: bool, warnings: bool, exclusions: bool| serde_json::json!({ "format": format, "errors": errors, "warnings": warnings, "exclusions": exclusions, "units": "mm" }).to_string().into_bytes();
+    // Errors and warnings: the text report, as the dialog's "Report file" type writes it; the waived finding is not in it.
+    let text = crate::kicad_engine::erc_report(&dir, &body("report", true, true, false));
+    assert_eq!((text["ok"].as_bool(), text["file_name"].as_str()), (Some(true), Some("ERC.rpt")), "{text}");
+    let rpt = text["report"].as_str().unwrap();
+    assert!(rpt.starts_with("ERC report ("), "{rpt}");
+    assert!(rpt.contains("Report includes: Errors, Warnings"), "{rpt}");
+    assert!(rpt.contains("[footprint_link_issues]") && !rpt.contains("bare footprint on purpose"), "the other symbol's warning is there, the waived one's comment is not: {rpt}");
+    // Exclusions only: the waived finding with its comment, and the other symbol's warning left out.
+    let only = crate::kicad_engine::erc_report(&dir, &body("report", false, false, true));
+    let rpt = only["report"].as_str().unwrap();
+    assert!(rpt.contains("Report includes: Exclusions") && rpt.contains("bare footprint on purpose"), "{rpt}");
+    assert_eq!(rpt.matches("[footprint_link_issues]").count(), 1, "{rpt}");
+    // The JSON file type: kicad-cli's own JSON, every severity.
+    let json = crate::kicad_engine::erc_report(&dir, &body("json", true, true, true));
+    assert_eq!(json["file_name"], "ERC.json");
+    let parsed: Value = serde_json::from_str(json["report"].as_str().unwrap()).unwrap();
+    assert_eq!(parsed["included_severities"], serde_json::json!(["error", "warning", "exclusion"]));
+    let excluded: Vec<&Value> = parsed["sheets"].as_array().unwrap().iter().flat_map(|s| s["violations"].as_array().unwrap().iter()).filter(|v| v["excluded"] == true).collect();
+    assert_eq!(excluded.len(), 1, "the waived finding is in the JSON file: {parsed:#}");
+    assert_eq!(excluded[0]["comment"], "bare footprint on purpose");
+
+    // The DRC dialog's: the same, from `kicad-cli pcb drc`.
+    let drc = crate::kicad_engine::drc_report(&dir, &body("report", true, true, true));
+    assert_eq!((drc["ok"].as_bool(), drc["file_name"].as_str()), (Some(true), Some("DRC.rpt")), "{drc}");
+    assert!(drc["report"].as_str().unwrap().starts_with("** Drc report for "), "{drc}");
+    let drc_json = crate::kicad_engine::drc_report(&dir, &body("json", true, true, true));
+    assert!(serde_json::from_str::<Value>(drc_json["report"].as_str().unwrap()).unwrap()["violations"].is_array());
+}

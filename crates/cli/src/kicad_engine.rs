@@ -64,6 +64,54 @@ pub fn erc(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     Ok(eda_kicad_engine::erc(&design, &model, &work(dir))?.to_json(&exclusions))
 }
 
+/// What `POST /api/erc/report` and `/api/drc/report` ask for: `{ format: "report" | "json", errors, warnings, exclusions, units: "mm" | "mil" | "in" }` -- the
+/// dialog's file type and Show boxes -- and, for the DRC, `refill_zones` and `schematic_parity`, the dialog's own checkboxes.
+fn report_options(body: &Value) -> eda_kicad_engine::ReportOptions {
+    let flag = |k: &str| body[k].as_bool().unwrap_or(false);
+    eda_kicad_engine::ReportOptions {
+        json: body["format"].as_str() == Some("json"),
+        errors: flag("errors"),
+        warnings: flag("warnings"),
+        exclusions: flag("exclusions"),
+        units: match body["units"].as_str() {
+            Some("mil" | "mils") => eda_kicad_engine::ReportUnits::Mils,
+            Some("in") => eda_kicad_engine::ReportUnits::In,
+            _ => eda_kicad_engine::ReportUnits::Mm,
+        },
+    }
+}
+
+fn saved(report: Result<eda_kicad_engine::SavedReport, Vec<CheckResult>>) -> Value {
+    match report {
+        Ok(r) => json!({ "ok": true, "file_name": r.file_name, "report": r.text }),
+        Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
+    }
+}
+
+/// `POST /api/erc/report`: the ERC dialog's "Save..." -- `kicad-cli sch erc` writes the report in the asked format (`ERC.rpt` text, `ERC.json`) for the
+/// severities the dialog shows, and the text comes back for the page to save: `{ ok, file_name, report }`.
+pub fn erc_report(dir: &Path, body: &[u8]) -> Value {
+    let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let (design, model) = match load_with_schematic(dir) {
+        Ok(v) => v,
+        Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
+    };
+    saved(eda_kicad_engine::erc_report(&design, &model, &work(dir), &report_options(&body)))
+}
+
+/// `POST /api/drc/report`: the DRC dialog's "Save..." (`DRC.rpt`, `DRC.json`), with the dialog's refill and parity options.
+pub fn drc_report(dir: &Path, body: &[u8]) -> Value {
+    let body: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    let parity = body["schematic_parity"].as_bool().unwrap_or(false);
+    let loaded = if parity { load_with_schematic(dir) } else { board::load(dir).map(|(_, d, m)| (d, m)) };
+    let (design, model) = match loaded {
+        Ok(v) => v,
+        Err(e) => return json!({ "ok": false, "message": board::reasons(&e) }),
+    };
+    let drc = eda_kicad_engine::DrcOptions { refill_zones: body["refill_zones"].as_bool().unwrap_or(false), schematic_parity: parity };
+    saved(eda_kicad_engine::drc_report(&design, &model, &work(dir), drc, &report_options(&body)))
+}
+
 /// Today's date (`YYYY-MM-DD`), for the derived-file header the studio's
 /// "Save As" routes write; the one clock helper lives in the engine crate.
 pub(crate) fn chrono_like_today() -> String {

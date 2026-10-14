@@ -649,6 +649,9 @@ fn handle(
             offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
+        // The dialogs' "Save...": kicad-cli's own report file (`ERC_REPORT`, `DRC_REPORT`), for the severities and units the dialog shows.
+        ("POST", "/api/erc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::erc_report),
+        ("POST", "/api/drc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::drc_report),
         ("GET", "/api/lint") => {
             let v = crate::kicad_engine::lint(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())

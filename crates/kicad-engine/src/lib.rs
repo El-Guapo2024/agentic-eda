@@ -880,6 +880,118 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     Ok(ErcReport { engine: format!("kicad-cli {version}"), violations, ignored_checks })
 }
 
+// ------------------------------------------------------------------ saved reports
+
+/// The unit a saved report prints lengths in (`--units`): the editor's own, `GetUserUnits()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReportUnits {
+    #[default]
+    Mm,
+    Mils,
+    In,
+}
+
+impl ReportUnits {
+    fn arg(self) -> &'static str {
+        match self {
+            ReportUnits::Mm => "mm",
+            ReportUnits::Mils => "mils",
+            ReportUnits::In => "in",
+        }
+    }
+}
+
+/// What a checker dialog's "Save..." asks of kicad-cli (`DIALOG_ERC::OnSaveReport`, `DIALOG_DRC::OnSaveReport`): the file format and the Show boxes -- the severities
+/// the dialog lists, which is what its report holds (`RC_ITEMS_PROVIDER::GetSeverities`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReportOptions {
+    /// A `.json` file (`WriteJsonReport`); else the text report, `.rpt` (`WriteTextReport`).
+    pub json: bool,
+    pub errors: bool,
+    pub warnings: bool,
+    pub exclusions: bool,
+    pub units: ReportUnits,
+}
+
+impl ReportOptions {
+    /// `--format`, `--units` and the severity flags of `kicad-cli sch erc` / `pcb drc`: all three boxes are `--severity-all`; kicad-cli's own default (errors and
+    /// warnings) is what none checked asks for.
+    fn args(&self) -> Vec<&'static str> {
+        let mut args = vec!["--format", if self.json { "json" } else { "report" }, "--units", self.units.arg()];
+        if self.errors && self.warnings && self.exclusions {
+            args.push("--severity-all");
+        } else {
+            if self.errors {
+                args.push("--severity-error");
+            }
+            if self.warnings {
+                args.push("--severity-warning");
+            }
+            if self.exclusions {
+                args.push("--severity-exclusions");
+            }
+        }
+        args
+    }
+
+    fn extension(&self) -> &'static str {
+        if self.json {
+            "json"
+        } else {
+            "rpt"
+        }
+    }
+}
+
+/// A report kicad-cli wrote for a dialog's "Save...": the name the dialog suggests (`ERC.rpt`, `DRC.json`) and the file's text.
+#[derive(Debug, Clone)]
+pub struct SavedReport {
+    pub file_name: String,
+    pub text: String,
+}
+
+/// Run `cmd` (a `kicad-cli ... -o <out>`) and read the report it wrote.
+fn run_saved_report(cmd: Command, out: &Path, what: &str) -> Result<String, Vec<CheckResult>> {
+    let _ = std::fs::remove_file(out);
+    let run = output_within(cmd, limit(REPORT_TIMEOUT))?;
+    std::fs::read_to_string(out).map_err(|_| fail(&format!("kicad_cli_{what}"), "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr))))
+}
+
+/// The ERC report file of a dialog's "Save..." (`ERC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli sch erc` on the design's schematic -- the exclusions in
+/// the derived project -- asked for `opts`' format, units and severities. A run, not the report on screen: a marker deleted from the list is in it.
+pub fn erc_report(design: &Design, model: &ConstraintModel, work: &Path, opts: &ReportOptions) -> Result<SavedReport, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (sch, _) = export_schematic(design, model, work, "board")?;
+    let out = work.join(format!("erc-report.{}", opts.extension()));
+    let mut cmd = Command::new(&cli);
+    cmd.args(["sch", "erc"]).args(opts.args()).arg("-o").arg(&out).arg(&sch);
+    Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text: run_saved_report(cmd, &out, "erc")? })
+}
+
+/// The DRC report file of a dialog's "Save..." (`DRC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli pcb drc` on the derived board, with the dialog's own
+/// options (`refill_zones`, `schematic_parity`) and `opts`' format, units and severities.
+pub fn drc_report(design: &Design, model: &ConstraintModel, work: &Path, drc: DrcOptions, opts: &ReportOptions) -> Result<SavedReport, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (pcb, _) = export_board(design, model, work, "board")?;
+    if drc.schematic_parity {
+        if design.schematic.is_none() {
+            return Err(fail("kicad_cli_parity", "schematic", "the parity test compares the board with the schematic, and this design has none"));
+        }
+        export_schematic(design, model, work, "board")?;
+    }
+    let out = work.join(format!("drc-report.{}", opts.extension()));
+    let mut cmd = Command::new(&cli);
+    cmd.args(["pcb", "drc"]).args(opts.args());
+    if drc.refill_zones {
+        cmd.arg("--refill-zones");
+    }
+    if drc.schematic_parity {
+        cmd.arg("--schematic-parity");
+    }
+    cmd.arg("-o").arg(&out).arg(&pcb);
+    Ok(SavedReport { file_name: format!("DRC.{}", opts.extension()), text: run_saved_report(cmd, &out, "drc")? })
+}
+
 // ------------------------------------------------------------------ statistics
 
 /// `kicad-cli pcb export stats` options -- the Board Statistics dialog's three
@@ -1568,6 +1680,17 @@ mod tests {
             json!({ "error_type": "ERCET_PIN_NOT_CONNECTED", "at_nm": [115_570_000, 110_490_000], "items": ["693a38f5-591c-4c06-9786-e8973d13af99"], "sheet": ["r"], "main_sheet": ["r"] })
         );
         assert_eq!(j["violations"][0]["sheet"], "/r");
+    }
+
+    #[test]
+    fn a_saved_report_asks_kicad_cli_for_its_format_its_units_and_the_severities_the_dialog_shows() {
+        let all = ReportOptions { json: false, errors: true, warnings: true, exclusions: true, units: ReportUnits::Mm };
+        assert_eq!(all.args(), ["--format", "report", "--units", "mm", "--severity-all"], "the three boxes are all severities");
+        assert_eq!(all.extension(), "rpt");
+        let some = ReportOptions { json: true, errors: true, warnings: false, exclusions: true, units: ReportUnits::Mils };
+        assert_eq!(some.args(), ["--format", "json", "--units", "mils", "--severity-error", "--severity-exclusions"]);
+        assert_eq!(some.extension(), "json");
+        assert_eq!(ReportOptions { units: ReportUnits::In, ..Default::default() }.args(), ["--format", "report", "--units", "in"], "none asked for: kicad-cli's own default");
     }
 
     #[test]

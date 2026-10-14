@@ -127,7 +127,7 @@ struct Rule {
 }
 
 /// The markers' own fields, per check: what `SCH_MARKER`'s creator sets (`erc.cpp` and `connection_graph.cpp` line numbers are of the source this was read from;
-/// the first six were probed on kicad-cli 10.99.0-5334, whose matcher accepts these forms and is more lenient with a few).
+/// the ones marked [probed] were run against kicad-cli 10.99.0-5334, whose matcher accepts these forms and is more lenient with a few).
 fn rule(check: &str) -> Option<Rule> {
     use At::{Aux, Main};
     use Paths::{None as NoPaths, Specific, SpecificMain, SpecificMainAux};
@@ -135,6 +135,7 @@ fn rule(check: &str) -> Option<Rule> {
     match check {
         // erc.cpp: a symbol's problem, put at the symbol, with no sheet in it (`TestLibSymbolIssues` 1706-1782, `TestFootprintLinkIssues` 1825-1933,
         // `TestSimModelIssues` 2061-2069).
+        // (`footprint_link_issues` [probed].)
         "footprint_link_issues" | "simulation_model_issue" | "lib_symbol_issues" | "lib_symbol_mismatch" => r(Main, NoPaths),
         // erc.cpp 169-172: `SetItems( sheet, test_item )`, at the first sheet. 716-721: the item with the undefined netclass.
         "duplicate_sheet_names" | "undefined_netclass" => r(Main, NoPaths),
@@ -142,28 +143,30 @@ fn rule(check: &str) -> Option<Rule> {
         "different_unit_footprint" => r(Aux, NoPaths),
         // connection_graph.cpp 4161-4166 and 4190-4195 (a symbol's pin), 4656-4661 (a sheet pin): sheet-specific, the item's sheet set, at the pin.
         // (The hierarchical label of the root sheet, 4628-4632, sets no sheet: see [`marker`].)
+        // [probed]
         "pin_not_connected" => r(Main, SpecificMain),
-        // erc.cpp 1225-1231: the pin that needs a driver; 1421-1429: a ground pin on another net; 1460-1465: a pin named like a stacked one.
+        // erc.cpp 1225-1231: the pin that needs a driver [probed: `pin_not_driven`, `power_pin_not_driven`]; 1421-1429: a ground pin on another net; 1460-1465: a
+        // pin named like a stacked one.
         "pin_not_driven" | "power_pin_not_driven" | "ground_pin_not_ground" | "stacked_pin_name" => r(Main, SpecificMain),
         // erc.cpp 616-622: the unit that is placed, with its sheet.
         "missing_unit" | "missing_input_pin" | "missing_bidi_pin" | "missing_power_pin" => r(Main, SpecificMain),
-        // connection_graph.cpp 4064-4069: `SetItems( no_connect )`, sheet-specific, item sheet set.
+        // connection_graph.cpp 4064-4069: `SetItems( no_connect )`, sheet-specific, item sheet set [probed].
         "no_connect_dangling" => r(Main, SpecificMain),
-        // connection_graph.cpp 4563-4568: the global label that appears once.
+        // connection_graph.cpp 4563-4568: the global label that appears once [probed].
         "single_global_label" => r(Main, SpecificMain),
-        // connection_graph.cpp 4298-4305: `wires[0]`'s position; 4355-4360 and 4591-4596: the label (`ERCE_LABEL_NOT_CONNECTED`, `ERCE_LABEL_SINGLE_PIN`).
+        // connection_graph.cpp 4298-4305: `wires[0]`'s position; 4355-4360 and 4591-4596: the label (`ERCE_LABEL_NOT_CONNECTED`, `ERCE_LABEL_SINGLE_PIN`) [probed: all three].
         "wire_dangling" | "label_dangling" | "isolated_pin_label" => r(Main, Specific),
         // connection_graph.cpp 3757-3762, 3821-3826 and 3925-3931: sheet-specific, at the first item (the net, the label, the bus entry).
         "bus_to_net_conflict" | "bus_to_bus_conflict" | "net_not_bus_member" => r(Main, Specific),
-        // erc.cpp 1184-1194: at `pin`, with the other pin's sheet as the aux path; 1273-1284: a shared pin on another net in another unit.
+        // erc.cpp 1184-1194: at `pin`, with the other pin's sheet as the aux path [probed]; 1273-1284: a shared pin on another net in another unit.
         "pin_to_pin" | "different_unit_net" => r(Main, SpecificMainAux),
         // connection_graph.cpp 3693-3699: `SetItems( m_driver, driver )`, at the driver.
         "multiple_net_names" => r(Aux, SpecificMainAux),
-        // erc.cpp 461-470: `SetItems( symbol, &field )`, at the field.
-        "field_name_whitespace" => r(Aux, SpecificMainAux),
         // Not here: `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`
-        // and `unresolved_variable` (a text's own record), `label_multiple_wires` and `four_way_junction` (a point of their own), `no_connect_connected`
-        // (two creators with two sets of paths), `hier_label_mismatch`, `similar_*`, `same_local_global_*`, `bus_definition_conflict`, `duplicate_pins`.
+        // and `unresolved_variable` (a text's own record), `field_name_whitespace` (a field has no uuid of its own: the marker names it with a
+        // `kiapi.schematic.ErcSymbolChildReference`, and none of the forms above matched on kicad-cli), `label_multiple_wires` and `four_way_junction` (a point
+        // of their own), `no_connect_connected` (two creators with two sets of paths), `hier_label_mismatch`, `similar_*`, `same_local_global_*`,
+        // `bus_definition_conflict`, `duplicate_pins`.
         _ => None,
     }
 }
@@ -348,7 +351,7 @@ mod tests {
 
     #[test]
     fn a_check_whose_marker_this_has_not_read_the_source_of_has_no_marker() {
-        for check in ["endpoint_off_grid", "unconnected_wire_endpoint", "unresolved_variable", "generic-warning", "four_way_junction", "no_connect_connected", "similar_labels"] {
+        for check in ["endpoint_off_grid", "unconnected_wire_endpoint", "unresolved_variable", "generic-warning", "four_way_junction", "no_connect_connected", "similar_labels", "field_name_whitespace"] {
             assert!(marker(check, "error", &[item("a", 1, 2, "Wire")], ROOT, 1).is_none(), "{check}");
         }
         assert!(marker("footprint_link_issues", "warning", &[], ROOT, 1).is_none(), "a violation naming no item cannot be keyed");
@@ -357,7 +360,7 @@ mod tests {
 
     #[test]
     fn every_check_with_a_marker_rule_has_a_kind_of_finding_and_the_names_are_kicads() {
-        for check in ["footprint_link_issues", "simulation_model_issue", "lib_symbol_issues", "lib_symbol_mismatch", "duplicate_sheet_names", "undefined_netclass", "different_unit_footprint", "pin_not_connected", "pin_not_driven", "power_pin_not_driven", "ground_pin_not_ground", "stacked_pin_name", "missing_unit", "missing_input_pin", "missing_bidi_pin", "missing_power_pin", "no_connect_dangling", "single_global_label", "wire_dangling", "label_dangling", "isolated_pin_label", "bus_to_net_conflict", "bus_to_bus_conflict", "net_not_bus_member", "pin_to_pin", "different_unit_net", "multiple_net_names", "field_name_whitespace"] {
+        for check in ["footprint_link_issues", "simulation_model_issue", "lib_symbol_issues", "lib_symbol_mismatch", "duplicate_sheet_names", "undefined_netclass", "different_unit_footprint", "pin_not_connected", "pin_not_driven", "power_pin_not_driven", "ground_pin_not_ground", "stacked_pin_name", "missing_unit", "missing_input_pin", "missing_bidi_pin", "missing_power_pin", "no_connect_dangling", "single_global_label", "wire_dangling", "label_dangling", "isolated_pin_label", "bus_to_net_conflict", "bus_to_bus_conflict", "net_not_bus_member", "pin_to_pin", "different_unit_net", "multiple_net_names"] {
             assert!(rule(check).is_some() && error_type(check, "error").is_some(), "{check}");
         }
         // `ERCE_` of erc_item.cpp with the library's `ERCET_`; two spellings that differ.
