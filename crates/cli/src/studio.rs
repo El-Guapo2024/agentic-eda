@@ -369,10 +369,11 @@ pub(crate) fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
     }
     // The board's path variables, so a model addressed through one of them (`${TEAM_LIBS}/part.step`, `${KIPRJMOD}/3d/part.step`: a footprint of one of the board's own
     // libraries) is found here as it is in the derived project kicad-cli runs on elsewhere (`eda_kicad::library_table::derive_project`).
-    let mut project = json!({});
-    if eda_kicad::library_table::derive_project(dir, &tmp_dir, &mut project).unwrap_or(false) {
-        let _ = std::fs::write(tmp_dir.join(format!("{title}.kicad_pro")), serde_json::to_string_pretty(&project).unwrap_or_default());
-    }
+    // The project starts as the design's own (`export_kicad_pro_for`, as `eda_kicad_engine` writes it): the variables of Board Setup's Text Variables page, where
+    // the board's path variables live too, are in it, and `derive_project` adds the board's tables to it.
+    let mut project: serde_json::Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap_or_else(|_| json!({}));
+    let _ = eda_kicad::library_table::derive_project(dir, &tmp_dir, &mut project);
+    let _ = std::fs::write(tmp_dir.join(format!("{title}.kicad_pro")), serde_json::to_string_pretty(&project).unwrap_or_default());
     let stderr_file = match std::fs::File::create(&stderr_path) {
         Ok(f) => f,
         Err(e) => {
