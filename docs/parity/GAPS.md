@@ -85,7 +85,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 13 | Zone fill: spokes, hatch, smoothing, iterative refill; pad and footprint overrides | Partly | `eabaf91` (10-09) |
 | 14 | Snap, grid and click versus drag | **Closed** (board, schematic) | `358606b` (10-09) |
 | 16 | PCB context menu | Mostly done | `4c041a6` (10-09) |
-| 17 | Groups, nested | Mostly done (board) | `4c041a6` (10-09) |
+| 17 | Groups, nested | Mostly done (board and sheet) | `4c041a6` (10-09), `task-sch-groups` (10-13, not merged) |
 | 18 | Appearance panel | Mostly done | `6611ade` (10-09) |
 | 21 | Find on the PCB | Mostly done | `4c041a6` (10-09) |
 | 22 | Create Array | Mostly done | `afcb91b` (10-09) |
@@ -111,7 +111,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview | mostly done | S |
 | 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
-| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | no schematic groups, a user-defined field has no place on the sheet, no Pin Helpers menu (done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
+| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | a user-defined field has no place on the sheet, no Pin Helpers menu (schematic groups done on `task-sch-groups`, 2026-10-13, not merged; done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
 | 11 | P11 Search and inspection | 21, 29 | **done 2026-10-13 on `task-search-inspect` (not merged)**: Find by Properties (the From Selection tab and the Query tab on KiCad's expression language), Find following user fields, hidden fields and zone names, Clearance Resolution and Constraints Resolution (a rule engine in `crates/drc`: the implicit rules, the `.kicad_dru`, `EvalRules` with KiCad's report text), the Footprint Checker (kicad-cli's DRC on a scratch board). Items 21 and 29 list what is left | done (not merged) | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
 | 13 | P13 Zone leftovers | 13 | non-copper zones, multi-layer zones, `connect_nearby_polys`, mask-only NPTH knockouts | open | L |
@@ -146,6 +146,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   itself when it is placed, edited in Label Properties, moved and dragged (`AutoRotateItem`); a free text has a justification (`SchExtras::text_justify`) that is written, read back and flipped by Rotate and Mirror as `SCH_TEXT` flips it;
   the net-collision overlay of a Move or Drag (`SCH_DRAG_NET_COLLISION_MONITOR`: circles at the junctions the held items would make between two nets, marks where a connection is pulled apart, the warning cursor); the Symbol Fields Table's attribute
   columns (DNP, Exclude from BOM, board, simulation), Include 'DNP' / 'Exclude from BOM' symbols and KiCad's four built-in views; a power symbol's Symbol Properties (Reference, Value as the net, Show checks); Copy as Text.
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 28): the sheet's groups (item 17): the selection tool picks the outermost group of a member, enters and leaves it, boxes take a group whole or by any member, and Move, Drag, Rotate, Mirror, Lock, Delete, Copy, Paste and Duplicate take the tree.
 - Measured on `task-sch-details`: 76 new Rust tests (ops 62: pins 13, sheet pins 8, labels and text 26, net collision 9, fields table 6; kicad 5, one slow with kicad-cli; model 4; cli 5) and about 50 new `node --test` cases; the kicad-cli proof
   (`crates/kicad/tests/sch_details.rs`, `EDA_SLOW_TESTS=1`: a file with swapped pins, a sheet pin moved to the top edge and justified texts loads, its ERC reports the sheet pin at the moved place, and `kicad-cli sch upgrade` writes the justification,
   the angle, the pin and the cached copy of the symbol back as we wrote them); `web/studio/e2e/sch-details.check.js` (nine scenarios through `window.__eda`, 72 checks, every scenario undoes itself).
@@ -405,12 +406,16 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`, `board_inspection_tool.cpp`, `router/router_tool.cpp`.
 
 ### 17. Groups
-**Mostly done on the board (2026-10-08/09, `4c041a6`); the schematic and the footprint editor have none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
+**Mostly done on the board (2026-10-08/09, `4c041a6`) and on the schematic sheet (2026-10-13, `task-sch-groups`, not merged); the footprint editor has none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
 - Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`Cmd::EditGroup`); groups nest (`EDA_GROUP`; `crates/model/src/groups.rs`,
   `crates/ops/src/pcb_groups.rs`); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree; the entered group is drawn with its box and name; the `.kicad_pcb` file and the clipboard hold the tree.
 - Done 2026-10-10 (`task-pcb-edit-details`): items drawn, pasted, duplicated or arrayed while a group is entered join it (`BOARD_COMMIT::Push`; `Cmd::InGroup`, `crates/ops/src/pcb_groups.rs`; `PARITY-pcb.md` section 16).
-- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the schematic (P10's last step, `sch_group_tool.cpp`: not reached on `task-sch-details`) or the footprint editor.
-- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 28): the sheet has the same groups. `eda_model::groups::{GroupTree, GroupHost}` is the one tree and the one set of list edits the board's drawings and the sheet's `SchExtras::groups` both run; Group, Ungroup, Add Items, Remove Items and
+  Group Properties are `SchCmd` verbs (one undo step each) with the studio's whole-group selection, Enter and Leave Group, window and crossing boxes, the Grouping and Enter Group entries of the context menu, the group's box and name, Properties on a group, and Move, Drag, Rotate, Mirror (a lone group turns on itself), Lock,
+  Delete, Copy, Cut, Paste and Duplicate taking the whole tree; what is made while a group is entered joins it; `(group "name" (uuid ..) (members ..))` is written as `saveGroup` writes it and read back (the writer names every item's uuid for it). 7 model, 23 ops, 8 kicad (one slow: kicad-cli loads nested groups, runs ERC, `sch upgrade` keeps them), 1 cli and 12 `node --test` cases;
+  `web/studio/e2e/sch-groups.check.js` (thirteen scenarios through `window.__eda`).
+- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the footprint editor. On the sheet: Reorganize into Module Sheets drops the groups of the sheets it takes items out of; a group of one member dissolves (KiCad keeps it); a lone group's turn point counts a text or a label by its anchor; Group Properties does not take the view to a row's item; the Align and Distribute verbs are not group-aware.
+- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
 
 ### 18. Appearance and display options
 **Mostly done (2026-10-09, `6611ade`).** Hit: every session. Blocks: no.
@@ -647,7 +652,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | **Closed** | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`, `88c8c0a`); schematic Align and Align to Grid move each item's wires with it (`kicad-port/schAlign.ts`, `2a8bf8f`). |
 | 26 | Array tool | Partial | `Cmd::CreateArray` (`crates/ops/src/array.rs`), `CreateArrayDialog.tsx`: footprints and every other kind, since 2026-10-09 (`afcb91b`); the footprint editor's pad numbering is left (item 22). |
-| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic and the footprint editor have no groups; item 17. |
+| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic sheet's groups are done on `task-sch-groups` (`SchCmd::Group` family in `crates/ops/src/sch_groups.rs`, `kicad-port/schGroups.ts`, `PARITY-sch.md` section 28); the footprint editor has no groups; item 17. |
 | 28 | Dimensions and measure | **Closed** | `crates/connectivity/src/dimension.rs`, `Cmd::AddDimension` family, `components/DimensionPropertiesDialog.tsx`, the measure tool. Left: the interactive height click, text border, manual text position, export (item 2). |
 | 29 | Pan | Partial | `kicad-port/viewControls.ts`, `Canvas.tsx` (PCB); item 20. |
 | 30 | Context menu | **Closed** | `kicad-port/pcbContextMenu.ts` (KiCad's `CONDITIONAL_MENU` and the entries of every tool's `Init()`), `pcbSelectionSummary.ts`, `components/canvas/pcbMenuBuilder.ts`, `Canvas.tsx`. Left: table cells, gate swap, generators, most of the router's via and posture entries (item 16, item 7). |
@@ -887,11 +892,12 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `common/dialogs/{panel_text_variables,panel_setup_netclasses}.cpp`, `common/project/component_class_settings.cpp`, `pcbnew/drc/rule_editor/` (82 files), `pcbnew/tools/drc_rule_editor_tool.cpp`.
 - Conflicts: P15 (the project writer in `kicad-engine`: a hunk); `ops`, `runner` hunks.
 
-### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged); schematic groups, a user-defined field's place and Pin Helpers are left.**
+### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged) and, for the schematic's groups, on `task-sch-groups` (2026-10-13, P10b, not merged); a user-defined field's place and Pin Helpers are left.**
 - Done there: pin selection (`SCH_PIN_T`: Swap Pins, Swap Pin Labels, Swap Unit Labels, the pin-level highlight and Select Node), sheet pins one by one, the net-collision overlay of a drag, `AutoRotateItem` after a label lands, a power symbol's Properties dialog,
   text justification flipping on a mirror, pan with the middle and right button and auto-pan while drawing and moving, the Symbol Fields Table's attribute columns and Exclude DNP filter, Copy as Text, part of the item 15 schematic list. `PARITY-sch.md` sections 21 to 27;
   `web/studio/e2e/sch-details.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_details.rs`.
-- Left: schematic groups (`sch_group_tool.cpp`), a user-defined field's place on the sheet (`SchematicSection::field_layout`), Pin Helpers, a sheet pin's text look, a label's own fields.
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 28): schematic groups (`sch_group_tool.cpp`, `group_tool.cpp`; item 17): Group, Ungroup, Add and Remove Items, Group Properties, whole-group selection, enter and leave, the tree under move, turn, delete and the clipboard, `(group ...)` in the file; `web/studio/e2e/sch-groups.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_groups.rs`.
+- Left: a user-defined field's place on the sheet (`SchematicSection::field_layout`), Pin Helpers, a sheet pin's text look, a label's own fields.
 - Files: `web/studio/src/components/SchematicView.tsx`, `components/schematic/{schItems,schHit,schSelectionSummary}.ts`, `kicad-port/{schMove,selection,schConnection}.ts`, `components/SymbolFieldsTableDialog.tsx`,
   `crates/ops/src/{sch_move,sch_edit,sch_props,sch_fields,fields_table}.rs`, `crates/model/src/sch_extras.rs`.
 - KiCad: `eeschema/tools/{sch_edit_tool,sch_selection_tool,sch_drag_net_collision,sch_group_tool,sch_move_tool}.cpp`, `sch_label.cpp`, `sch_pin.cpp`, `dialogs/dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`, `common/view/wx_view_controls.cpp`.
