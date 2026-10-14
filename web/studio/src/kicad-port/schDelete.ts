@@ -4,6 +4,7 @@
 import type { Cmd } from "../api/types";
 import { withoutLocked } from "./schLock";
 import { parseFieldId } from "./schFieldEdit";
+import { groupAndDescendants, groupLeaves, isGroup, ancestors } from "./groupTree";
 
 /** The id lists of a schematic sheet -- structural, so this module needs no React or store types. */
 export interface SchIds {
@@ -18,13 +19,15 @@ export interface SchIds {
   lines?: ReadonlyArray<{ id: string }>;
   graphics?: ReadonlyArray<{ id: string }>;
   sheets: ReadonlyArray<{ id: string; pins?: ReadonlyArray<{ id: string }> }>;
+  /** The groups of the sheet: a deleted group takes everything below it with it. */
+  groups?: ReadonlyArray<{ id: string; member_ids: readonly string[] }>;
 }
 
 /** The delete verbs for `ids` (locked items skipped; ids that are not on the sheet ignored). */
 export function deleteCmds(sch: SchIds, ids: readonly string[], locked: ReadonlySet<string>): Cmd[] {
   const has = (list: ReadonlyArray<{ id: string }> | undefined, id: string) => (list ?? []).some((x) => x.id === id);
   const cmds: Cmd[] = [];
-  const kept = withoutLocked(ids, locked);
+  const kept = withoutLocked(openGroups(sch.groups ?? [], ids, locked), locked);
   // the reference an owner key names (`R1#2` is a unit of `R1`)
   const refOf = (owner: string) => /^(.*)#(\d+)$/.exec(owner)?.[1] ?? owner;
   for (const id of kept) {
@@ -53,4 +56,23 @@ export function deleteCmds(sch: SchIds, ids: readonly string[], locked: Readonly
     }
   }
   return cmds;
+}
+
+/**
+ * `DoDelete`: "Groups need to delete their children" -- a group in `ids` is replaced by the items below it, nested groups opened. `FilterSelectionForLockedItems` first: a group
+ * with a locked item anywhere below it, or itself locked or inside a locked group, is no selection and nothing of it goes.
+ */
+export function openGroups(groups: ReadonlyArray<{ id: string; member_ids: readonly string[] }>, ids: readonly string[], locked: ReadonlySet<string>): string[] {
+  if (groups.length === 0) return [...ids];
+  const lockedThrough = (id: string) => locked.has(id) || ancestors(groups, id).some((g) => locked.has(g.id));
+  const out: string[] = [];
+  for (const id of ids) {
+    if (!isGroup(groups, id)) {
+      if (!out.includes(id)) out.push(id);
+      continue;
+    }
+    if (lockedThrough(id) || groupAndDescendants(groups, id).some((g) => locked.has(g)) || groupLeaves(groups, id).some(lockedThrough)) continue;
+    for (const leaf of groupLeaves(groups, id)) if (!out.includes(leaf)) out.push(leaf);
+  }
+  return out;
 }

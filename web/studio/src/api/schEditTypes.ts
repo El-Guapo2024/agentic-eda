@@ -172,7 +172,17 @@ export type SchEditCmd =
   /** Swap Pin Labels: the net labels on the pins trade texts in selection order. */
   | { verb: "swap_pin_labels"; pins: string[] }
   /** Swap Unit Labels: the placed units of one multi-unit reference trade the net labels on their pins. */
-  | { verb: "swap_unit_labels"; ids: string[] };
+  | { verb: "swap_unit_labels"; ids: string[] }
+  /** Group Items (Ctrl+G, `SCH_GROUP_TOOL::Group`): a new group over `ids` (items and other groups; at least two). Each leaves the group it was in. */
+  | { verb: "group"; ids: string[] }
+  /** Ungroup (`GROUP_TOOL::Ungroup`): every listed group dissolves, its members freed. */
+  | { verb: "ungroup"; ids: string[] }
+  /** Add Items (`GROUP_TOOL::AddToGroup`): `ids` join `group_id`, each leaving the group it was in. */
+  | { verb: "add_to_group"; group_id: string; ids: string[] }
+  /** Remove Items (`GROUP_TOOL::RemoveFromGroup`): each id leaves its group; a group left with fewer than two dissolves. */
+  | { verb: "remove_from_group"; ids: string[] }
+  /** Group Properties (`DIALOG_GROUP_PROPERTIES`): the group is renamed and its members are exactly `member_ids`. */
+  | { verb: "edit_group"; id: string; name: string; member_ids: string[] };
 
 /** One turn made while the items are held (`R`, Shift+`R`, `X`, `Y`). */
 export type SchTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";

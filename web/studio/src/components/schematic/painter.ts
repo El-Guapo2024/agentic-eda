@@ -50,6 +50,7 @@ import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from ".
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
 import { dashPattern, drawSelectionBox, paintGraphics, rgba } from "./schGraphicsPainter";
+import { drawGroups } from "./schGroupPainter";
 import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
 import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
@@ -87,6 +88,8 @@ export interface SchematicPaintOptions {
   lintSelected?: number | null;
   /** The View menu's toggles (hidden pins, which ERC markers, simulation marks); KiCad's defaults when omitted. */
   display?: SchDisplayOptions;
+  /** The group worked in (`SCH_SELECTION_TOOL::m_enteredGroup`): drawn in a box with its name. A group that is selected is drawn so too. */
+  enteredGroup?: string | null;
 }
 
 const REF_FONT = 1.6;
@@ -1101,6 +1104,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
       }
     }
   }
+
+  // The groups: a box around a selected group and around the one worked in (`SCH_PAINTER::draw( SCH_GROUP )`).
+  drawGroups(ctx, view, sch, opts.selection, opts.enteredGroup ?? null);
 
   // ERC markers last of all -- an overlay above every sheet layer, matching real KiCad (and this app's own canvas/painter.ts for DRC).
   if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null, opts.ercStale, display);

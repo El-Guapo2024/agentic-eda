@@ -479,7 +479,7 @@ export interface Drawings {
   tuning_patterns?: TuningPattern[];
 }
 
-/** `crates/model/src/ir.rs` `Group` (task item 5) -- `PCB_GROUP`: a named set of member item ids (a part reference, or a track/via/zone/shape/text id), no geometry of its own. No nested groups in this model. */
+/** `crates/model/src/ir.rs` `Group` -- `PCB_GROUP` (on the board) and `SCH_GROUP` (on a sheet): a named set of member item ids (a part reference, a track/via/zone/shape/text id, a wire, a label ...) and of other groups' ids, no geometry of its own. */
 export interface Group {
   id: string;
   name: string;
@@ -2331,6 +2331,8 @@ export interface Schematic {
   graphics?: SchGraphic[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
   locked?: string[];
+  /** The groups of this sheet (`SCH_GROUP`): a named set of item ids and of other groups' ids. Absent from a backend built before schematic groups. */
+  groups?: Group[];
   /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */

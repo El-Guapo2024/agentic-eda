@@ -30,6 +30,7 @@ import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { substituteSelection } from "../kicad-port/groupTree";
+import { substituteSchSelection } from "../kicad-port/schGroups";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
 import { DEFAULT_BOARD_CONTROL, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
@@ -552,6 +553,8 @@ export interface StudioState {
    * its own members selects that member alone instead of the whole group
    * (see `withGroupSubstitution` in this file). `null` outside any group. */
   enteredGroupId: string | null;
+  /** The group of the sheet in view that is being worked in (`SCH_SELECTION_TOOL::m_enteredGroup`): its own members, and the groups directly in it, are picked one by one. `null` outside any group. */
+  schEnteredGroupId: string | null;
   /** Refs to flash/outline because a problem in the panel references them. */
   hot: Set<string>;
   netHighlight: string | null;
@@ -890,6 +893,7 @@ const initialState: StudioState = {
   glbError: null,
   selection: new Set(),
   enteredGroupId: null,
+  schEnteredGroupId: null,
   hot: new Set(),
   netHighlight: null,
   schLineMode: 1,
@@ -1027,6 +1031,9 @@ export type Action =
   | { type: "SET_ENTERED_GROUP"; id: string | null }
   /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
   | { type: "ENTER_GROUP"; id: string }
+  | { type: "SET_SCH_ENTERED_GROUP"; id: string | null }
+  /** `SCH_SELECTION_TOOL::EnterGroup`: the group of the sheet becomes the one worked in, and its members are selected. */
+  | { type: "ENTER_SCH_GROUP"; id: string }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -1235,7 +1242,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_TAB":
       return { ...state, tab: action.tab };
     case "SET_SHEET_PATH":
-      return { ...state, currentSheetPath: action.path, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
+      // `SCH_SELECTION_TOOL::Reset`: a new sheet leaves the group that was entered
+      return { ...state, currentSheetPath: action.path, schEnteredGroupId: null, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
     case "SET_SCH_NAV":
       return { ...state, schNav: action.nav };
     case "SET_SCH_LINE_MODE":
@@ -1249,6 +1257,12 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION": {
+      // On the schematic the groups are the sheet's: a pin, a field or a sheet pin takes the group of its symbol or sheet (`getClosestGroup`).
+      if (state.tab === "schematic" && state.schematic) {
+        if (action.raw || (state.schematic.groups ?? []).length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
+        const { ids, exits } = substituteSchSelection(state.schematic, action.refs, state.schEnteredGroupId);
+        return { ...state, selection: new Set(ids), armed: null, armedFootprint: null, schEnteredGroupId: exits ? null : state.schEnteredGroupId };
+      }
       const groups = state.board?.drawings?.groups;
       if (action.raw || !groups || groups.length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
       // Selecting something outside the entered group leaves it (`PCB_SELECTION_TOOL::select`: `ExitGroup()`).
@@ -1257,6 +1271,14 @@ function reducer(state: StudioState, action: Action): StudioState {
     }
     case "SET_ENTERED_GROUP":
       return { ...state, enteredGroupId: action.id };
+    case "SET_SCH_ENTERED_GROUP":
+      return { ...state, schEnteredGroupId: action.id };
+    case "ENTER_SCH_GROUP": {
+      // `SCH_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its direct members -- each as it is, a group inside it too.
+      const group = (state.schematic?.groups ?? []).find((g) => g.id === action.id);
+      if (!group) return state;
+      return { ...state, schEnteredGroupId: group.id, selection: new Set(group.member_ids), armed: null };
+    }
     case "ENTER_GROUP": {
       // `PCB_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its members -- each as it is, a group inside it too.
       const group = state.board?.drawings?.groups.find((g) => g.id === action.id);
@@ -1342,6 +1364,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       }
       // Nothing selected but still inside a group: the selection tool's next `else if` tier, `ExitGroup()` -- which leaves the group and does not select
       // it (`ExitGroup( bool aSelectGroup = false )`; only the Leave Group action, `ExitGroup( true )`, does).
+      if (state.tab === "schematic" && state.schEnteredGroupId != null) {
+        return { ...state, schEnteredGroupId: null };
+      }
       if (state.enteredGroupId != null) {
         return { ...state, enteredGroupId: null };
       }
@@ -1451,8 +1476,11 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, prefs: action.prefs };
     case "SET_PREFERENCES_DIALOG_OPEN":
       return { ...state, preferencesDialogOpen: action.open };
-    case "SCHEMATIC_OK":
-      return { ...state, schematic: action.schematic, schematicError: null, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
+    case "SCHEMATIC_OK": {
+      // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
+      const schEntered = state.schEnteredGroupId != null && (action.schematic.groups ?? []).some((g) => g.id === state.schEnteredGroupId) ? state.schEnteredGroupId : null;
+      return { ...state, schematic: action.schematic, schematicError: null, schEnteredGroupId: schEntered, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
+    }
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":
@@ -1981,7 +2009,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
       // With a group entered on the board, what a command adds joins it (`BOARD_COMMIT::Push`: `Cmd::InGroup`).
       const st = stateRef.current;
-      const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : cmd;
+      // (On the schematic the same holds for the group of the sheet: `SCH_COMMIT::Push` adds what a command made to `enteredGroup`.)
+      const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
