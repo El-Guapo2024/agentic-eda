@@ -51,7 +51,7 @@
 // needs to be re-applied here -- the backend already baked `part.rot`
 // and the bottom-side mirror into `pads[].x/y` and `courtyard`.
 import * as THREE from "three";
-import type { BoardState, BoardText, Part, Shape, Side } from "../../api/types";
+import type { BoardState, BoardText, FillZone, Part, Shape, Side } from "../../api/types";
 import { layerColor } from "../canvas/layers";
 import { THEME_COLORS, shapeLayerOf, type Rgba } from "../../kicad-port/appearance3d";
 import { circleThrough, normalizeSweep } from "../canvas/painter";
@@ -493,13 +493,10 @@ function addTrack(group: THREE.Group, ptsMm: ReadonlyArray<[number, number]>, y:
 // ---------------------------------------------------------------------
 
 /**
- * Fill isn't computed anywhere in this model (same reason the 2D painter
- * only draws a zone's outline) -- this renders the *outline polygon
- * itself* as a flat, translucent copper-colored fill, an honest stand-in
- * for "the pour would go here" rather than a real clearance-aware fill
- * shape. Same LAYER_3D_COPPER_TOP tone as tracks/pads (not the 2D
- * editor's per-layer red/blue), distinguished from solid copper only by
- * opacity.
+ * A zone's copper while kicad-cli's own render (the GLB) is not there yet: the fill KiCad made (`GET /api/fill`, `BuildBoardOptions.zoneFills`) as flat, translucent
+ * copper-colored polygons -- a zone with no fill has no copper yet, as in KiCad's 3D viewer. Without fills to go by (a caller that has none to give) it renders the
+ * *outline polygon itself*, an honest stand-in for "the pour would go here". Same LAYER_3D_COPPER_TOP tone as tracks/pads (not the 2D editor's per-layer red/blue),
+ * distinguished from solid copper only by opacity.
  */
 function zoneMaterial(side: Side): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
@@ -919,6 +916,8 @@ export interface BuildBoardOptions {
   visible?: (row: string) => boolean;
   /** The colour of every row (`resolveColors`: the theme, the board's stackup, the swatches). The theme's, by default. */
   colors?: Record<string, Rgba>;
+  /** The zones' fills as KiCad made them (`GET /api/fill`): a zone with none has no copper. Absent: each zone's outline stands in for its copper. */
+  zoneFills?: readonly FillZone[];
 }
 
 /** Where a layer KiCad draws flat above the board sits, in the front or the back (`BOARD_ADAPTER::InitSettings`: a technical layer other than silkscreen, mask and paste is 2 * 1.1 * the layer thickness off the copper). */
@@ -979,10 +978,17 @@ export function buildBoardGroup(board: BoardState, opts: BuildBoardOptions = {})
     if (board.routing.zones.length > 0 && shown("zones")) {
       for (const zone of board.routing.zones) {
         const outlineMm: Array<[number, number]> = zone.outline.map(([x, yy]) => [mm(x), mm(yy)]);
-        // A zone on several layers is on each of its copper layers; one on no copper layer (silkscreen, mask) is not copper.
+        // A zone on several layers is on each of its copper layers; one on no copper layer (silkscreen, mask) is not copper. A rule area has no copper at all.
+        if (zone.is_rule_area) continue;
         for (const layer of zoneCopperLayers(zone)) {
           if (!copperShown(layer)) continue;
-          addZoneFill(group, outlineMm, zoneY(layer, layerOrder), zoneMat[silkSide(layer)]);
+          if (!opts.zoneFills) {
+            addZoneFill(group, outlineMm, zoneY(layer, layerOrder), zoneMat[silkSide(layer)]);
+            continue;
+          }
+          const fill = opts.zoneFills.find((f) => f.id === zone.id && f.layer === layer);
+          if (!fill?.filled) continue; // never filled, or edited since: no copper yet
+          for (const ring of fill.fragments) addZoneFill(group, ring.map(([x, yy]) => [mm(x), mm(yy)] as [number, number]), zoneY(layer, layerOrder), zoneMat[silkSide(layer)]);
         }
       }
     }

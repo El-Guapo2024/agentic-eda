@@ -64,6 +64,26 @@ pub(crate) fn refill(dir: &Path, only: Option<Vec<String>>) -> Value {
     json!({ "ok": true, "engine": fills.engine, "seconds": fills.seconds(), "layers": layers, "rings": rings, "zones": zones, "revision": fills.revision })
 }
 
+/// "Check zone fills before plotting" (`kicad-cli ... --check-zones`, "Check and refill zones if required"): KiCad's filler runs when some copper zone has no fill that is
+/// current (never filled, unfilled, or edited since), and not otherwise. `Err` says why it could not.
+pub(crate) fn ensure_filled(dir: &Path) -> Result<(), String> {
+    let (_, design, _) = board::load(dir).map_err(|e| board::reasons(&e))?;
+    let pours = design.routing.as_ref().map_or(0, |r| r.zones.iter().filter(|z| !z.is_rule_area && z.outline.len() >= 3).count());
+    if pours == 0 {
+        return Ok(());
+    }
+    let current = cached(dir).map_or(0, |k| k.tally(&design).0);
+    if current == pours {
+        return Ok(());
+    }
+    let done = refill(dir, None);
+    if done["ok"] == true {
+        Ok(())
+    } else {
+        Err(done["message"].as_str().unwrap_or("kicad-cli could not fill the zones").to_string())
+    }
+}
+
 /// Unfill All Zones (Ctrl+B), or Unfill Selected Zones when `only` names zones: the fills are taken away, and the zones are outlines until the next B.
 pub(crate) fn clear(dir: &Path, only: Option<Vec<String>>) -> Value {
     match only {
@@ -78,6 +98,19 @@ pub(crate) fn clear(dir: &Path, only: Option<Vec<String>>) -> Value {
         }
     }
     json!({ "ok": true })
+}
+
+/// `GET /api/zone_priorities/auto`: the Zone Manager's Auto-Assign Priorities (`AutoAssignZonePriorities`, `eda_ops::zone_priority`) worked out for the board as it is, not
+/// applied: `{ changed, priorities: { zone id: priority } }`. The dialog stages the priorities and applies them on OK, as KiCad's does with its clones of the zones.
+pub(crate) fn auto_priorities(dir: &Path) -> Value {
+    let (_, design, model) = match board::load(dir) {
+        Ok(loaded) => loaded,
+        Err(e) => return json!({ "changed": false, "error": board::reasons(&e) }),
+    };
+    match eda_ops::zone_priority::auto_assign_zone_priorities(&design, &model) {
+        Some(priorities) => json!({ "changed": true, "priorities": priorities }),
+        None => json!({ "changed": false, "priorities": {} }),
+    }
 }
 
 /// A board imported from a `.kicad_pcb` shows the fills the file was saved with (KiCad's own, as saved): `scanned` is what the importer found in the file, filed for the
@@ -110,6 +143,8 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
     // One entry per zone and layer: a zone on several layers (`Zone::layers`) has a fill on each, under the same id.
     let zones_json: Vec<Value> = zones
         .iter()
+        // A rule area has no fill, ever: it is not in the report.
+        .filter(|z| !z.is_rule_area)
         .flat_map(|z| z.layer_set().into_iter().map(move |layer| (z, layer)))
         .map(|(z, layer)| {
             let fill = copper.get(&z.id, layer);

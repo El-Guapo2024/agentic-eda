@@ -2,7 +2,7 @@
 // which ratsnest lines are drawn, how a net highlight is chosen and toggled back, and which zones are filled. No React, no DOM,
 // so `npm run test:unit` covers it; `actions/boardControlActions.ts` is the thin layer that reads the store and dispatches.
 
-import type { FillReport, RatsnestEdge } from "../api/types";
+import type { RatsnestEdge } from "../api/types";
 import { padIds } from "./pcbItems";
 
 // ------------------------------------------------------------------- ratsnest
@@ -137,36 +137,6 @@ export function netsOfSelection(selection: Iterable<string>, board: BoardNets): 
 /** `toggleLastNetHighlight`: the highlighted set and the last one trade places (`m_lastHighlighted`). */
 export function swapHighlight(current: readonly string[], last: readonly string[]): { current: string[]; last: string[] } {
   return { current: [...last], last: [...current] };
-}
-
-// -------------------------------------------------------------------- zone fill
-
-/**
- * Which zones are filled. `null` = all of them (what Fill All and the live refresh keep), a list = only those (Draft Fill on
- * a selection): `zoneFill` itself (the last fill fetched) stays the whole report, painted only for these.
- */
-export type FilledZones = readonly string[] | null;
-
-/** The zones with a fill showing: none when nothing was ever filled (or it was just unfilled). */
-export function filledNow(all: readonly string[], filled: FilledZones, hasFill: boolean): string[] {
-  if (!hasFill) return [];
-  return filled === null ? [...all] : all.filter((id) => filled.includes(id));
-}
-
-/** `ZoneFill` ("Draft Fill Selected Zone(s)"): the filled set after filling `ids` too. All filled again is `null`. */
-export function afterFill(all: readonly string[], filled: FilledZones, hasFill: boolean, ids: readonly string[]): FilledZones {
-  const next = new Set([...filledNow(all, filled, hasFill), ...ids.filter((id) => all.includes(id))]);
-  return next.size === all.length ? null : [...next];
-}
-
-/** `ZoneUnfill`: the filled set after `UnFill()` on `ids`. An empty list means nothing is filled any more. */
-export function afterUnfill(all: readonly string[], filled: FilledZones, hasFill: boolean, ids: readonly string[]): string[] {
-  return filledNow(all, filled, hasFill).filter((id) => !ids.includes(id));
-}
-
-/** The fill report, kept to the zones in `ids` (`null` = all of it). */
-export function keepFilled(report: FillReport, ids: FilledZones): FillReport {
-  return ids === null ? report : { ...report, zones: report.zones.filter((z) => ids.includes(z.id)) };
 }
 
 // ------------------------------------------------------------------------ zones

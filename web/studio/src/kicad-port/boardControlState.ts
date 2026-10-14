@@ -2,7 +2,7 @@
 // ZoneFiller) need, kept in one object (`StudioState.bcx`, one `BCX` reducer action) like `pcbParityState.ts`, so the shared store
 // carries a few small hunks instead of a field per action.
 
-import type { FilledZones, RatsnestMode } from "./boardControl";
+import type { RatsnestMode } from "./boardControl";
 
 /** The export / output dialogs `BoardExportDialog.tsx` serves (each one is a kicad-cli command, except `cmp`). */
 export type BoardExportKind = "3d" | "vrml" | "gencad" | "ipcd356" | "ipc2581" | "odb" | "pcb_bom" | "cmp";
@@ -31,8 +31,6 @@ export interface BoardControlState {
   localRatsnestPads: string[];
   /** `BOARD_DESIGN_SETTINGS::m_UseConnectedTrackWidth` (`pcbnew.EditorControl.autoTrackWidth`). */
   autoTrackWidth: boolean;
-  /** Which zones have a fill showing: `null` = all of them (see `FilledZones`). */
-  zoneFilled: FilledZones;
   /** `PCB_DISPLAY_OPTIONS::m_FlipBoardView` (`pcbnew.Control.flipBoard`). */
   boardFlipped: boolean;
   /** The Zone Manager dialog (`pcbnew.Control.zonesManager`). */
@@ -56,7 +54,6 @@ export const DEFAULT_BOARD_CONTROL: BoardControlState = {
   currentHighlight: [],
   localRatsnestPads: [],
   autoTrackWidth: false,
-  zoneFilled: null,
   boardFlipped: false,
   zoneManagerOpen: false,
   boardExport: null,

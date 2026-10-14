@@ -12,7 +12,7 @@ import { postRepairBoard } from "../api/boardControl";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
 import { fetchFootprintLibraryNames } from "../api/client";
 import type { Cmd, ZonePriorityMove } from "../api/types";
-import { afterFill, afterUnfill, filledNow, highlightedNets, netsOfSelection, ratsnestModeCycle, selectedCopperZones, setNetsHidden, swapHighlight } from "../kicad-port/boardControl";
+import { highlightedNets, netsOfSelection, ratsnestModeCycle, selectedCopperZones, setNetsHidden, swapHighlight } from "../kicad-port/boardControl";
 
 export interface BoardControlContext {
   state: StudioState;
@@ -48,7 +48,7 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
     "pcbnew.Control.zoneDisplayTesselation",
     pcbOnly(() => {
       dispatch({ type: "SET_ZONE_DISPLAY_MODE", mode: "triangulated" });
-      if (state.zoneFill) void api.fillZones();
+      if (state.zoneFill) void api.refreshFill();
     })
   );
 
@@ -125,7 +125,7 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
 
   // ----------------------------------------------------------- the zone tools (zone_filler_tool.cpp)
 
-  // ZoneFill ("Draft Fill Selected Zone(s)"): fills the selected zones; the others keep whatever fill they had.
+  // ZoneFill ("Draft Fill Selected Zone(s)"): kicad-cli's filler runs and the selected zones take its fill; the others keep whatever fill they had.
   m.set(
     "pcbnew.ZoneFiller.zoneFill",
     pcbOnly(() => {
@@ -134,12 +134,11 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
         toast("Select the zone(s) to fill.");
         return;
       }
-      bcx({ zoneFilled: afterFill(fillableIds, state.bcx.zoneFilled, state.zoneFill != null, ids) });
-      void api.fillZones();
+      void api.fillZones(ids);
     })
   );
 
-  // ZoneUnfill: removes the fill from the selected zones.
+  // ZoneUnfill: removes the fill from the selected zones (they are outlines until filled again).
   m.set(
     "pcbnew.ZoneFiller.zoneUnfill",
     pcbOnly(() => {
@@ -148,26 +147,18 @@ export function registerBoardControlActions(m: Map<string, () => void>, c: Board
         toast("Select the zone(s) to unfill.");
         return;
       }
-      if (!state.zoneFill) return;
-      const left = afterUnfill(fillableIds, state.bcx.zoneFilled, true, ids);
-      if (left.length === 0) {
-        api.unfillZones();
-        return;
-      }
-      bcx({ zoneFilled: left });
-      dispatch({ type: "FILL_OK", fill: state.zoneFill });
+      void api.unfillZones(ids);
     })
   );
 
-  // ZoneFillDirty (the system action behind the auto-refill): refills the zones that have no fill. A filled zone is refilled with every
-  // change to the board already (the live fill), so what is left to do is the zones that were never filled -- or were just unfilled.
+  // ZoneFillDirty (the system action behind the auto-refill): fills the zones that have no fill -- never filled, unfilled, or edited since. Zones that have one keep it
+  // (KiCad's auto-refill is off: a fill stays as it is until B).
   m.set(
     "pcbnew.ZoneFiller.zoneFillDirty",
     pcbOnly(() => {
-      if (fillableIds.length === 0) return;
-      if (state.zoneFill && filledNow(fillableIds, state.bcx.zoneFilled, true).length === fillableIds.length) return;
-      bcx({ zoneFilled: null });
-      void api.fillZones();
+      const current = new Set((state.zoneFill?.zones ?? []).filter((f) => f.filled).map((f) => f.id));
+      const missing = fillableIds.filter((id) => !current.has(id));
+      if (missing.length > 0) void api.fillZones(missing);
     })
   );
 

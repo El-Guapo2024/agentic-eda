@@ -1,19 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  afterFill,
-  afterUnfill,
   connectedTrackWidth,
   trackUnder,
   displayedRatsnest,
   duplicatedZoneOutline,
-  filledNow,
   filterZones,
   flipLocalX,
   flipPan,
   highlightedNets,
   isHighlighted,
-  keepFilled,
   moveZone,
   netsOfSelection,
   panDeltaX,
@@ -27,7 +23,7 @@ import {
   zoneOrder,
   type RatsnestView,
 } from "./boardControl";
-import type { FillReport, RatsnestEdge } from "../api/types";
+import type { RatsnestEdge } from "../api/types";
 
 test("ratsnestModeCycle: off -> all layers -> visible layers -> off, as PCB_CONTROL::RatsnestModeCycle", () => {
   let s = { show: false, mode: "all" as "all" | "visible" };
@@ -138,35 +134,6 @@ test("netsOfSelection: the nets of the selected connected items in first-seen or
 test("swapHighlight: the current and the last highlight trade places", () => {
   assert.deepEqual(swapHighlight(["A"], ["B", "C"]), { current: ["B", "C"], last: ["A"] });
   assert.deepEqual(swapHighlight([], ["B"]), { current: ["B"], last: [] });
-});
-
-const all = ["z1", "z2", "z3"];
-
-test("filledNow: nothing before a fill, everything for 'all', the named ones for a draft fill", () => {
-  assert.deepEqual(filledNow(all, null, false), []);
-  assert.deepEqual(filledNow(all, null, true), all);
-  assert.deepEqual(filledNow(all, ["z2"], true), ["z2"]);
-  assert.deepEqual(filledNow(all, ["z2", "gone"], true), ["z2"], "a deleted zone drops out");
-});
-
-test("afterFill: a draft fill adds its zones, and filling the last unfilled zone makes it 'all' again", () => {
-  assert.deepEqual(afterFill(all, null, false, ["z2"]), ["z2"]);
-  assert.deepEqual(afterFill(all, ["z2"], true, ["z1"]), ["z2", "z1"]);
-  assert.equal(afterFill(all, ["z1", "z2"], true, ["z3"]), null);
-  assert.deepEqual(afterFill(all, null, false, ["z1", "ghost"]), ["z1"], "an unknown id is ignored");
-});
-
-test("afterUnfill: the zones left with a fill; empty means nothing is filled", () => {
-  assert.deepEqual(afterUnfill(all, null, true, ["z2"]), ["z1", "z3"]);
-  assert.deepEqual(afterUnfill(all, ["z1"], true, ["z1"]), []);
-  assert.deepEqual(afterUnfill(all, null, false, ["z1"]), [], "nothing was filled to begin with");
-});
-
-test("keepFilled: the report is cut to the filled zones, whole for null", () => {
-  const report: FillReport = { zones: [{ id: "z1", net: "A", layer: "F.Cu", area_um2: 1, fragments: [] }, { id: "z2", net: "A", layer: "F.Cu", area_um2: 2, fragments: [] }] };
-  assert.equal(keepFilled(report, null), report);
-  assert.deepEqual(keepFilled(report, ["z2"]).zones.map((z) => z.id), ["z2"]);
-  assert.deepEqual(keepFilled(report, []).zones, []);
 });
 
 test("selectedCopperZones: only the zones of the selection that are copper (a rule area has no fill)", () => {

@@ -77,6 +77,7 @@ mod pcb_props;
 mod pcb_transform;
 mod tuning;
 mod zone_overrides;
+pub mod zone_priority;
 mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
