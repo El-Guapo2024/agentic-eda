@@ -38,7 +38,7 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
 /// check (`eda_drc::outline::check_board_outline`): a gap wider than the chaining epsilon, a chain that crosses itself, a contour that crosses another,
 /// a line a few nanometres long. One finding per place, located at the Edge.Cuts items it names (or `outline`). A board whose outline is its polygon has
 /// nothing to check, and says nothing; one with other Edge.Cuts items passes once when they chain cleanly. This is not a second DRC -- kicad-cli's
-/// run on the exported file is the judge -- it is the outline the zone filler, the router and the 3D view are working from, reported while it is drawn.
+/// run on the exported file is the judge -- it is the outline the router and the 3D view are working from, reported while it is drawn.
 fn outline_malformed(design: &Design) -> Vec<CheckResult> {
     if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design)) {
         return Vec::new();
