@@ -806,6 +806,10 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
+        // The entries are the pipe-delimited strings `PCB_MARKER::FromLegacyString` reads. A newer KiCad keeps them as ProtoJSON and reads the strings only
+        // through the schema migration from 2 to 3 (`BOARD_DESIGN_SETTINGS::migrateSchema2to3`, 10.99 by build 5334), which runs only for a file that says it
+        // is at 2; a section without a version reads as current and its strings are dropped. Version 2 is also what a KiCad from before the change is at.
+        project["board"]["design_settings"]["meta"] = serde_json::json!({ "version": 2 });
     }
     // The Text Variables page (`PROJECT::GetTextVars`, the project file's `text_variables`): once it has been used it is the project's whole set, and kicad-cli expands
     // `${NAME}` in the plots, the reports and the DRC from it. Until then the board folder's variables are the project's (`library_table::derive_project`).
