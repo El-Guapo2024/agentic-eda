@@ -3716,7 +3716,7 @@ mod tests {
         let cli = eda_kicad_engine::find_cli().expect("checked by the caller");
         let board = dir.join(".kicad").join("board.kicad_pcb");
         let out = dir.join(".kicad").join("direct.json");
-        let ran = std::process::Command::new(cli).args(["pcb", "drc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&board).output().expect("kicad-cli runs");
+        let ran = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "drc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&board).output().expect("kicad-cli runs");
         assert!(out.exists(), "kicad-cli wrote no report: {}{}", String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
         let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
         report["violations"].as_array().unwrap().iter().filter(|v| v["type"] == kind).map(|v| (v["excluded"].as_bool().unwrap_or(false), v["severity"].as_str().unwrap().to_string())).collect()

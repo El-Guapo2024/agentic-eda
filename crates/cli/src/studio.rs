@@ -386,7 +386,7 @@ pub(crate) fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
     // timeout.
     use std::os::unix::process::CommandExt as _;
     let start = std::time::Instant::now();
-    let mut child = match std::process::Command::new(kicad_cli_path())
+    let mut child = match eda_kicad_engine::cli_command(&kicad_cli_path(), None)
         .args([
             "pcb",
             "export",
