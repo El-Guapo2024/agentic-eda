@@ -1,7 +1,8 @@
 //! Fill All Zones by KiCad's own filler (`eda_kicad_engine::refill_zones`), against kicad-cli itself.
 //!
 //! The proof has three parts, on KiCad's QA boards (`qa/data/pcbnew`), whose zones are the hard cases (a net tie, drilled holes with no copper, zones on technical layers, zones on
-//! several layers):
+//! several layers, two zones of one priority that yield to each other by their uuids). `REFILL_BOARDS=a.kicad_pcb,b/c.kicad_pcb` names others; `issue22826`'s inner layers differ
+//! by 0.5 to 0.8% because its through-hole pads are `(remove_unused_layers yes)`, which the IR does not keep (GAPS.md item 13):
 //!   1. the fill read back from the derived board is the fill kicad-cli makes of the original: per layer, the area of every ring is the same to within a fraction of a percent,
 //!      which is also the proof that the derived board is the original board (a hole or a tie it lost would show here);
 //!   2. the board the studio derives with those fills in it is read by kicad-cli, whose plain DRC (no `--refill-zones`: it keeps its courtyard checks) runs on it, and a
@@ -37,7 +38,7 @@ fn kicad_cli_fills_the_derived_board_as_it_fills_the_original() {
         eprintln!("kicad-cli not found; skipping");
         return;
     };
-    let boards = std::env::var("REFILL_BOARDS").map(|v| v.split(',').map(String::from).collect::<Vec<_>>()).unwrap_or_else(|_| ["issue5990.kicad_pcb", "issue14008.kicad_pcb", "issue6260.kicad_pcb"].map(String::from).to_vec());
+    let boards = std::env::var("REFILL_BOARDS").map(|v| v.split(',').map(String::from).collect::<Vec<_>>()).unwrap_or_else(|_| ["issue5990.kicad_pcb", "issue14008.kicad_pcb", "issue6260.kicad_pcb", "issue5750.kicad_pcb"].map(String::from).to_vec());
     let root = std::env::var_os("PARITY_TMP").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("eda_refill_zones"));
     let mut table = String::from("| board | layer | kicad-cli on the original mm² | Fill All Zones mm² | diff % | rings (original / ours) |\n|---|---|---|---|---|---|\n");
     let mut times = String::from("| board | Fill All Zones (B) seconds | rings |\n|---|---|---|\n");
@@ -101,12 +102,12 @@ fn kicad_cli_fills_the_derived_board_as_it_fills_the_original() {
         assert!(again.zones_refilled_by_kicad);
         assert_eq!(again.zone_fills.as_ref().map(|f| f.counts()), Some(fills.counts()), "{rel}: the refill is the same one");
 
-        // The fills the original file was saved with are the ones an import files for the zones: kicad-cli saved the refilled original, so they are its refill.
+        // The fills a file is saved with are the ones an import files for its zones, found by the uuid the zones have in the file: kicad-cli saved the refilled original, and
+        // the zones of the board imported from the original file are the zones of that one.
         let saved = std::fs::read_to_string(&original).unwrap();
-        let (saved_design, _, _) = import_kicad_pcb(&saved).unwrap();
-        let mut saved_design = saved_design;
-        saved_design.routing.as_mut().unwrap().assign_missing_ids();
-        let filed = entries_of_imported_file(&saved_design, scan_zone_fills(&saved));
+        let mut fresh = design.clone();
+        fresh.routing.as_mut().unwrap().assign_missing_ids();
+        let filed = entries_of_imported_file(&fresh, scan_zone_fills(&saved));
         let filed_rings: usize = filed.values().flat_map(|e| e.layers.values()).map(Vec::len).sum();
         assert_eq!(filed_rings, oracle.values().map(|v| v.1).sum::<usize>(), "{rel}: an import files every ring the file was saved with");
     }
