@@ -1424,7 +1424,12 @@ mod tests {
         design.schematic = Some(eda_model::ir::SchematicSection {
             symbols: vec![], wires: vec![], labels: vec![], texts: vec![], power_symbols: vec![], no_connects: vec![], bus_entries: vec![],
             erc_exclusions: vec![
-                eda_model::ir::ErcExclusion { check: "footprint_link_issues".into(), location: "R1".into(), comment: "bare footprint on purpose".into(), marker: "footprint_link_issues|1130300|1003300|a4f97020-e09b-4e24-b611-b376f3c27df7|00000000-0000-0000-0000-000000000000|||".into() },
+                eda_model::ir::ErcExclusion {
+                    check: "footprint_link_issues".into(),
+                    location: "R1".into(),
+                    comment: "bare footprint on purpose".into(),
+                    marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_FOOTPRINT_LINK_ISSUES".into(), at_nm: [113_030_000, 100_330_000], items: vec!["a4f97020-e09b-4e24-b611-b376f3c27df7".into()], ..Default::default() }),
+                },
                 eda_model::ir::ErcExclusion { check: "wire_dangling".into(), location: "W1".into(), ..Default::default() },
             ],
             erc_pin_map: None,
@@ -1436,13 +1441,18 @@ mod tests {
         let json: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         let entries = json["board"]["design_settings"]["drc_exclusions"].as_array().expect("a list");
         assert_eq!(entries.len(), 1, "an exclusion with no position to try is the studio's alone: {entries:?}");
-        assert_eq!(entries[0][0], "annular_width|12459000|18390000|via-uuid|00000000-0000-0000-0000-000000000000");
-        assert_eq!(entries[0][1], "tight on purpose");
+        assert_eq!(entries[0]["marker"], serde_json::json!({ "errorType": "DRCET_ANNULAR_WIDTH", "position": { "xNm": "12459000", "yNm": "18390000" }, "items": [{ "value": "via-uuid" }] }));
+        assert_eq!(entries[0]["comment"], "tight on purpose");
         assert!(json["schematic"]["connection_grid_size"].is_null(), "KiCad's default grid is not written");
         let waived = json["erc"]["erc_exclusions"].as_array().expect("a list");
-        assert_eq!(waived.len(), 1, "an ERC exclusion whose marker text is not known is the studio's alone: {waived:?}");
-        assert_eq!(waived[0][0], "footprint_link_issues|1130300|1003300|a4f97020-e09b-4e24-b611-b376f3c27df7|00000000-0000-0000-0000-000000000000|||");
-        assert_eq!(waived[0][1], "bare footprint on purpose");
+        assert_eq!(waived.len(), 1, "an ERC exclusion whose marker is not known is the studio's alone: {waived:?}");
+        assert_eq!(
+            waived[0],
+            serde_json::json!({
+                "marker": { "errorType": "ERCET_FOOTPRINT_LINK_ISSUES", "position": { "xNm": "113030000", "yNm": "100330000" }, "items": [{ "value": "a4f97020-e09b-4e24-b611-b376f3c27df7" }] },
+                "comment": "bare footprint on purpose",
+            })
+        );
         assert_eq!(json["erc"]["rule_severities"]["pin_not_connected"], "warning", "the schematic's own choice");
         assert_eq!(json["erc"]["rule_severities"]["lib_symbol_mismatch"], "warning", "and it can undo the embedded-library default");
         assert_eq!(json["erc"]["rule_severities"]["lib_symbol_issues"], "ignore");

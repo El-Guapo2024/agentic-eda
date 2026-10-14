@@ -427,9 +427,9 @@ pub struct Violation {
     pub markers_nm: Vec<(i64, i64)>,
     /// An ERC violation's sheet: the path (`ERC_SHEET::uuid_path`) of the sheet kicad-cli's report lists it under. Empty for a DRC one.
     pub sheet: String,
-    /// An ERC violation's marker as KiCad keeps an exclusion, `SCH_MARKER::SerializeToString`, when the report says enough to write it to the letter
-    /// ([`eda_kicad::erc_exclusions::marker_text`]); empty when it does not. Empty for a DRC violation.
-    pub marker: String,
+    /// An ERC violation's marker as KiCad keeps an exclusion (`SCH_MARKER`, `kiapi.schematic.ErcMarker`), when the report says enough to write it to the
+    /// letter ([`eda_kicad::erc_exclusions::marker`]); `None` when it does not, and for a DRC violation.
+    pub marker: Option<eda_model::ir::ErcMarker>,
 }
 
 impl Violation {
@@ -462,26 +462,27 @@ impl Violation {
             comment: v["comment"].as_str().unwrap_or("").to_string(),
             markers_nm: marker_candidates(&at_nm),
             sheet: String::new(),
-            marker: String::new(),
+            marker: None,
         }
     }
 
-    /// The items of an ERC violation as `SCH_MARKER::SerializeToString` wants them: uuid, position in schematic units (100 nm) and name. kicad-cli's
-    /// ERC report prints these positions with the board's scale (`ERC_REPORT::WriteJsonReport` builds its `UNITS_PROVIDER` on `pcbIUScale`), so a position
-    /// of 1.1557 "mm" is 1155700 schematic units. Nothing when the report is not in millimetres.
+    /// The items of an ERC violation as a marker names them: uuid, position in nanometres and name. The schematic's internal unit is a nanometre in the
+    /// nightly the studio runs (10.99.0-5334) and its ERC report prints millimetres as they are; the nightly before it printed a hundredth of that
+    /// (`ERC_REPORT::WriteJsonReport` built its `UNITS_PROVIDER` on the board's scale while the schematic's unit was 100 nm). Nothing when the report is
+    /// not in millimetres.
     fn marker_items(v: &Value, units_mm: bool) -> Vec<eda_kicad::erc_exclusions::MarkerItem> {
         if !units_mm {
             return Vec::new();
         }
-        let iu = |x: f64| (x * 1_000_000.0).round() as i64;
+        let nm = |x: f64| (x * 1_000_000.0).round() as i64;
         v["items"]
             .as_array()
             .map(|is| {
                 is.iter()
                     .map(|it| eda_kicad::erc_exclusions::MarkerItem {
                         uuid: it["uuid"].as_str().unwrap_or("").to_string(),
-                        x: iu(it["pos"]["x"].as_f64().unwrap_or(0.0)),
-                        y: iu(it["pos"]["y"].as_f64().unwrap_or(0.0)),
+                        x_nm: nm(it["pos"]["x"].as_f64().unwrap_or(0.0)),
+                        y_nm: nm(it["pos"]["y"].as_f64().unwrap_or(0.0)),
                         description: it["description"].as_str().unwrap_or("").to_string(),
                     })
                     .collect()
@@ -812,7 +813,7 @@ impl ErcReport {
     /// reports as excluded -- the project lists its marker (`erc.erc_exclusions`) -- or whose
     /// `(check, location)` is in `exclusions` reports as `"excluded"`: still listed, no longer an
     /// error or a warning, with the exclusion's `comment`; `kicad_matched` says whether kicad-cli
-    /// itself matched it. `marker` is the text its exclusion would go into the project as, when the
+    /// itself matched it. `marker` is the marker its exclusion would go into the project as, when the
     /// report says enough to write it (`eda_kicad::erc_exclusions`), and `sheet` the sheet the
     /// report lists it under.
     pub fn to_json(&self, exclusions: &[ErcExclusion]) -> Value {
@@ -841,8 +842,8 @@ impl ErcReport {
                     "comment": if excluded { comment } else { "" },
                     "kicad_matched": by_kicad,
                 });
-                if !v.marker.is_empty() {
-                    j["marker"] = json!(v.marker);
+                if let Some(marker) = &v.marker {
+                    j["marker"] = serde_json::to_value(marker).unwrap_or(Value::Null);
                 }
                 if !v.sheet.is_empty() {
                     j["sheet"] = json!(v.sheet);
@@ -870,7 +871,7 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
         for v in sheet["violations"].as_array().into_iter().flatten() {
             let mut violation = Violation::from_json(v, &map, units_mm);
             violation.sheet = path.to_string();
-            violation.marker = eda_kicad::erc_exclusions::marker_text(&violation.kind, &Violation::marker_items(v, units_mm), path, sheet_count).unwrap_or_default();
+            violation.marker = eda_kicad::erc_exclusions::marker(&violation.kind, &violation.severity, &Violation::marker_items(v, units_mm), path, sheet_count);
             violations.push(violation);
         }
     }
@@ -1523,7 +1524,7 @@ mod tests {
     fn a_finding_kicad_cli_matched_is_excluded_with_its_comment_and_counted_by_nobody() {
         let a = erc_item("Pin 1", Some("U1.1"), "u-a");
         let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![erc_violation("pin_not_connected", vec![a.clone()], true), erc_violation("pin_not_connected", vec![erc_item("Pin 2", Some("U1.2"), "u-b")], false)], ignored_checks: vec![] };
-        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.1".into(), comment: "reviewed".into(), marker: "pin_not_connected|1|2|u-a|n|/r|/r|".into() }]);
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.1".into(), comment: "reviewed".into(), marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1, 2], items: vec!["u-a".into()], ..Default::default() }) }]);
         assert_eq!(j["violations"][0]["severity"], "excluded");
         assert_eq!(j["violations"][0]["kicad_matched"], true, "kicad-cli itself matched the marker text");
         assert_eq!(j["violations"][0]["comment"], "reviewed", "the studio's comment is the exclusion's");
@@ -1550,19 +1551,22 @@ mod tests {
     }
 
     #[test]
-    fn an_erc_entry_offers_the_text_of_the_marker_its_exclusion_would_be_and_the_sheet_it_is_under() {
-        // The report's positions are in the board's scale (1/100 of a schematic unit's millimetre): 1.1557 "mm" is schematic unit 1155700.
+    fn an_erc_entry_offers_the_marker_its_exclusion_would_be_and_the_sheet_it_is_under() {
+        // The report's positions are millimetres as they are, and the marker's are nanometres: 115.57 mm is 115570000.
         let v = json!({ "type": "pin_not_connected", "description": "Pin not connected", "severity": "error",
-            "items": [{ "description": "Symbol #PWR03 Pin 1 [Power input, Line]", "pos": { "x": 1.1557, "y": 1.1049 }, "uuid": "693a38f5-591c-4c06-9786-e8973d13af99" }] });
+            "items": [{ "description": "Symbol #PWR03 Pin 1 [Power input, Line]", "pos": { "x": 115.57, "y": 110.49 }, "uuid": "693a38f5-591c-4c06-9786-e8973d13af99" }] });
         let items = Violation::marker_items(&v, true);
-        assert_eq!((items[0].x, items[0].y), (1_155_700, 1_104_900));
+        assert_eq!((items[0].x_nm, items[0].y_nm), (115_570_000, 110_490_000));
         assert!(Violation::marker_items(&v, false).is_empty(), "inches: not known");
         let mut violation = Violation::from_json(&v, &HashMap::new(), true);
         violation.sheet = "/r".into();
-        violation.marker = eda_kicad::erc_exclusions::marker_text("pin_not_connected", &items, "/r", 1).unwrap();
+        violation.marker = eda_kicad::erc_exclusions::marker("pin_not_connected", "error", &items, "/r", 1);
         let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![violation], ignored_checks: vec![] };
         let j = rep.to_json(&[]);
-        assert_eq!(j["violations"][0]["marker"], "pin_not_connected|1155700|1104900|693a38f5-591c-4c06-9786-e8973d13af99|00000000-0000-0000-0000-000000000000|/r|/r|");
+        assert_eq!(
+            j["violations"][0]["marker"],
+            json!({ "error_type": "ERCET_PIN_NOT_CONNECTED", "at_nm": [115_570_000, 110_490_000], "items": ["693a38f5-591c-4c06-9786-e8973d13af99"], "sheet": ["r"], "main_sheet": ["r"] })
+        );
         assert_eq!(j["violations"][0]["sheet"], "/r");
     }
 

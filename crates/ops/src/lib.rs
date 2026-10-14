@@ -1163,16 +1163,16 @@ pub enum Cmd {
     /// findings `Exclusions` itself can never exclude). One already excluded
     /// is replaced, which is how "Edit exclusion comment..." changes the
     /// comment: `comment` is `SCH_MARKER::GetComment` ("Exclude with
-    /// comment..."), `marker` the marker's `SerializeToString` as the report
-    /// said it (`ErcViolation.marker`; empty when it could not) and an
-    /// empty one leaves the text the exclusion had.
+    /// comment..."), `marker` the marker as the report said it
+    /// (`ErcViolation.marker`; none when it could not) and none leaves the
+    /// marker the exclusion had.
     AddErcExclusion {
         check: String,
         location: String,
         #[serde(default)]
         comment: String,
         #[serde(default)]
-        marker: String,
+        marker: Option<eda_model::ir::ErcMarker>,
     },
     /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"; Delete
     /// Marker on an excluded marker, which is what makes KiCad forget it --
@@ -4322,21 +4322,21 @@ impl<'a> Board<'a> {
     }
 
     /// `dialog_erc.cpp`'s "Exclude this violation" -- see `Cmd::AddErcExclusion`'s own doc.
-    fn add_erc_exclusion(&mut self, check: &str, location: &str, comment: &str, marker: &str) -> Result<(), Vec<CheckResult>> {
+    fn add_erc_exclusion(&mut self, check: &str, location: &str, comment: &str, marker: &Option<eda_model::ir::ErcMarker>) -> Result<(), Vec<CheckResult>> {
         if location.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_erc_exclusion", check, "this finding has no location to key an exclusion on")]);
         }
         // The list belongs to the schematic as a whole, the root's: a sheet the editor is on does not keep one of its own.
         let sch = self.design.schematic.get_or_insert_with(empty_schematic_section);
         match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location) {
-            // Already waived: the comment is the new one (an empty one clears it), the marker text the new one when there is one.
+            // Already waived: the comment is the new one (an empty one clears it), the marker the new one when there is one.
             Some(slot) => {
                 slot.comment = comment.into();
-                if !marker.is_empty() {
-                    slot.marker = marker.into();
+                if marker.is_some() {
+                    slot.marker = marker.clone();
                 }
             }
-            None => sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into(), comment: comment.into(), marker: marker.into() }),
+            None => sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into(), comment: comment.into(), marker: marker.clone() }),
         }
         sch.erc_exclusions.sort();
         Ok(())

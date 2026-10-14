@@ -696,20 +696,41 @@ pub struct ErcExclusion {
     /// derived project beside [`marker`](Self::marker), so kicad-cli's report carries it back. Additive.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub comment: String,
-    /// The marker as KiCad keeps an exclusion: `SCH_MARKER::SerializeToString` (`<key>|<x>|<y>|<main uuid>|<aux uuid>|<sheet path>|<main item's
-    /// sheet path>|<aux item's sheet path>`), as the studio worked it out from kicad-cli's report when the finding was waived
-    /// (`eda_kicad::erc_exclusions::marker_text`). `SCHEMATIC::ResolveERCExclusions` matches a marker to its exclusion by this exact text, and
-    /// turns one that matches nothing into an excluded marker of its own, so the derived project lists it only when it is known to the letter.
-    /// Empty: the exclusion is the studio's alone (its marker sits somewhere kicad-cli's report cannot tell, or its check is not one the
-    /// text is known for). Additive.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub marker: String,
+    /// The marker of the finding as the studio worked it out from kicad-cli's report when the finding was waived (`eda_kicad::erc_exclusions`).
+    /// KiCad matches a marker to its exclusion by the marker itself -- the check, the position, the items and the sheet paths -- and keeps one
+    /// that matches nothing as an excluded marker of its own, so the derived project lists it only when it is known to the letter. `None`: the
+    /// exclusion is the studio's alone (its marker sits somewhere kicad-cli's report cannot tell, or its check is not one the marker is known
+    /// for). Additive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<ErcMarker>,
+}
+
+/// An ERC marker as KiCad's project keeps it in an exclusion (`SCH_MARKER`; `kiapi.schematic.ErcMarker`): what kind of finding it is, where it is,
+/// which items it names and which sheets it belongs to.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErcMarker {
+    /// KiCad's name for the kind of finding (`kiapi.schematic.ErcErrorType`: `ERCET_PIN_NOT_CONNECTED`, ...). It is the check, except that the pin
+    /// conflict is two kinds (`ERCET_PIN_TO_PIN_WARNING`, `ERCET_PIN_TO_PIN_ERROR`).
+    pub error_type: String,
+    /// The marker's position in nanometres, the schematic's own unit.
+    pub at_nm: [i64; 2],
+    /// The uuids of the items the finding names in the derived schematic, main item first (`RC_ITEM::GetMainItemID`, `GetAuxItemID`).
+    pub items: Vec<String>,
+    /// `SetSheetSpecificPath`: the sheet the marker belongs to, as the uuids from the root sheet down (`KIID_PATH`). Empty: it belongs to none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sheet: Vec<String>,
+    /// `SetItemsSheetPaths`: the sheet of the main item, and of the aux item. Empty: none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub main_sheet: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aux_sheet: Vec<String>,
 }
 
 /// A waived DRC violation: `BOARD_DESIGN_SETTINGS::m_DrcExclusions` with its `m_DrcExclusionComments`
 /// (`dialog_drc.cpp`'s "Exclude this violation", "Exclude with comment...", Exclude Marker).
 ///
-/// KiCad keys an exclusion by the marker's serialization (`PCB_MARKER::SerializeToString`): the check's settings key, the marker's
+/// KiCad keys an exclusion by the marker (`PCB_MARKER`; `kiapi.board.DrcMarker`): the kind of check, the marker's
 /// position and the uuids of the items it names. The derived project writes these as `board.design_settings.drc_exclusions`, so
 /// kicad-cli reports the violation as excluded and leaves it out of a report that does not ask for exclusions. Here the identity of a
 /// violation is `(check, items)` -- the uuids of the derived board's own items, which `eda_kicad::export_kicad_pcb_mapped` mints
@@ -727,9 +748,9 @@ pub struct DrcExclusion {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ids: Vec<String>,
     /// Where kicad-cli's marker for this violation may sit, in nanometres (KiCad's board unit). KiCad matches an exclusion to a marker by
-    /// the exact serialization, position included, and kicad-cli's report does not say where a marker is -- only where its items are. So
+    /// the marker itself, position included, and kicad-cli's report does not say where a marker is -- only where its items are. So
     /// these are the positions worth trying (the items' own, a track's middle, the middle of the first two items): the derived project
-    /// lists one serialization for each, and the one that is the marker's is the one kicad-cli matches (the rest are dropped on load,
+    /// lists one record for each, and the one that is the marker's is the one kicad-cli matches (the rest are dropped on load,
     /// as KiCad drops an exclusion no marker matches). Empty: the exclusion is the studio's alone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub positions_nm: Vec<[i64; 2]>,

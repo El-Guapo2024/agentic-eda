@@ -173,39 +173,47 @@ fn erc_waived(b: &Board) -> Vec<ErcExclusion> {
     b.design().schematic.as_ref().map(|s| s.erc_exclusions.clone()).unwrap_or_default()
 }
 
-fn add_erc(check: &str, location: &str, comment: &str, marker: &str) -> Cmd {
-    Cmd::AddErcExclusion { check: check.into(), location: location.into(), comment: comment.into(), marker: marker.into() }
+/// A marker for the tests: the kind of finding, a position and the one item it names.
+fn marker(error_type: &str, x: i64, item: &str) -> Option<eda_model::ir::ErcMarker> {
+    if error_type.is_empty() {
+        return None;
+    }
+    Some(eda_model::ir::ErcMarker { error_type: error_type.into(), at_nm: [x, x], items: vec![item.into()], ..Default::default() })
+}
+
+fn add_erc(check: &str, location: &str, comment: &str, marker: Option<eda_model::ir::ErcMarker>) -> Cmd {
+    Cmd::AddErcExclusion { check: check.into(), location: location.into(), comment: comment.into(), marker }
 }
 
 #[test]
 fn an_erc_exclusion_keeps_its_comment_and_marker_text_and_adding_it_again_edits_them() {
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);
-    b.apply(&add_erc("wire_dangling", "w2", "", "")).unwrap();
-    b.apply(&add_erc("pin_not_connected", "U1.1", "left open on purpose", "pin_not_connected|1|2|u|n|/r|/r|")).unwrap();
+    b.apply(&add_erc("wire_dangling", "w2", "", None)).unwrap();
+    b.apply(&add_erc("pin_not_connected", "U1.1", "left open on purpose", marker("ERCET_PIN_NOT_CONNECTED", 1, "u"))).unwrap();
     let list = erc_waived(&b);
     assert_eq!(list.iter().map(|e| (e.check.as_str(), e.location.as_str())).collect::<Vec<_>>(), [("pin_not_connected", "U1.1"), ("wire_dangling", "w2")], "kept sorted by (check, location)");
-    assert_eq!((list[0].comment.as_str(), list[0].marker.as_str()), ("left open on purpose", "pin_not_connected|1|2|u|n|/r|/r|"));
+    assert_eq!((list[0].comment.as_str(), list[0].marker.clone()), ("left open on purpose", marker("ERCET_PIN_NOT_CONNECTED", 1, "u")));
 
     // "Edit exclusion comment...": the same key again replaces the comment; a call that has no marker text leaves the one it had.
-    b.apply(&add_erc("pin_not_connected", "U1.1", "reviewed", "")).unwrap();
+    b.apply(&add_erc("pin_not_connected", "U1.1", "reviewed", None)).unwrap();
     let list = erc_waived(&b);
     assert_eq!(list.len(), 2, "no second entry for the same finding");
-    assert_eq!((list[0].comment.as_str(), list[0].marker.as_str()), ("reviewed", "pin_not_connected|1|2|u|n|/r|/r|"));
-    // An empty comment clears it; a new marker text replaces the old one.
-    b.apply(&add_erc("pin_not_connected", "U1.1", "", "pin_not_connected|3|4|u|n|/r|/r|")).unwrap();
-    assert_eq!((erc_waived(&b)[0].comment.as_str(), erc_waived(&b)[0].marker.as_str()), ("", "pin_not_connected|3|4|u|n|/r|/r|"));
+    assert_eq!((list[0].comment.as_str(), list[0].marker.clone()), ("reviewed", marker("ERCET_PIN_NOT_CONNECTED", 1, "u")));
+    // An empty comment clears it; a new marker replaces the old one.
+    b.apply(&add_erc("pin_not_connected", "U1.1", "", marker("ERCET_PIN_NOT_CONNECTED", 3, "u"))).unwrap();
+    assert_eq!((erc_waived(&b)[0].comment.as_str(), erc_waived(&b)[0].marker.clone()), ("", marker("ERCET_PIN_NOT_CONNECTED", 3, "u")));
 }
 
 #[test]
 fn an_erc_finding_with_no_location_cannot_be_excluded_and_deleting_needs_the_exact_key() {
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);
-    let e = b.apply(&add_erc("wire_dangling", "", "why", "")).unwrap_err();
+    let e = b.apply(&add_erc("wire_dangling", "", "why", None)).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_erc_exclusion");
     assert!(erc_waived(&b).is_empty());
 
-    b.apply(&add_erc("wire_dangling", "w1", "x", "wire_dangling|1|1|w|n|/r||")).unwrap();
+    b.apply(&add_erc("wire_dangling", "w1", "x", marker("ERCET_WIRE_DANGLING", 1, "w"))).unwrap();
     let e = b.apply(&Cmd::DeleteErcExclusion { check: "wire_dangling".into(), location: "w9".into() }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_erc_exclusion");
     assert_eq!(erc_waived(&b).len(), 1);
@@ -217,17 +225,17 @@ fn an_erc_finding_with_no_location_cannot_be_excluded_and_deleting_needs_the_exa
 #[test]
 fn the_erc_exclusion_json_reads_with_or_without_a_comment_and_writes_nothing_extra_for_a_bare_one() {
     let bare: Cmd = serde_json::from_value(serde_json::json!({ "op": "add_erc_exclusion", "check": "wire_dangling", "location": "w1" })).unwrap();
-    assert!(matches!(&bare, Cmd::AddErcExclusion { comment, marker, .. } if comment.is_empty() && marker.is_empty()), "an older client's body still reads");
-    let full: Cmd = serde_json::from_value(serde_json::json!({ "op": "add_erc_exclusion", "check": "wire_dangling", "location": "w1", "comment": "ok", "marker": "wire_dangling|1|1|w|n|/r||" })).unwrap();
-    assert!(matches!(&full, Cmd::AddErcExclusion { comment, marker, .. } if comment == "ok" && marker.starts_with("wire_dangling|")));
+    assert!(matches!(&bare, Cmd::AddErcExclusion { comment, marker, .. } if comment.is_empty() && marker.is_none()), "an older client's body still reads");
+    let full: Cmd = serde_json::from_value(serde_json::json!({ "op": "add_erc_exclusion", "check": "wire_dangling", "location": "w1", "comment": "ok", "marker": { "error_type": "ERCET_WIRE_DANGLING", "at_nm": [1, 1], "items": ["w"], "sheet": ["r"] } })).unwrap();
+    assert!(matches!(&full, Cmd::AddErcExclusion { comment, marker, .. } if comment == "ok" && marker.as_ref().is_some_and(|m| m.error_type == "ERCET_WIRE_DANGLING" && m.sheet == vec!["r".to_string()])));
     assert_eq!(full.domain(), Domain::Schematic);
 
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);
-    b.apply(&add_erc("wire_dangling", "w1", "", "")).unwrap();
+    b.apply(&add_erc("wire_dangling", "w1", "", None)).unwrap();
     let text = serde_json::to_string(b.design()).unwrap();
     assert!(text.contains("erc_exclusions") && !text.contains("\"comment\"") && !text.contains("\"marker\""), "a bare exclusion serializes as it always did: {text}");
-    b.apply(&add_erc("wire_dangling", "w1", "why", "wire_dangling|1|1|w|n|/r||")).unwrap();
+    b.apply(&add_erc("wire_dangling", "w1", "why", marker("ERCET_WIRE_DANGLING", 1, "w"))).unwrap();
     let back: Design = serde_json::from_str(&serde_json::to_string(b.design()).unwrap()).unwrap();
     assert_eq!(back.schematic.unwrap().erc_exclusions, erc_waived(&b));
 }
@@ -238,15 +246,15 @@ fn delete_all_markers_with_the_exclusions_clears_the_list_and_is_refused_when_it
     let mut b = Board::new(design(), &m, 100, 300);
     let e = b.apply(&Cmd::ClearErcExclusions).unwrap_err();
     assert_eq!(e[0].check, "ops_no_schematic", "a board with no schematic has no exclusion to clear");
-    b.apply(&add_erc("wire_dangling", "w1", "x", "wire_dangling|1|1|w|n|/r||")).unwrap();
-    b.apply(&add_erc("label_dangling", "l1", "", "")).unwrap();
+    b.apply(&add_erc("wire_dangling", "w1", "x", marker("ERCET_WIRE_DANGLING", 1, "w"))).unwrap();
+    b.apply(&add_erc("label_dangling", "l1", "", None)).unwrap();
     assert_eq!(erc_waived(&b).len(), 2);
     b.apply(&Cmd::ClearErcExclusions).unwrap();
     assert!(erc_waived(&b).is_empty());
     let e = b.apply(&Cmd::ClearErcExclusions).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_erc_exclusion", "nothing left to clear");
     // The exclusions are about the report, not the drawing: no net is re-read from the schematic after them, and they belong to the root's.
-    assert!(!Cmd::ClearErcExclusions.edits_connectivity() && !add_erc("a", "b", "", "").edits_connectivity());
+    assert!(!Cmd::ClearErcExclusions.edits_connectivity() && !add_erc("a", "b", "", None).edits_connectivity());
     assert_eq!(Cmd::ClearErcExclusions.domain(), Domain::Schematic);
     let on_sheet: Cmd = serde_json::from_value(serde_json::json!({ "op": "clear_erc_exclusions" })).unwrap();
     assert!(matches!(on_sheet, Cmd::ClearErcExclusions));

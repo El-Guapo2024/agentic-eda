@@ -3673,14 +3673,14 @@ mod tests {
         setup_schematic(&dir);
 
         assert!(
-            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into(), comment: String::new(), marker: String::new() }, false, "test").is_err(),
+            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into(), comment: String::new(), marker: None }, false, "test").is_err(),
             "a blank location is refused -- nothing to key an exclusion on"
         );
 
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), comment: String::new(), marker: String::new() }, false, "test").unwrap();
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: String::new() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), comment: String::new(), marker: None }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: None }, false, "test").unwrap();
         // Adding the same one again is a harmless no-op, not a duplicate.
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: String::new() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: None }, false, "test").unwrap();
 
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
