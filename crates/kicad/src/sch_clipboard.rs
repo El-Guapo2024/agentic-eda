@@ -427,8 +427,8 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     // `(lib_symbols ...)`: one entry per library symbol the selection names, by name.
     let mut cache: BTreeMap<String, LibrarySymbol> = BTreeMap::new();
     for c in &symbols {
-        cache.entry(c.lib_id.clone()).or_insert_with(|| match input.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(&c.lib_id)).filter(|s| s.published) {
-            Some(rich) => rich.clone(),
+        cache.entry(c.lib_id.clone()).or_insert_with(|| match input.design.symbol_library.as_ref().and_then(|l| l.flatten(&c.lib_id).ok().filter(|_| l.by_lib_id(&c.lib_id).is_some_and(|s| s.published))) {
+            Some(rich) => rich, // the schematic caches the flat symbol (`LIB_SYMBOL::Flatten`)
             None => LibrarySymbol::from_engine_symbol(&c.engine),
         });
     }
@@ -436,8 +436,8 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     for p in &powers {
         let engine = input.model.symbol_of(&p.lib_id).or_else(|| eda_model::symbol::builtin(&p.lib_id));
         if let Some(engine) = engine {
-            cache.entry(p.lib_id.clone()).or_insert_with(|| match input.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(&p.lib_id)).filter(|s| s.published) {
-                Some(rich) => rich.clone(),
+            cache.entry(p.lib_id.clone()).or_insert_with(|| match input.design.symbol_library.as_ref().and_then(|l| l.flatten(&p.lib_id).ok().filter(|_| l.by_lib_id(&p.lib_id).is_some_and(|s| s.published))) {
+                Some(rich) => rich,
                 None => LibrarySymbol::from_engine_symbol(&engine),
             });
             power_engine.insert(p.lib_id.clone(), engine);

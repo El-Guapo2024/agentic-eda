@@ -13,12 +13,15 @@
 //! Grammar notes confirmed against the KiCad source this repo ports (`eeschema/sch_io/kicad_sexpr`):
 //! a symbol's own `(symbol "Name_<unit>_<style>" ...)` sub-blocks carry the drawn items (unit 0 = shared
 //! by every unit, style 0 = shared by every body style); `(extends "Parent")` names a base symbol of
-//! the same file whose graphics and pins this one shows; a pin or pin-number/name block hides with
-//! either the bare atom `hide` (older files) or `(hide yes)` (KiCad 9+).
-
-use std::collections::HashMap;
+//! the same file whose graphics and pins this one shows -- the symbol is read as a *derived* one
+//! ([`LibrarySymbol::extends`]: its own properties, none of the drawing; `SCH_IO_KICAD_SEXPR_PARSER::parseSymbol`
+//! keeps the link too) and `eda_model::SymbolLibrarySection::flatten` gives the symbol with everything it inherits; a pin
+//! or pin-number/name block hides with either the bare atom `hide` (older files) or `(hide yes)` (KiCad 9+);
+//! every `(property ...)` is a field with its place and look (`parseProperty`), `ki_keywords`, `ki_fp_filters`
+//! and `ki_description` being the symbol's own members and `ki_locked` a flag that is not kept.
 
 use eda_model::ir::{LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin};
+use eda_model::sym_fields::{is_mandatory_field, FieldHAlign, FieldVAlign, LibrarySymbolField, MANDATORY_FIELDS};
 use eda_model::symbol::SPoint;
 
 use crate::sexpr::{self, Sexpr};
@@ -47,11 +50,39 @@ pub fn parse_library_symbols(text: &str) -> Result<ParsedSymbols, String> {
     let tree = sexpr::parse(source).map_err(|e| format!("not a valid s-expression file: {e}"))?;
     let root = tree.as_list().filter(|l| sexpr::tag(l) == Some("kicad_symbol_lib")).ok_or("the top-level form is not (kicad_symbol_lib ...); not a KiCad symbol library file")?;
 
-    let parsed = symbols_of(root);
+    let mut parsed = symbols_of(root);
     if parsed.symbols.is_empty() {
         return Err("the file holds no symbol".into());
     }
+    parsed.symbols = parents_first(parsed.symbols);
     Ok(parsed)
+}
+
+/// The symbols in file order, except that a symbol comes after the symbol it extends when that one is in the list too (a file does not have to put a base before its derived
+/// symbols, and the library takes them one by one: a derived symbol needs its parent already there).
+fn parents_first(symbols: Vec<LibrarySymbol>) -> Vec<LibrarySymbol> {
+    let names: Vec<String> = symbols.iter().map(|s| s.lib_id.clone()).collect();
+    let mut placed: Vec<bool> = vec![false; symbols.len()];
+    let mut order: Vec<usize> = Vec::with_capacity(symbols.len());
+    fn visit(i: usize, symbols: &[LibrarySymbol], names: &[String], placed: &mut [bool], order: &mut Vec<usize>, depth: usize) {
+        if placed[i] {
+            return;
+        }
+        placed[i] = true; // before the parent: a cycle in the file ends here
+        if let Some(parent) = symbols[i].extends.as_deref() {
+            if let Some(p) = names.iter().position(|n| n == parent) {
+                if depth < 64 {
+                    visit(p, symbols, names, placed, order, depth + 1);
+                }
+            }
+        }
+        order.push(i);
+    }
+    for i in 0..symbols.len() {
+        visit(i, &symbols, &names, &mut placed, &mut order, 0);
+    }
+    let mut slots: Vec<Option<LibrarySymbol>> = symbols.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
 }
 
 /// Every `(symbol "Name" ...)` child of `list` as an editable [`LibrarySymbol`], named as the node names it -- a bare name in a library
@@ -59,10 +90,9 @@ pub fn parse_library_symbols(text: &str) -> Result<ParsedSymbols, String> {
 /// after the colon). The reader behind both the Symbol Editor's import and the schematic clipboard.
 pub(crate) fn symbols_of(list: &[Sexpr]) -> ParsedSymbols {
     let items: Vec<(&str, &[Sexpr])> = sexpr::find_all(list, "symbol").filter_map(|it| Some((sexpr::txt(it, 1)?, it))).collect();
-    let by_name: HashMap<&str, &[Sexpr]> = items.iter().copied().collect();
 
     let mut warnings = Vec::new();
-    let symbols = items.iter().map(|(name, item)| build(name, item, &by_name, &mut warnings)).collect();
+    let symbols = items.iter().map(|(name, item)| build(name, item, &mut warnings)).collect();
     warnings.sort();
     warnings.dedup();
     ParsedSymbols { symbols, warnings }
@@ -80,48 +110,162 @@ fn yes_no(item: &[Sexpr], key: &str, default: bool) -> bool {
     sexpr::find(item, key).and_then(|f| sexpr::txt(f, 1)).map(|v| v == "yes").unwrap_or(default)
 }
 
-fn property(item: &[Sexpr], base: Option<&[Sexpr]>, key: &str) -> String {
-    let find = |node: &[Sexpr]| sexpr::find_all(node, "property").find(|p| sexpr::txt(p, 1) == Some(key)).and_then(|p| sexpr::txt(p, 2)).map(str::to_string);
-    find(item).or_else(|| base.and_then(find)).unwrap_or_default()
+/// What a symbol's `(property ...)` forms hold: its fields, with the three `ki_*` properties that are the symbol's own members (`parseProperty`).
+#[derive(Default)]
+pub(crate) struct Properties {
+    /// Every field in file order: the mandatory ones (by their canonical names; the match is not case sensitive) and the user fields. A user field whose name is already taken
+    /// is renamed `name_1`, `name_2` ..., and after nine tries dropped, as `parseProperty` does.
+    pub fields: Vec<LibrarySymbolField>,
+    pub keywords: String,
+    pub footprint_filters: Vec<String>,
+    /// `ki_description`, where a file of KiCad 7 or before kept the description.
+    pub legacy_description: Option<String>,
 }
 
-fn build(name: &str, item: &[Sexpr], by_name: &HashMap<&str, &[Sexpr]>, warnings: &mut Vec<String>) -> LibrarySymbol {
-    let base = sexpr::find(item, "extends").and_then(|e| sexpr::txt(e, 1)).and_then(|b| by_name.get(b).copied());
+/// `parseEDA_TEXT`'s `(effects (font (size h w) bold italic) (justify ...) (hide yes))` into a field: the size is the height, `bold` and `italic` are bare tokens or `(bold yes)`,
+/// a `(hide ...)` among the effects hides the field.
+fn read_effects(field: &mut LibrarySymbolField, effects: &[Sexpr]) {
+    let flag = |node: &[Sexpr], key: &str| {
+        node.iter().skip(1).any(|c| match c {
+            Sexpr::Atom(a) => a == key,
+            Sexpr::List(l) => sexpr::tag(l) == Some(key) && sexpr::txt(l, 1).map(|v| v == "yes").unwrap_or(true),
+        })
+    };
+    if let Some(font) = sexpr::find(effects, "font") {
+        if let Some(size) = sexpr::find(font, "size").and_then(|s| sexpr::num(s, 1)) {
+            field.size_mm = size;
+        }
+        field.bold = flag(font, "bold");
+        field.italic = flag(font, "italic");
+    }
+    if let Some(justify) = sexpr::find(effects, "justify") {
+        for c in justify.iter().skip(1).filter_map(Sexpr::text) {
+            match c {
+                "left" => field.h_align = FieldHAlign::Left,
+                "right" => field.h_align = FieldHAlign::Right,
+                "top" => field.v_align = FieldVAlign::Top,
+                "bottom" => field.v_align = FieldVAlign::Bottom,
+                _ => {}
+            }
+        }
+    }
+    if flag(effects, "hide") {
+        field.hidden = true;
+    }
+}
 
-    let own = drawn_items(item, warnings);
-    // `extends` with nothing drawn of its own shows the base's graphics and pins; a derived symbol that
-    // does draw something keeps it.
-    let (graphics, pins, unit_count, alt_style) = match base {
-        Some(b) if own.0.is_empty() && own.1.is_empty() => drawn_items(b, warnings),
-        _ => own,
+/// `SCH_IO_KICAD_SEXPR_PARSER::parseProperty` for every `(property ...)` of a symbol's own node.
+pub(crate) fn read_properties(item: &[Sexpr]) -> Properties {
+    let mut out = Properties::default();
+    for prop in sexpr::find_all(item, "property") {
+        // `(property private "Name" ...)`: the private flag is not kept
+        let at = if prop.get(1).and_then(Sexpr::text) == Some("private") { 2 } else { 1 };
+        let (Some(name), Some(value)) = (sexpr::txt(prop, at), sexpr::txt(prop, at + 1)) else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        match name {
+            "ki_keywords" => out.keywords = value.to_string(),
+            "ki_description" => out.legacy_description = Some(value.to_string()),
+            "ki_fp_filters" => out.footprint_filters = value.split_whitespace().map(str::to_string).collect(),
+            "ki_locked" => {}
+            _ => {
+                let mut f = LibrarySymbolField::named(name, value);
+                if let Some(canonical) = MANDATORY_FIELDS.iter().find(|m| m.eq_ignore_ascii_case(name)) {
+                    f.name = (*canonical).to_string();
+                    f.hidden = false;
+                }
+                if let Some(a) = sexpr::find(prop, "at") {
+                    f.at = SPoint { x: sexpr::num(a, 1).unwrap_or(0.0), y: sexpr::num(a, 2).unwrap_or(0.0) };
+                    f.angle_deg = sexpr::num(a, 3).unwrap_or(0.0);
+                }
+                if let Some(h) = sexpr::find(prop, "hide") {
+                    f.hidden = sexpr::txt(h, 1).map(|v| v == "yes").unwrap_or(true);
+                }
+                if let Some(n) = sexpr::find(prop, "show_name") {
+                    f.show_name = sexpr::txt(n, 1).map(|v| v == "yes").unwrap_or(true);
+                }
+                if let Some(n) = sexpr::find(prop, "do_not_autoplace") {
+                    f.do_not_autoplace = sexpr::txt(n, 1).map(|v| v == "yes").unwrap_or(true);
+                }
+                if let Some(effects) = sexpr::find(prop, "effects") {
+                    read_effects(&mut f, effects);
+                }
+                if is_mandatory_field(&f.name) {
+                    if let Some(slot) = out.fields.iter_mut().find(|x| x.name == f.name) {
+                        *slot = f;
+                    } else {
+                        out.fields.push(f);
+                    }
+                    continue;
+                }
+                // a user field: a second one of the same name gets `name_1` ... `name_9`, then is dropped
+                let mut unique = f.name.clone();
+                let mut n = 0;
+                while out.fields.iter().any(|x| x.name == unique) && n < 9 {
+                    n += 1;
+                    unique = format!("{}_{n}", f.name);
+                }
+                if !out.fields.iter().any(|x| x.name == unique) {
+                    f.name = unique;
+                    out.fields.push(f);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn build(name: &str, item: &[Sexpr], warnings: &mut Vec<String>) -> LibrarySymbol {
+    let extends = sexpr::find(item, "extends").and_then(|e| sexpr::txt(e, 1)).map(str::to_string);
+
+    // A derived symbol keeps no drawing of its own (`SaveSymbol` writes none): what it draws, its units and its pin text options are its root's, which `flatten` takes.
+    let (graphics, pins, unit_count, alt_style) = if extends.is_some() {
+        let own = drawn_items(item, warnings);
+        if !own.0.is_empty() || !own.1.is_empty() {
+            warnings.push("a derived symbol has a drawing of its own, which is not used: it shows its parent's".to_string());
+        }
+        (Vec::new(), Vec::new(), 1, false)
+    } else {
+        drawn_items(item, warnings)
     };
 
     let power = |node: &[Sexpr]| node.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power")) || it.text() == Some("power"));
-    let pin_numbers = sexpr::find(item, "pin_numbers").or_else(|| base.and_then(|b| sexpr::find(b, "pin_numbers")));
-    let pin_names = sexpr::find(item, "pin_names").or_else(|| base.and_then(|b| sexpr::find(b, "pin_names")));
-    let footprint_filters = property(item, base, "ki_fp_filters").split_whitespace().map(str::to_string).collect();
-    let reference = property(item, base, "Reference");
-
+    let pin_numbers = sexpr::find(item, "pin_numbers");
+    let pin_names = sexpr::find(item, "pin_names");
+    let props = read_properties(item);
     let mut sym = LibrarySymbol {
         lib_id: name.to_string(),
-        reference_prefix: if reference.is_empty() { "U".to_string() } else { reference },
-        description: property(item, base, "Description"),
-        keywords: property(item, base, "ki_keywords"),
-        datasheet: property(item, base, "Datasheet"),
-        power: power(item) || base.is_some_and(power),
-        in_bom: yes_no(item, "in_bom", base.map(|b| yes_no(b, "in_bom", true)).unwrap_or(true)),
-        on_board: yes_no(item, "on_board", base.map(|b| yes_no(b, "on_board", true)).unwrap_or(true)),
+        power: power(item),
+        in_bom: yes_no(item, "in_bom", true),
+        on_board: yes_no(item, "on_board", true),
         pin_numbers_hidden: pin_numbers.map(hidden).unwrap_or(false),
         pin_names_hidden: pin_names.map(hidden).unwrap_or(false),
-        footprint_filters,
+        keywords: props.keywords.clone(),
+        footprint_filters: props.footprint_filters.clone(),
         unit_count: unit_count.max(1),
         has_alternate_body_style: alt_style,
         graphics,
         pins,
+        extends,
         ..LibrarySymbol::default()
     };
     if let Some(offset) = pin_names.and_then(|p| sexpr::find(p, "offset")).and_then(|o| sexpr::num(o, 1)) {
         sym.pin_name_offset_mm = offset;
+    }
+    // The fields. A root symbol has its Reference prefix ("U" when the file says none, as it always was); a derived symbol's empty Reference or Description is the parent's.
+    let derived = sym.extends.is_some();
+    let mut fields = props.fields;
+    if let Some(legacy) = &props.legacy_description {
+        match fields.iter_mut().find(|f| f.name == "Description") {
+            Some(f) if f.text.is_empty() => f.text = legacy.clone(),
+            Some(_) => {}
+            None => fields.push(LibrarySymbolField { hidden: true, ..LibrarySymbolField::named("Description", legacy) }),
+        }
+    }
+    sym.set_fields(fields);
+    if !derived && sym.reference_prefix.is_empty() {
+        sym.reference_prefix = "U".to_string();
     }
     sym.assign_missing_ids();
     sym
@@ -248,6 +392,7 @@ fn parse_pin(item: &[Sexpr], unit: u32, style: u32) -> Option<LibrarySymbolPin> 
 mod tests {
     use super::*;
     use crate::{export_kicad_sym, export_kicad_sym_library};
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign, LibrarySymbolField};
 
     fn pin(number: &str, unit: u32, body_style: u32, hidden: bool) -> LibrarySymbolPin {
         LibrarySymbolPin {
@@ -292,6 +437,8 @@ mod tests {
             ],
             pins: vec![pin("1", 1, 1, false), pin("2", 1, 1, true), pin("3", 2, 1, false), pin("1", 1, 2, false)],
             published: false,
+            extends: None,
+            fields: vec![],
         };
         sym.assign_missing_ids();
         sym
@@ -363,21 +510,112 @@ mod tests {
     }
 
     #[test]
-    fn extends_borrows_the_bases_drawing_and_unsupported_items_are_reported() {
+    fn a_derived_symbol_is_read_as_derived_and_flattens_onto_its_parents_drawing() {
         let text = r#"(kicad_symbol_lib (version 20231120)
+            (symbol "Child" (extends "Base") (property "Description" "derived" (at 0 0 0)) (property "Value" "CH" (at 1 2 0) (effects (font (size 1 1) bold) (justify left bottom))))
             (symbol "Base" (property "Datasheet" "http://x" (at 0 0 0))
                 (symbol "Base_0_1" (rectangle (start -1 -1) (end 1 1) (stroke (width 0.2) (type default)) (fill (type background)))
                     (bezier (pts (xy 0 0) (xy 1 1) (xy 2 1) (xy 3 0)))
                     (text_box "x" (at 0 0 0) (size 1 1)))
-                (symbol "Base_1_1" (pin power_in line (at 0 -3.81 90) (length 2.54) (name "GND") (number "1"))))
-            (symbol "Child" (extends "Base") (property "Description" "derived" (at 0 0 0))))"#;
+                (symbol "Base_1_1" (pin power_in line (at 0 -3.81 90) (length 2.54) (name "GND") (number "1")))))"#;
         let parsed = parse_library_symbols(text).unwrap();
-        let child = parsed.symbols.iter().find(|s| s.lib_id == "Child").unwrap();
-        assert_eq!((child.pins.len(), child.graphics.len()), (1, 1), "the base's pin and rectangle");
-        assert_eq!(child.datasheet, "http://x", "a property the child lacks comes from the base");
-        assert_eq!(child.description, "derived");
+        // the base first, though the file lists the derived symbol before it
+        assert_eq!(parsed.symbols.iter().map(|s| s.lib_id.as_str()).collect::<Vec<_>>(), ["Base", "Child"]);
+        let child = &parsed.symbols[1];
+        assert_eq!(child.extends.as_deref(), Some("Base"));
+        assert!(child.pins.is_empty() && child.graphics.is_empty(), "a derived symbol keeps no drawing of its own");
+        assert_eq!((child.description.as_str(), child.datasheet.as_str()), ("derived", ""), "its own properties only: the Datasheet is the parent's until flattened");
+        let value = child.field("Value").unwrap();
+        assert_eq!((value.text.as_str(), value.at.x, value.at.y, value.size_mm, value.bold, value.h_align, value.v_align), ("CH", 1.0, 2.0, 1.0, true, FieldHAlign::Left, FieldVAlign::Bottom));
         assert_eq!(parsed.warnings.len(), 2, "{:?}", parsed.warnings);
         assert!(parsed.warnings.iter().any(|w| w.contains("bezier")) && parsed.warnings.iter().any(|w| w.contains("text box")));
+
+        let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols };
+        let flat = section.flatten("Child").unwrap();
+        assert_eq!((flat.pins.len(), flat.graphics.len()), (1, 1), "the base's pin and rectangle");
+        assert_eq!((flat.datasheet.as_str(), flat.description.as_str()), ("http://x", "derived"));
+        assert_eq!(flat.field("Value").unwrap().text, "CH");
+    }
+
+    #[test]
+    fn every_property_is_a_field_with_its_place_and_look_and_the_ki_ones_are_the_symbols_members() {
+        let text = r#"(symbol "Chip"
+            (property "Reference" "IC" (at -1.5 3 90) (effects (font (size 1.5 1.5) italic) (justify right)))
+            (property "Value" "Chip" (at 0 -3 0) (show_name yes) (do_not_autoplace yes) (effects (font (size 1.27 1.27))))
+            (property "Footprint" "Pkg:Chip" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+            (property "Datasheet" "http://ds" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+            (property "Vendor" "ACME" (at 2 4 0) (effects (font (size 0.8 0.8))))
+            (property "Vendor" "twin" (at 2 5 0))
+            (property private "Secret" "s" (at 0 0 0))
+            (property "ki_keywords" "a b" (at 0 0 0))
+            (property "ki_description" "old style" (at 0 0 0))
+            (property "ki_fp_filters" "SOIC* DIP*" (at 0 0 0))
+            (property "ki_locked" "" (at 0 0 0)))"#;
+        let sym = &parse_library_symbols(text).unwrap().symbols[0];
+        assert_eq!((sym.reference_prefix.as_str(), sym.datasheet.as_str(), sym.keywords.as_str()), ("IC", "http://ds", "a b"));
+        assert_eq!(sym.description, "old style", "a file of KiCad 7 kept the description in ki_description");
+        assert_eq!(sym.footprint_filters, ["SOIC*", "DIP*"]);
+        let r = sym.field("Reference").unwrap();
+        assert_eq!((r.at.x, r.at.y, r.angle_deg, r.size_mm, r.italic, r.h_align), (-1.5, 3.0, 90.0, 1.5, true, FieldHAlign::Right));
+        let v = sym.field("Value").unwrap();
+        assert!(v.show_name && v.do_not_autoplace && !v.hidden);
+        assert!(sym.field("Footprint").unwrap().hidden, "(hide yes) as a form of the property");
+        assert!(sym.field("Datasheet").unwrap().hidden, "(hide yes) among the effects");
+        let users: Vec<(String, String)> = sym.user_fields().into_iter().map(|f| (f.name, f.text)).collect();
+        assert_eq!(users, [("Vendor".to_string(), "ACME".to_string()), ("Vendor_1".to_string(), "twin".to_string()), ("Secret".to_string(), "s".to_string())], "a second Vendor is renamed Vendor_1; private is dropped; the ki_ properties are no fields");
+    }
+
+    #[test]
+    fn a_derived_symbol_is_written_as_kicad_writes_it_and_reads_back_the_same() {
+        let mut base = LibrarySymbol { lib_id: "Test:Base".into(), reference_prefix: "U".into(), pins: vec![pin("1", 1, 1, false)], ..LibrarySymbol::default() };
+        base.assign_missing_ids();
+        let mut child = LibrarySymbol { lib_id: "Test:Child".into(), extends: Some("Test:Base".into()), keywords: "kw".into(), ..LibrarySymbol::default() };
+        let mut fields = child.all_fields();
+        fields[1].text = "CHILD".into();
+        fields[1].at = SPoint { x: 1.5, y: -2.5 };
+        fields[1].show_name = true;
+        fields[3].text = "http://child".into();
+        fields.push(LibrarySymbolField { name: "MPN".into(), text: "X-9".into(), hidden: true, bold: true, h_align: FieldHAlign::Right, ..Default::default() });
+        child.set_fields(fields);
+        child.reference_prefix.clear();
+        let text = export_kicad_sym_library(&[&base, &child]);
+        let block = &text[text.find("(symbol \"Child\"").unwrap()..];
+        assert!(block.starts_with("(symbol \"Child\" (extends \"Base\")"), "KiCad's own `(symbol \"Name\" (extends \"Parent\")`: {block}");
+        assert!(!block.contains("_1_1") && !block.contains("(pin "), "no drawing under a derived symbol");
+        assert!(!block.contains("pin_names") && !block.contains("in_bom"), "no root options either: they are the root's");
+        assert!(block.contains("(property \"Value\" \"CHILD\" (at 1.5 -2.5 0) (show_name yes)"), "{block}");
+        assert!(block.contains("(property \"MPN\" \"X-9\" (at 0 0 0) (effects (font (size 1.27 1.27) bold) (justify right) (hide yes)))"), "{block}");
+        assert!(block.contains("(property \"ki_keywords\" \"kw\""));
+
+        let parsed = parse_library_symbols(&text).unwrap();
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        assert_eq!(parsed.symbols.iter().map(|s| s.lib_id.as_str()).collect::<Vec<_>>(), ["Base", "Child"]);
+        let back = &parsed.symbols[1];
+        assert_eq!(back.extends.as_deref(), Some("Base"), "the file names the parent by its bare name: the library the symbol lands in is the caller's");
+        assert_eq!((back.keywords.as_str(), back.datasheet.as_str()), ("kw", "http://child"));
+        assert_eq!(back.field("Value").unwrap().at.y, -2.5);
+        assert_eq!(back.field("MPN").unwrap().h_align, FieldHAlign::Right);
+        assert_eq!(back.reference_prefix, "", "an empty Reference of a derived symbol stays empty: it is the parent's");
+        // and writing what was read gives the same text again
+        let again = export_kicad_sym_library(&[&parsed.symbols[0], &parsed.symbols[1]]);
+        assert_eq!(again.replace("\"Base\"", "\"Test:Base\""), text.replace("\"Base\"", "\"Test:Base\""), "{again}\n---\n{text}");
+    }
+
+    #[test]
+    fn the_fields_of_a_root_symbol_round_trip_with_their_layout() {
+        let mut sym = LibrarySymbol { lib_id: "Test:R".into(), reference_prefix: "R".into(), datasheet: "http://r".into(), description: "a resistor".into(), ..LibrarySymbol::default() };
+        let mut f = sym.all_fields();
+        f[0].at = SPoint { x: 2.032, y: 0.0 };
+        f[0].angle_deg = 90.0;
+        f[1].text = "10k".into();
+        f[1].at = SPoint { x: -2.0, y: 0.0 };
+        f[1].v_align = FieldVAlign::Top;
+        f[2].text = "Resistor_SMD:R_0603".into();
+        f.push(LibrarySymbolField { name: "Tolerance".into(), text: "1%".into(), at: SPoint { x: 0.0, y: -5.0 }, size_mm: 1.0, italic: true, ..Default::default() });
+        sym.set_fields(f);
+        let back = &parse_library_symbols(&export_kicad_sym(&sym)).unwrap().symbols[0];
+        assert_eq!(back.all_fields(), sym.all_fields());
+        assert_eq!(back.fields, sym.fields, "the list the editor made is the list the reader makes");
     }
 
     #[test]

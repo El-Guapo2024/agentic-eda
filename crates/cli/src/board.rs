@@ -213,8 +213,10 @@ pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut C
 fn publish_overlay(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     if let Some(lib) = &design.symbol_library {
         for lib_sym in lib.symbols.iter().filter(|s| s.published) {
+            // a derived symbol is placed as the flat symbol it stands for (`LIB_SYMBOL::Flatten`: what the schematic caches); one whose parent is gone is not
+            let Ok(flat) = lib.flatten(&lib_sym.lib_id) else { continue };
             model.symbols.retain(|s| s.lib_id != lib_sym.lib_id);
-            model.symbols.push(lib_sym.to_engine_symbol());
+            model.symbols.push(flat.to_engine_symbol());
         }
     }
 }
@@ -1436,6 +1438,11 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => format!("symbol-shape move {lib_id:?} {id} --dx {dx_mm:.2} --dy {dy_mm:.2}"),
         Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, .. } => format!("symbol-shape edit {lib_id:?} {id} --width {stroke_mm:.2}"),
         Cmd::EditSymbolText { lib_id, id, text, .. } => format!("symbol-text edit {lib_id:?} {id} --content {text:?}"),
+        Cmd::DeriveSymbol { parent, lib_id, .. } => format!("symbol derive {lib_id:?} --from {parent:?}"),
+        Cmd::FlattenSymbol { lib_id } => format!("symbol flatten {lib_id:?}"),
+        Cmd::UpdateSymbolFields { lib_id, fields, .. } => format!("symbol update-fields {lib_id:?} --fields {}", fields.join(",")),
+        Cmd::SetSymbolParent { lib_id, parent } => format!("symbol set-parent {lib_id:?} {parent:?}"),
+        Cmd::EditLibrarySymbolFields { lib_id, fields } => format!("symbol fields {lib_id:?} --count {}", fields.len()),
     }
 }
 
@@ -1608,6 +1615,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::CreateFootprintArray { .. } => "footprint-array",
 
         Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
+        Cmd::DeriveSymbol { .. } | Cmd::FlattenSymbol { .. } | Cmd::UpdateSymbolFields { .. } | Cmd::SetSymbolParent { .. } | Cmd::EditLibrarySymbolFields { .. } => "symbol-derive",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
         Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } => "symbol-shape",
         Cmd::EditSymbolText { .. } => "symbol-text",

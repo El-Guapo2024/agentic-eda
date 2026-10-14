@@ -114,7 +114,11 @@ pub fn export_symbols(dir: &Path, body: &[u8]) -> Value {
     let libs = crate::library_tables::libs(dir, crate::library_index::Kind::Symbol);
     for id in ids {
         match crate::library_api::symbol_in_libs(&*libs, &design, &model, &id) {
-            Some((sym, _)) => found.push((id, sym)),
+            Some((sym, _)) => {
+                // the library the schematic's symbols are written into holds them flat, as KiCad's `ExportSymbolsToLibrary` writes the cached ones
+                let flat = design.symbol_library.as_ref().filter(|l| l.is_derived(&id)).and_then(|l| l.flatten(&id).ok()).unwrap_or(sym);
+                found.push((id, flat))
+            }
             None => skipped.push(format!("{id}: no symbol with this lib_id in the project library or anything it loads")),
         }
     }
@@ -246,6 +250,8 @@ mod tests {
             graphics: vec![],
             pins: vec![],
             published: false,
+            extends: None,
+            fields: vec![],
         };
         let (kept, clashes) = unique_by_name(vec![("A:R".into(), sym("A:R")), ("B:C".into(), sym("B:C")), ("C:R".into(), sym("C:R"))]);
         assert_eq!(kept.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), vec!["C:R", "B:C"]);

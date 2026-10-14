@@ -49,6 +49,8 @@ fn a_whole_symbol_with_graphics_reads_back_from_text_as_the_design_file_holds_it
         graphics: all_kinds(),
         pins: vec![],
         published: false,
+        extends: None,
+        fields: vec![],
     };
     // The design file is pretty-printed, so floats that are whole numbers carry a `.0`.
     let text = serde_json::to_string_pretty(&sym).unwrap();

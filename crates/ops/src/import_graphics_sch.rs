@@ -428,7 +428,7 @@ impl Board<'_> {
         if items.is_empty() {
             return Err(fail("ops_empty_import", "No graphic items found in file."));
         }
-        let sym = self.library_symbol_mut(&req.lib_id)?;
+        let sym = self.drawing_symbol_mut(&req.lib_id)?;
         sym.graphics.extend(items);
         sym.assign_missing_ids();
         Ok(())

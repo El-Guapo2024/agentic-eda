@@ -700,7 +700,13 @@ fn handle(
         ("GET", "/api/symbol") => {
             // A lib_id is `Library:Name`; the client sends it `encodeURIComponent`-escaped (`Device%3AR`).
             let lib_id = query_value(target, "lib_id");
-            let v = symbol_edit_json(dir, &lib_id).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `flatten=1`: the symbol with everything it inherits from its parents -- what the editor draws of a derived symbol
+            let v = if query_value(target, "flatten") == "1" {
+                crate::library_api::symbol_flattened(dir, &lib_id).map_err(|e| e).and_then(|s| serde_json::to_value(s).map_err(|e| vec![CheckResult::fail("board_bad_design", &lib_id, e.to_string())]))
+            } else {
+                symbol_edit_json(dir, &lib_id)
+            }
+            .unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/symbol_editor/names") => {

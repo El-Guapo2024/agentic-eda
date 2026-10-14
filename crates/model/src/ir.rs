@@ -3792,6 +3792,14 @@ pub struct LibrarySymbol {
     /// published`'s own doc describes. Starts `false`.
     #[serde(default)]
     pub published: bool,
+    /// `(extends "Parent")`: the `lib_id` of the symbol this one is derived from (`LIB_SYMBOL::SetParent`), in the same library. A derived symbol keeps no graphics or pins
+    /// of its own: [`SymbolLibrarySection::flatten`] gives the symbol with everything it inherits. See [`crate::sym_fields`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
+    /// The symbol's properties beyond the text members above: the layout of each field, `Value` and `Footprint`, and the user fields -- see [`crate::sym_fields`]. Empty for
+    /// a symbol that was never given one: it has the five mandatory fields at their default places.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<crate::sym_fields::LibrarySymbolField>,
 }
 
 impl Default for LibrarySymbol {
@@ -3814,6 +3822,8 @@ impl Default for LibrarySymbol {
             graphics: Vec::new(),
             pins: Vec::new(),
             published: false,
+            extends: None,
+            fields: Vec::new(),
         }
     }
 }

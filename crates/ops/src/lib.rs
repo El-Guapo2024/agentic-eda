@@ -59,6 +59,7 @@ pub use array::ArrayGeometry;
 mod array_numbering;
 pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
 mod fp_array;
+mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
 mod fp_models;
@@ -1647,6 +1648,56 @@ pub enum Cmd {
     /// generic `MoveSymbolGraphic` (text is still one `LibrarySymbolGraphic`
     /// entry, addressed by the same `id`).
     EditSymbolText { lib_id: String, id: String, text: String, angle_deg: f64, size_mm: f64 },
+
+    // ------------------------------------------------------- derived symbols
+    //
+    // `(extends "Parent")`: a symbol that inherits its parent's drawing and overrides its fields -- `eda_model::sym_fields`, `crates/ops/src/sym_derive.rs`.
+    /// `eeschema.SymbolLibraryControl.deriveFromExistingSymbol` (`DIALOG_LIB_NEW_SYMBOL` with a parent, `LIB_SYMBOL_LIBRARY_MANAGER::CreateSymbol`): `lib_id`, a new symbol in
+    /// `parent`'s library, derived from `parent` (a project-library entry). The five mandatory fields are copied from the parent (the Footprint and the Datasheet emptied unless
+    /// kept); `transfer_user_fields` copies its user fields too (their text emptied unless `keep_content_user_fields`). Refused when the name is taken unless `overwrite`.
+    DeriveSymbol {
+        parent: String,
+        lib_id: String,
+        #[serde(default)]
+        keep_footprint: bool,
+        #[serde(default)]
+        keep_datasheet: bool,
+        #[serde(default)]
+        transfer_user_fields: bool,
+        #[serde(default)]
+        keep_content_user_fields: bool,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// `eeschema.SymbolLibraryControl.flattenSymbol` (`SYMBOL_EDITOR_CONTROL::FlattenSymbol`): the derived symbol `lib_id` becomes the flat symbol it stands for -- the root's
+    /// drawing and everything it inherits, no parent. Refused for a symbol that is not derived.
+    FlattenSymbol { lib_id: String },
+    /// `eeschema.SymbolLibraryControl.updateSymbolFields` (`DIALOG_UPDATE_SYMBOL_FIELDS`): the fields `fields` (by name) of the derived symbol `lib_id` follow its parent's (flattened):
+    /// the text, the visibility, the sizes and styles and the places, as each box asks; `remove_extras` takes away a field the parent lacks and `reset_empty` lets an empty
+    /// parent field empty the symbol's. Refused for a symbol that is not derived ("Symbol is not derived from another symbol.").
+    UpdateSymbolFields {
+        lib_id: String,
+        fields: Vec<String>,
+        #[serde(default)]
+        remove_extras: bool,
+        #[serde(default)]
+        reset_empty: bool,
+        #[serde(default = "d_true")]
+        reset_text: bool,
+        #[serde(default = "d_true")]
+        reset_visibility: bool,
+        #[serde(default = "d_true")]
+        reset_effects: bool,
+        #[serde(default = "d_true")]
+        reset_positions: bool,
+    },
+    /// `DIALOG_LIB_SYMBOL_PROPERTIES`' "Derive from" choice: the derived symbol `lib_id` extends `parent` instead. The parent must be a symbol of the same library, not the symbol
+    /// itself and not one derived from it (that would make a cycle).
+    SetSymbolParent { lib_id: String, parent: String },
+    /// The Symbol Properties dialog's fields grid (`DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`): the symbol's fields, all at once -- the five mandatory ones and the user
+    /// fields with their text, place, size, alignment and visibility. A user field needs a name that is not taken (nor one of the `ki_` properties, which are the symbol's keywords
+    /// and footprint filters); one with neither a name nor a text is dropped.
+    EditLibrarySymbolFields { lib_id: String, fields: Vec<eda_model::sym_fields::LibrarySymbolField> },
 }
 
 /// A schematic with nothing on it: what the first schematic verb creates, and the screen a new
@@ -1795,7 +1846,12 @@ impl Cmd {
             | Cmd::DeleteSymbolGraphic { .. }
             | Cmd::MoveSymbolGraphic { .. }
             | Cmd::EditSymbolGraphic { .. }
-            | Cmd::EditSymbolText { .. } => Domain::SymbolEditor,
+            | Cmd::EditSymbolText { .. }
+            | Cmd::DeriveSymbol { .. }
+            | Cmd::FlattenSymbol { .. }
+            | Cmd::UpdateSymbolFields { .. }
+            | Cmd::SetSymbolParent { .. }
+            | Cmd::EditLibrarySymbolFields { .. } => Domain::SymbolEditor,
             _ => Domain::Pcb,
         }
     }
@@ -2023,7 +2079,12 @@ impl Cmd {
             | Cmd::DeleteSymbolGraphic { lib_id, .. }
             | Cmd::MoveSymbolGraphic { lib_id, .. }
             | Cmd::EditSymbolGraphic { lib_id, .. }
-            | Cmd::EditSymbolText { lib_id, .. } => vec![lib_id.as_str()],
+            | Cmd::EditSymbolText { lib_id, .. }
+            | Cmd::FlattenSymbol { lib_id }
+            | Cmd::UpdateSymbolFields { lib_id, .. }
+            | Cmd::SetSymbolParent { lib_id, .. }
+            | Cmd::EditLibrarySymbolFields { lib_id, .. } => vec![lib_id.as_str()],
+            Cmd::DeriveSymbol { lib_id, parent, .. } => vec![lib_id.as_str(), parent.as_str()],
         }
     }
 
@@ -2601,6 +2662,24 @@ impl<'a> Board<'a> {
             Cmd::DeleteFootprintText { footprint, id } => self.delete_footprint_text(footprint, id),
             Cmd::MoveFootprintText { footprint, id, x, y } => self.move_footprint_text(footprint, id, *x, *y),
             Cmd::CreateFootprintArray { footprint, ids, geometry, arrange, numbering } => self.create_footprint_array(footprint, ids, geometry, *arrange, numbering.as_ref()),
+            Cmd::DeriveSymbol { parent, lib_id, keep_footprint, keep_datasheet, transfer_user_fields, keep_content_user_fields, overwrite } => {
+                self.derive_symbol_verb(parent, lib_id, eda_model::sym_fields::DeriveOptions { keep_footprint: *keep_footprint, keep_datasheet: *keep_datasheet, transfer_user_fields: *transfer_user_fields, keep_content_user_fields: *keep_content_user_fields }, *overwrite)
+            }
+            Cmd::FlattenSymbol { lib_id } => self.flatten_symbol_verb(lib_id),
+            Cmd::UpdateSymbolFields { lib_id, fields, remove_extras, reset_empty, reset_text, reset_visibility, reset_effects, reset_positions } => self.update_symbol_fields_verb(
+                lib_id,
+                eda_model::sym_fields::UpdateFieldsOptions {
+                    fields: fields.iter().cloned().collect(),
+                    remove_extras: *remove_extras,
+                    reset_empty: *reset_empty,
+                    reset_text: *reset_text,
+                    reset_visibility: *reset_visibility,
+                    reset_effects: *reset_effects,
+                    reset_positions: *reset_positions,
+                },
+            ),
+            Cmd::SetSymbolParent { lib_id, parent } => self.set_symbol_parent_verb(lib_id, parent),
+            Cmd::EditLibrarySymbolFields { lib_id, fields } => self.edit_library_symbol_fields_verb(lib_id, fields),
 
             Cmd::OpenSymbolForEdit { lib_id } => self.open_symbol_for_edit(lib_id),
             Cmd::DeleteLibrarySymbol { lib_id } => self.delete_library_symbol(lib_id),
@@ -5067,6 +5146,16 @@ impl<'a> Board<'a> {
             .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])
     }
 
+    /// [`library_symbol_mut`](Self::library_symbol_mut) for an edit of the symbol's drawing -- a pin, a graphic, the anchor: refused for a derived symbol, whose graphics and pins
+    /// are its parent's (`SYMBOL_EDIT_FRAME::IsSymbolEditable`: "Symbol %s is a derived symbol. Symbol graphics will not be editable.").
+    pub(crate) fn drawing_symbol_mut(&mut self, lib_id: &str) -> Result<&mut LibrarySymbol, Vec<CheckResult>> {
+        let derived_from = self.design.symbol_library.as_ref().filter(|l| l.is_derived(lib_id)).and_then(|l| l.by_lib_id(lib_id)).and_then(|s| s.extends.clone());
+        if let Some(parent) = derived_from {
+            return Err(vec![CheckResult::fail("ops_derived_symbol", lib_id, format!("this symbol is derived from {parent}: its graphics and pins are the parent's -- edit them in the parent, or flatten the symbol first"))]);
+        }
+        self.library_symbol_mut(lib_id)
+    }
+
     fn open_symbol_for_edit(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
         if lib_id.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_symbol", "symbol", "a symbol needs a lib_id")]);
@@ -5105,10 +5194,15 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The symbol and, with it, every symbol derived from it (`LIB_BUFFER::DeleteBuffer`: "Remove all derived symbols to prevent broken inheritance").
     fn delete_library_symbol(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
-        let lib = self.design.symbol_library.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")])?;
+        if self.design.symbol_library.is_none() {
+            return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")]);
+        }
+        let gone = self.symbols_to_delete(lib_id);
+        let lib = self.design.symbol_library.as_mut().expect("checked above");
         let before = lib.symbols.len();
-        lib.symbols.retain(|s| s.lib_id != lib_id);
+        lib.symbols.retain(|s| !gone.contains(&s.lib_id));
         if lib.symbols.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the library")]);
         }
@@ -5184,20 +5278,20 @@ impl<'a> Board<'a> {
     fn add_symbol_pin(&mut self, lib_id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
         pin.id = String::new(); // ids are ours to assign, never the caller's
         Self::validate_pin(&pin)?;
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         sym.pins.push(pin);
         sym.assign_missing_ids();
         Ok(())
     }
 
     fn move_symbol_pin(&mut self, lib_id: &str, id: &str, x: f64, y: f64) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         Self::find_pin_mut(sym, id)?.at = eda_model::symbol::SPoint { x, y };
         Ok(())
     }
 
     fn delete_symbol_pin(&mut self, lib_id: &str, id: &str) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let before = sym.pins.len();
         sym.pins.retain(|p| p.id != id);
         if sym.pins.len() == before {
@@ -5209,14 +5303,14 @@ impl<'a> Board<'a> {
     fn edit_symbol_pin(&mut self, lib_id: &str, id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
         pin.id = id.to_string();
         Self::validate_pin(&pin)?;
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let slot = Self::find_pin_mut(sym, id)?;
         *slot = pin;
         Ok(())
     }
 
     fn push_pin_property(&mut self, lib_id: &str, source_pin_id: &str, field: PushPinField, body_style: Option<u32>) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let src = sym.pins.iter().find(|p| p.id == source_pin_id).cloned().ok_or_else(|| vec![CheckResult::fail("ops_unknown_pin", source_pin_id, "no pin with this id")])?;
         let shown_style = body_style.unwrap_or(src.body_style);
         for p in sym.pins.iter_mut().filter(|p| p.id != source_pin_id) {
@@ -5242,14 +5336,14 @@ impl<'a> Board<'a> {
             }
         }
         graphic.set_id(String::new());
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         sym.graphics.push(graphic);
         sym.assign_missing_ids();
         Ok(())
     }
 
     fn delete_symbol_graphic(&mut self, lib_id: &str, id: &str) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let before = sym.graphics.len();
         sym.graphics.retain(|g| g.id() != id);
         if sym.graphics.len() == before {
@@ -5263,7 +5357,7 @@ impl<'a> Board<'a> {
     }
 
     fn move_symbol_graphic(&mut self, lib_id: &str, id: &str, dx_mm: f64, dy_mm: f64) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         Self::find_symbol_graphic_mut(sym, id)?.translate(dx_mm, dy_mm);
         Ok(())
     }
@@ -5272,7 +5366,7 @@ impl<'a> Board<'a> {
         if stroke_mm < 0.0 {
             return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width cannot be negative")]);
         }
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let g = Self::find_symbol_graphic_mut(sym, id)?;
         match g {
             LibrarySymbolGraphic::Rectangle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Polyline { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Circle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Arc { stroke_mm: s, fill: f, .. } => {
@@ -5288,7 +5382,7 @@ impl<'a> Board<'a> {
         if size_mm <= 0.0 {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let g = Self::find_symbol_graphic_mut(sym, id)?;
         match g {
             LibrarySymbolGraphic::Text { text: t, angle_deg: a, size_mm: s, .. } => {
@@ -5349,6 +5443,8 @@ mod pcb_transform_tests;
 mod array_tests;
 #[cfg(test)]
 mod fp_array_tests;
+#[cfg(test)]
+mod sym_derive_tests;
 #[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]
