@@ -889,7 +889,7 @@ pub(crate) fn write_footprint(
     pads.sort_by(|a, b| a.1.number.cmp(&b.1.number));
 
     // The footprint's own clearance and zone connection (`FOOTPRINT::SetLocalClearance`, `SetLocalZoneConnection`): the
-    // facts a pad inherits. Resolved like the filler resolves them, so kicad-cli's fill and DRC see what the studio's do.
+    // facts a pad inherits. Resolved as `DRC_ENGINE::EvalZoneConnection` does, so kicad-cli's fill and DRC see what the studio shows.
     if let Some(&(first, first_pad)) = pads.first() {
         let facts = design.pad_zone_facts(&fp.id, &footprint.name, first, footprint.pads.len(), &first_pad.number);
         if let Some(c) = facts.footprint_clearance {

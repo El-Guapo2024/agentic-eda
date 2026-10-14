@@ -1973,9 +1973,9 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
 /// (`Zone::layers`: `(layers "F.Cu" "B.Cu")`, `*.Cu`, `F&B.Cu`, `*.Mask`), and a zone
 /// with no copper layer in it is a non-copper zone. This IR's `Zone` has a single
 /// outline, so a zone with several `(polygon ...)` outlines (the first is the outline,
-/// the others its holes) becomes one `Zone` per `(polygon ...)`. The stored `(filled_polygon ...)`s are not read --
-/// fills are always derived (`eda_zone_filler`), which is also what
-/// kicad-cli's own `pcb drc --refill-zones` run does. Footprint-level
+/// the others its holes) becomes one `Zone` per `(polygon ...)`. The stored `(filled_polygon ...)`s are not part of the
+/// design: the scan of the file (`eda_kicad::zone_fills::scan_zone_fills`) is handed out in [`ImportNotes::zone_fills`] and kept beside `design.json` as the board's fills (KiCad's
+/// own, as saved), which is what kicad-cli's `pcb drc --refill-zones` replaces on the next Fill All Zones. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
 fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> Vec<Zone> {
     // Board-level zones, then each footprint's own (`forEachGeometryItem`

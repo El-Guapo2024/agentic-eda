@@ -2474,8 +2474,8 @@ mod tests {
         let number_after = |key: &str| -> f64 { let i = text.find(key).unwrap_or_else(|| panic!("{key} in the file kicad-cli wrote")); text[i + key.len()..].trim_start().split(|c: char| c == ')' || c.is_whitespace()).next().unwrap().parse().unwrap() };
         assert_eq!((number_after("(dashed_line_dash_ratio"), number_after("(dashed_line_gap_ratio")), (8.0, 2.5), "kicad-cli read the ratios");
         // The offsets: kicad-cli parses `(zone_defaults (property (layer ..) (hatch_position (xy ..))))` without complaint, but at the KiCad snapshot this studio follows the parser
-        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what the filler reads, and the
-        // file writer is the only thing that fills those). The studio's filler applies them (`eda_zone_filler::hatch`), and the derived file has KiCad's own text for them.
+        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what a fill reads, and kicad-cli's
+        // refill of the derived file is what fills those). The derived file has KiCad's own text for them.
         let (_, design, model) = load(&dir).unwrap();
         let derived = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(derived.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))) (property (layer \"B.Cu\") (hatch_position (xy 0 0.7))))"), "{derived}");

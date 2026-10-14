@@ -31,8 +31,8 @@ pub(crate) struct ZoneArgs<'a> {
     pub net: usize,
     pub locked: bool,
     pub uuid: &'a str,
-    /// The fill of each layer of the zone, one ring per `(filled_polygon ..)`, in nanometres: kicad-cli's (`crate::zone_fills`) when the board has been filled by it, else the
-    /// studio's own filler's. A layer that is not here has no fill.
+    /// The fill of each layer of the zone, one ring per `(filled_polygon ..)`, in nanometres: kicad-cli's (`crate::zone_fills`), while the zone is the one it filled. A layer
+    /// that is not here has no fill.
     pub fills: &'a [(String, Vec<crate::zone_fills::KicadRing>)],
     /// `BOARD::GetEnabledLayers`: the layers the board has. The zone is written on the ones of its layer set that are in this list (`format( const ZONE* )`'s
     /// `layers &= aZone->GetBoard()->GetEnabledLayers()`); `None` is every layer.

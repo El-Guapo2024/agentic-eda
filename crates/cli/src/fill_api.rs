@@ -180,6 +180,50 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_kicad::zone_fills::{zone_signature, KicadRing, ZoneEntry};
+    use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection, Zone};
+    use eda_model::{ConstraintModel, Net};
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    fn square(id: &str, uuid: &str, layer: &str, x: i64) -> Zone {
+        let p = |x, y| Point { x, y };
+        Zone { id: id.into(), uuid: uuid.into(), net: "GND".into(), layer: layer.into(), outline: vec![p(x, 0), p(x + 10_000, 0), p(x + 10_000, 10_000), p(x, 10_000)], ..Default::default() }
+    }
+
+    /// A board directory with an intent of two nets, no part, and `zones`.
+    fn board_dir(name: &str, zones: Vec<Zone>) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("eda_fill_api_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let model = ConstraintModel { nets: vec![Net { name: "GND".into(), pins: vec![] }, Net { name: "VCC".into(), pins: vec![] }], ..Default::default() };
+        std::fs::write(dir.join("intent.yaml"), serde_yaml::to_string(&model).unwrap()).unwrap();
+        write_zones(&dir, zones);
+        std::fs::write(dir.join("board.json"), serde_json::to_string(&json!({ "intent": dir.join("intent.yaml").display().to_string(), "snap_um": 100, "spacing_um": 500 })).unwrap()).unwrap();
+        dir
+    }
+
+    fn write_zones(dir: &Path, zones: Vec<Zone>) {
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: Some(PlacementSection { outline: vec![Point { x: 0, y: 0 }, Point { x: 40_000, y: 0 }, Point { x: 40_000, y: 20_000 }, Point { x: 0, y: 20_000 }], footprints: vec![], modules: vec![] }),
+            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        std::fs::write(dir.join("design.json"), design.canonical_bytes().unwrap()).unwrap();
+    }
+
+    fn fill_of(zone: &Zone, layer: &str) -> ZoneEntry {
+        let ring = KicadRing { island: false, pts: vec![[1_000_000, 1_000_000], [9_000_000, 1_000_000], [9_000_000, 9_000_000], [1_000_000, 9_000_000]] };
+        ZoneEntry { sig: zone_signature(zone), layers: BTreeMap::from([(layer.to_string(), vec![ring])]) }
+    }
 
     #[test]
     fn a_request_names_the_zones_it_is_about_or_all_of_them() {
@@ -198,5 +242,110 @@ mod tests {
         std::fs::write(dir.join("design.json"), "{}").unwrap();
         assert_ne!(design_stamp(&dir), none);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `GET /api/fill`: a zone never filled is an outline (`filled: false`, no fragments), one kicad-cli filled has its rings in micrometres, a zone edited since is an outline again
+    /// and counts as out of date in the source, and a rule area is not in the report at all.
+    #[test]
+    fn the_report_says_which_zones_have_a_current_fill_and_leaves_rule_areas_out() {
+        let mut keepout = square("ka", "", "F.Cu", 20_000);
+        keepout.is_rule_area = true;
+        let (a, b) = (square("za", "", "F.Cu", 0), square("zb", "", "B.Cu", 0));
+        let dir = board_dir("report", vec![a.clone(), b.clone(), keepout.clone()]);
+
+        // design.json keeps its zones in a canonical order, so they are found by id.
+        let by_id = |r: &Value, id: &str| r["zones"].as_array().unwrap().iter().find(|z| z["id"] == id).cloned().unwrap_or(Value::Null);
+        let r = report(&dir, false).unwrap();
+        assert_eq!(r["source"], Value::Null, "nothing has been filled");
+        let mut ids: Vec<&str> = r["zones"].as_array().unwrap().iter().map(|z| z["id"].as_str().unwrap()).collect();
+        ids.sort();
+        assert_eq!(ids, ["za", "zb"], "the rule area has no fill, ever");
+        assert!(r["zones"].as_array().unwrap().iter().all(|z| z["filled"] == false && z["fragments"].as_array().unwrap().is_empty() && z["area_um2"] == 0.0));
+
+        let fills = KicadFills::new("kicad-cli 10.99.0".into(), "rev".into(), 2_500, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]));
+        zone_fills::store(&dir, &fills).unwrap();
+        let r = report(&dir, true).unwrap();
+        let za = by_id(&r, "za");
+        assert_eq!((za["filled"].clone(), za["fragments"][0][2].clone(), za["area_um2"].as_f64()), (json!(true), json!([9_000, 9_000]), Some(64_000_000.0)), "{za}");
+        assert_eq!(za["polys"][0]["outline"].as_array().unwrap().len(), 4, "with `polys` the unfractured islands");
+        assert_eq!(by_id(&r, "zb")["filled"], false, "zb was never filled");
+        assert_eq!(r["source"], json!({ "engine": "kicad-cli 10.99.0", "revision": "rev", "seconds": 2.5, "zones": 1, "stale": 0 }));
+
+        // Zone A is edited: its fill is no longer its own.
+        let mut edited = a.clone();
+        edited.min_thickness += 10;
+        write_zones(&dir, vec![edited, b, keepout]);
+        let r = report(&dir, false).unwrap();
+        assert_eq!(by_id(&r, "za")["filled"], false);
+        assert_eq!((r["source"]["zones"].clone(), r["source"]["stale"].clone()), (json!(0), json!(1)), "one zone out of date: {}", r["source"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// "Check zone fills before plotting" starts kicad-cli only when a pour has no current fill: a board with none, or whose pours are all current, is left alone.
+    #[test]
+    fn checking_the_zone_fills_fills_nothing_that_is_filled_or_that_has_no_zone() {
+        let none = board_dir("ensure_none", vec![]);
+        assert!(ensure_filled(&none).is_ok(), "no zone, nothing to fill");
+        let a = square("za", "", "F.Cu", 0);
+        let dir = board_dir("ensure_current", vec![a.clone()]);
+        zone_fills::store(&dir, &KicadFills::new("kicad-cli 10.99.0".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
+        assert!(ensure_filled(&dir).is_ok(), "every pour is current: kicad-cli is not started");
+        let _ = std::fs::remove_dir_all(&none);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Unfill All Zones forgets every fill; Unfill Selected Zones only the named ones.
+    #[test]
+    fn unfilling_forgets_all_the_fills_or_the_selected_zones_only() {
+        let (a, b) = (square("za", "", "F.Cu", 0), square("zb", "", "B.Cu", 0));
+        let dir = board_dir("clear", vec![a.clone(), b.clone()]);
+        let both = KicadFills::new("kicad-cli".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu")), ("zb".to_string(), fill_of(&b, "B.Cu"))]));
+        zone_fills::store(&dir, &both).unwrap();
+        assert_eq!(clear(&dir, Some(vec!["za".into()])), json!({ "ok": true }));
+        assert_eq!(cached(&dir).unwrap().zones.keys().collect::<Vec<_>>(), ["zb"]);
+        assert_eq!(clear(&dir, None), json!({ "ok": true }));
+        assert!(cached(&dir).is_none(), "Unfill All Zones leaves nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An imported board shows the fills its file was saved with: the zones are found by the uuid they had in the file, and each gets the fingerprint of the zone as imported.
+    #[test]
+    fn an_imported_boards_fills_are_filed_for_its_zones_by_the_uuid_they_had() {
+        let dir = std::env::temp_dir().join(format!("eda_fill_api_import_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (square("za", "uuid-a", "F.Cu", 0), square("zb", "uuid-b", "B.Cu", 0));
+        let design = Design {
+            schema: 1,
+            provenance: Provenance { engine_version: "t".into(), intent_hash: "t".into(), seed: 0, stage_hashes: vec![] },
+            schematic: None,
+            nets: None,
+            placement: None,
+            routing: Some(RoutingSection { tracks: vec![], vias: vec![], zones: vec![a.clone(), b.clone()], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+            drawings: None,
+            footprint_library: None,
+            sheet_contents: None,
+            bus_aliases: vec![],
+            symbol_library: None,
+        };
+        let scanned = vec![
+            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1_000_000, 0], [1_000_000, 1_000_000]] },
+            ScannedFill { zone: "uuid-a".into(), layer: "F.Cu".into(), island: true, pts: vec![[5_000_000, 5_000_000], [6_000_000, 5_000_000], [6_000_000, 6_000_000]] },
+            ScannedFill { zone: "somebody else".into(), layer: "F.Cu".into(), island: false, pts: vec![[0, 0], [1, 0], [1, 1]] },
+        ];
+        keep_imported(&dir, &design, scanned);
+        let kept = cached(&dir).expect("the fills were kept");
+        assert_eq!(kept.zones.keys().collect::<Vec<_>>(), ["za"], "zb's file had no fill and the stranger's is nobody's");
+        assert_eq!(kept.rings(&a, "F.Cu").len(), 2, "both rings, one an island");
+        assert!(kept.rings(&a, "F.Cu")[1].island);
+        assert!(kept.current(&b).is_none());
+        // A file with no fill leaves nothing behind.
+        let empty = std::env::temp_dir().join(format!("eda_fill_api_import_empty_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&empty);
+        std::fs::create_dir_all(&empty).unwrap();
+        keep_imported(&empty, &design, vec![]);
+        assert!(cached(&empty).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&empty);
     }
 }

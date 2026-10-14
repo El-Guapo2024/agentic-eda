@@ -371,8 +371,8 @@ export interface RuleAreaFields {
 /**
  * `crates/model/src/ir.rs` `Zone` -- id/net/layer/outline plus the full
  * `ZONE_SETTINGS` (`ZoneSettingsFields`) and rule-area flags
- * (`RuleAreaFields`), ported into the IR so `crates/zone-filler` can read
- * them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
+ * (`RuleAreaFields`), kept in the IR and written to the derived `.kicad_pcb`, where
+ * kicad-cli's filler reads them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
  * server-side default (`Zone::default()`) once `add_zone` creates a zone,
  * so these are never actually absent from a real `/api/state` response --
  * not marked optional, same convention this file uses for every other

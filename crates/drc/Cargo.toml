@@ -2,7 +2,7 @@
 name = "eda-drc"
 version = "0.1.0"
 edition = "2021"
-description = "Geometry core (shapes, collision, clearance rules, rule expressions, rtree, zone-fill driver, stroke font) for the router, zone filler, connectivity and exporter. Not a design-rule checker: DRC is kicad-cli's."
+description = "Geometry core (shapes, collision, clearance rules, rule expressions, rtree, the copper of the zones as their fills hold it, stroke font) for the router, connectivity and exporter. Not a design-rule checker: DRC is kicad-cli's, and so is the zone fill."
 
 [dependencies]
 serde = { workspace = true }

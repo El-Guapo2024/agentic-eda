@@ -2288,6 +2288,26 @@ mod tests {
         }
     }
 
+    /// The fills kicad-cli made (Fill All Zones) are part of what the board shows: the version changes when they are kept or forgotten, so the 3D view is rebuilt from them, a
+    /// DRC run before them is out of date and the page reads them again.
+    #[test]
+    fn the_version_changes_when_the_fills_are_kept_or_forgotten() {
+        let dir = std::env::temp_dir().join(format!("eda_studio_version_fills_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("design.json"), "{}").unwrap();
+        let job: Job = Arc::new(Mutex::new(String::new()));
+        let before = version_string(&dir, &job);
+        assert_eq!(version_string(&dir, &job), before, "nothing changed");
+        let fills = eda_kicad::zone_fills::KicadFills::new("kicad-cli".into(), String::new(), 1, Default::default());
+        eda_kicad::zone_fills::store(&dir, &fills).unwrap();
+        let kept = version_string(&dir, &job);
+        assert_ne!(kept, before, "the fills were kept");
+        eda_kicad::zone_fills::forget(&dir);
+        assert_ne!(version_string(&dir, &job), kept, "and forgotten");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The 3D export draws copper on a net the netlist no longer names (a net renamed after the board was routed) instead of refusing the board.
     #[test]
     fn the_3d_export_adds_the_nets_the_copper_uses() {
