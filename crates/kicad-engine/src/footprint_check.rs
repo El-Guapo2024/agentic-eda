@@ -21,7 +21,6 @@ use eda_model::ir::{LibraryFootprint, Shape, Um};
 use eda_model::CheckResult;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
-use std::process::Command;
 
 /// The checks of the Footprint Checker, as the board DRC names them (`DRC_ITEM`'s settings keys), with the severity the Footprint Editor gives them.
 pub const CHECKS: &[(&str, &str)] = &[
@@ -329,7 +328,8 @@ pub fn run_scratch(scratch: &Scratch) -> Result<FootprintCheck, Vec<CheckResult>
         write_file(&pcb, &scratch.pcb)?;
         write_file(&dir.join("footprint_check.kicad_pro"), &scratch.project)?;
         let report = dir.join("footprint_check.drc.json");
-        let mut cmd = Command::new(&cli);
+        // The scratch project names only the checker's checks, so the run needs no library table (`cli_command`).
+        let mut cmd = super::cli_command(&cli, None);
         cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(&pcb);
         let raw = run_report(cmd, &report, "footprint_check")?;
         let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
@@ -450,6 +450,8 @@ mod tests {
             eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
             return;
         }
+        // No other test's environment (a one-second time limit) while this one runs kicad-cli.
+        let _env = crate::tests::Env::take();
         if super::super::find_cli().is_none() {
             eprintln!("skipped: kicad-cli not found");
             return;
@@ -538,7 +540,7 @@ mod tests {
             write_file(&pcb, &board.pcb).unwrap();
             write_file(&dir.join("direct.kicad_pro"), &board.project).unwrap();
             let report = dir.join("direct.json");
-            let mut cmd = Command::new(super::super::find_cli().unwrap());
+            let mut cmd = super::super::cli_command(&super::super::find_cli().unwrap(), None);
             cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(&pcb);
             run_report(cmd, &report, "direct").unwrap()
         });

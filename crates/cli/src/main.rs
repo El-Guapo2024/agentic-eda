@@ -1012,7 +1012,7 @@ fn export_fab(cx: &Ctx, design: &Design) -> Result<(), Vec<CheckResult>> {
         jobs.push(("bom", [vec!["sch".to_string(), "export".into(), "bom".into()], fab_api::bom_args(), vec!["-o".into(), bom_out]].concat(), sch));
     }
     for (what, args, input) in jobs {
-        let out = std::process::Command::new(&cli)
+        let out = eda_kicad_engine::cli_command(&cli, None)
             .args(&args)
             .arg(&input)
             .output()
