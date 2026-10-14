@@ -10,6 +10,10 @@
 //! [`normalize`] rewrites a newer tree into the older layout, so every reader of footprints in this crate works on either: the transform becomes an
 //! `(at ...)` and the zones' points go to the board frame (`TRANSFORM_TRS::Apply`: the scale, then `RotatePoint` by the orientation, then the
 //! translation). The model has no footprint scale, so a footprint whose scale is not 1:1 is read at 1:1 and its reference is returned.
+//!
+//! What says a footprint is in the new layout is its `(transform ...)` itself, not the file's `(version ...)`: the token and the library-frame storage
+//! came in the same version, and a footprint pasted from KiCad 10 reaches the importer inside a board header that [`crate::parse_pcb_clipboard`]
+//! writes with an older version.
 
 use crate::sexpr::{self, Sexpr};
 
@@ -20,12 +24,11 @@ pub const FIRST_FP_AFFINE_TRANSFORM: i64 = 20260616;
 /// board frame when the file stores them in the library frame. Returns the references of the footprints whose scale is not 1:1.
 pub fn normalize(tree: &mut Sexpr) -> Vec<String> {
     let Sexpr::List(root) = tree else { return Vec::new() };
-    let version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).unwrap_or(0.0) as i64;
     let mut scaled = Vec::new();
     for child in root.iter_mut() {
         if let Sexpr::List(fp) = child {
             if matches!(sexpr::tag(fp), Some("footprint") | Some("module")) {
-                normalize_footprint(fp, version, &mut scaled);
+                normalize_footprint(fp, &mut scaled);
             }
         }
     }
@@ -65,7 +68,7 @@ fn read_transform(t: &[Sexpr]) -> Transform {
     out
 }
 
-fn normalize_footprint(fp: &mut Vec<Sexpr>, version: i64, scaled: &mut Vec<String>) {
+fn normalize_footprint(fp: &mut Vec<Sexpr>, scaled: &mut Vec<String>) {
     let Some(idx) = fp.iter().position(|c| c.as_list().is_some_and(|l| sexpr::tag(l) == Some("transform"))) else { return };
     let t = read_transform(fp[idx].as_list().unwrap_or(&[]));
     if fp.iter().any(|c| c.as_list().is_some_and(|l| sexpr::tag(l) == Some("at"))) {
@@ -75,9 +78,6 @@ fn normalize_footprint(fp: &mut Vec<Sexpr>, version: i64, scaled: &mut Vec<Strin
     }
     if (t.scale.0 - 1.0).abs() > 1e-9 || (t.scale.1 - 1.0).abs() > 1e-9 {
         scaled.push(reference(fp));
-    }
-    if version < FIRST_FP_AFFINE_TRANSFORM {
-        return;
     }
     let origin = (t.x.parse::<f64>().unwrap_or(0.0), t.y.parse::<f64>().unwrap_or(0.0));
     let angle = t.angle.parse::<f64>().unwrap_or(0.0);
@@ -218,14 +218,26 @@ mod tests {
         assert_eq!((sexpr::num(f, 1), sexpr::num(f, 2)), (Some(10.0), Some(19.0)));
     }
 
-    #[test]
-    fn an_older_file_keeps_its_board_frame_zones() {
-        let mut tree = parse(r#"(kicad_pcb (version 20260101) (footprint "X" (transform (translate 10 20) (rotate 90)) (zone (polygon (pts (xy 1 0))))))"#);
-        normalize(&mut tree);
+    fn first_zone_point(tree: &Sexpr) -> (Option<f64>, Option<f64>) {
         let fp = sexpr::find(tree.as_list().unwrap(), "footprint").unwrap().to_vec();
         let pts = sexpr::find(sexpr::find(sexpr::find(&fp, "zone").unwrap(), "polygon").unwrap(), "pts").unwrap().to_vec();
         let p = sexpr::find(&pts, "xy").unwrap();
-        assert_eq!((sexpr::num(p, 1), sexpr::num(p, 2)), (Some(1.0), Some(0.0)));
+        (sexpr::num(p, 1), sexpr::num(p, 2))
+    }
+
+    #[test]
+    fn a_footprint_placed_with_at_keeps_its_board_frame_zones() {
+        let mut tree = parse(r#"(kicad_pcb (version 20240108) (footprint "X" (at 10 20 90) (zone (polygon (pts (xy 1 0))))))"#);
+        normalize(&mut tree);
+        assert_eq!(first_zone_point(&tree), (Some(1.0), Some(0.0)));
+    }
+
+    #[test]
+    fn a_footprint_pasted_from_kicad_10_has_its_zones_moved_whatever_the_header_says() {
+        // `parse_pcb_clipboard` puts a bare footprint on a board header of its own, with an older version than the footprint was written in.
+        let mut tree = parse(r#"(kicad_pcb (version 20241229) (generator "pcbnew") (footprint "X" (transform (translate 10 20) (rotate 90) (scale 1 1)) (zone (polygon (pts (xy 1 0))))))"#);
+        normalize(&mut tree);
+        assert_eq!(first_zone_point(&tree), (Some(10.0), Some(19.0)));
     }
 
     #[test]
