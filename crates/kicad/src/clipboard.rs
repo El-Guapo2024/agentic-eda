@@ -307,8 +307,10 @@ pub fn parse_pcb_clipboard(text: &str) -> Result<Clipboard, Vec<CheckResult>> {
     let body = text.trim_start_matches('\u{feff}').trim();
     let bare = body.starts_with("(footprint") || body.starts_with("(module");
     let wrapped = if bare {
-        // A footprint alone: put it on a board that has nothing else, as `PCB_IO_KICAD_SEXPR::Parse` hands it back without one.
-        format!("(kicad_pcb (version 20241229) (generator \"pcbnew\") {body})")
+        // A footprint alone: put it on a board that has nothing else, as `PCB_IO_KICAD_SEXPR::Parse` hands it back without one. One that KiCad 10
+        // placed with a `(transform ...)` gets a header of its own format (`fp_transform`).
+        let version = if body.contains("(transform") { crate::fp_transform::FIRST_FP_AFFINE_TRANSFORM } else { 20241229 };
+        format!("(kicad_pcb (version {version}) (generator \"pcbnew\") {body})")
     } else if body.starts_with("(kicad_pcb") {
         body.to_string()
     } else {
@@ -604,6 +606,26 @@ mod tests {
         assert_eq!(clip.footprints.len(), 1);
         assert_eq!((clip.footprints[0].reference.as_str(), clip.footprints[0].at, clip.footprints[0].rot), ("C1", p(0, 0), 90_000));
         assert!(clip.footprints[0].pad_nets.is_empty());
+    }
+
+    #[test]
+    fn a_footprint_copied_in_kicad_10_99_reads_with_its_transform_and_its_own_zone() {
+        // KiCad 10.99 (file version 20260616 on) writes a footprint's place as `(transform ...)` and the footprint's own zones in its library frame.
+        let text = r#"(footprint "Test:KO" (layer "F.Cu") (uuid "44444444-4444-4444-8444-444444444444")
+            (transform (translate 0 0) (rotate -90) (scale 1 1))
+            (property "Reference" "U9" (at 0 -2 0) (layer "F.SilkS") (uuid "55555555-5555-4555-8555-555555555555") (effects (font (size 1 1) (thickness 0.15))))
+            (pad "1" smd rect (at -1 0 -90) (size 0.5 0.6) (layers "F.Cu" "F.Paste" "F.Mask") (uuid "66666666-6666-4666-8666-666666666666"))
+            (zone (net 0) (net_name "") (layer "F.Cu") (uuid "77777777-7777-4777-8777-777777777777") (hatch edge 0.5)
+                (connect_pads (clearance 0)) (min_thickness 0.25) (filled_areas_thickness no)
+                (keepout (tracks not_allowed) (vias not_allowed) (pads allowed) (copperpour not_allowed) (footprints allowed))
+                (fill (thermal_gap 0.5) (thermal_bridge_width 0.5))
+                (polygon (pts (xy 1 0) (xy 2 0) (xy 2 1) (xy 1 1)))))"#;
+        let clip = parse_pcb_clipboard(text).unwrap();
+        assert!(clip.bare_footprint);
+        assert_eq!((clip.footprints[0].reference.as_str(), clip.footprints[0].at, clip.footprints[0].rot), ("U9", p(0, 0), 90_000));
+        // `RotatePoint` by -90 takes the library point (x, y) to (-y, x) on the board.
+        let zone = clip.zones.iter().find(|z| z.parent_footprint.as_deref() == Some("U9")).expect("the footprint's zone");
+        assert_eq!(zone.outline, vec![p(0, 1_000), p(0, 2_000), p(-1_000, 2_000), p(-1_000, 1_000)]);
     }
 
     #[test]
