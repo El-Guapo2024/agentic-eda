@@ -1,15 +1,14 @@
-//! A footprint's own silkscreen, mask and copper graphics and its texts as the flattened board holds them (`DrcBoard::mask.silk`, `mask.graphics`, `copper_graphics`): from the footprint's
+//! A footprint's own silkscreen, mask and copper graphics and its texts as the flattened board holds them (`DrcBoard::mask.silk`, `mask.graphics`): from the footprint's
 //! art ([`eda_model::fp_art`]) put where the footprint is, and from its fields (the Reference, the Value and the user fields of [`eda_model::fp_edit`]), so a board made here and a board
 //! imported from KiCad are read the same way. Before, only an imported board had them (`FootprintExtra::graphics` and `texts`, board space, filled by the importer) and a board made here
 //! had an approximation of its reference label.
 //!
 //! The text shapes are the ones `eda_drc::stroke_font` lays out (`EDA_TEXT::GetEffectiveTextShape`); a graphic is `PCB_SHAPE::GetEffectiveShape` ([`crate::board::effective_shapes`]).
 
-use crate::board::{effective_shapes, footprint_text_shape, DrcCopperGraphic, DrcGraphic, DrcKnockout, DrcSilk, MaskData};
-use crate::kimath::{Seg, Shape};
+use crate::board::{effective_shapes, footprint_text_shape, DrcGraphic, DrcSilk, MaskData};
 use eda_model::fp_art::TextVars;
 use eda_model::fp_edit::{effective_reference, effective_value, FieldLayout, REFERENCE, VALUE};
-use eda_model::ir::{Design, FootprintExtra, FootprintInstance, FootprintText, Point, Shape as IrShape};
+use eda_model::ir::{Design, FootprintExtra, FootprintInstance, FootprintText, Point};
 use eda_model::{Footprint, Part};
 
 /// The text of a field laid out on the board as the importer's board-space text the DRC shapes are made from. `shown` is what it reads.
@@ -29,26 +28,14 @@ fn field_text(l: &FieldLayout, shown: &str, fp: &FootprintInstance) -> Footprint
     }
 }
 
-/// Every stroke of a shape, as the netless copper `knockoutGraphicClearance` makes of a graphic: the chains of its outline, each segment inflated by half the width.
-fn copper_strokes(shape: &IrShape) -> Option<Shape> {
-    let mut segs = Vec::new();
-    for chain in eda_model::outline::shape_chains(shape, eda_model::outline::MAX_ERROR_UM as f64) {
-        segs.extend(chain.pts.windows(2).map(|w| Seg::new(w[0], w[1])));
-        if chain.closed && chain.pts.len() > 2 {
-            segs.push(Seg::new(chain.pts[chain.pts.len() - 1], chain.pts[0]));
-        }
-    }
-    (!segs.is_empty()).then(|| Shape::Strokes { segs, r: shape.stroke_width().max(0) / 2 })
-}
-
 /// Whether this footprint's silkscreen has to be read from what the importer once kept in board space (`FootprintExtra::graphics`, `texts`): a design imported before footprints had
 /// art and fields of their own has no art and no field edit for it.
 fn legacy(design: &Design, fp: &FootprintInstance, footprint: &Footprint, extra: Option<&FootprintExtra>) -> bool {
     extra.is_some_and(|e| !e.texts.is_empty() || e.graphics.iter().any(|g| g.pad_number.is_none())) && footprint.art.is_empty() && design.footprint_edit(&fp.id).is_none()
 }
 
-/// Put the silkscreen items, the mask and silk graphics and the copper graphics of the placed footprint `fp` into `mask` and `copper`. `index` is the footprint's place in `mask.footprints`.
-pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInstance, footprint: &Footprint, extra: Option<&FootprintExtra>, index: usize, mask: &mut MaskData, copper: &mut Vec<DrcCopperGraphic>) {
+/// Put the silkscreen items and the mask and silk graphics of the placed footprint `fp` into `mask`. `index` is the footprint's place in `mask.footprints`.
+pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInstance, footprint: &Footprint, extra: Option<&FootprintExtra>, index: usize, mask: &mut MaskData) {
     if legacy(design, fp, footprint, extra) {
         if let Some(e) = extra {
             add_extra(fp, e, index, mask);
@@ -68,11 +55,6 @@ pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInst
         fields.push((f.name.as_str(), f.layout.clone(), f.text.clone()));
     }
     for (name, layout, shown) in fields {
-        if layout.visible && layout.knockout && !shown.is_empty() && !layout.layer.ends_with(".Cu") {
-            if let Some(shape) = footprint_text_shape(&field_text(&layout, &shown, fp)) {
-                mask.knockouts.push(DrcKnockout { layer: layout.layer.clone(), shape });
-            }
-        }
         if !layout.visible || shown.is_empty() || !silk(&layout.layer) {
             continue;
         }
@@ -90,11 +72,6 @@ pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInst
             continue;
         }
         let text = FootprintText { text: placed.text.clone(), layer: placed.layer.clone(), at: placed.at, angle_file_mdeg: placed.angle, size: placed.size, thickness: placed.thickness, halign: placed.halign, valign: placed.valign, mirror: placed.mirror, keep_upright: placed.keep_upright, bold: placed.bold };
-        if placed.knockout && !placed.layer.ends_with(".Cu") {
-            if let Some(shape) = footprint_text_shape(&text) {
-                mask.knockouts.push(DrcKnockout { layer: placed.layer.clone(), shape });
-            }
-        }
         if !silk(&placed.layer) {
             continue;
         }
@@ -103,7 +80,7 @@ pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInst
         }
     }
 
-    // The footprint's graphics: silk (clearance, over copper), mask (openings) and copper (netless: a zone keeps clear of it).
+    // The footprint's graphics: silk (clearance, over copper) and mask (openings).
     for s in &footprint.art.shapes {
         let placed = s.placed(fp);
         let pos = placed.shape.points().first().copied().unwrap_or(Point { x: 0, y: 0 });
@@ -123,10 +100,6 @@ pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInst
                     width: placed.shape.stroke_width(),
                     pad: None,
                 });
-            } else if layer.ends_with(".Cu") {
-                if let Some(shape) = copper_strokes(&placed.shape) {
-                    copper.push(DrcCopperGraphic { id: format!("{}.c{}", fp.id, copper.len()), desc: format!("Graphic on {layer} of {}", fp.id), layer: layer.to_string(), pos, shape });
-                }
             }
         }
     }
@@ -181,7 +154,7 @@ fn add_mask_pads(fp: &FootprintInstance, e: &FootprintExtra, index: usize, mask:
 mod tests {
     use super::*;
     use eda_model::fp_art::{FpArt, FpShape, FpText};
-    use eda_model::ir::{PlacementSection, Provenance, Side};
+    use eda_model::ir::{PlacementSection, Provenance, Shape as IrShape, Side};
     use eda_model::ConstraintModel;
 
     fn p(x: i64, y: i64) -> Point {
@@ -221,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn a_footprints_art_reaches_the_silk_mask_and_copper_lists_where_it_is() {
+    fn a_footprints_art_reaches_the_silk_and_mask_lists_where_it_is() {
         let (design, model) = board(Side::Top, 0);
         let b = crate::board::build(&design, &model);
         // two silk shapes/texts of the art, plus the Reference and Value fields of the footprint (the Value is on the fab layer: not silk)
@@ -237,11 +210,6 @@ mod tests {
         // the mask rectangle
         assert_eq!(b.mask.graphics.len(), 1);
         assert_eq!((b.mask.graphics[0].layer.as_str(), b.mask.graphics[0].margin, b.mask.graphics[0].filled), ("F.Mask", Some(50), true));
-        // the copper line is netless copper the filler keeps a zone away from
-        assert_eq!(b.copper_graphics.len(), 1);
-        let g = &b.copper_graphics[0];
-        assert_eq!(g.layer, "F.Cu");
-        assert!(matches!(&g.shape, Shape::Strokes { segs, r: 150 } if segs.len() == 1 && segs[0].a == p(8_000, 13_000) && segs[0].b == p(12_000, 13_000)), "{:?}", g.shape.bbox(0));
     }
 
     #[test]
@@ -250,7 +218,6 @@ mod tests {
         let b = crate::board::build(&design, &model);
         assert!(b.mask.silk.iter().all(|s| s.layer == "B.SilkS"), "{:?}", b.mask.silk.iter().map(|s| &s.layer).collect::<Vec<_>>());
         assert_eq!(b.mask.graphics[0].layer, "B.Mask");
-        assert_eq!(b.copper_graphics[0].layer, "B.Cu");
         // x is mirrored: the line (-1 .. 1, -2) mm is at x = 11 .. 9 mm
         let line = b.mask.silk.iter().find(|s| s.is_shape).expect("the silk line");
         assert_eq!(line.pos, p(11_000, 8_000));

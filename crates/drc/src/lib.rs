@@ -1,10 +1,10 @@
 //! The geometry core other crates build on: KiCad's shapes and collision
 //! (`kimath`), the flattened board (`board`), clearance and rule resolution
-//! (`constraints`, `pcbexpr`), a spatial index (`rtree`), the zone-fill driver
-//! (`fill`, over `eda_zone_filler`), the board outline as KiCad builds it from Edge.Cuts
+//! (`constraints`, `pcbexpr`), a spatial index (`rtree`), the copper of the zones
+//! as their fills hold it (`zone_copper`: the fill is KiCad's, never made here), the board outline as KiCad builds it from Edge.Cuts
 //! (`outline`: `ConvertOutlineToPolygon`) and the stroke font (`stroke_font`).
 //!
-//! The interactive router (`eda_pns`), the zone filler, live connectivity
+//! The interactive router (`eda_pns`), live connectivity
 //! (`eda_connectivity`), the `.kicad_pcb` exporter and the renderer all use it.
 //!
 //! This crate is **not** a design-rule checker any more. DRC, ERC, plots and
@@ -16,7 +16,6 @@
 pub mod board;
 pub mod constraints;
 pub mod dru;
-pub mod fill;
 pub mod inspect;
 mod fp_art;
 pub mod kimath;
@@ -28,4 +27,6 @@ pub mod pcbexpr;
 pub mod rule_board;
 pub mod rule_item;
 pub mod rtree;
+mod shape_poly;
 pub mod stroke_font;
+pub mod zone_copper;

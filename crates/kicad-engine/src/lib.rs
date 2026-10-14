@@ -18,7 +18,8 @@
 
 pub mod footprint_check;
 
-use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
+use eda_kicad::zone_fills::KicadFills;
+use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
 use eda_model::ir::{Design, DrcExclusion};
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
@@ -284,12 +285,28 @@ pub fn file_stem(name: &str) -> String {
     if s.is_empty() || s.starts_with('.') { "board".to_string() } else { s }
 }
 
+/// The fills kicad-cli made of the board whose derived files are written into `work` (`eda_kicad::zone_fills`): found only when `work` is that board's `.kicad`
+/// folder, where they are kept (the scratch folders of the gates and of the tests belong to no board and get none).
+fn studio_zone_fills(work: &Path) -> Option<KicadFills> {
+    if work.file_name().and_then(|n| n.to_str()) != Some(".kicad") {
+        return None;
+    }
+    eda_kicad::zone_fills::load(work.parent()?)
+}
+
 /// Export the design as `<stem>.kicad_pcb` (+ project); returns the pcb path
-/// and the uuid -> our id map.
+/// and the uuid -> our id map. The zones carry the fill kicad-cli made of the board (Fill All Zones, kept beside `design.json`) for as long as they are the zones it
+/// filled; a board without one has its zones unfilled.
 fn export_board(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
+    let cache = studio_zone_fills(work);
+    export_board_with(design, model, work, stem, cache.as_ref())
+}
+
+/// [`export_board`] with the fills of the zones given.
+fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem: &str, fills: Option<&KicadFills>) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
-    let (pcb, map) = export_kicad_pcb_mapped(design, model, &ExportMeta { date: &date, title: stem })?;
+    let (pcb, map) = export_kicad_pcb_mapped_with(design, model, &ExportMeta { date: &date, title: stem }, fills)?;
     // A net class with a colour (Appearance > Net Classes) can only reach KiCad in the project file, and KiCad reads the project's classes only when the board has
     // none of its own: so then the classes move there whole, and kicad-cli judges the board by the same numbers (`eda_kicad::appearance::split_net_classes`).
     let class_colors = studio_appearance(work).map(|a| eda_kicad::appearance::class_colors(&a)).unwrap_or_default();
@@ -570,6 +587,8 @@ pub struct DrcReport {
     /// "kicad-cli 10.99.0".
     pub engine: String,
     pub zones_refilled_by_kicad: bool,
+    /// The fills kicad-cli made when the run refilled the zones first (`DrcOptions::refill_zones`): the caller keeps them beside the design.
+    pub zone_fills: Option<KicadFills>,
     pub violations: Vec<Violation>,
     pub unconnected_items: Vec<Violation>,
     /// `--schematic-parity`: the board's differences from the schematic (`DRC_TEST_PROVIDER_SCHEMATIC_PARITY`: a missing, extra or
@@ -650,7 +669,7 @@ fn run_report_with_output(cmd: Command, report: &Path, what: &str) -> Result<(Va
 /// What a `kicad-cli pcb drc` run is asked for beyond the default.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DrcOptions {
-    /// "Refill all zones before performing DRC" (`--refill-zones`): see [`drc`].
+    /// "Refill all zones before performing DRC": see [`drc`].
     pub refill_zones: bool,
     /// "Test for parity between PCB and schematic" (`--schematic-parity`): the derived schematic goes next to the derived board, where kicad-cli looks for
     /// it, and the report's `schematic_parity` holds what differs.
@@ -659,16 +678,12 @@ pub struct DrcOptions {
 
 /// `kicad-cli pcb drc` on `design` as it is.
 ///
-/// `refill_zones` (KiCad's "Refill all zones before performing DRC") is
-/// opt-in. By default KiCad judges the fills the exported board already
-/// carries -- the ones our own filler computed and the studio shows -- and
-/// that matters: kicad-cli 10.99 skips the courtyard checks
-/// (`courtyards_overlap`, `pth_inside_courtyard`, ...) on a run that
-/// refills, so a default refill would silently turn the placement gates off.
-/// A kicad-cli without `--refill-zones` (9.0) falls back to the same
-/// no-refill run. Every kicad-cli start costs a third of a second, so this
-/// neither asks for its version nor probes its options: the version comes
-/// off the report.
+/// The DRC judges the fills the exported board carries: the ones kicad-cli made when the zones were last filled (Fill All Zones, kept beside the design), or none for
+/// a zone that was never filled, as in KiCad. `refill_zones` (KiCad's "Refill all zones before performing DRC") fills them first: kicad-cli's filler runs on a copy
+/// of the board ([`refill_zones`]) and the DRC then runs on the board with that fill in it, without `--refill-zones`, which in kicad-cli 10.99 skips the courtyard
+/// checks (`courtyards_overlap`, `pth_inside_courtyard`, ...) on a run that refills. The fills come back in [`DrcReport::zone_fills`] for the caller to keep. A
+/// kicad-cli that cannot refill (9.0) gives the DRC of the board as it is. Every kicad-cli start costs a third of a second, so this neither asks for its version nor
+/// probes its options: the version comes off the report.
 pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: bool) -> Result<DrcReport, Vec<CheckResult>> {
     drc_with(design, model, work, DrcOptions { refill_zones, schematic_parity: false })
 }
@@ -678,7 +693,19 @@ pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: 
 /// exclusions included, and each [`Violation`] says whether it is one.
 pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: DrcOptions) -> Result<DrcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
-    let (pcb, map) = export_board(design, model, work, "board")?;
+    // "Refill all zones before performing DRC": kicad-cli's filler runs first, on a copy of the board (`refill_zones`), and the DRC then judges the board with that fill
+    // in it -- not `--refill-zones` on the DRC run itself, which drops the courtyard checks. A kicad-cli that cannot refill (9.0) gives the DRC of the board as it is.
+    let refilled = if opts.refill_zones {
+        match refill_zones(design, model, work) {
+            Ok(fills) => Some(fills),
+            Err(e) if e.iter().any(|c| c.check == "kicad_cli_refill") => None,
+            Err(e) => return Err(e),
+        }
+    } else {
+        None
+    };
+    let cache = if refilled.is_none() { studio_zone_fills(work) } else { None };
+    let (pcb, map) = export_board_with(design, model, work, "board", refilled.as_ref().or(cache.as_ref()))?;
     if opts.schematic_parity {
         // kicad-cli reads the schematic next to the board (`<board stem>.kicad_sch`) to make the netlist the parity test compares with.
         if design.schematic.is_none() {
@@ -687,27 +714,13 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
         export_schematic(design, model, work, "board")?;
     }
     let report = work.join("drc.json");
-    let run = |refill: bool| {
-        let mut cmd = Command::new(&cli);
-        cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
-        if refill {
-            cmd.arg("--refill-zones");
-        }
-        if opts.schematic_parity {
-            cmd.arg("--schematic-parity");
-        }
-        cmd.arg("-o").arg(&report).arg(&pcb);
-        run_report_with_output(cmd, &report, "drc")
-    };
-    let ((raw, said), refilled) = if opts.refill_zones {
-        match run(true) {
-            Ok(raw) => (raw, true),
-            Err(e) if e.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("refill-zones"))) => (run(false)?, false),
-            Err(e) => return Err(e),
-        }
-    } else {
-        (run(false)?, false)
-    };
+    let mut cmd = Command::new(&cli);
+    cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
+    if opts.schematic_parity {
+        cmd.arg("--schematic-parity");
+    }
+    cmd.arg("-o").arg(&report).arg(&pcb);
+    let (raw, said) = run_report_with_output(cmd, &report, "drc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
     let read = |key: &str| -> Vec<Violation> {
         let mut list: Vec<Violation> = raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default();
@@ -728,13 +741,56 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
     });
     Ok(DrcReport {
         engine: format!("kicad-cli {version}"),
-        zones_refilled_by_kicad: refilled,
+        zones_refilled_by_kicad: refilled.is_some(),
+        zone_fills: refilled,
         violations: read("violations"),
         unconnected_items: read("unconnected_items"),
         schematic_parity: if opts.schematic_parity { read("schematic_parity") } else { Vec::new() },
         parity,
         ignored_checks: raw["ignored_checks"].as_array().map(|cs| cs.iter().map(IgnoredCheck::from_json).collect()).unwrap_or_default(),
     })
+}
+
+/// Fill All Zones (B) by KiCad's own filler: `kicad-cli pcb drc --refill-zones --save-board` on a copy of the derived board (`refill.kicad_pcb` beside the
+/// others in `work`, so the board the other runs read is left as it is), then the `(filled_polygon ..)` of every zone read back from the board kicad-cli
+/// saved. There is no other filler: this is what a fill is. The fills are returned for the design as it is now, each zone's with the fingerprint of the zone it was
+/// made for (`eda_kicad::zone_fills::zone_signature`); keeping them is the caller's (the studio keeps them beside `design.json`, `eda_kicad::zone_fills::store`).
+/// A board with no zone to fill does not start kicad-cli.
+///
+/// The copy starts with no fill at all (kicad-cli replaces every one), and its project ignores every DRC check, which kicad-cli then does not run: the refill is all
+/// this run is for. Its DRC report is not looked at.
+pub fn refill_zones(design: &Design, model: &ConstraintModel, work: &Path) -> Result<KicadFills, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let engine = format!("kicad-cli {}", cli_version(&cli));
+    if !design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| !z.is_rule_area && z.outline.len() >= 3)) {
+        return Ok(KicadFills::new(engine, String::new(), 0, Default::default()));
+    }
+    let started = Instant::now();
+    let stem = "refill";
+    let (pcb, map) = export_board_with(design, model, work, stem, None)?;
+    ignore_every_check(&work.join(format!("{stem}.kicad_pro")))?;
+    let report = work.join("refill.json");
+    let _ = std::fs::remove_file(&report);
+    let mut cmd = Command::new(&cli);
+    cmd.args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "json", "--units", "mm", "-o"]).arg(&report).arg(&pcb);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    // An old kicad-cli does not know the options. One that does has written the refilled board over the copy: a file of its own making, not the one we wrote.
+    let refilled = std::fs::read_to_string(&pcb).map_err(|e| fail("kicad_cli_refill", &pcb.display().to_string(), e.to_string()))?;
+    if !out.status.success() || refilled.contains("(generator \"eda-kicad\")") {
+        let why = said.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("it printed nothing");
+        return Err(fail("kicad_cli_refill", "kicad-cli", format!("kicad-cli could not refill the zones (it needs --refill-zones and --save-board): {why}")));
+    }
+    let zones = eda_kicad::zone_fills::entries_by_zone(design, eda_kicad::zone_fills::scan_zone_fills(&refilled), &map);
+    Ok(KicadFills::new(engine, String::new(), started.elapsed().as_millis() as u64, zones))
+}
+
+/// Every DRC check set to `ignore` in a derived project, so kicad-cli runs none of them.
+fn ignore_every_check(project: &Path) -> Result<(), Vec<CheckResult>> {
+    let text = std::fs::read_to_string(project).map_err(|e| fail("kicad_engine_write", &project.display().to_string(), e.to_string()))?;
+    let mut pro: Value = serde_json::from_str(&text).map_err(|e| fail("kicad_engine_write", &project.display().to_string(), e.to_string()))?;
+    pro["board"]["design_settings"]["rule_severities"] = Value::Object(eda_model::rules::DRC_CHECKS.iter().map(|(key, _)| (key.to_string(), Value::String("ignore".into()))).collect());
+    write_file(project, format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default()))
 }
 
 /// [`drc`] in a throwaway directory -- for a design that only exists in
@@ -1325,6 +1381,7 @@ mod tests {
         let rep = DrcReport {
             engine: "kicad-cli test".into(),
             zones_refilled_by_kicad: false,
+            zone_fills: None,
             violations: vec![found("clearance", &["a", "b"], false), found("clearance", &["a", "c"], false), found("annular_width", &["v"], true), found("hole_size", &["v"], false)],
             unconnected_items: vec![found("unconnected_items", &["p", "q"], false)],
             schematic_parity: vec![],

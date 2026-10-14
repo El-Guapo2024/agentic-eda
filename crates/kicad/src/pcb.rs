@@ -21,13 +21,25 @@ use crate::{fmt_mm_f, mm, sexpr_str};
 /// footprint, `REF.PAD`, shape, text; Edge.Cuts lines map to `outline`) --
 /// how a kicad-cli report is pointed back at `design.json`.
 pub fn export_kicad_pcb_mapped(design: &Design, model: &ConstraintModel, meta: &super::ExportMeta) -> Result<(String, std::collections::HashMap<String, String>), Vec<CheckResult>> {
+    export_kicad_pcb_mapped_with(design, model, meta, None)
+}
+
+/// [`export_kicad_pcb_mapped`] with the fills the zones are written with: kicad-cli's (`crate::zone_fills`), `None` for none.
+pub fn export_kicad_pcb_mapped_with(design: &Design, model: &ConstraintModel, meta: &super::ExportMeta, fills: Option<&crate::zone_fills::KicadFills>) -> Result<(String, std::collections::HashMap<String, String>), Vec<CheckResult>> {
     crate::start_uuid_map();
-    let r = export_kicad_pcb(design, model, meta);
+    let r = export_kicad_pcb_with(design, model, meta, fills);
     let map = crate::take_uuid_map();
     r.map(|s| (s, map))
 }
 
-pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super::ExportMeta) -> Result<String, Vec<CheckResult>> {
+/// The board with every zone unfilled: the fill is KiCad's (`crate::zone_fills`), made by kicad-cli, and a board that is not handed one has none to write.
+pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, meta: &super::ExportMeta) -> Result<String, Vec<CheckResult>> {
+    export_kicad_pcb_with(design, model, meta, None)
+}
+
+/// [`export_kicad_pcb`] with the fills of the zones: each zone is written with the rings kicad-cli made of it for as long as the zone is the one it filled (a zone that was
+/// edited since is written unfilled, as KiCad writes a zone it has emptied), nanometre for nanometre and with `(island yes)` where kicad-cli said so.
+pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &super::ExportMeta, fills: Option<&crate::zone_fills::KicadFills>) -> Result<String, Vec<CheckResult>> {
     let Some(pl) = &design.placement else {
         return Err(vec![CheckResult::fail("kicad.no_placement", "design", "design has no placement section")]);
     };
@@ -249,9 +261,8 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     };
 
     // ---- copper pours, rule areas, teardrops: rendered up front ----
-    // The outline is ours; so is the fill now (`eda_zone_filler`, stage 3/4 of the zone-filling port) --
-    // computed fresh here and written as `filled_polygon`, so KiCad shows (and plots/exports gerbers for) our
-    // fill directly without needing its own refill pass. A zone that belongs to a footprint (a rule area a
+    // The outline is ours; the fill is KiCad's: the rings kicad-cli made of the zone (Fill All Zones), written as `filled_polygon`, so KiCad shows (and plots/exports
+    // gerbers for) the fill it made without a refill pass of its own. A zone with none is written unfilled. A zone that belongs to a footprint (a rule area a
     // footprint carries) is written inside that footprint, where KiCad keeps it: a footprint's own rule area
     // does not test the footprint itself (`intersectsArea`'s `aArea->GetParent() == item`), so written at board
     // level it would report the footprint that owns it as a keepout violation.
@@ -259,10 +270,9 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
     if let Some(routing) = &design.routing {
         let mut zones: Vec<&Zone> = routing.zones.iter().collect();
         zones.sort_by(|a, b| (&a.net, &a.layer).cmp(&(&b.net, &b.layer)));
-        let drc_board_for_fill = eda_drc::board::build(design, model);
-        let fills = eda_drc::fill::fill_all_zones(&drc_board_for_fill, &model.board);
         // `BOARD::GetEnabledLayers`: the copper layers of the stackup and the technical and user layers Board Setup has on. A zone is written on those of its layer set.
         let enabled: std::collections::BTreeSet<String> = model.board.layers.iter().chain(model.board.layer_setup.enabled.iter()).cloned().collect();
+        let mut kept_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for z in &zones {
             if z.outline.len() < 3 {
                 continue;
@@ -271,18 +281,21 @@ pub fn export_kicad_pcb(design: &Design, model: &ConstraintModel, _meta: &super:
             // net check about it rejected the whole export with `kicad.unknown_net`. Neither has a zone on no
             // copper layer (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
             let n = if z.is_rule_area || !z.is_on_copper_layer() { 0 } else { net_of("a copper pour", &format!("{} on {}", z.net, z.layer), &z.net) };
-            // Seeded by the zone's own id: two pours on one net and layer must not share a uuid.
-            let uuid = crate::duid_for(&if z.id.is_empty() { format!("zone:{}:{}", z.net, z.layer) } else { format!("zone:{}", z.id) }, &z.id);
+            // Seeded by the zone's own id: two pours on one net and layer must not share a uuid. A zone imported from a KiCad file keeps the uuid it had there (the first zone
+            // to claim one): KiCad breaks the tie between zones of equal priority by comparing uuids (`ZONE::HigherPriority`), so a different uuid could turn one zone into the
+            // other's winner.
+            let uuid = if !z.uuid.is_empty() && kept_uuids.insert(z.uuid.clone()) {
+                crate::note_uuid(&z.uuid, &z.id);
+                z.uuid.clone()
+            } else {
+                crate::duid_for(&if z.id.is_empty() { format!("zone:{}:{}", z.net, z.layer) } else { format!("zone:{}", z.id) }, &z.id)
+            };
             written.entry(z.id.clone()).or_default().push(uuid.clone());
-            // Every disjoint fragment of the fill on each layer of the zone, as the one ring `(filled_polygon ..)` stores.
-            let layer_fills: Vec<(String, Vec<Vec<(i64, i64)>>)> = z
-                .layer_set()
-                .into_iter()
-                .filter_map(|layer| {
-                    let f = fills.get(&z.id, layer)?;
-                    Some((layer.to_string(), f.polys.iter().filter_map(|poly| poly.first()).filter(|ring| ring.len() >= 3).map(|ring| ring.iter().map(|p| (p.x, p.y)).collect()).collect()))
-                })
-                .collect();
+            // The rings kicad-cli stored for the zone on each of its layers, while the zone is the one it filled.
+            let layer_fills: Vec<(String, Vec<crate::zone_fills::KicadRing>)> = match fills {
+                Some(k) => z.layer_set().into_iter().map(|layer| (layer.to_string(), k.rings(z, layer).to_vec())).collect(),
+                None => Vec::new(),
+            };
             let mut block = String::new();
             write_zone(&mut block, z, &ZoneArgs { net: n, locked: is_locked(&z.id), uuid: &uuid, fills: &layer_fills, enabled_layers: Some(&enabled) });
             zone_blocks.push((z.parent_footprint.clone(), block));
@@ -1673,6 +1686,14 @@ mod tests {
         ]
     }
 
+    /// A made-up fill of kicad-cli's for every zone: a square ring on each layer of each (the writer puts what it is handed, whatever the ring).
+    fn kicad_fills_of(design: &Design) -> crate::zone_fills::KicadFills {
+        use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
+        let ring = KicadRing { island: false, pts: vec![[2_000_000, 2_000_000], [4_000_000, 2_000_000], [4_000_000, 4_000_000], [2_000_000, 4_000_000]] };
+        let zones = design.routing.as_ref().unwrap().zones.iter().filter(|z| !z.is_rule_area).map(|z| (z.id.clone(), ZoneEntry { sig: zone_signature(z), layers: z.layer_set().into_iter().map(|l| (l.to_string(), vec![ring.clone()])).collect() })).collect();
+        KicadFills::new("kicad-cli".into(), "r".into(), 1, zones)
+    }
+
     /// The text of the first `(zone ...)` block.
     fn first_zone(out: &str) -> &str {
         let at = out.find("\t(zone").expect("a zone block");
@@ -1722,6 +1743,40 @@ mod tests {
         // A footprint with neither writes neither.
         let plain = export_kicad_pcb(&fixture().0, &model, &meta()).unwrap();
         assert!(!plain.contains("np_thru_hole") && !plain.contains("net_tie_pad_groups"));
+    }
+
+    /// There is no filler here: a zone is written with the rings kicad-cli made of it (Fill All Zones keeps them beside the design) for as long as the zone is the one it
+    /// filled -- to the nanometre, with `(island yes)` where kicad-cli said so -- and unfilled otherwise, as KiCad writes a zone it has emptied.
+    #[test]
+    fn a_zone_is_written_with_kicad_clis_fill_while_it_is_the_zone_that_was_filled_and_unfilled_after() {
+        use crate::zone_fills::{zone_signature, KicadFills, KicadRing, ZoneEntry};
+        let (mut design, model) = fixture();
+        let zone = Zone { id: "zg".into(), net: "GND".into(), layer: "F.Cu".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
+        design.routing.as_mut().unwrap().zones = vec![zone.clone()];
+        let ring = |island: bool| KicadRing { island, pts: vec![[2_000_000, 2_000_000], [8_123_456, 2_000_000], [8_123_456, 7_654_321], [2_000_000, 7_654_321]] };
+        let entry = ZoneEntry { sig: zone_signature(&zone), layers: std::collections::BTreeMap::from([("F.Cu".to_string(), vec![ring(false), ring(true)])]) };
+        let kicad = KicadFills::new("kicad-cli 10.99.0".into(), "r1".into(), 2_500, std::collections::BTreeMap::from([("zg".to_string(), entry)]));
+
+        let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
+        let block = first_zone(&out);
+        assert_eq!(block.matches("(filled_polygon").count(), 2, "exactly kicad-cli's rings: {block}");
+        assert!(block.contains("(xy 8.123456 7.654321)"), "to the nanometre: {block}");
+        assert_eq!(block.matches("(island yes)").count(), 1, "and the island is marked");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.routing.as_ref().unwrap().zones.len(), 1, "the board with such a fill still loads with its zone");
+        assert_eq!(crate::zone_fills::scan_zone_fills(&out).len(), 2, "and the fills read back from the file");
+
+        // No fills handed over: every zone is written unfilled.
+        let plain = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(first_zone(&plain).matches("(filled_polygon").count(), 0);
+
+        // Edits elsewhere on the board leave the fill where it is (KiCad with auto-refill off); an edit to the zone itself empties it.
+        design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2_000, y: 9_000 }, Point { x: 9_000, y: 9_000 }], arc_mid_offset: None });
+        let after_a_track = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
+        assert_eq!(first_zone(&after_a_track).matches("(filled_polygon").count(), 2, "a track added since is no reason to take the copper away");
+        design.routing.as_mut().unwrap().zones[0].min_thickness += 10;
+        let edited = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad)).unwrap();
+        assert_eq!(first_zone(&edited).matches("(filled_polygon").count(), 0, "a zone edited since its fill is written without it");
     }
 
     #[test]
@@ -1790,6 +1845,9 @@ mod tests {
         let zones = &back.routing.as_ref().unwrap().zones;
         let got = zones.iter().find(|z| z.net == "GND").expect("GND zone");
         pour.id = got.id.clone();
+        // The zone comes back with the uuid it was written with (what KiCad breaks a tie of equal priorities by), which is not part of what was set.
+        assert!(!got.uuid.is_empty());
+        pour.uuid = got.uuid.clone();
         assert_eq!(*got, pour);
         assert_eq!(zones.iter().find(|z| z.net == "VIN").unwrap().pad_connection, eda_model::ir::PadConnection::ThtThermal);
         assert!(back.drawings.as_ref().unwrap().locked_ids.contains(&got.id), "the zone comes back locked");
@@ -1804,7 +1862,7 @@ mod tests {
         pour.set_layer_set(&["B.Cu", "F.Cu"]);
         assert_eq!((pour.layer.as_str(), pour.layers.clone()), ("F.Cu", vec!["F.Cu".to_string(), "B.Cu".to_string()]), "the set is kept in UI order, the front first");
         design.routing.as_mut().unwrap().zones = vec![pour.clone()];
-        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad_fills_of(&design))).unwrap();
         assert_eq!(out.matches("\t(zone").count(), 1, "one zone, not one per layer:\n{out}");
         let zone = first_zone(&out);
         assert!(zone.contains("(layers \"F.Cu\" \"B.Cu\")") && !zone.contains("(layer \"F.Cu\") (uuid"), "{zone}");
@@ -1831,7 +1889,7 @@ mod tests {
         let mut mask = Zone { id: "zm".into(), outline: square(8_000, 1_000, 6_000), ..Default::default() };
         mask.set_layer_set(&["B.Mask", "F.Mask"]);
         design.routing.as_mut().unwrap().zones = vec![silk, mask];
-        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad_fills_of(&design))).unwrap();
         let silk_block = out.split("\t(zone").skip(1).find(|z| z.contains("(layer \"F.SilkS\")")).expect("the silkscreen zone");
         assert!(!silk_block.contains("(net ") && !silk_block.contains("(net_name"), "a non-copper zone has no net, whatever its net says: {silk_block}");
         assert!(silk_block.contains("(filled_polygon") && silk_block.contains("(layer \"F.SilkS\")"), "and it is filled on its layer: {silk_block}");
@@ -1866,12 +1924,11 @@ mod tests {
     fn a_zone_on_a_four_layer_stack_keeps_its_layers_in_both_orders() {
         let (mut design, mut model) = fixture();
         model.board.layers = eda_model::rules::copper_layer_names(4);
-        // Islands kept: the inner layers have no GND pad or via of their own to hold a fill that islands are removed from.
-        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), island_removal_mode: eda_model::ir::IslandRemovalMode::Never, ..Default::default() };
+        let mut pour = Zone { id: "z4".into(), net: "GND".into(), outline: square(1_000, 1_000, 10_000), ..Default::default() };
         pour.set_layer_set(&["In2.Cu", "B.Cu", "F.Cu", "In1.Cu"]);
         assert_eq!(pour.layer_set(), vec!["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]);
         design.routing.as_mut().unwrap().zones = vec![pour];
-        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let out = export_kicad_pcb_with(&design, &model, &meta(), Some(&kicad_fills_of(&design))).unwrap();
         assert!(out.contains("(layers \"F.Cu\" \"B.Cu\" \"In1.Cu\" \"In2.Cu\")"), "{}", first_zone(&out));
         let order: Vec<&str> = first_zone(&out).lines().filter(|l| l.contains("(layer \"") && !l.contains("(zone")).map(|l| l.trim()).collect();
         assert_eq!(order, vec!["(layer \"F.Cu\")", "(layer \"B.Cu\")", "(layer \"In1.Cu\")", "(layer \"In2.Cu\")"], "one fill per layer, in file order");

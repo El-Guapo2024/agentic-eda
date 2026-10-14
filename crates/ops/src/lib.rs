@@ -3650,6 +3650,7 @@ impl<'a> Board<'a> {
             }
             let mut z = template.clone();
             z.id = String::new();
+            z.uuid.clear();
             z.outline = ring.iter().map(|p| Point { x: p.x, y: p.y }).collect();
             rt.zones.push(z);
         }

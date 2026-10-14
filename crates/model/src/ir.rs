@@ -1422,6 +1422,11 @@ pub struct Zone {
     pub net: String,
     pub layer: String,
     pub outline: Vec<Point>,
+    /// The uuid the zone had in the KiCad file it was imported from (`ZONE::m_Uuid`), empty for a zone drawn here. KiCad breaks the tie between zones of equal priority by
+    /// comparing uuids (`ZONE::HigherPriority`), so the derived board is written with it: kicad-cli's fill of the board then has the zones yielding to each other as it
+    /// did in the file the board came from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uuid: String,
     /// `ZONE::GetLayerSet()` of a zone on more than one layer (`(layers "F.Cu" "B.Cu")`): the whole set in the UI order (`LSET::UIOrder`: the copper
     /// stack from the front, then the technical layers), `layer` being its first (`ZONE::GetFirstLayer`). Empty for a zone on one layer, which `layer` names
     /// alone: a design written before zones had layer sets reads as it was. A zone whose set has no copper layer is a non-copper zone
@@ -1612,6 +1617,7 @@ impl Default for Zone {
             net: String::new(),
             layer: String::new(),
             outline: Vec::new(),
+            uuid: String::new(),
             layers: Vec::new(),
             clearance: default_zone_clearance(),
             min_thickness: default_zone_min_thickness(),

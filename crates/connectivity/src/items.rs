@@ -18,21 +18,18 @@
 //!   already carry an explicit `net: String` field, so unlike KiCad's
 //!   engine (which infers/propagates codes for items that might not have
 //!   one) there is nothing to propagate -- see the crate root docs.
-//! - **A zone is its real fill, one `CnItem` per disjoint fill fragment --
+//! - **A zone is its fill, one `CnItem` per disjoint fill fragment --
 //!   not a triangulated mesh.** `CN_ZONE_LAYER` in KiCad wraps one polygon
 //!   of an already-computed `SHAPE_POLY_SET` fill and builds an R-tree of
-//!   its fill *triangles* for collision; `eda_drc::fill::fill_all_zones`
-//!   (the `eda_zone_filler` port, run once per [`build_items`] call) gives
-//!   us the same per-fragment polygons, and an item connects to a zone when
-//!   one of its anchors lies inside one of them
-//!   (`CN_VISITOR::checkZoneItemConnection`'s own first, fast check,
+//!   its fill *triangles* for collision; the fills handed to [`build_items`]
+//!   (`eda_drc::zone_copper::ZoneCopper`: KiCad's own, made by kicad-cli and
+//!   kept beside `design.json`) give us the same per-fragment polygons, and
+//!   an item connects to a zone when one of its anchors lies inside one of
+//!   them (`CN_VISITOR::checkZoneItemConnection`'s own first, fast check,
 //!   generalised to be the *only* check here) -- no triangulation needed
-//!   since we're testing containment, not rendering. Before the zone-filling
-//!   port landed, a zone's raw `outline` stood in for its fill directly,
-//!   which over-reported connectivity everywhere a real fill would have
-//!   been narrower (thermal reliefs, clearance around other-net pads, a
-//!   fill that failed to reach every corner, islands removed entirely);
-//!   see `crates/zone-filler`'s task report for the closed gap.
+//!   since we're testing containment, not rendering. A zone with no fill
+//!   yet (never filled, or edited since) has no copper and connects
+//!   nothing, as in KiCad until the zones are filled.
 
 use std::collections::HashMap;
 
@@ -41,6 +38,7 @@ use eda_model::ir::{Design, Point, Um};
 use eda_model::{ConstraintModel, Part};
 
 use crate::geom::bbox_of;
+use eda_drc::zone_copper::ZoneCopper;
 
 /// Which board item a [`CnItem`] stands for. Carries the id strings a
 /// caller needs for reporting rather than raw indices, since `CnItem`
@@ -133,7 +131,7 @@ fn plated_through_hole_flags(model: &ConstraintModel, part: &Part) -> Vec<(bool,
 /// Build every [`CnItem`] on the board: pads (from the placement),
 /// track segments, vias and zone outlines (from the routing). `connected`
 /// is left empty; [`crate::algo::build_graph`] fills it in.
-pub fn build_items(design: &Design, model: &ConstraintModel) -> Vec<CnItem> {
+pub fn build_items(design: &Design, model: &ConstraintModel, copper: &ZoneCopper) -> Vec<CnItem> {
     let mut items = Vec::new();
     let layers = &model.board.layers;
     let last_idx = (layers.len().max(1) - 1) as i32;
@@ -198,34 +196,14 @@ pub fn build_items(design: &Design, model: &ConstraintModel) -> Vec<CnItem> {
         }
 
         if !rt.zones.is_empty() {
-            // Real fills (`eda_drc::fill::fill_all_zones`, the same
-            // `eda_zone_filler` port `eda_kicad`'s export uses) in place of
-            // the zone's raw outline -- see the module doc comment on why
-            // the outline alone used to under-report dangling items. A
-            // zone's fill is a `ShapePolySet` of possibly several disjoint,
-            // already-`Fracture()`d (one contour, no separate holes list)
-            // polygons; each becomes its own `CnItem`, exactly how KiCad's
-            // own `CN_ZONE_LAYER` is one per disjoint fill polygon too.
-            let drc_board = eda_drc::board::build(design, model);
-            let fills = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
-
             // One set of items per copper layer of a zone (`CN_ZONE_LAYER`); a non-copper zone is not in the connectivity at all.
             for z in &rt.zones {
                 for layer_name in z.copper_layers() {
                     let layer = layer_index(layers, layer_name);
-                    let fragments: Vec<Vec<Point>> = match fills.get(&z.id, layer_name) {
+                    // No fill for the zone on this layer: no copper there yet.
+                    let fragments: Vec<Vec<Point>> = match copper.get(&z.id, layer_name) {
                         Some(fill) => fill.polys.iter().filter_map(|poly| poly.first()).map(|chain| chain.iter().map(|p| Point { x: p.x, y: p.y }).collect()).collect(),
-                        // No stable id to look fills up by (e.g. not yet run
-                        // through `assign_missing_ids`): fall back to the raw
-                        // outline rather than silently dropping the zone.
-                        None if !z.id.is_empty() => Vec::new(),
-                        None => {
-                            if z.outline.len() >= 3 {
-                                vec![z.outline.clone()]
-                            } else {
-                                Vec::new()
-                            }
-                        }
+                        None => Vec::new(),
                     };
 
                     for outline in fragments {
@@ -262,7 +240,7 @@ mod tests {
     fn builds_one_item_per_pad_and_per_track_segment() {
         let (mut design, model) = two_pad_model();
         design.routing.as_mut().unwrap().tracks.push(eda_model::ir::Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 100, y: 0 }, Point { x: 100, y: 100 }], arc_mid_offset: None });
-        let items = build_items(&design, &model);
+        let items = build_items(&design, &model, &ZoneCopper::default());
         let pads = items.iter().filter(|i| matches!(i.item, ItemRef::Pad { .. })).count();
         let segs = items.iter().filter(|i| matches!(i.item, ItemRef::TrackSeg { .. })).count();
         assert_eq!(pads, 4, "2 parts x 2 pads each (0603 is a 2-pad package)");
@@ -283,7 +261,7 @@ mod tests {
         });
         model.parts[0].footprint = Some("THPAD".into());
         model.parts[0].package = Some("THPAD".into());
-        let items = build_items(&design, &model);
+        let items = build_items(&design, &model, &ZoneCopper::default());
         let pad = items.iter().find(|i| matches!(&i.item, ItemRef::Pad { reference, .. } if reference == "R1")).unwrap();
         assert_eq!(pad.layer_lo, 0);
         assert_eq!(pad.layer_hi, 1, "a 2-layer board's through-hole pad must span both layers");

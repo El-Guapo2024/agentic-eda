@@ -31,8 +31,9 @@ pub(crate) struct ZoneArgs<'a> {
     pub net: usize,
     pub locked: bool,
     pub uuid: &'a str,
-    /// The fill the studio's own filler computed on each layer of the zone, one ring per `(filled_polygon ..)`, in µm. A layer that is not here has no fill.
-    pub fills: &'a [(String, Vec<Vec<(i64, i64)>>)],
+    /// The fill of each layer of the zone, one ring per `(filled_polygon ..)`, in nanometres: kicad-cli's (`crate::zone_fills`) when the board has been filled by it, else the
+    /// studio's own filler's. A layer that is not here has no fill.
+    pub fills: &'a [(String, Vec<crate::zone_fills::KicadRing>)],
     /// `BOARD::GetEnabledLayers`: the layers the board has. The zone is written on the ones of its layer set that are in this list (`format( const ZONE* )`'s
     /// `layers &= aZone->GetBoard()->GetEnabledLayers()`); `None` is every layer.
     pub enabled_layers: Option<&'a std::collections::BTreeSet<String>>,
@@ -195,14 +196,18 @@ pub(crate) fn write_zone(out: &mut String, z: &Zone, a: &ZoneArgs) {
         for layer in layers {
             let Some((_, rings)) = a.fills.iter().find(|(l, _)| l == layer) else { continue };
             for ring in rings {
-                if ring.len() < 3 {
+                if ring.pts.len() < 3 {
                     continue;
                 }
                 writeln!(out, "\t\t(filled_polygon").unwrap();
                 writeln!(out, "\t\t\t(layer {})", sexpr_str(layer)).unwrap();
+                // `FormatBool( m_out, "island", true )`: the copper kicad-cli found no connection for.
+                if ring.island {
+                    writeln!(out, "\t\t\t(island yes)").unwrap();
+                }
                 writeln!(out, "\t\t\t(pts").unwrap();
-                for &(x, y) in ring {
-                    writeln!(out, "\t\t\t\t(xy {} {})", mm(x), mm(y)).unwrap();
+                for p in &ring.pts {
+                    writeln!(out, "\t\t\t\t(xy {} {})", crate::zone_fills::fmt_nm(p[0]), crate::zone_fills::fmt_nm(p[1])).unwrap();
                 }
                 writeln!(out, "\t\t\t)").unwrap();
                 writeln!(out, "\t\t)").unwrap();

@@ -114,6 +114,10 @@ pub struct ImportNotes {
     /// place it is at, mm (`eda_drc::outline::check_edge_cuts`).
     #[serde(default)]
     pub outline_errors: Vec<String>,
+    /// The `(filled_polygon ..)` the file stored for its zones (KiCad's own fill, as saved): not part of the design. The caller that keeps the board files
+    /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
+    #[serde(skip)]
+    pub zone_fills: Vec<crate::zone_fills::ScannedFill>,
 }
 
 /// Parse a `.kicad_pcb` file's text into our own design + constraint
@@ -146,6 +150,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
+    notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
 
     add_layers_in_use(
         &mut board.layer_setup,
@@ -2132,6 +2137,8 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         if !zone.is_on_copper_layer() {
             zone.net = String::new();
         }
+        // `ZONE::m_Uuid` (`(uuid ..)`, `(tstamp ..)` before KiCad 8): the tie between zones of equal priority is decided by it (`ZONE::HigherPriority`).
+        zone.uuid = sexpr::find(z, "uuid").or_else(|| sexpr::find(z, "tstamp")).and_then(|u| sexpr::txt(u, 1)).unwrap_or("").to_string();
         let item_ref = ItemRef::of(z);
         for outline in &outlines {
             out.push(Zone { outline: outline.clone(), ..zone.clone() });

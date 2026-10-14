@@ -523,6 +523,7 @@ impl Board<'_> {
         for (i, z) in copies.zones.iter_mut().enumerate() {
             let pts: Vec<String> = z.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
             z.id = mint("zone", format!("copy{i}|{}|{}|{}", z.net, z.layer, pts.join(";")));
+            z.uuid.clear();
             zone_ids.push(z.id.clone());
         }
         let mut shape_ids: Vec<String> = Vec::new();
