@@ -23,7 +23,7 @@
 // take plain mm numbers, matching the wire format directly).
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
-import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchLibrarySymbol, fetchSymbolEditorNames, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureSymbolInProject } from "../api/libraryClient";
 import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
@@ -75,8 +75,10 @@ export interface SymMovePreview {
 export interface SymbolEditorState {
   /** The symbol currently open, or `null` before anything has been opened this session. */
   libId: string | null;
-  /** The last successful GET /api/symbol?lib_id=... for `libId` -- raw mm/Y-up wire shape, untouched. */
+  /** The last successful GET /api/symbol?lib_id=... for `libId` -- raw mm/Y-up wire shape, untouched. For a derived symbol it is the flat symbol (everything it inherits): what is drawn. */
   symbol: LibrarySymbol | null;
+  /** A derived symbol's own entry (`extends`, its own fields); `null` for a symbol that is not derived (`symbol` is then the entry itself). */
+  derivedOwn: LibrarySymbol | null;
   error: string | null;
   view: ViewTransform;
   viewInitialized: boolean;
@@ -113,6 +115,12 @@ export interface SymbolEditorState {
   saveAs: SaveAsRequest | null;
   importRequest: ImportRequest | null;
   fieldsTableOpen: boolean;
+  /** Which symbols the fields table lists (`DIALOG_LIB_FIELDS_TABLE::SCOPE`): the library's, or the ones related to the target (its root and everything derived from it). */
+  fieldsTableScope: "library" | "related";
+  /** `deriveFromExistingSymbol`: the Derive from Existing Symbol dialog (`DIALOG_LIB_NEW_SYMBOL` with a parent) is open on this symbol. */
+  deriveRequest: { parent: string } | null;
+  /** `updateSymbolFields`: the Update Symbol Fields dialog (`DIALOG_UPDATE_SYMBOL_FIELDS`) is open on the symbol being edited. */
+  updateFieldsOpen: boolean;
   /** `placeSymbolText` / the Text tool: where the click landed, in internal µm; the Text Properties dialog asks for the text. */
   textDialog: { atUm: [number, number] } | null;
   /** The text the dialog was OK'd with, following the cursor until the click that places it (`TwoClickPlace`'s `item` while `IS_MOVING`). */
@@ -125,6 +133,7 @@ export interface SymbolEditorState {
 const initialState: SymbolEditorState = {
   libId: null,
   symbol: null,
+  derivedOwn: null,
   error: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
@@ -151,6 +160,9 @@ const initialState: SymbolEditorState = {
   saveAs: null,
   importRequest: null,
   fieldsTableOpen: false,
+  fieldsTableScope: "library",
+  deriveRequest: null,
+  updateFieldsOpen: false,
   textDialog: null,
   pendingText: null,
   lastTextAngle: 0,
@@ -159,7 +171,7 @@ const initialState: SymbolEditorState = {
 
 export type SymAction =
   | { type: "SET_LIB_ID"; libId: string | null }
-  | { type: "SYMBOL_OK"; symbol: LibrarySymbol }
+  | { type: "SYMBOL_OK"; symbol: LibrarySymbol; own?: LibrarySymbol | null }
   | { type: "SYMBOL_ERR"; message: string }
   | { type: "SET_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
@@ -187,7 +199,9 @@ export type SymAction =
   | { type: "SET_COPIED"; copied: { text: string; symbols: LibrarySymbol[] } | null }
   | { type: "SET_SAVE_AS"; request: SaveAsRequest | null }
   | { type: "SET_IMPORT_REQUEST"; request: ImportRequest | null }
-  | { type: "SET_FIELDS_TABLE_OPEN"; open: boolean }
+  | { type: "SET_FIELDS_TABLE_OPEN"; open: boolean; scope?: "library" | "related" }
+  | { type: "SET_DERIVE_REQUEST"; parent: string | null }
+  | { type: "SET_UPDATE_FIELDS_OPEN"; open: boolean }
   | { type: "SET_TEXT_DIALOG"; at: [number, number] | null }
   | { type: "SET_PENDING_TEXT"; pending: { text: string; sizeMm: number; angleDeg: number } | null }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
@@ -212,7 +226,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       };
     case "SYMBOL_OK":
       // `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()` each time a symbol is loaded: on for a multi-unit symbol.
-      return { ...state, symbol: action.symbol, error: null, syncPins: state.symbol ? state.syncPins : defaultSyncMode(action.symbol.unit_count) };
+      return { ...state, symbol: action.symbol, derivedOwn: action.own ?? null, error: null, syncPins: state.symbol ? state.syncPins : defaultSyncMode(action.symbol.unit_count) };
     case "SYMBOL_ERR":
       return { ...state, error: action.message };
     case "SET_VIEW":
@@ -274,7 +288,11 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_IMPORT_REQUEST":
       return { ...state, importRequest: action.request };
     case "SET_FIELDS_TABLE_OPEN":
-      return { ...state, fieldsTableOpen: action.open };
+      return { ...state, fieldsTableOpen: action.open, fieldsTableScope: action.scope ?? state.fieldsTableScope };
+    case "SET_DERIVE_REQUEST":
+      return { ...state, deriveRequest: action.parent ? { parent: action.parent } : null };
+    case "SET_UPDATE_FIELDS_OPEN":
+      return { ...state, updateFieldsOpen: action.open };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.at ? { atUm: action.at } : null };
     case "SET_PENDING_TEXT":
@@ -337,8 +355,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     const libId = stateRef.current.libId;
     if (!libId) return;
     try {
-      const symbol = await fetchLibrarySymbol(libId);
-      dispatch({ type: "SYMBOL_OK", symbol });
+      const { symbol, own } = await fetchSymbolForEditor(libId);
+      dispatch({ type: "SYMBOL_OK", symbol, own });
     } catch (e) {
       dispatch({ type: "SYMBOL_ERR", message: e instanceof Error ? e.message : String(e) });
     }
@@ -376,8 +394,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       dispatch({ type: "SET_LIB_ID", libId });
       await ensureSymbolInProject(libId); // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one
       await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
-      const symbol = await fetchLibrarySymbol(libId);
-      dispatch({ type: "SYMBOL_OK", symbol });
+      const { symbol, own } = await fetchSymbolForEditor(libId);
+      dispatch({ type: "SYMBOL_OK", symbol, own });
     },
     newSymbol: async () => {
       let existing: string[] = [];
@@ -393,7 +411,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         return;
       }
       dispatch({ type: "SET_LIB_ID", libId });
-      dispatch({ type: "SYMBOL_OK", symbol: await fetchLibrarySymbol(libId) });
+      const { symbol, own } = await fetchSymbolForEditor(libId);
+      dispatch({ type: "SYMBOL_OK", symbol, own });
     },
     closeSymbol: () => dispatch({ type: "SET_LIB_ID", libId: null }),
     refresh,

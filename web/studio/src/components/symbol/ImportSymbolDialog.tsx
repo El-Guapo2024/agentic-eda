@@ -45,7 +45,7 @@ export function ImportSymbolDialog() {
   const run = async (res: Record<string, Resolution>) => {
     const chosen = req.symbols.filter((s) => checked.has(s.lib_id));
     close();
-    await performImport({ api, dispatch }, req.lib, chosen, res);
+    await performImport({ api, dispatch }, req.lib, chosen, res, req.symbols);
   };
 
   /** `resolveConflicts`: the chosen symbols the destination library already has. No conflict, no second dialog. */

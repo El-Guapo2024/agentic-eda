@@ -1657,7 +1657,18 @@ export type Cmd =
   | { op: "delete_symbol_graphic"; lib_id: string; id: string }
   | { op: "move_symbol_graphic"; lib_id: string; id: string; dx_mm: Mm; dy_mm: Mm }
   | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill }
-  | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm };
+  | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm }
+  // ---------------------------------------------------------------- derived symbols
+  /** `deriveFromExistingSymbol` (`DIALOG_LIB_NEW_SYMBOL` with a parent): `lib_id`, a new symbol in the parent's library, derived from `parent`. */
+  | { op: "derive_symbol"; parent: string; lib_id: string; keep_footprint?: boolean; keep_datasheet?: boolean; transfer_user_fields?: boolean; keep_content_user_fields?: boolean; overwrite?: boolean }
+  /** `flattenSymbol`: the derived symbol becomes the flat symbol it stands for. */
+  | { op: "flatten_symbol"; lib_id: string }
+  /** `updateSymbolFields` (`DIALOG_UPDATE_SYMBOL_FIELDS`): the named fields of a derived symbol follow its parent's. `reset_*` default to true, `remove_extras` and `reset_empty` to false. */
+  | { op: "update_symbol_fields"; lib_id: string; fields: string[]; remove_extras?: boolean; reset_empty?: boolean; reset_text?: boolean; reset_visibility?: boolean; reset_effects?: boolean; reset_positions?: boolean }
+  /** Symbol Properties' "Derive from" choice. */
+  | { op: "set_symbol_parent"; lib_id: string; parent: string }
+  /** Symbol Properties' fields grid, all at once. */
+  | { op: "edit_library_symbol_fields"; lib_id: string; fields: LibrarySymbolField[] };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
@@ -2447,6 +2458,30 @@ export interface LibrarySymbolPin {
   number_size_mm: Mm | null;
 }
 
+/** `crates/model/src/sym_fields.rs` `FieldHAlign` / `FieldVAlign`: a field's `(justify ...)`. */
+export type FieldHAlign = "left" | "center" | "right";
+export type FieldVAlign = "top" | "center" | "bottom";
+
+/**
+ * `crates/model/src/sym_fields.rs` `LibrarySymbolField` -- one property of a library symbol (`SCH_FIELD` of a `LIB_SYMBOL`): `Reference`, `Value`, `Footprint`, `Datasheet`,
+ * `Description` or a user field, with the place and look `(property "Name" "text" (at x y angle) ... (effects ...))` keeps. The server leaves out what has its default (an angle
+ * of 0, a size of 1.27, nothing hidden, centred); `kicad-port/symFields.ts` puts it back.
+ */
+export interface LibrarySymbolField {
+  name: string;
+  text?: string;
+  at?: MmPoint;
+  angle_deg?: Degrees;
+  size_mm?: Mm;
+  hidden?: boolean;
+  show_name?: boolean;
+  do_not_autoplace?: boolean;
+  bold?: boolean;
+  italic?: boolean;
+  h_align?: FieldHAlign;
+  v_align?: FieldVAlign;
+}
+
 /** The fields `edit_symbol_properties` commits all at once (`dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles tabs) -- factored out so the `Cmd` variant and the Symbol Properties dialog's own form state share one field list, same pattern `FootprintPropertiesFields` already sets. */
 export interface SymbolPropertiesFields {
   reference_prefix: string;
@@ -2475,6 +2510,10 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
   graphics: LibrarySymbolGraphic[];
   pins: LibrarySymbolPin[];
   published: boolean;
+  /** `(extends "Parent")`: the `lib_id` of the symbol this one is derived from (`LIB_SYMBOL::SetParent`). A derived symbol keeps no graphics or pins of its own; `GET /api/symbol?flatten=1` gives it with everything it inherits. */
+  extends?: string | null;
+  /** The symbol's fields beyond the text members above (`crates/model/src/sym_fields.rs`): the layout of each field, `Value`, `Footprint` and the user fields. Empty for a symbol that never had one. */
+  fields?: LibrarySymbolField[];
 }
 
 /** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */
@@ -2482,6 +2521,8 @@ export interface SymbolEditorNames {
   names: string[];
   /** The `lib_id`s that are entries of the project library itself (editable in place). Absent from an older backend. */
   project?: string[];
+  /** The derived symbols of the project library, by `lib_id`, each with the `lib_id` of its parent (`(extends ...)`). */
+  derived?: Record<string, string>;
 }
 
 /** `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items, folded into one Cmd with a field selector -- see `Cmd`'s own `push_pin_property` doc. */

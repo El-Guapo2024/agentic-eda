@@ -2199,18 +2199,23 @@ fn symbol_edit_json(dir: &Path, lib_id: &str) -> Result<Value, Vec<CheckResult>>
 /// enumeration function) -- so "New Symbol" always has at least
 /// `Device:R`/`C`/`L`/`D`/`LED` to start editing from, even with no real
 /// KiCad install and nothing on the sheet yet.
-fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+pub(crate) fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let mut names: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();
     names.extend(eda_model::symbol::builtin_catalog().into_iter().map(|s| s.lib_id));
     // `project`: the entries of the project library itself -- see `footprint_library_json`.
     let mut project: Vec<String> = Vec::new();
+    // `derived`: each derived symbol of the project library with its parent -- the library tree offers Flatten and the related fields table for them
+    let mut derived = serde_json::Map::new();
     if let Some(lib) = &design.symbol_library {
         names.extend(lib.symbols.iter().map(|s| s.lib_id.clone()));
         project = lib.symbols.iter().map(|s| s.lib_id.clone()).collect();
         project.sort();
+        for s in lib.symbols.iter().filter(|s| s.extends.is_some()) {
+            derived.insert(s.lib_id.clone(), json!(s.extends));
+        }
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project, "derived": derived }))
 }
 
 /// `GET /api/symbol/export?lib_id=<id>` -- the derived, standalone

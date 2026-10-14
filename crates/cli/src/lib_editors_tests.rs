@@ -269,6 +269,28 @@ fn a_derived_symbol_is_placed_exported_and_undone_as_the_flat_symbol_it_stands_f
     assert!(design.symbol_library.as_ref().unwrap().by_lib_id("Lib:Mid").is_some());
 }
 
+/// `GET /api/symbol_editor/names` says which symbols of the project library are derived and from what -- the library tree offers Flatten Symbol and the related fields table from it --
+/// and `GET /api/symbol?flatten=1` is the symbol the editor draws.
+#[test]
+fn the_symbol_editor_names_route_says_which_symbols_are_derived_and_the_flat_route_draws_them() {
+    let dir = scratch("p17_names_derived");
+    setup(&dir);
+    symbol_chain_in(&dir);
+    let names = crate::studio::symbol_editor_names_json(&dir).unwrap();
+    assert_eq!(names["derived"]["Lib:Leaf"], "Lib:Mid");
+    assert_eq!(names["derived"]["Lib:Mid"], "Lib:Base");
+    assert!(names["derived"].get("Lib:Base").is_none(), "a root symbol is not listed");
+    let project: Vec<&str> = names["project"].as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+    assert!(project.contains(&"Lib:Base") && project.contains(&"Lib:Leaf"), "{project:?}");
+
+    let flat = crate::library_api::symbol_flattened(&dir, "Lib:Leaf").unwrap();
+    assert!(flat.extends.is_none(), "the flat symbol stands alone");
+    assert_eq!((flat.pins.len(), flat.graphics.len()), (2, 1), "and draws the root's pins and body");
+    let own = crate::library_api::symbol_any(&dir, "Lib:Leaf").unwrap().0;
+    assert_eq!(own.extends.as_deref(), Some("Lib:Mid"));
+    assert!(own.pins.is_empty() && own.graphics.is_empty(), "the symbol itself keeps no drawing");
+}
+
 /// kicad-cli's SVG plot of `symbol` in `library`, without its title line (which holds the date).
 fn plotted_symbol(work: &Path, library: &Path, symbol: &str, out_name: &str, extra: &[&str]) -> String {
     let out_dir = work.join(out_name);

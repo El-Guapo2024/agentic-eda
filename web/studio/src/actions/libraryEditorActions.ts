@@ -5,8 +5,7 @@
 // menus and hotkeys in step).
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: `pcbnew.ModuleEditor.createFootprint` (the footprint wizard), the five
-// `pcbnew.MicrowaveTool.*` (board-only footprints and custom pads), `eeschema.SymbolLibraryControl.{deriveFromExistingSymbol, flattenSymbol,
-// updateSymbolFields, showRelatedLibraryFieldsTable}` (derived symbols), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol
+// `pcbnew.MicrowaveTool.*` (board-only footprints and custom pads), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol
 // Viewer), `showHiddenFields` and `eeschema.SymbolDrawing.drawSymbolTextBox`. The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
 // board (actions/footprintCheckerActions.ts).
 import type { Dispatch } from "react";
@@ -203,8 +202,14 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
       symToast(`Synchronized Pins Mode ${st.syncPins ? "off" : "on"}`);
     })
   );
-  // Bulk Edit Symbol Fields... -- SYMBOL_EDITOR_CONTROL::ShowLibraryTable (DIALOG_LIB_FIELDS_TABLE, scope library).
-  m.set("eeschema.SymbolLibraryControl.showLibraryFieldsTable", symTab(() => ctx.symDispatch({ type: "SET_FIELDS_TABLE_OPEN", open: true })));
+  // Bulk Edit Symbol Fields... / Bulk Edit Related Symbol Fields... -- SYMBOL_EDITOR_CONTROL::ShowLibraryTable (DIALOG_LIB_FIELDS_TABLE, scope library / related symbols).
+  m.set("eeschema.SymbolLibraryControl.showLibraryFieldsTable", symTab(() => symLib.showFieldsTable(sc, "library")));
+  m.set("eeschema.SymbolLibraryControl.showRelatedLibraryFieldsTable", symTab(() => symLib.showFieldsTable(sc, "related")));
+  // Derive from Existing Symbol... / Flatten Symbol / Update Symbol Fields... -- SYMBOL_EDITOR_CONTROL::AddSymbol (CreateNewSymbol( parent )), FlattenSymbol, and
+  // SYMBOL_EDITOR_EDIT_TOOL::UpdateSymbolFields (DIALOG_UPDATE_SYMBOL_FIELDS, "Symbol is not derived from another symbol." for any other symbol).
+  m.set("eeschema.SymbolLibraryControl.deriveFromExistingSymbol", symTab(() => symLib.deriveFromExisting(sc)));
+  m.set("eeschema.SymbolLibraryControl.flattenSymbol", symTab(() => symLib.flattenSymbol(sc)));
+  m.set("eeschema.SymbolLibraryControl.updateSymbolFields", symTab(() => symLib.updateSymbolFields(sc)));
   // Symbol Properties... (File menu and tree context menu of the symbol editor) -- `symbolProperties`: the schematic tab's own handler (a placed
   // symbol's dialog) stays what it is there; on the Symbol tab it is the open symbol's library properties.
   const placedSymbolProperties = m.get("eeschema.InteractiveEdit.symbolProperties");

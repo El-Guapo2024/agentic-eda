@@ -68,7 +68,7 @@ fn resolve_footprint(model: &ConstraintModel, name: &str) -> Option<eda_model::F
 }
 
 /// A symbol by `lib_id` from the project library, else KiCad's installed libraries, else the resolved one (the board's model, the builtin table).
-fn symbol_any(dir: &Path, lib_id: &str) -> Result<(LibrarySymbol, bool), Vec<CheckResult>> {
+pub(crate) fn symbol_any(dir: &Path, lib_id: &str) -> Result<(LibrarySymbol, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     symbol_in(dir, &design, &model, lib_id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the project library or anything it loads")])
 }

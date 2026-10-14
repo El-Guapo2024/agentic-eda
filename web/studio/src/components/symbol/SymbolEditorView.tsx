@@ -14,6 +14,9 @@ import { SaveSymbolAsDialog } from "./SaveSymbolAsDialog";
 import { ImportSymbolDialog } from "./ImportSymbolDialog";
 import { LibraryFieldsTableDialog } from "./LibraryFieldsTableDialog";
 import { SymbolTextDialog } from "./SymbolTextDialog";
+import { DeriveSymbolDialog } from "./DeriveSymbolDialog";
+import { UpdateSymbolFieldsDialog } from "./UpdateSymbolFieldsDialog";
+import { DerivedSymbolBanner } from "./DerivedSymbolBanner";
 import { LibraryDialogHost } from "../library/libraryDialogs";
 import { DockColumn } from "../panels/Dock";
 import { Toolbar } from "../Toolbar";
@@ -42,6 +45,7 @@ export function SymbolEditorView() {
         <Toolbar id="options" editor="symbol" />
         <div className="editor-canvas-col">
           <SymbolEditorCanvas />
+          <DerivedSymbolBanner />
         </div>
         <Toolbar id="drawing" editor="symbol" />
       </div>
@@ -52,6 +56,8 @@ export function SymbolEditorView() {
       <ImportSymbolDialog />
       <LibraryFieldsTableDialog />
       <SymbolTextDialog />
+      <DeriveSymbolDialog />
+      <UpdateSymbolFieldsDialog />
       <LibraryDialogHost />
       {state.toast && (
         <div

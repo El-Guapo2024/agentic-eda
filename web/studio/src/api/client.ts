@@ -401,6 +401,28 @@ export async function fetchLibrarySymbol(libId: string): Promise<LibrarySymbol> 
   return withDefaults(s); // the server leaves out every field that has its default value (a unit or body style of 1, empty text fields)
 }
 
+/** `GET /api/symbol?flatten=1`: the symbol with everything it inherits from its parents (`LIB_SYMBOL::Flatten`) -- what the editor draws of a derived symbol. */
+export async function fetchLibrarySymbolFlat(libId: string): Promise<LibrarySymbol> {
+  const s = await getJson<LibrarySymbol & { error?: string }>(`/api/symbol?lib_id=${encodeURIComponent(libId)}&flatten=1`);
+  if (s.error) throw new ApiError(s.error);
+  return withDefaults(s);
+}
+
+/**
+ * The symbol open in the Symbol Editor: `symbol` is what is drawn (a derived symbol with everything it inherits), `own` the symbol's own entry when it is derived (its parent,
+ * its own fields), else null.
+ */
+export async function fetchSymbolForEditor(libId: string): Promise<{ symbol: LibrarySymbol; own: LibrarySymbol | null }> {
+  const own = await fetchLibrarySymbol(libId);
+  if (!own.extends) return { symbol: own, own: null };
+  try {
+    return { symbol: await fetchLibrarySymbolFlat(libId), own };
+  } catch {
+    // the parent is gone (a hand-edited design): show the symbol as it is, with nothing drawn
+    return { symbol: own, own };
+  }
+}
+
 export async function fetchSymbolEditorNames(): Promise<SymbolEditorNames> {
   const r = await getJson<SymbolEditorNames & { error?: string }>("/api/symbol_editor/names");
   if (r.error) throw new ApiError(r.error);
