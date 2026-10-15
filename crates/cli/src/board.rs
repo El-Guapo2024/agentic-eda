@@ -3794,10 +3794,14 @@ mod tests {
         // waived any more and kicad-cli reports the track again.
         step(&dir, Cmd::ClearDrcExclusions, false, "ui").unwrap();
         assert!(load(&dir).unwrap().1.drawings.map_or(true, |d| d.drc_exclusions.is_empty()));
+        // (a run of the studio's engine writes the derived files kicad-cli is then run on directly)
+        let cleared = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        assert_eq!((find(&cleared, "track_width")["excluded"].clone(), counts(&cleared, "track_width")), (serde_json::json!(false), 1), "the studio's report has the track again");
         assert_eq!(kicad_cli_lists(&dir, &plain, "track_width").len(), 1, "kicad-cli reports the track again");
         assert!(kicad_cli_lists(&dir, &["--severity-exclusions"], "track_width").is_empty(), "and has no excluded marker for it");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(load(&dir).unwrap().1.drawings.unwrap().drc_exclusions.len(), 2, "Undo brings the two that were left back");
+        crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
         assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "and the track is waived for kicad-cli again");
 
         // Undo takes the removal back (the via is waived again), and another Undo the exclusions.
