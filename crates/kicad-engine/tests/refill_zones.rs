@@ -12,10 +12,9 @@
 
 use eda_kicad::zone_fills::{entries_of_imported_file, scan_zone_fills};
 use eda_kicad::{import_kicad_pcb, zone_fills};
-use eda_kicad_engine::{drc, find_cli, refill_zones};
+use eda_kicad_engine::{cli_command, drc, find_cli, refill_zones};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn qa_boards_dir() -> PathBuf {
     let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data"));
@@ -52,7 +51,8 @@ fn kicad_cli_fills_the_derived_board_as_it_fills_the_original() {
         // 1. The oracle: kicad-cli refills the original board.
         let original = board.join("original.kicad_pcb");
         std::fs::write(&original, &text).unwrap();
-        let out = Command::new(&cli).args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "report", "--output"]).arg(board.join("original.report")).arg(&original).output().expect("run kicad-cli");
+        // The reference run is started as every other one is (`cli_command`: none of the user's KiCad settings), so it and the refill under test see the same KiCad.
+        let out = cli_command(&cli, None).args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "report", "--output"]).arg(board.join("original.report")).arg(&original).output().expect("run kicad-cli");
         assert!(out.status.success(), "{rel}: {}", String::from_utf8_lossy(&out.stderr));
         let mut oracle: BTreeMap<String, (f64, usize)> = BTreeMap::new();
         for f in scan_zone_fills(&std::fs::read_to_string(&original).unwrap()) {

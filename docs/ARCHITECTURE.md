@@ -94,11 +94,14 @@ never edited as masters.
     fill, as KiCad does with auto-refill off: an edit elsewhere leaves it, an
     edit to a zone empties that zone (a priority is none of them: the Zone
     Manager's OK changes priorities and puts the fills back), and a zone never
-    filled is an outline (and no copper for live connectivity). The fills are read by `GET /api/fill`
-    (canvas, 3D stand-in), the `.kicad_pcb` writer (`filled_polygon`, so the
-    DRC, the 3D render, the plots and File > Save As see them), live
-    connectivity and Cleanup Tracks (`eda_drc::zone_copper::ZoneCopper`). A
-    board imported from a `.kicad_pcb` starts with the fills it was saved with.
+    filled is an outline (and no copper for live connectivity). The fills are
+    read by `GET /api/fill` (canvas, 3D stand-in), the `.kicad_pcb` writer
+    (`filled_polygon`, so the DRC, the 3D render, the plots and File > Save As
+    see them), live connectivity and Cleanup Tracks
+    (`eda_drc::zone_copper::ZoneCopper`). A board imported from a `.kicad_pcb`
+    starts with the fills it was saved with. kicad-cli fills the board's zones
+    only (`FillAllZones` walks `board()->Zones()`): a footprint's own zone is
+    no pour to wait for.
     "Refill all zones before performing DRC" and the Plot dialog's "Check zone
     fills before plotting" fill first, on a copy, and then run the DRC or the
     export WITHOUT `--refill-zones` (kicad-cli 10.99 skips its courtyard checks

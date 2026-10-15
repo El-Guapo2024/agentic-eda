@@ -372,7 +372,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`eda_kicad::zone_fills`: nanometres, `(island yes)`; a footprint's own zones are taken out of the footprint's frame that kicad-cli 10.99.0-5334 stores them in, with the importer's `fp_transform` map). The
   fills are derived data beside `design.json` (`.kicad/zone_fills.json`), per zone with a fingerprint of the zone filled and the design revision. **Time**: a 30-part board (`examples/mcu_board_30plus.yaml`,
   placed and routed, a GND pour on both layers): 8.1 to 9.0 s with the user's footprint libraries (a DRC job does not start before the global libraries are enumerated), **1.9 to 3.3 s** with the empty settings
-  folder, the same fill; KiCad's QA boards 1.7 to 2.9 s (`issue6284`, four zones and 90 rings: 8.4 s).
+  folder, the same fill; KiCad's QA boards 1.7 to 2.9 s (`issue6284`, four zones and 90 rings: 8.4 s). kicad-cli fills the board's zones only (`ZONE_FILLER_TOOL::FillAllZones` walks `board()->Zones()`), so a
+  footprint's own zone is no pour to wait for (`zone_fills::fillable`: not "not filled", not listed by `GET /api/fill` unless a file stored a fill for it).
 - **Between fills the board shows the last fill**, as KiCad does with auto-refill off: an edit elsewhere leaves it, an edit to a zone (outline, layers, net, a setting) empties that zone (a priority is none of
   them: the Zone Manager's OK changes priorities and puts the fills back, `DIALOG_ZONE_MANAGER::OnOk`), and a zone never filled is an outline (no copper for live connectivity, the 3D stand-in and the status bar's "N zones not filled (B)"). Read by: the canvas and the 3D stand-in (`GET /api/fill`), the `.kicad_pcb` writer (so the DRC, the
   render, the plots and File > Save As carry kicad-cli's rings), live connectivity and Cleanup Tracks (`eda_drc::zone_copper::ZoneCopper`). A board imported from a `.kicad_pcb` starts with the fills it was saved with.
