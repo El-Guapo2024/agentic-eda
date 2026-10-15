@@ -12,9 +12,9 @@
 // kicad-port/cleanupFilters.ts, crates/connectivity/src/cleanup_filter.rs)
 // narrows which tracks and vias the cleanup may remove or merge; the ones it
 // skips still count as copper to the rest. "Refill zones before and after
-// cleanup" (`m_cbRefillZones`): the studio computes a zone's fill on demand,
-// so the checks always see the real one; ticked, the dialog refreshes the
-// displayed fill before the build (`CheckAllZones`) and after Update PCB
+// cleanup" (`m_cbRefillZones`): the checks see the pours as they were last
+// filled (KiCad's fill, kept beside the design); ticked, the dialog runs
+// kicad-cli's filler before the build (`CheckAllZones`) and after Update PCB
 // (`FillAllZones`), as B does.
 //
 // Not as in source: `doCleanup` clears the selection before the real run's

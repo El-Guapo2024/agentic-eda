@@ -68,6 +68,7 @@ import { SchContextMenu } from "../schematic/SchContextMenu";
 import { buildPcbMenu } from "./pcbMenuBuilder";
 import type { MenuNode } from "../../kicad/types";
 import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner } from "../../kicad-port/zonePointEditor";
+import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
@@ -596,7 +597,7 @@ export function Canvas() {
         if (mode?.mode === "cutout" && source) {
           void api.cmd({ op: "zone_cutout", id: source.id, cutout: draw.pts.map(([x, y]) => ({ x, y })) }).then(() => dispatch({ type: "SET_SELECTION", refs: [] }));
         } else if (mode?.mode === "similar" && source) {
-          void api.addZone(source.net, source.layer, draw.pts, zoneSettingsOf(source));
+          void api.addZone(source.net, source.layer, draw.pts, zoneSettingsOf(source), { layers: [...zoneLayers(source)] });
         } else {
           dispatch({ type: "SET_ZONE_PENDING", outline: draw.pts });
         }
@@ -1165,7 +1166,7 @@ export function Canvas() {
     } else if (drag.kind === "zoneCorner") {
       if (!motion?.dragging) return; // PCB_POINT_EDITOR::Main starts editing at the drag (`evt->IsDrag`), not at the press
       // `grid.BestSnapAnchor( pos, snapLayers, grid.GetItemGrid( item ), { item } )`: on the zone's layer, not onto the zone itself.
-      const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set([board?.routing?.zones.find((z) => z.id === drag.zoneId)?.layer ?? state.activeLayer ?? "F.Cu"]), category: "current", skip: new Set([drag.zoneId]) });
+      const p = snap.point("point_edit", [wx, wy], snapMods(e), { layers: new Set((([zone]) => (zone ? zoneLayers(zone) : [state.activeLayer ?? "F.Cu"]))([board?.routing?.zones.find((z) => z.id === drag.zoneId)])), category: "current", skip: new Set([drag.zoneId]) });
       const [sx, sy] = [p[0], p[1]];
       setZoneCornerPreview({ zoneId: drag.zoneId, outline: moveCorner(drag.baseOutline, drag.cornerIndex, sx, sy) });
     } else if (drag.kind === "tuneHandle") {

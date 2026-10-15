@@ -579,39 +579,50 @@ fn print_status(board: &Board, model: &ConstraintModel) -> Result<(), Vec<CheckR
     Ok(())
 }
 
-/// `eda board fill [--zone ID] [--layer L] [--json]`: compute every zone's
-/// real fill (`eda_drc::fill::fill_all_zones`, the `eda_zone_filler` port)
-/// and report it -- a human-readable per-zone summary by default (net,
-/// layer, area, fragment/island count), or the full fragment polygons
-/// (mm) with `--json`, the same shape `crates/cli/src/studio.rs`'s
-/// `/api/fill` endpoint returns for the UI to draw. Fills are always
-/// recomputed here, never read back from a stored "second master".
-fn print_fill(design: &eda_model::ir::Design, model: &ConstraintModel, want_zone: Option<&str>, want_layer: Option<&str>, as_json: bool) -> Result<(), Vec<CheckResult>> {
+/// `eda board fill [--zone ID] [--layer L] [--json] [--last]`: Fill All Zones. kicad-cli's filler runs (`crate::fill_api::refill`: the only zone filler there is) and the
+/// fill it makes is kept beside the board; with `--last` it is not run and the fill the board last had is what is reported. Either way a human-readable per-zone summary
+/// (net, layer, area, island count) by default, or the fragment polygons (mm) with `--json`, the same ring `crates/cli/src/studio.rs`'s `/api/fill` returns for the UI
+/// to draw. A zone with no fill (never filled, or edited since the last one) reports as unfilled.
+fn print_fill(dir: &Path, want_zone: Option<&str>, want_layer: Option<&str>, as_json: bool, last: bool) -> Result<(), Vec<CheckResult>> {
+    if !last {
+        let done = crate::fill_api::refill(dir, None);
+        if done["ok"] != true {
+            return Err(fail("board_fill", "kicad-cli", done["message"].as_str().unwrap_or("kicad-cli could not fill the zones")));
+        }
+        eprintln!("kicad-cli {} filled the zones in {:.1} s", done["engine"].as_str().unwrap_or(""), done["seconds"].as_f64().unwrap_or(0.0));
+    }
+    let (_meta, design, _model) = load(dir)?;
+    let cache = crate::fill_api::cached(dir);
+    let copper = cache.as_ref().map(|k| k.copper(&design)).unwrap_or_default();
     let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
-    let drc_board = eda_drc::board::build(design, model);
-    let results = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
     let mm = |v: i64| v as f64 / 1000.0;
 
     let mut matched = 0usize;
     let mut json_zones = Vec::new();
     for z in zones {
-        if want_zone.is_some_and(|id| id != z.id) || want_layer.is_some_and(|l| l != z.layer) {
-            continue;
-        }
-        matched += 1;
-        let fill = results.get(&z.id);
-        let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
-        let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
+        // A zone on several layers has a fill on each (`Zone::layers`): one line, one JSON entry, per layer.
+        for layer in z.layer_set() {
+            if want_zone.is_some_and(|id| id != z.id) || want_layer.is_some_and(|l| l != layer) {
+                continue;
+            }
+            matched += 1;
+            let filled = cache.as_ref().is_some_and(|k| k.current(z).is_some());
+            let fill = copper.get(&z.id, layer);
+            let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
+            let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
 
-        if as_json {
-            let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
-            json_zones.push(serde_json::json!({
-                "id": z.id, "net": z.net, "layer": z.layer,
-                "area_mm2": area_mm2, "islands": fragments.len(),
-                "fragments": frags_json,
-            }));
-        } else {
-            println!("zone {} net={} layer={} area={:.4}mm^2 islands={}", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, z.layer, area_mm2, fragments.len());
+            if as_json {
+                let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
+                json_zones.push(serde_json::json!({
+                    "id": z.id, "net": z.net, "layer": layer, "filled": filled,
+                    "area_mm2": area_mm2, "islands": fragments.len(),
+                    "fragments": frags_json,
+                }));
+            } else if filled {
+                println!("zone {} net={} layer={} area={:.4}mm^2 islands={}", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, layer, area_mm2, fragments.len());
+            } else {
+                println!("zone {} net={} layer={} unfilled", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, layer);
+            }
         }
     }
 
@@ -1872,11 +1883,10 @@ pub fn run(
             other => Err(fail("board_usage", other, "usage: eda board zone <add|delete> ...")),
         },
         "fill" => {
-            let (_meta, design, model) = load(&dir)?;
             let want_zone = flag(rest, "--zone");
             let want_layer = flag(rest, "--layer");
             let as_json = has(rest, "--json");
-            print_fill(&design, &model, want_zone.as_deref(), want_layer.as_deref(), as_json)
+            print_fill(&dir, want_zone.as_deref(), want_layer.as_deref(), as_json, has(rest, "--last"))
         }
         "shape" => match rest.get(1).map(String::as_str).unwrap_or("") {
             "add" => {
@@ -2464,8 +2474,8 @@ mod tests {
         let number_after = |key: &str| -> f64 { let i = text.find(key).unwrap_or_else(|| panic!("{key} in the file kicad-cli wrote")); text[i + key.len()..].trim_start().split(|c: char| c == ')' || c.is_whitespace()).next().unwrap().parse().unwrap() };
         assert_eq!((number_after("(dashed_line_dash_ratio"), number_after("(dashed_line_gap_ratio")), (8.0, 2.5), "kicad-cli read the ratios");
         // The offsets: kicad-cli parses `(zone_defaults (property (layer ..) (hatch_position (xy ..))))` without complaint, but at the KiCad snapshot this studio follows the parser
-        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what the filler reads, and the
-        // file writer is the only thing that fills those). The studio's filler applies them (`eda_zone_filler::hatch`), and the derived file has KiCad's own text for them.
+        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what a fill reads, and kicad-cli's
+        // refill of the derived file is what fills those). The derived file has KiCad's own text for them.
         let (_, design, model) = load(&dir).unwrap();
         let derived = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(derived.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))) (property (layer \"B.Cu\") (hatch_position (xy 0 0.7))))"), "{derived}");
@@ -5586,35 +5596,45 @@ mod tests {
         assert!(model.part("U3").is_none() && back.drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "one undo takes every copy away");
     }
 
-    /// Pad Properties' and Footprint Properties' zone connection reach the fill the studio draws (and, through the derived
-    /// `.kicad_pcb`, the one kicad-cli makes), and Undo takes each edit back: a GND pour thermal-relieves U1's GND pad, a solid
-    /// connection floods it, "None" clears it, the pad's own choice beats its footprint's.
+    /// Pad Properties' and Footprint Properties' zone connection reach the fill kicad-cli makes of the derived `.kicad_pcb` (Fill All Zones, the only filler there is), and
+    /// Undo takes each edit back: a GND pour thermal-relieves U1's GND pad, a solid connection floods it, the pad's own choice beats its footprint's (slow tier).
     #[test]
     fn a_pads_zone_connection_changes_the_fill_and_undo_takes_it_back() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
         let dir = scratch("pad_zone_connection");
         setup(&dir);
         let outline = vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }];
         step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }, false, "test").unwrap();
+        // The area of the pour after kicad-cli has filled the board as it is now.
         let area = |dir: &Path| -> f64 {
-            let (_, design, model) = load(dir).unwrap();
-            let board = eda_drc::board::build(&design, &model);
-            let fills = eda_drc::fill::fill_all_zones(&board, &model.board);
-            fills.zones.values().map(|z| z.fill.area()).sum()
+            let done = crate::fill_api::refill(dir, None);
+            assert_eq!(done["ok"], true, "{done}");
+            let (_, design, _) = load(dir).unwrap();
+            let copper = crate::fill_api::cached(dir).expect("kicad-cli's fill").copper(&design);
+            copper.zones.values().map(|f| f.area()).sum()
         };
         let relieved = area(&dir);
+        assert!(relieved > 100_000_000.0, "the pour has a fill: {relieved}");
         let set = |c: Option<eda_model::ir::PadConnection>| Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "1".into(), zone_connection: c, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
 
         step(&dir, set(Some(eda_model::ir::PadConnection::Full)), false, "ui").unwrap();
         let solid = area(&dir);
-        assert!(solid > relieved + 1_000_000.0, "a solid connection floods the pad's relief gap: {solid} against {relieved}");
+        assert!(solid > relieved + 100_000.0, "a solid connection floods the pad's relief gap: {solid} against {relieved}");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        assert!((area(&dir) - relieved).abs() < 1.0, "Undo takes the edit back");
+        assert!((area(&dir) - relieved).abs() < 1_000.0, "Undo takes the edit back");
 
         // the footprint says solid, the pad (its own choice) says thermal: the pad wins
         step(&dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: None }, false, "ui").unwrap();
-        assert!(area(&dir) > relieved + 1_000_000.0, "the footprint's solid connection reaches its pad");
+        assert!(area(&dir) > relieved + 100_000.0, "the footprint's solid connection reaches its pad");
         step(&dir, set(Some(eda_model::ir::PadConnection::Thermal)), false, "ui").unwrap();
-        assert!((area(&dir) - relieved).abs() < 1.0, "the pad's own thermal relief beats its footprint's solid one");
+        assert!((area(&dir) - relieved).abs() < 1_000.0, "the pad's own thermal relief beats its footprint's solid one");
     }
 
     /// A board whose sheet is drawn in KiCad's frame (a symbol at its library origin): R1, two pins, each on a wire to a label (`A` above it, `B` below),

@@ -624,6 +624,7 @@ fn edit_zone_cmd(id: String, net: &str, overrides: impl FnOnce(&mut Zone)) -> Cm
         id: z.id,
         net: z.net,
         layer: z.layer,
+        layers: if z.layers.is_empty() { None } else { Some(z.layers.clone()) },
         clearance: z.clearance,
         min_thickness: z.min_thickness,
         thermal_gap: z.thermal_gap,
@@ -678,6 +679,87 @@ fn edit_zone_sets_the_outline_smoothing_and_a_missing_one_leaves_it() {
 
     let e = b.apply(&edit_zone_cmd(id, "GND", |z| z.corner_radius = -1)).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_zone");
+}
+
+/// `ZONE_SETTINGS::m_Layers` (the dialog's layer list): a zone goes on several layers, keeps its id and its first layer, comes back to one, and an edit that does not
+/// name the set leaves a set that holds the zone's layer as it is.
+#[test]
+fn edit_zone_puts_a_zone_on_several_layers_and_back() {
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline: vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }] }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    let zone = |b: &Board<'_>| b.design().routing.as_ref().unwrap().zones[0].clone();
+
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.layers = vec!["B.Cu".into(), "F.Cu".into()])).unwrap();
+    let z = zone(&b);
+    assert_eq!((z.id.as_str(), z.layer.as_str(), z.layer_set()), (id.as_str(), "F.Cu", vec!["F.Cu", "B.Cu"]), "the set is kept in the order of the stack, the front first");
+
+    // An edit that does not send a set (an older client, or Zone Manager's priority write) leaves the set while the zone's layer is in it.
+    let mut cmd = edit_zone_cmd(id.clone(), "GND", |z| z.priority = 4);
+    if let Cmd::EditZone { layers, .. } = &mut cmd {
+        *layers = None;
+    }
+    b.apply(&cmd).unwrap();
+    assert_eq!((zone(&b).priority, zone(&b).layer_set()), (4, vec!["F.Cu", "B.Cu"]));
+
+    // ... and moves a zone that is not on that layer to it alone.
+    let mut cmd = edit_zone_cmd(id.clone(), "GND", |z| z.layer = "B.Cu".into());
+    if let Cmd::EditZone { layers, .. } = &mut cmd {
+        *layers = None;
+    }
+    b.apply(&cmd).unwrap();
+    assert_eq!(zone(&b).layer_set(), vec!["F.Cu", "B.Cu"], "B.Cu is in the set: nothing moves");
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.layers = vec!["B.Cu".into()])).unwrap();
+    let z = zone(&b);
+    assert_eq!((z.layer.as_str(), z.layers.len()), ("B.Cu", 0), "a set of one layer is the plain layer");
+
+    // The layers have to exist, and a pour is on copper or on technical layers, not both.
+    assert_eq!(b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.layers = vec!["F.Cu".into(), "In7.Cu".into()])).unwrap_err()[0].check, "ops_unknown_layer");
+    assert_eq!(b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.layers = vec!["F.Cu".into(), "F.SilkS".into()])).unwrap_err()[0].check, "ops_bad_zone");
+    // A rule area may span both (its layers are where it keeps things out).
+    b.apply(&edit_zone_cmd(id, "", |z| {
+        z.is_rule_area = true;
+        z.keepout_copper_pour = true;
+        z.layers = vec!["F.Cu".into(), "F.SilkS".into(), "B.Cu".into()];
+    }))
+    .unwrap();
+    assert_eq!(zone(&b).layer_set(), vec!["F.Cu", "B.Cu", "F.SilkS"]);
+}
+
+/// A zone on no copper layer (`fillNonCopperZone`'s): drawn on a technical layer that is on, with no net, whatever net the dialog sent.
+#[test]
+fn a_zone_can_be_on_a_technical_layer_and_has_no_net_there() {
+    let m = net_model();
+    let mut b = board(&m);
+    let outline = vec![Point { x: 0, y: 0 }, Point { x: 10_000, y: 0 }, Point { x: 10_000, y: 10_000 }];
+    b.apply(&Cmd::AddZone { net: "GND".into(), layer: "F.SilkS".into(), outline: outline.clone() }).unwrap();
+    let id = b.design().routing.as_ref().unwrap().zones[0].id.clone();
+    {
+        let z = &b.design().routing.as_ref().unwrap().zones[0];
+        assert_eq!((z.layer.as_str(), z.net.as_str(), z.is_on_copper_layer()), ("F.SilkS", "", false), "no net on a non-copper layer");
+    }
+    // A technical layer the board has turned off, and a name that is no layer, take no zone.
+    assert_eq!(b.apply(&Cmd::AddZone { net: "".into(), layer: "User.1".into(), outline: outline.clone() }).unwrap_err()[0].check, "ops_layer_off");
+    assert_eq!(b.apply(&Cmd::AddZone { net: "".into(), layer: "Nope".into(), outline: outline.clone() }).unwrap_err()[0].check, "ops_unknown_layer");
+
+    // It may have no minimum width (the mask zones of `issue22826` have none) and the spokes of a copper pour are no business of its; a pour needs both.
+    b.apply(&edit_zone_cmd(id.clone(), "", |z| {
+        z.layer = "F.SilkS".into();
+        z.min_thickness = 0;
+        z.thermal_spoke_width = 0;
+    }))
+    .unwrap();
+    assert_eq!(b.design().routing.as_ref().unwrap().zones[0].min_thickness, 0);
+    assert_eq!(b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.min_thickness = 0)).unwrap_err()[0].check, "ops_bad_zone", "a copper pour needs a minimum width");
+
+    // A dialog that sends a net for it still gets none; the same zone moved to copper takes the net.
+    b.apply(&edit_zone_cmd(id.clone(), "GND", |z| z.layers = vec!["F.SilkS".into(), "B.SilkS".into()])).unwrap();
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!((z.layer_set(), z.net.as_str()), (vec!["F.SilkS", "B.SilkS"], ""));
+    b.apply(&edit_zone_cmd(id, "GND", |z| z.layer = "F.Cu".into())).unwrap();
+    let z = &b.design().routing.as_ref().unwrap().zones[0];
+    assert_eq!((z.layer_set(), z.net.as_str()), (vec!["F.Cu"], "GND"));
 }
 
 #[test]

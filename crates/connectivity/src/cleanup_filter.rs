@@ -144,6 +144,7 @@ fn is_locked(design: &Design, id: &str) -> bool {
 mod tests {
     use super::*;
     use crate::cleanup::{compute_cleanup_filtered, CleanupKind, CleanupOptions, CleanupReport};
+    use eda_drc::zone_copper::ZoneCopper;
     use crate::tests_support::{pad_center, two_pad_model};
     use eda_model::ir::{DrawingsSection, Group, Point, Track, Via};
     use eda_model::{Net, NetClass};
@@ -193,7 +194,7 @@ mod tests {
     }
 
     fn cleanup(design: &Design, model: &ConstraintModel, opts: CleanupOptions, filter: &CleanupFilter) -> CleanupReport {
-        compute_cleanup_filtered(design, model, opts, filter)
+        compute_cleanup_filtered(design, model, &ZoneCopper::default(), opts, filter)
     }
 
     fn nulls_and_vias(design: &Design, model: &ConstraintModel, filter: &CleanupFilter) -> (Vec<String>, Vec<String>) {

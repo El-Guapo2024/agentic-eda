@@ -313,10 +313,11 @@ def render_report(conn, rt, scores):
 
     lines.append("## 3. Zone fill\n")
     lines.append(
-        "The exporter writes each zone's fill as computed by `crates/zone-filler` (the live zone filler the "
-        "studio shows), and kicad-cli judges those fills; `--refill-zones` is opt-in "
-        "(docs/ARCHITECTURE.md, \"Engines\"). The connectivity comparison above runs kicad-cli with "
-        "`--refill-zones` so a board with a pour isn't penalized for a gap that's out of scope here.\n"
+        "The zone fill is KiCad's, made by kicad-cli (`kicad-cli pcb drc --refill-zones --save-board` on a copy of "
+        "the derived board: Fill All Zones) and kept beside design.json; there is no other filler "
+        "(docs/ARCHITECTURE.md, \"Engines\"; the proof is `crates/kicad-engine/tests/refill_zones.rs`). "
+        "The connectivity comparison above gives the connectivity kicad-cli's own fill of the same board, so a "
+        "board with a pour isn't penalized for a gap that's out of scope here.\n"
     )
     lines.append("")
 

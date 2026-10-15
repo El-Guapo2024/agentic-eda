@@ -82,9 +82,15 @@ fn copper_layers(dir: &Path) -> Result<Vec<String>, String> {
 
 /// `POST /api/fab/gerbers`: `{"layers": ["F.Cu", "B.Cu", ...]}` (omitted or
 /// empty = [`default_gerber_layers`], the Plot dialog's own default
-/// checklist).
+/// checklist). `"check_zones": true` is the dialog's "Check zone fills before plotting": KiCad's filler runs first when some zone has no current fill
+/// (`crate::fill_api::ensure_filled`), so the copper plotted is the pour as it is now.
 pub fn gerbers(dir: &Path, body: &[u8]) -> Value {
     let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+    if req.get("check_zones").and_then(Value::as_bool).unwrap_or(false) {
+        if let Err(why) = crate::fill_api::ensure_filled(dir) {
+            return err(format!("Zones not filled before plotting: {why}"));
+        }
+    }
     let mut layers: Vec<String> = req.get("layers").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
     if layers.is_empty() {
         layers = match copper_layers(dir) {

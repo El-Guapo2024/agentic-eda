@@ -2,7 +2,7 @@
 // which ratsnest lines are drawn, how a net highlight is chosen and toggled back, and which zones are filled. No React, no DOM,
 // so `npm run test:unit` covers it; `actions/boardControlActions.ts` is the thin layer that reads the store and dispatches.
 
-import type { FillReport, RatsnestEdge } from "../api/types";
+import type { RatsnestEdge } from "../api/types";
 import { padIds } from "./pcbItems";
 
 // ------------------------------------------------------------------- ratsnest
@@ -139,36 +139,6 @@ export function swapHighlight(current: readonly string[], last: readonly string[
   return { current: [...last], last: [...current] };
 }
 
-// -------------------------------------------------------------------- zone fill
-
-/**
- * Which zones are filled. `null` = all of them (what Fill All and the live refresh keep), a list = only those (Draft Fill on
- * a selection): `zoneFill` itself (the last fill fetched) stays the whole report, painted only for these.
- */
-export type FilledZones = readonly string[] | null;
-
-/** The zones with a fill showing: none when nothing was ever filled (or it was just unfilled). */
-export function filledNow(all: readonly string[], filled: FilledZones, hasFill: boolean): string[] {
-  if (!hasFill) return [];
-  return filled === null ? [...all] : all.filter((id) => filled.includes(id));
-}
-
-/** `ZoneFill` ("Draft Fill Selected Zone(s)"): the filled set after filling `ids` too. All filled again is `null`. */
-export function afterFill(all: readonly string[], filled: FilledZones, hasFill: boolean, ids: readonly string[]): FilledZones {
-  const next = new Set([...filledNow(all, filled, hasFill), ...ids.filter((id) => all.includes(id))]);
-  return next.size === all.length ? null : [...next];
-}
-
-/** `ZoneUnfill`: the filled set after `UnFill()` on `ids`. An empty list means nothing is filled any more. */
-export function afterUnfill(all: readonly string[], filled: FilledZones, hasFill: boolean, ids: readonly string[]): string[] {
-  return filledNow(all, filled, hasFill).filter((id) => !ids.includes(id));
-}
-
-/** The fill report, kept to the zones in `ids` (`null` = all of it). */
-export function keepFilled(report: FillReport, ids: FilledZones): FillReport {
-  return ids === null ? report : { ...report, zones: report.zones.filter((z) => ids.includes(z.id)) };
-}
-
 // ------------------------------------------------------------------------ zones
 
 /** `ZONE_FILLER_TOOL::ZoneFill`/`ZoneUnfill`: the copper zones among the selection (a rule area has no fill). */
@@ -189,6 +159,14 @@ export function rankPriorities(order: readonly string[]): Record<string, number>
   const out: Record<string, number> = {};
   order.forEach((id, i) => (out[id] = order.length - 1 - i));
   return out;
+}
+
+/**
+ * The priorities the Zone Manager shows and writes on OK: those Auto-Assign staged (`exact`: KiCad's `AutoAssignZonePriorities` can leave several zones with one priority, a
+ * same-net group) when it staged every zone's, else the consecutive ranks of the list (a row moved by hand). `ids` are the zones the dialog lists.
+ */
+export function stagedPriorities(order: readonly string[], exact: Readonly<Record<string, number>> | null, ids: readonly string[]): Record<string, number> {
+  return exact && ids.every((id) => exact[id] !== undefined) ? { ...exact } : rankPriorities(order);
 }
 
 export type ZoneMove = "top" | "up" | "down" | "bottom";
@@ -218,10 +196,10 @@ export function moveZone(order: readonly string[], visible: readonly string[], i
 }
 
 /** `MODEL_ZONES_OVERVIEW::ApplyFilter`: the zones whose name and/or net contain the text (case-insensitive) and that are on `layer` (null = any). */
-export function filterZones<Z extends { id: string; net: string; layer: string }>(zones: readonly Z[], text: string, byName: boolean, byNet: boolean, layer: string | null): Z[] {
+export function filterZones<Z extends { id: string; net: string; layer: string; layers?: readonly string[] }>(zones: readonly Z[], text: string, byName: boolean, byNet: boolean, layer: string | null): Z[] {
   const needle = text.trim().toLowerCase();
   return zones.filter((z) => {
-    if (layer && z.layer !== layer) return false;
+    if (layer && !(z.layers && z.layers.length > 0 ? z.layers.includes(layer) : z.layer === layer)) return false;
     if (!needle) return true;
     return (byName && z.id.toLowerCase().includes(needle)) || (byNet && z.net.toLowerCase().includes(needle));
   });

@@ -133,7 +133,9 @@ pub(crate) fn set_stackup(design: &mut Design, model: &ConstraintModel, settings
                 *used.entry(t.layer.as_str()).or_default() += 1;
             }
             for z in &rt.zones {
-                *used.entry(z.layer.as_str()).or_default() += 1;
+                for layer in z.layer_set() {
+                    *used.entry(layer).or_default() += 1;
+                }
             }
             for v in &rt.vias {
                 for l in [&v.from_layer, &v.to_layer] {

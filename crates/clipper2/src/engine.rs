@@ -1313,7 +1313,9 @@ impl Clipper64 {
 
     fn reset(&mut self) {
         if !self.minima_list_sorted {
-            // `LocMinSorter`: descending y, then (on ties) descending x.
+            // `LocMinSorter`: descending y, then (on ties) ascending x -- `return locMin2->vertex->pt.y < locMin1->vertex->pt.y` and, for equal y,
+            // `return locMin2->vertex->pt.x > locMin1->vertex->pt.x`: the sweep takes the bottom-most minima first and the left-most of those, which
+            // is the order the result's polygons come out in (and so which one `SHAPE_POLY_SET` calls polygon 0).
             // The original uses `std::stable_sort` directly on the
             // `vector<unique_ptr<LocalMinima>>`; sorting via an index
             // permutation computed from `self.vertices` first (rather than
@@ -1328,7 +1330,7 @@ impl Clipper64 {
                 if keys[b].0 != keys[a].0 {
                     keys[b].0.cmp(&keys[a].0)
                 } else {
-                    keys[b].1.cmp(&keys[a].1)
+                    keys[a].1.cmp(&keys[b].1)
                 }
             });
             let old = std::mem::take(&mut self.minima_list);

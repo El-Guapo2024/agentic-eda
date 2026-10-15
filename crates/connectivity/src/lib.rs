@@ -24,9 +24,10 @@
 //! code for an item from its neighbours) is also out of scope -- every
 //! item in our `Design` already carries its real net name, so there is
 //! nothing to propagate. Zone connectivity is checked against each zone's
-//! real, computed fill (`eda_zone_filler`, via `eda_drc::fill`), not its
-//! raw outline -- see [`items`] for the (small) remaining differences from
-//! KiCad's own triangulated-fill collision.
+//! fill as KiCad made it (`eda_drc::zone_copper::ZoneCopper`, handed to
+//! [`analyze`]), not its raw outline: a zone that has not been filled
+//! has no copper and connects nothing -- see [`items`] for the (small)
+//! remaining differences from KiCad's own triangulated-fill collision.
 
 pub mod algo;
 pub mod cleanup;
@@ -48,6 +49,7 @@ pub use items::{CnItem, ItemRef};
 pub use ratsnest::{compute_ratsnest, RatsnestEdge};
 pub use teardrop::generate_teardrops;
 
+use eda_drc::zone_copper::ZoneCopper;
 use eda_model::ir::Design;
 use eda_model::ConstraintModel;
 
@@ -62,8 +64,8 @@ pub struct ConnectivityReport {
 /// Build the connectivity graph, its clusters, the ratsnest and the
 /// dangling-copper report, in one pass -- the batch equivalent of KiCad's
 /// `CONNECTIVITY_DATA::Build` + `RecalculateRatsnest`.
-pub fn analyze(design: &Design, model: &ConstraintModel) -> ConnectivityReport {
-    let graph = algo::build_graph(design, model);
+pub fn analyze(design: &Design, model: &ConstraintModel, copper: &ZoneCopper) -> ConnectivityReport {
+    let graph = algo::build_graph(design, model, copper);
     let clusters = algo::search_clusters(&graph);
     let ratsnest = ratsnest::compute_ratsnest(&graph, &clusters);
     let dangling = dangling::dangling_tracks_and_vias(&graph);
@@ -127,7 +129,7 @@ mod tests {
     #[test]
     fn two_unconnected_pads_yield_one_ratsnest_edge() {
         let (design, model) = two_pad_model();
-        let report = analyze(&design, &model);
+        let report = analyze(&design, &model, &ZoneCopper::default());
         assert_eq!(report.ratsnest.len(), 1, "{:?}", report.ratsnest.iter().map(|e| &e.net).collect::<Vec<_>>());
         assert_eq!(report.ratsnest[0].net, "N1");
         assert!(report.dangling.is_empty());
@@ -136,7 +138,7 @@ mod tests {
     #[test]
     fn a_ratsnest_line_names_the_two_pads_it_joins_and_the_copper_layers_they_are_on() {
         let (design, model) = two_pad_model();
-        let report = analyze(&design, &model);
+        let report = analyze(&design, &model, &ZoneCopper::default());
         let edge = &report.ratsnest[0];
         let ids: std::collections::BTreeSet<String> = [RatsnestEdge::item_id(&edge.from_item), RatsnestEdge::item_id(&edge.to_item)].into();
         assert_eq!(ids, ["R1.1".to_string(), "R2.1".to_string()].into(), "a pad is REF.NUMBER");
@@ -149,7 +151,7 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec!["R1.1".into(), "R2.1".into()], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
-        let report = analyze(&design, &model);
+        let report = analyze(&design, &model, &ZoneCopper::default());
         assert!(report.ratsnest.is_empty(), "{:?}", report.ratsnest.iter().map(|e| &e.net).collect::<Vec<_>>());
         assert!(report.dangling.is_empty());
     }
