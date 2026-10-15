@@ -7,10 +7,10 @@ use eda_model::ir::{Point, Shape};
 use eda_ops::{ArrayGeometry, AxisSpec, Cmd, Domain, NumberingType, PadNumbering};
 use std::path::Path;
 
-/// kicad-cli on `args`, in `work`; what it said, or what it said on failure.
+/// kicad-cli on `args`, in `work`; what it said, or what it said on failure. Launched as the studio launches it (`cli_command`: an empty KiCad config, not the user's).
 fn kicad_cli(work: &Path, args: &[&std::ffi::OsStr]) -> Result<String, String> {
     let cli = eda_kicad_engine::find_cli().ok_or("no kicad-cli")?;
-    let out = std::process::Command::new(cli).args(args).current_dir(work).output().map_err(|e| e.to_string())?;
+    let out = eda_kicad_engine::cli_command(&cli, None).args(args).current_dir(work).output().map_err(|e| e.to_string())?;
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     if out.status.success() {
         Ok(said)

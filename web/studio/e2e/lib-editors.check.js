@@ -47,6 +47,8 @@
   };
   /** `allowed`: messages (regular expressions) the scenario provokes on purpose -- the error toasts of a refusal are errors the page logs. */
   const scenario = async (name, fn, allowed = []) => {
+    // `window.__libEditorsOnly = /snapping/` (set before the script is loaded) runs the scenarios whose names match, while one is being worked on.
+    if (window.__libEditorsOnly && !window.__libEditorsOnly.test(name)) return;
     const entry = { name, ok: true, notes: [] };
     const t = (cond, msg) => { entry.notes.push(`${cond ? "ok" : "FAIL"}: ${msg}`); if (!cond) entry.ok = false; };
     const errorsFrom = (__eda.errors?.() ?? []).length;
@@ -543,6 +545,172 @@
     t(fl.pins.length === 2, "and still draws its parent's pins");
     await undoFp();
     t((await symbol(LEAF)).extends === BASE, "an undo gives the old name back");
+  });
+
+  // ================================================================================================ 3. snapping to other items' anchors in both editors
+  const canvasEl = () => document.querySelector(".editor-canvas-col .pcb-canvas-container");
+  const isMacPage = /Mac/.test(navigator.platform);
+  /** Where the editor's point `(wx, wy)` (um, +y down) is on the screen. */
+  const toScreen = (wx, wy) => { const v = __eda.state().view; const r = canvasEl().getBoundingClientRect(); return [r.left + v.x + wx * v.scale, r.top + v.y + wy * v.scale]; };
+  /** A pointer event on the canvas at the editor's point; `mods` are `ctrl` (Cmd on a Mac: the grid off), `shift` (the anchors off). */
+  const fire = (type, wx, wy, mods = {}, buttons = 0) => {
+    const [x, y] = toScreen(wx, wy);
+    canvasEl().dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, buttons, pointerId: 1, pointerType: "mouse", ctrlKey: !!mods.ctrl && !isMacPage, metaKey: !!mods.ctrl && isMacPage, shiftKey: !!mods.shift }));
+  };
+  /**
+   * A click of the left button at the editor's point. `hover: false` sends the press alone: a hover first (the pointer arriving) already snaps once, and snapping to an anchor starts the snap lines
+   * through it (`SNAP_LINE_MANAGER::SetSnapLineOrigin`), which the press that follows then sticks to -- KiCad's own behaviour, but it makes the point of a press depend on the hover before it.
+   */
+  const clickAt = async (wx, wy, mods = {}, hover = true) => { if (hover) { fire("pointermove", wx, wy, mods); await sleep(70); } fire("pointerdown", wx, wy, mods, 1); await sleep(40); fire("pointerup", wx, wy, mods); await sleep(450); };
+  /** Arms a placing tool: an undo (like Escape) puts the editor back on the Select tool, and a tool that is armed already would be switched off by its action. */
+  const arm = async (action, tool) => { if (__eda.state().tool !== tool) { await __eda.run(action); await sleep(250); } };
+  const dragFromTo = async (from, to, mods = {}) => {
+    fire("pointermove", from[0], from[1], mods); await sleep(60);
+    fire("pointerdown", from[0], from[1], mods, 1); await sleep(60);
+    // far enough to be a drag (8 px), then on to the target, then the release
+    fire("pointermove", from[0] + 40 / __eda.state().view.scale, from[1] + 40 / __eda.state().view.scale, mods, 1); await sleep(60);
+    fire("pointermove", to[0], to[1], mods, 1); await sleep(80);
+    fire("pointerup", to[0], to[1], mods); await sleep(700);
+  };
+  const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  const onGrid = (v, g) => Math.abs(v - Math.round(v / g) * g) < 1e-6 * Math.max(1, Math.abs(v)) + 1e-6;
+
+  await scenario("Footprint Editor snapping: a pad tool click goes to the centre of a pad under it, Shift puts it on the grid, Ctrl+Shift leaves it where it is", async (t) => {
+    await clickTab("Footprint");
+    await __eda.run("pcbnew.ModuleEditor.newFootprint");
+    await sleep(800);
+    const name = (await fpNames()).find((n) => !libraryBefore.fp.includes(n) && !made.includes(n));
+    made.push(name);
+    const r = await cmd({ op: "add_pad", footprint: name, pad: { ...padOf("1"), at: { x: 5400, y: 2300 } } });
+    t(r.ok, `a pad at (5400, 2300), off the 250 um grid: ${r.message ?? "ok"}`);
+    await sleep(600);
+    await __eda.run("common.Control.zoomFitScreen");
+    await sleep(500);
+    const scale = __eda.state().view.scale;
+    const d = Math.min(60, 10 / scale);
+    t(scale > 0, `the view: ${scale} px/um; the cursor goes ${Math.round(d)} um from the pad's centre`);
+    await arm("pcbnew.PadTool.placePad", "pad");
+    t(__eda.state().tool === "pad", "the pad tool is armed");
+    await clickAt(5400 + d, 2300 + d);
+    let pads = (await footprint(name)).pads;
+    t(pads.length === 2 && pads.filter((p) => p.at.x === 5400 && p.at.y === 2300).length === 2, `the new pad is at the centre of the first: ${JSON.stringify(pads.map((p) => [p.number, p.at.x, p.at.y]))}`);
+    t(__eda.state().snap?.anchored === true, `the snap report says an anchor: ${JSON.stringify(__eda.state().snap)}`);
+    await undoFp();
+    t((await footprint(name)).pads.length === 1, "one undo takes the pad away");
+    // Shift turns the anchors off: the grid
+    await arm("pcbnew.PadTool.placePad", "pad");
+    await clickAt(5400 + d, 2300 + d, { shift: true }, false);
+    pads = (await footprint(name)).pads;
+    const shifted = pads.find((p) => p.number !== "1");
+    t(!!shifted && onGrid(shifted.at.x, 250) && onGrid(shifted.at.y, 250) && !(shifted.at.x === 5400 && shifted.at.y === 2300), `with Shift the pad is on the grid: ${JSON.stringify(shifted?.at)}`);
+    await undoFp();
+    // Ctrl+Shift turns both off: where the pointer is
+    await arm("pcbnew.PadTool.placePad", "pad");
+    await clickAt(5400 + d, 2300 + d, { shift: true, ctrl: true }, false);
+    pads = (await footprint(name)).pads;
+    const free = pads.find((p) => p.number !== "1");
+    t(!!free && near(free.at.x, 5400 + d, 3) && near(free.at.y, 2300 + d, 3), `with both off the pad is where the pointer was: ${JSON.stringify(free?.at)} for (${Math.round(5400 + d)}, ${Math.round(2300 + d)})`);
+    await undoFp();
+    // Ctrl alone: the grid is off, the anchor stays
+    await arm("pcbnew.PadTool.placePad", "pad");
+    await clickAt(5400 + d, 2300 + d, { ctrl: true }, false);
+    pads = (await footprint(name)).pads;
+    t(pads.filter((p) => p.at.x === 5400 && p.at.y === 2300).length === 2, "with only the grid off the anchor still takes it");
+    await undoFp();
+  });
+
+  await scenario("Footprint Editor snapping: a line goes to the end of a line on the active layer, not to a pad on another; a dragged line lands its end on another's", async (t) => {
+    await clickTab("Footprint");
+    await __eda.run("pcbnew.ModuleEditor.newFootprint");
+    await sleep(800);
+    const name = (await fpNames()).find((n) => !libraryBefore.fp.includes(n) && !made.includes(n));
+    made.push(name);
+    const seg = (x0, y0, x1, y1) => ({ kind: "segment", layer: "F.SilkS", stroke_width: 150, filled: false, start: { x: x0, y: y0 }, end: { x: x1, y: y1 } });
+    for (const c of [{ op: "add_pad", footprint: name, pad: { ...padOf("1"), at: { x: 5430, y: 2330 } } }, { op: "add_footprint_graphic", footprint: name, shape: seg(4310, 710, 7310, 710) }, { op: "add_footprint_graphic", footprint: name, shape: seg(1130, 3330, 2130, 3330) }]) {
+      const r = await cmd(c);
+      if (!r.ok) t(false, `${c.op}: ${r.message}`);
+    }
+    await sleep(700);
+    await __eda.run("common.Control.zoomFitScreen");
+    await sleep(500);
+    const scale = __eda.state().view.scale;
+    const d = Math.min(60, 10 / scale);
+    // the line tool: the first click near the end of the silk line (on the active layer F.SilkS), the second away from everything
+    await arm("pcbnew.InteractiveDrawing.line", "draw_segment");
+    t(__eda.state().tool === "draw_segment", "the line tool is armed");
+    await clickAt(4310 + d, 710 + d, {}, false);
+    await clickAt(3000, 5000, { shift: true, ctrl: true }, false);
+    let graphics = (await footprint(name)).graphics;
+    const made1 = graphics.find((g) => g.start.x === 4310 && g.start.y === 710 && g.end.x !== 7310);
+    t(graphics.length === 3 && !!made1, `the new line starts at the end of the silk line: ${JSON.stringify(graphics.map((g) => [g.start, g.end]))}`);
+    await undoFp();
+    t((await footprint(name)).graphics.length === 2, "one undo takes the line away");
+    // a click near the pad (on F.Cu, not the active layer): no snap to it
+    await arm("pcbnew.InteractiveDrawing.line", "draw_segment");
+    await clickAt(5430 + d, 2330 + d, { ctrl: true }, false);
+    await clickAt(3000, 5000, { shift: true, ctrl: true }, false);
+    graphics = (await footprint(name)).graphics;
+    const toPad = graphics.find((g) => g.start.x === 5430 && g.start.y === 2330);
+    t(graphics.length === 3 && !toPad, `a line on the silk layer does not snap to a pad on the copper one: ${JSON.stringify(graphics.map((g) => g.start))}`);
+    await undoFp();
+    // a drag: the second silk line, picked up at its start, dropped near the end of the first
+    await select([]);
+    const second = graphics.find((g) => g.start.x === 1130);
+    await dragFromTo([1130, 3330], [4310 + d, 710 + d]);
+    const moved = (await footprint(name)).graphics.find((g) => g.id === second.id);
+    t(!!moved && moved.start.x === 4310 && moved.start.y === 710, `the dropped line has its start on the other's end: ${JSON.stringify(moved?.start)} (it was (1130, 3330))`);
+    t(!!moved && moved.end.x - moved.start.x === 1000 && moved.end.y === moved.start.y, "and the same length");
+    await undoFp();
+    t((await footprint(name)).graphics.find((g) => g.id === second.id)?.start.x === 1130, "one undo puts it back");
+  });
+
+  await scenario("Symbol Editor snapping: the pin tool goes to the end of another pin when the grid is off, to the grid otherwise", async (t) => {
+    await clickTab("Symbol");
+    await sleep(500);
+    const id = "eda:P17Snap";
+    madeSyms.push(id);
+    let r = await cmd({ op: "new_symbol", lib_id: id });
+    t(r.ok, `new_symbol: ${r.message ?? "ok"}`);
+    r = await cmd({ op: "add_symbol_pin", lib_id: id, pin: { number: "9", name: "X", electrical_type: "passive", shape: "line", at: { x: 3.1, y: 0.7 }, angle_deg: 0, length_mm: 2.54, unit: 1, body_style: 1, hidden: false, name_size_mm: null, number_size_mm: null } });
+    t(r.ok, `a pin whose end is at (3.1, 0.7) mm, off the 1.27 mm grid: ${r.message ?? "ok"}`);
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(1000);
+    await __eda.run("common.Control.zoomFitScreen");
+    await sleep(500);
+    const scale = __eda.state().view.scale;
+    const d = Math.min(300, 10 / scale);
+    t(scale > 0, `the view: ${scale} px/um; the cursor goes ${Math.round(d)} um from the pin's end`);
+    await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
+    t(__eda.state().tool === "pin", `the pin tool is armed: ${__eda.state().tool}`);
+    const tip = [3100, -700];
+    // grid off (Ctrl): the end of the other pin
+    await clickAt(tip[0] + d, tip[1] + d, { ctrl: true }, false);
+    let pins = (await symbol(id)).pins;
+    t(pins.length === 2 && pins.filter((p) => p.at.x === 3.1 && p.at.y === 0.7).length === 2, `with the grid off the new pin ends where the other does: ${JSON.stringify(pins.map((p) => [p.number, p.at.x, p.at.y]))}`);
+    t(__eda.state().snap?.anchored === true, `the snap report: ${JSON.stringify(__eda.state().snap)}`);
+    await undoFp();
+    // the grid on: the grid decides (a pin end is within the range, but so is a grid point)
+    await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
+    await clickAt(tip[0] + d, tip[1] + d, {}, false);
+    pins = (await symbol(id)).pins;
+    const gridPin = pins.find((p) => p.number !== "9");
+    t(!!gridPin && onGrid(gridPin.at.x, 1.27) && onGrid(gridPin.at.y, 1.27), `with the grid on the new pin is on the grid: ${JSON.stringify(gridPin?.at)}`);
+    await undoFp();
+    // Shift: no anchors, the grid
+    await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
+    await clickAt(tip[0] + d, tip[1] + d, { shift: true }, false);
+    pins = (await symbol(id)).pins;
+    const shiftPin = pins.find((p) => p.number !== "9");
+    t(!!shiftPin && onGrid(shiftPin.at.x, 1.27) && onGrid(shiftPin.at.y, 1.27), `with Shift too: ${JSON.stringify(shiftPin?.at)}`);
+    await undoFp();
+    // both off: the pointer
+    await arm("eeschema.SymbolDrawing.placeSymbolPin", "pin");
+    await clickAt(tip[0] + d, tip[1] + d, { ctrl: true, shift: true }, false);
+    pins = (await symbol(id)).pins;
+    const freePin = pins.find((p) => p.number !== "9");
+    t(!!freePin && near(freePin.at.x * 1000, tip[0] + d, 3) && near(-freePin.at.y * 1000, tip[1] + d, 3), `with both off the pin is where the pointer was: ${JSON.stringify(freePin?.at)}`);
+    await undoFp();
   });
 
   // ================================================================================================ leave the library as it was
