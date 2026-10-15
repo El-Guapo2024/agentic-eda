@@ -3,7 +3,7 @@
 // turned, mirrored, locked, deleted, copied, pasted and duplicated as one tree, what is made while a group is entered joining it, the Grouping and Enter Group entries of the
 // context menu, and the `(group ...)` forms the derived `.kicad_sch` has. User-defined fields: one added in Symbol Properties, shown and placed beside the others, picked,
 // moved, turned, mirrored, edited and hidden like Reference and Value, and written to the file where the sheet draws it. Pin Helpers: the submenu of a pin's context menu, and a wire stub
-// (held by the Drag tool), a no-connect and a net, hierarchical and global label on a pin and on a sheet pin.
+// (held by the Drag tool), a no-connect and a net, hierarchical and global label on a pin and on a sheet pin. Swapped pins kept by Copy and Paste and by Duplicate.
 // Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir>`), with the
 // schematic tab open -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY of a board: it edits and undoes, and it leaves Strict
 // off while it runs. It makes nothing that stays: every scenario undoes what it did (and, if it left anything behind, the run undoes until the sheet is as it was).
@@ -917,6 +917,45 @@
       await undo();
       t((await sch("")).labels.length === before.labels.length, "one Undo takes it away");
       await enterSheet(MCU);
+    });
+
+
+    // ----- swapped pins through the clipboard
+    await scenario("Swapped pins: Copy and Paste and Duplicate give the copy the same pins", async (t) => {
+      const swapOf = async (id) => (await sch(MCU)).symbols.filter((x) => x.id === id).map((x) => x.pin_swaps ?? null)[0];
+      await post({ op: "sch_edit", verb: "swap_pins", pins: ["pin:U1:3", "pin:U1:4"] }, MCU);
+      await sleep(900);
+      const s0 = await sch(MCU);
+      const swaps = await swapOf("U1");
+      t(swaps && swaps["3"] === "4" && swaps["4"] === "3", `U1's pins 3 and 4 have traded places (${JSON.stringify(swaps)})`);
+      // Duplicate: the copy is carried; a click drops it
+      await fitTo(["U1"]);
+      await select(["U1"]);
+      await __eda.run("common.Interactive.duplicate");
+      await sleep(1500);
+      const [qx, qy] = screenOf(s0.symbols.find((x) => x.id === "U1").at[0] + 60000, s0.symbols.find((x) => x.id === "U1").at[1]);
+      fire("pointermove", qx, qy); await sleep(900);
+      fire("pointerdown", qx, qy, { buttons: 1 }); await sleep(80); fire("pointerup", qx, qy); await sleep(1800);
+      const s1 = await sch(MCU);
+      const copy = s1.symbols.find((x) => !s0.symbols.some((o) => o.id === x.id));
+      t(!!copy && copy.id !== "U1", `Duplicate made a symbol of its own (${copy && copy.id})`);
+      t(copy && copy.pin_swaps && copy.pin_swaps["3"] === "4" && copy.pin_swaps["4"] === "3", `with the same pins traded (${JSON.stringify(copy && copy.pin_swaps)})`);
+      await undo();
+      t(!(await sch(MCU)).symbols.some((x) => !s0.symbols.some((o) => o.id === x.id)), "one Undo takes the copy away");
+      // Copy and Paste
+      await select(["U1"]);
+      await __eda.run("common.Interactive.copy");
+      await sleep(900);
+      await __eda.run("common.Interactive.paste");
+      await sleep(1500);
+      const [rx, ry] = screenOf(s0.symbols.find((x) => x.id === "U1").at[0] + 60000, s0.symbols.find((x) => x.id === "U1").at[1]);
+      fire("pointermove", rx, ry); await sleep(900);
+      fire("pointerdown", rx, ry, { buttons: 1 }); await sleep(80); fire("pointerup", rx, ry); await sleep(1800);
+      const s2 = await sch(MCU);
+      const pasted = s2.symbols.find((x) => !s0.symbols.some((o) => o.id === x.id));
+      t(!!pasted && pasted.pin_swaps && pasted.pin_swaps["3"] === "4" && pasted.pin_swaps["4"] === "3", `a pasted copy has them too (${JSON.stringify(pasted && [pasted.id, pasted.pin_swaps])})`);
+      await undo();
+      await fit();
     });
 
     // -------------------------------------------------------------------------------------------------------------------- the end

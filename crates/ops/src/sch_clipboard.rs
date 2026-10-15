@@ -277,6 +277,12 @@ impl<'a> Board<'a> {
                 sch.extras.body_styles.insert(eda_model::ir::field_key(new, s.unit), style);
             }
         }
+        // a pasted symbol keeps the places Swap Pins gave its pins (`SchExtras::pin_swaps`; the clipboard names the symbol's own copy of its library symbol, `lib_name`)
+        for (s, new) in src.symbols.iter().zip(symbol_refs) {
+            if let Some(swaps) = src.extras.pin_swaps_of(&eda_model::ir::field_key(&s.id, s.unit)) {
+                sch.extras.pin_swaps.insert(eda_model::ir::field_key(new, s.unit), swaps.clone());
+            }
+        }
         // a pasted label keeps its spin, size, bold and italic
         for (k, l) in src.labels.iter().enumerate() {
             let Some(new_id) = sch.labels.get(first_label + k).map(|n| n.id.clone()) else { continue };

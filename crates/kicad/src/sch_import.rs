@@ -26,7 +26,7 @@ use std::path::Path;
 
 use eda_model::ir::{Design, LabelKind, LabelShape, Millideg, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
 use eda_model::sch_extras::{JunctionLook, SchStroke};
-use eda_model::symbol::{LibSymbol, SPoint};
+use eda_model::symbol::{LibPin, LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
 use crate::sch_extras_io::{parse_bool, read_effects, uuid_of, EffectsLook};
@@ -131,6 +131,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         uuid: Option<String>,
         /// The properties beyond the standard fields: user-defined fields (`FIELD_T::USER`), with where and how each is drawn.
         user_fields: Vec<RawUserField>,
+        /// The places Swap Pins traded, read from the symbol's own copy of its library symbol (`(lib_name ..)`): pin number -> the pin whose place it has (`SchExtras::pin_swaps`).
+        swaps: BTreeMap<String, String>,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
     // each power symbol's `(uuid ..)`, parallel to `power_symbols`
@@ -172,6 +174,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let body_style = sexpr::find(item, "body_style").or_else(|| sexpr::find(item, "convert")).and_then(|b| sexpr::num(b, 1)).unwrap_or(1.0).max(1.0) as u32;
         let at_um = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
+        // `(lib_name "<cache>")`: the symbol's own copy of its library symbol in the sheet's cache, which Swap Pins gave other places for some of its pins
+        let swaps = sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).filter(|name| *name != lib_id).and_then(|name| lib_table.get(name)).map(|cached| pin_swaps_between(resolved, cached, unit, body_style)).unwrap_or_default();
 
         let reference = property_text(item, "Reference").unwrap_or_default();
         let value = property_text(item, "Value").unwrap_or_default();
@@ -195,7 +199,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         }
 
         overrides.extend(parse_instance_overrides(item, at_um));
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item) });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps });
     }
 
     if opts.unique_references {
@@ -247,6 +251,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     // `(body_style 2)` of the symbols placed in the alternate body style of a library symbol that has one, by `field_key` (`SchExtras::body_styles`)
     let mut body_style_entries: Vec<(String, u32)> = Vec::new();
+    // the places Swap Pins traded, by `field_key` (`SchExtras::pin_swaps`)
+    let mut pin_swap_entries: Vec<(String, BTreeMap<String, String>)> = Vec::new();
     // the user-defined fields of the symbols (`SchematicSection::user_fields`, by reference) and where each unit draws them (`field_layout`, by `field_key`)
     let mut user_fields_read: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
     let mut field_layout_read: BTreeMap<String, Vec<eda_model::ir::FieldPlacement>> = BTreeMap::new();
@@ -280,7 +286,14 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                     Some(owner) => {
                         // the pin where the owner's body style puts it (`SCH_SYMBOL::UpdatePins`: "the body style may have a different pin layout")
                         let styled = (owner.body_style > 1 && resolved.has_alternate_body()).then(|| resolved.in_style(owner.body_style));
-                        let local = styled.as_ref().and_then(|s| s.pins.iter().find(|q| q.number == p.number && (q.unit == 0 || q.unit == owner.unit))).map_or(p.at, |q| q.at);
+                        // and the place it has: its own, or the one of the pin it traded with (`SwapPinGeometry`, read from the symbol's own copy)
+                        let source = owner.swaps.get(&p.number).map(String::as_str).unwrap_or(p.number.as_str());
+                        let place_pins: &[LibPin] = styled.as_ref().map_or(&resolved.pins, |s| &s.pins);
+                        let local = if source == p.number.as_str() {
+                            styled.as_ref().and_then(|s| s.pins.iter().find(|q| q.number == p.number && (q.unit == 0 || q.unit == owner.unit))).map_or(p.at, |q| q.at)
+                        } else {
+                            place_pins.iter().find(|q| q.number == source && (q.unit == 0 || q.unit == owner.unit)).map_or(p.at, |q| q.at)
+                        };
                         let world = transform_local_point(local, owner.angle_deg, owner.mirrored, owner.mirror_y);
                         let at_pin = Point { x: owner.at_um.x + crate::import::mm_to_um(world.x), y: owner.at_um.y + crate::import::mm_to_um(world.y) };
                         pin_world.insert(format!("{reference}.{}", p.number), at_pin);
@@ -312,6 +325,9 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             let r = &raw[i];
             if r.body_style > 1 && lib_table.get(r.lib_id.as_str()).is_some_and(|l| l.has_alternate_body()) {
                 body_style_entries.push((eda_model::ir::field_key(&reference, r.unit), r.body_style.min(2)));
+            }
+            if !r.swaps.is_empty() {
+                pin_swap_entries.push((eda_model::ir::field_key(&reference, r.unit), r.swaps.clone()));
             }
             symbols.push(SymbolInstance {
                 id: reference.clone(),
@@ -583,6 +599,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             sch.extras.set_locked(&id, true);
         }
         sch.extras.body_styles.extend(body_style_entries);
+        sch.extras.pin_swaps.extend(pin_swap_entries);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {
@@ -768,6 +785,37 @@ pub(crate) fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
         comments.pop();
     }
     Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments, paper })
+}
+
+/// The places Swap Pins traded, read from the symbol's own copy of its library symbol: `SwapPinGeometry` swaps the position, orientation and length of two `SCH_PIN`s in the
+/// copy (`SCH_SCREEN::Append` keeps such a symbol under a name of its own, `(lib_name ...)`), so a pin of `cached` that is not where the library's pin of that number is sits where
+/// another pin of the library symbol is. The result is `pin number -> the number of the pin whose place it has` for the pins of `unit` (`SchExtras::pin_swaps`), and is empty
+/// when the copy is no copy of `lib` (other pin numbers), when a pin sits where no pin of the library symbol does (a frame of its own) or where several do, or when what moved
+/// is no exchange of places -- a copy this reader cannot read as swaps is read as the library symbol, as it always was.
+fn pin_swaps_between(lib: &LibSymbol, cached: &LibSymbol, unit: u32, body_style: u32) -> BTreeMap<String, String> {
+    let styled = |s: &LibSymbol| if body_style > 1 && s.has_alternate_body() { s.in_style(body_style).into_owned() } else { s.clone() };
+    let (lib, cached) = (styled(lib), styled(cached));
+    let on_unit = |p: &&LibPin| p.unit == 0 || p.unit == unit;
+    let place = |p: &LibPin| ((p.at.x * 1000.0).round() as i64, (p.at.y * 1000.0).round() as i64, p.angle_deg.rem_euclid(360.0).round() as i64, (p.length_mm * 1000.0).round() as i64);
+    let (lib_pins, cached_pins): (Vec<&LibPin>, Vec<&LibPin>) = (lib.pins.iter().filter(on_unit).collect(), cached.pins.iter().filter(on_unit).collect());
+    let mut swaps: BTreeMap<String, String> = BTreeMap::new();
+    for cp in &cached_pins {
+        let Some(lp) = lib_pins.iter().find(|q| q.number == cp.number) else { return BTreeMap::new() };
+        if place(cp) == place(lp) {
+            continue;
+        }
+        let sources: Vec<&&LibPin> = lib_pins.iter().filter(|q| place(q) == place(cp)).collect();
+        if sources.len() != 1 {
+            return BTreeMap::new();
+        }
+        swaps.insert(cp.number.clone(), sources[0].number.clone());
+    }
+    // an exchange of places: what a pin took is what another pin that moved left
+    let sources: std::collections::BTreeSet<&String> = swaps.values().collect();
+    if sources.len() != swaps.len() || !swaps.keys().all(|k| sources.contains(k)) {
+        return BTreeMap::new();
+    }
+    swaps
 }
 
 /// A user-defined field of a placed symbol as the file has it (`SCH_IO_KICAD_SEXPR_PARSER::parseSchField`): the text, where its anchor is on the sheet and

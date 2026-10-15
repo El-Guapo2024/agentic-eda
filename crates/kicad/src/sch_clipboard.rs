@@ -235,6 +235,24 @@ pub struct CopyOutput {
     pub sheet_files: Vec<String>,
 }
 
+/// The library symbol with the places Swap Pins traded for the pins of `unit`: pin `n` has the position, orientation and length of pin `swaps[n]` (`SwapPinGeometry`),
+/// in each body style the symbol has.
+fn swapped_copy(base: &LibrarySymbol, unit: u32, swaps: &BTreeMap<String, String>) -> LibrarySymbol {
+    let mut copy = base.clone();
+    let here = |p: &eda_model::ir::LibrarySymbolPin, style: u32| p.body_style == style && (p.unit == 0 || p.unit == unit);
+    for style in [1, 2] {
+        let items: Vec<(String, (eda_model::symbol::SPoint, f64, f64))> = copy.pins.iter().filter(|p| here(p, style)).map(|p| (p.number.clone(), (p.at, p.angle_deg, p.length_mm))).collect();
+        for (number, (at, angle, length)) in eda_model::sch_extras::permute_pins(items, swaps) {
+            if let Some(p) = copy.pins.iter_mut().find(|p| here(p, style) && p.number == number) {
+                p.at = at;
+                p.angle_deg = angle;
+                p.length_mm = length;
+            }
+        }
+    }
+    copy
+}
+
 /// One symbol of the selection, as the clipboard will have it.
 struct CopiedSymbol<'a> {
     sym: &'a SymbolInstance,
@@ -323,12 +341,16 @@ fn sheet_box_mm(c: &CopiedSymbol<'_>) -> (f64, f64, f64, f64) {
 }
 
 /// The symbol form (`SCH_IO_KICAD_SEXPR::saveSymbol` with `aForClipboard`).
-fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>) {
+fn write_symbol(out: &mut String, input: &CopyInput<'_>, c: &CopiedSymbol<'_>, lib_name: Option<&str>) {
     let sym = c.sym;
     let part = input.model.part(&sym.id);
     let yes = |b: bool| if b { "yes" } else { "no" };
     let (ox, oy) = (c.origin.x as f64 / 1000.0, c.origin.y as f64 / 1000.0);
     let _ = writeln!(out, "\t(symbol");
+    // a symbol whose pins Swap Pins moved names its own copy of the library symbol (`SCH_SCREEN::Append`)
+    if let Some(name) = lib_name {
+        let _ = writeln!(out, "\t\t(lib_name {})", sexpr_str(name));
+    }
     let _ = writeln!(out, "\t\t(lib_id {})", sexpr_str(&c.lib_id));
     let _ = writeln!(out, "\t\t(at {} {} {})", fmt_mm_f(ox), fmt_mm_f(oy), fmt_mm_f(sym.rot as f64 / 1000.0));
     if sym.mirrored || sym.mirror_y {
@@ -511,6 +533,20 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
             power_engine.insert(p.lib_id.clone(), engine);
         }
     }
+    // The symbols whose pins Swap Pins moved keep a copy of their own in the cache, one per placed symbol, named `<symbol>_<n>`, with the places traded (`SwapPinGeometry`): the
+    // pasted symbol, here and in KiCad, has its pins where the copied one has them.
+    let mut cache_names: BTreeMap<(String, u32), String> = BTreeMap::new();
+    let mut cache_counts: BTreeMap<String, u32> = BTreeMap::new();
+    for c in &symbols {
+        let Some(swaps) = sch.extras.pin_swaps_of(&eda_model::ir::field_key(&c.sym.id, c.sym.unit)) else { continue };
+        let Some(base) = cache.get(&c.lib_id).cloned() else { continue };
+        let bare = c.lib_id.rsplit(':').next().unwrap_or(&c.lib_id).to_string();
+        let n = cache_counts.entry(bare.clone()).or_insert(0);
+        *n += 1;
+        let name = format!("{bare}_{n}");
+        cache.insert(name.clone(), swapped_copy(&base, c.sym.unit, swaps));
+        cache_names.insert((c.sym.id.clone(), c.sym.unit), name);
+    }
     if !cache.is_empty() {
         let _ = writeln!(out, "(lib_symbols");
         for (name, sym) in &cache {
@@ -523,7 +559,7 @@ pub fn write_clipboard(input: &CopyInput<'_>, ids: &[String]) -> Result<CopyOutp
     }
 
     for c in &symbols {
-        write_symbol(&mut out, input, c);
+        write_symbol(&mut out, input, c, cache_names.get(&(c.sym.id.clone(), c.sym.unit)).map(String::as_str));
     }
     for p in &powers {
         match power_engine.get(&p.lib_id) {
