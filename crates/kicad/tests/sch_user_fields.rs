@@ -3,7 +3,7 @@
 //! and its place in the frame of the symbol (`eda_engine::fields::page_field`'s inverse), so a second write puts it where the first did.
 //!
 //! The slow proof against kicad-cli (nested groups and a placed user field in one sheet: the ERC runs and the SVG draws the field where we put it) is in
-//! `sch_groups.rs`.
+//! `sch_groups.rs`. The last test is the text look of a hierarchical sheet pin (`SchExtras::sheet_pin_looks`: its size, bold and italic), written and read the same way.
 
 use eda_kicad::{export_kicad_sch, import_kicad_sch, ExportMeta};
 use eda_model::ir::{Design, FieldPlacement, Point, Provenance, SchematicSection, SymbolInstance, TextJustify, TextVAlign};
@@ -250,4 +250,42 @@ fn a_sheet_with_no_user_fields_reads_with_none() {
     let (design, _model, _) = import_kicad_sch(&export(&plain, &m)).unwrap();
     let sch = design.schematic.unwrap();
     assert!(sch.user_fields.is_empty() && sch.field_layout.is_empty());
+}
+
+// ------------------------------------------------------------------------------------------------------------- a sheet pin's text look
+
+#[test]
+fn a_sheet_pins_text_look_is_written_and_read_back() {
+    use eda_model::ir::{LabelShape, SheetInstance, SheetPin};
+    use eda_model::sch_extras::LabelLook;
+    let m = model();
+    let mut sch = SchematicSection { symbols: vec![], ..Default::default() };
+    sch.sheets.push(SheetInstance {
+        id: "11111111-1111-4111-8111-111111111111".into(),
+        name: "Sub".into(),
+        file: "sub.kicad_sch".into(),
+        at: Point { x: 100_000, y: 50_000 },
+        size: (40_000, 30_000),
+        pins: vec![
+            SheetPin { id: "22222222-2222-4222-8222-222222222222".into(), name: "CLK".into(), shape: LabelShape::Input, at: Point { x: 100_000, y: 60_000 } },
+            SheetPin { id: "33333333-3333-4333-8333-333333333333".into(), name: "DATA".into(), shape: LabelShape::Output, at: Point { x: 140_000, y: 70_000 } },
+        ],
+        page: String::new(),
+    });
+    sch.extras.sheet_pin_looks.insert("22222222-2222-4222-8222-222222222222".into(), LabelLook { size_um: 2_000, bold: true, italic: true, auto_rotate: false });
+    let text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
+    // the font of the pin says its size, bold and italic; the other pin has the default text
+    let pin = |name: &str| {
+        let from = text.find(&format!("(pin \"{name}\"")).unwrap_or_else(|| panic!("no pin {name}"));
+        text[from..from + text[from..].find("(effects").unwrap() + 120].to_string()
+    };
+    assert!(pin("CLK").contains("(font (size 2 2) (bold yes) (italic yes))"), "{}", pin("CLK"));
+    assert!(pin("DATA").contains("(font (size 1.27 1.27))") && !pin("DATA").contains("bold"), "{}", pin("DATA"));
+    // and the reader gives the look back, by the pin's uuid
+    let (design, _, _) = import_kicad_sch(&text).expect("the file reads");
+    let back = design.schematic.expect("a sheet");
+    let looks = &back.extras.sheet_pin_looks;
+    assert_eq!(looks.len(), 1, "only a pin that is set differently has an entry: {looks:?}");
+    let look = looks.get("22222222-2222-4222-8222-222222222222").copied().expect("the look of CLK");
+    assert_eq!((look.size_um, look.bold, look.italic), (2_000, true, true));
 }

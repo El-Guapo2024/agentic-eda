@@ -2279,6 +2279,10 @@ export interface SheetPin {
   name: string;
   shape: LabelShape;
   at: [Um, Um];
+  /** How the pin's text is set (Sheet Pin Properties; `SCH_SHEET_PIN` is an `EDA_TEXT`): absent is 50 mil, regular, upright. */
+  size_um?: Um;
+  bold?: boolean;
+  italic?: boolean;
 }
 
 /** One child sheet placed directly on the schematic view currently being shown -- `GET /api/schematic`'s own `sheets` field, not the whole project's tree (see `sheet_path` for how deep the current view already is). */

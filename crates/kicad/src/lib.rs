@@ -657,7 +657,10 @@ pub(crate) fn write_sheet_item(out: &mut String, sch: &eda_model::ir::SchematicS
         writeln!(out, "\t\t\t(uuid \"{pin_uuid}\")").unwrap();
         // the pin's text reads into the sheet: left-justified from a pin on the left edge, right-justified from one on the right
         let justify = if angle == 0 || angle == 90 { "right" } else { "left" };
-        writeln!(out, "\t\t\t(effects (font (size 1.27 1.27)) (justify {justify})))").unwrap();
+        // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`)
+        let look = sch.extras.sheet_pin_looks.get(&p.id).copied().unwrap_or_default();
+        let font = FieldLook { size_um: look.text_size_um() as f64, bold: look.bold, italic: look.italic, ..FieldLook::DEFAULT }.font();
+        writeln!(out, "\t\t\t(effects {font} (justify {justify})))").unwrap();
     }
     writeln!(out, "\t\t(instances").unwrap();
     writeln!(out, "\t\t\t(project \"eda-kicad\"").unwrap();

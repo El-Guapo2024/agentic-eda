@@ -3,7 +3,8 @@
 // turned, mirrored, locked, deleted, copied, pasted and duplicated as one tree, what is made while a group is entered joining it, the Grouping and Enter Group entries of the
 // context menu, and the `(group ...)` forms the derived `.kicad_sch` has. User-defined fields: one added in Symbol Properties, shown and placed beside the others, picked,
 // moved, turned, mirrored, edited and hidden like Reference and Value, and written to the file where the sheet draws it. Pin Helpers: the submenu of a pin's context menu, and a wire stub
-// (held by the Drag tool), a no-connect and a net, hierarchical and global label on a pin and on a sheet pin. Swapped pins kept by Copy and Paste and by Duplicate.
+// (held by the Drag tool), a no-connect and a net, hierarchical and global label on a pin and on a sheet pin. Swapped pins kept by Copy and Paste and by Duplicate. A sheet pin's text look
+// (size, bold, italic) set in Sheet Pin Properties and written to the file.
 // Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir>`), with the
 // schematic tab open -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY of a board: it edits and undoes, and it leaves Strict
 // off while it runs. It makes nothing that stays: every scenario undoes what it did (and, if it left anything behind, the run undoes until the sheet is as it was).
@@ -956,6 +957,52 @@
       t(!!pasted && pasted.pin_swaps && pasted.pin_swaps["3"] === "4" && pasted.pin_swaps["4"] === "3", `a pasted copy has them too (${JSON.stringify(pasted && [pasted.id, pasted.pin_swaps])})`);
       await undo();
       await fit();
+    });
+
+
+    // ----- a sheet pin's text look
+    await scenario("A sheet pin's text look: Sheet Pin Properties set its size, bold and italic, the file says so, one undo step", async (t) => {
+      await leave();
+      const rootSheet = await sch("");
+      const pin = rootSheet.sheets.find((x) => x.id === MCU).pins[0];
+      const pinOf = async () => (await sch("")).sheets.find((x) => x.id === MCU).pins.find((q) => q.id === pin.id);
+      const fileForm = async () => {
+        const files = (await json("/api/schematic.kicad_sch")).files;
+        const text = (files.find((f) => /board/.test(f.name)) ?? files[0]).text;
+        // the pin of that name at that place (another sheet may have a pin of the same name)
+        const at = `(at ${pin.at[0] / 1000} ${pin.at[1] / 1000} `;
+        for (let from = text.indexOf(`(pin "${pin.name}"`); from >= 0; from = text.indexOf(`(pin "${pin.name}"`, from + 1)) {
+          const form = text.slice(from, from + 400);
+          if (form.slice(0, 160).includes(at)) return form;
+        }
+        return "";
+      };
+      t(!!pin && !pin.size_um && !pin.bold && !pin.italic, `the pin ${pin && pin.name} starts with the default text (${JSON.stringify(pin)})`);
+      await select([pin.id]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(700);
+      t(!!dialog() && /Sheet Pin Properties/.test(dialog().textContent), "Properties on a sheet pin opens Sheet Pin Properties");
+      const size = dialog().querySelector('[data-testid="sheet-pin-size"]');
+      t(!!size && Number(size.value) === 1.27, `the text size starts at 1.27 mm (${size && size.value})`);
+      setValue(size, "0");
+      await sleep(150);
+      t(buttonText(dialog(), "OK").disabled, "a size that would make the text vanish cannot be OK'd");
+      setValue(size, "2.54");
+      await sleep(100);
+      dialog().querySelector('[data-testid="sheet-pin-bold"]').click();
+      dialog().querySelector('[data-testid="sheet-pin-italic"]').click();
+      await sleep(100);
+      buttonText(dialog(), "OK").click();
+      await sleep(1300);
+      let now = await pinOf();
+      t(now && now.size_um === 2540 && now.bold === true && now.italic === true, `the pin is set in 2.54 mm bold italic (${JSON.stringify(now)})`);
+      const form = await fileForm();
+      t(/\(font \(size 2\.54 2\.54\) \(bold yes\) \(italic yes\)\)/.test(form), `and the file says so (${form.replace(/\s+/g, " ").slice(0, 160)})`);
+      await undo();
+      now = await pinOf();
+      t(now && !now.size_um && !now.bold && !now.italic, "one Undo gives the pin its default text again");
+      t(/\(font \(size 1\.27 1\.27\)\)/.test(await fileForm()), "and the file");
+      await enterSheet(MCU);
     });
 
     // -------------------------------------------------------------------------------------------------------------------- the end

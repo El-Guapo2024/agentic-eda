@@ -120,8 +120,8 @@ export type SchEditCmd =
   /** Put a pin on a sheet's border (`SCH_SHEET::AddPin`); `at` must be on the border (kicad-port/schSheetPins.ts `constrainOnEdge`). */
   | { verb: "add_sheet_pin"; sheet: string; name: string; shape: LabelShape; at: PointXY }
   | { verb: "delete_sheet_pin"; id: string }
-  /** Rename, reshape or move a sheet pin; a field left out is unchanged. */
-  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY }
+  /** Rename, reshape or move a sheet pin, or set the size (0.01 to 1000 mm), bold and italic of its text; a field left out is unchanged. */
+  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY; size_um?: Um; bold?: boolean; italic?: boolean }
   /** Give every placed unit of reference `id` the library symbol `lib_id` (`DIALOG_CHANGE_SYMBOLS`, change mode). */
   | { verb: "change_symbol"; id: string; lib_id: string }
   /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */

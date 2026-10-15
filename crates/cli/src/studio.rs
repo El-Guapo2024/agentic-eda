@@ -1755,7 +1755,22 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
-                "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
+                // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
+                "pins": s.pins.iter().map(|p| {
+                    let mut pin = json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] });
+                    if let Some(look) = sch.extras.sheet_pin_looks.get(&p.id) {
+                        if look.size_um > 0 {
+                            pin["size_um"] = json!(look.size_um);
+                        }
+                        if look.bold {
+                            pin["bold"] = json!(true);
+                        }
+                        if look.italic {
+                            pin["italic"] = json!(true);
+                        }
+                    }
+                    pin
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();

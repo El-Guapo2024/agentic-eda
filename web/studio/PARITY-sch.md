@@ -761,7 +761,7 @@ parts are `kicad-port/schSheetPinItems.ts` (the box and the hit: 7 tests); the d
 |---|---|---|
 | Pick, window and crossing box, the Pins filter, the summary | **identical**: the pin's box is the body box of a hierarchical label (the flag and the name from the pin's point into the sheet), grown by the accuracy; an exact hit within a pen's width is taken before a near one | `SCH_SHEET_PIN::HitTest`, `SCH_HIERLABEL::GetBodyBoundingBox` |
 | Move (M, G, a drag) | **identical**: the pin slides along the border it is on and the part of the move that leaves the border is dropped; pushed past the end of the border it stops at the corner and one dragged across goes to the nearest border (the text takes its spin from the side: `SetSide`); a wire on the pin goes with a drag and the net stays | `SCH_SHEET_PIN::ConstrainOnEdge`, `SCH_MOVE_TOOL` |
-| Sheet Pin Properties (E, a double-click) | **partial**: the name (a combo of the hierarchical labels the sheet's own file has; choosing one takes its shape) and the shape, one `edit_sheet_pin` (one undo step, nothing sent when nothing changed; the pin keeps its id so it stays selected); not the pin's font, size, bold, italic and colour (the IR has no place for them) | `DIALOG_SHEET_PIN_PROPERTIES` |
+| Sheet Pin Properties (E, a double-click) | **partial**: the name (a combo of the hierarchical labels the sheet's own file has; choosing one takes its shape) and the shape, one `edit_sheet_pin` (one undo step, nothing sent when nothing changed; the pin keeps its id so it stays selected); the text's size, bold and italic (section 31); not the pin's font face and colour (the IR has no place for them) | `DIALOG_SHEET_PIN_PROPERTIES` |
 | Delete | **identical**: the one pin goes (a second Delete is refused) and the net through it is cut | `SCH_EDIT_TOOL::DoDelete` |
 | Swap (Alt+S) | **identical**: two pins of one sheet trade places and with them the nets they reach; a pin with another kind of item, or pins of two sheets, are refused | `SCH_EDIT_TOOL::Swap` |
 
@@ -913,6 +913,20 @@ Tests: `crates/ops/src/sch_pin_helpers_tests.rs` (13: a stub out of each pin alo
 `schPinHelpers.test.ts`, `crates/kicad/tests/sch_pin_swaps.rs` (5: a file with swapped pins reads back with the swap for each turn and the nets as drawn, a symbol with its pins reads with none, a second round trip, the clipboard text and its reading, and -- slow, `EDA_SLOW_TESTS=1` -- kicad-cli reading the clipboard with the wires on the pins they were on), `crates/ops/src/sch_clipboard_tests.rs` (a pasted symbol keeps its swap).
 
 Browser check: `e2e/sch-groups.check.js` (five more scenarios: the submenu of a pin's context menu and Net Label with its undo; No Connect on two pins, its refusal, Hierarchical and Global Label; Wire held by the Drag tool, dropped, undone and cancelled with Escape; a sheet pin's global label on the root sheet; Duplicate and Copy and Paste of a symbol with swapped pins). It was run on 2026-10-15 on port 8829: all entries pass.
+
+
+## 31. A sheet pin's text look (`dialog_sheet_pin_properties.cpp`, `sch_label.cpp::SCH_HIERLABEL::GetSchematicTextOffset`, `sch_io_kicad_sexpr.cpp::saveSheet`; GAPS.md items 1, 12; P10b)
+
+Added 2026-10-15 (`task-sch-groups`). A hierarchical sheet pin is an `EDA_TEXT` (`SCH_SHEET_PIN` is a `SCH_HIERLABEL`): Sheet Pin Properties sets the size, bold and italic of its name as Label Properties does a label's. The IR keeps them as `SchExtras::sheet_pin_looks` (a `LabelLook` by the pin's id; absent is 50 mil, regular, upright, so a design that never set one serializes as before).
+
+| Behaviour | Status | KiCad file:function |
+|---|---|---|
+| Sheet Pin Properties | **identical in effect**: Text size (0.01 to 1000 mm: "Don't allow text to disappear"), Bold and Italic beside the name and the shape; OK is one `edit_sheet_pin` (`size_um`, `bold`, `italic` with the name, the shape and the place), one undo step, nothing when nothing changed; the look stays with a pin that is renamed or moved and goes with a pin or a sheet that is deleted | `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow` |
+| Drawn and picked | **identical in effect**: the flag grows with the size and the name is set in it (a bold text with a fifth of its size for a pen, an italic one leaning), a quarter of the text offset plus the size out from the flag, along the sheet on a left or right border and up it on a top or bottom one; the pin's box for a click and a window is that of its size (the default text is 50 mil: the painter drew it 1 mm before, with the name of a top or bottom pin lying) | `SCH_HIERLABEL::GetSchematicTextOffset`, `GetBodyBoundingBox` |
+| The file | **identical**: `(pin "NAME" shape (at ..) (uuid ..) (effects (font (size S S) (bold yes) (italic yes)) (justify ..)))`, read back by the pin's uuid | `SCH_IO_KICAD_SEXPR::saveSheet`, `parseSchSheetPin`, `parseEDA_TEXT` |
+| Not done | | the pin's font face and colour; Copy, Paste and Duplicate of a sheet make it with no pins, as they always did, so a look is not carried; a pin made again by Sync Sheet Pins or Autoplace All Sheet Pins is a new pin with the default text |
+
+Tests: `crates/ops/src/sch_sheet_pin_tests.rs` (3: a look set and cleared by the default, the refusals, the look kept by a rename and a move and gone with the pin or the sheet), `crates/kicad/tests/sch_user_fields.rs` (`a_sheet_pins_text_look_is_written_and_read_back`), `schSheetPinItems.test.ts` (the command and the box), and `e2e/sch-groups.check.js` (Sheet Pin Properties with a size that would vanish refused, 2.54 mm bold italic set, the file saying so, one Undo). The whole file (23 scenarios, 152 checks: groups, user fields, Pin Helpers, swapped pins and this) was run on 2026-10-15 on port 8829: all pass.
 
 
 ## Manual click-through needed

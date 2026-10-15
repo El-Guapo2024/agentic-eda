@@ -43,7 +43,8 @@ pub enum SchCmd {
     /// Delete one sheet pin (`SCH_EDIT_TOOL::DoDelete` on a pin; what `CleanupSheetPins` and the sync dialog send).
     DeleteSheetPin { id: String },
     /// Rename, reshape or move one sheet pin (`SCH_SHEET_PIN` properties and the sync dialog's "update"); a field left
-    /// out is unchanged. The new position must still be on the border.
+    /// out is unchanged. The new position must still be on the border. `size_um` (0.01 to 1000 mm), `bold` and `italic` are how the pin's text is set
+    /// (`DIALOG_SHEET_PIN_PROPERTIES`: `SCH_SHEET_PIN` is an `EDA_TEXT`).
     EditSheetPin {
         id: String,
         #[serde(default)]
@@ -52,6 +53,12 @@ pub enum SchCmd {
         shape: Option<LabelShape>,
         #[serde(default)]
         at: Option<Point>,
+        #[serde(default)]
+        size_um: Option<Um>,
+        #[serde(default)]
+        bold: Option<bool>,
+        #[serde(default)]
+        italic: Option<bool>,
     },
     /// Change Symbol (`DIALOG_CHANGE_SYMBOLS::processSymbols`, `MODE::CHANGE`): every placed unit of the reference `id`
     /// takes the library symbol `lib_id`; position, orientation, unit and fields stay (fields are the caller's to reset).
@@ -362,7 +369,7 @@ impl<'a> Board<'a> {
             SchCmd::DeleteSheet { id } => delete_sheet(self.schematic_mut()?, id),
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
             SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
-            SchCmd::EditSheetPin { id, name, shape, at } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at),
+            SchCmd::EditSheetPin { id, name, shape, at, size_um, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_um: *size_um, bold: *bold, italic: *italic }),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
             SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style),
@@ -607,11 +614,15 @@ fn edit_graphic(sch: &mut SchematicSection, id: &str, mut graphic: SchGraphic) -
 
 fn delete_sheet(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckResult>> {
     let before = sch.sheets.len();
+    let pins: Vec<String> = sch.sheets.iter().filter(|s| s.id == id).flat_map(|s| s.pins.iter().map(|p| p.id.clone())).collect();
     sch.sheets.retain(|s| s.id != id);
     if sch.sheets.len() == before {
         return Err(vec![CheckResult::fail("ops_unknown_sheet", id, "no sheet with this id")]);
     }
     sch.extras.set_locked(id, false);
+    for pin in pins {
+        sch.extras.sheet_pin_looks.remove(&pin);
+    }
     Ok(())
 }
 
@@ -651,12 +662,25 @@ fn find_sheet_pin<'a>(sch: &'a mut SchematicSection, id: &str) -> Result<(&'a mu
 fn delete_sheet_pin(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckResult>> {
     let (s, i) = find_sheet_pin(sch, id)?;
     s.pins.remove(i);
+    sch.extras.sheet_pin_looks.remove(id);
     Ok(())
 }
 
-fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shape: Option<LabelShape>, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
+/// What Sheet Pin Properties sets of a pin's text (`EDA_TEXT`); a member left out is unchanged.
+#[derive(Debug, Clone, Copy, Default)]
+struct SheetPinLookEdit {
+    size_um: Option<Um>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+}
+
+fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shape: Option<LabelShape>, at: Option<Point>, look: SheetPinLookEdit) -> Result<(), Vec<CheckResult>> {
     if name.is_some_and(|n| n.trim().is_empty()) {
         return Err(vec![CheckResult::fail("ops_bad_sheet_pin", id, "a sheet pin needs a name")]);
+    }
+    // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear" (the limits of a label's)
+    if look.size_um.is_some_and(|size| !(10..=1_000_000).contains(&size)) {
+        return Err(vec![CheckResult::fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm.")]);
     }
     let (s, i) = find_sheet_pin(sch, id)?;
     if let Some(p) = at {
@@ -675,7 +699,25 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
     if let Some(p) = at {
         pin.at = p;
     }
-    if pin.name == before.name && pin.shape == before.shape && pin.at == before.at {
+    let renamed_or_moved = pin.name != before.name || pin.shape != before.shape || pin.at != before.at;
+    // the look: the default one (50 mil, regular, upright) is no entry
+    let was = sch.extras.sheet_pin_looks.get(id).copied().unwrap_or_default();
+    let mut now = was;
+    if let Some(size) = look.size_um {
+        now.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
+    }
+    if let Some(b) = look.bold {
+        now.bold = b;
+    }
+    if let Some(i) = look.italic {
+        now.italic = i;
+    }
+    if now.is_default() {
+        sch.extras.sheet_pin_looks.remove(id);
+    } else {
+        sch.extras.sheet_pin_looks.insert(id.to_string(), now);
+    }
+    if !renamed_or_moved && now == was {
         return Err(vec![CheckResult::fail("ops_sheet_pin_unchanged", id, "the pin already has these properties")]);
     }
     // The pin keeps its id: it is the same item after its Properties (KiCad keeps the item and its selection), and a pin moved by `sch_move` keeps it too.
@@ -876,15 +918,15 @@ mod tests {
         assert_eq!(add(&mut b, "nope", "X", p(10_000, 12_000)), "ops_unknown_sheet");
 
         // Renaming and reshaping, then a move along the edge; a no-op is refused.
-        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None })).unwrap();
         let renamed = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(renamed.shape, LabelShape::Bidirectional);
         assert_eq!(renamed.id, vin.id, "the pin keeps its id, so it is still the selected item after its Properties");
-        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)) })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)), size_um: None, bold: None, italic: None })).unwrap();
         let moved = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(moved.at, p(10_000, 18_000));
-        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: Some("VBUS".into()), shape: None, at: None })).unwrap_err()[0].check, "ops_sheet_pin_unchanged");
-        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: None, shape: None, at: Some(p(12_000, 12_000)) })).unwrap_err()[0].check, "ops_sheet_pin_off_border");
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: Some("VBUS".into()), shape: None, at: None, size_um: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_unchanged");
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: None, shape: None, at: Some(p(12_000, 12_000)), size_um: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_off_border");
 
         b.apply(&Cmd::sch(SchCmd::DeleteSheetPin { id: moved.id.clone() })).unwrap();
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].pins.len(), 1);

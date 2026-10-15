@@ -516,6 +516,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
     let mut sheet_locked: Vec<bool> = Vec::new();
+    // how each sheet pin's text is set, by the pin's id (`SchExtras::sheet_pin_looks`)
+    let mut sheet_pin_looks: Vec<(String, eda_model::sch_extras::LabelLook)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
@@ -528,6 +530,12 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                 let shape = sexpr::txt(p, 2).map(label_shape_from_token).unwrap_or_default();
                 let at = sexpr::find(p, "at").and_then(point_mm)?;
                 let id = sexpr::find(p, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+                // `(effects (font (size h w) bold italic) ..)`: how the pin's text is set (`SCH_SHEET_PIN` is an `EDA_TEXT`); the default one is no entry
+                let effects = read_effects(p);
+                let look = eda_model::sch_extras::LabelLook { size_um: if effects.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { effects.size_um }, bold: effects.bold, italic: effects.italic, auto_rotate: false };
+                if !id.is_empty() && !look.is_default() {
+                    sheet_pin_looks.push((id.clone(), look));
+                }
                 Some(eda_model::ir::SheetPin { id, name, shape, at: mm_point_to_um(at) })
             })
             .collect();
@@ -600,6 +608,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         }
         sch.extras.body_styles.extend(body_style_entries);
         sch.extras.pin_swaps.extend(pin_swap_entries);
+        sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {
