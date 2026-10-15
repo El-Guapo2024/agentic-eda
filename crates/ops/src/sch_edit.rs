@@ -179,6 +179,18 @@ pub enum SchCmd {
     /// are placed by the manual routine (`AUTOPLACE_MANUAL`: beside the symbol, on a side that has no pins, clear of what is drawn around it) and stay
     /// autoplaced, so a later turn of the symbol places them again. Refused when every field is already where it would put them.
     AutoplaceFields { ids: Vec<String> },
+    /// Add a user-defined field to a symbol (`DIALOG_SYMBOL_PROPERTIES::OnAddField`): `id` is the symbol's reference (every placed unit has the field), `name` the
+    /// field's name (not one of the four standard fields and not one the symbol has, whatever the case) and `text` what it shows. It starts hidden, like a field
+    /// KiCad adds (`SetVisible( false )`); show it, place it and move it as any field (`fld:<reference>:<name>`).
+    AddUserField {
+        id: String,
+        name: String,
+        #[serde(default)]
+        text: String,
+    },
+    /// Remove a user-defined field from a symbol (`DIALOG_SYMBOL_PROPERTIES::OnDeleteField`: "The first %d fields are mandatory"): the field and the places it
+    /// had on every placed unit go.
+    RemoveUserField { id: String, name: String },
     /// Text Properties on a free-standing text (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`): its text, its size (0.01 to 1000 mm, "don't
     /// allow text to disappear"), its angle (KiCad offers horizontal and vertical: any angle is made upright) and how it is justified about its anchor,
     /// `h` (left, centre, right) and `v` (top, centre, bottom) in the text's own axes.
@@ -248,6 +260,7 @@ impl SchCmd {
             SchCmd::PlaceLabel { net, .. } => vec![net.as_str()],
             SchCmd::PlaceText { content, .. } => vec![content.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
+            SchCmd::AddUserField { id, .. } | SchCmd::RemoveUserField { id, .. } => vec![id.as_str()],
             SchCmd::SetStroke { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
@@ -280,6 +293,8 @@ impl SchCmd {
             SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
             SchCmd::EditField { id, .. } => format!("schematic edit-field {id}"),
             SchCmd::AutoplaceFields { ids } => format!("schematic autoplace-fields {}", ids.join(" ")),
+            SchCmd::AddUserField { id, name, .. } => format!("schematic field-add {id} {name:?}"),
+            SchCmd::RemoveUserField { id, name } => format!("schematic field-remove {id} {name:?}"),
             SchCmd::EditText { id, .. } => format!("schematic edit-text {id}"),
             SchCmd::EditSheet { id, .. } => format!("schematic edit-sheet {id}"),
             SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
@@ -303,7 +318,7 @@ impl SchCmd {
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
             SchCmd::PlaceLabel { .. } => "schematic-label",
-            SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } => "schematic-fields",
+            SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
             SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } => "schematic-pins",
@@ -315,7 +330,7 @@ impl SchCmd {
     /// of the names of the nets drawn inside it, so those are read from the drawing like any other edit (`Cmd::edits_connectivity`).
     pub fn edits_connectivity(&self) -> bool {
         match self {
-            SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } => false,
+            SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
             // a group is a set of names; it moves, joins and leaves nothing
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
@@ -364,6 +379,8 @@ impl<'a> Board<'a> {
                 },
             ),
             SchCmd::AutoplaceFields { ids } => self.autoplace_sch_fields(ids),
+            SchCmd::AddUserField { id, name, text } => self.add_user_field(id, name, text),
+            SchCmd::RemoveUserField { id, name } => self.remove_user_field(id, name),
             SchCmd::EditText { id, text, size_um, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle, *h, *v),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_um, style, color, diameter_um } => self.set_sch_stroke(ids, *width_um, *style, *color, *diameter_um),

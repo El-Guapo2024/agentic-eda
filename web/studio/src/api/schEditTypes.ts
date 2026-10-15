@@ -161,6 +161,10 @@ export type SchEditCmd =
     }
   /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on these symbols, power symbols, sheets, or the item each listed field belongs to. */
   | { verb: "autoplace_fields"; ids: string[] }
+  /** Add a user-defined field to the symbol `id` (a reference): `DIALOG_SYMBOL_PROPERTIES::OnAddField`. It starts hidden; show it with `edit_field` and `visible`. */
+  | { verb: "add_user_field"; id: string; name: string; text?: string }
+  /** Remove a user-defined field from the symbol `id` (a reference): `OnDeleteField`. The four standard fields cannot go. */
+  | { verb: "remove_user_field"; id: string; name: string }
   /** Text Properties of a free text: its text, its size (um, 0.01 to 1000 mm), its angle (millidegrees; horizontal or vertical) and its justification about the anchor. */
   | { verb: "edit_text"; id: string; text?: string; size_um?: Um; angle?: number; h?: SchHAlign; v?: SchVAlign }
   /** Sheet Properties: the sheet's name and the file it shows (a bare name; one the project has is linked to, a new one gets the content). */

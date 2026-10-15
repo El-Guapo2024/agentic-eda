@@ -209,3 +209,41 @@ export function autoplaceCmd(sch: Pick<Schematic, "symbols" | "power_symbols" | 
 
 /** The ids of a selection that are fields. */
 export const selectedFields = (selection: Iterable<string>): string[] => [...selection].filter(isFieldId);
+
+// ---------------------------------------------------------------------------------------------------------------------------- user-defined fields
+
+/** The four fields every symbol has (`SCH_SYMBOL`'s mandatory ones). Any other field of a symbol is user-defined (`FIELD_T::USER`). */
+export const STANDARD_SYMBOL_FIELDS = ["Reference", "Value", "Footprint", "Datasheet"] as const;
+
+/** Is `name` a standard field's, whatever the case (`parseSchField` and `FindFieldCaseInsensitive` match a name without regard to it)? */
+export const isStandardSymbolField = (name: string): boolean => STANDARD_SYMBOL_FIELDS.some((n) => n.toLowerCase() === name.toLowerCase());
+
+/** The user-defined fields among the fields of a symbol, in the order the backend lists them. */
+export const userFieldsOf = <T extends Pick<SchField, "name">>(fields: readonly T[] | undefined): T[] => (fields ?? []).filter((f) => !isStandardSymbolField(f.name));
+
+/** The name a new field starts with (`GetUserFieldName( ndx )`: `Field<N>`, N the number of fields the symbol has, `taken` being their names), the first that no field has. */
+export function newUserFieldName(taken: readonly string[]): string {
+  const lower = new Set(taken.map((n) => n.trim().toLowerCase()));
+  for (let n = lower.size; ; n++) {
+    const name = `Field${n}`;
+    if (!lower.has(name.toLowerCase())) return name;
+  }
+}
+
+/** Why `name` cannot be the name of a field the symbol has not yet (`taken`: the names of the fields it has), or null when it can. */
+export function userFieldNameError(name: string, taken: readonly string[]): string | null {
+  const n = name.trim();
+  if (n === "") return "A field needs a name.";
+  if (n.includes("{") || n.includes("}")) return `"${n}" is not a valid field name.`;
+  if (isStandardSymbolField(n) || taken.some((t) => t.trim().toLowerCase() === n.toLowerCase())) return `A field named "${n}" already exists.`;
+  return null;
+}
+
+/** Add a user-defined field to the symbol `id` (`DIALOG_SYMBOL_PROPERTIES::OnAddField`): hidden until it is shown (an `edit_field` with `visible`). */
+export const addUserFieldCmd = (id: string, name: string, text: string): Cmd => ({ op: "sch_edit", verb: "add_user_field", id, name: name.trim(), text }) as unknown as Cmd;
+
+/** Remove a user-defined field from the symbol `id` (`OnDeleteField`). */
+export const removeUserFieldCmd = (id: string, name: string): Cmd => ({ op: "sch_edit", verb: "remove_user_field", id, name }) as unknown as Cmd;
+
+/** Set the text of the field `name` of the item `owner` (Field Properties with only the text changed). */
+export const fieldTextCmd = (owner: string, name: string, text: string): Cmd => ({ op: "sch_edit", verb: "edit_field", id: fieldId(owner, name), text }) as unknown as Cmd;

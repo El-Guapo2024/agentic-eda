@@ -1,18 +1,21 @@
-// Schematic groups check (GAPS.md package P10b; item 17): Group, Ungroup, Add Items, Remove Items and Group Properties on the sheet, groups that nest, the whole group selected by a click on a member, Enter Group
-// (a double click) and Leave Group, a window and a crossing box around a group, a group moved, turned, mirrored, locked, deleted, copied, pasted and duplicated as one tree, what is made while a group
-// is entered joining it, the Grouping and Enter Group entries of the context menu, and the `(group ...)` forms the derived `.kicad_sch` has.
-// Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir>`), with the schematic tab
-// open -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY of a board: it edits and undoes, and it leaves Strict off while it runs. It makes
-// nothing that stays: every scenario undoes what it did (and, if it left anything behind, the run undoes until the sheet is as it was).
+// Schematic groups and user-defined fields check (GAPS.md package P10b; items 1, 12 and 17). Groups: Group, Ungroup, Add Items, Remove Items and Group Properties on the sheet,
+// groups that nest, the whole group selected by a click on a member, Enter Group (a double click) and Leave Group, a window and a crossing box around a group, a group moved,
+// turned, mirrored, locked, deleted, copied, pasted and duplicated as one tree, what is made while a group is entered joining it, the Grouping and Enter Group entries of the
+// context menu, and the `(group ...)` forms the derived `.kicad_sch` has. User-defined fields: one added in Symbol Properties, shown and placed beside the others, picked,
+// moved, turned, mirrored, edited and hidden like Reference and Value, and written to the file where the sheet draws it.
+// Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir>`), with the
+// schematic tab open -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY of a board: it edits and undoes, and it leaves Strict
+// off while it runs. It makes nothing that stays: every scenario undoes what it did (and, if it left anything behind, the run undoes until the sheet is as it was).
+// `window.__schGroupsOnly = /regexp/` runs only the scenarios whose names match.
 //
 // It answers through `window.__schGroupsCheck`:
 //   { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }
-// A run takes a few minutes (each edit waits for the server's answer), longer than a tool call may last, so it runs on its own: read it with `await __schGroupsCheck.wait(30000)` (it returns when the
-// run is done or the time is up) until `.done`. In a hidden pane the browser stops timers and animation frames; the script then drives both from a fetch loop. A hidden pane also tells the canvas its size
-// only after a screenshot: take one after loading the page, or the view the script works from has no size and the setup says so.
+// A run takes a few minutes (each edit waits for the server's answer), longer than a tool call may last, so it runs on its own: read it with `await __schGroupsCheck.wait(30000)` (it
+// returns when the run is done or the time is up) until `.done`. In a hidden pane the browser stops timers and animation frames; the script then drives both from a fetch loop. A
+// hidden pane also tells the canvas its size only after a screenshot: take one after loading the page, or the view the script works from has no size and the setup says so.
 //
-// It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`, every action by its id), the dialog's controls (their `aria-label`s)
-// and the pointer events a user makes on the canvas.
+// It works through `window.__eda` (select with `common.InteractiveSelection.selectItems`, undo with `common.Interactive.undo`, every action by its id), the dialog's controls (their
+// `aria-label`s) and the pointer events a user makes on the canvas.
 (async () => {
   const results = [];
   const check = (window.__schGroupsCheck = { results, done: false, ok: false, wait: null });
@@ -66,6 +69,7 @@
       junctions: s.junctions.map((j) => [j.id, j.at]),
       groups: (s.groups ?? []).map((g) => [g.id, g.name, [...g.member_ids].sort()]),
       locked: [...(s.locked ?? [])].sort(),
+      fields: s.symbols.map((x) => [x.id, (x.fields ?? []).map((f) => [f.name, f.text, f.visible, f.at, f.vertical, f.h])]),
     });
   };
   const select = async (ids) => { await __eda.run("common.InteractiveSelection.clear"); if (ids.length > 0) await __eda.run("common.InteractiveSelection.selectItems", ids); await sleep(250); };
@@ -619,6 +623,190 @@
       t(named && named.members.length === 2, `the named group lists the uuids of C1 and C2 (${named && named.members.length})`);
       t(outer && named && outer.members.includes(named.uuid) && outer.members.length === 2, "and the group that holds it lists that group's uuid and C3's");
       t(forms.every((f) => f.members.every((u) => text.includes(`(uuid "${u}")`) || forms.some((g) => g.uuid === u))), "every member uuid is the uuid of an item in the file");
+    });
+
+
+    // ----- a user-defined field
+    const fieldOf = async (ref, name) => ((await sch(MCU)).symbols.find((x) => x.id === ref)?.fields ?? []).find((f) => f.name === name);
+    /** `(property "name" "text" (at x y angle) ...)` of the symbol `ref` in the file the studio derives (millimetres), or null. */
+    const fileProperty = async (ref, name) => {
+      const files = (await json("/api/schematic.kicad_sch")).files;
+      const text = (files.find((f) => /mcu_u1/.test(f.name)) ?? files[0]).text;
+      const start = text.indexOf(`(property "Reference" "${ref}"`);
+      if (start < 0) return null;
+      const end = text.indexOf("(pin ", start);
+      const m = text.slice(start, end < 0 ? undefined : end).match(new RegExp(`\\(property "${name}" "([^"]*)" \\(at ([-\\d.]+) ([-\\d.]+) (\\d+)\\)([^\\n]*)\\n([^\\n]*)`));
+      return m ? { text: m[1], at: [Number(m[2]), Number(m[3])], angle: Number(m[4]), flags: m[5], effects: m[6] } : null;
+    };
+    const dialog = () => document.querySelector(".dialog");
+    const addUserField = async (ref, name, text) => {
+      await post({ op: "sch_edit", verb: "add_user_field", id: ref, name, text }, MCU);
+      await post({ op: "sch_edit", verb: "edit_field", id: `fld:${ref}:${name}`, visible: true }, MCU);
+      await sleep(300);
+    };
+    const near = (a, b, tol = 1) => Math.abs(a - b) <= tol;
+
+    await scenario("A user-defined field is added in Symbol Properties, shown and placed with the others, and written to the file; one undo step", async (t) => {
+      t(!(await fieldOf("C1", "MPN")), "C1 has no MPN field");
+      await select(["C1"]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(700);
+      t(!!dialog() && /Symbol Properties/.test(dialog().textContent), "Properties on a symbol opens Symbol Properties");
+      buttonText(dialog(), "Add Field").click();
+      await sleep(250);
+      const nameBox = dialog().querySelector('input[aria-label="New field name"]');
+      t(!!nameBox && /^Field\d+$/.test(nameBox.value), `Add Field starts a row called Field<N> (${nameBox && nameBox.value})`);
+      // a name the symbol has is refused, and nothing is applied
+      setValue(nameBox, "value");
+      await sleep(100);
+      buttonText(dialog(), "OK").click();
+      await sleep(500);
+      t(!!dialog() && /already exists/.test(dialog().textContent), "a name a standard field has is refused in the dialog");
+      setValue(dialog().querySelector('input[aria-label="New field name"]'), "MPN");
+      await sleep(100);
+      setValue(dialog().querySelector('input[aria-label="MPN value"]'), "CL05B104KO5NNNC");
+      await sleep(100);
+      const shown = [...dialog().querySelectorAll("label")].find((l) => /Show the MPN field/.test(l.title)).querySelector("input");
+      t(!shown.checked, "a new field is hidden until it is shown");
+      shown.click();
+      await sleep(100);
+      buttonText(dialog(), "OK").click();
+      await sleep(1400);
+      t(!dialog(), "OK closes the dialog");
+      const f = await fieldOf("C1", "MPN");
+      const [r, v] = [await fieldOf("C1", "Reference"), await fieldOf("C1", "Value")];
+      t(f && f.id === "fld:C1:MPN" && f.text === "CL05B104KO5NNNC" && f.visible, `C1 has the field, shown (${JSON.stringify(f && [f.id, f.text, f.visible])})`);
+      t(f && new Set([r.at[1], v.at[1], f.at[1]]).size === 3 && f.at[1] > v.at[1] && v.at[1] > r.at[1], `the three texts are stacked on their own lines (${[r.at[1], v.at[1], f.at[1]]})`);
+      const p = await fileProperty("C1", "MPN");
+      t(p && p.text === "CL05B104KO5NNNC" && f && near(p.at[0], f.at[0] / 1000, 0.002) && near(p.at[1], f.at[1] / 1000, 0.002) && !/hide/.test(p.effects), `the file has it where the sheet draws it (${JSON.stringify(p)} for ${f && f.at})`);
+      await undo();
+      t(!(await fieldOf("C1", "MPN")) && !(await fileProperty("C1", "MPN")), "one Undo takes the field away again");
+    });
+
+    await scenario("A user-defined field is an item: a click selects it, and it moves, turns, mirrors and hides like Reference and Value", async (t) => {
+      await addUserField("C1", "MPN", "CL05B104");
+      const id = "fld:C1:MPN";
+      let f = await fieldOf("C1", "MPN");
+      t(f && f.visible, "the field is shown");
+      await fitTo(["C1", id]);
+      await select([]);
+      await clickAt(f.at[0] + 600, f.at[1]);
+      t(same(selectedIds(), [id]), `a click on its text selects the field (${selectedIds()})`);
+      // the others stay when it moves
+      const ref0 = (await fieldOf("C1", "Reference")).at;
+      await post({ op: "sch_move", verb: "move", ids: [id], dx: 2540, dy: -2540 }, MCU);
+      await sleep(500);
+      const moved = await fieldOf("C1", "MPN");
+      t(near(moved.at[0], f.at[0] + 2540) && near(moved.at[1], f.at[1] - 2540), `Move takes it by the offset (${f.at} -> ${moved.at})`);
+      t(same((await fieldOf("C1", "Reference")).at, ref0), "and the Reference stays");
+      const p = await fileProperty("C1", "MPN");
+      t(p && near(p.at[0], moved.at[0] / 1000, 0.002) && near(p.at[1], moved.at[1] / 1000, 0.002), `the file has it where it was moved (${JSON.stringify(p && p.at)})`);
+      await undo();
+      t(same((await fieldOf("C1", "MPN")).at, f.at), "one Undo puts it back");
+      // R turns its text a quarter where it stands, X flips its justification
+      await select([id]);
+      await __eda.run("eeschema.InteractiveEdit.rotateCCW");
+      await sleep(800);
+      let g = await fieldOf("C1", "MPN");
+      t(g.vertical === true && same(g.at, f.at), `R turns the text where it stands (vertical ${g.vertical})`);
+      const q = await fileProperty("C1", "MPN");
+      t(q && q.angle === 90, `and the file says 90 (${q && q.angle})`);
+      await undo();
+      await select([id]);
+      await __eda.run("eeschema.InteractiveEdit.mirrorH");
+      await sleep(800);
+      g = await fieldOf("C1", "MPN");
+      t(g.h !== f.h && same(g.at, f.at), `X flips the justification (${f.h} -> ${g.h})`);
+      await undo();
+      // Delete hides it and keeps its text (`SCH_EDIT_TOOL::DoDelete` on a field)
+      await select([id]);
+      await __eda.run("common.Interactive.delete");
+      await sleep(800);
+      g = await fieldOf("C1", "MPN");
+      t(g && g.visible === false && g.text === "CL05B104", "Delete hides it and keeps its text");
+      const hidden = await fileProperty("C1", "MPN");
+      t(hidden && /hide yes/.test(hidden.effects + hidden.flags), `and the file says so (${JSON.stringify(hidden && hidden.effects)})`);
+      await undo();
+      t((await fieldOf("C1", "MPN")).visible === true, "one Undo shows it again");
+      // the symbol carries it along
+      await post({ op: "sch_move", verb: "move", ids: ["C1"], dx: 2540, dy: 0 }, MCU);
+      await sleep(500);
+      const carried = await fieldOf("C1", "MPN");
+      t(near(carried.at[0], f.at[0] + 2540) && near(carried.at[1], f.at[1]), `a symbol takes it along (${f.at} -> ${carried.at})`);
+    });
+
+    await scenario("Field Properties edit the text of a user-defined field (an empty one too), and its look", async (t) => {
+      await addUserField("C1", "MPN", "CL05B104");
+      const id = "fld:C1:MPN";
+      await select([id]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(600);
+      t(!!dialog() && /Edit MPN Field/.test(dialog().textContent), "Properties on the field opens Field Properties");
+      const text = dialog().querySelector(".kv-grid input");
+      t(text.value === "CL05B104" && !text.disabled, "the text is editable");
+      setValue(text, "CL05B104KO5NNNC");
+      await sleep(100);
+      const checks = [...dialog().querySelectorAll("label")].map((l) => [l.textContent.trim(), l.querySelector("input")]);
+      checks.find(([n]) => /Bold/.test(n))[1].click();
+      await sleep(100);
+      buttonText(dialog(), "OK").click();
+      await sleep(1200);
+      let f = await fieldOf("C1", "MPN");
+      t(f.text === "CL05B104KO5NNNC" && f.bold === true, `the text and the bold look are set (${f.text} ${f.bold})`);
+      const p = await fileProperty("C1", "MPN");
+      t(p && p.text === "CL05B104KO5NNNC" && /bold yes/.test(p.effects), `and written (${JSON.stringify(p)})`);
+      await undo();
+      f = await fieldOf("C1", "MPN");
+      t(f.text === "CL05B104" && !f.bold, "one Undo takes both back");
+      // an empty text is allowed for a user-defined field, not for a Value
+      await select([id]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(600);
+      setValue(dialog().querySelector(".kv-grid input"), "");
+      await sleep(100);
+      t(!buttonText(dialog(), "OK").disabled, "OK is allowed with no text for a user-defined field");
+      buttonText(dialog(), "OK").click();
+      await sleep(1000);
+      t((await fieldOf("C1", "MPN")).text === "", "the field is empty");
+      await closeDialogs();
+    });
+
+    await scenario("Symbol Properties edit and remove a user-defined field; Autoplace Fields places a shown one with the others", async (t) => {
+      await addUserField("C1", "MPN", "CL05B104");
+      await select(["C1"]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(700);
+      const value = dialog().querySelector('input[aria-label="MPN value"]');
+      t(!!value && value.value === "CL05B104", "the field has its row, with its text");
+      setValue(value, "TEXT2");
+      await sleep(100);
+      buttonText(dialog(), "OK").click();
+      await sleep(1200);
+      t((await fieldOf("C1", "MPN")).text === "TEXT2", "OK sets the text of the row");
+      await undo();
+      t((await fieldOf("C1", "MPN")).text === "CL05B104", "one Undo takes it back");
+      // Autoplace Fields (O) puts the field with the others again, in one undo step
+      await post({ op: "sch_move", verb: "move", ids: ["fld:C1:MPN"], dx: 10000, dy: 10000 }, MCU);
+      await sleep(400);
+      await select(["C1"]);
+      await __eda.run("eeschema.InteractiveEdit.autoplaceFields");
+      await sleep(900);
+      const f = await fieldOf("C1", "MPN");
+      const [r, v] = [await fieldOf("C1", "Reference"), await fieldOf("C1", "Value")];
+      t(near(f.at[0], r.at[0]) && f.at[1] > v.at[1] && v.at[1] > r.at[1], `Autoplace Fields puts it on its own line under the Value (${[r.at, v.at, f.at].map((a) => a.join(",")).join(" | ")})`);
+      await undo();
+      // remove it from the dialog
+      await select(["C1"]);
+      await __eda.run("eeschema.InteractiveEdit.properties");
+      await sleep(700);
+      dialog().querySelector('button[aria-label="Remove MPN"]').click();
+      await sleep(150);
+      t(!dialog().querySelector('input[aria-label="MPN value"]'), "the row is gone");
+      buttonText(dialog(), "OK").click();
+      await sleep(1200);
+      t(!(await fieldOf("C1", "MPN")) && !(await fileProperty("C1", "MPN")), "OK removes the field from the symbol and the file");
+      await undo();
+      t(!!(await fieldOf("C1", "MPN")), "one Undo brings it back");
     });
 
     // -------------------------------------------------------------------------------------------------------------------- the end

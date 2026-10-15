@@ -2066,7 +2066,7 @@ export type LibSymbols = Record<string, LibSymbol>;
 
 /** One field of a symbol, power symbol or sheet as `GET /api/schematic` sends it: the text and where KiCad draws it on the sheet (`eda_engine::fields::PageField`). */
 export interface SchField {
-  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
+  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown) and, after them, the symbol's user-defined fields (hidden until shown); a sheet's `Sheetname`, `Sheetfile`. */
   name: string;
   text: string;
   /** What `${NAME}` in `text` stands for (`SCH_FIELD::GetShownText`); absent when it is `text` itself. A Reference never has one: the painter writes it with its unit letter. */

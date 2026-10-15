@@ -29,7 +29,7 @@ use eda_model::sch_extras::{JunctionLook, SchStroke};
 use eda_model::symbol::{LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
-use crate::sch_extras_io::{parse_bool, uuid_of};
+use crate::sch_extras_io::{parse_bool, read_effects, uuid_of, EffectsLook};
 use crate::sexpr::{self, Sexpr};
 use crate::symbol_lib::build_symbol_table;
 
@@ -129,6 +129,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         exclude_from_board: bool,
         exclude_from_sim: bool,
         uuid: Option<String>,
+        /// The properties beyond the standard fields: user-defined fields (`FIELD_T::USER`), with where and how each is drawn.
+        user_fields: Vec<RawUserField>,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
     // each power symbol's `(uuid ..)`, parallel to `power_symbols`
@@ -193,7 +195,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         }
 
         overrides.extend(parse_instance_overrides(item, at_um));
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item) });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item) });
     }
 
     if opts.unique_references {
@@ -245,6 +247,9 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     // `(body_style 2)` of the symbols placed in the alternate body style of a library symbol that has one, by `field_key` (`SchExtras::body_styles`)
     let mut body_style_entries: Vec<(String, u32)> = Vec::new();
+    // the user-defined fields of the symbols (`SchematicSection::user_fields`, by reference) and where each unit draws them (`field_layout`, by `field_key`)
+    let mut user_fields_read: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let mut field_layout_read: BTreeMap<String, Vec<eda_model::ir::FieldPlacement>> = BTreeMap::new();
     for reference in order {
         let idxs = &by_ref[&reference];
         // Every instance of one reference is the same real part (one
@@ -324,6 +329,18 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                 exclude_from_board: r.exclude_from_board,
                 exclude_from_sim: r.exclude_from_sim,
             });
+            if !r.user_fields.is_empty() {
+                // the text of a user field is the symbol's, whatever the unit; the place is each unit's own, in the frame the writer measures it in
+                // (`eda_engine::fields::page_field`: from the symbol's origin, through its turn and mirror and the width of the box a mirror is about)
+                let part = parts.last().expect("the part of this reference");
+                let sym = symbols.last().expect("the symbol just pushed");
+                let lib_for_geometry = resolved.map(|l| if r.body_style > 1 && l.has_alternate_body() { l.in_style(r.body_style).into_owned() } else { l.clone() });
+                let width = eda_engine::symgeom::SymbolGeom::of(sym, part, lib_for_geometry.as_ref()).width;
+                for u in &r.user_fields {
+                    user_fields_read.entry(reference.clone()).or_default().entry(u.name.clone()).or_insert_with(|| u.text.clone());
+                }
+                field_layout_read.insert(eda_model::ir::field_key(&reference, r.unit), r.user_fields.iter().map(|u| u.placement(sym, width)).collect());
+            }
         }
     }
 
@@ -531,7 +548,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() }, field_layout: Default::default() };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: user_fields_read, imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() }, field_layout: field_layout_read };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -751,6 +768,82 @@ pub(crate) fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
         comments.pop();
     }
     Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments, paper })
+}
+
+/// A user-defined field of a placed symbol as the file has it (`SCH_IO_KICAD_SEXPR_PARSER::parseSchField`): the text, where its anchor is on the sheet and
+/// at what angle, how it is set, and whether it is drawn.
+struct RawUserField {
+    name: String,
+    text: String,
+    at_um: Point,
+    angle_deg: f64,
+    look: EffectsLook,
+    hidden: bool,
+    show_name: bool,
+    do_not_autoplace: bool,
+}
+
+impl RawUserField {
+    /// The field as a placement in the frame of `sym` (`SCH_FIELD::SetPosition`: the page position taken back through the symbol's transform; `eda_engine::fields::
+    /// local_placement_on_page`), `width` being the box a mirror is about.
+    fn placement(&self, sym: &SymbolInstance, width: f64) -> eda_model::ir::FieldPlacement {
+        use eda_model::ir::{TextJustify, TextVAlign};
+        let has = |w: &str| self.look.justify.iter().any(|j| j == w);
+        let h = if has("left") {
+            TextJustify::Left
+        } else if has("right") {
+            TextJustify::Right
+        } else {
+            TextJustify::Center
+        };
+        let v = if has("top") {
+            TextVAlign::Top
+        } else if has("bottom") {
+            TextVAlign::Bottom
+        } else {
+            TextVAlign::Center
+        };
+        // a field is along the sheet or up it (`keepUpright`)
+        let vertical = eda_model::kicad_geom::keep_upright_is_vertical(self.angle_deg);
+        let mut p = eda_engine::fields::local_placement_on_page(sym.at, sym.rot, sym.mirrored, width, &self.name, (self.at_um.x as f64, self.at_um.y as f64), vertical, h, v, !self.hidden);
+        p.size_um = if self.look.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { self.look.size_um };
+        p.bold = self.look.bold;
+        p.italic = self.look.italic;
+        p.name_shown = self.show_name;
+        p.no_autoplace = self.do_not_autoplace;
+        p
+    }
+}
+
+/// The properties of a placed symbol that are no standard field (`FIELD_T::USER`): every `(property ...)` but Reference, Value, Footprint, Datasheet and
+/// Description (matched without regard to case, as `parseSchField` does), in file order, the first of a name. `(property private "Name" "text" ...)` is read too
+/// (the flag is not kept).
+fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
+    let mut out: Vec<RawUserField> = Vec::new();
+    for p in sexpr::find_all(item, "property") {
+        // `private` is a word of its own before the name; a field called "private" has a list (its position) where the text would end
+        let shift = usize::from(sexpr::txt(p, 1) == Some("private") && p.get(3).is_some_and(|n| n.text().is_some()));
+        let (Some(name), Some(text)) = (sexpr::txt(p, 1 + shift), sexpr::txt(p, 2 + shift)) else { continue };
+        if name.is_empty() || ["Reference", "Value", "Footprint", "Datasheet", "Description"].iter().any(|m| m.eq_ignore_ascii_case(name)) || out.iter().any(|f| f.name == name) {
+            continue;
+        }
+        let at = sexpr::find(p, "at");
+        let at_um = at.and_then(|a| Some(Point { x: crate::import::mm_to_um(sexpr::num(a, 1)?), y: crate::import::mm_to_um(sexpr::num(a, 2)?) })).unwrap_or(Point { x: 0, y: 0 });
+        let effects = sexpr::find(p, "effects");
+        // `(hide yes)`: KiCad 9 writes it in the property, before `(effects ...)`, and in it for a file we wrote; a bare `hide` is older still
+        let hidden = parse_bool(p, "hide").unwrap_or(false) || effects.is_some_and(|e| parse_bool(e, "hide").unwrap_or(false) || e.iter().skip(1).any(|c| c.text() == Some("hide")));
+        out.push(RawUserField {
+            name: name.to_string(),
+            text: text.to_string(),
+            at_um,
+            angle_deg: at.and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0),
+            look: read_effects(p),
+            hidden,
+            show_name: parse_bool(p, "show_name").unwrap_or(false),
+            do_not_autoplace: parse_bool(p, "do_not_autoplace").unwrap_or(false),
+        });
+    }
+    out
 }
 
 /// A symbol instance's own `(property "Name" "Value" ...)` text, by name.

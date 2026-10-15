@@ -5391,6 +5391,8 @@ mod sch_groups_tests;
 #[cfg(test)]
 mod sch_fields_tests;
 #[cfg(test)]
+mod sch_user_fields_tests;
+#[cfg(test)]
 mod sch_body_style_tests;
 #[cfg(test)]
 mod sch_props_tests;

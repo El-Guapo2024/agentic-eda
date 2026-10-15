@@ -344,3 +344,70 @@ fn kicad_loads_nested_groups_and_writes_them_back_with_every_member() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// -------------------------------------------------------------------------------------------------------- a placed user field (P10b step 2)
+
+/// The invisible `<text x=".." y=".." textLength=".." text-anchor="..">content</text>` element kicad-cli's SVG export writes beside the strokes of each text: where
+/// the text is, in millimetres of the page: the x and y of its middle and the length of the text.
+fn svg_text(svg: &str, content: &str) -> Option<(f64, f64, f64)> {
+    let end = svg.find(&format!(">{content}</text>"))?;
+    let start = svg[..end].rfind("<text ")?;
+    let tag = &svg[start..end];
+    let attr = |name: &str| -> Option<f64> {
+        let from = tag.find(&format!("{name}=\""))? + name.len() + 2;
+        tag[from..].split('"').next()?.parse().ok()
+    };
+    Some((attr("x")?, attr("y")?, attr("textLength")?))
+}
+
+#[test]
+fn kicad_draws_a_placed_user_field_where_we_put_it_in_a_sheet_with_nested_groups() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let Some(cli) = find_kicad_cli() else {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    };
+    // the sheet of the groups test, with two user fields of U1: `MPN`, shown 12.7 mm right of and 20.32 mm above the origin of the symbol (left justified, centred
+    // on its line), and `Manufacturer`, hidden
+    let m = model();
+    let mut sch = grouped(&m);
+    let user = sch.user_fields.entry("U1".into()).or_default();
+    user.insert("MPN".into(), "74LVC1G08".into());
+    user.insert("Manufacturer".into(), "TexasInstruments".into());
+    sch.field_layout.insert("U1".into(), vec![eda_model::ir::FieldPlacement { dx: 12_700, dy: -20_320, visible: true, h: eda_model::ir::TextJustify::Left, ..eda_model::ir::FieldPlacement::at_origin("MPN") }]);
+    let file_text = export_kicad_sch(&design_with(sch), &m, &META).expect("the sheet exports");
+    let (ax, ay) = (76.2 + 12.7, 76.2 - 20.32);
+    assert!(file_text.contains(&format!("(property \"MPN\" \"74LVC1G08\" (at {ax} {ay} 0)")), "our file puts the field at {ax} {ay}:\n{}", file_text.lines().filter(|l| l.contains("MPN")).collect::<Vec<_>>().join("\n"));
+
+    let dir = std::env::temp_dir().join(format!("eda_sch_user_field_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("field.kicad_sch");
+    std::fs::write(&file, &file_text).unwrap();
+
+    // 1. the ERC runs: a file with nested groups and a user field loads
+    assert!(erc(&cli, &file).get("sheets").is_some());
+
+    // 2. the SVG draws the shown field where we put it, and not the hidden one
+    let svg_dir = dir.join("svg");
+    let out = Command::new(&cli).args(["sch", "export", "svg", "--no-background-color", "--output"]).arg(&svg_dir).arg(&file).output().expect("run kicad-cli");
+    assert!(out.status.success(), "kicad-cli sch export svg: {}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    let svg = std::fs::read_to_string(svg_dir.join("field.svg")).expect("the SVG of the sheet");
+    let (x, y, len) = svg_text(&svg, "74LVC1G08").unwrap_or_else(|| panic!("the field is not in the SVG"));
+    // text-anchor "middle": x is the middle of a text that starts at its anchor; y is the middle of the line, half the 1.27 mm text height below the anchor
+    assert!((x - (ax + len / 2.0)).abs() < 0.05, "x {x}, wanted {}", ax + len / 2.0);
+    assert!((y - (ay + 0.635)).abs() < 0.05, "y {y}, wanted {}", ay + 0.635);
+    assert!(svg_text(&svg, "TexasInstruments").is_none(), "a hidden field is not drawn");
+
+    // 3. KiCad's own writer keeps the field, where it is and hidden or not, and the groups
+    let run = Command::new(&cli).args(["sch", "upgrade", "--force"]).arg(&file).output().expect("run kicad-cli");
+    assert!(run.status.success(), "kicad-cli sch upgrade: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    let back = std::fs::read_to_string(&file).unwrap();
+    assert!(back.contains(&format!("(property \"MPN\" \"74LVC1G08\"\n\t\t\t(at {ax} {ay} 0)")) || back.contains(&format!("(property \"MPN\" \"74LVC1G08\" (at {ax} {ay} 0)")), "KiCad kept the place:\n{}", back.lines().filter(|l| l.contains("MPN")).collect::<Vec<_>>().join("\n"));
+    let manufacturer = back.find("\"TexasInstruments\"").expect("KiCad kept the hidden field");
+    assert!(back[manufacturer..].lines().take(6).any(|l| l.contains("(hide yes)")), "and kept it hidden");
+    assert_eq!(group_forms(&back).len(), 3, "and the three groups");
+    let _ = std::fs::remove_dir_all(&dir);
+}

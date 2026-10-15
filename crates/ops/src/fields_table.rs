@@ -939,10 +939,18 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
     }
 
     // Validated: mutate.
+    let ids: Vec<String> = {
+        let mut v: Vec<String> = sch.symbols.iter().map(|s| s.id.clone()).collect();
+        v.sort();
+        v.dedup();
+        v
+    };
     for r in &changes.remove_fields {
         for m in sch.user_fields.values_mut() {
             m.remove(r);
         }
+        // the places the field had on the sheet go with it
+        crate::sch_fields::drop_field_placements(sch, &ids, r);
     }
     for r in &changes.rename_fields {
         for m in sch.user_fields.values_mut() {
@@ -950,13 +958,9 @@ pub fn apply_field_changes(sch: &mut SchematicSection, changes: &FieldChanges) -
                 m.insert(r.to.clone(), v);
             }
         }
+        // and a renamed field keeps its places
+        crate::sch_fields::rename_field_placements(sch, &ids, &r.from, &r.to);
     }
-    let ids: Vec<String> = {
-        let mut v: Vec<String> = sch.symbols.iter().map(|s| s.id.clone()).collect();
-        v.sort();
-        v.dedup();
-        v
-    };
     for a in &changes.add_fields {
         for id in &ids {
             sch.user_fields.entry(id.clone()).or_default().entry(a.clone()).or_default();

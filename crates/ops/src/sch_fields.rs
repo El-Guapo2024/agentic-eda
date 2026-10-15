@@ -328,6 +328,12 @@ impl<'a> Board<'a> {
                 self.edit_symbol_fields(&id, None, None, Some(text))?;
                 Ok(ctx.key.clone())
             }
+            // a user-defined field (`SchematicSection::user_fields`, part-wide): any text, none included (`SCH_FIELD::SetText`)
+            (OwnerKind::Symbol, other) if !eda_engine::fields::is_standard_field(other) => {
+                let id = ctx.symbol().expect("a symbol").id.clone();
+                self.schematic_mut()?.user_fields.entry(id).or_default().insert(other.to_string(), text.to_string());
+                Ok(ctx.key.clone())
+            }
             (OwnerKind::Power, "Value") => {
                 if blank {
                     return Err(fail("ops_bad_field", &ctx.key, "A value cannot be empty."));
@@ -349,6 +355,50 @@ impl<'a> Board<'a> {
             }
             _ => Err(fail("ops_field_text_fixed", &ctx.key, format!("the text of '{name}' is not edited"))),
         }
+    }
+
+    /// Add a user-defined field: see [`SchCmd::AddUserField`](crate::sch_edit::SchCmd::AddUserField).
+    pub(crate) fn add_user_field(&mut self, id: &str, name: &str, text: &str) -> Result<(), Vec<CheckResult>> {
+        let name = name.trim();
+        let sch = self.schematic_mut()?;
+        if !sch.symbols.iter().any(|s| s.id == id) {
+            return Err(fail("ops_unknown_item", id, "no symbol with this reference on the sheet"));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the symbol is locked"));
+        }
+        if name.is_empty() {
+            return Err(fail("ops_bad_field", id, "A field needs a name."));
+        }
+        // the table's rule (`FIELDS_EDITOR_GRID_DATA_MODEL`): a name that is generated (`${...}`) is no field of the symbol
+        if eda_model::text_vars::has_text_vars(name) || name.contains('{') {
+            return Err(fail("ops_bad_field", id, format!("'{name}' is not a valid field name.")));
+        }
+        let taken = eda_engine::fields::STANDARD_FIELDS.iter().any(|n| n.eq_ignore_ascii_case(name)) || sch.user_fields.get(id).is_some_and(|m| m.keys().any(|n| n.eq_ignore_ascii_case(name)));
+        if taken {
+            return Err(fail("ops_field_exists", id, format!("A field named '{name}' already exists.")));
+        }
+        sch.user_fields.entry(id.to_string()).or_default().insert(name.to_string(), text.to_string());
+        Ok(())
+    }
+
+    /// Remove a user-defined field: see [`SchCmd::RemoveUserField`](crate::sch_edit::SchCmd::RemoveUserField).
+    pub(crate) fn remove_user_field(&mut self, id: &str, name: &str) -> Result<(), Vec<CheckResult>> {
+        let sch = self.schematic_mut()?;
+        if eda_engine::fields::is_standard_field(name) {
+            return Err(fail("ops_field_mandatory", id, format!("The {name} field cannot be removed.")));
+        }
+        if sch.extras.is_locked(id) {
+            return Err(fail("ops_locked", id, "the symbol is locked"));
+        }
+        if sch.user_fields.get_mut(id).and_then(|m| m.remove(name)).is_none() {
+            return Err(fail("ops_unknown_item", id, format!("the symbol has no field '{name}'")));
+        }
+        if sch.user_fields.get(id).is_some_and(|m| m.is_empty()) {
+            sch.user_fields.remove(id);
+        }
+        drop_field_placements(sch, &[id.to_string()], name);
+        Ok(())
     }
 
     /// Autoplace Fields: see [`SchCmd::AutoplaceFields`](crate::sch_edit::SchCmd::AutoplaceFields).
@@ -427,6 +477,30 @@ fn keys_of(sch: &SchematicSection, id: &str) -> Vec<String> {
     keys.extend(sch.extras.body_styles.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.extend(sch.extras.pin_swaps.keys().filter(|k| k.as_str() == id || k.starts_with(&prefix)).cloned());
     keys.into_iter().collect()
+}
+
+/// The places a user-defined field had on the units of the symbols `refs` go (a field removed from them).
+pub(crate) fn drop_field_placements(sch: &mut SchematicSection, refs: &[String], name: &str) {
+    for id in refs {
+        for key in keys_of(sch, id) {
+            if let Some(placements) = sch.field_layout.get_mut(&key) {
+                placements.retain(|p| p.name != name);
+            }
+        }
+    }
+}
+
+/// A user-defined field of the symbols `refs` is renamed: the places it had keep it.
+pub(crate) fn rename_field_placements(sch: &mut SchematicSection, refs: &[String], from: &str, to: &str) {
+    for id in refs {
+        for key in keys_of(sch, id) {
+            if let Some(placements) = sch.field_layout.get_mut(&key) {
+                for p in placements.iter_mut().filter(|p| p.name == from) {
+                    p.name = to.to_string();
+                }
+            }
+        }
+    }
 }
 
 /// A symbol is renamed: what is kept per unit under its reference (where its fields are, whether Autoplace Fields put them there, its body style, the places
