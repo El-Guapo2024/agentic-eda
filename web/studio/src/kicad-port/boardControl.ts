@@ -161,6 +161,14 @@ export function rankPriorities(order: readonly string[]): Record<string, number>
   return out;
 }
 
+/**
+ * The priorities the Zone Manager shows and writes on OK: those Auto-Assign staged (`exact`: KiCad's `AutoAssignZonePriorities` can leave several zones with one priority, a
+ * same-net group) when it staged every zone's, else the consecutive ranks of the list (a row moved by hand). `ids` are the zones the dialog lists.
+ */
+export function stagedPriorities(order: readonly string[], exact: Readonly<Record<string, number>> | null, ids: readonly string[]): Record<string, number> {
+  return exact && ids.every((id) => exact[id] !== undefined) ? { ...exact } : rankPriorities(order);
+}
+
 export type ZoneMove = "top" | "up" | "down" | "bottom";
 
 /**

@@ -17,6 +17,7 @@ import {
   ratsnestModeCycle,
   selectedCopperZones,
   setNetsHidden,
+  stagedPriorities,
   swapHighlight,
   toggleLocalRatsnestFootprint,
   toggleLocalRatsnestPad,
@@ -224,4 +225,13 @@ test("flipPan: a pan made without the mirror in mind goes the other way along x 
   const after = { x: 130, y: 20, scale: 0.01 };
   assert.deepEqual(flipPan(false, before, after), after);
   assert.deepEqual(flipPan(true, before, after), { x: 70, y: 20, scale: 0.01 });
+});
+
+test("stagedPriorities: what Auto-Assign staged when it staged every zone, else the consecutive ranks of the list", () => {
+  const order = ["c", "b", "a"];
+  assert.deepEqual(stagedPriorities(order, null, order), { c: 2, b: 1, a: 0 });
+  assert.deepEqual(stagedPriorities(order, { a: 2, b: 2, c: 1 }, order), { a: 2, b: 2, c: 1 }, "a same-net group keeps one priority");
+  assert.deepEqual(stagedPriorities(order, { a: 2, b: 2 }, order), { c: 2, b: 1, a: 0 }, "a zone that came since has none staged: back to the ranks");
+  const staged = { a: 5 };
+  assert.notEqual(stagedPriorities(["a"], staged, ["a"]), staged, "a copy, not the staged map itself");
 });

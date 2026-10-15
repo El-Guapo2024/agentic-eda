@@ -8,39 +8,9 @@ import { useNonPassiveWheel } from "../hooks/useNonPassiveWheel";
 import type { FillZone, Zone } from "../api/types";
 import { layerColor } from "./canvas/layers";
 import { zoneLayers } from "../kicad-port/zoneLayers";
+import { fitView, PREVIEW_SIZE as SIZE, ringsBounds as bounds, ringsPath as path, worldAt, zoomAbout, type PreviewView } from "../kicad-port/zonePreview";
 
 type Pt = [number, number];
-
-interface View {
-  /** World µm at the centre of the canvas, and µm per pixel. */
-  cx: number;
-  cy: number;
-  scale: number;
-}
-
-const SIZE = { w: 300, h: 260 };
-
-function bounds(rings: readonly (readonly Pt[])[]): [number, number, number, number] | null {
-  let box: [number, number, number, number] | null = null;
-  for (const ring of rings) {
-    for (const [x, y] of ring) {
-      box = box ? [Math.min(box[0], x), Math.min(box[1], y), Math.max(box[2], x), Math.max(box[3], y)] : [x, y, x, y];
-    }
-  }
-  return box;
-}
-
-function path(rings: readonly (readonly Pt[])[]): string {
-  return rings.map((ring) => (ring.length < 3 ? "" : `M${ring.map(([x, y]) => `${x} ${y}`).join("L")}Z`)).join("");
-}
-
-/** The view that fits `box` (the board's edges, else the zone) in the canvas, with a margin. */
-export function fitView(box: [number, number, number, number] | null): View {
-  if (!box) return { cx: 0, cy: 0, scale: 100 };
-  const [x0, y0, x1, y1] = box;
-  const scale = Math.max((x1 - x0) / (SIZE.w * 0.92), (y1 - y0) / (SIZE.h * 0.92), 1);
-  return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, scale };
-}
 
 /** The colour KiCad's theme gives a layer, by its real key (`F.Cu` is `F_Cu`). */
 export function colorOfLayer(layer: string): string {
@@ -54,7 +24,7 @@ export function ZonePreview({ zone, fills, outlinePolys, outline }: { zone: Zone
   const edges: Pt[][] = useMemo(() => (outlinePolys && outlinePolys.length > 0 ? outlinePolys.flatMap((p) => [p.outer, ...p.holes]) : outline && outline.length >= 3 ? [outline] : []), [outlinePolys, outline]);
   const boardBox = useMemo(() => bounds(edges) ?? (zone ? bounds([zone.outline as Pt[]]) : null), [edges, zone]);
   // The zoom a person chose is kept across zones and tabs (`m_hasSavedZoom`); until they chose one the canvas fits the board.
-  const [chosen, setChosen] = useState<View | null>(null);
+  const [chosen, setChosen] = useState<PreviewView | null>(null);
   const view = chosen ?? fitView(boardBox);
   const drag = useRef<{ x: number; y: number; cx: number; cy: number } | null>(null);
 
@@ -63,15 +33,13 @@ export function ZonePreview({ zone, fills, outlinePolys, outline }: { zone: Zone
   const box = useRef<HTMLDivElement>(null);
   const world = (e: { clientX: number; clientY: number }): Pt => {
     const r = box.current?.getBoundingClientRect() ?? { left: 0, top: 0 };
-    return [view.cx + (e.clientX - r.left - SIZE.w / 2) * view.scale, view.cy + (e.clientY - r.top - SIZE.h / 2) * view.scale];
+    return worldAt(view, e.clientX - r.left, e.clientY - r.top);
   };
   // The wheel zooms about the cursor (`preventDefault()` keeps the page from scrolling under it, which a React `onWheel` cannot do).
   useNonPassiveWheel(box, (e) => {
     e.preventDefault();
     const [wx, wy] = world(e);
-    const scale = Math.min(Math.max(view.scale * (e.deltaY < 0 ? 0.8 : 1.25), 1), 1_000_000);
-    const r = scale / view.scale;
-    setChosen({ cx: wx - (wx - view.cx) * r, cy: wy - (wy - view.cy) * r, scale });
+    setChosen(zoomAbout(view, wx, wy, e.deltaY < 0 ? 0.8 : 1.25));
   });
 
   return (

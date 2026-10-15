@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Cmd } from "../api/types";
 import { fetchAutoZonePriorities } from "../api/client";
 import { ZonePreview } from "./ZonePreview";
-import { filterZones, moveZone, rankPriorities, zoneOrder, type ZoneMove } from "../kicad-port/boardControl";
+import { filterZones, moveZone, stagedPriorities, zoneOrder, type ZoneMove } from "../kicad-port/boardControl";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { zoneIsOnCopper, zoneLayers } from "../kicad-port/zoneLayers";
 
@@ -51,7 +51,7 @@ export function ZoneManagerDialog() {
   const ids = new Set(zones.map((z) => z.id));
   const order = [...staged.filter((id) => ids.has(id)), ...zoneOrder(zones.filter((z) => !staged.includes(z.id)))];
   const byId = new Map(zones.map((z) => [z.id, z]));
-  const rank = exact && zones.every((z) => exact[z.id] !== undefined) ? exact : rankPriorities(order);
+  const rank = stagedPriorities(order, exact, zones.map((z) => z.id));
   const shown = filterZones(order.map((id) => byId.get(id)!), text, byName, byNet, layer || null);
   const shownIds = shown.map((z) => z.id);
   const filledIds = new Set(state.zoneFill?.zones.filter((f) => f.filled).map((f) => f.id));
