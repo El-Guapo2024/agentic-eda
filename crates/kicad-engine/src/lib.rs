@@ -53,6 +53,178 @@ fn need_cli() -> Result<PathBuf, Vec<CheckResult>> {
     find_cli().ok_or_else(|| fail("kicad_cli_missing", "kicad-cli", "kicad-cli not found (set EDA_KICAD_CLI, or install KiCad nightly with tools/install-kicad-nightly.sh)"))
 }
 
+// ------------------------------------------------------------- KiCad's own settings
+
+/// A `kicad-cli` command that reads none of the user's KiCad settings.
+///
+/// kicad-cli loads the settings of the KiCad it belongs to (`~/Library/Preferences/kicad/<version>` on macOS, `~/.config/kicad/<version>` on
+/// Linux): the global library tables, the path variables, the colour themes and every editor's defaults. A DRC, an ERC or an export of a derived
+/// project would then answer differently from one person's KiCad to the next, and loading the global tables costs a run seconds (a DRC of a
+/// 30-part board took 6 s with them and 1.5 s without, 2026-10-13). So every run gets a settings folder of this program's through
+/// `KICAD_CONFIG_HOME` (`SETTINGS_MANAGER::calculateUserSettingsPath`, which appends the version): KiCad writes its defaults there on first use,
+/// and nothing else writes to it.
+///
+/// That folder has no global library table: the derived files carry their footprints and symbols, and 3D models resolve through the path
+/// variables KiCad sets from its own install (`${KICAD10_3DMODEL_DIR}`). The library checks (`lib_footprint_issues`, `lib_footprint_mismatch`,
+/// `lib_symbol_issues`, `lib_symbol_mismatch`) are the one use of a table, and every derived project sets them to `ignore` unless the design
+/// says otherwise; when `project` (the `.kicad_pro` the run reads) turns one on, the run gets a second folder whose tables are a fresh install's:
+/// one entry each, naming the install's default table, as KiCad's first start writes them.
+///
+/// `EDA_KICAD_CONFIG_HOME` moves the folders (default: the system's temporary directory); `EDA_KICAD_USER_CONFIG=1` gives kicad-cli the user's
+/// settings back.
+pub fn cli_command(cli: &Path, project: Option<&Path>) -> Command {
+    let mut cmd = Command::new(cli);
+    if std::env::var_os("EDA_KICAD_USER_CONFIG").is_some() {
+        return cmd;
+    }
+    let libraries = project.is_some_and(library_checks_on);
+    if let Some(dir) = settings_home(cli, libraries) {
+        cmd.env("KICAD_CONFIG_HOME", dir);
+    }
+    cmd
+}
+
+/// Whether `project` turns a library check on: a severity other than `ignore` for one of them. A project that does not name them (a scratch
+/// project of this program's, such as the Footprint Checker's, which reads only its own checks) counts as leaving them off.
+fn library_checks_on(project: &Path) -> bool {
+    let Ok(pro) = std::fs::read_to_string(project).map(|t| serde_json::from_str::<Value>(&t).unwrap_or(Value::Null)) else { return false };
+    let on = |severities: &Value, key: &str| severities.get(key).and_then(Value::as_str).is_some_and(|s| s != "ignore");
+    let board = &pro["board"]["design_settings"]["rule_severities"];
+    let schematic = &pro["erc"]["rule_severities"];
+    ["lib_footprint_issues", "lib_footprint_mismatch"].iter().any(|k| on(board, k)) || ["lib_symbol_issues", "lib_symbol_mismatch"].iter().any(|k| on(schematic, k))
+}
+
+/// The settings folder of [`cli_command`]: `<base>/empty`, or `<base>/libraries` with a fresh install's global library tables in it.
+fn settings_home(cli: &Path, libraries: bool) -> Option<PathBuf> {
+    let base = std::env::var_os("EDA_KICAD_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("eda-kicad-config"));
+    let dir = base.join(if libraries { "libraries" } else { "empty" });
+    std::fs::create_dir_all(&dir).ok()?;
+    if libraries {
+        seed_library_tables(cli, &dir);
+    }
+    Some(dir)
+}
+
+/// The global `fp-lib-table` and `sym-lib-table` a fresh install of the KiCad that `cli` belongs to starts with: each names the install's own
+/// default table (`template/fp-lib-table`, `template/sym-lib-table`) as one library of type `Table`. Written once per settings version; a KiCad
+/// whose templates cannot be found gets none, and its library checks report what they find.
+fn seed_library_tables(cli: &Path, home: &Path) {
+    let version = settings_version(&cli_version(cli));
+    let Some(template) = template_dir(cli) else { return };
+    let dir = home.join(&version);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    for (file, head) in [("fp-lib-table", "fp_lib_table"), ("sym-lib-table", "sym_lib_table")] {
+        let target = dir.join(file);
+        let source = template.join(file);
+        if target.exists() || !source.exists() {
+            continue;
+        }
+        let text = format!(
+            "({head}\n\t(version 7)\n\t(lib (name \"KiCad\") (type \"Table\") (uri \"{}\") (options \"\") (descr \"KiCad Default Libraries\"))\n)\n",
+            source.display()
+        );
+        // Written beside the target and renamed into place, so a run that starts meanwhile never reads half a table.
+        let tmp = dir.join(format!(".{file}.{}", std::process::id()));
+        if std::fs::write(&tmp, text).is_ok() && std::fs::rename(&tmp, &target).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// The settings version KiCad keeps its settings under: the major and minor of `kicad-cli version` ("10.99.0" is "10.99", "9.0.4" is "9.0").
+fn settings_version(version: &str) -> String {
+    let mut parts = version.trim().split('.');
+    match (parts.next(), parts.next()) {
+        (Some(major), Some(minor)) if !major.is_empty() && major.chars().all(|c| c.is_ascii_digit()) => format!("{major}.{}", minor.chars().take_while(char::is_ascii_digit).collect::<String>()),
+        _ => "0.0".to_string(),
+    }
+}
+
+/// The install's `template` folder, where its default library tables are: beside `Contents/MacOS` in a macOS bundle
+/// (`KiCad.app/Contents/SharedSupport/template`), under `share/kicad` beside `bin` elsewhere (`/usr/share/kicad/template`).
+fn template_dir(cli: &Path) -> Option<PathBuf> {
+    let cli = std::fs::canonicalize(cli).unwrap_or_else(|_| cli.to_path_buf());
+    let parent = cli.parent()?;
+    let up = parent.parent()?;
+    [up.join("SharedSupport/template"), up.join("share/kicad/template")].into_iter().find(|d| d.join("fp-lib-table").exists())
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("eda-settings-test-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn the_settings_version_is_the_major_and_minor() {
+        assert_eq!(settings_version("10.99.0"), "10.99");
+        assert_eq!(settings_version("9.0.4"), "9.0");
+        assert_eq!(settings_version("10.0.0-rc1"), "10.0");
+        assert_eq!(settings_version(""), "0.0");
+    }
+
+    #[test]
+    fn a_project_turns_the_library_checks_on_only_by_naming_one() {
+        let d = scratch("pro");
+        let write = |name: &str, v: Value| {
+            let p = d.join(name);
+            std::fs::write(&p, v.to_string()).unwrap();
+            p
+        };
+        let derived = write("derived.kicad_pro", json!({
+            "board": { "design_settings": { "rule_severities": { "lib_footprint_issues": "ignore", "lib_footprint_mismatch": "ignore", "clearance": "error" } } },
+            "erc": { "rule_severities": { "lib_symbol_issues": "ignore", "lib_symbol_mismatch": "ignore" } },
+        }));
+        assert!(!library_checks_on(&derived), "every derived project ignores them by default");
+        let board_on = write("board.kicad_pro", json!({ "board": { "design_settings": { "rule_severities": { "lib_footprint_mismatch": "warning" } } } }));
+        assert!(library_checks_on(&board_on));
+        let sch_on = write("sch.kicad_pro", json!({ "erc": { "rule_severities": { "lib_symbol_mismatch": "error" } } }));
+        assert!(library_checks_on(&sch_on));
+        let scratch_project = write("scratch.kicad_pro", json!({ "board": { "design_settings": { "rule_severities": { "malformed_courtyard": "error" } } } }));
+        assert!(!library_checks_on(&scratch_project), "a project that does not name them leaves them off");
+        assert!(!library_checks_on(&d.join("missing.kicad_pro")));
+    }
+
+    #[test]
+    fn the_install_template_folder_is_found_in_a_mac_bundle_and_a_unix_tree() {
+        let d = scratch("tpl");
+        let mac = d.join("KiCad.app/Contents");
+        std::fs::create_dir_all(mac.join("MacOS")).unwrap();
+        std::fs::create_dir_all(mac.join("SharedSupport/template")).unwrap();
+        std::fs::write(mac.join("SharedSupport/template/fp-lib-table"), "(fp_lib_table)").unwrap();
+        std::fs::write(mac.join("MacOS/kicad-cli"), "").unwrap();
+        assert_eq!(template_dir(&mac.join("MacOS/kicad-cli")).map(|p| p.ends_with("SharedSupport/template")), Some(true));
+        let unix = d.join("usr");
+        std::fs::create_dir_all(unix.join("bin")).unwrap();
+        std::fs::create_dir_all(unix.join("share/kicad/template")).unwrap();
+        std::fs::write(unix.join("share/kicad/template/fp-lib-table"), "(fp_lib_table)").unwrap();
+        std::fs::write(unix.join("bin/kicad-cli"), "").unwrap();
+        assert_eq!(template_dir(&unix.join("bin/kicad-cli")).map(|p| p.ends_with("share/kicad/template")), Some(true));
+        assert_eq!(template_dir(&d.join("nowhere/kicad-cli")), None);
+    }
+
+    #[test]
+    fn every_run_gets_a_settings_folder_of_its_own() {
+        // Through the environment, as a test cannot know where the system keeps its temporary files for another process.
+        let cli = PathBuf::from("/nonexistent/kicad-cli");
+        let cmd = cli_command(&cli, None);
+        let home = cmd.get_envs().find(|(k, _)| *k == "KICAD_CONFIG_HOME").and_then(|(_, v)| v).map(PathBuf::from);
+        if std::env::var_os("EDA_KICAD_USER_CONFIG").is_some() {
+            assert!(home.is_none());
+        } else {
+            let home = home.expect("KICAD_CONFIG_HOME is set");
+            assert!(home.ends_with("empty") && home.is_dir(), "{}", home.display());
+        }
+    }
+}
+
 // ------------------------------------------------------------- the time limit
 
 /// How long a `kicad-cli pcb drc` or `sch erc` may run before it is killed. A
@@ -178,7 +350,7 @@ fn per_cli<T: Clone>(cache: &'static OnceLock<Mutex<HashMap<PathBuf, T>>>, cli: 
 pub fn cli_version(cli: &Path) -> String {
     static CACHE: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
     per_cli(&CACHE, cli, || {
-        let mut cmd = Command::new(cli);
+        let mut cmd = cli_command(cli, None);
         cmd.arg("version");
         output_within(cmd, limit(VERSION_TIMEOUT)).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default()
     })
@@ -384,7 +556,7 @@ pub fn convert_models_to_vrml(work: &Path, models: &[PathBuf]) -> Result<Vec<Opt
     let models_dir = work.join("m");
     let _ = std::fs::remove_dir_all(&models_dir);
     write_file(&board, models_board_text(models))?;
-    let mut cmd = Command::new(&cli);
+    let mut cmd = cli_command(&cli, None);
     cmd.args(["pcb", "export", "vrml", "--units", "mm", "--models-dir", "m", "-f", "-o"]).arg(work.join("models.wrl")).arg(&board);
     let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
     if !out.status.success() {
@@ -719,7 +891,7 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
     }
     let report = work.join("drc.json");
     let run = |refill: bool| {
-        let mut cmd = Command::new(&cli);
+        let mut cmd = cli_command(&cli, Some(&pcb.with_extension("kicad_pro")));
         cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
         if refill {
             cmd.arg("--refill-zones");
@@ -860,7 +1032,7 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     let cli = need_cli()?;
     let (sch, map) = export_schematic(design, model, work, "board")?;
     let report = work.join("erc.json");
-    let mut cmd = Command::new(&cli);
+    let mut cmd = cli_command(&cli, Some(&sch.with_extension("kicad_pro")));
     cmd.args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(&sch);
     let raw = run_report(cmd, &report, "erc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
@@ -1012,7 +1184,7 @@ pub fn stats(design: &Design, model: &ConstraintModel, work: &Path, opts: StatsO
     let (pcb, _) = export_board(design, model, work, "board")?;
     let out_file = work.join(if json { "stats.json" } else { "stats.txt" });
     let _ = std::fs::remove_file(&out_file);
-    let mut cmd = Command::new(&cli);
+    let mut cmd = cli_command(&cli, None);
     cmd.args(["pcb", "export", "stats", "--format", if json { "json" } else { "report" }, "--units", if opts.inches { "in" } else { "mm" }]);
     if opts.exclude_footprints_without_pads {
         cmd.arg("--exclude-footprints-without-pads");
@@ -1143,18 +1315,23 @@ const RULES_PROBE_PCB: &str = r#"(kicad_pcb
 const RULES_PROBE_SENTINEL: &str = "(rule \"eda_probe_sentinel\"\n  (constraint clearance (min 1000mm)))\n";
 
 /// Does kicad-cli load `rules` (a `.kicad_dru` text) whole? It does when the sentinel rule appended after it takes
-/// effect on the probe board. kicad-cli has no rules checker of its own, and a rules file that does not parse is
-/// dropped without a word (DRC then runs on the board's implicit rules alone), so a rule that must show itself is the
-/// only way to see that the file was read.
+/// effect on the probe board. kicad-cli has no rules checker of its own: an older one drops a rules file that does not
+/// parse without a word (DRC then runs on the board's implicit rules alone), a newer one stops the DRC with no report,
+/// so a rule that must show itself is the one way to see that the file was read either way.
 fn rules_load(cli: &Path, dir: &Path, rules: &str) -> Result<bool, Vec<CheckResult>> {
     work_dir(dir)?;
     write_file(&dir.join("probe.kicad_pcb"), RULES_PROBE_PCB)?;
     write_file(&dir.join("probe.kicad_dru"), format!("{rules}\n{RULES_PROBE_SENTINEL}"))?;
     let report = dir.join("probe.drc.json");
-    let mut cmd = Command::new(cli);
+    let mut cmd = cli_command(cli, None);
     cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(dir.join("probe.kicad_pcb"));
-    let raw = run_report(cmd, &report, "rules")?;
-    Ok(raw["violations"].as_array().is_some_and(|vs| vs.iter().any(|v| v["type"].as_str() == Some("clearance"))))
+    match run_report(cmd, &report, "rules") {
+        Ok(raw) => Ok(raw["violations"].as_array().is_some_and(|vs| vs.iter().any(|v| v["type"].as_str() == Some("clearance")))),
+        // A newer kicad-cli (10.99 by build 5334) stops a DRC whose rules do not compile ("DRC incomplete: could not compile custom design
+        // rules") and writes no report, where an older one dropped the file without a word: either way the rules did not load.
+        Err(e) if e.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("could not compile custom design rules"))) => Ok(false),
+        Err(e) => Err(e),
+    }
 }
 
 /// Ask kicad-cli whether `text` (a `.kicad_dru`) loads: once for the whole text, and, if it does not, once per step of a
@@ -1274,7 +1451,7 @@ fn run_export(cli: &Path, scope: &str, kind: &str, args: &[String], input: &Path
     if dir_kind && !out_arg.ends_with('/') {
         out_arg.push('/');
     }
-    let mut cmd = Command::new(cli);
+    let mut cmd = cli_command(cli, None);
     cmd.args([scope, "export", kind]).args(args).arg("-o").arg(&out_arg).arg(input);
     let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
     let mut files: Vec<String> = std::fs::read_dir(out_dir)
@@ -1360,7 +1537,7 @@ pub fn export_sch_bom(design: &Design, model: &ConstraintModel, work: &Path, roo
     }
     let started = std::time::SystemTime::now() - std::time::Duration::from_secs(1);
     let named = |v: &Value| v.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-    let mut cmd = Command::new(&cli);
+    let mut cmd = cli_command(&cli, None);
     cmd.args(["sch", "export", "bom", "--preset"]).arg(named(preset)).arg("--format-preset").arg(named(fmt)).arg("-o").arg(&output).arg(&sch);
     let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
     let written = output.metadata().and_then(|m| m.modified()).is_ok_and(|t| t >= started);
@@ -1838,13 +2015,14 @@ mod tests {
     }
 
     /// Sets environment variables for one test and puts them back however it ends. The environment
-    /// is the process's, shared by every test thread, so only one of these lives at a time.
-    struct Env {
+    /// is the process's, shared by every test thread, so only one of these lives at a time; a test that runs kicad-cli
+    /// takes one too (`footprint_check`), so another test's short time limit is never its own.
+    pub(crate) struct Env {
         keys: Vec<&'static str>,
         _only_one: std::sync::MutexGuard<'static, ()>,
     }
     impl Env {
-        fn take() -> Env {
+        pub(crate) fn take() -> Env {
             static ONE: Mutex<()> = Mutex::new(());
             Env { keys: vec![], _only_one: ONE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
         }

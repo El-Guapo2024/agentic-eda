@@ -244,11 +244,14 @@ impl CopiedSymbol<'_> {
 fn copied_symbol<'a>(input: &CopyInput<'_>, sym: &'a SymbolInstance) -> Option<CopiedSymbol<'a>> {
     let lib_id = if sym.lib_id.is_empty() { format!("eda:{}", sym.id) } else { sym.lib_id.clone() };
     let part = input.model.part(&sym.id);
-    let real: Option<LibSymbol> = if sym.lib_id.is_empty() || is_synthetic_lib_id(&sym.lib_id) {
+    // A generated symbol (`gen:`) is a real one made from the part (`ConstraintModel::real_symbol_of`, `gensym`): the same one the sheet's own file draws
+    // and its wires reach, so the copy has its pins where the copied wires end. Only the older synthetic form (`eda:`) is the generic box below.
+    let real: Option<LibSymbol> = if sym.lib_id.is_empty() {
         None
     } else {
         match part {
             Some(p) => input.model.real_symbol_of(&sym.lib_id, p),
+            None if is_synthetic_lib_id(&sym.lib_id) => None,
             None => input.model.symbol_of(&sym.lib_id),
         }
     };

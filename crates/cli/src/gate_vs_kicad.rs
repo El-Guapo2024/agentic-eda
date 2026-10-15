@@ -84,7 +84,7 @@ mod tests {
         let (_, map) = eda_kicad::export_kicad_pcb_mapped(design, model, &eda_kicad::ExportMeta { date: &date, title: "board" }).expect("export");
         let report = work.join("drc_all.json");
         let _ = std::fs::remove_file(&report);
-        let out = std::process::Command::new(eda_kicad_engine::find_cli().expect("kicad-cli"))
+        let out = eda_kicad_engine::cli_command(&eda_kicad_engine::find_cli().expect("kicad-cli"), None)
             .args(["pcb", "drc", "--format", "json", "--severity-all", "--all-track-errors", "--units", "mm", "-o"])
             .arg(&report)
             .arg(work.join("board.kicad_pcb"))
