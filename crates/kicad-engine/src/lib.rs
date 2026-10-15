@@ -1640,6 +1640,122 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `empty_design` with one copper pour on F.Cu, no net: enough for `refill_zones` to have something to fill.
+    fn design_with_a_pour() -> (Design, ConstraintModel) {
+        let (mut design, model) = empty_design();
+        design.routing = Some(
+            serde_json::from_value(json!({
+                "tracks": [], "vias": [],
+                "zones": [{ "id": "pour", "net": "", "layer": "F.Cu", "outline": [{ "x": 1000, "y": 1000 }, { "x": 9000, "y": 1000 }, { "x": 9000, "y": 9000 }, { "x": 1000, "y": 9000 }] }],
+            }))
+            .unwrap(),
+        );
+        (design, model)
+    }
+
+    /// The stand-in kicad-cli of the refill tests: writes what it was given to `$FAKE_LOG`, answers a DRC with an empty report and, asked for `--refill-zones
+    /// --save-board`, saves the board it was given with a `(filled_polygon ..)` in its zone and its own generator, as the real one does.
+    const FILLING_CLI: &str = r#"out=""; pcb=""; prev=""; refill=no; save=no
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  if [ "$a" = "--refill-zones" ]; then refill=yes; fi
+  if [ "$a" = "--save-board" ]; then save=yes; fi
+  pcb="$a"; prev="$a"
+done
+echo "$refill $save config=$KICAD_CONFIG_HOME $*" >> "$FAKE_LOG"
+cp "$pcb" "$pcb.given"
+echo '{"coordinate_units":"mm","kicad_version":"10.99.0-fake","violations":[],"unconnected_items":[]}' > "$out"
+if [ $refill = yes ] && [ $save = yes ] && [ -z "$FAKE_CANNOT_REFILL" ]; then
+  awk '/\(polygon/ && !done { print "(filled_polygon (layer \"F.Cu\") (pts (xy 1 1) (xy 9 1) (xy 9 9)))"; done = 1 } { gsub(/\(generator "eda-kicad"\)/, "(generator \"pcbnew\")"); print }' "$pcb" > "$pcb.saved" && mv "$pcb.saved" "$pcb"
+fi"#;
+
+    #[test]
+    fn fill_all_zones_runs_kicad_clis_filler_on_a_copy_through_cli_command_and_reads_its_fills_back() {
+        let mut env = Env::take();
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_refill_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls.log");
+        env.set("FAKE_LOG", &log);
+        env.set("EDA_KICAD_CLI", script(&dir, "filling.sh", FILLING_CLI));
+        env.set("EDA_KICAD_CONFIG_HOME", dir.join("settings"));
+        let work = dir.join("work");
+
+        // A board with no pour has nothing to fill: kicad-cli is not started.
+        let (bare, model) = empty_design();
+        let none = refill_zones(&bare, &model, &work).expect("nothing to fill");
+        assert!(none.zones.is_empty() && !log.exists(), "kicad-cli was started for a board with no zone");
+
+        let (design, model) = design_with_a_pour();
+        let fills = refill_zones(&design, &model, &work).expect("a refill");
+        assert_eq!(fills.engine, "kicad-cli 10.99.0-fake");
+        let entry = &fills.zones["pour"];
+        assert_eq!(entry.sig, eda_kicad::zone_fills::zone_signature(&design.routing.as_ref().unwrap().zones[0]), "the fill is the fill of the zone as it is now");
+        assert_eq!(entry.layers["F.Cu"][0].pts, vec![[1_000_000, 1_000_000], [9_000_000, 1_000_000], [9_000_000, 9_000_000]], "nanometres, as kicad-cli stored them");
+
+        // One launch, the filler's: the copy of the board in a folder of its own, saved, with the settings folder of `cli_command` (no user libraries to enumerate).
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(calls.lines().count(), 1, "{calls}");
+        assert!(calls.starts_with("yes yes "), "--refill-zones and --save-board: {calls}");
+        assert!(calls.contains("pcb drc --refill-zones --save-board"), "{calls}");
+        if std::env::var_os("EDA_KICAD_USER_CONFIG").is_none() {
+            let home = dir.join("settings").join("empty");
+            assert!(calls.contains(&format!("config={}", home.display())), "the empty settings folder of cli_command, not a folder of the refill's own: {calls}");
+            assert!(home.is_dir());
+        }
+        assert!(work.join("refill").join("refill.kicad_pcb").exists() && !work.join("board.kicad_pcb").exists(), "the board the other runs read is left as it is");
+        let given = std::fs::read_to_string(work.join("refill").join("refill.kicad_pcb.given")).unwrap();
+        assert!(given.contains("(generator \"eda-kicad\")") && !given.contains("(filled_polygon"), "kicad-cli was given the board unfilled, as we write it");
+        let pro: Value = serde_json::from_str(&std::fs::read_to_string(work.join("refill").join("refill.kicad_pro")).unwrap()).unwrap();
+        let severities = pro["board"]["design_settings"]["rule_severities"].as_object().unwrap();
+        assert!(!severities.is_empty() && severities.values().all(|v| v == "ignore"), "the copy's project ignores every check: the refill is all the run is for");
+
+        // A kicad-cli that cannot refill (9.0 does not know the options) leaves the board as we wrote it: said so, never taken for a fill.
+        env.set("FAKE_CANNOT_REFILL", "1");
+        let e = refill_zones(&design, &model, &work).unwrap_err();
+        assert_eq!(e[0].check, "kicad_cli_refill", "{e:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_drc_refills_first_on_a_copy_and_judges_the_board_with_that_fill_in_it_not_with_refill_zones() {
+        let mut env = Env::take();
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_drc_refill_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls.log");
+        env.set("FAKE_LOG", &log);
+        env.set("EDA_KICAD_CLI", script(&dir, "filling.sh", FILLING_CLI));
+        env.set("EDA_KICAD_CONFIG_HOME", dir.join("settings"));
+        let (design, model) = design_with_a_pour();
+        let work = dir.join("work");
+
+        let report = drc(&design, &model, &work, true).expect("refill, then DRC");
+        assert!(report.zones_refilled_by_kicad);
+        assert_eq!(report.zone_fills.as_ref().map(|k| k.counts()), Some((1, 1)), "the fills come back for the caller to keep");
+        let calls: Vec<String> = std::fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
+        assert_eq!(calls.len(), 2, "the refill, then the DRC: {calls:?}");
+        assert!(calls[0].starts_with("yes yes "), "{calls:?}");
+        assert!(calls[1].starts_with("no no ") && !calls[1].contains("--refill-zones"), "kicad-cli 10.99 drops its courtyard checks on a run that refills: {calls:?}");
+        let judged = std::fs::read_to_string(work.join("board.kicad_pcb.given")).unwrap();
+        assert!(judged.contains("(filled_polygon"), "the DRC judges the board with the fill in it");
+        let flat = judged.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("(filled_polygon (layer \"F.Cu\") (pts (xy 1 1) (xy 9 1) (xy 9 9) ) )"), "KiCad's own ring, as it stored it");
+
+        // Not asked for: the board as it is, the fills kept beside the design (none here), no refill.
+        let _ = std::fs::remove_file(&log);
+        let plain = drc(&design, &model, &work, false).expect("a plain DRC");
+        assert!(!plain.zones_refilled_by_kicad && plain.zone_fills.is_none());
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        assert!(!std::fs::read_to_string(work.join("board.kicad_pcb.given")).unwrap().contains("(filled_polygon"), "a zone never filled is exported unfilled, as in KiCad");
+
+        // A kicad-cli that cannot refill gives the DRC of the board as it is.
+        env.set("FAKE_CANNOT_REFILL", "1");
+        let fallback = drc(&design, &model, &work, true).expect("the DRC without a refill");
+        assert!(!fallback.zones_refilled_by_kicad && fallback.zone_fills.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_derived_files_are_named_after_the_project_with_safe_characters() {
         assert_eq!(file_stem("mcu_board_30plus"), "mcu_board_30plus");

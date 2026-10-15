@@ -152,11 +152,12 @@ pub fn nm_to_um(nm: i64) -> i64 {
 // ----------------------------------------------------------------------------------------------------- the zone's fingerprint
 
 /// A fingerprint of everything about a zone that its fill is a fill *of*: the outline, the layers, the net and the settings (clearance, minimum width, connection,
-/// thermal relief, priority, island removal, hatch, smoothing). Editing any of them takes the fill away (KiCad unfills a zone that is edited); the name, the
-/// border style and where the zone came from do not. The zone's own id is the key it is filed under.
+/// thermal relief, island removal, hatch, smoothing). Editing any of them takes the fill away (KiCad unfills a zone that is edited); the name, the border style and where
+/// the zone came from do not, and nor does the priority: the Zone Manager's OK changes the priorities and puts the zones' fills back (`DIALOG_ZONE_MANAGER::OnOk`), the
+/// next fill takes them into account. The zone's own id is the key it is filed under.
 pub fn zone_signature(z: &Zone) -> String {
     let text = format!(
-        "{:?}|{}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+        "{:?}|{}|{:?}|{}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
         z.outline,
         z.net,
         z.layer_set(),
@@ -166,7 +167,6 @@ pub fn zone_signature(z: &Zone) -> String {
         z.thermal_gap,
         z.thermal_spoke_width,
         z.pad_connection,
-        z.priority,
         z.island_removal_mode,
         z.min_island_area,
         z.fill_mode,
@@ -740,6 +740,9 @@ mod tests {
         let mut other_net = z.clone();
         other_net.net = "VCC".into();
         assert!(fills.current(&other_net).is_none());
+        let mut raised = z.clone();
+        raised.priority += 1;
+        assert!(fills.current(&raised).is_some(), "the Zone Manager's OK changes priorities and keeps the fills; the next fill takes them into account");
         // A zone drawn after the fill has none.
         let d3 = design(vec![z.clone(), zone("zone-b", "")]);
         assert_eq!(fills.tally(&d3), (1, 0));

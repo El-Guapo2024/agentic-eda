@@ -143,8 +143,8 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
     // One entry per zone and layer: a zone on several layers (`Zone::layers`) has a fill on each, under the same id.
     let zones_json: Vec<Value> = zones
         .iter()
-        // A rule area has no fill, ever: it is not in the report.
-        .filter(|z| !z.is_rule_area)
+        // A rule area has no fill, ever, and nor has an outline of fewer than three corners (kicad-cli fills neither): they are not in the report.
+        .filter(|z| !z.is_rule_area && z.outline.len() >= 3)
         .flat_map(|z| z.layer_set().into_iter().map(move |layer| (z, layer)))
         .map(|(z, layer)| {
             let fill = copper.get(&z.id, layer);
@@ -245,13 +245,15 @@ mod tests {
     }
 
     /// `GET /api/fill`: a zone never filled is an outline (`filled: false`, no fragments), one kicad-cli filled has its rings in micrometres, a zone edited since is an outline again
-    /// and counts as out of date in the source, and a rule area is not in the report at all.
+    /// and counts as out of date in the source, and a rule area, or an outline with fewer than three corners, is not in the report at all.
     #[test]
-    fn the_report_says_which_zones_have_a_current_fill_and_leaves_rule_areas_out() {
+    fn the_report_says_which_zones_have_a_current_fill_and_leaves_rule_areas_and_degenerate_outlines_out() {
         let mut keepout = square("ka", "", "F.Cu", 20_000);
         keepout.is_rule_area = true;
+        let mut line = square("zl", "", "F.Cu", 40_000);
+        line.outline.truncate(2);
         let (a, b) = (square("za", "", "F.Cu", 0), square("zb", "", "B.Cu", 0));
-        let dir = board_dir("report", vec![a.clone(), b.clone(), keepout.clone()]);
+        let dir = board_dir("report", vec![a.clone(), b.clone(), keepout.clone(), line.clone()]);
 
         // design.json keeps its zones in a canonical order, so they are found by id.
         let by_id = |r: &Value, id: &str| r["zones"].as_array().unwrap().iter().find(|z| z["id"] == id).cloned().unwrap_or(Value::Null);
@@ -259,7 +261,7 @@ mod tests {
         assert_eq!(r["source"], Value::Null, "nothing has been filled");
         let mut ids: Vec<&str> = r["zones"].as_array().unwrap().iter().map(|z| z["id"].as_str().unwrap()).collect();
         ids.sort();
-        assert_eq!(ids, ["za", "zb"], "the rule area has no fill, ever");
+        assert_eq!(ids, ["za", "zb"], "the rule area has no fill, ever, and two corners enclose nothing");
         assert!(r["zones"].as_array().unwrap().iter().all(|z| z["filled"] == false && z["fragments"].as_array().unwrap().is_empty() && z["area_um2"] == 0.0));
 
         let fills = KicadFills::new("kicad-cli 10.99.0".into(), "rev".into(), 2_500, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]));
@@ -274,7 +276,7 @@ mod tests {
         // Zone A is edited: its fill is no longer its own.
         let mut edited = a.clone();
         edited.min_thickness += 10;
-        write_zones(&dir, vec![edited, b, keepout]);
+        write_zones(&dir, vec![edited, b, keepout, line]);
         let r = report(&dir, false).unwrap();
         assert_eq!(by_id(&r, "za")["filled"], false);
         assert_eq!((r["source"]["zones"].clone(), r["source"]["stale"].clone()), (json!(0), json!(1)), "one zone out of date: {}", r["source"]);
