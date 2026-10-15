@@ -5785,6 +5785,38 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Each Pin Helper (a wire stub, a no-connect, a local, a hierarchical and a global label on a pin) makes exactly one undo step on the sheet, and one Undo puts it back exactly; a
+    /// helper that would change nothing is refused and is no step at all.
+    #[test]
+    fn every_pin_helper_is_one_undo_step() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_pin_helpers::PinHelper as H;
+        let dir = scratch("sch_pin_helper_undo");
+        setup_schematic(&dir);
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        for what in [H::Wire, H::NoConnect, H::NetLabel, H::HierLabel, H::GlobalLabel] {
+            let cmd = Cmd::SchEdit(V::PinHelper { what, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 });
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        // two labels on two pins, the text each pin's: the pins have no name, so `<reference>_<number>`
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NetLabel, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 })), false, "test").unwrap();
+        let d = load(&dir).unwrap().1;
+        let mut texts: Vec<String> = d.schematic.as_ref().unwrap().labels.iter().map(|l| l.net.clone()).collect();
+        texts.sort();
+        assert_eq!(texts, ["R1_1", "R2_1"]);
+        // a no-connect where there is one already changes nothing: refused, and no step
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("have it already"), "{}", reasons(&e));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The verbs of a user-defined field (show it, edit its text, move, turn and mirror it, autoplace the fields, add and remove one) each make exactly one undo step on the
     /// sheet and one Undo puts it back exactly; the studio's sheet lists the field, hidden until it is shown, with the id every verb takes it by.
     #[test]

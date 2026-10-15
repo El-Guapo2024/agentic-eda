@@ -744,6 +744,11 @@ export interface StudioState {
    */
   schWirePick: { id: string; vertices: number[] } | null;
   /**
+   * The ends of several wires picked at once: what the Drag tool takes when the wire stubs of Pin Helpers > Wire are handed to it (`SetFlags( ENDPOINT )` on each new wire). Read by
+   * `pickedVertices` while the selection is those wires; cleared when the drag is dropped or cancelled.
+   */
+  schPickedEnds: Record<string, number[]> | null;
+  /**
    * base_screen.cpp's `m_LocalOrigin` (default (0,0), same as source) --
    * the status bar's dx/dy/dist is always relative to THIS point, set by
    * Space (common.Control.resetLocalCoords, pcb_base_frame.cpp's
@@ -973,6 +978,7 @@ const initialState: StudioState = {
   cursorUm: null,
   moveOriginUm: null,
   schWirePick: null,
+  schPickedEnds: null,
   localOriginUm: { x: 0, y: 0 },
   prefs: loadPreferences(browserStorage()),
   preferencesDialogOpen: false,
@@ -1077,6 +1083,7 @@ export type Action =
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
   | { type: "SET_SCH_WIRE_PICK"; pick: { id: string; vertices: number[] } | null }
+  | { type: "SET_SCH_PICKED_ENDS"; ends: Record<string, number[]> | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SET_PREFERENCES"; prefs: Preferences }
@@ -1339,6 +1346,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           armed: null,
           armedFootprint: null,
           movePreview: null,
+          schPickedEnds: null,
           activeTool: "select",
           drawState: null,
           zonePending: null,
@@ -1396,7 +1404,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, movePreview: board ? { ...p, rotateStepDeg: state.prefs.rotationStepDeg, flipDirection: state.prefs.flipDirection } : p };
     }
     case "SET_ACTIVE_TOOL":
-      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null };
+      // (the ends of the wires Pin Helpers handed to the Drag tool are the Drag tool's: they go when it does)
+      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null, schPickedEnds: action.tool === "drag" ? state.schPickedEnds : null };
     case "SET_VIEW":
       return { ...state, view: action.view };
     case "SET_SCHEMATIC_VIEW":
@@ -1468,6 +1477,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, moveOriginUm: action.at };
     case "SET_SCH_WIRE_PICK":
       return { ...state, schWirePick: action.pick };
+    case "SET_SCH_PICKED_ENDS":
+      return { ...state, schPickedEnds: action.ends };
     case "SET_LOCAL_ORIGIN":
       return { ...state, localOriginUm: action.at };
     case "TOGGLE_AUTO_PAN":
@@ -1745,6 +1756,12 @@ export interface StudioApi {
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
    */
   placeNewSchItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
+  /**
+   * A schematic command that puts new items on the sheet and hands them to the Drag tool at once, as Pin Helpers > Wire does (`RunSynchronousAction( SCH_ACTIONS::drag, &commit )`): the step is held
+   * open (`carry: "begin"`), `plan` reads the sheet before and after and says what to select, which ends of which wires are picked and where the hold is, the drop joins the step and Escape takes
+   * the new items away again (`revertCarriedPlacement`). False when the command was refused; a command that made nothing to drag stands as a step of its own.
+   */
+  dragNewSchItems: (cmd: Cmd, plan: (before: Schematic, after: Schematic) => { ids: string[]; ends: Record<string, number[]>; at: { x: number; y: number } } | null) => Promise<boolean>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
   /**
@@ -1786,7 +1803,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const carriedPlacementRef = useRef(false);
   useEffect(() => {
     // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
-    if (state.activeTool !== "move" && carriedPlacementRef.current) {
+    if (state.activeTool !== "move" && state.activeTool !== "drag" && carriedPlacementRef.current) {
       carriedPlacementRef.current = false;
       void postCarry("commit");
     }
@@ -2479,6 +2496,26 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }
+      return true;
+    },
+    dragNewSchItems: async (cmd, plan) => {
+      const st = stateRef.current;
+      const sheet = st.currentSheetPath;
+      const before = st.schematic;
+      if (!before) return false;
+      const ok = await runCmd(cmd, "begin");
+      if (!ok) return false;
+      const after = await fetchSchematic(sheet).catch(() => null);
+      const dragging = after ? plan(before, after) : null;
+      if (!dragging || dragging.ids.length === 0) {
+        await postCarry("commit"); // nothing to drag: what the command did stands
+        return true;
+      }
+      carriedPlacementRef.current = true;
+      dispatch({ type: "SET_SELECTION", refs: dragging.ids, raw: true });
+      dispatch({ type: "SET_SCH_PICKED_ENDS", ends: dragging.ends });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: dragging.at });
       return true;
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {

@@ -204,9 +204,22 @@ fn a_no_connect_helper_flags_each_pin_once() {
     let mut want = vec![p1, p3];
     want.sort_by_key(|q| (q.x, q.y));
     assert_eq!(at, want);
-    // a pin that has one already does not get a second (`CleanUp`: "two no-connects at one point become one")
-    let again = ok(after, PinHelper::NoConnect, &["pin:U1:1"]);
-    assert_eq!(again.no_connects.len(), 2);
+    // a pin that has one already does not get a second (`CleanUp`: "two no-connects at one point become one"), and a command that changes nothing is refused, so it is no undo step
+    let e = run(after.clone(), helper(PinHelper::NoConnect, &["pin:U1:1"], 0)).unwrap_err();
+    assert_eq!(e[0].check, "ops_pin_helper_unchanged");
+    // one pin that has it and one that has not: the one is done
+    let more = ok(after, PinHelper::NoConnect, &["pin:U1:1", "pin:U1:2"]);
+    assert_eq!(more.no_connects.len(), 3);
+}
+
+#[test]
+fn a_stub_that_lies_along_a_wire_that_is_there_changes_nothing_and_is_refused() {
+    let mut start = sheet(0, false);
+    let tip = pin_at(&start, "1");
+    // the wire of pin 1 already leaves it to the left: the stub is a part of it
+    start.wires.push(Wire { id: "w1".into(), net: "N".into(), pins: vec![], pts: vec![tip, p(tip.x - 5_080, tip.y)], bus: false });
+    let e = run(start, helper(PinHelper::Wire, &["pin:U1:1"], 0)).unwrap_err();
+    assert_eq!(e[0].check, "ops_pin_helper_unchanged");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------- labels

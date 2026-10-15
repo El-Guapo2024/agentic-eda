@@ -161,6 +161,11 @@ export type SchEditCmd =
     }
   /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on these symbols, power symbols, sheets, or the item each listed field belongs to. */
   | { verb: "autoplace_fields"; ids: string[] }
+  /**
+   * Pin Helpers (`PIN_TRICKS_MENU`): a wire stub, a no-connect or a local, hierarchical or global label on each pin (`pin:<reference>:<number>`) and sheet pin of `pins` (anything else is passed
+   * over; none is refused). A stub is one step of `grid`, the wire grid (um, 0 is 50 mil); a label says the pin's name and reads away from it. One undo step.
+   */
+  | { verb: "pin_helper"; what: "wire" | "no_connect" | "net_label" | "hier_label" | "global_label"; pins: string[]; grid?: Um }
   /** Add a user-defined field to the symbol `id` (a reference): `DIALOG_SYMBOL_PROPERTIES::OnAddField`. It starts hidden; show it with `edit_field` and `visible`. */
   | { verb: "add_user_field"; id: string; name: string; text?: string }
   /** Remove a user-defined field from the symbol `id` (a reference): `OnDeleteField`. The four standard fields cannot go. */

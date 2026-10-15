@@ -19,6 +19,7 @@ import { registerSchGroupActions } from "./schGroupActions";
 import { registerSchBodyStyleActions } from "./schBodyStyleActions";
 import { registerSchModuleSheetActions } from "./schModuleSheetActions";
 import { registerSchPinActions } from "./schPinActions";
+import { registerSchPinHelperActions } from "./schPinHelperActions";
 import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
@@ -194,6 +195,7 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   registerSchSheetPinActions(registry, ctx);
   registerSchGroupActions(registry, ctx);
   registerSchPinActions(registry, ctx);
+  registerSchPinHelperActions(registry, ctx);
   registerSchFieldActions(registry, ctx);
   registerSchBodyStyleActions(registry, ctx);
   registerSchModuleSheetActions(registry, ctx);

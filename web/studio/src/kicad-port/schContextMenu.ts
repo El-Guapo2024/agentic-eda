@@ -4,6 +4,7 @@
 // evaluated here over a summary of the selection. The studio shows an action KiCad would offer but that is not wired
 // as a disabled entry ("not ported yet"), the way its menus already do.
 import type { MenuNode } from "../kicad/types";
+import { allPinsOrSheetPins, PIN_HELPERS } from "./schPinHelpers";
 
 /** How many selected items there are of each kind the menu's conditions distinguish. */
 export interface SchSelectionSummary {
@@ -131,6 +132,8 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
 
   // `SCH_SELECTION_TOOL::Init` (priority 1): Enter Group for one selected group, Leave Group while one is entered
   add(single && s.groups === 1 && item("common.Interactive.groupEnter"), s.inGroup && item("common.Interactive.groupLeave"));
+  // `selToolMenu.AddMenu( makePinTricksMenu( m_selectionTool ), S_C::AllPinsOrSheetPins, 1 )`: Pin Helpers (`PIN_TRICKS_MENU`) for a selection of pins and sheet pins
+  add(allPinsOrSheetPins(s) && { type: "submenu", label: "Pin Helpers", items: PIN_HELPERS.map((h) => ({ type: "item", action: h.action, label: h.label }) as MenuNode) });
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
   // `GROUP_TOOL::Init`: the Grouping submenu for any selection (`GROUP_CONTEXT_MENU::update` says which of its four entries are on)
   if (s.total > 0) {

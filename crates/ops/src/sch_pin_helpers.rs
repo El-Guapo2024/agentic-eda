@@ -93,6 +93,32 @@ fn spin_away_from(body: (i64, i64)) -> LabelSpin {
     }
 }
 
+/// What a helper draws, as the places of it (a wire read from either end and its ids and nets left out, as a cleanup may merge it into another): to tell a command that changed
+/// nothing from one that did.
+type Drawn = (Vec<Vec<Point>>, Vec<Point>, Vec<Point>, Vec<(String, Point)>);
+
+fn drawn_items(sch: &eda_model::ir::SchematicSection) -> Drawn {
+    let mut wires: Vec<Vec<Point>> = sch
+        .wires
+        .iter()
+        .map(|w| {
+            let mut pts = w.pts.clone();
+            if pts.first() > pts.last() {
+                pts.reverse();
+            }
+            pts
+        })
+        .collect();
+    wires.sort();
+    let mut junctions: Vec<Point> = sch.junctions.iter().map(|j| j.at).collect();
+    junctions.sort();
+    let mut no_connects: Vec<Point> = sch.no_connects.iter().map(|n| n.at).collect();
+    no_connects.sort();
+    let mut labels: Vec<(String, Point)> = sch.labels.iter().map(|l| (l.net.clone(), l.at)).collect();
+    labels.sort();
+    (wires, junctions, no_connects, labels)
+}
+
 fn fail(check: &str, subject: &str, why: impl Into<String>) -> Vec<CheckResult> {
     vec![CheckResult::fail(check, subject, why)]
 }
@@ -145,6 +171,7 @@ impl<'a> Board<'a> {
             return Err(fail("ops_nothing_selected", ids.first().map(String::as_str).unwrap_or("pins"), "select a pin or a sheet pin"));
         }
         let step = if grid > 0 { grid } else { DEFAULT_WIRE_GRID_UM };
+        let was = drawn_items(self.schematic()?);
         match what {
             PinHelper::NoConnect => {
                 let sch = self.schematic_mut()?;
@@ -182,6 +209,10 @@ impl<'a> Board<'a> {
         }
         scene.clean_up();
         *self.schematic_mut()? = scene.finish();
+        // a no-connect on a pin that has one, a stub along a wire that is there: the cleanup took it back, and a step that changed nothing is no step
+        if drawn_items(self.schematic()?) == was {
+            return Err(fail("ops_pin_helper_unchanged", ids.first().map(String::as_str).unwrap_or("pins"), "the pins have it already"));
+        }
         Ok(())
     }
 }

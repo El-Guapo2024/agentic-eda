@@ -814,6 +814,8 @@ export function useActionRunner() {
       if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       // `EDIT_TOOL::Duplicate` / `PCB_CONTROL::Paste`: cancelling the move that carries the new items takes them away again.
       if ((state.tab === "pcb" || state.tab === "schematic") && state.activeTool === "move") void api.revertCarriedPlacement();
+      // Pin Helpers > Wire: the stubs were handed to the Drag tool, and cancelling it reverts the commit (`commit.Revert()`)
+      if (state.tab === "schematic" && state.activeTool === "drag") void api.revertCarriedPlacement();
       dispatch({ type: "ESCAPE" });
     });
 
