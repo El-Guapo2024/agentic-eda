@@ -29,8 +29,8 @@ export interface CheckerView {
     filter: RcFilter;
     /** The schematic's severity table as last read (`GET /api/sch/erc_severities`): what the marker menu needs to say a check's severity when the finding is waived. */
     severities: Record<string, RuleSeverity> | null;
-    /** The page Schematic Setup opens on (a marker menu's "Edit violation severities..." / "Edit pin-to-pin conflict map..."); null = the first. */
-    setupPage: "severities" | "pinmap" | null;
+    /** The page Schematic Setup opens on (a marker menu's "Edit violation severities..." / "Edit pin-to-pin conflict map..." / "Edit connection grid spacing..."); null = the first. */
+    setupPage: "severities" | "pinmap" | "formatting" | null;
   };
 }
 

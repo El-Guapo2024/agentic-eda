@@ -1350,6 +1350,7 @@ export type Cmd =
   | { op: "add_drc_exclusions"; exclusions: DrcExclusionSpec[] }
   /** "Remove exclusion for this violation" (and "Remove all exclusions ..."): put the violations back in the report. */
   | { op: "delete_drc_exclusions"; exclusions: Array<{ check: string; items: string[] }> }
+  | { op: "clear_drc_exclusions" }
   /** Schematic Setup > Violation Severity (`panel_setup_severities.cpp`): ERC settings key -> severity, the whole table (see `ErcSeveritiesReply`). */
   | { op: "set_erc_severities"; severities: Record<string, RuleSeverity> }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
@@ -1559,8 +1560,10 @@ export type Cmd =
   /** `eeschema.EditorControl.incrementAnnotations`: every reference with the start's letters and a number at least its own moves by `increment`. */
   | { op: "increment_annotations"; start: string; increment: number }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
-  | { op: "add_erc_exclusion"; check: string; location: string }
+  | { op: "add_erc_exclusion"; check: string; location: string; comment?: string; marker?: ErcMarker }
   | { op: "delete_erc_exclusion"; check: string; location: string }
+  | { op: "clear_erc_exclusions" }
+  | { op: "set_connection_grid"; mils: number }
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
@@ -2556,6 +2559,8 @@ export interface DrcReport {
   schematic_parity_error?: string;
   /** The checks whose severity is Ignore (the Ignored Tests tab). */
   ignored_checks?: IgnoredCheck[];
+  /** Set by Delete All Markers (`DIALOG_DRC::OnDeleteAllClick`, `m_drcRun = false`): the lists were emptied by hand, not by a clean board; Run DRC makes a report again. */
+  markers_deleted?: boolean;
 }
 
 // ---------------------------------------------------------------- ERC
@@ -2580,6 +2585,20 @@ export interface ErcItem {
   id: string | null;
 }
 
+/** An ERC marker as the report offers it and `add_erc_exclusion` keeps it (`eda_model::ir::ErcMarker`). */
+export interface ErcMarker {
+  /** KiCad's name for the kind of finding (`ERCET_PIN_NOT_CONNECTED`, ...). */
+  error_type: string;
+  /** Where the marker is, in nanometres. */
+  at_nm: [number, number];
+  /** The uuids of the items it names in the derived schematic, main first. */
+  items: string[];
+  /** The sheet paths of the marker (the uuids from the root sheet down); absent when it has none. */
+  sheet?: string[];
+  main_sheet?: string[];
+  aux_sheet?: string[];
+}
+
 export interface ErcViolation {
   /** KiCad's own ERC type name ("pin_not_connected", "wire_dangling", ...) for a kicad-cli violation; the readability check's own name ("schematic_wire_overlap", ...) for a lint finding. */
   check: string;
@@ -2597,6 +2616,14 @@ export interface ErcViolation {
   hint: string | null;
   /** kicad-cli violations only: every item it names. */
   items?: ErcItem[];
+  /** Why it was waived (`SCH_MARKER::GetComment`); empty for none. kicad-cli findings only. */
+  comment?: string;
+  /** Whether kicad-cli itself matched the exclusion in the derived project (`erc.erc_exclusions`). An exclusion the studio holds can be one kicad-cli's own report still lists: its marker is not known to the letter. */
+  kicad_matched?: boolean;
+  /** The finding's marker as KiCad keeps an exclusion (`kiapi.schematic.ErcMarker`), when the report says enough to write it to the letter: what `add_erc_exclusion` keeps for the derived project. */
+  marker?: ErcMarker;
+  /** The sheet kicad-cli's report lists the finding under (`ERC_SHEET::uuid_path`). */
+  sheet?: string;
 }
 
 export interface ErcReport {
@@ -2609,6 +2636,40 @@ export interface ErcReport {
   revision?: string;
   /** The checks whose severity is Ignore (the Ignored Tests tab). */
   ignored_checks?: IgnoredCheck[];
+  /** Set by Delete All Markers (`DIALOG_ERC::OnDeleteAllClick`, `m_ercRun = false`): see `DrcReport.markers_deleted`. */
+  markers_deleted?: boolean;
+}
+
+/** What the checker dialogs' "Save..." asks for (`POST /api/erc/report`, `/api/drc/report`): the file type, the Show boxes and the units; the DRC dialog's own checkboxes too. */
+export interface SavedReportRequest {
+  /** "report": the text file, `.rpt` (`WriteTextReport`); "json": `.json` (`WriteJsonReport`). */
+  format: "report" | "json";
+  errors: boolean;
+  warnings: boolean;
+  exclusions: boolean;
+  units: "mm" | "mil" | "in";
+  refill_zones?: boolean;
+  schematic_parity?: boolean;
+}
+
+/** The report kicad-cli wrote: the file name the dialog suggests (`ERC.rpt`, `DRC.json`) and its text. */
+export interface SavedReportReply {
+  ok: boolean;
+  message?: string;
+  file_name?: string;
+  report?: string;
+}
+
+/** GET /api/sch/formatting: the settings of Schematic Setup > Formatting the design keeps. */
+export interface SchFormattingReply {
+  ok: boolean;
+  message?: string;
+  /** Connection grid spacing in mils: the design's own, else KiCad's default (50). */
+  connection_grid_mils: number;
+  min_connection_grid_mils: number;
+  max_connection_grid_mils: number;
+  /** True when the design stores a setting of its own. */
+  custom: boolean;
 }
 
 /** GET /api/sch/erc_severities: the ERC severities Schematic Setup > Violation Severity edits. */

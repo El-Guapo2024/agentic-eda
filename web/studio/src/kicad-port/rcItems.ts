@@ -9,10 +9,16 @@
 // The dialogs (components/DrcDialog.tsx, ErcDialog.tsx) and the canvases' marker menus render what these return and run the commands they
 // build; nothing here knows React or the store.
 //
+//   common/rc_item.cpp                RC_TREE_MODEL::DeleteCurrentItem / DeleteItems (Delete Marker, Delete All Markers)
+//   pcbnew/tools/board_inspection_tool.cpp  InspectDRCErrorMenuText     pcbnew/tools/drc_tool.cpp  FixDRCErrorMenuText / FixDRCError
+//   eeschema/tools/sch_inspection_tool.cpp  InspectERCErrorMenuText     eeschema/tools/sch_edit_tool.cpp  FixERCErrorMenuText / FixERCError
+//
 // What differs from KiCad, and why:
-//   - "Exclude all violations of rule '...'" is per violated *rule* in KiCad (a custom rule's name; DRC only); kicad-cli's report does not say which
-//     rule a violation broke, so the menu offers "all '<check>' violations" -- every violation of the check -- on both the board and the schematic.
-//   - The ERC menu has no "Fix"/"Inspect" entries: those open KiCad's own library table and symbol diff dialogs.
+//   - "Exclude all violations of rule '...'" is per violated *rule* in KiCad (`DRC_ITEM::GetViolatingRule`, a custom rule that is not implicit; DRC only).
+//     kicad-cli's report does not carry the rule, but it names it in the violation's text -- `DRC_CONSTRAINT::GetName` is "rule '<name>'" for a custom
+//     rule and the bare name of an implicit one -- so the rule is read from there ([`violatingRule`]). The menu also offers "all '<check>' violations"
+//     -- every violation of the check -- on the board and on the schematic, which KiCad's does not.
+//   - The ERC "Edit Netclasses..." fix opens Schematic Setup > Net Classes, a page this app does not have; its entry is left out.
 import type { DrcExclusionSpec, DrcReport, DrcViolation, ErcReport, ErcViolation, RuleSeverity } from "../api/types";
 import { nextMarkerIndex, prevMarkerIndex } from "./checkerNav";
 import { severitiesToSend, severityOf, type SeverityItem } from "./boardSetupRules";
@@ -120,9 +126,14 @@ export type RcMenuId =
   | "remove_exclusion"
   | "edit_comment"
   | "remove_exclusion_type"
+  | "remove_exclusion_rule"
   | "exclude"
   | "exclude_comment"
   | "exclude_type"
+  | "exclude_rule"
+  | "inspect"
+  | "fix"
+  | "connection_grid"
   | "severity_error"
   | "severity_warning"
   | "severity_ignore"
@@ -149,8 +160,15 @@ export interface RcMenuContext {
   pinMap?: boolean;
   /** The menu is the canvas marker's, which also offers to show the marker in the dialog. */
   onCanvas?: boolean;
-  /** An exclusion can carry a comment (`m_DrcExclusionComments`). The board's can; the schematic's here is a bare `(check, location)` key, so its menu has no comment entries. Default true. */
+  /** An exclusion can carry a comment (`m_DrcExclusionComments`, `m_ErcExclusionComments`): both menus offer "Exclude with comment..." and "Edit exclusion comment...". Default true. */
   comments?: boolean;
+  /** DRC only: the name of the custom rule the violation broke ([`violatingRule`]); null for a violation of an implicit rule (Board Setup's, a netclass's ...), which has no "all violations of rule" entry. */
+  rule?: string | null;
+  /** The Inspect entry the marker's check has ([`drcInspectEntry`], [`ercInspectEntry`]), and its Fix entry; none for most checks. */
+  inspect?: MarkerEntry | null;
+  fix?: MarkerEntry | null;
+  /** ERC only: `ERCE_ENDPOINT_OFF_GRID` also offers "Edit connection grid spacing...". */
+  connectionGrid?: boolean;
 }
 
 /**
@@ -165,13 +183,21 @@ export function rcMenu(c: RcMenuContext): RcMenuEntry[] {
   if (c.excluded) {
     out.push({ id: "remove_exclusion", label: "Remove exclusion for this violation", hint: `It will be placed back in the ${listName} list` });
     if (comments) out.push({ id: "edit_comment", label: "Edit exclusion comment..." });
+    if (c.rule) out.push({ id: "remove_exclusion_rule", label: `Remove all exclusions for violations of rule '${c.rule}'`, hint: `They will be placed back in the ${listName} list` });
     out.push({ id: "remove_exclusion_type", label: `Remove all exclusions for '${c.title}' violations`, hint: `They will be placed back in the ${listName} list` });
   } else {
     out.push({ id: "exclude", label: "Exclude this violation", hint: `It will be excluded from the ${listName} list` });
     if (comments) out.push({ id: "exclude_comment", label: "Exclude with comment...", hint: `It will be excluded from the ${listName} list` });
+    if (c.rule) out.push({ id: "exclude_rule", label: `Exclude all violations of rule '${c.rule}'...`, hint: `They will be excluded from the ${listName} list` });
     out.push({ id: "exclude_type", label: `Exclude all '${c.title}' violations`, hint: `They will be excluded from the ${listName} list` });
   }
   out.push({ id: "separator", label: "" });
+  // `InspectDRCErrorMenuText` / `FixDRCErrorMenuText`: the entries a check has to look into the violation or to put it right, then a separator of their own.
+  if (c.inspect || c.fix) {
+    if (c.inspect) out.push({ id: "inspect", label: c.inspect.label });
+    if (c.fix) out.push({ id: "fix", label: c.fix.label });
+    out.push({ id: "separator", label: "" });
+  }
   if (!c.pinMap) {
     if (c.severity === "warning") out.push({ id: "severity_error", label: `Change severity to Error for all '${c.title}' violations`, hint: `Violation severities can also be edited in ${setup}` });
     else out.push({ id: "severity_warning", label: `Change severity to Warning for all '${c.title}' violations`, hint: `Violation severities can also be edited in ${setup}` });
@@ -183,11 +209,137 @@ export function rcMenu(c: RcMenuContext): RcMenuEntry[] {
       ? { id: "edit_severities", label: "Edit pin-to-pin conflict map...", hint: `Open the ${setup} dialog` }
       : { id: "edit_severities", label: "Edit violation severities...", hint: `Open the ${setup} dialog` }
   );
+  // `ID_EDIT_CONNECTION_GRID`, appended after the severities entry for an endpoint that is off the grid.
+  if (c.connectionGrid) out.push({ id: "connection_grid", label: "Edit connection grid spacing...", hint: `Open the ${setup} dialog` });
   if (c.onCanvas) {
     out.push({ id: "separator", label: "" });
     out.push({ id: "show_in_dialog", label: c.domain === "drc" ? "Show in the Design Rules Checker" : "Show in the Electrical Rules Checker" });
   }
   return out;
+}
+
+// ------------------------------------------------------------------------------------------------------------ Inspect and Fix
+
+/** What an Inspect or a Fix entry does when it is picked: run an action (after selecting the violation's main item when the action works on the selection), or open the item's own properties. */
+export type MarkerCommand =
+  | { kind: "action"; id: string; select: boolean }
+  | { kind: "properties" }
+  | { kind: "inspect_clearance" }
+  | { kind: "inspect_constraints" };
+
+/** One of those entries: the text of the menu item (`GetRunMenuCommandDescription` of the action, or the dialog's own words) and what it does. */
+export interface MarkerEntry {
+  label: string;
+  command: MarkerCommand;
+}
+
+/** `BOARD_INSPECTION_TOOL::InspectDRCErrorMenuText`: the checks whose violation a Clearance Resolution report explains. */
+const CLEARANCE_CHECKS: readonly string[] = ["clearance", "copper_edge_clearance", "hole_clearance", "drilled_holes_too_close", "starved_thermal"];
+/** ... and a Constraints Resolution report. */
+const CONSTRAINT_CHECKS: readonly string[] = [
+  "text_height",
+  "text_thickness",
+  "diff_pair_uncoupled_length_too_long",
+  "track_width",
+  "track_angle",
+  "track_segment_length",
+  "via_diameter",
+  "annular_width",
+  "drill_out_of_range",
+  "microvia_drill_out_of_range",
+  "connection_width",
+  "assertion_failure",
+];
+
+/** `InspectDRCErrorMenuText` and `InspectDRCError`: the DRC marker's Inspect entry, if its check has one. */
+export function drcInspectEntry(check: string): MarkerEntry | null {
+  if (CLEARANCE_CHECKS.includes(check)) return { label: "Clearance Resolution", command: { kind: "inspect_clearance" } };
+  if (CONSTRAINT_CHECKS.includes(check)) return { label: "Constraints Resolution", command: { kind: "inspect_constraints" } };
+  if (check === "lib_footprint_mismatch") return { label: "Compare Footprint with Library", command: { kind: "action", id: "pcbnew.InspectionTool.DiffFootprint", select: true } };
+  return null;
+}
+
+/**
+ * `DRC_TOOL::FixDRCErrorMenuText` and `FixDRCError`: the DRC marker's Fix entry, if its check has one. `mainKind` is what the violation's main item is
+ * (`itemKind`: a text, a dimension ...); a text check's entry says Dimension, Field or Text Properties after it.
+ */
+export function drcFixEntry(check: string, mainKind: string | null): MarkerEntry | null {
+  const act = (label: string, id: string, select = false): MarkerEntry => ({ label, command: { kind: "action", id, select } });
+  const props = (label: string): MarkerEntry => ({ label, command: { kind: "properties" } });
+  switch (check) {
+    case "lib_footprint_issues":
+      return act("Manage Footprint Libraries...", "common.SuiteControl.showFootprintLibTable");
+    case "lib_footprint_mismatch":
+      return act("Update Footprint...", "pcbnew.GlobalEdit.updateFootprint", true);
+    case "footprint_filters_mismatch":
+      return act("Change Footprint...", "pcbnew.GlobalEdit.changeFootprint", true);
+    case "footprint_symbol_mismatch":
+    case "footprint_symbol_field_mismatch":
+    case "missing_footprint":
+    case "duplicate_footprints":
+    case "extra_footprint":
+      return act("Update PCB from Schematic...", "common.Control.updatePcbFromSchematic");
+    case "footprint_type_mismatch":
+    case "footprint":
+      return props("Edit Footprint Properties...");
+    case "padstack":
+    case "padstack_invalid":
+      return props("Edit Pad Properties...");
+    case "text_height":
+    case "text_thickness":
+    case "mirrored_text_on_front_layer":
+    case "nonmirrored_text_on_back_layer":
+      return props(mainKind === "dimension" ? "Edit Dimension Properties..." : mainKind === "field" ? "Edit Field Properties..." : "Edit Text Properties...");
+    case "track_dangling":
+    case "via_dangling":
+      return act("Cleanup Tracks & Vias...", "pcbnew.GlobalEdit.cleanupTracksAndVias");
+    default:
+      return null;
+  }
+}
+
+/** `SCH_INSPECTION_TOOL::InspectERCErrorMenuText` and `InspectERCError`. */
+export function ercInspectEntry(check: string): MarkerEntry | null {
+  if (check === "bus_to_net_conflict") return { label: "Show Bus Syntax Help", command: { kind: "action", id: "eeschema.InspectionTool.showBusSyntaxHelp", select: false } };
+  if (check === "lib_symbol_mismatch") return { label: "Compare Symbol with Library", command: { kind: "action", id: "eeschema.InspectionTool.diffSymbol", select: true } };
+  return null;
+}
+
+/** `SCH_EDIT_TOOL::FixERCErrorMenuText` and `FixERCError` (without "Edit Netclasses...", which needs Schematic Setup's Net Classes page). */
+export function ercFixEntry(check: string): MarkerEntry | null {
+  const act = (label: string, id: string, select = false): MarkerEntry => ({ label, command: { kind: "action", id, select } });
+  switch (check) {
+    case "simulation_model_issue":
+    case "footprint_filter":
+    case "footprint_link_issues":
+      return act("Edit Symbol Properties...", "eeschema.InteractiveEdit.properties", true);
+    case "lib_symbol_issues":
+      return act("Manage Symbol Libraries...", "common.SuiteControl.showSymbolLibTable");
+    case "lib_symbol_mismatch":
+      return act("Update Symbol...", "eeschema.InteractiveEdit.updateSymbol", true);
+    case "unannotated":
+    case "duplicate_reference":
+      return act("Annotate Schematic...", "eeschema.EditorControl.annotate");
+    default:
+      return null;
+  }
+}
+
+// ------------------------------------------------------------------------------------------------------------ the rule a violation broke
+
+/**
+ * The custom rule a DRC violation broke: `DRC_ITEM::GetViolatingRule()->m_Name` when the rule is not implicit (`dialog_drc.cpp` offers "Exclude all
+ * violations of rule" for those only). kicad-cli's report does not carry the rule but its text names it: a constraint found in a custom rule reports
+ * as "rule '<name>'" (`DRC_CONSTRAINT::GetName`); an implicit rule's name stands bare. Null when the violation names none.
+ */
+export function violatingRule(description: string): string | null {
+  const m = /\brule '([^']*)'/.exec(description);
+  return m ? (m[1] ?? null) : null;
+}
+
+/** The violations of one rule on a page of the report, as "Exclude all violations of rule" works on them: the ones not waived yet (to exclude) or the ones that are (to remove). */
+export function ofRule(list: readonly DrcViolation[], rule: string, excluded: boolean): DrcViolation[] {
+  return list.filter((v) => violatingRule(v.description) === rule && canExclude(v) && (v.excluded ?? false) === excluded);
 }
 
 /** `ID_SET_SEVERITY_TO_*` -> the severity it sets. */
@@ -283,6 +435,80 @@ export function patchDrcSeverity(report: DrcReport, check: string, severity: Rul
 /** The `(check, location)` key `add_erc_exclusion` takes for a finding; null for one with nothing to key on. */
 export function ercKey(v: Pick<ErcViolation, "check" | "location">): { check: string; location: string } | null {
   return v.location ? { check: v.check, location: v.location } : null;
+}
+
+/**
+ * The report after waiving (or restoring) findings, without running kicad-cli again: [`patchDrcExcluded`]'s ERC twin. `comment` is the exclusion's
+ * (`SCH_MARKER::GetComment`). The counts leave the waived ones out. Whether kicad-cli matched the new exclusion is not known until the next run.
+ */
+export function patchErcExcluded(report: ErcReport, keys: ReadonlyArray<{ check: string; location: string }>, excluded: boolean, comment = ""): ErcReport {
+  const hit = (v: ErcViolation) => v.location !== null && keys.some((k) => k.check === v.check && k.location === v.location);
+  const violations = report.violations.map((v) => {
+    if (!hit(v)) return v;
+    const { kicad_matched: _unknown, ...rest } = v;
+    return { ...rest, severity: excluded ? ("excluded" as const) : (v.base_severity ?? ("error" as const)), comment: excluded ? comment : "" };
+  });
+  const counts: Record<string, number> = {};
+  for (const v of violations) if (v.severity !== "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
+  return { ...report, violations, counts };
+}
+
+// ------------------------------------------------------------------------------------------------------------ Delete Marker, Delete All Markers
+
+/** The pages of the DRC dialog that list markers. */
+export type DrcPage = "violations" | "unconnected" | "parity";
+
+const dropAt = <T,>(list: readonly T[] | undefined, index: number): T[] | undefined => list?.filter((_, i) => i !== index);
+
+function drcCounts(...lists: ReadonlyArray<readonly DrcViolation[] | undefined>): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const list of lists) for (const v of list ?? []) if (!v.excluded) counts[v.type] = (counts[v.type] ?? 0) + 1;
+  return counts;
+}
+
+/**
+ * Delete Marker on a page of the DRC report (`DIALOG_DRC::OnDeleteOneClick`, `RC_TREE_MODEL::DeleteCurrentItem( true )`): the marker leaves the list and the
+ * board, whatever it is, an exclusion included. A violation is not fixed by it: the next run finds it. Whether an excluded marker's exclusion goes with it is the
+ * caller's (KiCad records the markers that are left, `BOARD::RecordDRCExclusions`, so it does: `deleteMarkerDrc` sends `delete_drc_exclusions`).
+ */
+export function patchDrcDeleteMarker(report: DrcReport, page: DrcPage, index: number): DrcReport {
+  const violations = page === "violations" ? (dropAt(report.violations, index) ?? []) : report.violations;
+  const unconnected = page === "unconnected" ? dropAt(report.unconnected_items, index) : report.unconnected_items;
+  const parity = page === "parity" ? dropAt(report.schematic_parity, index) : report.schematic_parity;
+  return { ...report, violations, ...(unconnected ? { unconnected_items: unconnected } : {}), ...(parity ? { schematic_parity: parity } : {}), counts: drcCounts(violations, unconnected, parity) };
+}
+
+/**
+ * Delete All Markers (`DIALOG_DRC::OnDeleteAllClick`, `deleteAllMarkers`): the errors and warnings of every page go; the exclusions go too when the person said so
+ * ("Errors, Warnings and Exclusions"). The report is left as a run that has to be made again (`m_drcRun = false`).
+ */
+export function patchDrcDeleteAll(report: DrcReport, includeExclusions: boolean): DrcReport {
+  const keep = (list: DrcViolation[] | undefined) => list?.filter((v) => !includeExclusions && (v.excluded ?? false));
+  const violations = keep(report.violations) ?? [];
+  const unconnected = keep(report.unconnected_items);
+  const parity = keep(report.schematic_parity);
+  return { ...report, violations, ...(unconnected ? { unconnected_items: unconnected } : {}), ...(parity ? { schematic_parity: parity } : {}), counts: {}, markers_deleted: true };
+}
+
+function ercCounts(violations: readonly ErcViolation[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const v of violations) if (v.severity !== "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
+  return counts;
+}
+
+/**
+ * Delete Marker on the ERC report (`DIALOG_ERC::OnDeleteOneClick`). The report on screen loses the row; whether an excluded marker's exclusion goes with it is
+ * the caller's (KiCad records the markers that are left, `RecordERCExclusions`, so it does: `deleteErcMarker` sends `delete_erc_exclusion`).
+ */
+export function patchErcDeleteMarker(report: ErcReport, index: number): ErcReport {
+  const violations = report.violations.filter((_, i) => i !== index);
+  return { ...report, violations, counts: ercCounts(violations) };
+}
+
+/** Delete All Markers on the ERC report (`DIALOG_ERC::OnDeleteAllClick`): [`patchDrcDeleteAll`]'s twin. */
+export function patchErcDeleteAll(report: ErcReport, includeExclusions: boolean): ErcReport {
+  const violations = report.violations.filter((v) => !includeExclusions && v.severity === "excluded");
+  return { ...report, violations, counts: {}, markers_deleted: true };
 }
 
 /** [`patchDrcSeverity`] for the schematic: an excluded finding stays excluded, whatever the check becomes. */
