@@ -81,10 +81,7 @@ fn normalize_footprint(fp: &mut Vec<Sexpr>, scaled: &mut Vec<String>) {
     }
     let origin = (t.x.parse::<f64>().unwrap_or(0.0), t.y.parse::<f64>().unwrap_or(0.0));
     let angle = t.angle.parse::<f64>().unwrap_or(0.0);
-    let apply = |(x, y): (f64, f64)| {
-        let (rx, ry) = rotate_point((x * t.scale.0, y * t.scale.1), angle);
-        (rx + origin.0, ry + origin.1)
-    };
+    let apply = |p: (f64, f64)| apply_transform(p, origin, angle, t.scale);
     for child in fp.iter_mut() {
         if let Sexpr::List(zone) = child {
             if sexpr::tag(zone) == Some("zone") {
@@ -92,6 +89,13 @@ fn normalize_footprint(fp: &mut Vec<Sexpr>, scaled: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// `TRANSFORM_TRS::Apply` on a point of a footprint's frame: the scale, then the rotation by the orientation, then the translation. The unit is the caller's (the map is
+/// linear): [`normalize`] maps a footprint's zones with it in millimetres, the reader of a refilled board's fills (`zone_fills::scan_zone_fills`) in nanometres.
+pub(crate) fn apply_transform((x, y): (f64, f64), origin: (f64, f64), angle_deg: f64, scale: (f64, f64)) -> (f64, f64) {
+    let (rx, ry) = rotate_point((x * scale.0, y * scale.1), angle_deg);
+    (rx + origin.0, ry + origin.1)
 }
 
 /// `RotatePoint( VECTOR2I&, const EDA_ANGLE& )` (libs/kimath/src/trigo.cpp), in millimetres: the exact quarter turns first, then

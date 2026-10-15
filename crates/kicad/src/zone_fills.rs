@@ -223,14 +223,17 @@ pub struct ScannedFill {
 }
 
 /// Every stored fill of every zone in a `.kicad_pcb` (the board's and the ones inside footprints), without building a tree of the file: a fill is a million points
-/// on a big board.
+/// on a big board. The points are in the board's frame: a file KiCad 10 saved (`(transform ..)` on its footprints, `fp_transform`) stores the fills of a footprint's own
+/// zones in the footprint's frame, and they are mapped out of it here, as the importer maps the zones' outlines.
 pub fn scan_zone_fills(text: &str) -> Vec<ScannedFill> {
     let mut out = Vec::new();
     let mut cur = Cursor { s: text.as_bytes(), text, i: 0 };
-    // Walk the file's lists; a `(zone ..)` is read whole, anything else is entered (a footprint holds zones).
+    // Walk the file's lists; a `(zone ..)` is read whole, a footprint is read for its zones, anything else is entered.
     while let Some(tag) = cur.next_list_tag() {
-        if tag == "zone" {
-            cur.read_zone(&mut out);
+        match tag {
+            "zone" => cur.read_zone(&mut out),
+            "footprint" | "module" => cur.read_footprint(&mut out),
+            _ => {}
         }
     }
     out
@@ -330,6 +333,99 @@ impl<'a> Cursor<'a> {
                 _ => {}
             }
             self.i += 1;
+        }
+    }
+
+    /// Past a `(footprint` and up to its closing paren: the fills of its zones, each point taken out of the footprint's frame when the footprint has a `(transform ..)`
+    /// (`fp_transform::apply_transform`; the transform precedes the zones in the file, as `PCB_IO_KICAD_SEXPR::format( const FOOTPRINT* )` writes it).
+    fn read_footprint(&mut self, out: &mut Vec<ScannedFill>) {
+        let mut transform: Option<([f64; 2], f64, [f64; 2])> = None;
+        loop {
+            self.skip_ws();
+            match self.s.get(self.i) {
+                None => return,
+                Some(b')') => {
+                    self.i += 1;
+                    return;
+                }
+                Some(b'(') => {
+                    self.i += 1;
+                    match self.atom().unwrap_or("") {
+                        "transform" => transform = Some(self.read_transform()),
+                        "zone" => {
+                            let first = out.len();
+                            self.read_zone(out);
+                            if let Some((origin, angle, scale)) = transform {
+                                for fill in &mut out[first..] {
+                                    for p in &mut fill.pts {
+                                        let (x, y) = crate::fp_transform::apply_transform((p[0] as f64, p[1] as f64), (origin[0] * 1e6, origin[1] * 1e6), angle, (scale[0], scale[1]));
+                                        *p = [x.round() as i64, y.round() as i64];
+                                    }
+                                }
+                            }
+                        }
+                        _ => self.skip_list(),
+                    }
+                }
+                Some(_) => {
+                    self.atom();
+                }
+            }
+        }
+    }
+
+    /// Past `(transform` and up to its closing paren: `(translate x y) (rotate a) (scale sx sy)` as the translation in millimetres, the angle in degrees and the scale.
+    /// What the file leaves out is what `read_transform` of the importer takes it for: no translation, no rotation, scale 1 (a zero or negative scale is read as 1).
+    fn read_transform(&mut self) -> ([f64; 2], f64, [f64; 2]) {
+        let (mut origin, mut angle, mut scale) = ([0.0, 0.0], 0.0, [1.0, 1.0]);
+        loop {
+            self.skip_ws();
+            match self.s.get(self.i) {
+                None => break,
+                Some(b')') => {
+                    self.i += 1;
+                    break;
+                }
+                Some(b'(') => {
+                    self.i += 1;
+                    let tag = self.atom().unwrap_or("");
+                    let nums = self.numbers();
+                    match (tag, nums.as_slice()) {
+                        ("translate", [x, y, ..]) => origin = [*x, *y],
+                        ("rotate", [a, ..]) => angle = *a,
+                        ("scale", [sx, sy, ..]) => scale = [sx, sy].map(|v| if v.is_finite() && *v > 0.0 { *v } else { 1.0 }),
+                        _ => {}
+                    }
+                }
+                Some(_) => {
+                    self.atom();
+                }
+            }
+        }
+        (origin, angle, scale)
+    }
+
+    /// The numbers of a list from the cursor to its closing paren (past it); anything that is not a number is left out.
+    fn numbers(&mut self) -> Vec<f64> {
+        let mut out = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.s.get(self.i) {
+                None => return out,
+                Some(b')') => {
+                    self.i += 1;
+                    return out;
+                }
+                Some(b'(') => {
+                    self.i += 1;
+                    self.skip_list();
+                }
+                Some(_) => {
+                    if let Some(v) = self.atom().and_then(|a| a.parse::<f64>().ok()) {
+                        out.push(v);
+                    }
+                }
+            }
         }
     }
 
@@ -579,6 +675,33 @@ mod tests {
         assert_eq!(got[1].pts, vec![[500_000, 500_000], [9_250_000, 500_000], [9_250_000, -9_750_000], [500_000, 9_500_000]]);
         assert_eq!((got[2].layer.as_str(), got[2].island), ("B.Cu", true), "(island yes)");
         assert!(got[3].island, "a bare (island) is one too");
+    }
+
+    #[test]
+    fn the_fills_of_a_footprints_zones_come_out_of_the_footprints_frame_when_it_has_a_transform() {
+        // A KiCad 10 file: the footprint is placed with `(transform ..)` and its zones are stored in its own frame (`fp_transform`). A quarter turn takes (x, y) to (y, -x).
+        let fill = r#"(filled_polygon (layer "F.Cu") (pts (xy 1 0) (xy 2 0) (xy 2 1.5)))"#;
+        let board = format!(
+            r#"(kicad_pcb (version 20260901)
+	(footprint "turned" (layer "F.Cu") (transform (translate 100 50) (rotate 90) (scale 1 1)) (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+		(zone (uuid "turned-zone") (layers "F.Cu") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) {fill}))
+	(footprint "plain" (layer "F.Cu") (at 7 7 0)
+		(zone (uuid "plain-zone") (layers "F.Cu") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) {fill}))
+	(footprint "scaled" (layer "F.Cu") (transform (translate 10 20) (scale 2 3))
+		(zone (uuid "scaled-zone") (layers "F.Cu") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) {fill}))
+	(footprint "slanted" (layer "F.Cu") (transform (translate 0 0) (rotate 30) (scale 1 1))
+		(zone (uuid "slanted-zone") (layers "F.Cu") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) (filled_polygon (layer "F.Cu") (pts (xy 2 0) (xy 3 0) (xy 3 1)))))
+	(zone (uuid "board-zone") (layers "F.Cu") (polygon (pts (xy 0 0) (xy 1 0) (xy 1 1))) {fill})
+)"#
+        );
+        let got: BTreeMap<String, Vec<[i64; 2]>> = scan_zone_fills(&board).into_iter().map(|f| (f.zone, f.pts)).collect();
+        assert_eq!(got.len(), 5, "{got:?}");
+        assert_eq!(got["turned-zone"], vec![[100_000_000, 49_000_000], [100_000_000, 48_000_000], [101_500_000, 48_000_000]], "turned a quarter, then moved");
+        assert_eq!(got["plain-zone"], vec![[1_000_000, 0], [2_000_000, 0], [2_000_000, 1_500_000]], "no transform: the points are the board's, as an older file has them");
+        assert_eq!(got["scaled-zone"], vec![[12_000_000, 20_000_000], [14_000_000, 20_000_000], [14_000_000, 24_500_000]], "scaled, then moved");
+        assert_eq!(got["board-zone"], vec![[1_000_000, 0], [2_000_000, 0], [2_000_000, 1_500_000]]);
+        // Any other angle is the rotation `RotatePoint` makes: x' = y sin + x cos, y' = y cos - x sin.
+        assert_eq!(got["slanted-zone"], vec![[1_732_051, -1_000_000], [2_598_076, -1_500_000], [3_098_076, -633_975]]);
     }
 
     #[test]
