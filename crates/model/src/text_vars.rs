@@ -229,15 +229,22 @@ pub fn resolve_text_vars(source: &str, resolver: &Resolver, depth: &mut usize) -
     text
 }
 
-/// What `GetShownText` makes of a stored text: its escapes undone, its variables resolved, and the escape markers of a literal `\${..}` turned back into
-/// `${..}` for display. `depth` is the nesting of the field lookup this text is the answer to (0 for the text of an item itself).
+/// What `GetShownText` makes of a stored text: its escapes undone, its variables resolved, and the escape markers of a literal `\${..}` turned back
+/// (`FinalizeTextVarExpansion`). `depth` is the nesting of the field lookup this text is the answer to: 0 for the text of an item itself, which is
+/// shown, so a marker becomes `${..}` (`FOR_CANVAS`, `FOR_GUI`); more for a field another text looks up, which every `ResolveTextVar` asks for in the
+/// `INTERNAL` context at `aDepth + 1` (`FOOTPRINT::ResolveTextVar`, `SCH_SYMBOL::ResolveTextVar`), so a marker stays escaped, `\${..}`, and the
+/// text that asked keeps it literal too.
 pub fn shown_text(source: &str, resolver: &Resolver, depth: usize) -> String {
     let mut text = unescape_string(source);
     if has_text_vars(&text) {
         let mut d = depth;
         text = resolve_text_vars(&text, resolver, &mut d);
     }
-    text.replace(ESC_DOLLAR, "${").replace(ESC_AT, "@{")
+    if depth == 0 {
+        text.replace(ESC_DOLLAR, "${").replace(ESC_AT, "@{")
+    } else {
+        text.replace(ESC_DOLLAR, "\\${").replace(ESC_AT, "\\@{")
+    }
 }
 
 // ------------------------------------------------------------------------------------------------ the project and the title block

@@ -278,8 +278,8 @@ fn our_file_with_the_three_details_has_what_we_say_in_it_and_kicad_reads_it_the_
     // 1. the ERC runs on it: the file and the sheet it names load
     let report = erc(&cli, &file);
     assert!(report.get("sheets").is_some(), "{report}");
-    // ... and reports the sheet pin where we put it: the sheet's file has no hierarchical label for it ("hier_label_mismatch"), which KiCad says at the pin. (The report's
-    // positions are hundredths of a millimetre: the pin at (135, 100) mm is (1.35, 1.0).)
+    // ... and reports the sheet pin where we put it: the sheet's file has no hierarchical label for it ("hier_label_mismatch"), which KiCad says at the pin, in
+    // millimetres. (A kicad-cli 10.99 before build 5334 gave its ERC positions in hundredths of a millimetre, (1.35, 1.0) for this pin.)
     let mismatch = report["sheets"]
         .as_array()
         .unwrap()
@@ -288,7 +288,7 @@ fn our_file_with_the_three_details_has_what_we_say_in_it_and_kicad_reads_it_the_
         .find(|v| v["type"] == "hier_label_mismatch")
         .unwrap_or_else(|| panic!("KiCad did not report the sheet pin: {report}"));
     let pos = &mismatch["items"][0]["pos"];
-    assert_eq!((pos["x"].as_f64(), pos["y"].as_f64()), (Some(1.35), Some(1.0)), "{mismatch}");
+    assert_eq!((pos["x"].as_f64(), pos["y"].as_f64()), (Some(135.0), Some(100.0)), "{mismatch}");
 
     // 2. KiCad reads the file and writes it again (`kicad-cli sch upgrade --force`, its own writer): what it kept is what it understood
     let run = Command::new(&cli).args(["sch", "upgrade", "--force"]).arg(&file).output().expect("run kicad-cli");

@@ -2756,7 +2756,9 @@ mod tests {
         assert_eq!(shown.board_text, "Rev B7 of intent on F.Silkscreen B7-10k");
         assert_eq!(shown.mpn, "ERJ-B7 GND 2PAD eda F.Silkscreen ${REV}", "the studio's own reading of the variables it knows");
         // A literal `${REV}` that comes back from another field's shown text is a variable again to the text that asked for it (KiCad's ResolveTextVars passes).
-        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD eda F.Silkscreen B7 U2 Default");
+        // U1's MPN ends in an escaped `\${REV}`, and it stays literal in a text that looks the field up: the lookup is `INTERNAL`, which keeps the
+        // escape (`FinalizeTextVarExpansion`; KiCad 10.99 by build 5334 -- an older one expanded it again).
+        assert_eq!(shown.twin, "B7-10k ERJ-B7 GND 2PAD eda F.Silkscreen ${REV} U2 Default");
         board_with_text_variables(&without, &shown, &[]);
 
         let plot = |dir: &Path| -> String {
@@ -2816,7 +2818,7 @@ mod tests {
         let text = sch["texts"][0]["shown"].as_str().unwrap().to_string();
         let title = sch["title_block"]["shown"]["title"].as_str().unwrap().to_string();
         assert_eq!(v1, "10k B7");
-        assert_eq!(text, "Sheet 1/1 / Main B7  B7 intent intent.kicad_sch ${REV}", "the studio's own reading: the root sheet has no name, so its name is empty");
+        assert_eq!(text, "Sheet 1/1 / Main B7 Root B7 intent intent.kicad_sch ${REV}", "the root sheet has no name of its own, and kicad-cli calls it Root");
         schematic_with_text_variables(&without, &[v1.as_str(), v2.as_str(), text.as_str(), title.as_str()], &[]);
 
         let plot = |dir: &Path| -> String {
@@ -3729,7 +3731,7 @@ mod tests {
         let cli = eda_kicad_engine::find_cli().expect("checked by the caller");
         let board = dir.join(".kicad").join("board.kicad_pcb");
         let out = dir.join(".kicad").join("direct.json");
-        let ran = std::process::Command::new(cli).args(["pcb", "drc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&board).output().expect("kicad-cli runs");
+        let ran = eda_kicad_engine::cli_command(&cli, None).args(["pcb", "drc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&board).output().expect("kicad-cli runs");
         assert!(out.exists(), "kicad-cli wrote no report: {}{}", String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
         let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
         report["violations"].as_array().unwrap().iter().filter(|v| v["type"] == kind).map(|v| (v["excluded"].as_bool().unwrap_or(false), v["severity"].as_str().unwrap().to_string())).collect()
