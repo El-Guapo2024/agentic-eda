@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import type { DrcReport, DrcViolation, ErcReport, ErcViolation } from "../api/types";
 import {
@@ -306,7 +307,7 @@ test("the menu offers the rule's entries only for a custom rule, and the same en
 // ------------------------------------------------------------------------------------------------------------ Inspect and Fix
 
 test("a DRC marker's Inspect entry is the resolution report of its check (InspectDRCErrorMenuText)", () => {
-  for (const check of ["clearance", "copper_edge_clearance", "hole_clearance", "drilled_holes_too_close", "starved_thermal"]) {
+  for (const check of ["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal"]) {
     assert.deepEqual(drcInspectEntry(check), { label: "Clearance Resolution", command: { kind: "inspect_clearance" } }, check);
   }
   for (const check of ["track_width", "via_diameter", "annular_width", "text_height", "connection_width", "assertion_failure", "diff_pair_uncoupled_length_too_long"]) {
@@ -315,6 +316,27 @@ test("a DRC marker's Inspect entry is the resolution report of its check (Inspec
   assert.deepEqual(drcInspectEntry("lib_footprint_mismatch"), { label: "Compare Footprint with Library", command: { kind: "action", id: "pcbnew.InspectionTool.DiffFootprint", select: true } });
   assert.equal(drcInspectEntry("silk_overlap"), null);
   assert.equal(drcInspectEntry("unconnected_items"), null);
+});
+
+test("every check the Inspect and Fix tables name is one KiCad reports under that key", () => {
+  // The keys of `DRC_ITEM` / `ERC_ITEM` (`GetSettingsKey`): the pinned source's lists, plus the two kinds of finding that are always errors and so are not on the severity pages.
+  const keys = (file: string): Set<string> => new Set([...readFileSync(`src/kicad/${file}`, "utf8").matchAll(/"key":\s*"([^"]+)"/g)].map((m) => m[1]!));
+  const drc = keys("drc_checks.json");
+  for (const always of ["padstack_invalid", "generic-warning", "generic-error"]) drc.add(always);
+  const erc = keys("erc_checks.json");
+  const named = [
+    ...["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal", "text_height", "text_thickness", "diff_pair_uncoupled_length_too_long", "track_width", "track_angle", "track_segment_length", "via_diameter", "annular_width", "drill_out_of_range", "microvia_drill_out_of_range", "connection_width", "assertion_failure", "lib_footprint_mismatch"],
+    ...["lib_footprint_issues", "footprint_filters_mismatch", "footprint_symbol_mismatch", "footprint_symbol_field_mismatch", "missing_footprint", "duplicate_footprints", "extra_footprint", "footprint_type_mismatch", "footprint", "padstack", "padstack_invalid"],
+    ...["mirrored_text_on_front_layer", "nonmirrored_text_on_back_layer", "track_dangling", "via_dangling"],
+  ];
+  for (const check of named) assert.ok(drc.has(check), `${check} is not a DRC check key`);
+  // ... and each of them has the entry the tables give it, so a mistyped key shows here and not as a menu that has no entry.
+  for (const check of named.slice(0, 18)) assert.ok(drcInspectEntry(check) !== null, `${check} has an Inspect entry`);
+  for (const check of named.slice(18)) assert.ok(drcFixEntry(check, "part") !== null, `${check} has a Fix entry`);
+  for (const check of ["simulation_model_issue", "footprint_filter", "footprint_link_issues", "lib_symbol_issues", "lib_symbol_mismatch", "unannotated", "duplicate_reference", "bus_to_net_conflict"]) {
+    assert.ok(erc.has(check), `${check} is not an ERC check key`);
+    assert.ok(ercFixEntry(check) !== null || ercInspectEntry(check) !== null, `${check} has an entry`);
+  }
 });
 
 test("a DRC marker's Fix entry is the action that puts its check right (FixDRCErrorMenuText)", () => {

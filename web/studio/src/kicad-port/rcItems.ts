@@ -234,7 +234,7 @@ export interface MarkerEntry {
 }
 
 /** `BOARD_INSPECTION_TOOL::InspectDRCErrorMenuText`: the checks whose violation a Clearance Resolution report explains. */
-const CLEARANCE_CHECKS: readonly string[] = ["clearance", "copper_edge_clearance", "hole_clearance", "drilled_holes_too_close", "starved_thermal"];
+const CLEARANCE_CHECKS: readonly string[] = ["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal"];
 /** ... and a Constraints Resolution report. */
 const CONSTRAINT_CHECKS: readonly string[] = [
   "text_height",
