@@ -2,7 +2,8 @@
 // groups that nest, the whole group selected by a click on a member, Enter Group (a double click) and Leave Group, a window and a crossing box around a group, a group moved,
 // turned, mirrored, locked, deleted, copied, pasted and duplicated as one tree, what is made while a group is entered joining it, the Grouping and Enter Group entries of the
 // context menu, and the `(group ...)` forms the derived `.kicad_sch` has. User-defined fields: one added in Symbol Properties, shown and placed beside the others, picked,
-// moved, turned, mirrored, edited and hidden like Reference and Value, and written to the file where the sheet draws it.
+// moved, turned, mirrored, edited and hidden like Reference and Value, and written to the file where the sheet draws it. Pin Helpers: the submenu of a pin's context menu, and a wire stub
+// (held by the Drag tool), a no-connect and a net, hierarchical and global label on a pin and on a sheet pin.
 // Run it in the page of a served board made from examples/mcu_board_30plus.yaml (`eda board new examples/mcu_board_30plus.yaml -o <dir>` then `eda board serve -C <dir>`), with the
 // schematic tab open -- paste it into the Browser pane's javascript tool, or `page.evaluate( src )` in Playwright -- on a COPY of a board: it edits and undoes, and it leaves Strict
 // off while it runs. It makes nothing that stays: every scenario undoes what it did (and, if it left anything behind, the run undoes until the sheet is as it was).
@@ -67,6 +68,7 @@
       labels: s.labels.map((l) => [l.id, l.net, l.at, l.spin]),
       texts: s.texts.map((t) => [t.id, t.content, t.at]),
       junctions: s.junctions.map((j) => [j.id, j.at]),
+      ncs: (s.no_connects ?? []).map((n) => [n.id, n.at]),
       groups: (s.groups ?? []).map((g) => [g.id, g.name, [...g.member_ids].sort()]),
       locked: [...(s.locked ?? [])].sort(),
       fields: s.symbols.map((x) => [x.id, (x.fields ?? []).map((f) => [f.name, f.text, f.visible, f.at, f.vertical, f.h])]),
@@ -807,6 +809,114 @@
       t(!(await fieldOf("C1", "MPN")) && !(await fileProperty("C1", "MPN")), "OK removes the field from the symbol and the file");
       await undo();
       t(!!(await fieldOf("C1", "MPN")), "one Undo brings it back");
+    });
+
+
+    // ----- Pin Helpers
+    /** Where pin `number` of U1 ends: a no-connect flag sits on the connection point of the two NC pins of the MCU. */
+    const tipOf = async (pin) => ((await sch(MCU)).no_connects ?? []).find((n) => n.pin === `U1.${pin}`)?.at;
+    const newItems = async (kind, before) => ((await sch(MCU))[kind] ?? []).filter((x) => !before[kind].some((o) => o.id === x.id));
+    const submenu = (name) => menu() && [...menu().querySelectorAll(".menu-node-submenu")].find((e) => (e.querySelector(".menu-node-label")?.textContent ?? e.textContent).trim().startsWith(name));
+    const itemOf = (sub, label) => sub && [...sub.querySelectorAll(".menu-node-item")].find((e) => (e.textContent || "").trim().replace(/\s+/g, " ").startsWith(label));
+
+    await scenario("Pin Helpers: the context menu of a pin has the submenu, and Net Label puts a label named by the pin where it reads away from it, selected; one undo step", async (t) => {
+      const tip = await tipOf(12);
+      t(!!tip, `U1's pin 12 has a no-connect flag to find its tip by (${tip})`);
+      const before = await sch(MCU);
+      await fitTo(["U1"]);
+      await select([]);
+      await rclickAt(tip[0], tip[1]);
+      const labels = menuLabels();
+      t(/^Pin Helpers/.test(labels[0] ?? ""), `Pin Helpers heads the menu of a selected pin (${labels.slice(0, 3)})`);
+      const sub = submenu("Pin Helpers");
+      const names = sub ? [...sub.querySelectorAll(".menu-node-item")].map((e) => (e.textContent || "").trim().replace(/\s+/g, " ")) : [];
+      t(same(names, ["Wire", "No Connect", "Net Label", "Hierarchical Label", "Global Label"]), `with KiCad's five entries (${names})`);
+      t(same(selectedIds(), ["pin:U1:12"]), `the right click selected the pin (${selectedIds()})`);
+      itemOf(sub, "Net Label").click();
+      await sleep(1400);
+      const made = await newItems("labels", before);
+      t(made.length === 1 && made[0].net === "NC1" && same(made[0].at, tip), `a label named by the pin's name is at the pin's end (${JSON.stringify(made.map((l) => [l.net, l.at]))})`);
+      t(made[0] && made[0].spin === "bottom", `it reads away from the pin, which runs up into the symbol: down (${made[0] && made[0].spin})`);
+      t(same(selectedIds(), [made[0]?.id]), `and the new label is what is selected (${selectedIds()})`);
+      await undo();
+      t((await newItems("labels", before)).length === 0, "one Undo takes it away");
+    });
+
+    await scenario("Pin Helpers: No Connect flags every selected pin, Hierarchical and Global Label take the pin's name and a shape of its type; a helper that changes nothing is refused", async (t) => {
+      const before = await sch(MCU);
+      await select(["pin:U1:3", "pin:U1:4"]);
+      await __eda.run("studio.PinHelpers.noConnect");
+      await sleep(1200);
+      const flags = await newItems("no_connects", before);
+      t(flags.length === 2, `a no-connect on each of the two pins (${flags.length})`);
+      t(selectedIds().length === 0, `and nothing is selected afterwards (${selectedIds()})`);
+      // again: both pins have one, so nothing would change
+      const steps = await snapshotOf(MCU);
+      await select(["pin:U1:3", "pin:U1:4"]);
+      await __eda.run("studio.PinHelpers.noConnect");
+      await sleep(900);
+      t((await snapshotOf(MCU)) === steps, "a second No Connect on them changes nothing (and adds no undo step)");
+      await undo();
+      t((await newItems("no_connects", before)).length === 0, "one Undo takes both flags away");
+      for (const [action, scope] of [["studio.PinHelpers.hierLabel", "hierarchical"], ["studio.PinHelpers.globalLabel", "global"]]) {
+        const b = await sch(MCU);
+        await select(["pin:U1:11"]);
+        await __eda.run(action);
+        await sleep(1200);
+        const made = await newItems("labels", b);
+        t(made.length === 1 && made[0].net === "RESET" && made[0].scope === scope && ["input", "output", "bidirectional", "tri_state", "passive"].includes(made[0].shape), `${scope}: RESET with a shape (${JSON.stringify(made.map((l) => [l.net, l.scope, l.shape]))})`);
+        await undo();
+      }
+    });
+
+    await scenario("Pin Helpers: Wire puts a stub one grid step out of the pin and holds it by its far end; a click drops it (one undo step), Escape takes it away", async (t) => {
+      const tip = await tipOf(12);
+      const before = await sch(MCU);
+      await fitTo(["U1"]);
+      await select(["pin:U1:12"]);
+      await __eda.run("studio.PinHelpers.wire");
+      await sleep(1500);
+      const made = await newItems("wires", before);
+      const stub = made[0];
+      t(made.length === 1 && same(stub.pts[0], tip) && stub.pts[1][0] === tip[0] && stub.pts[1][1] - tip[1] === 1270, `a stub 1.27 mm long runs from the pin's end down, out of the symbol (${JSON.stringify(stub && stub.pts)})`);
+      t(__eda.state().tool === "drag" && same(selectedIds(), [stub?.id]), `the Drag tool holds it (${__eda.state().tool}; selected ${selectedIds()})`);
+      const [px, py] = screenOf(tip[0], tip[1] + 5080);
+      fire("pointermove", px, py); await sleep(500);
+      fire("pointermove", px + 1, py + 1); await sleep(600);
+      fire("pointerdown", px, py, { buttons: 1 }); await sleep(80); fire("pointerup", px, py); await sleep(1500);
+      const moved = (await newItems("wires", before))[0];
+      t(moved && same(moved.pts[0], tip) && moved.pts[moved.pts.length - 1][1] === tip[1] + 5080, `a click drops it: the far end follows the pointer, the end at the pin stays (${JSON.stringify(moved && moved.pts)})`);
+      t(__eda.state().tool === "select", "and the tool is the selection tool again");
+      await undo();
+      t((await newItems("wires", before)).length === 0, "one Undo takes the stub and the drag away");
+      // Escape: the commit is reverted
+      await select(["pin:U1:12"]);
+      await __eda.run("studio.PinHelpers.wire");
+      await sleep(1500);
+      t((await newItems("wires", before)).length === 1, "the stub is there while it is held");
+      await __eda.run("common.Interactive.cancel");
+      await sleep(1500);
+      t((await newItems("wires", before)).length === 0 && __eda.state().tool === "select", "Escape takes it away again (`commit.Revert()`)");
+    });
+
+    await scenario("Pin Helpers: a sheet pin on the root sheet gets a global label named by it, in the shape of its pin, reading out of the sheet", async (t) => {
+      await leave();
+      const rootSheet = await sch("");
+      const mcu = rootSheet.sheets.find((x) => x.id === MCU);
+      const pin = mcu.pins[0];
+      t(!!pin && !!pin.id, `the MCU sheet has pins on the root sheet (${mcu.pins.length})`);
+      const before = await sch("");
+      await select([pin.id]);
+      await __eda.run("studio.PinHelpers.globalLabel");
+      await sleep(1400);
+      const after = await sch("");
+      const made = after.labels.filter((l) => !before.labels.some((o) => o.id === l.id));
+      t(made.length === 1 && made[0].net === pin.name && made[0].scope === "global" && same(made[0].at, pin.at), `a global label named ${pin.name} is at the sheet pin (${JSON.stringify(made.map((l) => [l.net, l.scope, l.at]))})`);
+      t(made[0] && made[0].shape === (pin.shape === "passive" ? "input" : pin.shape), `in the shape of the pin, a passive one being an input (${made[0] && made[0].shape} for ${pin.shape})`);
+      t(same(selectedIds(), [made[0]?.id]), `and it is the selection (${selectedIds()})`);
+      await undo();
+      t((await sch("")).labels.length === before.labels.length, "one Undo takes it away");
+      await enterSheet(MCU);
     });
 
     // -------------------------------------------------------------------------------------------------------------------- the end
