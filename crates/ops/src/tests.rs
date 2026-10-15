@@ -2323,6 +2323,7 @@ fn sym_pin(number: &str, x: f64, y: f64) -> LibrarySymbolPin {
         hidden: false,
         name_size_mm: Some(1.27),
         number_size_mm: Some(1.27),
+        alternates: Vec::new(),
     }
 }
 

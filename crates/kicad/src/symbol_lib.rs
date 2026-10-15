@@ -629,9 +629,9 @@ fn write_symbol_pin(out: &mut String, p: &eda_model::ir::LibrarySymbolPin) {
     if p.hidden {
         write!(out, " hide").unwrap();
     }
-    writeln!(
+    write!(
         out,
-        " (name {} (effects (font (size {} {})))) (number {} (effects (font (size {} {})))))",
+        " (name {} (effects (font (size {} {})))) (number {} (effects (font (size {} {}))))",
         crate::sexpr_str(if p.name.is_empty() { "~" } else { &p.name }),
         crate::fmt_mm_f(name_size),
         crate::fmt_mm_f(name_size),
@@ -640,6 +640,13 @@ fn write_symbol_pin(out: &mut String, p: &eda_model::ir::LibrarySymbolPin) {
         crate::fmt_mm_f(number_size),
     )
     .unwrap();
+    // `SCH_IO_KICAD_SEXPR_LIB_CACHE::savePin`: the alternates in the map's order (by name), "any invalid alternates" -- one with no name -- left out
+    let mut alts: Vec<&eda_model::ir::PinAlternate> = p.alternates.iter().filter(|a| !a.name.is_empty()).collect();
+    alts.sort_by(|a, b| a.name.cmp(&b.name));
+    for a in alts {
+        write!(out, " (alternate {} {} {})", crate::sexpr_str(&a.name), a.electrical_type, a.shape).unwrap();
+    }
+    writeln!(out, ")").unwrap();
 }
 
 #[cfg(test)]
@@ -946,6 +953,7 @@ mod tests {
             hidden,
             name_size_mm: Some(1.27),
             number_size_mm: Some(1.27),
+            alternates: Vec::new(),
         }
     }
 

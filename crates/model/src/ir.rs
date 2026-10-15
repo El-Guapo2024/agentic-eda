@@ -3692,6 +3692,17 @@ impl LibrarySymbolGraphic {
 /// dialog's own name/number text-size fields (`LibPin` has none of these
 /// three -- editor-only metadata, same split `LibraryPad`'s own doc
 /// explains for its own overrides).
+/// One alternate function of a library symbol's pin (`SCH_PIN::ALT`, `(alternate "name" type shape)`): the name it goes by, the electrical type and the graphic style it
+/// takes when a schematic selects it. Same raw-token convention as the pin's own `electrical_type` and `shape`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinAlternate {
+    pub name: String,
+    pub electrical_type: String,
+    #[serde(default = "d_pin_shape")]
+    pub shape: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LibrarySymbolPin {
@@ -3722,6 +3733,10 @@ pub struct LibrarySymbolPin {
     pub name_size_mm: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number_size_mm: Option<f64>,
+    /// `SCH_PIN::GetAlternates()`: the pin's alternate functions -- the Pin Properties dialog's "Alternate Assignments". Sorted by name, a name once and not empty
+    /// (the file keeps them in a `std::map`, and the dialog says "Alternate pin definitions must have a name."). Not available for a symbol with several body styles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternates: Vec<PinAlternate>,
 }
 
 impl LibrarySymbolPin {
@@ -3737,7 +3752,7 @@ impl LibrarySymbolPin {
     /// 1, `hidden`/text sizes at their defaults (the engine type never had
     /// them to read back).
     pub fn from_engine_pin(p: &crate::symbol::LibPin) -> Self {
-        LibrarySymbolPin { id: String::new(), number: p.number.clone(), name: p.name.clone(), electrical_type: p.electrical_type.clone(), shape: p.shape.clone(), at: p.at, angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None }
+        LibrarySymbolPin { id: String::new(), number: p.number.clone(), name: p.name.clone(), electrical_type: p.electrical_type.clone(), shape: p.shape.clone(), at: p.at, angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() }
     }
 }
 
@@ -4427,6 +4442,7 @@ mod tests {
             hidden: false,
             name_size_mm: None,
             number_size_mm: None,
+            alternates: Vec::new(),
         }
     }
 

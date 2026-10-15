@@ -149,6 +149,10 @@ fn check_footprint_name(name: &str) -> Result<(), Vec<CheckResult>> {
     Ok(())
 }
 
+/// The electrical types and graphic styles a pin takes, as the tokens a `.kicad_sym` writes them (`getPinElectricalTypeToken`, `getPinShapeToken`): what an alternate function of a pin may name.
+pub(crate) const PIN_TYPE_TOKENS: [&str; 12] = ["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"];
+pub(crate) const PIN_SHAPE_TOKENS: [&str; 9] = ["line", "inverted", "clock", "inverted_clock", "input_low", "clock_low", "output_low", "edge_clock_high", "non_logic"];
+
 pub(crate) fn check_symbol_lib_id(lib_id: &str) -> Result<(), Vec<CheckResult>> {
     let (lib, item) = split_lib_name(lib_id);
     if item.is_empty() {
@@ -435,6 +439,7 @@ mod verb_tests {
                 hidden: false,
                 name_size_mm: None,
                 number_size_mm: None,
+                alternates: Vec::new(),
             });
         }
         sym.graphics.push(LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 0, body_style: 1, start: SPoint { x: -2.54, y: -3.81 }, end: SPoint { x: 2.54, y: 3.81 }, stroke_mm: 0.254, fill: eda_model::ir::LibraryFill::None });

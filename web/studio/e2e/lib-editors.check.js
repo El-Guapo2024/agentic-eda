@@ -837,6 +837,116 @@
     await closeDialogs();
   });
 
+  // ================================================================================================ 6. alternate pin functions
+  await scenario("Symbol Editor pin alternates: Pin Properties edits them in KiCad's grid, the icon is drawn beside the name while Show Pin Alternate Icons is on, the file has them, a symbol with two body styles takes none", async (t) => {
+    await clickTab("Symbol");
+    await sleep(500);
+    const id = "eda:P17Alt";
+    madeSyms.push(id);
+    let r = await cmd({ op: "new_symbol", lib_id: id });
+    t(r.ok, `new_symbol: ${r.message ?? "ok"}`);
+    const pin = (number, y) => ({ number, name: `PA${number}`, electrical_type: "bidirectional", shape: "line", at: { x: -5.08, y }, angle_deg: 0, length_mm: 2.54, unit: 1, body_style: 1, hidden: false, name_size_mm: null, number_size_mm: null });
+    for (const p of [pin("1", 0), pin("2", -5.08)]) { r = await cmd({ op: "add_symbol_pin", lib_id: id, pin: p }); if (!r.ok) t(false, `add_symbol_pin: ${r.message}`); }
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(1000);
+    await __eda.run("common.Control.zoomFitScreen");
+    await sleep(500);
+    const canvas = () => document.querySelector(".editor-canvas-col canvas");
+    const shot = () => { const c = canvas(); const ctx = c.getContext("2d"); return { w: c.width, h: c.height, dpr: c.width / parseFloat(c.style.width || c.width), d: ctx.getImageData(0, 0, c.width, c.height).data }; };
+    /** The box of the pixels that differ between two shots, in the editor's um (+y down), and how many there are. */
+    const diffBox = (a, b) => {
+      const v = __eda.state().view;
+      let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1, n = 0;
+      for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
+        const i = (y * a.w + x) * 4;
+        if (Math.abs(a.d[i] - b.d[i]) + Math.abs(a.d[i + 1] - b.d[i + 1]) + Math.abs(a.d[i + 2] - b.d[i + 2]) > 60) { n++; x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); }
+      }
+      const w = (px, py) => [(px / a.dpr - v.x) / v.scale, (py / a.dpr - v.y) / v.scale];
+      return { n, from: n ? w(x0, y0) : null, to: n ? w(x1, y1) : null };
+    };
+    t(__eda.actions().some((a) => a.id === "eeschema.EditorControl.togglePinAltIcons" && a.enabled), "Show Pin Alternate Icons is an enabled action of the Symbol tab");
+    // no pin has alternates yet: the toggle changes nothing on the canvas
+    const bare = shot();
+    await __eda.run("eeschema.EditorControl.togglePinAltIcons");
+    await sleep(400);
+    t(diffBox(bare, shot()).n === 0, "with no alternates the icons toggle draws nothing");
+    await __eda.run("eeschema.EditorControl.togglePinAltIcons");
+    await sleep(300);
+
+    // double click on the pin: Pin Properties, the pane for alternates starts closed
+    const PIN1 = [-4000, 0];
+    const dbl = async (wx, wy) => { const [sx, sy] = toScreen(wx, wy); canvasEl().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: sx, clientY: sy, detail: 2 })); await sleep(600); };
+    await dbl(...PIN1);
+    t(!!tid("pin-alternates") && !tid("pin-alternates-add"), "Pin Properties has the alternates pane, closed while the pin has none");
+    tid("pin-alternates-toggle").click(); await sleep(150);
+    t(!!tid("pin-alternates-add") && !!tid("pin-alternates-delete"), "the turndown opens the grid with its buttons");
+    t(/Alternate Pin Name/.test(tid("pin-alternates")?.textContent ?? "") && /Electrical Type/.test(tid("pin-alternates")?.textContent ?? "") && /Graphic Style/.test(tid("pin-alternates")?.textContent ?? ""), "with KiCad's three columns");
+    // + adds a row with no name and the pin's own type and style
+    tid("pin-alternates-add").click(); await sleep(150);
+    t(tid("alt-name-0")?.value === "" && tid("alt-type-0")?.value === "bidirectional" && tid("alt-shape-0")?.value === "line", `a new row has no name and the pin's type and style: ${JSON.stringify([tid("alt-name-0")?.value, tid("alt-type-0")?.value, tid("alt-shape-0")?.value])}`);
+    // OK with a nameless row: refused in the dialog's words
+    await click(tid("pin-props-ok"), 300);
+    t(/Alternate pin definitions must have a name\./.test(tid("pin-props-error")?.textContent ?? "") && !!tid("pin-alternates"), `refused: ${tid("pin-props-error")?.textContent}`);
+    await type(tid("alt-name-0"), "UART_TX");
+    await choose(tid("alt-type-0"), "output");
+    tid("pin-alternates-add").click(); await sleep(150);
+    await type(tid("alt-name-1"), "ADC1");
+    await choose(tid("alt-type-1"), "input");
+    // a name given twice: the last row stays
+    tid("pin-alternates-add").click(); await sleep(150);
+    await type(tid("alt-name-2"), "UART_TX");
+    await choose(tid("alt-shape-2"), "inverted");
+    await click(tid("pin-props-ok"), 900);
+    t(!tid("pin-alternates"), "OK closes the dialog");
+    let sym = await symbol(id);
+    let alts = (sym.pins.find((p) => p.number === "1")?.alternates ?? []).map((a) => `${a.name} ${a.electrical_type} ${a.shape}`);
+    t(same(alts, ["ADC1 input line", "UART_TX bidirectional inverted"]), `the pin keeps each name once, in the order of the names: ${JSON.stringify(alts)}`);
+    t((sym.pins.find((p) => p.number === "2")?.alternates ?? []).length === 0, "the other pin has none");
+    // the file
+    const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
+    t(text.includes('(alternate "ADC1" input line)') && text.includes('(alternate "UART_TX" bidirectional inverted)') && text.indexOf('"ADC1"') < text.indexOf('"UART_TX"'), "the exported .kicad_sym has (alternate ...) inside the pin, by name");
+    // the icon: toggling it off changes pixels beside the first pin's name, none at the second pin
+    await sleep(500);
+    const withIcon = shot();
+    await __eda.run("eeschema.EditorControl.togglePinAltIcons");
+    await sleep(400);
+    const without = shot();
+    const d = diffBox(withIcon, without);
+    t(d.n >= 20, `Show Pin Alternate Icons draws an icon (${d.n} px)`);
+    // pin 1 runs right from (-5.08, 0) to the body at (-2.54, 0); the name is inside from 0.508 mm on, the icon after it, level with the line
+    t(!!d.from && d.from[0] > -2540 && d.to[0] < 9000 && d.from[1] > -1500 && d.to[1] < 1500, `the icon is beside the first pin's name, level with its line: ${JSON.stringify([d.from, d.to])}`);
+    await __eda.run("eeschema.EditorControl.togglePinAltIcons");
+    await sleep(300);
+    t(diffBox(withIcon, shot()).n === 0, "and back on, it is drawn again");
+
+    // reopened: the pane starts open with the rows; a deleted row is gone, Cancel keeps the library as it was
+    await dbl(...PIN1);
+    t(!!tid("pin-alternates-add") && tid("alt-name-0")?.value === "ADC1" && tid("alt-name-1")?.value === "UART_TX", `reopened, the pane is open with the rows: ${tid("alt-name-0")?.value}, ${tid("alt-name-1")?.value}`);
+    tid("alt-row-0").click(); await sleep(80);
+    tid("pin-alternates-delete").click(); await sleep(150);
+    t(!tid("alt-name-1") && tid("alt-name-0")?.value === "UART_TX", "the delete button removes the selected row");
+    await click(tid("pin-props-cancel"), 300);
+    sym = await symbol(id);
+    t(sym.pins.find((p) => p.number === "1")?.alternates?.length === 2, "Cancel keeps both");
+    // one undo of the Symbol Editor takes the whole edit back
+    await undoFp();
+    sym = await symbol(id);
+    t((sym.pins.find((p) => p.number === "1")?.alternates ?? []).length === 0, "one undo of the Symbol Editor takes the alternates away");
+
+    // a symbol with two body styles takes none: the pane is disabled with KiCad's tooltip, and the verb refuses
+    const cur = await symbol(id);
+    r = await cmd({ op: "edit_symbol_properties", lib_id: id, reference_prefix: "U", description: "", keywords: "", datasheet: "", power: false, in_bom: true, on_board: true, pin_numbers_hidden: false, pin_names_hidden: false, pin_name_offset_mm: cur.pin_name_offset_mm ?? 0.508, unit_count: 1, has_alternate_body_style: true, footprint_filters: [] });
+    t(r.ok, `two body styles: ${r.message ?? "ok"}`);
+    await sleep(900);
+    await dbl(...PIN1);
+    t(!!tid("pin-alternates") && !tid("pin-alternates-add") && tid("pin-alternates-toggle")?.disabled === true, "the pane is disabled");
+    t(/not available for symbols with multiple body styles/.test(tid("pin-alternates-toggle")?.getAttribute("title") ?? ""), `with KiCad's tooltip: ${tid("pin-alternates-toggle")?.getAttribute("title")}`);
+    await click(tid("pin-props-cancel"), 300);
+    r = await cmd({ op: "edit_symbol_pin", lib_id: id, id: cur.pins.find((p) => p.number === "1").id, pin: { ...cur.pins.find((p) => p.number === "1"), alternates: [{ name: "A", electrical_type: "input", shape: "line" }] } });
+    t(!r.ok && /multiple body styles/.test(r.message ?? JSON.stringify(r)), `the verb refuses alternates: ${r.message ?? JSON.stringify(r)}`);
+  }, [/body styles/i]);
+
   // ================================================================================================ leave the library as it was
   await closeDialogs();
   for (const n of made) { await cmd({ op: "delete_library_footprint", name: n }); }

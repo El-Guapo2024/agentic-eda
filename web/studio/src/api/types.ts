@@ -2449,6 +2449,13 @@ export type LibrarySymbolGraphic =
   | { kind: "arc"; id?: string; unit: number; body_style: number; start: MmPoint; mid: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm };
 
+/** `crates/model/src/ir.rs` `PinAlternate` -- one alternate function of a pin (`SCH_PIN::ALT`, `(alternate "name" type shape)`): a name, an electrical type and a graphic style. A pin keeps each name once, in the order of the names. */
+export interface PinAlternate {
+  name: string;
+  electrical_type: PinElectricalType;
+  shape: PinShape;
+}
+
 /** `crates/model/src/ir.rs` `LibrarySymbolPin` -- one pin on a [`LibrarySymbol`], addressable (unlike the read-only `LibPin` above) for move/edit/delete. */
 export interface LibrarySymbolPin {
   id?: string;
@@ -2465,6 +2472,8 @@ export interface LibrarySymbolPin {
   hidden: boolean;
   name_size_mm: Mm | null;
   number_size_mm: Mm | null;
+  /** The pin's alternate functions (`DIALOG_PIN_PROPERTIES`' "Alternate pin function definitions"); the server leaves the list out when it is empty. */
+  alternates?: PinAlternate[];
 }
 
 /** `crates/model/src/sym_fields.rs` `FieldHAlign` / `FieldVAlign`: a field's `(justify ...)`. */

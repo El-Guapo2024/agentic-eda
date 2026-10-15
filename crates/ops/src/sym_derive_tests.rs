@@ -37,6 +37,7 @@ fn base() -> LibrarySymbol {
             hidden: false,
             name_size_mm: None,
             number_size_mm: None,
+            alternates: Vec::new(),
         });
     }
     let mut f = s.all_fields();

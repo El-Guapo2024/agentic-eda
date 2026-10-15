@@ -28,6 +28,8 @@ import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
 import { defaultPenUm, textOrigin, FIELD_SIZE_UM } from "../../kicad-port/schText";
 import { shownText } from "../../kicad-port/schFieldEdit";
 import { electricalTypeLayout, pinLabelsShown, pinShown } from "../../kicad-port/symPinText";
+import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/symPinAltIcon";
+import { DEFAULT_PIN_TEXTS, PIN_TEXT_SIZE_UM, shownPinName, type PinTexts } from "../schematic/pinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
@@ -162,6 +164,8 @@ export interface SymPaintOptions {
   showHiddenPins: boolean;
   /** `m_ShowPinNumbers`: force the pin numbers on even where the symbol hides them. */
   showPinNumbers: boolean;
+  /** `m_ShowPinAltIcons`: the icon beside the name of a pin that has alternate functions. */
+  showPinAltIcons?: boolean;
   /** The Text tool's text between its dialog and the placing click: it follows the cursor (`SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace`). */
   pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
   /** The symbol's fields that are on show (kicad-port/symFieldLayout.ts `fieldsOnShow`: the ones with a text, the hidden ones only while Show Hidden Fields is on). */
@@ -188,12 +192,32 @@ function drawField(ctx: CanvasRenderingContext2D, f: SchField, color: string) {
   ctx.restore();
 }
 
+/** `drawAltPinModesIcon`: the strokes of the glyph, turned a quarter counter-clockwise about its centre beside a pin that runs up or down. */
+export function drawPinAltIcon(ctx: CanvasRenderingContext2D, icon: PinAltIcon, color: string) {
+  const g = altIconStrokes(icon.sizeUm);
+  ctx.save();
+  ctx.translate(icon.center[0], icon.center[1]);
+  if (icon.vertical) ctx.rotate(-Math.PI / 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = g.widthUm;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (const [x1, y1, x2, y2] of g.lines) {
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  }
+  ctx.moveTo(g.arc.cx + g.arc.r * Math.cos(g.arc.from), g.arc.cy + g.arc.r * Math.sin(g.arc.from));
+  ctx.arc(g.arc.cx, g.arc.cy, g.arc.r, g.arc.from, g.arc.to, true);
+  ctx.stroke();
+  ctx.restore();
+}
+
 export function paintSymbol(
   ctx: CanvasRenderingContext2D,
   view: ViewTransform,
   widthPx: number,
   heightPx: number,
-  symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean } | null,
+  symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean; pin_name_offset_mm?: number } | null,
   opts: SymPaintOptions
 ) {
   if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm);
@@ -219,6 +243,8 @@ export function paintSymbol(
   }
 
   const labels = pinLabelsShown(symbol, opts.showPinNumbers);
+  // `(pin_names (offset x))`: the names are inside the body from `x` on, over the pin line when it is zero (`GetPinNameInfo`)
+  const texts: PinTexts = { ...DEFAULT_PIN_TEXTS, nameOffsetUm: symbol.pin_name_offset_mm === undefined ? DEFAULT_PIN_TEXTS.nameOffsetUm : symbol.pin_name_offset_mm * 1000 };
   const hiddenColor = layerColor("LAYER_HIDDEN");
   for (const p of symbol.pins) {
     // `SCH_PAINTER::draw( SCH_PIN )`: a pin marked invisible is drawn only while hidden pins are shown, and then in the hidden colour
@@ -236,7 +262,12 @@ export function paintSymbol(
     ctx.stroke();
     // The labels are the symbol's call (`GetShowPinNames` / `GetShowPinNumbers`): blank what is not shown, the shared painter draws the rest.
     const shownPin = { ...rp.pin, name: labels.names ? rp.pin.name : "", number: labels.numbers ? rp.pin.number : "" };
-    drawPinText(ctx, { ...rp, pin: shownPin }, p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined);
+    drawPinText(ctx, { ...rp, pin: shownPin }, p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined, texts);
+    // `SCH_PAINTER::draw( SCH_PIN )`: beside the name, in its colour, when the pin has alternates and the name is drawn
+    if (opts.showPinAltIcons !== false && p.alternates?.length && labels.names && shownPinName(p.name) !== "") {
+      const nameWidth = measureStrokeText(shownPinName(p.name), PIN_TEXT_SIZE_UM);
+      drawPinAltIcon(ctx, pinAltIcon(rp.tip, rp.root, { widthUm: nameWidth, sizeUm: PIN_TEXT_SIZE_UM }, texts.nameOffsetUm), p.hidden ? hiddenColor : layerColor("LAYER_PINNAM"));
+    }
     if (opts.showElectricalTypes && p.electrical_type !== "no_connect") {
       // `GetPinElectricalTypeInfo`, drawn in `LAYER_PRIVATE_NOTES` (the hidden colour on a hidden pin).
       const l = electricalTypeLayout(p, rp.tip, rp.dir);

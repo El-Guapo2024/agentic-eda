@@ -8,7 +8,7 @@
 //! reader is the inverse of [`export_kicad_sym`](crate::export_kicad_sym) instead: everything that
 //! writer emits comes back, so copy -> paste and export -> import are lossless for the studio's own
 //! symbols, and a real KiCad file loses only what the editable type cannot hold (text boxes, bezier
-//! curves, alternate pin functions -- each reported in `warnings`, never dropped silently).
+//! curves -- each reported in `warnings`, never dropped silently); a pin's alternate functions come back as the pin's `alternates`.
 //!
 //! Grammar notes confirmed against the KiCad source this repo ports (`eeschema/sch_io/kicad_sexpr`):
 //! a symbol's own `(symbol "Name_<unit>_<style>" ...)` sub-blocks carry the drawn items (unit 0 = shared
@@ -385,7 +385,21 @@ fn parse_pin(item: &[Sexpr], unit: u32, style: u32) -> Option<LibrarySymbolPin> 
         hidden: hidden(item),
         name_size_mm: name_node.and_then(font_size),
         number_size_mm: number_node.and_then(font_size),
+        alternates: pin_alternates(item),
     })
+}
+
+/// A pin's `(alternate "name" <type> <shape>)` forms (`SCH_IO_KICAD_SEXPR_PARSER::parseSymbol`, `T_alternate`): kept by name -- the file's `std::map`, so a name given twice keeps its
+/// last definition -- and sorted by it, as the map holds them. A nameless one is what the library cache's writer strips ("a bug somewhere in the alternate pin code"), so it is not read.
+fn pin_alternates(pin: &[Sexpr]) -> Vec<eda_model::ir::PinAlternate> {
+    let mut map: std::collections::BTreeMap<String, eda_model::ir::PinAlternate> = std::collections::BTreeMap::new();
+    for alt in sexpr::find_all(pin, "alternate") {
+        let Some(name) = sexpr::txt(alt, 1).filter(|n| !n.is_empty()) else { continue };
+        let electrical_type = sexpr::txt(alt, 2).unwrap_or("passive").to_string();
+        let shape = sexpr::txt(alt, 3).filter(|s| !s.is_empty()).unwrap_or("line").to_string();
+        map.insert(name.to_string(), eda_model::ir::PinAlternate { name: name.to_string(), electrical_type, shape });
+    }
+    map.into_values().collect()
 }
 
 #[cfg(test)]
@@ -409,6 +423,7 @@ mod tests {
             hidden,
             name_size_mm: Some(1.0),
             number_size_mm: Some(0.9),
+            alternates: Vec::new(),
         }
     }
 
@@ -442,6 +457,45 @@ mod tests {
         };
         sym.assign_missing_ids();
         sym
+    }
+
+    /// `(alternate "name" type shape)` of a pin: written in the map's order after the name and the number (`savePin`), read back by name -- a name given twice keeps its last
+    /// definition (`pin->GetAlternates()[ alt.m_Name ] = alt`), a nameless one is not read -- and a file KiCad wrote reads as the same alternates.
+    #[test]
+    fn a_pins_alternate_functions_are_written_as_kicad_writes_them_and_read_back() {
+        use eda_model::ir::PinAlternate;
+        let alt = |name: &str, t: &str, shape: &str| PinAlternate { name: name.into(), electrical_type: t.into(), shape: shape.into() };
+        let mut sym = LibrarySymbol::new_empty("Test:Mcu");
+        let mut p = pin("7", 1, 1, false);
+        p.alternates = vec![alt("UART_TX", "output", "line"), alt("GPIO7", "bidirectional", "inverted"), alt("", "input", "line"), alt("ADC1", "input", "clock")];
+        sym.pins = vec![p, pin("8", 1, 1, false)];
+        sym.has_alternate_body_style = false;
+        sym.unit_count = 1;
+        sym.assign_missing_ids();
+        let text = export_kicad_sym(&sym);
+        // by name, the nameless one left out
+        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("{needle} is written:\n{text}"));
+        assert!(at("(alternate \"ADC1\" input clock)") < at("(alternate \"GPIO7\" bidirectional inverted)") && at("(alternate \"GPIO7\"") < at("(alternate \"UART_TX\" output line)"), "{text}");
+        assert!(!text.contains("(alternate \"\""), "an alternate with no name is not written");
+        assert!(text.contains("(number \"7\" (effects (font (size 0.9 0.9)))) (alternate \"ADC1\""), "after the number, in the pin's own parentheses: {text}");
+        let back = parse_library_symbols(&text).unwrap();
+        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+        let names: Vec<_> = back.symbols[0].pins.iter().find(|p| p.number == "7").unwrap().alternates.iter().map(|a| (a.name.as_str(), a.electrical_type.as_str(), a.shape.as_str())).collect();
+        assert_eq!(names, [("ADC1", "input", "clock"), ("GPIO7", "bidirectional", "inverted"), ("UART_TX", "output", "line")]);
+        assert!(back.symbols[0].pins.iter().find(|p| p.number == "8").unwrap().alternates.is_empty());
+
+        // a file as KiCad writes it: a name given twice keeps the last
+        let kicad = r#"(kicad_symbol_lib (version 20231120) (generator "kicad_symbol_editor")
+            (symbol "Mcu" (symbol "Mcu_1_1" (pin bidirectional line (at 0 0 0) (length 2.54)
+                (name "PA0" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27))))
+                (alternate "TIM2_CH1" bidirectional line) (alternate "ADC_IN0" input line) (alternate "TIM2_CH1" output clock)))))"#;
+        let parsed = parse_library_symbols(kicad).unwrap();
+        let alts = &parsed.symbols[0].pins[0].alternates;
+        assert_eq!(alts.iter().map(|a| (a.name.as_str(), a.electrical_type.as_str(), a.shape.as_str())).collect::<Vec<_>>(), [("ADC_IN0", "input", "line"), ("TIM2_CH1", "output", "clock")]);
+        assert!(parsed.warnings.is_empty(), "alternates are no longer a warning: {:?}", parsed.warnings);
+        // and written again says the same
+        let again = parse_library_symbols(&export_kicad_sym(&parsed.symbols[0])).unwrap();
+        assert_eq!(again.symbols[0].pins[0].alternates, *alts);
     }
 
     #[test]

@@ -5063,7 +5063,7 @@ mod tests {
         setup_mcu30_users_board(&dir);
         let (_, mut design, _) = load(&dir).unwrap();
         // a published library symbol with the pins of the resistor R1 is, a rectangle in its normal body and a wider one in the alternate body
-        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None };
+        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() };
         let rect = |half: f64, style: u32| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: SPoint::new(-half, 2.54), end: SPoint::new(half, -2.54), stroke_mm: 0.254, fill: LibraryFill::None };
         let mut lib = LibrarySymbol::new_empty("Test:Gate2");
         lib.reference_prefix = "R".into();
@@ -5366,6 +5366,7 @@ mod tests {
             hidden: false,
             name_size_mm: None,
             number_size_mm: None,
+            alternates: Vec::new(),
         };
         step(&dir, Cmd::AddSymbolPin { lib_id: "TEST:R".into(), pin }, false, "test").unwrap();
 

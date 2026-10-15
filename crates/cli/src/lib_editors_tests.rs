@@ -330,6 +330,7 @@ fn base_symbol() -> LibrarySymbol {
             hidden: false,
             name_size_mm: None,
             number_size_mm: None,
+            alternates: Vec::new(),
         });
     }
     let mut f = s.all_fields();
@@ -502,5 +503,88 @@ fn kicad_cli_loads_derived_symbols_keeps_them_through_sym_upgrade_and_plots_a_fl
         assert!(theirs_svg.contains("<rect") && theirs_svg.matches("stroked-text").count() >= 4, "kicad-cli drew the body and the texts of the derived symbol ({label})");
         assert_eq!(ours_svg, theirs_svg, "kicad-cli plots the flat symbol this studio makes as it plots the derived one ({label})");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ============================================================================================================================================= pin alternate functions
+
+fn mcu_with_alternates() -> LibrarySymbol {
+    use eda_model::ir::PinAlternate;
+    let alt = |name: &str, t: &str, shape: &str| PinAlternate { name: name.into(), electrical_type: t.into(), shape: shape.into() };
+    let mut s = base_symbol();
+    s.lib_id = "Lib:Mcu".into();
+    s.pins[0].name = "PA0".into();
+    s.pins[0].electrical_type = "bidirectional".into();
+    s.pins[0].alternates = vec![alt("UART_TX", "output", "line"), alt("ADC1", "input", "line"), alt("GPIO0", "bidirectional", "inverted"), alt("TIM2_CH1", "output", "clock")];
+    s
+}
+
+/// The alternate functions of a pin are one undo step of the symbol editor (the pin's own verb carries them) and reach the derived library file by name, in the map's order.
+#[test]
+fn pin_alternates_are_one_undo_step_and_reach_the_derived_kicad_sym() {
+    let dir = scratch("p17_pin_alternates");
+    setup(&dir);
+    step(&dir, Cmd::PutLibrarySymbol { symbol: mcu_with_alternates(), overwrite: false }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let pin = design.symbol_library.as_ref().unwrap().by_lib_id("Lib:Mcu").unwrap().pins[0].clone();
+    // Pin Properties' grid: a row removed, a row changed, one added -- one verb
+    let mut edited = pin.clone();
+    edited.alternates.retain(|a| a.name != "TIM2_CH1");
+    edited.alternates.iter_mut().find(|a| a.name == "ADC1").unwrap().shape = "clock_low".into();
+    edited.alternates.push(eda_model::ir::PinAlternate { name: "SPI_MISO".into(), electrical_type: "input".into(), shape: "line".into() });
+    step(&dir, Cmd::EditSymbolPin { lib_id: "Lib:Mcu".into(), id: pin.id.clone(), pin: edited }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let names = |d: &eda_model::ir::Design| d.symbol_library.as_ref().unwrap().by_lib_id("Lib:Mcu").unwrap().pins[0].alternates.iter().map(|a| format!("{} {} {}", a.name, a.electrical_type, a.shape)).collect::<Vec<_>>();
+    assert_eq!(names(&design), ["ADC1 input clock_low", "GPIO0 bidirectional inverted", "SPI_MISO input line", "UART_TX output line"]);
+    let text = crate::library_api::symbol_kicad_sym_any(&dir, "Lib:Mcu").unwrap();
+    assert!(text.contains("(alternate \"ADC1\" input clock_low)") && text.contains("(alternate \"SPI_MISO\" input line)") && !text.contains("TIM2_CH1"), "{text}");
+    // one undo of the Symbol Editor brings the whole first list back
+    undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    assert_eq!(names(&design), ["UART_TX output line", "ADC1 input line", "GPIO0 bidirectional inverted", "TIM2_CH1 output clock"], "as imported");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): a symbol with alternate pin functions written by this studio loads in kicad-cli, `kicad-cli sym upgrade` keeps every alternate (name, type,
+/// style) of every pin, and a plot of the symbol is the plot of the same symbol without them (the alternates are the pin's menu in the editor, not part of the drawing).
+#[test]
+fn kicad_cli_loads_pin_alternates_and_keeps_them_through_sym_upgrade() {
+    if !slow() {
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    }
+    let dir = scratch("p17_pin_alternates_kicad_cli");
+    setup(&dir);
+    let mut mine = mcu_with_alternates();
+    mine.lib_id = "Mcu".into();
+    mine.assign_missing_ids();
+    let mut plain = mine.clone();
+    plain.lib_id = "Plain".into();
+    plain.pins.iter_mut().for_each(|p| p.alternates.clear());
+    let text = eda_kicad::export_kicad_sym_library(&[&mine, &plain]);
+    let work = dir.join("kicad");
+    std::fs::create_dir_all(&work).unwrap();
+    let (path, upgraded) = (work.join("mcu.kicad_sym"), work.join("upgraded.kicad_sym"));
+    std::fs::write(&path, &text).unwrap();
+    std::fs::write(&upgraded, &text).unwrap();
+    kicad_cli(&work, &["sym".as_ref(), "upgrade".as_ref(), upgraded.as_os_str()]).unwrap_or_else(|e| panic!("kicad-cli sym upgrade: {e}"));
+    let theirs_text = std::fs::read_to_string(&upgraded).unwrap();
+    assert!(theirs_text.contains("(alternate \"UART_TX\" output line)"), "kicad-cli kept the alternates:\n{theirs_text}");
+    let theirs = eda_kicad::parse_library_symbols(&theirs_text).expect("the reader takes KiCad's text");
+    let kicad_mcu = theirs.symbols.iter().find(|s| s.lib_id == "Mcu").unwrap();
+    for (a, b) in mine.pins.iter().zip(&kicad_mcu.pins) {
+        // KiCad keeps a pin's alternates in a map by name, so they come back in the name's order
+        let mut sorted = a.alternates.clone();
+        sorted.sort_by(|x, y| x.name.cmp(&y.name));
+        assert_eq!((&a.number, &sorted), (&b.number, &b.alternates), "pin {}: the alternate functions, by name", a.number);
+    }
+    assert!(!kicad_mcu.pins[0].alternates.is_empty());
+    // loads and plots (kicad-cli reads the file with the alternates and draws the symbol as it draws the one without them)
+    let with = plotted_symbol(&work, &path, "Mcu", "with", &[]);
+    let without = plotted_symbol(&work, &path, "Plain", "without", &[]);
+    assert_eq!(with.matches("<path").count(), without.matches("<path").count(), "the alternates add nothing to the plot");
     let _ = std::fs::remove_dir_all(&dir);
 }

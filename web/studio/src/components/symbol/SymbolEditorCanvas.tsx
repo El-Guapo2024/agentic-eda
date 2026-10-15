@@ -299,6 +299,7 @@ export function SymbolEditorCanvas() {
       showElectricalTypes: state.showElectricalTypes,
       showHiddenPins: state.showHiddenPins,
       showPinNumbers: state.showPinNumbers,
+      showPinAltIcons: state.showPinAltIcons,
       pendingText: state.pendingText,
       fields: shownFields,
     });
@@ -310,7 +311,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sym, shownFields, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.pendingText, containerSize, snapTick]);
+  }, [sym, shownFields, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.showPinAltIcons, state.pendingText, containerSize, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {

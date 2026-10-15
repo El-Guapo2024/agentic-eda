@@ -5280,6 +5280,35 @@ impl<'a> Board<'a> {
         if pin.length_mm < 0.0 {
             return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "pin length cannot be negative")]);
         }
+        // `DIALOG_PIN_PROPERTIES::TransferDataFromWindow`: every alternate function has a name; its type and style are the ones a file can say
+        for a in &pin.alternates {
+            if a.name.is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "Alternate pin definitions must have a name.")]);
+            }
+            if !library_editors::PIN_TYPE_TOKENS.contains(&a.electrical_type.as_str()) {
+                return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("alternate {:?}: {:?} is not a pin electrical type", a.name, a.electrical_type))]);
+            }
+            if !library_editors::PIN_SHAPE_TOKENS.contains(&a.shape.as_str()) {
+                return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("alternate {:?}: {:?} is not a pin graphic style", a.name, a.shape))]);
+            }
+        }
+        Ok(())
+    }
+
+    /// `alternates[ alt.m_Name ] = alt` for each row of the grid: a name once (the last definition stays), in the map's order.
+    fn normalize_alternates(pin: &mut LibrarySymbolPin) {
+        let mut map: std::collections::BTreeMap<String, eda_model::ir::PinAlternate> = std::collections::BTreeMap::new();
+        for a in std::mem::take(&mut pin.alternates) {
+            map.insert(a.name.clone(), a);
+        }
+        pin.alternates = map.into_values().collect();
+    }
+
+    /// "Alternate pin assignments are not available for symbols with multiple body styles." (`DIALOG_PIN_PROPERTIES`: the alternates panel is disabled for them.)
+    fn check_alternates_allowed(sym: &LibrarySymbol, pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
+        if !pin.alternates.is_empty() && sym.has_alternate_body_style {
+            return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "Alternate pin assignments are not available for symbols with multiple body styles.")]);
+        }
         Ok(())
     }
 
@@ -5289,8 +5318,10 @@ impl<'a> Board<'a> {
 
     fn add_symbol_pin(&mut self, lib_id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
         pin.id = String::new(); // ids are ours to assign, never the caller's
+        Self::normalize_alternates(&mut pin);
         Self::validate_pin(&pin)?;
         let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_alternates_allowed(sym, &pin)?;
         sym.pins.push(pin);
         sym.assign_missing_ids();
         Ok(())
@@ -5314,8 +5345,10 @@ impl<'a> Board<'a> {
 
     fn edit_symbol_pin(&mut self, lib_id: &str, id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
         pin.id = id.to_string();
+        Self::normalize_alternates(&mut pin);
         Self::validate_pin(&pin)?;
         let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_alternates_allowed(sym, &pin)?;
         let slot = Self::find_pin_mut(sym, id)?;
         *slot = pin;
         Ok(())
@@ -5459,6 +5492,8 @@ mod fp_array_tests;
 mod sym_derive_tests;
 #[cfg(test)]
 mod fp_lib_fields_tests;
+#[cfg(test)]
+mod pin_alternates_tests;
 #[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]
