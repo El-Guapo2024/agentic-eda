@@ -9,13 +9,18 @@
 //
 // The pure rules are kicad-port/rcItems.ts; this file is the part that talks to the store and the server.
 import type { Dispatch } from "react";
-import { fetchErcSeverities, fetchVersion } from "../api/client";
-import type { Cmd, DrcReport, DrcViolation, ErcViolation, RuleSeverity } from "../api/types";
+import { fetchErcSeverities, fetchVersion, postSavedReport } from "../api/client";
+import type { Cmd, DrcReport, DrcViolation, ErcViolation, RuleSeverity, SavedReportRequest } from "../api/types";
+import { itemKind } from "../kicad-port/pcbItems";
+import { openPropertiesFor } from "../components/canvas/properties";
+import { inspectViolation } from "./inspectActions";
 import drcChecks from "../kicad/drc_checks.json";
 import ercChecks from "../kicad/erc_checks.json";
 import { revisionAfterOwnEdit } from "../kicad-port/checkRevision";
-import { canExclude, drcExclusionSpec, drcKey, ercKey, listedIndexes, menuSeverity, ofCheck, selectionAfterRowGone, severitiesAfter, stepListed, type RcMenuEntry, type RcMenuId } from "../kicad-port/rcItems";
+import { canExclude, drcExclusionSpec, drcFixEntry, drcInspectEntry, drcKey, ercFixEntry, ercInspectEntry, ercKey, listedIndexes, menuSeverity, ofCheck, ofRule, selectionAfterRowGone, severitiesAfter, stepListed, violatingRule, type MarkerEntry, type RcMenuContext, type RcMenuEntry, type RcMenuId } from "../kicad-port/rcItems";
 import { fitTransform } from "../kicad-port/view";
+import { drcMarkerObject, objectOn } from "../kicad-port/appearance";
+import { DRC_MARKER_HIT_UM, nearestMarker } from "../kicad-port/markerHit";
 import { ercMarkerPosition } from "../components/schematic/ercMarkerPosition";
 import { getCheckerView, setDrcView, setErcView, type DrcTab } from "../state/checkerView";
 import type { Action as StudioAction, StudioApi, StudioState } from "../state/store";
@@ -61,6 +66,52 @@ export function ercSettingSeverity(v: Pick<ErcViolation, "check" | "severity" | 
 
 /** `ERCE_PIN_TO_PIN_WARNING` / `_ERROR`: findings of the pin conflicts map, whose severity is the map's. */
 export const isPinMapCheck = (check: string): boolean => check === "pin_to_pin";
+
+/**
+ * Everything the marker menu of a DRC violation depends on (`OnDRCItemRClick`): its check, whether it is waived, the custom rule it broke, and the Inspect and Fix entries its check has --
+ * the dialog's menu and the canvas marker's are built from the same one.
+ */
+export function drcMenuContext(state: Pick<StudioState, "board">, v: DrcViolation, onCanvas = false): RcMenuContext {
+  const main = v.items[0]?.id ?? null;
+  const kind = main && state.board ? itemKind(state.board, main) : null;
+  return {
+    domain: "drc",
+    title: drcTitle(v.type),
+    excluded: v.excluded === true,
+    severity: drcSettingSeverity(state, v.type),
+    rule: violatingRule(v.description),
+    inspect: v.items.length > 0 ? drcInspectEntry(v.type) : null,
+    fix: v.items.length > 0 ? drcFixEntry(v.type, kind) : null,
+    ...(onCanvas ? { onCanvas } : {}),
+  };
+}
+
+/** The same for an ERC finding (`OnERCItemRClick`); `endpoint_off_grid` also offers Schematic Setup's connection grid. */
+export function ercMenuContext(v: ErcViolation, onCanvas = false): RcMenuContext {
+  return {
+    domain: "erc",
+    title: ercTitle(v.check),
+    excluded: v.severity === "excluded",
+    severity: ercSettingSeverity(v),
+    pinMap: isPinMapCheck(v.check),
+    inspect: ercInspectEntry(v.check),
+    fix: ercFixEntry(v.check),
+    connectionGrid: v.check === "endpoint_off_grid",
+    ...(onCanvas ? { onCanvas } : {}),
+  };
+}
+
+// -------------------------------------------------------------------------------------------------------------------------- running an action by id
+
+let actionRunner: ((id: string, param?: unknown) => void) | null = null;
+
+/** Installed by `useEdaTestHook` next to the global hotkeys: the action runner (`useActionRunner`'s `run`), so a marker's Fix entry can run an action by its id from outside React. */
+export function setCheckerRunner(run: ((id: string, param?: unknown) => void) | null): void {
+  actionRunner = run;
+}
+
+/** How long a Fix entry waits for the selection it just made to reach the runner, which reads the selection of the render it was made in. */
+const SELECT_THEN_RUN_MS = 80;
 
 // -------------------------------------------------------------------------------------------------------------------------- selecting
 
@@ -234,16 +285,26 @@ export async function excludeDrcOfCheck(ctx: CheckerCtx, check: string, excluded
   return excluded ? excludeDrc(ctx, of) : restoreDrc(ctx, of);
 }
 
-/** `ERC` twins: the exclusion is a bare `(check, location)` key, applied to the report on screen. */
-export async function setErcExcluded(ctx: CheckerCtx, violations: readonly ErcViolation[], excluded: boolean): Promise<boolean> {
+/**
+ * `ERC` twins: the exclusion is a `(check, location)` key with a comment and its marker (`ErcViolation.marker`, which the derived project lists
+ * for kicad-cli), applied to the report on screen. `comment` is `SCH_MARKER::SetExcluded`'s; `edit` is "Edit exclusion comment...": the findings already
+ * waived get the new comment instead of being skipped.
+ */
+export async function setErcExcluded(ctx: CheckerCtx, violations: readonly ErcViolation[], excluded: boolean, comment = "", edit = false): Promise<boolean> {
   const { api, dispatch } = ctx;
-  const keys = violations.flatMap((v) => (excluded ? v.severity !== "excluded" : v.severity === "excluded") ? [ercKey(v)] : []).filter((k): k is { check: string; location: string } => k !== null);
-  if (keys.length === 0) return false;
+  const wanted = (v: ErcViolation) => (edit ? v.severity === "excluded" : excluded ? v.severity !== "excluded" : v.severity === "excluded");
+  const picked = violations.flatMap((v) => {
+    const k = wanted(v) ? ercKey(v) : null;
+    return k ? [{ k, marker: v.marker }] : [];
+  });
+  if (picked.length === 0) return false;
   const before = api.getState();
-  const cmds: Cmd[] = keys.map((k) => ({ op: excluded ? "add_erc_exclusion" : "delete_erc_exclusion", check: k.check, location: k.location }));
+  const cmds: Cmd[] = picked.map(({ k, marker }) =>
+    excluded ? { op: "add_erc_exclusion", check: k.check, location: k.location, comment, ...(marker ? { marker } : {}) } : { op: "delete_erc_exclusion", check: k.check, location: k.location }
+  );
   if (!(await api.cmdBatch(cmds))) return false;
   const version = await revisionAfter(before.ercVersion, before);
-  for (const k of keys) dispatch({ type: "ERC_MARK_EXCLUDED", check: k.check, location: k.location, excluded, version });
+  for (const { k } of picked) dispatch({ type: "ERC_MARK_EXCLUDED", check: k.check, location: k.location, excluded, comment, version });
   return true;
 }
 
@@ -282,6 +343,231 @@ export async function excludeMarkerErc(ctx: CheckerCtx): Promise<void> {
   if (!(await setErcExcluded(ctx, [v], true))) return;
   const next = filter.exclusions ? null : selectionAfterRowGone(listed, here);
   if (next !== null) selectErc(ctx, next);
+}
+
+/** Waive (or restore) every violation of one custom rule on every page of the report: "Exclude all violations of rule '...'" (`ID_ADD_EXCLUSION_ALL`, `ID_REMOVE_EXCLUSION_ALL`). */
+export async function excludeDrcOfRule(ctx: CheckerCtx, rule: string, excluded: boolean): Promise<boolean> {
+  const report = ctx.api.getState().drc;
+  if (!report) return false;
+  const all = [...report.violations, ...(report.unconnected_items ?? []), ...(report.schematic_parity ?? [])];
+  const of = ofRule(all, rule, !excluded);
+  return excluded ? excludeDrc(ctx, of) : restoreDrc(ctx, of);
+}
+
+// -------------------------------------------------------------------------------------------------------------------------- Delete Marker
+
+/** Where the selection goes when a row is deleted: the row that followed it among the listed ones, else the one before (`RC_TREE_MODEL::DeleteItems`), as an index of the list after the deletion. */
+function afterDelete(listed: readonly number[], gone: number): { old: number | null; next: number | null } {
+  const old = selectionAfterRowGone(listed, gone);
+  return { old, next: old === null ? null : old > gone ? old - 1 : old };
+}
+
+/**
+ * Delete Marker on the DRC dialog (`DIALOG_DRC::OnDeleteOneClick`, `RC_TREE_MODEL::DeleteCurrentItem( true )`): the selected marker of the page that is up leaves the list and the
+ * board. An excluded marker takes its exclusion with it: `BOARD::RecordDRCExclusions` -- which the next DRC run and the next save make -- keeps the exclusions of the markers that
+ * are left, so a deleted one is not (`delete_drc_exclusions`) and the violation is found again by the next run, not excluded. A violation that is not excluded only leaves the list.
+ */
+export async function deleteMarkerDrc(ctx: CheckerCtx): Promise<boolean> {
+  const { api, dispatch } = ctx;
+  const s = api.getState();
+  const { tab, filter } = getCheckerView().drc;
+  if (tab !== "violations" && tab !== "unconnected" && tab !== "parity") return false;
+  const list = drcListOf(s.drc, tab);
+  const here = drcSelectedOf(s, tab);
+  const v = here !== null ? list[here] : undefined;
+  if (here === null || !v) return false;
+  const { old, next } = afterDelete(listedIndexes(list, filter), here);
+  let version: string | null | undefined;
+  if (v.excluded === true && canExclude(v)) {
+    if (!(await api.cmd({ op: "delete_drc_exclusions", exclusions: [drcKey(v)] }))) return false;
+    version = await revisionAfter(s.drcVersion, s);
+  }
+  dispatch({ type: "DRC_DELETE_MARKER", page: tab, index: here, select: next, ...(version !== undefined ? { version } : {}) });
+  if (tab !== "violations") setDrcView(tab === "unconnected" ? { unconnectedSelected: next } : { paritySelected: next });
+  if (old !== null) frameDrc(ctx, list[old]);
+  return true;
+}
+
+/**
+ * Delete All Markers on the DRC dialog (`OnDeleteAllClick`): the errors and warnings of every page, and the exclusions too when `includeExclusions` ("Errors, Warnings and
+ * Exclusions"): with no marker left, `RecordDRCExclusions` keeps none (`clear_drc_exclusions`, one undo step).
+ */
+export async function deleteAllMarkersDrc(ctx: CheckerCtx, includeExclusions: boolean): Promise<boolean> {
+  const { api, dispatch } = ctx;
+  const s = api.getState();
+  const report = s.drc;
+  const excluded = [...(report?.violations ?? []), ...(report?.unconnected_items ?? []), ...(report?.schematic_parity ?? [])].some((v) => v.excluded === true);
+  let version: string | null | undefined;
+  if (includeExclusions && excluded) {
+    if (!(await api.cmd({ op: "clear_drc_exclusions" }))) return false;
+    version = await revisionAfter(s.drcVersion, s);
+  }
+  dispatch({ type: "DRC_DELETE_ALL", includeExclusions, ...(version !== undefined ? { version } : {}) });
+  setDrcView({ unconnectedSelected: null, paritySelected: null });
+  return true;
+}
+
+/**
+ * Delete Marker on the ERC dialog (`DIALOG_ERC::OnDeleteOneClick`). An excluded marker takes its exclusion with it: KiCad records the markers that are left
+ * (`RecordERCExclusions`, when ERC is run and when the project is saved), so a deleted one is not recorded -- the finding is reported again at the next run, and not
+ * excluded. A finding that is not excluded only leaves the list; the next run finds it again.
+ */
+export async function deleteMarkerErc(ctx: CheckerCtx): Promise<boolean> {
+  const { api, dispatch } = ctx;
+  const s = api.getState();
+  const list = s.erc?.violations ?? [];
+  const here = s.ercSelected;
+  const v = here !== null ? list[here] : undefined;
+  if (here === null || !v) return false;
+  const { old, next } = afterDelete(listedIndexes(list, getCheckerView().erc.filter), here);
+  const key = v.severity === "excluded" ? ercKey(v) : null;
+  let version: string | null | undefined;
+  if (key) {
+    if (!(await api.cmd({ op: "delete_erc_exclusion", check: key.check, location: key.location }))) return false;
+    version = await revisionAfter(s.ercVersion, s);
+  }
+  dispatch({ type: "ERC_DELETE_MARKER", index: here, select: next, ...(version !== undefined ? { version } : {}) });
+  if (old !== null) frameErc(ctx, list[old]);
+  return true;
+}
+
+/** Delete All Markers on the ERC dialog (`OnDeleteAllClick`); with the exclusions, they are forgotten too (one undo step). */
+export async function deleteAllMarkersErc(ctx: CheckerCtx, includeExclusions: boolean): Promise<boolean> {
+  const { api, dispatch } = ctx;
+  const s = api.getState();
+  let version: string | null | undefined;
+  if (includeExclusions && (s.erc?.violations ?? []).some((v) => v.severity === "excluded")) {
+    if (!(await api.cmd({ op: "clear_erc_exclusions" }))) return false;
+    version = await revisionAfter(s.ercVersion, s);
+  }
+  dispatch({ type: "ERC_DELETE_ALL", includeExclusions, ...(version !== undefined ? { version } : {}) });
+  return true;
+}
+
+// -------------------------------------------------------------------------------------------------------------------------- Save report
+
+/** Hand a text to the browser as a file to save (the page's "file dialog"). */
+export function downloadText(fileName: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * The dialogs' "Save..." (`DIALOG_ERC::OnSaveReport`, `DIALOG_DRC::OnSaveReport`): kicad-cli writes the report -- text (`.rpt`) or JSON -- for the severities the Show boxes
+ * list, in the editor's units, and the page saves it as `ERC.rpt` / `DRC.json`. A fresh run of kicad-cli, as the report is its own: a marker deleted from the list
+ * is in it, and the exclusions are the derived project's. Resolves to whether a file was saved; the reason is a toast.
+ */
+export async function saveReport(ctx: CheckerCtx, domain: "erc" | "drc", format: "report" | "json"): Promise<boolean> {
+  const { api, dispatch } = ctx;
+  const state = api.getState();
+  const filter = getCheckerView()[domain].filter;
+  const request: SavedReportRequest = { format, errors: filter.errors, warnings: filter.warnings, exclusions: filter.exclusions, units: state.units };
+  if (domain === "drc") {
+    request.refill_zones = state.drcRefillZones;
+    request.schematic_parity = state.drcParity;
+  }
+  try {
+    const reply = await postSavedReport(domain, request);
+    if (!reply.ok || reply.report === undefined) {
+      dispatch({ type: "TOAST", message: reply.message ?? "kicad-cli could not write the report.", kind: "error" });
+      return false;
+    }
+    downloadText(reply.file_name ?? (domain === "erc" ? "ERC" : "DRC") + (format === "json" ? ".json" : ".rpt"), reply.report);
+    dispatch({ type: "TOAST", message: `Report file '${reply.file_name ?? ""}' created.`, kind: "info" });
+    return true;
+  } catch (e) {
+    dispatch({ type: "TOAST", message: e instanceof Error ? e.message : String(e), kind: "error" });
+    return false;
+  }
+}
+
+// -------------------------------------------------------------------------------------------------------------------------- selecting a marker on the canvas
+
+/** The DRC marker on the board at (x, y) µm that is drawn -- its kind is switched on in the Objects tab, or it is the one the dialog has selected (components/canvas/painter.ts `drawDrcMarkers`) -- or -1. */
+export function drcMarkerAt(state: Pick<StudioState, "drc" | "layerVisible" | "drcSelected">, x: number, y: number): number {
+  const list = state.drc?.violations ?? [];
+  return nearestMarker(
+    list.map((v, i) => (i === state.drcSelected || objectOn(state.layerVisible, drcMarkerObject(v)) ? (v.items[0]?.pos ?? null) : null)),
+    x,
+    y,
+    DRC_MARKER_HIT_UM
+  );
+}
+
+/**
+ * A left click on a DRC marker on the board (`PCB_SELECTION_TOOL::selectPoint` takes a `PCB_MARKER` like any item, and `DRC_TOOL::CrossProbe` then selects its row in
+ * the dialog when that is shown): the marker is the selection -- the items that were selected are not -- drawn highlighted, and the dialog's Violations page has it.
+ */
+export function selectMarkerDrc(ctx: CheckerCtx, index: number): void {
+  ctx.dispatch({ type: "CLEAR_SELECTION" });
+  ctx.dispatch({ type: "SET_DRC_SELECTED", index });
+  if (ctx.api.getState().drcDialogOpen) setDrcView({ tab: "violations" });
+}
+
+/** The same on the schematic (`SCH_INSPECTION_TOOL::CrossProbe`). */
+export function selectMarkerErc(ctx: CheckerCtx, index: number): void {
+  ctx.dispatch({ type: "CLEAR_SELECTION" });
+  ctx.dispatch({ type: "SET_ERC_SELECTED", index });
+  if (ctx.api.getState().ercDialogOpen) setErcView({ tab: "erc" });
+}
+
+// -------------------------------------------------------------------------------------------------------------------------- Inspect and Fix
+
+/** What a marker's item is selected as before an action that works on the selection runs: a pad or a track segment stands for its footprint or its track, a field for its footprint. */
+function selectableRef(id: string): string {
+  return id.includes(":") ? id.split(":")[0]! : baseRef(id);
+}
+
+/** Select the item (when the action works on the selection), then run the action once the selection has reached the runner. */
+function selectThenRun(ctx: CheckerCtx, tab: "pcb" | "schematic", id: string, select: string | null): void {
+  ctx.dispatch({ type: "SET_TAB", tab });
+  if (select) ctx.dispatch({ type: "SET_SELECTION", refs: [select] });
+  setTimeout(() => actionRunner?.(id), select ? SELECT_THEN_RUN_MS : 0);
+}
+
+/** An Inspect or Fix entry of a DRC violation (`InspectDRCError`, `FixDRCError`). */
+export function runDrcEntry(ctx: CheckerCtx, entry: MarkerEntry, v: DrcViolation): void {
+  const { api, dispatch } = ctx;
+  const c = entry.command;
+  const main = v.items[0]?.id ?? null;
+  switch (c.kind) {
+    case "inspect_clearance":
+      void inspectViolation(api, dispatch, "clearance", v);
+      return;
+    case "inspect_constraints":
+      void inspectViolation(api, dispatch, "constraints", v);
+      return;
+    case "properties":
+      // `OnEditItemRequest( item )`: the item's own properties dialog, on the board.
+      if (!main) return;
+      dispatch({ type: "SET_TAB", tab: "pcb" });
+      dispatch({ type: "SET_SELECTION", refs: [selectableRef(main)] });
+      openPropertiesFor(main, api, dispatch);
+      return;
+    case "action":
+      selectThenRun(ctx, "pcb", c.id, c.select && main ? selectableRef(main) : null);
+      return;
+  }
+}
+
+/** An Inspect or Fix entry of an ERC finding (`InspectERCError`, `FixERCError`): the finding's main item is what the action works on. */
+export function runErcEntry(ctx: CheckerCtx, entry: MarkerEntry, v: ErcViolation): void {
+  const c = entry.command;
+  if (c.kind !== "action") return;
+  const main = v.items?.find((i) => i.id)?.id ?? v.location ?? null;
+  selectThenRun(ctx, "schematic", c.id, c.select && main ? main : null);
+}
+
+/** "Edit connection grid spacing..." (`ShowSchematicSetupDialog( "Formatting" )`): Schematic Setup on its Formatting page. */
+export function openConnectionGridSetup(ctx: CheckerCtx): void {
+  setErcView({ setupPage: "formatting" });
+  ctx.dispatch({ type: "SET_SCH_DIALOG", dialog: "setup" });
 }
 
 // -------------------------------------------------------------------------------------------------------------------------- severities
@@ -384,6 +670,19 @@ export async function runMarkerMenu(ctx: CheckerCtx, target: MarkerTarget, id: R
       case "remove_exclusion_type":
         await excludeDrcOfCheck(ctx, v.type, false);
         return;
+      case "exclude_rule":
+      case "remove_exclusion_rule": {
+        const rule = violatingRule(v.description);
+        if (rule) await excludeDrcOfRule(ctx, rule, id === "exclude_rule");
+        return;
+      }
+      case "inspect":
+      case "fix": {
+        const menu = drcMenuContext(state, v);
+        const entry = id === "inspect" ? menu.inspect : menu.fix;
+        if (entry) runDrcEntry(ctx, entry, v);
+        return;
+      }
       case "edit_severities":
         openSeveritySetup(ctx, "drc");
         return;
@@ -403,6 +702,16 @@ export async function runMarkerMenu(ctx: CheckerCtx, target: MarkerTarget, id: R
     case "exclude":
       await setErcExcluded(ctx, [v], true);
       return;
+    case "exclude_comment": {
+      const text = await askComment("");
+      if (text !== null) await setErcExcluded(ctx, [v], true, text);
+      return;
+    }
+    case "edit_comment": {
+      const text = await askComment(v.comment ?? "");
+      if (text !== null) await setErcExcluded(ctx, [v], true, text, true);
+      return;
+    }
     case "remove_exclusion":
       await setErcExcluded(ctx, [v], false);
       return;
@@ -411,6 +720,16 @@ export async function runMarkerMenu(ctx: CheckerCtx, target: MarkerTarget, id: R
       return;
     case "remove_exclusion_type":
       await excludeErcOfCheck(ctx, v.check, false);
+      return;
+    case "inspect":
+    case "fix": {
+      const menu = ercMenuContext(v);
+      const entry = id === "inspect" ? menu.inspect : menu.fix;
+      if (entry) runErcEntry(ctx, entry, v);
+      return;
+    }
+    case "connection_grid":
+      openConnectionGridSetup(ctx);
       return;
     case "edit_severities":
       openSeveritySetup(ctx, "erc", isPinMapCheck(v.check));

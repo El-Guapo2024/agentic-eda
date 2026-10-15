@@ -570,6 +570,10 @@ pub enum Cmd {
     AddDrcExclusions { exclusions: Vec<DrcExclusion> },
     /// "Remove exclusion for this violation": put the violations `exclusions` name back in the report. Refused when none of them is waived.
     DeleteDrcExclusions { exclusions: Vec<DrcExclusionKey> },
+    /// Delete Marker on an excluded marker and Delete All Markers with "Errors, Warnings and Exclusions" (`DIALOG_DRC::OnDeleteOneClick`,
+    /// `OnDeleteAllClick`): the markers go, and `BOARD::RecordDRCExclusions` -- which the next run and the next save make -- keeps the exclusions of the
+    /// markers that are left, so with all of them gone no exclusion is. (One marker's is `DeleteDrcExclusions`.) Refused when none is listed.
+    ClearDrcExclusions,
     /// Schematic Setup > Violation Severity: the ERC checks reported at a severity other than their default, by settings key
     /// (`eda_model::erc_checks`) -> `error` | `warning` | `ignore`. Whole table in, whole table replaced.
     SetErcSeverities { severities: BTreeMap<String, String> },
@@ -1166,12 +1170,33 @@ pub enum Cmd {
     /// applies to kicad-cli's ERC report, so the persisted list needs no
     /// translation.
     /// Refused if `location` is empty (nothing to key on -- the same
-    /// findings `Exclusions` itself can never exclude); adding one
-    /// already excluded is a harmless no-op, not an error.
-    AddErcExclusion { check: String, location: String },
-    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"):
+    /// findings `Exclusions` itself can never exclude). One already excluded
+    /// is replaced, which is how "Edit exclusion comment..." changes the
+    /// comment: `comment` is `SCH_MARKER::GetComment` ("Exclude with
+    /// comment..."), `marker` the marker as the report said it
+    /// (`ErcViolation.marker`; none when it could not) and none leaves the
+    /// marker the exclusion had.
+    AddErcExclusion {
+        check: String,
+        location: String,
+        #[serde(default)]
+        comment: String,
+        #[serde(default)]
+        marker: Option<eda_model::ir::ErcMarker>,
+    },
+    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"; Delete
+    /// Marker on an excluded marker, which is what makes KiCad forget it --
+    /// `RecordERCExclusions` records the markers that are left):
     /// refused if no exclusion with this exact key exists.
     DeleteErcExclusion { check: String, location: String },
+    /// Schematic Setup > Formatting > Connection grid spacing (`panel_setup_formatting.cpp`): the grid, in mils, that ERC expects wire ends and pins on
+    /// (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`). From `MIN_CONNECTION_GRID_MILS` (25) to 10000; 50, KiCad's default, is stored as none.
+    SetConnectionGrid { mils: u32 },
+    /// Delete All Markers with "Errors, Warnings and Exclusions"
+    /// (`DIALOG_ERC::OnDeleteAllClick`): every marker goes, the excluded ones
+    /// too, and KiCad records the markers that are left, so no exclusion
+    /// is. Refused when none is listed.
+    ClearErcExclusions,
 
     /// `L`/`Ctrl+L`/`H`: place a net label. `kind`/`shape` follow
     /// `eda_model::ir::LabelKind`'s own vocabulary (local has no shape).
@@ -1719,6 +1744,8 @@ impl Cmd {
             | Cmd::SchMove(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
+            | Cmd::ClearErcExclusions
+            | Cmd::SetConnectionGrid { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
             | Cmd::AddSchText { .. }
@@ -1799,8 +1826,8 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
-            // A severity table is about the report, not the drawing.
-            Cmd::SetErcSeverities { .. } => false,
+            // A severity table and the findings waived are about the report, not the drawing.
+            Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -1916,6 +1943,7 @@ impl Cmd {
             Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::ClearDrcExclusions => vec!["drc_exclusions"],
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -1959,6 +1987,8 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
+            Cmd::ClearErcExclusions => vec!["erc_exclusions"],
+            Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
@@ -2358,7 +2388,9 @@ impl<'a> Board<'a> {
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
             Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
+            Cmd::ClearDrcExclusions => review::clear_drc_exclusions(&mut self.design),
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
+            Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
@@ -2533,8 +2565,9 @@ impl<'a> Board<'a> {
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
-            Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
+            Cmd::AddErcExclusion { check, location, comment, marker } => self.add_erc_exclusion(check, location, comment, marker),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
+            Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
             Cmd::AddSchText { content, at, angle_millideg, size_um } => self.add_sch_text(content, *at, *angle_millideg, *size_um),
@@ -4335,20 +4368,28 @@ impl<'a> Board<'a> {
     }
 
     /// `dialog_erc.cpp`'s "Exclude this violation" -- see `Cmd::AddErcExclusion`'s own doc.
-    fn add_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+    fn add_erc_exclusion(&mut self, check: &str, location: &str, comment: &str, marker: &Option<eda_model::ir::ErcMarker>) -> Result<(), Vec<CheckResult>> {
         if location.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_erc_exclusion", check, "this finding has no location to key an exclusion on")]);
         }
-        let sch = self.schematic_mut_or_create();
-        if !sch.erc_exclusions.iter().any(|e| e.check == check && e.location == location) {
-            sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into() });
-            sch.erc_exclusions.sort();
+        // The list belongs to the schematic as a whole, the root's: a sheet the editor is on does not keep one of its own.
+        let sch = self.design.schematic.get_or_insert_with(empty_schematic_section);
+        match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location) {
+            // Already waived: the comment is the new one (an empty one clears it), the marker the new one when there is one.
+            Some(slot) => {
+                slot.comment = comment.into();
+                if marker.is_some() {
+                    slot.marker = marker.clone();
+                }
+            }
+            None => sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into(), comment: comment.into(), marker: marker.clone() }),
         }
+        sch.erc_exclusions.sort();
         Ok(())
     }
 
     fn delete_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
-        let sch = self.schematic_mut()?;
+        let sch = self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])?;
         let before = sch.erc_exclusions.len();
         sch.erc_exclusions.retain(|e| !(e.check == check && e.location == location));
         if sch.erc_exclusions.len() == before {
@@ -4362,6 +4403,16 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_label", "label", "a label needs a net name")]);
         }
         self.schematic_mut_or_create().labels.push(NetLabel { id: String::new(), net: net.into(), at, kind });
+        Ok(())
+    }
+
+    /// `DIALOG_ERC::OnDeleteAllClick` with the exclusions: see `Cmd::ClearErcExclusions`.
+    fn clear_erc_exclusions(&mut self) -> Result<(), Vec<CheckResult>> {
+        let sch = self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])?;
+        if sch.erc_exclusions.is_empty() {
+            return Err(vec![CheckResult::fail("ops_unknown_erc_exclusion", "erc_exclusions", "no finding is excluded")]);
+        }
+        sch.erc_exclusions.clear();
         Ok(())
     }
 

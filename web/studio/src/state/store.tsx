@@ -13,7 +13,7 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimens
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
-import { patchDrcExcluded, patchDrcSeverity, patchErcSeverity } from "../kicad-port/rcItems";
+import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
@@ -1087,6 +1087,11 @@ export type Action =
   | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   /** The same for the schematic (`set_erc_severities`). */
   | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
+  /** Delete Marker / Delete All Markers (`DIALOG_DRC::OnDeleteOneClick`, `OnDeleteAllClick`) on the report on screen: the rows leave the lists and the canvas. `version` is given when the deletion also changed the design (an excluded marker's exclusion goes with it): see `ERC_DELETE_MARKER`. */
+  | { type: "DRC_DELETE_MARKER"; page: DrcPage; index: number; /** The row selected after it (an index of the list as it is then), or null. */ select: number | null; version?: string | null }
+  | { type: "DRC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
+  | { type: "ERC_DELETE_MARKER"; index: number; select: number | null; /** As for `ERC_MARK_EXCLUDED`: given when the deletion also changed the design (an excluded marker's exclusion goes with it). */ version?: string | null }
+  | { type: "ERC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
   | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
@@ -1094,7 +1099,7 @@ export type Action =
   | { type: "ERC_OK"; erc: ErcReport; /** The revision the report was computed on. */ version: string | null }
   | { type: "ERC_ERR"; message: string }
   /** Exclude / un-exclude one finding in the report on screen without re-running kicad-cli (the exclusion itself is a persisted `Cmd`); `version` is the revision the patched report is now valid for (checkRevision.ts's `revisionAfterOwnEdit`): the board's after that Cmd when the report was current, so it is not called out of date by its own exclusion -- the report's own when it already was out of date. */
-  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; version: string | null }
+  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; comment?: string; version: string | null }
   | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_ERC_LINT_SELECTED"; index: number | null }
   | { type: "LINT_OK"; lint: LintReport }
@@ -1477,6 +1482,18 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "ERC_PATCH_SEVERITY":
       if (!state.erc) return state;
       return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description), ercVersion: action.version, ercSelected: null };
+    case "DRC_DELETE_MARKER":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcDeleteMarker(state.drc, action.page, action.index), drcSelected: action.page === "violations" ? action.select : state.drcSelected, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };
+    case "DRC_DELETE_ALL":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcDeleteAll(state.drc, action.includeExclusions), drcSelected: null, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };
+    case "ERC_DELETE_MARKER":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcDeleteMarker(state.erc, action.index), ercSelected: action.select, ...(action.version !== undefined ? { ercVersion: action.version } : {}) };
+    case "ERC_DELETE_ALL":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcDeleteAll(state.erc, action.includeExclusions), ercSelected: null, ...(action.version !== undefined ? { ercVersion: action.version } : {}) };
     case "SET_DRC_SELECTED":
       return { ...state, drcSelected: action.index, drcLintSelected: action.index === null ? state.drcLintSelected : null };
     case "SET_DRC_LINT_SELECTED":
@@ -1489,17 +1506,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, erc: action.erc, ercRunning: false, ercError: null, ercVersion: action.version, ercSelected: null };
     case "ERC_ERR":
       return { ...state, ercRunning: false, ercError: action.message };
-    case "ERC_MARK_EXCLUDED": {
+    case "ERC_MARK_EXCLUDED":
       if (!state.erc) return state;
-      const counts = { ...state.erc.counts };
-      const violations = state.erc.violations.map((v) => {
-        if (v.check !== action.check || v.location !== action.location) return v;
-        if (action.excluded && v.severity !== "excluded") counts[v.check] = Math.max(0, (counts[v.check] ?? 0) - 1);
-        if (!action.excluded && v.severity === "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
-        return { ...v, severity: action.excluded ? ("excluded" as const) : (v.base_severity ?? ("error" as const)) };
-      });
-      return { ...state, erc: { ...state.erc, violations, counts }, ercVersion: action.version };
-    }
+      return { ...state, erc: patchErcExcluded(state.erc, [{ check: action.check, location: action.location }], action.excluded, action.comment ?? ""), ercVersion: action.version };
     case "SET_ERC_SELECTED":
       return { ...state, ercSelected: action.index, ercLintSelected: action.index === null ? state.ercLintSelected : null };
     case "SET_ERC_LINT_SELECTED":

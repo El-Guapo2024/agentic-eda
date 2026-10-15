@@ -116,7 +116,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
 | 13 | P13 Zone leftovers | 13 | zone fill is KiCad's now (kicad-cli, `crates/zone-filler` deleted); non-copper and multi-layer zones, Auto-Assign Priorities, the Zone Manager preview, the zone lock | done 2026-10-13 on `task-zones` (not merged); item 13 lists what is left | L |
 | 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | done 2026-10-13 on `task-fp-3d` (not merged); item 30 lists what is left | M |
-| 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | open | S-M |
+| 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | done 2026-10-14 on `task-review` (not merged); item 11 lists what is left | S-M |
 | 16 | P16 PCB item kinds the IR lacks | 24 | text box, tables (stackup table), barcode, point, reference image, hatch fill | deferred | L |
 | 17 | P17 Library editor leftovers | 19, 22 | no snap to anchors in the editors, no pad array numbering, no derived symbols, no alternate pin functions | open | L |
 | 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | after P3, P4 | L |
@@ -333,17 +333,29 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
 
 ### 11. The DRC and ERC dialogs
-**Mostly closed (2026-10-08, `02f383c`).** Hit: every review pass. Blocks: no. Package P15.
+**Mostly closed (2026-10-08, `02f383c`; the leftovers 2026-10-14, package P15 on `task-review`).** Hit: every review pass. Blocks: no.
 - Done: Run DRC and Run ERC through kicad-cli with a running state, out-of-date marking and lint tabs; the list is `RC_TREE_MODEL`'s; DRC exclusions as an undoable verb
   (`Cmd::AddDrcExclusions` / `DeleteDrcExclusions`, `design.drawings.drc_exclusions`) written into the derived `.kicad_pro`; Next, Previous and Exclude Marker; a marker menu in both dialogs and on both
   canvases; the Ignored Tests and Schematic Parity pages (`--schematic-parity`); a Violation Severity page in Schematic Setup. `web/studio/e2e/drc-review.check.js` drives it. Details:
   `PARITY-pcb.md` section 9a, `PARITY-sch.md` sections 4 and 9, `PARITY-common.md` section 5.
-- Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its exact text, position included, and kicad-cli's report gives
+- Done by P15 (`PARITY-pcb.md` section 33, `PARITY-sch.md` section 28): **ERC exclusions reach kicad-cli, with their comments** (`erc.erc_exclusions` of the derived project, from the marker kicad-cli reported:
+  `eda_kicad::erc_exclusions`, `ErcViolation.marker`, `Cmd::AddErcExclusion { comment, marker }`); the exclusions of both domains are written as the records kicad-cli 10.99.0-5334 keeps in a project
+  (`kiapi.board.DrcExclusion`, `kiapi.schematic.ErcExclusion`, protobuf JSON, positions in nanometres) with the section's schema said (`board.design_settings.meta.version` 3, `erc.meta.version` 1) -- not the
+  pipe-delimited texts of `SerializeToString`, which that nightly migrates only out of a section at an older schema; **Delete Marker and Delete All Markers** in both dialogs (an excluded marker that is deleted takes its
+  exclusion with it, as `RecordDRCExclusions` / `RecordERCExclusions` keep only the markers that are left: `delete_*_exclusion`, `Cmd::ClearDrcExclusions` / `ClearErcExclusions`, one undo step each); **a marker
+  selected by a left click** on the board and on the sheet, a double click bringing the dialog up on it; **Exclude with comment / Edit exclusion comment** in the ERC menu; **Exclude all violations of rule '...'**
+  (the rule is read from the violation's text); the **Inspect and Fix entries** of both menus (`InspectDRCErrorMenuText`, `FixDRCErrorMenuText`, `InspectERCErrorMenuText`, `FixERCErrorMenuText`);
+  **Save...** from both dialogs (`kicad-cli ... --format report|json`, the Show boxes as the severities); **Edit connection grid spacing...** and Schematic Setup > General > Formatting (`Cmd::SetConnectionGrid`,
+  `schematic.connection_grid_size`). `web/studio/e2e/review.check.js` drives it; the kicad-cli proofs (slow tier) are in `crates/cli/src/review_tests.rs` and `board.rs` (`drc_exclusions`).
+- Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its kind, position and items, and kicad-cli's report gives
   the items' positions and never the marker's, so the studio writes the positions worth trying (`eda_kicad::drc_exclusions`) and waives the rest in the studio's report alone (`kicad_matched: false`). A
-  KiCad patch adding the marker position to `RC_JSON::VIOLATION` would close it; that is upstream work and not planned. **ERC exclusions are the studio's alone**: the derived project has no
-  `erc.erc_exclusions`, though their serialization (`SCH_MARKER::SerializeToString`: key, position, the two item uuids, sheet paths) is within reach -- the exporter mints the uuids, so the DRC method
-  of guessing the position applies -- and they have no comment. Not ported: selecting a marker with a left click, Delete Marker / Delete All Markers and Save report, "Exclude all violations of rule
-  '...'", the Inspect / Fix menu entries, Edit connection grid spacing (Schematic Setup has no Formatting page).
+  KiCad patch adding the marker position to `RC_JSON::VIOLATION` would close it; that is upstream work and not planned. **An ERC exclusion reaches it only for the checks whose marker is known to the letter**
+  (`eda_kicad::erc_exclusions::rule`): not `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`, `unresolved_variable`,
+  `field_name_whitespace`, `label_multiple_wires`, `four_way_junction`, `no_connect_connected`, `hier_label_mismatch`, `similar_*`, `same_local_global_*`, `bus_definition_conflict`, `duplicate_pins`; a DRC check whose marker
+  carries a layer (`copper_sliver`, `starved_thermal`, `generic-*`, `unresolved_variable`) is waived in the studio alone too. **The records are what kicad-cli 10.99.0-5334 reads**: an older kicad-cli
+  (up to the pinned source, `8303b2ad`) reads the pipe-delimited texts only and would ignore them. Not ported: the ERC Fix entry "Edit Netclasses..." (Schematic Setup has no Net Classes page), Report all errors
+  for each track (`--all-track-errors`), the cross-probe options, the other pages of Schematic Setup > Formatting (text sizes, line widths, junction and hop-over sizes, intersheet references), and a file dialog
+  for Save... (the page downloads the report).
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `eeschema/sch_marker.cpp`, `eeschema/schematic.cpp` (`ResolveERCExclusions`), `eeschema/erc/erc_settings.cpp`,
   `common/rc_item.cpp`, `common/dialogs/panel_setup_severities.cpp`.
 
@@ -956,7 +968,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/3d_cache/`.
 - Conflicts: P2 and P7 (`fp_edit.rs`), P1 (the footprint), P17 (the editor dialog).
 
-### P15. Review workflow leftovers (item 11). Size S-M. Rank 15.
+### P15. Review workflow leftovers (item 11). Size S-M. Rank 15. **Done 2026-10-14 on `task-review`, waiting for its merge; item 11 lists what is left.**
 - ERC exclusions into the derived project (`erc.erc_exclusions`, `SCH_MARKER::SerializeToString`, positions guessed as `eda_kicad::drc_exclusions` does) with their comments; Delete Marker, Delete All Markers and Save report; "Exclude all violations of
   rule"; a marker selected by a left click; the Inspect / Fix entries; Edit connection grid spacing. The kicad-cli marker position stays upstream and unplanned.
 - Files: `crates/kicad-engine/src/lib.rs`, `crates/kicad/src/drc_exclusions.rs` and a new `erc_exclusions.rs`, `crates/ops` (`AddErcExclusion` gets a comment), `components/{ErcDialog,DrcDialog,SchematicSetupDialog}.tsx`.

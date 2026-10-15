@@ -250,6 +250,17 @@ pub fn erc_severities(dir: &Path) -> Value {
     json!({ "ok": true, "severities": eda_kicad::effective_erc_severities(&design), "custom": custom })
 }
 
+/// `GET /api/sch/formatting`: `{ok, connection_grid_mils, custom}` -- Schematic Setup > Formatting, the settings of that page the design keeps: the connection grid
+/// (KiCad's default, 50 mils, unless the design says otherwise) and whether the design says so. The project file carries it to kicad-cli.
+pub fn formatting(dir: &Path) -> Value {
+    let (_, design, _) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let own = design.schematic.as_ref().and_then(|s| s.extras.connection_grid_mils);
+    json!({ "ok": true, "connection_grid_mils": own.unwrap_or(eda_model::sch_extras::DEFAULT_CONNECTION_GRID_MILS), "min_connection_grid_mils": eda_model::sch_extras::MIN_CONNECTION_GRID_MILS, "max_connection_grid_mils": eda_model::sch_extras::MAX_CONNECTION_GRID_MILS, "custom": own.is_some() })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

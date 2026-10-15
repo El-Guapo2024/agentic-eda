@@ -75,9 +75,8 @@ import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
 import { connectedTrackWidth, trackUnder, displayedRatsnest, flipLocalX, flipPan, highlightedNets, panDeltaX, toggleLocalRatsnestFootprint, toggleLocalRatsnestPad } from "../../kicad-port/boardControl";
 import { padAt } from "../../kicad-port/boardControlPick";
-import { DRC_MARKER_HIT_UM, nearestMarker } from "../../kicad-port/markerHit";
 import { canExclude, rcMenu } from "../../kicad-port/rcItems";
-import { drcSettingSeverity, drcTitle, runMarkerMenu, toMenuEntries } from "../../actions/checkerOps";
+import { drcMarkerAt, drcMenuContext, runMarkerMenu, selectMarkerDrc, showDrcInDialog, toMenuEntries } from "../../actions/checkerOps";
 import { askExclusionComment } from "../../state/checkerView";
 import "../../styles/canvas.css";
 
@@ -929,6 +928,15 @@ export function Canvas() {
     pendingClickRef.current = null;
     const ctrlOrCmd = isMac() ? e.metaKey : e.ctrlKey;
     const modifiers = computeClickModifiers(e.shiftKey, ctrlOrCmd, e.altKey);
+    // A left click on a DRC marker selects it: `PCB_SELECTION_TOOL::selectPoint` takes a `PCB_MARKER` like any item, and `DRC_TOOL::CrossProbe` then selects its row in the
+    // dialog when that is shown. It is the selection, the items that were selected are not; Alt+click still gets the list of everything under the pointer.
+    if (state.activeTool === "select" && !hasModifier(modifiers) && !e.altKey) {
+      const markerIndex = drcMarkerAt(state, wx, wy);
+      if (markerIndex >= 0) {
+        selectMarkerDrc({ api, dispatch }, markerIndex);
+        return;
+      }
+    }
     const toleranceUm = Math.max(150, 6 / state.view.scale);
     const onePixelUm = 1 / state.view.scale;
     // pcb_selection_tool.cpp selectPoint: "if( m_enteredGroup && !m_enteredGroup->GetBoundingBox().Contains( aWhere ) ) ExitGroup();" -- a click
@@ -1296,11 +1304,11 @@ export function Canvas() {
     const [wx, wy] = worldAt(e);
     // A right click on a DRC marker (a circle the last run left on the board) opens the marker's menu -- Exclude, Exclude all of this type, Change severity,
     // Show in the dialog -- instead of the item menu: a `PCB_MARKER` is an item of its own with its own entries (kicad-port/rcItems.ts `rcMenu`).
-    const markerIndex = nearestMarker((state.drc?.violations ?? []).map((v) => v.items[0]?.pos ?? null), wx, wy, DRC_MARKER_HIT_UM);
+    const markerIndex = drcMarkerAt(state, wx, wy);
     if (markerIndex >= 0) {
       const v = state.drc!.violations[markerIndex]!;
       dispatch({ type: "SET_DRC_SELECTED", index: markerIndex });
-      const spec = rcMenu({ domain: "drc", title: drcTitle(v.type), excluded: v.excluded === true, severity: drcSettingSeverity(state, v.type), onCanvas: true });
+      const spec = rcMenu(drcMenuContext(state, v, true));
       const entries = toMenuEntries(spec, (id) => void runMarkerMenu({ api, dispatch }, { domain: "drc", tab: "violations", index: markerIndex }, id, askExclusionComment), canExclude(v));
       setPcbMenu(null);
       setContextMenu({ x: e.clientX, y: e.clientY, entries });
@@ -1385,6 +1393,13 @@ export function Canvas() {
       return;
     }
     if (!board) return;
+    // `PCB_EDIT_FRAME::OnEditItemRequest` on a `PCB_MARKER`: `DRC_TOOL::CrossProbe( marker )` -- the dialog comes up with the marker's row selected.
+    const [mx, my] = worldAt(e);
+    const markerHit = drcMarkerAt(state, mx, my);
+    if (markerHit >= 0) {
+      showDrcInDialog({ api, dispatch }, "violations", markerHit);
+      return;
+    }
     // pcb_point_editor.cpp: double-clicking a single selected zone's edge
     // (not one of its corners -- grabbing a corner is onPointerDown's own
     // drag-start check, above) adds a new corner there.

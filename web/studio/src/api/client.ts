@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
@@ -651,6 +651,11 @@ export function postBoardStats(opts: BoardStatsOptions, report?: { units: Length
   return postJson("/api/board_stats", report ? { ...opts, report: true, units: report.units, date: report.date } : opts);
 }
 
+/** The ERC and DRC dialogs' "Save...": a run of kicad-cli that writes its own report file (`ERC_REPORT`, `DRC_REPORT`) for the severities the dialog shows; the text comes back. */
+export function postSavedReport(domain: "erc" | "drc", req: SavedReportRequest): Promise<SavedReportReply> {
+  return postJson(`/api/${domain}/report`, req);
+}
+
 /** Board Setup > Design Rules > Custom Rules, "Check rule syntax": kicad-cli loads the text (crates/cli/src/kicad_engine.rs `check_rules`); nothing is saved. */
 export function postCheckRules(text: string): Promise<RulesCheckReply> {
   return postJson("/api/check_rules", { text });
@@ -688,6 +693,11 @@ export async function fetchErcPinMap(): Promise<ErcPinMapReply> {
 /** The ERC severities Schematic Setup > Violation Severity edits (the table kicad-cli's ERC runs with). */
 export async function fetchErcSeverities(): Promise<ErcSeveritiesReply> {
   return getJson<ErcSeveritiesReply>("/api/sch/erc_severities");
+}
+
+/** The settings of Schematic Setup > Formatting the design keeps (the connection grid). */
+export async function fetchSchFormatting(): Promise<SchFormattingReply> {
+  return getJson<SchFormattingReply>("/api/sch/formatting");
 }
 
 /** `POST /api/inspect/clearance`: `reportClearance` for two items (`aAt`/`bAt`, in micrometres, say which segment of a track was meant). */

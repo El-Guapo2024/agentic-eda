@@ -651,6 +651,9 @@ fn handle(
             offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
+        // The dialogs' "Save...": kicad-cli's own report file (`ERC_REPORT`, `DRC_REPORT`), for the severities and units the dialog shows.
+        ("POST", "/api/erc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::erc_report),
+        ("POST", "/api/drc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::drc_report),
         ("GET", "/api/lint") => {
             let v = crate::kicad_engine::lint(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -668,6 +671,7 @@ fn handle(
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
+        ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
