@@ -10,6 +10,7 @@ import { hairlineUm } from "./view";
 import { layerColor } from "./layers";
 import { drawStrokeText } from "../text/strokeFont";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
+import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { DEFAULT_OPACITY, copperColor, netPalette, objectOn, ratsnestColor, type AppearanceState, type NetColorMode, type ObjectId, type Opacity, type OpacityKey, type Rgba } from "../../kicad-port/appearance";
 import type { NetsContext } from "../../kicad-port/appearanceNets";
 import { splitCarried } from "../../kicad-port/pcbCarry";
@@ -129,7 +130,7 @@ export function drawLockedShadows(ctx: CanvasRenderingContext2D, board: BoardSta
   }
   if (on(opts.layerVisible, "zones")) {
     for (const z of board.routing?.zones ?? []) {
-      if (!locked.has(z.id) || z.outline.length < 3 || !shadowed(z.layer)) continue;
+      if (!locked.has(z.id) || z.outline.length < 3 || !zoneLayers(z).some(shadowed)) continue;
       ctx.lineWidth = m;
       ctx.beginPath();
       z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));

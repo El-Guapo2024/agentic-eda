@@ -76,7 +76,9 @@ pub fn preview(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
-    let report = compute_cleanup_filtered(&design, &model, opts_of(&req), &filter_of(&req));
+    // A track is dangling or shorting against the pours as they were last filled (KiCad's fill, `crate::fill_api`); a zone with none is no copper.
+    let copper = crate::fill_api::cached(dir).map(|k| k.copper(&design)).unwrap_or_default();
+    let report = compute_cleanup_filtered(&design, &model, &copper, opts_of(&req), &filter_of(&req));
     json!({
         "ok": true,
         "changes": report.changes.iter().map(change_json).collect::<Vec<_>>(),
@@ -94,7 +96,9 @@ pub fn apply(dir: &Path, body: &[u8]) -> Value {
         Ok(v) => v,
         Err(e) => return err(board::reasons(&e)),
     };
-    let report = compute_cleanup_filtered(&design, &model, opts_of(&req), &filter_of(&req));
+    // A track is dangling or shorting against the pours as they were last filled (KiCad's fill, `crate::fill_api`); a zone with none is no copper.
+    let copper = crate::fill_api::cached(dir).map(|k| k.copper(&design)).unwrap_or_default();
+    let report = compute_cleanup_filtered(&design, &model, &copper, opts_of(&req), &filter_of(&req));
     if report.changes.is_empty() {
         return json!({ "ok": true, "message": "nothing to clean up", "changes": [] });
     }

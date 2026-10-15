@@ -371,8 +371,8 @@ export interface RuleAreaFields {
 /**
  * `crates/model/src/ir.rs` `Zone` -- id/net/layer/outline plus the full
  * `ZONE_SETTINGS` (`ZoneSettingsFields`) and rule-area flags
- * (`RuleAreaFields`), ported into the IR so `crates/zone-filler` can read
- * them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
+ * (`RuleAreaFields`), kept in the IR and written to the derived `.kicad_pcb`, where
+ * kicad-cli's filler reads them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
  * server-side default (`Zone::default()`) once `add_zone` creates a zone,
  * so these are never actually absent from a real `/api/state` response --
  * not marked optional, same convention this file uses for every other
@@ -381,7 +381,14 @@ export interface RuleAreaFields {
 export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   id: string;
   net: string;
+  /** The zone's first layer (`ZONE::GetFirstLayer`): the front-most copper layer of its set, else its first technical layer. */
   layer: string;
+  /**
+   * `ZONE::GetLayerSet()`: every layer the zone is on, `layer` first, in the order the Layers tab lists them (the copper stack from the front, then the technical layers) --
+   * one layer for a zone on one. A zone with no copper layer in it is a non-copper zone (`fillNonCopperZone`: silkscreen, mask, paste and user layers; no net).
+   * Absent from a backend that predates layer sets: read it with `zoneLayers` (`kicad-port/zoneLayers.ts`).
+   */
+  layers?: string[];
   /** Task item 4: true for a generated teardrop (`eda_model::ir::Zone::teardrop`), never a hand-drawn zone. */
   teardrop: boolean;
   /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
@@ -1387,7 +1394,7 @@ export type Cmd =
    * one field of the panel, the whole thing commits together. Outline is
    * untouched (no point editor yet, see PARITY-pcb.md).
    */
-  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields & RuleAreaFields)
+  | ({ op: "edit_zone"; id: string; net: string; layer: string; /** The layers the zone is on (`ZONE_SETTINGS::m_Layers`); absent leaves a set that holds `layer` as it is. */ layers?: string[] } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
   | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }
@@ -1929,27 +1936,55 @@ export interface Ratsnest {
 
 // ---------------------------------------------------------------- fill
 //
-// GET /api/fill. Source of truth: crates/cli/src/studio.rs `fill_json()`,
-// `crates/zone-filler` via `eda_drc::fill::fill_all_zones` -- the real
-// KiCad zone-fill algorithm (clearance/thermal-relief/min-width/island
-// knockouts), computed fresh on every call (no caching, same reasoning as
-// /api/drc). `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
-// zone_filler_tool.cpp) are this app's own fetch/clear of this report --
-// see state/store.tsx's `zoneFill`.
+// GET /api/fill. Source of truth: crates/cli/src/fill_api.rs `report()`. The zone fill is
+// KiCad's, made by `kicad-cli pcb drc --refill-zones --save-board` (B, "Fill All Zones") and kept
+// beside design.json (`eda_kicad::zone_fills`); there is no other filler. Between fills the board
+// shows the last one, as KiCad does with auto-refill off. A zone that was never filled, or was edited
+// since, has none: `filled` is false, there are no fragments and the canvas draws its outline
+// (`pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll`, B/Ctrl+B, zone_filler_tool.cpp -- see
+// state/store.tsx's `zoneFill`).
 
-/** One zone's computed fill -- possibly several disjoint fragments (islands). Each fragment is a single closed ring, already "Fracture"d (slit at any hole), never a separate outer+holes pair. */
+/** One zone's fill on one layer -- possibly several disjoint fragments (islands). Each fragment is a single closed ring, already "Fracture"d (slit at any hole), never a separate outer+holes pair. */
 export interface FillZone {
   id: string;
   net: string;
   layer: string;
+  /** The zone has a fill that is current: it was filled by kicad-cli and not edited since. False: no copper yet, drawn as an outline. */
+  filled: boolean;
   area_um2: number;
   fragments: [Um, Um][][];
   /** Only with `GET /api/fill?polys=1`: the same fill unfractured, one outline and its holes per island (what the triangulation display needs). */
   polys?: { outline: [Um, Um][]; holes: [Um, Um][][] }[];
 }
 
+/** Whose fill the board holds: `null` when no zone has ever been filled (or the fills were all taken away). */
+export interface FillSource {
+  /** "kicad-cli 10.99.0", or "the .kicad_pcb that was imported" for the fills a file was saved with. */
+  engine: string;
+  /** The design revision (`/api/version`) the run started from. */
+  revision: string;
+  /** How long kicad-cli took. */
+  seconds: number;
+  /** Zones with a fill that is current, and zones with one that was edited since (they show as outlines). */
+  zones: number;
+  stale: number;
+}
+
 export interface FillReport {
   zones: FillZone[];
+  source: FillSource | null;
+}
+
+/** POST /api/fill/kicad: kicad-cli's filler ran (`ok`), or could not (`message`). */
+export interface KicadFillReply {
+  ok: boolean;
+  message?: string;
+  engine?: string;
+  seconds?: number;
+  layers?: number;
+  rings?: number;
+  zones?: number;
+  revision?: string;
 }
 
 // ---------------------------------------------------------------- board.glb
@@ -2547,7 +2582,7 @@ export interface DrcReport {
   engine?: string;
   /** The ratsnest kicad-cli reports as `unconnected_items`. */
   unconnected_items?: DrcViolation[];
-  /** Whether kicad-cli refilled zones itself (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills, so it judges the fills the exported board already carries (the ones the studio shows). */
+  /** Whether kicad-cli's filler ran before the DRC ("Refill all zones before performing DRC"): on a copy of the board, the DRC then judging the board with that fill. Off by default: the DRC judges the fills the board holds. */
   zones_refilled_by_kicad?: boolean;
   /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
   revision?: string;

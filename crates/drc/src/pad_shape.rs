@@ -2,11 +2,11 @@
 //! pad whose copper is off its position. The parts come from [`eda_model::pad_geom::pad_pieces`], the one place that knows what a
 //! pad is made of, carried to the board by the pad's and footprint's pose.
 //!
-//! The DRC, the routing gate, the router and the zone filler all measure a pad by this shape, so a custom pad's primitives, a
+//! The DRC, the routing gate and the router all measure a pad by this shape, so a custom pad's primitives, a
 //! trapezoid's slanted sides and a chamfer's cut corners are the clearance they were in KiCad.
 
 use crate::kimath::{Seg, Shape};
-use eda_model::footprint::{Pad, PadShape};
+use eda_model::footprint::Pad;
 use eda_model::ir::{FootprintInstance, Point, Um};
 use eda_model::pad_geom::{pad_pieces, PadFrame, PadPiece, P};
 
@@ -47,38 +47,11 @@ pub fn pad_copper(fp: &FootprintInstance, pad: &Pad, center: Point) -> Shape {
     }
 }
 
-/// `PAD::ShapePos` on the board: the pad's position moved by its offset, which is in the pad's own (turned, mirrored) frame.
-pub fn shape_pos(fp: &FootprintInstance, pad: &Pad, center: Point) -> Point {
-    match pad.ext.offset {
-        Some((ox, oy)) if ox != 0 || oy != 0 => pt(PadFrame::of(fp, pad, center).to_board((ox as f64, oy as f64))),
-        _ => center,
-    }
-}
-
-/// The bounding box `(x0, y0, x1, y1)` of the pad's copper at orientation 0, position 0 and no offset: `dummy_pad.GetBoundingBox( layer )`
-/// in `ZONE_FILLER::buildThermalSpokes`, the box a thermal relief's spokes are cut from. `None` for a pad whose box is its size.
-pub fn spoke_box(pad: &Pad) -> Option<(Um, Um, Um, Um)> {
-    if !pad.has_complex_outline() {
-        return None;
-    }
-    let mut bare = pad.clone();
-    bare.ext.offset = None;
-    bare.rot = 0;
-    let (x0, y0, x1, y1) = bare.local_bbox();
-    Some((x0.floor() as Um, y0.floor() as Um, x1.ceil() as Um, y1.ceil() as Um))
-}
-
-/// Whether a zone keeps clear of the convex hull of the pad rather than its shape (`CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`).
-pub fn custom_convex_hull(pad: &Pad) -> bool {
-    pad.shape == PadShape::Custom && pad.ext.custom.as_ref().is_some_and(|c| c.zone == eda_model::footprint::CustomZoneMode::ConvexHull)
-}
-
 /// The pad's copper as polygons with holes in board space: the union of the outlines of its parts (`PAD::GetEffectivePolygon`, with the
 /// error inside, the outline the studio draws and the 3D view extrudes). A custom pad with a ring has an outline and a hole. The studio's
 /// painter fills the contours with the even-odd rule.
 pub fn pad_polygons(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: Um) -> eda_shape_poly_set::ShapePolySet {
-    let shape = crate::fill::convert_shape(&pad_copper(fp, pad, center));
-    eda_zone_filler::shape::union_polyset(&shape, max_error)
+    crate::shape_poly::union_polyset(&pad_copper(fp, pad, center), max_error)
 }
 
 /// [`pad_polygons`] as the list of its contours, the outline of each polygon first and then its holes, in micrometres.
@@ -89,8 +62,8 @@ pub fn pad_outline(fp: &FootprintInstance, pad: &Pad, center: Point, max_error: 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eda_model::footprint::{PadAnchor, PadCustom, PadKind, PadPrimitive, PadShapeExt};
-    use eda_model::ir::{ChamferCorners, LabelSide, Side};
+    use eda_model::footprint::{PadAnchor, PadCustom, PadKind, PadPrimitive, PadShape, PadShapeExt};
+    use eda_model::ir::{LabelSide, Side};
 
     fn instance(at: (Um, Um), rot: i32, side: Side) -> FootprintInstance {
         FootprintInstance { id: "U1".into(), at: Point { x: at.0, y: at.1 }, rot: rot as u32, side, label: LabelSide::Above }
@@ -98,10 +71,6 @@ mod tests {
 
     fn pad(shape: PadShape, size: (Um, Um), ext: PadShapeExt) -> Pad {
         Pad { number: "1".into(), at: (0, 0), size, shape, kind: PadKind::Smd, drill: None, drill_slot: None, rot: 0, roundrect_ratio: None, opposite_side: false, ext }
-    }
-
-    fn line(a: (Um, Um), b: (Um, Um), w: Um) -> PadPrimitive {
-        PadPrimitive { shape: eda_model::ir::Shape::Segment { id: String::new(), layer: String::new(), stroke_width: w, filled: false, start: Point { x: a.0, y: a.1 }, end: Point { x: b.0, y: b.1 } }, proxy: false }
     }
 
     #[test]
@@ -152,18 +121,5 @@ mod tests {
         assert_eq!(top.bbox(0), (4900, 4700, 5900, 5300));
         let bottom = pad_copper(&instance((5000, 5000), 0, Side::Bottom), &p, Point { x: 5000, y: 5000 });
         assert_eq!(bottom.bbox(0), (4100, 4700, 5100, 5300));
-        assert_eq!(shape_pos(&instance((5000, 5000), 0, Side::Top), &p, Point { x: 5000, y: 5000 }), Point { x: 5400, y: 5000 });
-        assert_eq!(shape_pos(&instance((5000, 5000), 90_000, Side::Top), &p, Point { x: 5000, y: 5000 }), Point { x: 5000, y: 5400 }, "turned with the footprint");
-    }
-
-    #[test]
-    fn the_spoke_box_of_a_custom_pad_is_the_box_of_all_its_copper_and_mirrors_with_the_side() {
-        let p = pad(PadShape::Custom, (800, 800), PadShapeExt { custom: Some(PadCustom { anchor: PadAnchor::Rect, zone: Default::default(), primitives: vec![line((0, 0), (-2000, 0), 200)] }), ..Default::default() });
-        assert_eq!(spoke_box(&p), Some((-2100, -400, 400, 400)));
-        // A plain pad has none: the filler takes its size.
-        assert_eq!(spoke_box(&pad(PadShape::Rect, (800, 800), PadShapeExt::default())), None);
-        // The chamfered rectangle's box is its own size.
-        let c = pad(PadShape::ChamferedRect, (1000, 600), PadShapeExt { chamfer_ratio: Some(0.2), chamfer_corners: ChamferCorners { top_left: true, ..Default::default() }, ..Default::default() });
-        assert_eq!(spoke_box(&c), Some((-500, -300, 500, 300)));
     }
 }

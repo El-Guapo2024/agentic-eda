@@ -1455,6 +1455,18 @@ pub struct Zone {
     pub net: String,
     pub layer: String,
     pub outline: Vec<Point>,
+    /// The uuid the zone had in the KiCad file it was imported from (`ZONE::m_Uuid`), empty for a zone drawn here. KiCad breaks the tie between zones of equal priority by
+    /// comparing uuids (`ZONE::HigherPriority`), so the derived board is written with it: kicad-cli's fill of the board then has the zones yielding to each other as it
+    /// did in the file the board came from.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uuid: String,
+    /// `ZONE::GetLayerSet()` of a zone on more than one layer (`(layers "F.Cu" "B.Cu")`): the whole set in the UI order (`LSET::UIOrder`: the copper
+    /// stack from the front, then the technical layers), `layer` being its first (`ZONE::GetFirstLayer`). Empty for a zone on one layer, which `layer` names
+    /// alone: a design written before zones had layer sets reads as it was. A zone whose set has no copper layer is a non-copper zone
+    /// (`fillNonCopperZone`: silkscreen, mask, paste and user layers; no net). The fill is one per layer, derived. Read the set with
+    /// [`Zone::layer_set`], change it with [`Zone::set_layer_set`] so `layer` stays its first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<String>,
 
     // ---- fill settings (ZONE_SETTINGS), added additively with KiCad's own
     // defaults so existing design.json files without these fields keep
@@ -1581,6 +1593,51 @@ impl Zone {
         let pts: Vec<String> = self.outline.iter().map(|p| format!("{},{}", p.x, p.y)).collect();
         format!("{}|{}|{}", self.net, self.layer, pts.join(";"))
     }
+
+    /// `ZONE::GetLayerSet()`: the layers the zone is on, in the UI order, `layer` first. A zone on one layer is `[layer]`.
+    pub fn layer_set(&self) -> Vec<&str> {
+        if self.layers.len() > 1 {
+            self.layers.iter().map(String::as_str).collect()
+        } else {
+            vec![self.layer.as_str()]
+        }
+    }
+
+    /// `ZONE::IsOnLayer` (`GetLayerSet().test( aLayer )`).
+    pub fn is_on_layer(&self, layer: &str) -> bool {
+        if self.layers.len() > 1 {
+            self.layers.iter().any(|l| l == layer)
+        } else {
+            self.layer == layer
+        }
+    }
+
+    /// `ZONE::IsOnCopperLayer`: some layer of the set is copper. A zone with none is a non-copper zone.
+    pub fn is_on_copper_layer(&self) -> bool {
+        self.layer_set().into_iter().any(crate::layers::is_copper_layer_name)
+    }
+
+    /// The copper layers of the set, in the UI order.
+    pub fn copper_layers(&self) -> Vec<&str> {
+        self.layer_set().into_iter().filter(|l| crate::layers::is_copper_layer_name(l)).collect()
+    }
+
+    /// `ZONE::SetLayerSet`: the zone is on exactly these layers (nothing changes for an empty list). They are kept once each in the UI order and
+    /// `layer` is the first of them (`GetFirstLayer`); a set of one layer is the plain `layer`.
+    pub fn set_layer_set<S: AsRef<str>>(&mut self, layers: &[S]) {
+        let mut set: Vec<String> = layers.iter().map(|l| l.as_ref().to_string()).collect();
+        set.sort_by_key(|l| (crate::layers::ui_order_rank(l), l.clone()));
+        set.dedup();
+        let Some(first) = set.first() else { return };
+        self.layer = first.clone();
+        self.layers = if set.len() > 1 { set } else { Vec::new() };
+    }
+
+    /// `ZONE::Flip`'s layer half: every layer of the set goes to the one `map` names.
+    pub fn map_layers(&mut self, map: impl Fn(&str) -> String) {
+        let set: Vec<String> = self.layer_set().into_iter().map(|l| map(l)).collect();
+        self.set_layer_set(&set);
+    }
 }
 
 impl Default for Zone {
@@ -1593,6 +1650,8 @@ impl Default for Zone {
             net: String::new(),
             layer: String::new(),
             outline: Vec::new(),
+            uuid: String::new(),
+            layers: Vec::new(),
             clearance: default_zone_clearance(),
             min_thickness: default_zone_min_thickness(),
             thermal_gap: default_thermal_gap(),
@@ -2644,6 +2703,18 @@ pub struct FootprintGraphic {
     pub pin_type: String,
 }
 
+/// A non-plated hole whose `(layers ..)` name no copper layer (`issue5990`'s mounting holes and `issue14559`'s plugs are `*.Mask` only): the pad has no copper, but it is a drilled
+/// hole that zones and tracks keep clear of on every copper layer (`ZONE_FILLER::knockoutThermalReliefs`: `npthWithHole`). It is in the footprint's frame, as [`crate::Pad`] has it
+/// (`at`, `drill` or `drill_slot`, `rot`; `size` is the mask opening, which the mask graphics of [`FootprintExtra::graphics`] keep), so it follows the footprint when it moves.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FootprintHole {
+    pub pad: crate::footprint::Pad,
+    /// The pad's own `(clearance ..)` (`PAD::GetLocalClearance`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance: Option<Um>,
+}
+
 /// See [`DrawingsSection::footprint_extras`].
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -2669,6 +2740,9 @@ pub struct FootprintExtra {
     pub zone_connection: Option<PadConnection>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pads: Vec<PadMaskInfo>,
+    /// The non-plated holes of the footprint that are on no copper layer ([`FootprintHole`]). Not in `Footprint::pads`: they have no copper to measure, draw or route round.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<FootprintHole>,
     /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
     /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
     /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them

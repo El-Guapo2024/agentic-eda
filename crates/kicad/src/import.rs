@@ -118,6 +118,10 @@ pub struct ImportNotes {
     /// place it is at, mm (`eda_drc::outline::check_edge_cuts`).
     #[serde(default)]
     pub outline_errors: Vec<String>,
+    /// The `(filled_polygon ..)` the file stored for its zones (KiCad's own fill, as saved): not part of the design. The caller that keeps the board files
+    /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
+    #[serde(skip)]
+    pub zone_fills: Vec<crate::zone_fills::ScannedFill>,
 }
 
 /// Parse a `.kicad_pcb` file's text into our own design + constraint
@@ -152,6 +156,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
+    notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
 
     add_layers_in_use(
         &mut board.layer_setup,
@@ -1381,6 +1386,9 @@ fn import_footprints(
                 if let Some(g) = mask_only_pad_graphics(pad, &fp_inst, rot, net_names, notes) {
                     extra.graphics.extend(g);
                 }
+                if let Some(h) = layerless_hole(pad, side, rot, file_version, notes) {
+                    extra.holes.push(h);
+                }
                 continue;
             };
             extra.pads.push(pad_mask_info(pad, layers, file_version, side));
@@ -1545,6 +1553,21 @@ fn rotated_extent(rot_millideg: i64, size: (i64, i64)) -> (i64, i64) {
     let (sin, cos) = rad.sin_cos();
     let (w, h) = (size.0 as f64, size.1 as f64);
     ((w * cos.abs() + h * sin.abs()).round() as i64, (w * sin.abs() + h * cos.abs()).round() as i64)
+}
+
+/// A non-plated hole whose `(layers ..)` name no copper layer (the mounting holes and plugs of `*.Mask`-only pads): no pad copper, but a drilled hole that zones keep clear of
+/// on every copper layer (`ZONE_FILLER::knockoutThermalReliefs`'s `npthWithHole`). `None` for any other pad.
+fn layerless_hole(pad: &[Sexpr], fp_side: Side, fp_rot: u32, file_version: i64, notes: &mut ImportNotes) -> Option<eda_model::ir::FootprintHole> {
+    if sexpr::txt(pad, 2) != Some("np_thru_hole") {
+        return None;
+    }
+    let p = parse_pad_geometry_opt(pad, fp_side, fp_rot, notes, true)?;
+    if p.drill.is_none() && p.drill_slot.is_none() {
+        return None;
+    }
+    // `(clearance C)` on the pad (`PAD::SetLocalClearance`); in pre-9.0 files 0 meant "inherit".
+    let clearance = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)).map(mm_to_um).filter(|&c| !(file_version <= 20240201 && c == 0));
+    Some(eda_model::ir::FootprintHole { pad: p, clearance })
 }
 
 /// A pad with no copper layer but a mask layer is a pure mask aperture
@@ -1952,12 +1975,13 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
 
 /// `PCB_IO_KICAD_SEXPR_PARSER::parseZONE`, for board-level `(zone ...)`s:
 /// copper pours, teardrops (`(attr (teardrop ...))`) and rule areas
-/// (`(keepout ...)`/`(placement ...)`). This IR's `Zone` is single-layer
-/// and single-outline, so a zone on several layers (`(layers ...)`) or
-/// with several `(polygon ...)` outlines becomes one `Zone` per
-/// (layer, outline). The stored `(filled_polygon ...)`s are not read --
-/// fills are always derived (`eda_zone_filler`), which is also what
-/// kicad-cli's own `pcb drc --refill-zones` run does. Footprint-level
+/// (`(keepout ...)`/`(placement ...)`). A zone keeps its layer set
+/// (`Zone::layers`: `(layers "F.Cu" "B.Cu")`, `*.Cu`, `F&B.Cu`, `*.Mask`), and a zone
+/// with no copper layer in it is a non-copper zone. This IR's `Zone` has a single
+/// outline, so a zone with several `(polygon ...)` outlines (the first is the outline,
+/// the others its holes) becomes one `Zone` per `(polygon ...)`. The stored `(filled_polygon ...)`s are not part of the
+/// design: the scan of the file (`eda_kicad::zone_fills::scan_zone_fills`) is handed out in [`ImportNotes::zone_fills`] and kept beside `design.json` as the board's fills (KiCad's
+/// own, as saved), which is what kicad-cli's `pcb drc --refill-zones` replaces on the next Fill All Zones. Footprint-level
 /// zones are imported too, tagged with their parent footprint.
 fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers: &[String], notes: &mut ImportNotes, refs: &mut Refs) -> Vec<Zone> {
     // Board-level zones, then each footprint's own (`forEachGeometryItem`
@@ -1994,20 +2018,15 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
                 zone.net = sexpr::txt(n, 1).unwrap_or("").to_string();
             }
         }
-        let mut layers: Vec<String> = Vec::new();
+        // `T_layer` (a zone on one layer) and `T_layers` (`parseBoardItemLayersAsMask`: the wildcards `*.Cu`, `F&B.Cu` and `*.Mask` stand for the layers they name).
+        let mut names: Vec<&str> = Vec::new();
         if let Some(l) = sexpr::find(z, "layer") {
-            layers.extend(sexpr::txt(l, 1).map(str::to_string));
+            names.extend(sexpr::txt(l, 1));
         }
         if let Some(l) = sexpr::find(z, "layers") {
-            for i in 1..l.len() {
-                match sexpr::txt(l, i) {
-                    Some("*.Cu") => layers.extend(copper_layers.iter().cloned()),
-                    Some("F&B.Cu") => layers.extend(["F.Cu".to_string(), "B.Cu".to_string()]),
-                    Some(name) => layers.push(name.to_string()),
-                    None => {}
-                }
-            }
+            names.extend((1..l.len()).filter_map(|i| sexpr::txt(l, i)));
         }
+        let mut layers: Vec<String> = expand_layer_names(&names, copper_layers);
         if let Some(p) = sexpr::find(z, "priority") {
             zone.priority = sexpr::num(p, 1).unwrap_or(0.0).max(0.0) as u32;
         }
@@ -2111,20 +2130,25 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
             zone.teardrop = sexpr::find(a, "teardrop").is_some();
         }
 
-        // Only copper layers make a copper zone (`GetLayerSet() & boardCopperLayers`).
-        layers.retain(|l| copper_layers.contains(l));
-        layers.dedup();
+        // The zone keeps its whole layer set (`ZONE::SetLayerSet`): the copper layers the board has and the technical and user layers KiCad names. A copper layer the
+        // board lacks is dropped (`GetLayerSet() & boardCopperLayers`); a set with no copper layer left is a non-copper zone (`fillNonCopperZone`), which has no net
+        // (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
+        layers.retain(|l| if eda_model::layers::is_copper_layer_name(l) { copper_layers.contains(l) } else { eda_model::layers::is_optional_layer(l) });
         let outlines: Vec<Vec<Point>> = sexpr::find_all(z, "polygon").filter_map(poly_points).collect();
         if outlines.is_empty() || layers.is_empty() {
             notes.zones_skipped += 1;
             continue;
         }
+        zone.set_layer_set(&layers);
+        if !zone.is_on_copper_layer() {
+            zone.net = String::new();
+        }
+        // `ZONE::m_Uuid` (`(uuid ..)`, `(tstamp ..)` before KiCad 8): the tie between zones of equal priority is decided by it (`ZONE::HigherPriority`).
+        zone.uuid = sexpr::find(z, "uuid").or_else(|| sexpr::find(z, "tstamp")).and_then(|u| sexpr::txt(u, 1)).unwrap_or("").to_string();
         let item_ref = ItemRef::of(z);
-        for layer in &layers {
-            for outline in &outlines {
-                out.push(Zone { layer: layer.clone(), outline: outline.clone(), ..zone.clone() });
-                refs.zones.push(item_ref.clone());
-            }
+        for outline in &outlines {
+            out.push(Zone { outline: outline.clone(), ..zone.clone() });
+            refs.zones.push(item_ref.clone());
         }
     }
     out

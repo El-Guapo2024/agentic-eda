@@ -21,6 +21,7 @@ import { distToPolyline, distToSegment, pointInPolygon, polygonArea, shapeArea, 
 import { guessSelectionCandidates, type GuessCandidate } from "../../kicad-port/selection";
 import { objectOn } from "../../kicad-port/appearance";
 import { layerIsVisible, layerStateKey } from "../../kicad-port/layerPresets";
+import { zonePickLayer } from "../../kicad-port/zoneLayers";
 
 export type SelectableKind = "part" | "track" | "via" | "zone" | "shape" | "text" | "dimension" | "pad" | "field";
 
@@ -247,7 +248,7 @@ export function collectSelectionCandidates(
     const nearEdge = edgeDist <= toleranceUm / 2;
     const d = inside ? 0 : edgeDist;
     const area = nearEdge ? 1 : polygonArea(z.outline);
-    consider("zone", z.id, d, area, z.layer);
+    consider("zone", z.id, d, area, zonePickLayer(z, layerVisible, activeLayer));
   }
   for (const s of board.drawings?.shapes ?? []) {
     // A filled shape at opacity 0 cannot be picked (`options.m_FilledShapeOpacity == 0.0 && IsAnyFill()`).
@@ -360,7 +361,7 @@ export function collectBoxSelection(board: BoardState, selBox: Box, crossing: bo
   }
   for (const z of board.routing?.zones ?? []) {
     if (z.outline.length < 3) continue;
-    consider("zone", z.id, boxOf(z.outline), z.layer);
+    consider("zone", z.id, boxOf(z.outline), zonePickLayer(z, layerVisible, activeLayer));
   }
   for (const s of board.drawings?.shapes ?? []) {
     if (s.kind !== "segment" && s.kind !== "arc" && s.kind !== "bezier" && s.filled && !objectOn(layerVisible, "shapes")) continue;

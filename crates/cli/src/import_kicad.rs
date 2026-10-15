@@ -80,6 +80,8 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
 
     let design_bytes = design.canonical_bytes().map_err(|e| fail("kicad_import_encode", "design.json", e.to_string()))?;
     std::fs::write(out.join("design.json"), design_bytes).map_err(|e| fail("io", "design.json", e.to_string()))?;
+    // The board shows the fills the file was saved with (KiCad's own), as it does in KiCad: they are kept beside the design, not in it (`crate::fill_api`).
+    crate::fill_api::keep_imported(&out, &design, notes.zone_fills.clone());
 
     // `board::load` reads `meta.intent` as a plain path (no relativizing to
     // the board dir), so it has to survive the board directory moving

@@ -38,7 +38,7 @@ pub fn drc(dir: &Path, refill_zones: bool) -> Result<Value, Vec<CheckResult>> {
 }
 
 /// `kicad-cli pcb drc` on the current design: `{ engine, violations, unconnected_items, schematic_parity, ignored_checks, counts }`.
-/// `refill_zones`: see [`eda_kicad_engine::drc`] (off by default; kicad-cli drops its courtyard checks when it refills).
+/// `refill_zones`: see [`eda_kicad_engine::drc`] (off by default: kicad-cli's filler runs first, on a copy, and the fills it makes are kept like Fill All Zones').
 ///
 /// With the dialog's "Test for parity between PCB and schematic" (`schematic_parity`, `--schematic-parity`): the design's schematic -- the one
 /// the engine would derive from the intent when none is stored yet, as for ERC -- goes beside the board for kicad-cli to compare with,
@@ -49,7 +49,14 @@ pub fn drc(dir: &Path, refill_zones: bool) -> Result<Value, Vec<CheckResult>> {
 pub fn drc_with(dir: &Path, refill_zones: bool, schematic_parity: bool) -> Result<Value, Vec<CheckResult>> {
     let (design, model) = if schematic_parity { load_with_schematic(dir)? } else { board::load(dir).map(|(_, d, m)| (d, m))? };
     let waived = design.drawings.as_ref().map(|d| d.drc_exclusions.clone()).unwrap_or_default();
-    Ok(eda_kicad_engine::drc_with(&design, &model, &work(dir), eda_kicad_engine::DrcOptions { refill_zones, schematic_parity })?.to_json_with(&waived))
+    let revision = crate::fill_api::design_stamp(dir);
+    let mut report = eda_kicad_engine::drc_with(&design, &model, &work(dir), eda_kicad_engine::DrcOptions { refill_zones, schematic_parity })?;
+    // "Refill all zones before performing DRC" made fills: they are the board's now, kept beside the design like the ones Fill All Zones makes.
+    if let Some(mut fills) = report.zone_fills.take() {
+        fills.revision = revision;
+        let _ = eda_kicad::zone_fills::store(dir, &fills);
+    }
+    Ok(report.to_json_with(&waived))
 }
 
 /// `kicad-cli sch erc` on the current schematic, in the studio's ERC shape

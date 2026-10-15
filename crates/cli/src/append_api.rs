@@ -65,8 +65,10 @@ pub fn read(dir: &Path, body: &[u8]) -> Value {
             }
         }
         for z in &clip.zones {
-            if copper(&z.layer) {
-                missing.insert(&z.layer);
+            for l in z.layer_set() {
+                if copper(l) {
+                    missing.insert(l);
+                }
             }
         }
         if !missing.is_empty() {

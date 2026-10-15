@@ -159,7 +159,7 @@ mod tests {
     }
 
     fn report(violations: Vec<Violation>) -> DrcReport {
-        DrcReport { engine: "kicad-cli test".into(), zones_refilled_by_kicad: false, violations, unconnected_items: vec![], schematic_parity: vec![], parity: None, ignored_checks: vec![] }
+        DrcReport { engine: "kicad-cli test".into(), zones_refilled_by_kicad: false, zone_fills: None, violations, unconnected_items: vec![], schematic_parity: vec![], parity: None, ignored_checks: vec![] }
     }
 
     #[test]

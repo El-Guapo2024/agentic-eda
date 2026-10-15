@@ -29,7 +29,7 @@ mod pcb_generated;
 mod pcb_items;
 mod clipboard;
 pub use clipboard::{export_pcb_clipboard, parse_pcb_clipboard, ClipFootprint, ClipGroup, ClipRef, Clipboard};
-pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pro, export_kicad_pro_for};
+pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, export_kicad_pcb_mapped, export_kicad_pcb_mapped_with, export_kicad_pcb_with, export_kicad_pro, export_kicad_pro_for};
 
 mod sexpr;
 mod page;
@@ -82,6 +82,8 @@ pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_t
 pub mod drc_exclusions;
 pub mod erc_exclusions;
 pub use pcb::effective_erc_severities;
+// The zone fills kicad-cli makes (Fill All Zones, B): read back from a refilled board and kept as derived data beside `design.json`.
+pub mod zone_fills;
 // The Appearance panel's share: the layers, objects, colours, presets and views the person chose, in the derived `.kicad_prl` and `.kicad_pro`.
 pub mod appearance;
 // Import Graphics (`common/import_gfx`): the readers of DXF files and the shapes they hand the importers of the editors.
@@ -1482,6 +1484,15 @@ pub(crate) fn duid_for(seed: &str, our_id: &str) -> String {
         }
     });
     u
+}
+
+/// Records `uuid -> our_id` for a uuid that was not minted here (an imported item's own), when a mapped export is running.
+pub(crate) fn note_uuid(uuid: &str, our_id: &str) {
+    UUID_MAP.with(|m| {
+        if let Some(map) = m.borrow_mut().as_mut() {
+            map.insert(uuid.to_string(), our_id.to_string());
+        }
+    });
 }
 
 pub(crate) fn start_uuid_map() {

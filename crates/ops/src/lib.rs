@@ -77,6 +77,7 @@ mod pcb_props;
 mod pcb_transform;
 mod tuning;
 mod zone_overrides;
+pub mod zone_priority;
 mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
@@ -392,6 +393,11 @@ pub enum Cmd {
         id: String,
         net: String,
         layer: String,
+        /// `ZONE_SETTINGS::m_Layers`: the layers the zone is on (the dialog's layer list), `layer` being the first. Absent leaves a zone on several
+        /// layers as it is when `layer` is one of them, and puts any other zone on `layer` alone. A zone with no copper layer in its set is a non-copper
+        /// zone (it has no net).
+        #[serde(default)]
+        layers: Option<Vec<String>>,
         clearance: Um,
         min_thickness: Um,
         thermal_gap: Um,
@@ -2418,6 +2424,7 @@ impl<'a> Board<'a> {
                 id,
                 net,
                 layer,
+                layers,
                 clearance,
                 min_thickness,
                 thermal_gap,
@@ -2446,6 +2453,7 @@ impl<'a> Board<'a> {
                 id,
                 net,
                 layer,
+                layers.as_deref(),
                 *clearance,
                 *min_thickness,
                 *thermal_gap,
@@ -3328,14 +3336,27 @@ impl<'a> Board<'a> {
         if !net.is_empty() {
             self.known_net(net)?;
         }
-        self.known_layer(layer)?;
+        self.known_zone_layer(layer)?;
         if outline.len() < 3 {
             return Err(vec![CheckResult::fail("ops_bad_zone", net, "a zone outline needs at least three points")]);
         }
+        // A zone on no copper layer has no net (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
+        let net = if eda_model::layers::is_copper_layer_name(layer) { net } else { "" };
         let rt = self.routing_mut();
         rt.zones.push(Zone { id: String::new(), net: net.into(), layer: layer.into(), outline: outline.to_vec(), ..Default::default() });
         rt.assign_missing_ids();
         Ok(())
+    }
+
+    /// The layers a zone can be on: a copper layer the board has, or a technical or user layer it has turned on (`LSET::AllNonCuMask` that Board Editor Layers enables).
+    fn known_zone_layer(&self, layer: &str) -> Result<(), Vec<CheckResult>> {
+        if eda_model::layers::is_copper_layer_name(layer) {
+            return self.known_layer(layer);
+        }
+        if eda_model::layers::is_optional_layer(layer) {
+            return self.layer_is_on(layer, "zone");
+        }
+        Err(vec![CheckResult::fail("ops_unknown_layer", layer, "a zone can be on a copper, technical or user layer")])
     }
 
     fn delete_zone(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
@@ -3370,6 +3391,7 @@ impl<'a> Board<'a> {
         id: &str,
         net: &str,
         layer: &str,
+        layers: Option<&[String]>,
         clearance: Um,
         min_thickness: Um,
         thermal_gap: Um,
@@ -3400,14 +3422,28 @@ impl<'a> Board<'a> {
         if !net.is_empty() {
             self.known_net(net)?;
         }
-        self.known_layer(layer)?;
+        // The zone's layer set: the dialog's list when it sends one, else `layer` (keeping a set that already holds it).
+        let wanted: Vec<String> = match layers {
+            Some(set) if !set.is_empty() => set.to_vec(),
+            _ => vec![layer.to_string()],
+        };
+        for l in &wanted {
+            self.known_zone_layer(l)?;
+        }
+        let copper = wanted.iter().any(|l| eda_model::layers::is_copper_layer_name(l));
+        if !is_rule_area && copper && wanted.iter().any(|l| !eda_model::layers::is_copper_layer_name(l)) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "a zone is on copper layers or on technical layers, not both (only a rule area can be on both)")]);
+        }
         if clearance < 0 {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "clearance cannot be negative")]);
         }
-        if min_thickness <= 0 {
+        // A zone on no copper layer may have no minimum width at all (`issue22826`'s mask zones; the non-copper dialog does not check it), and has no thermal
+        // spokes to check it against: both are copper pours' (`panel_zone_properties.cpp`'s `AcceptOptions`).
+        let pour = copper && !is_rule_area;
+        if min_thickness < 0 || (min_thickness == 0 && copper) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "minimum width must be positive")]);
         }
-        if thermal_spoke_width < min_thickness {
+        if pour && thermal_spoke_width < min_thickness {
             // panel_zone_properties.cpp's AcceptOptions(): "Thermal spoke
             // width cannot be smaller than the minimum width."
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "thermal spoke width cannot be smaller than the minimum width")]);
@@ -3420,8 +3456,11 @@ impl<'a> Board<'a> {
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
-        z.net = net.into();
-        z.layer = layer.into();
+        if layers.is_some_and(|l| !l.is_empty()) || !z.is_on_layer(layer) {
+            z.set_layer_set(&wanted);
+        }
+        // A zone on no copper layer has no net.
+        z.net = if copper || is_rule_area { net.into() } else { String::new() };
         z.clearance = clearance;
         z.min_thickness = min_thickness;
         z.thermal_gap = thermal_gap;
@@ -3645,6 +3684,7 @@ impl<'a> Board<'a> {
             }
             let mut z = template.clone();
             z.id = String::new();
+            z.uuid.clear();
             z.outline = ring.iter().map(|p| Point { x: p.x, y: p.y }).collect();
             rt.zones.push(z);
         }
@@ -3667,8 +3707,8 @@ impl<'a> Board<'a> {
                 }
             }
             for z in rt.zones.iter_mut() {
-                if let Some(dest) = map.get(z.layer.as_str()) {
-                    z.layer = (*dest).to_string();
+                if z.layer_set().into_iter().any(|l| map.contains_key(l)) {
+                    z.map_layers(|l| map.get(l).map_or_else(|| l.to_string(), |d| (*d).to_string()));
                 }
             }
             // `if( via->GetViaType() == VIATYPE::THROUGH ) continue;` --
