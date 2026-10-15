@@ -79,7 +79,7 @@ impl KicadFills {
     /// The zones of `design` that have a fill that is current, and the zones that have one that is out of date (edited since).
     pub fn tally(&self, design: &Design) -> (usize, usize) {
         let zones = design.routing.as_ref().map_or(&[][..], |r| r.zones.as_slice());
-        let fillable = zones.iter().filter(|z| !z.is_rule_area && z.outline.len() >= 3);
+        let fillable = zones.iter().filter(|z| fillable(z));
         let (mut current, mut stale) = (0, 0);
         for z in fillable {
             match self.zones.get(&z.id) {
@@ -142,6 +142,12 @@ impl KicadFills {
             self.zones.remove(id);
         }
     }
+}
+
+/// Whether kicad-cli's Fill All Zones fills `zone`: a zone of the board with an outline that is not a rule area. `ZONE_FILLER_TOOL::FillAllZones` walks `board()->Zones()`, which
+/// leaves out the zones that belong to a footprint, so one of those has no fill to wait for (a fill a file stored for it is still read).
+pub fn fillable(zone: &Zone) -> bool {
+    !zone.is_rule_area && zone.outline.len() >= 3 && zone.parent_footprint.is_none()
 }
 
 /// Nanometres to the micrometres the IR works in, rounded to the nearest.

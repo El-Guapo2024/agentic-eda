@@ -368,32 +368,32 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `DrcBoard`). P13's own plan for it (fill fidelity: courtyards and net ties as knockouts, the hatched zone's thermal rings, `connect_nearby_polys`, mask-only NPTH knockouts; the speed of a fine hatch) is
   **superseded**: nothing fills here, so nothing is left to port, and a hatch over a whole board is as fast as kicad-cli is (a few seconds).
 - **Fill All Zones** (B, `POST /api/fill/kicad`, `eda board fill`): `kicad-cli pcb drc --refill-zones --save-board` on a COPY of the derived board (`.kicad/refill/`: the project's rules, none of the board's library
-  tables, every DRC check ignored, `KICAD_CONFIG_HOME` an empty folder), then each zone's `(filled_polygon ..)` read back (`eda_kicad::zone_fills`: nanometres, `(island yes)`). The fills are derived data beside
-  `design.json` (`.kicad/zone_fills.json`), per zone with a fingerprint of the zone filled and the design revision. **Time**: a 30-part board (`examples/mcu_board_30plus.yaml`, placed and routed, a GND pour
-  on both layers): 8.1 to 9.0 s with the user's footprint libraries, **1.9 to 3.3 s** with the empty configuration (a DRC job does not start before the global libraries are enumerated), the same fill; KiCad's QA
-  boards 1.7 to 2.9 s (`issue6284`, four zones and 90 rings: 8.4 s).
-- **Between fills the board shows the last fill**, as KiCad does with auto-refill off: an edit elsewhere leaves it, an edit to a zone (outline, layers, net, a setting) empties that zone, and a zone never filled is
-  an outline (no copper for live connectivity, the 3D stand-in and the status bar's "N zones not filled (B)"). Read by: the canvas and the 3D stand-in (`GET /api/fill`), the `.kicad_pcb` writer (so the DRC, the
+  tables, every DRC check ignored, started through `eda_kicad_engine::cli_command` like every other kicad-cli run, so with its empty settings folder), then each zone's `(filled_polygon ..)` read back
+  (`eda_kicad::zone_fills`: nanometres, `(island yes)`; a footprint's own zones are taken out of the footprint's frame that kicad-cli 10.99.0-5334 stores them in, with the importer's `fp_transform` map). The
+  fills are derived data beside `design.json` (`.kicad/zone_fills.json`), per zone with a fingerprint of the zone filled and the design revision. **Time**: a 30-part board (`examples/mcu_board_30plus.yaml`,
+  placed and routed, a GND pour on both layers): 8.1 to 9.0 s with the user's footprint libraries (a DRC job does not start before the global libraries are enumerated), **1.9 to 3.3 s** with the empty settings
+  folder, the same fill; KiCad's QA boards 1.7 to 2.9 s (`issue6284`, four zones and 90 rings: 8.4 s).
+- **Between fills the board shows the last fill**, as KiCad does with auto-refill off: an edit elsewhere leaves it, an edit to a zone (outline, layers, net, a setting) empties that zone (a priority is none of
+  them: the Zone Manager's OK changes priorities and puts the fills back, `DIALOG_ZONE_MANAGER::OnOk`), and a zone never filled is an outline (no copper for live connectivity, the 3D stand-in and the status bar's "N zones not filled (B)"). Read by: the canvas and the 3D stand-in (`GET /api/fill`), the `.kicad_pcb` writer (so the DRC, the
   render, the plots and File > Save As carry kicad-cli's rings), live connectivity and Cleanup Tracks (`eda_drc::zone_copper::ZoneCopper`). A board imported from a `.kicad_pcb` starts with the fills it was saved with.
   "Refill all zones before performing DRC", the Plot dialog's "Check zone fills before plotting" and the Zone Manager's "Refill zones" run the filler first, on a copy; the DRC itself runs without `--refill-zones`
   (kicad-cli 10.99 skips its courtyard checks on a run that refills). Fill Selected, Unfill Selected and Unfill All Zones go to the server.
 - **Zone kinds**: non-copper zones (silkscreen, mask, paste and user layers: `dialog_non_copper_zones_properties`; no net) and zones on several layers (`Zone::layers`, `(layers "F.Cu" "B.Cu")`, `*.Mask`, `F&B.Cu`),
   read and written as KiCad does, edited in Zone Properties (one box per layer, the dialog chosen by the layer drawn on). A zone keeps the uuid it had in an imported file (`Zone::uuid`): KiCad breaks ties between
-  zones of one priority by uuid, and `issue5750`'s B.Cu fill was 83 mm² in kicad-cli's refill of the file and 158 mm² in its refill of our copy until it did. A mask-only NPTH hole (`FootprintExtra::holes`) and a net
+  zones of one priority by uuid, and `issue5750`'s B.Cu fill came out at about half the area in kicad-cli's refill of our copy until it did (the slow proof below). A mask-only NPTH hole (`FootprintExtra::holes`) and a net
   tie's pad groups reach the derived board, so the fill kicad-cli makes of it keeps clear of the hole and exempts the tie.
 - **Zone UI**: Auto-Assign Priorities in the Zone Manager (`AutoAssignZonePriorities` ported to `eda_ops::zone_priority`: the pads and vias of each net inside an overlap decide, the smaller zone where they do not,
   Kahn's order, one priority per same-net group; `GET /api/zone_priorities/auto`, staged and applied on OK), the Zone Manager's preview (a tab per layer of the zone: the board's edges, the fill or the outline;
   `components/ZonePreview.tsx`), a "Refill zones" box, and the Locked box of Zone Properties. The full settings dialog, keepouts, Merge, Duplicate onto Layer and the Priority actions are as before (`PARITY-boardctl.md`).
-- **Proof**: `crates/kicad-engine/tests/refill_zones.rs` (slow tier, `EDA_SLOW_TESTS=1`): kicad-cli's fill of the derived board equals its fill of the original, board by board and layer by layer, to 0.00 to 0.002% of the area
+- **Proof**: in the fast tier, `crates/kicad-engine` tests with a stand-in kicad-cli (the refill runs `pcb drc --refill-zones --save-board` on the copy through `cli_command`'s settings folder and reads the
+  saved board's rings; the DRC after a refill runs without `--refill-zones` on the board that carries them; a kicad-cli that cannot refill is told apart) and `eda_kicad::zone_fills` (the scanner, a footprint's
+  frame, the fingerprint, the cache file). In the slow tier, `crates/kicad-engine/tests/refill_zones.rs` (`EDA_SLOW_TESTS=1`): kicad-cli's fill of the derived board equals its fill of the original, board by board and layer by layer, to 0.00 to 0.002% of the area
   on `issue5990` (mask-only NPTH holes), `issue14008` (a net tie), `issue6260` (a non-copper zone) and `issue5750` (the uuid tie), and on `issue6284`, `issue12609`, `issue2568`, `hatch_thermal_connectivity`,
   `zone_filler`, `issue7086`; the DRC runs on the board written with those fills. `web/studio/e2e/zones.check.js`: 8 scenarios through `window.__eda` on a served board, kicad-cli running for real.
 - Left: `issue22826`'s inner layers differ by 0.5 to 0.8% because its through-hole pads are `(remove_unused_layers yes)` and `(zone_layer_connections)`, which the IR does not keep (item 31, padstacks); the Zone
   Manager's "Update Displayed Zones" (a fill of the dialog's staged copies; the preview shows the fills the board holds, and the staged priorities take effect with OK and a fill); no auto-refill after an edit
   (KiCad's own setting is off by default; `ZoneFillDirty` fills the zones that have none); a fill is derived data, not an undo step: Undo of a zone edit gives the fill back only because the cache still holds the old
-  zone's entry, and a second fill replaces it; kicad-cli 10.99.0-5334 (the nightly installed 2026-10-13) writes a footprint with `(transform (translate ..) (rotate ..))` instead of `(at ..)`, which the importer
-  does not read (a board that kicad-cli or that nightly saved cannot be imported; `kicad_cli_clipboard`'s `what_kicad_itself_writes_for_those_items_reads_back_the_same` fails on it).
-- Finding, not done: every kicad-cli job of a board spends about 5 s of a 7 s DRC enumerating the global footprint libraries before it starts; a derived project that needs none of them could run the DRC, the ERC and
-  the exports with an empty `KICAD_CONFIG_HOME` as the refill does (1.6 s instead of 7 s on the 30-part board). The library-link checks are ignored in the derived project already.
+  zone's entry, and a second fill replaces it.
 - Port from: `pcbnew/zone.cpp`, `zone_utils.cpp` (`AutoAssignZonePriorities`), `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `jobs` of `pcbnew_jobs_handler.cpp`
   (`JobExportDrc`: `--refill-zones`, `--save-board`), `pcb_io/kicad_sexpr/` (`format( const ZONE* )`: the layer set and the filled polygons), `pcbnew/teardrop/`.
 

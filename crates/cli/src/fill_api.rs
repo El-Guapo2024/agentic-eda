@@ -68,7 +68,7 @@ pub(crate) fn refill(dir: &Path, only: Option<Vec<String>>) -> Value {
 /// current (never filled, unfilled, or edited since), and not otherwise. `Err` says why it could not.
 pub(crate) fn ensure_filled(dir: &Path) -> Result<(), String> {
     let (_, design, _) = board::load(dir).map_err(|e| board::reasons(&e))?;
-    let pours = design.routing.as_ref().map_or(0, |r| r.zones.iter().filter(|z| !z.is_rule_area && z.outline.len() >= 3).count());
+    let pours = design.routing.as_ref().map_or(0, |r| r.zones.iter().filter(|z| zone_fills::fillable(z)).count());
     if pours == 0 {
         return Ok(());
     }
@@ -143,8 +143,9 @@ pub(crate) fn report(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckRes
     // One entry per zone and layer: a zone on several layers (`Zone::layers`) has a fill on each, under the same id.
     let zones_json: Vec<Value> = zones
         .iter()
-        // A rule area has no fill, ever, and nor has an outline of fewer than three corners (kicad-cli fills neither): they are not in the report.
-        .filter(|z| !z.is_rule_area && z.outline.len() >= 3)
+        // A rule area has no fill, ever, and nor has an outline of fewer than three corners or a footprint's own zone (kicad-cli fills none of them): they are not in the
+        // report, unless a file stored a fill for one.
+        .filter(|z| zone_fills::fillable(z) || (!z.is_rule_area && z.outline.len() >= 3 && cache.as_ref().is_some_and(|k| k.current(z).is_some())))
         .flat_map(|z| z.layer_set().into_iter().map(move |layer| (z, layer)))
         .map(|(z, layer)| {
             let fill = copper.get(&z.id, layer);
@@ -292,8 +293,17 @@ mod tests {
         let dir = board_dir("ensure_current", vec![a.clone()]);
         zone_fills::store(&dir, &KicadFills::new("kicad-cli 10.99.0".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
         assert!(ensure_filled(&dir).is_ok(), "every pour is current: kicad-cli is not started");
+        // A footprint's own zone is not one kicad-cli fills (`FillAllZones` walks the board's zones): it is not waited for, and not in the report.
+        let mut inside = square("zf", "", "F.Cu", 30_000);
+        inside.parent_footprint = Some("U1".into());
+        let with_footprint_zone = board_dir("ensure_footprint_zone", vec![a.clone(), inside]);
+        zone_fills::store(&with_footprint_zone, &KicadFills::new("kicad-cli 10.99.0".into(), String::new(), 1, BTreeMap::from([("za".to_string(), fill_of(&a, "F.Cu"))]))).unwrap();
+        assert!(ensure_filled(&with_footprint_zone).is_ok(), "the zone of a footprint has no fill to wait for");
+        let r = report(&with_footprint_zone, false).unwrap();
+        assert_eq!(r["zones"].as_array().unwrap().iter().map(|z| z["id"].as_str().unwrap()).collect::<Vec<_>>(), ["za"], "{r}");
         let _ = std::fs::remove_dir_all(&none);
         let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&with_footprint_zone);
     }
 
     /// Unfill All Zones forgets every fill; Unfill Selected Zones only the named ones.

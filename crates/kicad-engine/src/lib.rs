@@ -935,7 +935,7 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
 pub fn refill_zones(design: &Design, model: &ConstraintModel, work: &Path) -> Result<KicadFills, Vec<CheckResult>> {
     let cli = need_cli()?;
     let engine = format!("kicad-cli {}", cli_version(&cli));
-    if !design.routing.as_ref().is_some_and(|r| r.zones.iter().any(|z| !z.is_rule_area && z.outline.len() >= 3)) {
+    if !design.routing.as_ref().is_some_and(|r| r.zones.iter().any(eda_kicad::zone_fills::fillable)) {
         return Ok(KicadFills::new(engine, String::new(), 0, Default::default()));
     }
     let started = Instant::now();

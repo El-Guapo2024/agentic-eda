@@ -92,8 +92,9 @@ never edited as masters.
     per zone with a fingerprint of the zone filled (outline, layers, net,
     settings) and the design revision. Between fills the board shows the last
     fill, as KiCad does with auto-refill off: an edit elsewhere leaves it, an
-    edit to a zone empties that zone, and a zone never filled is an outline
-    (and no copper for live connectivity). The fills are read by `GET /api/fill`
+    edit to a zone empties that zone (a priority is none of them: the Zone
+    Manager's OK changes priorities and puts the fills back), and a zone never
+    filled is an outline (and no copper for live connectivity). The fills are read by `GET /api/fill`
     (canvas, 3D stand-in), the `.kicad_pcb` writer (`filled_polygon`, so the
     DRC, the 3D render, the plots and File > Save As see them), live
     connectivity and Cleanup Tracks (`eda_drc::zone_copper::ZoneCopper`). A
