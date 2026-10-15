@@ -69,6 +69,25 @@ fn an_exclusion_is_removed_by_its_key_and_removing_one_that_is_not_there_is_refu
 }
 
 #[test]
+fn delete_all_markers_with_the_exclusions_forgets_every_waived_violation_in_one_step() {
+    let m = ConstraintModel::default();
+    let mut b = Board::new(design(), &m, 100, 300);
+    // Nothing waived: refused, nothing to undo.
+    let e = b.apply(&Cmd::ClearDrcExclusions).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_drc_exclusion");
+    b.apply(&Cmd::AddDrcExclusions { exclusions: vec![exclusion("clearance", &["a", "b"]), exclusion("hole_clearance", &["a", "b"]), exclusion("track_width", &["t"])] }).unwrap();
+    assert_eq!(waived(&b).len(), 3);
+    b.apply(&Cmd::ClearDrcExclusions).unwrap();
+    assert!(waived(&b).is_empty());
+    let e = b.apply(&Cmd::ClearDrcExclusions).unwrap_err();
+    assert_eq!(e[0].check, "ops_unknown_drc_exclusion");
+    // It is a board edit, and it comes back from the studio's JSON.
+    let cmd: Cmd = serde_json::from_value(serde_json::json!({ "op": "clear_drc_exclusions" })).unwrap();
+    assert!(matches!(cmd, Cmd::ClearDrcExclusions));
+    assert_eq!(Cmd::ClearDrcExclusions.domain(), Domain::Pcb);
+}
+
+#[test]
 fn an_exclusion_that_names_nothing_is_refused_and_stores_nothing() {
     let m = ConstraintModel::default();
     let mut b = Board::new(design(), &m, 100, 300);

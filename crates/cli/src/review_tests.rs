@@ -180,6 +180,34 @@ fn an_erc_exclusion_is_one_undo_step_and_its_marker_is_in_the_derived_project() 
     assert!(load(&dir).unwrap().1.schematic.unwrap().erc_exclusions.is_empty());
 }
 
+/// Delete Marker on an excluded DRC marker and Delete All Markers with the exclusions (`RecordDRCExclusions` forgets what no marker holds): the verbs are one undo
+/// step each, and the derived project lists what is left.
+#[test]
+fn deleting_drc_markers_with_their_exclusions_is_undoable_and_the_project_follows() {
+    let dir = scratch("review_drc_delete");
+    setup(&dir);
+    let spec = |check: &str, items: &[&str]| eda_model::ir::DrcExclusion { check: check.into(), items: items.iter().map(|s| s.to_string()).collect(), ids: vec![], positions_nm: vec![], comment: String::new() };
+    let key = |check: &str, items: &[&str]| eda_model::ir::DrcExclusionKey { check: check.into(), items: items.iter().map(|s| s.to_string()).collect() };
+    let waived = |dir: &Path| load(dir).unwrap().1.drawings.map_or(0, |d| d.drc_exclusions.len());
+    step(&dir, Cmd::AddDrcExclusions { exclusions: vec![spec("track_width", &["t1"]), spec("track_width", &["t2"]), spec("annular_width", &["v1"])] }, false, "ui").unwrap();
+    // Delete Marker on one excluded marker: its exclusion goes.
+    step(&dir, Cmd::DeleteDrcExclusions { exclusions: vec![key("track_width", &["t1"])] }, false, "ui").unwrap();
+    assert_eq!(waived(&dir), 2);
+    // Delete All Markers, "Errors, Warnings and Exclusions": the rest goes, in one step, and the derived project lists none.
+    step(&dir, Cmd::ClearDrcExclusions, false, "ui").unwrap();
+    assert_eq!(waived(&dir), 0);
+    let (_, design, model) = load(&dir).unwrap();
+    let pro: Value = serde_json::from_str(&eda_kicad::export_kicad_pro_for(&design, &model)).unwrap();
+    assert!(pro["board"]["design_settings"]["drc_exclusions"].as_array().is_none_or(|l| l.is_empty()), "{pro}");
+    // Each is its own undo step.
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(waived(&dir), 2);
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(waived(&dir), 3);
+    undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+    assert_eq!(waived(&dir), 0);
+}
+
 /// The dialogs' "Save..." (slow tier): the report is kicad-cli's own file -- `ERC.rpt` text, `ERC.json` -- for the severities the Show boxes list, with the
 /// exclusion and its comment in it when that box is on; a run that fails says why.
 #[test]

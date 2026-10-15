@@ -564,6 +564,10 @@ pub enum Cmd {
     AddDrcExclusions { exclusions: Vec<DrcExclusion> },
     /// "Remove exclusion for this violation": put the violations `exclusions` name back in the report. Refused when none of them is waived.
     DeleteDrcExclusions { exclusions: Vec<DrcExclusionKey> },
+    /// Delete Marker on an excluded marker and Delete All Markers with "Errors, Warnings and Exclusions" (`DIALOG_DRC::OnDeleteOneClick`,
+    /// `OnDeleteAllClick`): the markers go, and `BOARD::RecordDRCExclusions` -- which the next run and the next save make -- keeps the exclusions of the
+    /// markers that are left, so with all of them gone no exclusion is. (One marker's is `DeleteDrcExclusions`.) Refused when none is listed.
+    ClearDrcExclusions,
     /// Schematic Setup > Violation Severity: the ERC checks reported at a severity other than their default, by settings key
     /// (`eda_model::erc_checks`) -> `error` | `warning` | `ignore`. Whole table in, whole table replaced.
     SetErcSeverities { severities: BTreeMap<String, String> },
@@ -1933,6 +1937,7 @@ impl Cmd {
             Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::ClearDrcExclusions => vec!["drc_exclusions"],
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2377,6 +2382,7 @@ impl<'a> Board<'a> {
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
             Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
+            Cmd::ClearDrcExclusions => review::clear_drc_exclusions(&mut self.design),
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
             Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),

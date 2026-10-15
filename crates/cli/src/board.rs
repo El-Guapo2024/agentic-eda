@@ -1230,6 +1230,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetTuningProfiles { settings } => format!("board-setup tuning-profiles ({} profiles)", settings.profiles.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
+        Cmd::ClearDrcExclusions => "drc unexclude --all".to_string(),
         Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
         Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
@@ -1532,7 +1533,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetZoneHatchOffsets { .. } => "zone-hatch-offsets",
         Cmd::SetTuningPatterns { .. } => "tuning-patterns",
         Cmd::SetTuningProfiles { .. } => "tuning-profiles",
-        Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
+        Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } | Cmd::ClearDrcExclusions => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::SetLocked { .. } => "lock",
@@ -3786,6 +3787,16 @@ mod tests {
         assert_eq!(counts(&removed, "annular_width"), 1);
         assert_eq!(kicad_cli_lists(&dir, &plain, "annular_width").len(), 1, "kicad-cli reports it again");
         assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "the others stay waived");
+
+        // Delete All Markers with "Errors, Warnings and Exclusions": KiCad's next run records the markers that are left, and none is, so no violation is
+        // waived any more and kicad-cli reports the track again.
+        step(&dir, Cmd::ClearDrcExclusions, false, "ui").unwrap();
+        assert!(load(&dir).unwrap().1.drawings.map_or(true, |d| d.drc_exclusions.is_empty()));
+        assert_eq!(kicad_cli_lists(&dir, &plain, "track_width").len(), 1, "kicad-cli reports the track again");
+        assert!(kicad_cli_lists(&dir, &["--severity-exclusions"], "track_width").is_empty(), "and has no excluded marker for it");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.drawings.unwrap().drc_exclusions.len(), 2, "Undo brings the two that were left back");
+        assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "and the track is waived for kicad-cli again");
 
         // Undo takes the removal back (the via is waived again), and another Undo the exclusions.
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();

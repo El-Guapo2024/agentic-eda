@@ -64,6 +64,16 @@ pub(crate) fn delete_drc_exclusions(design: &mut Design, keys: &[DrcExclusionKey
     Ok(())
 }
 
+/// `Cmd::ClearDrcExclusions`: Delete All Markers with the exclusions (`DIALOG_DRC::OnDeleteAllClick`). Refused when no violation is waived.
+pub(crate) fn clear_drc_exclusions(design: &mut Design) -> Done {
+    let list = &mut drawings(design).drc_exclusions;
+    if list.is_empty() {
+        return Err(vec![CheckResult::fail("ops_unknown_drc_exclusion", "drc_exclusions", "no violation is excluded")]);
+    }
+    list.clear();
+    Ok(())
+}
+
 /// `Cmd::SetErcSeverities`: Schematic Setup > Violation Severity (`panel_setup_severities.cpp`), the whole table, stored as sent (the page
 /// names the checks whose severity differs from KiCad's default, and the ones the table already named: the derived project ignores the two
 /// library-link checks unless the table says otherwise, so going back to their default has to be said, as for the board's table). An empty
