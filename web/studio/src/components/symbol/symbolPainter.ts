@@ -27,7 +27,6 @@ import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID
 import { drawStrokeText } from "../text/strokeFont";
 import { electricalTypeLayout, pinLabelsShown, pinShown } from "../../kicad-port/symPinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
-import { snapPoint } from "../canvas/gridHelper";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
 export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon";
@@ -228,7 +227,8 @@ export function paintSymbol(
   drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorUm);
   if (opts.pendingText && opts.cursorUm) {
-    const [x, y] = snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
+    // (the canvas hands over the cursor its grid helper gave -- on the text grid, or an anchor -- while the Text tool runs)
+    const [x, y] = [opts.cursorUm.x, opts.cursorUm.y];
     drawRealGraphic(ctx, { kind: "text", content: opts.pendingText.text, at: [x, y], angleDeg: opts.pendingText.angleDeg, sizeUm: opts.pendingText.sizeMm * 1000 }, layerColor("selection"));
   }
 }

@@ -12,7 +12,6 @@ import { useFpApi, useFpDispatch, useFpState, type FpToolId } from "../../state/
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
 import { paintFootprint } from "./footprintPainter";
 import { useFootprintChecker } from "../../state/footprintChecker";
-import { snapPoint } from "../canvas/gridHelper";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
@@ -40,6 +39,10 @@ import { useFootprintGridOrigin } from "../../state/gridOrigin";
 import { useGridSettings } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
+import { heldCursor } from "../../kicad-port/heldCursor";
+import { FootprintSnap, type FootprintPointOpts, type FootprintSnapMods } from "./footprintSnap";
+import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
+import { layerColor } from "../canvas/layers";
 import "../../styles/canvas.css";
 
 const SHAPE_TOOL_KIND: Partial<Record<FpToolId, "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier">> = {
@@ -122,7 +125,7 @@ function graphicHitDistance(s: CmdShape, wx: number, wy: number): number {
 
 type DragState =
   | { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] }
-  | { kind: "move"; refs: string[]; moveKind: "pad" | "graphic" | "text"; startWorld: [number, number] };
+  | { kind: "move"; refs: string[]; moveKind: "pad" | "graphic" | "text"; startWorld: [number, number]; snapOrigin: [number, number] };
 
 function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "polygon" | "bezier", pts: [number, number][], layer: string): CmdShape | null {
   const p = (i: number) => ({ x: pts[i]![0], y: pts[i]![1] });
@@ -151,12 +154,6 @@ function footprintToShapeArg(kind: "segment" | "arc" | "rect" | "circle" | "poly
 // (An arc and a Bezier are not point-counted either: kicad-port/arcGeom.ts / bezierGeom.ts decide when they are complete.)
 const AUTO_FINISH: Partial<Record<"segment" | "rect" | "circle" | "arc" | "polygon" | "bezier", number>> = { segment: 2, rect: 2, circle: 2 };
 
-/** The grid category a footprint editor tool places on (`PCB_GRID_HELPER`'s: a shape on the graphics grid, text on the text grid; a pad and the anchor on the current one). */
-function toolCategory(tool: string): GridCategory {
-  if (tool.startsWith("draw_")) return "graphics";
-  return tool === "text" ? "text" : "current";
-}
-
 export function FootprintCanvas() {
   const state = useFpState();
   const dispatch = useFpDispatch();
@@ -166,12 +163,17 @@ export function FootprintCanvas() {
   const gridList = useGridSettings("footprint").grids;
   const gridOverrides = useGridOverrides("footprint");
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridUm, gridList, gridOverrides);
-  const toolGrid = (): number => gridOf(toolCategory(state.activeTool));
-  /** `GetSelectionGrid`: the coarsest of the grids of what is held. */
-  const heldGrid = (ids: readonly string[]): number => {
+  /** `GetSelectionGrid`: the category of the coarsest grid of what is held. */
+  const heldCategory = (ids: readonly string[]): GridCategory => {
     const cats = ids.map((id): GridCategory => (api.padById(id) ? "connectable" : api.graphicById(id) ? "graphics" : "text"));
-    return gridOf(selectionGrid(cats, gridOf));
+    return selectionGrid(cats, gridOf);
   };
+  // The grid helper of the tool in force (kicad-port/pcbGridHelper.ts, footprintSnap.ts), kept fed with the view, the grid, the overrides and the open footprint's items: a click goes
+  // to the grid, or to an anchor of another item -- a pad's centre and outline, a graphic's end points, middle and centre, the footprint's origin -- like `PCB_GRID_HELPER::BestSnapAnchor`.
+  const snapRef = useRef<FootprintSnap | null>(null);
+  if (!snapRef.current) snapRef.current = new FootprintSnap();
+  const snap = snapRef.current;
+  const [snapTick, bumpSnap] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -191,6 +193,28 @@ export function FootprintCanvas() {
   const userMovedRef = useRef(false);
 
   const fp = state.footprint;
+  snap.update({ footprint: fp, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides, origin: [gridOrigin.x, gridOrigin.y], highContrast: state.highContrast, activeLayer: state.activeLayer });
+  snap.onChange = () => bumpSnap((n) => n + 1);
+  // A tool of its own starts a helper of its own: what the last one remembered (the anchor snapped to, the snap line, the construction geometry) goes with it.
+  useEffect(() => {
+    snap.reset();
+    bumpSnap((n) => n + 1);
+  }, [snap, state.activeTool]);
+  useEffect(() => () => snap.reset(), [snap]);
+  const snapMods = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): FootprintSnapMods => ({ ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey });
+  /** What each placing tool asks `BestSnapAnchor` for: the shape and text tools the active layer and their grid; the pad and anchor tools (and the pickers) every layer. */
+  const toolOpts = (tool: string): FootprintPointOpts => {
+    if (tool.startsWith("draw_")) return { category: "graphics" };
+    if (tool === "text") return { category: "text" };
+    return { category: "current", layers: "all" };
+  };
+  /** The point a click of the tool in force goes to. */
+  const toolPoint = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, wx: number, wy: number, tool: string = state.activeTool): [number, number] => {
+    const p = snap.point(tool, [wx, wy], snapMods(e), toolOpts(tool));
+    return [p[0], p[1]];
+  };
+  /** The tools whose clicks go through the grid helper: the marker and the rubber band follow them on every move. */
+  const placing = state.activeTool === "pad" || state.activeTool === "text" || state.activeTool === "anchor" || state.activeTool.startsWith("draw_");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -285,17 +309,24 @@ export function FootprintCanvas() {
       gridVisible: state.gridVisible,
       gridOrigin: [gridOrigin.x, gridOrigin.y],
       drawState: state.drawState,
-      cursorUm: state.cursorUm,
+      // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer
+      cursorUm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorUm,
       movePreview: state.movePreview,
       highContrast: state.highContrast,
       activeLayer: state.activeLayer,
       markers: checkMarkers,
     });
+    // What the grid helper shows: the snap marker and its icon, the snap lines, the construction geometry.
+    const snapOverlay = snap.overlay();
+    if (snapOverlay) {
+      const k = state.view.scale || 1;
+      paintSnapOverlay(ctx, k, [-state.view.x / k, -state.view.y / k, (width - state.view.x) / k, (height - state.view.y) / k], snapOverlay, { marker: layerColor("LAYER_AUX_ITEMS"), construction: layerColor("anchor"), guideActive: layerColor("anchor") });
+    }
     ctx.restore();
     ctx.restore();
     // (`checkMarkers` is made afresh each render: it is its two inputs the loop follows)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name]);
+  }, [fp, state.view, state.selection, state.gridUm, state.gridVisible, gridOrigin, state.drawState, state.cursorUm, state.movePreview, state.enumerate, state.highContrast, state.activeLayer, containerSize, checker.markers, checker.selected, checker.name, state.name, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -352,7 +383,7 @@ export function FootprintCanvas() {
     if (draw.shapeKind === "arc") return;
     if (draw.shapeKind === "bezier") {
       // A double-click: "use the current point for all remaining points", accept, and reset (no chaining).
-      const at = state.cursorUm ? snapPoint(state.cursorUm.x, state.cursorUm.y, gridOf("graphics")) : draw.bezier?.lastPoint;
+      const at = snap.lastPoint() ?? draw.bezier?.lastPoint;
       const curve = draw.bezier && at ? bezierFinishDouble(draw.bezier, at) : null;
       if (curve) void api.addGraphic(bezierShape(curve, state.activeLayer, DRAW_STROKE_WIDTH_UM));
       dispatch({ type: "SET_DRAW_STATE", draw: null });
@@ -384,12 +415,12 @@ export function FootprintCanvas() {
     }
     if (e.button !== 0) return;
 
-    const [sx, sy] = snapPoint(wx, wy, toolGrid());
+    const [sx, sy] = placing ? toolPoint(e, wx, wy) : [wx, wy];
 
     // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts: Create Array's "Select Point..." / "Select Item...") a left click answers it, snapped to the
     // grid, or the item under it for an item session, and does nothing else.
     if (picker.session()) {
-      const [px, py] = snapPoint(wx, wy, gridOf("current"));
+      const [px, py] = toolPoint(e, wx, wy, "picker");
       picker.click({ point: { x: px, y: py }, item: () => hitTest(wx, wy)?.id ?? null });
       return;
     }
@@ -481,9 +512,9 @@ export function FootprintCanvas() {
       dispatch({ type: "SET_SELECTION", refs });
       if (refs.includes(hit.id)) {
         const held = refs.length > 1 ? refs : [hit.id];
-        dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy] };
-        // `GetSelectionGrid`: what is picked up snaps on its own grid (a pad on the connectable one, a graphic on the graphics one).
-        const [ox, oy] = snapPoint(wx, wy, heldGrid(held));
+        // `BestDragOrigin`: the point of what is picked up that the move holds it by -- the nearest origin or corner of the items to the pointer (else the pointer itself).
+        const [ox, oy] = snap.dragOrigin([wx, wy], held);
+        dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy], snapOrigin: [ox, oy] };
         dispatch({ type: "SET_MOVE_ORIGIN", at: { x: ox, y: oy } });
       }
     } else if (!hasModifier(modifiers)) {
@@ -503,14 +534,17 @@ export function FootprintCanvas() {
     }
     // `drawArc` / `drawOneBezier`'s motion branch: update the construction manager's geometry (never its step) with the snapped cursor.
     const draw = state.drawState;
-    if (draw && (draw.arc || draw.bezier)) {
-      const [sx, sy] = snapPoint(wx, wy, toolGrid());
+    // The tools that place something: the grid helper sees every move, so the marker, the snap lines and the rubber band follow the cursor.
+    const cursor = placing ? toolPoint(e, wx, wy) : null;
+    if (draw && (draw.arc || draw.bezier) && cursor) {
+      const [sx, sy] = cursor;
       if (draw.arc) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, arc: arcMotion(draw.arc, [sx, sy], arcAngleSnap("45", e)) } });
       else if (draw.bezier) dispatch({ type: "SET_DRAW_STATE", draw: { ...draw, bezier: bezierMotion(draw.bezier, [sx, sy]) } });
     }
     // The armed Move (a Duplicate's pick-up): the selection follows the snapped cursor from where it was picked up.
     if (state.activeTool === "move" && state.duplicatePending && state.selection.size > 0) {
-      const [sx, sy] = snapPoint(wx, wy, heldGrid([...state.selection]));
+      const held = [...state.selection];
+      const [sx, sy] = (([x, y]) => [x, y] as [number, number])(snap.moveCursor([wx, wy], snapMods(e), held, heldCategory(held)));
       // No pointer position was known when the copies were picked up (`doMoveSelection`'s `originalCursorPos`): the first move is it.
       if (!state.moveOriginUm) dispatch({ type: "SET_MOVE_ORIGIN", at: { x: sx, y: sy } });
       const origin = state.moveOriginUm ?? { x: sx, y: sy };
@@ -526,7 +560,9 @@ export function FootprintCanvas() {
     } else if (drag.kind === "move") {
       // Nothing is picked up until the press has become a drag (tool_dispatcher.cpp: 8 px, or on macOS a motion after 300 ms held).
       if (!motion?.dragging) return;
-      const [sx, sy] = snapPoint(wx, wy, heldGrid(drag.refs));
+      // `BestSnapAnchor( cursor, { active layer }, selection grid, selection )`, the cursor being the held point plus how far the pointer has travelled (kicad-port/heldCursor.ts).
+      const c = snap.moveCursor(heldCursor(drag.snapOrigin, drag.startWorld, [wx, wy]), snapMods(e), drag.refs, heldCategory(drag.refs));
+      const [sx, sy] = [c[0], c[1]];
       const origin = state.moveOriginUm ?? { x: sx, y: sy };
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxUm: sx - origin.x, dyUm: sy - origin.y } });
     }

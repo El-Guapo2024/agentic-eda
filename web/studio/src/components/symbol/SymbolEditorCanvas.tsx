@@ -18,10 +18,13 @@ import { useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../st
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
 import { paintSymbol, mmPointToUm, umPointToMm, toLibPin, IDENTITY, type SymShapeKind } from "./symbolPainter";
 import { resolvePin } from "../schematic/transform";
-import { snapPoint } from "../canvas/gridHelper";
 import { useGridSettings } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
+import { heldCursor } from "../../kicad-port/heldCursor";
+import { SymbolSnap, type SymbolSnapMods } from "./symbolSnap";
+import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
+import { layerColor } from "../canvas/layers";
 import { handleWheel, type WheelInput } from "../../kicad-port/viewControls";
 import { useWheelPrefs } from "../../actions/useWheelPrefs";
 import { useNonPassiveWheel } from "../../hooks/useNonPassiveWheel";
@@ -117,7 +120,7 @@ function pinHitDistance(pin: LibrarySymbolPin, wx: number, wy: number): number {
   return distToSegment(wx, wy, rp.root[0], rp.root[1], rp.tip[0], rp.tip[1]);
 }
 
-type DragState = { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic"; startWorld: [number, number] };
+type DragState = { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic"; startWorld: [number, number]; snapOrigin: [number, number] };
 
 function symbolGraphicFromDraw(kind: SymShapeKind, ptsUm: [number, number][], unit: number, bodyStyle: number): LibrarySymbolGraphic | null {
   const p = (i: number) => umPointToMm(ptsUm[i]![0], ptsUm[i]![1]);
@@ -161,11 +164,10 @@ export function SymbolEditorCanvas() {
   const gridList = useGridSettings("symbol").grids;
   const gridOverrides = useGridOverrides("symbol");
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridUm, gridList, gridOverrides);
-  const toolGrid = (): number => gridOf(toolCategory(state.activeTool));
-  /** `GetSelectionGrid`: the coarsest of the grids of what is held (a pin is a connectable item, a graphic is text or a shape). */
-  const heldGrid = (ids: readonly string[]): number => {
+  /** `GetSelectionGrid`: the category of the coarsest grid of what is held (a pin is a connectable item, a graphic is text or a shape). */
+  const heldCategory = (ids: readonly string[]): GridCategory => {
     const cats = ids.map((id): GridCategory => (api.pinById(id) ? "connectable" : api.graphicById(id)?.kind === "text" ? "text" : "graphics"));
-    return gridOf(selectionGrid(cats, gridOf));
+    return selectionGrid(cats, gridOf);
   };
   const { run } = useActionRunner();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -189,6 +191,27 @@ export function SymbolEditorCanvas() {
   const userMovedRef = useRef(false);
 
   const sym = state.symbol;
+
+  // The grid helper of the tool in force (kicad-port/schGridHelper.ts, symbolSnap.ts), kept fed with the view, the grid, the overrides and the pins of the unit being edited: a click goes
+  // to the grid, or -- with the grid off -- to the end of another pin, like `EE_GRID_HELPER::BestSnapAnchor`.
+  const snapRef = useRef<SymbolSnap | null>(null);
+  if (!snapRef.current) snapRef.current = new SymbolSnap();
+  const snap = snapRef.current;
+  const [snapTick, bumpSnap] = useState(0);
+  snap.update({ symbol: sym, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides });
+  useEffect(() => {
+    snap.reset();
+    bumpSnap((n) => n + 1);
+  }, [snap, state.activeTool]);
+  useEffect(() => () => snap.reset(), [snap]);
+  const snapMods = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }): SymbolSnapMods => ({ ctrl: isMac() ? e.metaKey : e.ctrlKey, shift: e.shiftKey });
+  /** The point a click of the tool in force goes to. */
+  const toolPoint = (e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }, wx: number, wy: number): [number, number] => {
+    const p = snap.point(state.activeTool, [wx, wy], snapMods(e), toolCategory(state.activeTool));
+    return [p[0], p[1]];
+  };
+  /** The tools that place something: the grid helper sees every move, so the marker and the snap lines follow the cursor. */
+  const placing = state.activeTool === "pin" || state.activeTool === "text" || state.activeTool === "anchor" || state.activeTool.startsWith("draw_");
 
   useEffect(() => {
     const container = containerRef.current;
@@ -265,16 +288,23 @@ export function SymbolEditorCanvas() {
       activeUnit: state.activeUnit,
       activeBodyStyle: state.activeBodyStyle,
       drawState: state.drawState,
-      cursorUm: state.cursorUm,
+      // the rubber band follows the cursor the grid helper gave (a snapped one), not the pointer
+      cursorUm: placing && snap.lastPoint() ? { x: snap.lastPoint()![0], y: snap.lastPoint()![1] } : state.cursorUm,
       movePreview: state.movePreview,
       showElectricalTypes: state.showElectricalTypes,
       showHiddenPins: state.showHiddenPins,
       showPinNumbers: state.showPinNumbers,
       pendingText: state.pendingText,
     });
+    // What the grid helper shows: the snap marker, the snap lines, the construction geometry.
+    const snapOverlay = snap.overlay();
+    if (snapOverlay) {
+      const k = state.view.scale || 1;
+      paintSnapOverlay(ctx, k, [-state.view.x / k, -state.view.y / k, (width - state.view.x) / k, (height - state.view.y) / k], snapOverlay, { marker: "#4aa3ff", construction: layerColor("anchor"), guideActive: layerColor("anchor"), guides: false });
+    }
     ctx.restore();
     ctx.restore();
-  }, [sym, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.pendingText, containerSize]);
+  }, [sym, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.pendingText, containerSize, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -373,7 +403,7 @@ export function SymbolEditorCanvas() {
     }
     if (e.button !== 0) return;
 
-    const [sx, sy] = snapPoint(wx, wy, toolGrid());
+    const [sx, sy] = placing ? toolPoint(e, wx, wy) : [wx, wy];
 
     if (state.activeTool === "pin" && sym) {
       // The pin just placed may not be in `sym.pins` yet (the document is re-polled after the round trip), so seed from it too:
@@ -435,9 +465,9 @@ export function SymbolEditorCanvas() {
       dispatch({ type: "SET_SELECTION", refs });
       if (refs.includes(hit.id)) {
         const held = refs.length > 1 ? refs : [hit.id];
-        dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy] };
-        // `GetSelectionGrid`: what is picked up snaps on its own grid.
-        const [ox, oy] = snapPoint(wx, wy, heldGrid(held));
+        // `BestDragOrigin`: the point of what is picked up that the move holds it by -- the nearest end of a pin to the pointer (else the pointer itself).
+        const [ox, oy] = snap.dragOrigin([wx, wy], held, heldCategory(held));
+        dragRef.current = { kind: "move", refs: held, moveKind: hit.kind, startWorld: [wx, wy], snapOrigin: [ox, oy] };
         dispatch({ type: "SET_MOVE_ORIGIN", at: { x: ox, y: oy } });
       }
     } else if (!hasModifier(modifiers)) {
@@ -449,6 +479,8 @@ export function SymbolEditorCanvas() {
     const [wx, wy] = worldAt(e);
     dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
     const motion = gestureRef.current?.move(e.clientX, e.clientY, e.timeStamp);
+    // The tools that place something: the grid helper sees every move, so the marker and the snap lines follow the cursor.
+    if (placing) toolPoint(e, wx, wy);
     const drag = dragRef.current;
     if (!drag) return;
     if (drag.kind === "pan") {
@@ -458,7 +490,9 @@ export function SymbolEditorCanvas() {
     } else if (drag.kind === "move") {
       // Nothing is picked up until the press has become a drag (tool_dispatcher.cpp: 8 px, or on macOS a motion after 300 ms held).
       if (!motion?.dragging) return;
-      const [sx, sy] = snapPoint(wx, wy, heldGrid(drag.refs));
+      // `BestSnapAnchor( cursor, selection grid, selection )`, the cursor being the held point plus how far the pointer has travelled (kicad-port/heldCursor.ts).
+      const c = snap.moveCursor(heldCursor(drag.snapOrigin, drag.startWorld, [wx, wy]), snapMods(e), drag.refs, heldCategory(drag.refs));
+      const [sx, sy] = [c[0], c[1]];
       const origin = state.moveOriginUm ?? { x: sx, y: sy };
       dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: drag.moveKind, dxUm: sx - origin.x, dyUm: sy - origin.y } });
     }
