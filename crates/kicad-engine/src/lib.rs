@@ -8,8 +8,10 @@
 //! read back as a design.
 //!
 //! There is one answer per question: DRC, ERC, plots, Gerbers, drill,
-//! position files, STEP, netlist and BOM all come from kicad-cli. Nothing
-//! in this workspace re-implements any of them.
+//! position files, STEP, netlist and BOM all come from kicad-cli, and so does
+//! reading a board or a schematic of another EDA format ([`foreign`]:
+//! `kicad-cli pcb import` and `sch import`). Nothing in this workspace
+//! re-implements any of them.
 //!
 //! The scratch directory is the caller's choice. The studio and the CLI
 //! pass `<board dir>/.kicad` (kept for inspection); the gates, which work
@@ -17,6 +19,9 @@
 //! removed afterwards).
 
 pub mod footprint_check;
+// Other EDA formats in: `kicad-cli pcb import` and `kicad-cli sch import` (docs/ARCHITECTURE.md, "Engines").
+pub mod foreign;
+pub use foreign::{import_foreign_pcb, import_foreign_sch, ForeignImport, ForeignOptions};
 
 use eda_kicad::zone_fills::KicadFills;
 use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
