@@ -5377,6 +5377,7 @@ pub mod episode;
 pub mod flash;
 pub mod sch_edit;
 pub mod sch_move;
+pub mod sch_pin_helpers;
 mod sch_pins;
 mod sch_labels;
 pub mod sch_net_collision;
@@ -5392,6 +5393,8 @@ mod sch_groups_tests;
 mod sch_fields_tests;
 #[cfg(test)]
 mod sch_user_fields_tests;
+#[cfg(test)]
+mod sch_pin_helpers_tests;
 #[cfg(test)]
 mod sch_body_style_tests;
 #[cfg(test)]

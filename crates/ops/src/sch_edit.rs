@@ -179,6 +179,15 @@ pub enum SchCmd {
     /// are placed by the manual routine (`AUTOPLACE_MANUAL`: beside the symbol, on a side that has no pins, clear of what is drawn around it) and stay
     /// autoplaced, so a later turn of the symbol places them again. Refused when every field is already where it would put them.
     AutoplaceFields { ids: Vec<String> },
+    /// Pin Helpers (`PIN_TRICKS_MENU`, `SCH_SELECTION_TOOL::Main` on `ID_POPUP_SCH_PIN_TRICKS_*`): `what` -- a wire stub, a no-connect, a local, a hierarchical or a global label --
+    /// on every pin (`pin:<reference>:<number>`) and sheet pin (`shpin_..`) of `pins`; anything else in the list is passed over, and a list with no pin in it is refused.
+    /// `grid` is the wire grid a stub is one step of (micrometres; 0 is 50 mil). One undo step.
+    PinHelper {
+        what: crate::sch_pin_helpers::PinHelper,
+        pins: Vec<String>,
+        #[serde(default)]
+        grid: Um,
+    },
     /// Add a user-defined field to a symbol (`DIALOG_SYMBOL_PROPERTIES::OnAddField`): `id` is the symbol's reference (every placed unit has the field), `name` the
     /// field's name (not one of the four standard fields and not one the symbol has, whatever the case) and `text` what it shows. It starts hidden, like a field
     /// KiCad adds (`SetVisible( false )`); show it, place it and move it as any field (`fld:<reference>:<name>`).
@@ -261,6 +270,7 @@ impl SchCmd {
             SchCmd::PlaceText { content, .. } => vec![content.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddUserField { id, .. } | SchCmd::RemoveUserField { id, .. } => vec![id.as_str()],
+            SchCmd::PinHelper { pins, .. } => pins.iter().map(String::as_str).collect(),
             SchCmd::SetStroke { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
@@ -293,6 +303,7 @@ impl SchCmd {
             SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
             SchCmd::EditField { id, .. } => format!("schematic edit-field {id}"),
             SchCmd::AutoplaceFields { ids } => format!("schematic autoplace-fields {}", ids.join(" ")),
+            SchCmd::PinHelper { what, pins, .. } => format!("schematic pin-helper {} {}", serde_json::to_value(what).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(), pins.join(" ")),
             SchCmd::AddUserField { id, name, .. } => format!("schematic field-add {id} {name:?}"),
             SchCmd::RemoveUserField { id, name } => format!("schematic field-remove {id} {name:?}"),
             SchCmd::EditText { id, .. } => format!("schematic edit-text {id}"),
@@ -321,7 +332,7 @@ impl SchCmd {
             SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
-            SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } => "schematic-pins",
+            SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } | SchCmd::PinHelper { .. } => "schematic-pins",
             SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } => "schematic-group",
         }
     }
@@ -379,6 +390,7 @@ impl<'a> Board<'a> {
                 },
             ),
             SchCmd::AutoplaceFields { ids } => self.autoplace_sch_fields(ids),
+            SchCmd::PinHelper { what, pins, grid } => self.pin_helper(*what, pins, *grid),
             SchCmd::AddUserField { id, name, text } => self.add_user_field(id, name, text),
             SchCmd::RemoveUserField { id, name } => self.remove_user_field(id, name),
             SchCmd::EditText { id, text, size_um, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle, *h, *v),

@@ -1032,7 +1032,7 @@ fn rotate_sheet_pin(sheet: &mut SheetInstance, pin: usize, before: &SheetInstanc
 }
 
 /// 0 top, 1 right, 2 bottom, 3 left.
-fn side_of(sheet: &SheetInstance, p: Point) -> u8 {
+pub(crate) fn side_of(sheet: &SheetInstance, p: Point) -> u8 {
     let (l, t, r, b) = (sheet.at.x, sheet.at.y, sheet.at.x + sheet.size.0, sheet.at.y + sheet.size.1);
     if p.x <= l {
         3
