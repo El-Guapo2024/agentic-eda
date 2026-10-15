@@ -73,6 +73,10 @@ use crate::sexpr::{self, Sexpr};
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ImportNotes {
     pub zones_skipped: usize,
+    /// Footprints whose `(transform ... (scale sx sy))` is not 1:1 (KiCad 10, [`crate::fp_transform`]): the model has no footprint scale, so they are
+    /// read at 1:1.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footprints_scaled: Vec<String>,
     /// Always 0 now: an Edge.Cuts arc is kept as an arc ([`Self::outline_shapes`]), not tessellated into the outline's straight segments.
     /// (Kept so an `ImportNotes` written by an older build still reads.)
     pub track_arcs_approximated: usize,
@@ -124,14 +128,16 @@ pub struct ImportNotes {
 /// model. See the module docs for exactly what is ported vs. approximated
 /// vs. dropped (reported in the returned [`ImportNotes`]).
 pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNotes), Vec<CheckResult>> {
-    let tree = sexpr::parse(text)
+    let mut tree = sexpr::parse(text)
         .map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
+    // KiCad 10's footprint `(transform ...)` and library-frame footprint zones, rewritten into the layout the readers below take (`fp_transform`).
+    let footprints_scaled = crate::fp_transform::normalize(&mut tree);
     let root = tree
         .as_list()
         .filter(|l| sexpr::tag(l) == Some("kicad_pcb"))
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_board", "file", "top-level form is not (kicad_pcb ...); not a KiCad PCB file")])?;
 
-    let mut notes = ImportNotes::default();
+    let mut notes = ImportNotes { footprints_scaled, ..ImportNotes::default() };
 
     let layers = import_layers(root);
     let net_names = import_net_names(root);

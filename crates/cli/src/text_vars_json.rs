@@ -238,7 +238,9 @@ impl SchShown {
             page,
             page_count: entries.len(),
             sheet_path,
-            sheet_name: breadcrumb.last().map(|(_, n)| n.clone()).unwrap_or_default(),
+            // The root sheet has no name of its own; kicad-cli calls it "Root" ("Make ${SHEETNAME} work on the root sheet until we properly
+            // support naming it", `EESCHEMA_HELPERS::LoadSchematic`), and every plot and export is kicad-cli's, so the studio reads it the same.
+            sheet_name: breadcrumb.last().map(|(_, n)| n.clone()).unwrap_or_else(|| "Root".to_string()),
             file_name: format!("{stem}.kicad_sch"),
             file_path: dir.join(".kicad").join(format!("{stem}.kicad_sch")).display().to_string(),
             symbols,

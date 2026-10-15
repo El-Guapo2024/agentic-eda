@@ -34,6 +34,7 @@ pub use pcb::{custom_erc_pin_map, effective_rule_severities, export_kicad_pcb, e
 mod sexpr;
 mod page;
 mod import;
+mod fp_transform;
 mod import_items;
 pub use import::{import_kicad_pcb, merge_project_design_rules, merge_project_net_classes, merge_project_rule_severities, merge_project_setup_pages, mm_to_um, parse_project_net_classes, parse_rule_severities, ImportNotes};
 
@@ -72,6 +73,7 @@ pub use sch_clipboard::{parse_clipboard, write_clipboard, CopyInput, CopyOutput}
 mod sch_extras_io;
 pub mod sch_overlap;
 mod sch_import;
+mod sch_crossref;
 mod sheet_file;
 pub use sheet_file::load_sheet_file;
 pub use sch_import::{import_kicad_sch, import_kicad_sch_tree, import_kicad_sch_tree_with, import_kicad_sch_with, pin_kind_from_electrical_type, reconcile, transform_local_point, ImportOptions};
@@ -149,7 +151,10 @@ pub fn export_kicad_sch(
     model: &ConstraintModel,
     meta: &ExportMeta,
 ) -> Result<String, Vec<CheckResult>> {
-    export_screen(design, model, meta, &ScreenCtx::root())
+    let mut files = vec![(String::new(), export_screen(design, model, meta, &ScreenCtx::root())?)];
+    // Symbol cross-references the way KiCad stores them (`sch_crossref`).
+    sch_crossref::refs_to_kiids(&mut files);
+    Ok(files.pop().map(|(_, text)| text).unwrap_or_default())
 }
 
 fn export_screen(design: &Design, model: &ConstraintModel, meta: &ExportMeta, ctx: &ScreenCtx) -> Result<String, Vec<CheckResult>> {
@@ -698,6 +703,8 @@ pub fn export_kicad_sch_tree(design: &Design, model: &ConstraintModel, meta: &Ex
             out.push((file.clone(), export_screen(&child_design, model, &child_meta, &ctx)?));
         }
     }
+    // Symbol cross-references the way KiCad stores them, across the files (`sch_crossref`).
+    sch_crossref::refs_to_kiids(&mut out);
     Ok(out)
 }
 

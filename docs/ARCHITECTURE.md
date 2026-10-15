@@ -69,15 +69,24 @@ never edited as masters.
     rules, the design's own ERC pin map and the `.kicad_dru` an import brought,
     and ignores the library-link checks (every footprint and symbol is
     embedded, so there is no library to compare it with).
+  - **kicad-cli never reads the user's KiCad settings.** Every run goes through
+    `eda_kicad_engine::cli_command`, which points `KICAD_CONFIG_HOME` at a
+    settings folder of ours (KiCad writes its defaults there on first use), so
+    a DRC, an ERC or an export answers the same on every machine whatever the
+    user's library tables, path variables or colour themes say, and skips
+    loading the global library tables (a 30-part DRC: 1.5 s instead of 6 s).
+    A project that turns a library check back on gets a second folder with a
+    fresh install's tables. `EDA_KICAD_CONFIG_HOME` moves the folders;
+    `EDA_KICAD_USER_CONFIG=1` gives kicad-cli the user's settings back.
   - **Zone fill is KiCad's, through kicad-cli, and nobody else's** (decided
     2026-10-13: there is no zone filler in this workspace; `crates/zone-filler`
     is deleted). Fill All Zones (B, `POST /api/fill/kicad`, `eda board fill`)
     runs `kicad-cli pcb drc --refill-zones --save-board` on a COPY of the
     derived board (`.kicad/refill/`: the project's rules, none of the board's
-    library tables, every DRC check ignored, `KICAD_CONFIG_HOME` an empty
-    folder: a DRC job does not start before the global footprint libraries are
-    enumerated, 5 s of a 7 s run, and a fill needs none of them; 2 to 3 s on a
-    30-part board) and reads each zone's `(filled_polygon ..)` back
+    library tables, every DRC check ignored, so `cli_command` gives it the empty
+    settings folder: a DRC job does not start before the global footprint
+    libraries are enumerated, 5 s of a 7 s run, and a fill needs none of them;
+    2 to 3 s on a 30-part board) and reads each zone's `(filled_polygon ..)` back
     (`eda_kicad::zone_fills`: nanometres, `(island yes)` kept). The fills are
     derived data beside `design.json`, never in it: `.kicad/zone_fills.json`,
     per zone with a fingerprint of the zone filled (outline, layers, net,
