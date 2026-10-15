@@ -15,11 +15,12 @@
 //!
 //! with the position in nanometres (the schematic's internal unit is a nanometre now, and kicad-cli's report prints millimetres as they are), the
 //! sheet paths as the uuids from the root sheet down, and each path field there only when the check's marker sets it. That nightly reads an old
-//! pipe-delimited text as a legacy entry and drops it, so none is written. A record that matches no marker is not dropped: kicad-cli turns it into
-//! an excluded marker of its own and its report lists it beside the real violation (with the same items, when they resolve). So a record may go into
-//! the project only when it is known to the letter, and this module says it only for the checks whose markers it has read the source of
-//! (`eeschema/erc/erc.cpp`, `eeschema/connection_graph.cpp`) and probed against kicad-cli; any other exclusion stays the studio's alone, as a DRC
-//! exclusion does when the report cannot say where its marker is.
+//! pipe-delimited text only out of a section that says it is at schema 0 (with the position in the old unit, a hundred nanometres) and drops it from any
+//! other, so none is written: the project lists the records, and its `erc` section says they are at schema 1 (`export_kicad_pro_for`). A record that
+//! matches no marker is not dropped: kicad-cli turns it into an excluded marker of its own and its report lists it beside the real violation (with the
+//! same items, when they resolve). So a record may go into the project only when it is known to the letter, and this module says it only for the checks
+//! whose markers it has read the source of (`eeschema/erc/erc.cpp`, `eeschema/connection_graph.cpp`) and probed against kicad-cli; any other exclusion
+//! stays the studio's alone, as a DRC exclusion does when the report cannot say where its marker is.
 //!
 //! What kicad-cli's report (`ERC_REPORT::WriteJsonReport`) gives is the items' uuids and positions, and the path of the sheet it lists the
 //! violation under -- `MainItemHasSheetPath() ? GetMainItemSheetPath() : sheetList[0]`. The rest of the record depends on the check: which of the

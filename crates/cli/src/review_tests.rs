@@ -58,7 +58,7 @@ fn kicad_cli_lists(dir: &Path, severities: &[&str], check: &str) -> Vec<(bool, S
     let sch = dir.join(".kicad").join("board.kicad_sch");
     let out = dir.join(".kicad").join("direct-erc.json");
     let _ = std::fs::remove_file(&out);
-    let ran = std::process::Command::new(cli).args(["sch", "erc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&sch).output().expect("kicad-cli runs");
+    let ran = eda_kicad_engine::cli_command(&cli, None).args(["sch", "erc", "--format", "json", "--units", "mm"]).args(severities).arg("-o").arg(&out).arg(&sch).output().expect("kicad-cli runs");
     assert!(out.exists(), "kicad-cli wrote no report: {}{}", String::from_utf8_lossy(&ran.stdout), String::from_utf8_lossy(&ran.stderr));
     let report: Value = serde_json::from_str(&std::fs::read_to_string(&out).unwrap()).unwrap();
     report["sheets"]

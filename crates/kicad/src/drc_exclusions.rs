@@ -10,8 +10,9 @@
 //!   "comment": "..." }
 //! ```
 //!
-//! (and a `layer` for a marker that has one). That nightly reads an old pipe-delimited text as a legacy entry and drops it, so none is written. A
-//! record no marker matches is dropped when the board loads.
+//! (and a `layer` for a marker that has one). That nightly reads an old pipe-delimited text only out of a section that says it is at schema 2 or less
+//! (`BOARD_DESIGN_SETTINGS::migrateSchema2to3` turns it into this record) and drops it from any other, so none is written: the project lists the records, and
+//! its design settings say they are at schema 3 (`export_kicad_pro_for`). A record no marker matches is dropped when the board loads.
 //!
 //! The position is the catch: kicad-cli's report (`DRC_REPORT::WriteJsonReport`) says where the *items* of a violation are
 //! (`EDA_ITEM::GetPosition`), never where the marker is, and most checks put the marker somewhere of their own (the contact point of

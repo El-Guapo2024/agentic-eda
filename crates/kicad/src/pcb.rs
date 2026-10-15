@@ -790,14 +790,19 @@ pub fn effective_erc_severities(design: &Design) -> BTreeMap<String, String> {
     severities
 }
 
+/// The schema `board.design_settings` is at when it lists its exclusions as records: 3 (`BOARD_DESIGN_SETTINGS::migrateSchema2to3` is the step that makes them).
+const DRC_EXCLUSION_RECORDS_SCHEMA: u32 = 3;
+/// The schema the `erc` section is at when it lists its exclusions as records: 1 (a section at 0 lists pipe-delimited texts).
+const ERC_EXCLUSION_RECORDS_SCHEMA: u32 = 1;
+
 /// [`export_kicad_pro`] plus the parts of the project the design's own data decides:
 ///
 /// - `erc`: the design's own pin map, so kicad-cli's ERC judges pin conflicts by the matrix the user set up and not only by KiCad's
 ///   default, and the per-check severities ([`effective_erc_severities`]);
 /// - `schematic.connection_grid_size`: Schematic Setup's connection grid, in mils, when it is not KiCad's default;
-/// - `erc.erc_exclusions`: the ERC findings the user waived, whose marker text is known ([`crate::erc_exclusions`]), with their comments;
-/// - `board.design_settings.drc_exclusions`: the violations the user waived ([`crate::drc_exclusions`]), so kicad-cli reports each as
-///   excluded and leaves it out of a report that does not ask for exclusions.
+/// - `erc.erc_exclusions`: the ERC findings the user waived, whose marker is known ([`crate::erc_exclusions`]), with their comments, as records at the schema that has them;
+/// - `board.design_settings.drc_exclusions`: the violations the user waived ([`crate::drc_exclusions`]), as records at the schema that has them, so kicad-cli
+///   reports each as excluded and leaves it out of a report that does not ask for exclusions.
 pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String {
     let mut project: serde_json::Value = serde_json::from_str(&export_kicad_pro(model)).unwrap_or_else(|_| serde_json::json!({}));
     let mut erc = serde_json::json!({ "rule_severities": effective_erc_severities(design) });
@@ -811,15 +816,21 @@ pub fn export_kicad_pro_for(design: &Design, model: &ConstraintModel) -> String 
     let waived_erc = crate::erc_exclusions::project_entries(design.schematic.as_ref().map_or(&[][..], |s| s.erc_exclusions.as_slice()));
     if !waived_erc.is_empty() {
         erc["erc_exclusions"] = serde_json::Value::Array(waived_erc);
+        // The entries are structured records (`kiapi.schematic.ErcExclusion`), the form of a section at schema 1; at schema 0 -- what a section that says so is, and
+        // what KiCad before the change wrote -- an entry is a pipe-delimited text, and a record is not read. So the section says which it is (measured on
+        // kicad-cli 10.99.0-5334: records are read at 1, 2, 3 and without a version, texts only at 0).
+        erc["meta"] = serde_json::json!({ "version": ERC_EXCLUSION_RECORDS_SCHEMA });
     }
     project["erc"] = erc;
     let waived = crate::drc_exclusions::project_entries(design.drawings.as_ref().map_or(&[][..], |d| d.drc_exclusions.as_slice()));
     if !waived.is_empty() {
         project["board"]["design_settings"]["drc_exclusions"] = serde_json::Value::Array(waived);
-        // The entries are the pipe-delimited strings `PCB_MARKER::FromLegacyString` reads. A newer KiCad keeps them as ProtoJSON and reads the strings only
-        // through the schema migration from 2 to 3 (`BOARD_DESIGN_SETTINGS::migrateSchema2to3`, 10.99 by build 5334), which runs only for a file that says it
-        // is at 2; a section without a version reads as current and its strings are dropped. Version 2 is also what a KiCad from before the change is at.
-        project["board"]["design_settings"]["meta"] = serde_json::json!({ "version": 2 });
+        // The entries are structured records (`kiapi.board.DrcExclusion`), the form of a section at schema 3. A section that says it is at 2 or less is what KiCad
+        // before the change wrote: its entries are pipe-delimited texts, which 10.99 by build 5334 turns into records on load (`BOARD_DESIGN_SETTINGS::migrateSchema2to3`)
+        // and reads nothing else from; a section without a version is read as current, and a text in it is dropped. So the section says which it is, and the studio
+        // writes the records alone, not a text for a migration to convert (measured on kicad-cli 10.99.0-5334: records are read at 2, 3, 4 and without a version,
+        // texts only at 2 or less).
+        project["board"]["design_settings"]["meta"] = serde_json::json!({ "version": DRC_EXCLUSION_RECORDS_SCHEMA });
     }
     // The Text Variables page (`PROJECT::GetTextVars`, the project file's `text_variables`): once it has been used it is the project's whole set, and kicad-cli expands
     // `${NAME}` in the plots, the reports and the DRC from it. Until then the board folder's variables are the project's (`library_table::derive_project`).
@@ -1416,6 +1427,7 @@ mod tests {
         let (mut design, model) = fixture();
         let plain: serde_json::Value = serde_json::from_str(&export_kicad_pro_for(&design, &model)).expect("valid json");
         assert!(plain["board"]["design_settings"]["drc_exclusions"].is_null(), "nothing waived: the key is not written");
+        assert!(plain["board"]["design_settings"]["meta"].is_null() && plain["erc"]["meta"].is_null(), "and neither section says which schema it is at");
         assert_eq!(plain["erc"]["rule_severities"].as_object().map(|o| o.len()), Some(2), "only the two library checks, which are always ignored");
 
         design.drawings = Some(DrawingsSection {
@@ -1447,6 +1459,8 @@ mod tests {
         assert_eq!(entries.len(), 1, "an exclusion with no position to try is the studio's alone: {entries:?}");
         assert_eq!(entries[0]["marker"], serde_json::json!({ "errorType": "DRCET_ANNULAR_WIDTH", "position": { "xNm": "12459000", "yNm": "18390000" }, "items": [{ "value": "via-uuid" }] }));
         assert_eq!(entries[0]["comment"], "tight on purpose");
+        assert_eq!(json["board"]["design_settings"]["meta"], serde_json::json!({ "version": 3 }), "records are what a board's design settings at schema 3 list (at 2 they are texts)");
+        assert_eq!(json["erc"]["meta"], serde_json::json!({ "version": 1 }), "and what an erc section at schema 1 lists (at 0 they are texts)");
         assert!(json["schematic"]["connection_grid_size"].is_null(), "KiCad's default grid is not written");
         let waived = json["erc"]["erc_exclusions"].as_array().expect("a list");
         assert_eq!(waived.len(), 1, "an ERC exclusion whose marker is not known is the studio's alone: {waived:?}");

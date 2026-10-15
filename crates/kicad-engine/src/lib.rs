@@ -1135,7 +1135,7 @@ pub fn erc_report(design: &Design, model: &ConstraintModel, work: &Path, opts: &
     let cli = need_cli()?;
     let (sch, _) = export_schematic(design, model, work, "board")?;
     let out = work.join(format!("erc-report.{}", opts.extension()));
-    let mut cmd = Command::new(&cli);
+    let mut cmd = cli_command(&cli, Some(&sch.with_extension("kicad_pro")));
     cmd.args(["sch", "erc"]).args(opts.args()).arg("-o").arg(&out).arg(&sch);
     Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text: run_saved_report(cmd, &out, "erc")? })
 }
@@ -1152,7 +1152,7 @@ pub fn drc_report(design: &Design, model: &ConstraintModel, work: &Path, drc: Dr
         export_schematic(design, model, work, "board")?;
     }
     let out = work.join(format!("drc-report.{}", opts.extension()));
-    let mut cmd = Command::new(&cli);
+    let mut cmd = cli_command(&cli, Some(&pcb.with_extension("kicad_pro")));
     cmd.args(["pcb", "drc"]).args(opts.args());
     if drc.refill_zones {
         cmd.arg("--refill-zones");
