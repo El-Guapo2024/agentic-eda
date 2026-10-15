@@ -110,7 +110,7 @@ export function LibrarySymbolPropertiesDialog() {
           <span>{subject.lib_id}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "74vh", overflowY: "auto" }}>
-          <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={setError} />
+          <SymbolFieldsGrid rows={rows} onChange={setRows} parentName={parent ? bareName(parent) : undefined} onError={setError} initialField={state.propertiesField} />
           <div className="kv-grid" style={{ gridTemplateColumns: "180px 1fr", marginTop: 10 }}>
             <span>Keywords</span>
             <input value={form.keywords} onChange={(e) => set("keywords", e.target.value)} style={{ width: 300 }} data-testid="props-keywords" />

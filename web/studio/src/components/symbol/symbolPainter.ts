@@ -16,7 +16,7 @@
 // able to disagree. Only the grid/anchor/in-progress-draw/move-preview
 // chrome below is new, mirroring `components/footprint/footprintPainter
 // .ts`'s own small set of editor-only additions to its own board painter.
-import type { LibPin, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
+import type { LibPin, LibrarySymbolGraphic, LibrarySymbolPin, SchField } from "../../api/types";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineUm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
@@ -24,7 +24,9 @@ import { drawPinDecoration, drawPinText, drawRealGraphic } from "../schematic/pa
 import type { ResolvedGraphic } from "../schematic/libSymbol";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix } from "../schematic/transform";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
-import { drawStrokeText } from "../text/strokeFont";
+import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { defaultPenUm, textOrigin, FIELD_SIZE_UM } from "../../kicad-port/schText";
+import { shownText } from "../../kicad-port/schFieldEdit";
 import { electricalTypeLayout, pinLabelsShown, pinShown } from "../../kicad-port/symPinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
 
@@ -162,6 +164,28 @@ export interface SymPaintOptions {
   showPinNumbers: boolean;
   /** The Text tool's text between its dialog and the placing click: it follows the cursor (`SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace`). */
   pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
+  /** The symbol's fields that are on show (kicad-port/symFieldLayout.ts `fieldsOnShow`: the ones with a text, the hidden ones only while Show Hidden Fields is on). */
+  fields?: SchField[];
+}
+
+/** The colour KiCad draws a field of that name in (`SCH_PAINTER::draw( SCH_FIELD )`): the reference, the value, or a field's own. */
+function fieldColor(name: string): string {
+  return layerColor(name === "Reference" ? "LAYER_REFERENCEPART" : name === "Value" ? "LAYER_VALUEPART" : "LAYER_FIELDS");
+}
+
+/** One field where KiCad puts it: the anchor, the justification in the text's own axes, a text at 90 degrees turned a quarter counter-clockwise about its anchor. */
+function drawField(ctx: CanvasRenderingContext2D, f: SchField, color: string) {
+  const text = shownText(f);
+  if (!text) return;
+  const sizeUm = f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM;
+  // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
+  const thickness = f.bold ? Math.round(sizeUm / 5) : defaultPenUm(sizeUm);
+  const [dx, dy] = textOrigin(measureStrokeText(text, sizeUm), sizeUm, thickness, f.h, f.v);
+  ctx.save();
+  ctx.translate(f.at[0], f.at[1]);
+  if (f.vertical) ctx.rotate(-Math.PI / 2);
+  drawStrokeText(ctx, text, dx, dy, { sizeUm, thicknessUm: thickness, justify: "left", color, italic: f.italic });
+  ctx.restore();
 }
 
 export function paintSymbol(
@@ -221,6 +245,15 @@ export function paintSymbol(
       if (l.vertical) drawStrokeText(ctx, l.text, l.at[0] + shift, l.at[1], { sizeUm: l.sizeUm, thicknessUm: l.thicknessUm, angleRad: -Math.PI / 2, justify: l.justify, color });
       else drawStrokeText(ctx, l.text, l.at[0], l.at[1] + shift, { sizeUm: l.sizeUm, thicknessUm: l.thicknessUm, justify: l.justify, color });
     }
+    ctx.restore();
+  }
+
+  // The fields (`SCH_FIELD` items of the symbol): a field that is not shown is drawn, in the hidden-items colour, because the list holds it only while Show Hidden Fields is on.
+  for (const f of opts.fields ?? []) {
+    const mv = moved(f.id);
+    ctx.save();
+    if (mv) ctx.translate(mv.dxUm, mv.dyUm);
+    drawField(ctx, f, opts.selection.has(f.id ?? "") ? layerColor("selection") : !f.visible ? hiddenColor : fieldColor(f.name));
     ctx.restore();
   }
 

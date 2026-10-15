@@ -103,7 +103,7 @@
     "common.Control.cursor45Crosshairs": "supported",
     "eeschema.SymbolLibraryControl.showElectricalTypes": "supported",
     "eeschema.SymbolLibraryControl.showHiddenPins": "supported",
-    "eeschema.SymbolLibraryControl.showHiddenFields": "not ported: a library symbol's fields are all listed in its properties",
+    "eeschema.SymbolLibraryControl.showHiddenFields": "supported",
     "common.Control.showLibraryTree": "supported",
     "common.Control.showProperties": "not ported: the symbol editor has no Properties pane yet (the Symbol and Pin Properties dialogs are there)",
     "common.InteractiveSelection.selectionTool": "supported",

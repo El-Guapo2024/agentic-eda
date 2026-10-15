@@ -12,7 +12,7 @@
 // already happens once, up front, this file's own `screenToWorld`/
 // `worldToScreen` calls are completely ordinary -- no second Y-flip
 // belongs here.
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LibraryFill, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState, type SymToolId } from "../../state/symbolEditorStore";
 import { boundsOfPoints, fitTransform, screenToWorld } from "../../kicad-port/view";
@@ -22,6 +22,9 @@ import { useGridSettings } from "../../state/gridSettings";
 import { useGridOverrides } from "../../state/gridOverrides";
 import { gridSizeFor, selectionGrid, type GridCategory } from "../../kicad-port/gridOverrides";
 import { heldCursor } from "../../kicad-port/heldCursor";
+import { allFields } from "../../kicad-port/symFields";
+import { fieldsOnShow, hitLibField, libFieldName } from "../../kicad-port/symFieldLayout";
+import { measureStrokeText } from "../text/strokeFont";
 import { SymbolSnap, type SymbolSnapMods } from "./symbolSnap";
 import { paintSnapOverlay } from "../canvas/snapOverlayPainter";
 import { layerColor } from "../canvas/layers";
@@ -120,7 +123,7 @@ function pinHitDistance(pin: LibrarySymbolPin, wx: number, wy: number): number {
   return distToSegment(wx, wy, rp.root[0], rp.root[1], rp.tip[0], rp.tip[1]);
 }
 
-type DragState = { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic"; startWorld: [number, number]; snapOrigin: [number, number] };
+type DragState = { kind: "pan"; button: 1 | 2; startScreen: [number, number]; startView: [number, number] } | { kind: "move"; refs: string[]; moveKind: "pin" | "graphic" | "field"; startWorld: [number, number]; snapOrigin: [number, number] };
 
 function symbolGraphicFromDraw(kind: SymShapeKind, ptsUm: [number, number][], unit: number, bodyStyle: number): LibrarySymbolGraphic | null {
   const p = (i: number) => umPointToMm(ptsUm[i]![0], ptsUm[i]![1]);
@@ -166,7 +169,7 @@ export function SymbolEditorCanvas() {
   const gridOf = (c: GridCategory): number => gridSizeFor(c, state.gridUm, gridList, gridOverrides);
   /** `GetSelectionGrid`: the category of the coarsest grid of what is held (a pin is a connectable item, a graphic is text or a shape). */
   const heldCategory = (ids: readonly string[]): GridCategory => {
-    const cats = ids.map((id): GridCategory => (api.pinById(id) ? "connectable" : api.graphicById(id)?.kind === "text" ? "text" : "graphics"));
+    const cats = ids.map((id): GridCategory => (api.pinById(id) ? "connectable" : libFieldName(id) || api.graphicById(id)?.kind === "text" ? "text" : "graphics"));
     return selectionGrid(cats, gridOf);
   };
   const { run } = useActionRunner();
@@ -191,6 +194,8 @@ export function SymbolEditorCanvas() {
   const userMovedRef = useRef(false);
 
   const sym = state.symbol;
+  /** The fields on show: the symbol's own list, those with a text, the hidden ones only while Show Hidden Fields is on (kicad-port/symFieldLayout.ts). */
+  const shownFields = useMemo(() => (sym ? fieldsOnShow(allFields(sym), state.showHiddenFields, state.activeUnit, sym.unit_count) : []), [sym, state.showHiddenFields, state.activeUnit]);
 
   // The grid helper of the tool in force (kicad-port/schGridHelper.ts, symbolSnap.ts), kept fed with the view, the grid, the overrides and the pins of the unit being edited: a click goes
   // to the grid, or -- with the grid off -- to the end of another pin, like `EE_GRID_HELPER::BestSnapAnchor`.
@@ -198,7 +203,7 @@ export function SymbolEditorCanvas() {
   if (!snapRef.current) snapRef.current = new SymbolSnap();
   const snap = snapRef.current;
   const [snapTick, bumpSnap] = useState(0);
-  snap.update({ symbol: sym, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides });
+  snap.update({ symbol: sym, fields: shownFields, unit: state.activeUnit, bodyStyle: state.activeBodyStyle, showHiddenPins: state.showHiddenPins, scale: state.view.scale, gridUm: state.gridUm, grids: gridList, overrides: gridOverrides });
   useEffect(() => {
     snap.reset();
     bumpSnap((n) => n + 1);
@@ -295,6 +300,7 @@ export function SymbolEditorCanvas() {
       showHiddenPins: state.showHiddenPins,
       showPinNumbers: state.showPinNumbers,
       pendingText: state.pendingText,
+      fields: shownFields,
     });
     // What the grid helper shows: the snap marker, the snap lines, the construction geometry.
     const snapOverlay = snap.overlay();
@@ -304,7 +310,7 @@ export function SymbolEditorCanvas() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sym, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.pendingText, containerSize, snapTick]);
+  }, [sym, shownFields, state.view, state.selection, state.gridUm, state.gridVisible, state.activeUnit, state.activeBodyStyle, state.drawState, state.cursorUm, state.movePreview, state.showElectricalTypes, state.showHiddenPins, state.showPinNumbers, state.pendingText, containerSize, snapTick]);
 
   const worldAt = useCallback(
     (e: { clientX: number; clientY: number }): [number, number] => {
@@ -316,7 +322,7 @@ export function SymbolEditorCanvas() {
 
   /** Topmost pin/graphic under a world point, pins first (connection points read above body art, same tier `FootprintCanvas.tsx`'s own pad-first hit test uses) -- restricted to whichever unit/body-style is currently being edited, same filter the painter itself applies. */
   const hitTest = useCallback(
-    (wx: number, wy: number): { kind: "pin" | "graphic"; id: string } | null => {
+    (wx: number, wy: number): { kind: "pin" | "graphic" | "field"; id: string } | null => {
       if (!sym) return null;
       const visible = (unit: number, bodyStyle: number) => (unit === 0 || unit === state.activeUnit) && (bodyStyle === 0 || bodyStyle === state.activeBodyStyle);
       const tol = Math.max(80, 6 / state.view.scale);
@@ -325,13 +331,16 @@ export function SymbolEditorCanvas() {
         // A hidden pin that is not drawn cannot be picked (`IsShowingHiddenPins`).
         if (p.id && pinShown(p.hidden, state.showHiddenPins) && visible(p.unit, p.body_style) && pinHitDistance(p, wx, wy) <= tol) return { kind: "pin", id: p.id };
       }
+      // A field that is on show: its box (`SCH_FIELD::HitTest`); a hidden one is there to pick only while Show Hidden Fields is on, as it is drawn only then.
+      const field = hitLibField(shownFields, wx, wy, Math.max(40, 3 / state.view.scale), measureStrokeText);
+      if (field) return { kind: "field", id: field };
       for (let i = sym.graphics.length - 1; i >= 0; i--) {
         const g = sym.graphics[i]!;
         if (g.id && visible(g.unit, g.body_style) && graphicHitDistance(g, wx, wy) <= tol) return { kind: "graphic", id: g.id };
       }
       return null;
     },
-    [sym, state.view.scale, state.activeUnit, state.activeBodyStyle, state.showHiddenPins]
+    [sym, shownFields, state.view.scale, state.activeUnit, state.activeBodyStyle, state.showHiddenPins]
   );
 
   const finishDraw = useCallback(() => {
@@ -517,8 +526,14 @@ export function SymbolEditorCanvas() {
           });
           void api.movePins(moves);
         } else {
-          for (const id of refs) void api.moveGraphic(id, dxMm, dyMm);
+          for (const id of refs) if (!libFieldName(id)) void api.moveGraphic(id, dxMm, dyMm);
         }
+        // the fields among what was held (`SCH_FIELD`s move with the rest): one verb for the lot
+        const fieldNames = refs.flatMap((id) => {
+          const n = libFieldName(id);
+          return n ? [n] : [];
+        });
+        if (fieldNames.length > 0) void api.moveFields(fieldNames, dxMm, dyMm);
       }
     }
   };
@@ -542,6 +557,8 @@ export function SymbolEditorCanvas() {
     const [wx, wy] = worldAt(e);
     const hit = hitTest(wx, wy);
     if (hit?.kind === "pin") dispatch({ type: "SET_PIN_PROPERTIES_ID", id: hit.id });
+    // a field opens Symbol Properties on its row (`DIALOG_LIB_SYMBOL_PROPERTIES` with the field's row selected)
+    else if (hit?.kind === "field") dispatch({ type: "SET_PROPERTIES_OPEN", open: true, field: libFieldName(hit.id) ?? undefined });
   };
 
   const rotatePinSelection = useCallback(

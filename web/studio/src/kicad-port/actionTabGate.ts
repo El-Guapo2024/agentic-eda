@@ -63,6 +63,8 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
   // `SYMBOL_EDITOR_EDIT_TOOL`'s stacked-pin tools.
   "eeschema.InteractiveEdit.convertStackedPins",
   "eeschema.InteractiveEdit.explodeStackedPin",
+  // View > Show Pin Alternate Icons (`SYMBOL_EDITOR_CONTROL::TogglePinAltIcons`): a pin of a library symbol has alternates, a pin of a placed symbol is read from the engine's table, which has none.
+  "eeschema.EditorControl.togglePinAltIcons",
 ]);
 
 /**

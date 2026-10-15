@@ -1,7 +1,7 @@
 // The Symbol Editor's snapping, as its canvas uses it: the grid helper of the tool in force (kicad-port/schGridHelper.ts, a port of EE_GRID_HELPER) kept fed with the view, the grid
 // list and its overrides and the items of the unit being edited (kicad-port/symSnapItems.ts), answering "where does a click here go?" and, for a move, "where does the held selection
 // start from and where does it go?". The same object the schematic's canvas uses (components/schematic/schSnap.ts), with the library symbol as the sheet.
-import type { LibrarySymbol } from "../../api/types";
+import type { LibrarySymbol, SchField } from "../../api/types";
 import { SchGridHelper, type SchSnapItem } from "../../kicad-port/schGridHelper";
 import { symbolSnapItems } from "../../kicad-port/symSnapItems";
 import { computeVisibleGridSize } from "../../kicad-port/grid";
@@ -13,6 +13,8 @@ import { reportSnap } from "../../kicad-port/snapReport";
 /** What the snapping needs to know about the editor; the canvas hands it over on every render. */
 export interface SymbolSnapView {
   symbol: LibrarySymbol | null;
+  /** The symbol's fields on show (`SCH_FIELD`s are items to hold a move by, `computeAnchors`' text case). */
+  fields?: readonly SchField[];
   unit: number;
   bodyStyle: number;
   showHiddenPins: boolean;
@@ -42,15 +44,17 @@ export class SymbolSnap {
   private items: SchSnapItem[] = [];
   private signature = "";
   private seen: LibrarySymbol | null = null;
+  private seenFields: readonly SchField[] | undefined;
 
   update(view: SymbolSnapView): void {
     this.view = view;
     const key = `${view.unit}|${view.bodyStyle}|${view.showHiddenPins}`;
-    if (view.symbol === this.seen && key === this.key) return;
+    if (view.symbol === this.seen && view.fields === this.seenFields && key === this.key) return;
     this.seen = view.symbol;
+    this.seenFields = view.fields;
     this.key = key;
     // The editor re-reads the symbol every moment and hands over a new object each time: the items are made again only when what is snapped to changed.
-    const items = symbolSnapItems(view.symbol, view.unit, view.bodyStyle, view.showHiddenPins);
+    const items = symbolSnapItems(view.symbol, view.unit, view.bodyStyle, view.showHiddenPins, view.fields);
     const sig = JSON.stringify(items.map((i) => [i.id, i.kind, i.position]));
     if (sig !== this.signature) {
       this.signature = sig;

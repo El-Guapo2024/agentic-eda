@@ -6,7 +6,7 @@
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: `pcbnew.ModuleEditor.createFootprint` (the footprint wizard), the five
 // `pcbnew.MicrowaveTool.*` (board-only footprints and custom pads), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol
-// Viewer), `showHiddenFields` and `eeschema.SymbolDrawing.drawSymbolTextBox`. The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
+// Viewer) and `eeschema.SymbolDrawing.drawSymbolTextBox`. The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
 // board (actions/footprintCheckerActions.ts).
 import type { Dispatch } from "react";
 import type { Action as StudioAction } from "../state/store";
@@ -192,6 +192,9 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   m.set("eeschema.SymbolLibraryControl.showElectricalTypes", symTab(() => ctx.symDispatch({ type: "TOGGLE_ELECTRICAL_TYPES" })));
   m.set("eeschema.SymbolLibraryControl.showPinNumbers", symTab(() => ctx.symDispatch({ type: "TOGGLE_PIN_NUMBERS" })));
   m.set("eeschema.SymbolLibraryControl.showHiddenPins", symTab(() => ctx.symDispatch({ type: "TOGGLE_HIDDEN_PINS" })));
+  // Show Hidden Fields / Show Pin Alternate Icons -- SYMBOL_EDITOR_CONTROL::ToggleHiddenFields, TogglePinAltIcons: render-setting toggles.
+  m.set("eeschema.SymbolLibraryControl.showHiddenFields", symTab(() => ctx.symDispatch({ type: "TOGGLE_HIDDEN_FIELDS" })));
+  m.set("eeschema.EditorControl.togglePinAltIcons", symTab(() => ctx.symDispatch({ type: "TOGGLE_PIN_ALT_ICONS" })));
   // Synchronized Pins Mode -- ToggleSyncedPinsMode: `m_SyncPinEdit = !m_SyncPinEdit`; enabled for a multi-unit symbol only (`multiUnitModeCond`).
   m.set(
     "eeschema.SymbolLibraryControl.toggleSyncedPinsMode",

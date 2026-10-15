@@ -3,7 +3,7 @@
 // (`ShowHideColumns( "0 1 2 3 4 5 6 7" )`) and, behind "More columns", the ones KiCad hides: text size, orientation, position and autoplacement. The buttons are the dialog's own:
 // add a field (`OnAddField`: a hidden "Field<n>" the name of which is selected), delete (`OnDeleteField`: "The first 5 fields are mandatory."; an inherited field is reset to
 // its parent's value instead, `EraseRow`), move up and down (`OnMoveUp` / `OnMoveDown`, never into the mandatory rows). The rows' rules live in kicad-port/symFieldsGrid.ts.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FieldHAlign, FieldVAlign } from "../../api/types";
 import { MANDATORY_FIELDS, isMandatoryField } from "../../kicad-port/symFields";
 import { moveRow, newUserField, type GridRow } from "../../kicad-port/symFieldsGrid";
@@ -19,10 +19,22 @@ export interface SymbolFieldsGridProps {
   parentName?: string;
   /** A message the grid wants shown (the dialog's error line). */
   onError: (message: string | null) => void;
+  /** The field whose row starts selected (a double click on a field of the canvas opened the dialog on it). */
+  initialField?: string | null;
 }
 
-export function SymbolFieldsGrid({ rows, onChange, parentName, onError }: SymbolFieldsGridProps) {
-  const [selected, setSelected] = useState<number | null>(null);
+export function SymbolFieldsGrid({ rows, onChange, parentName, onError, initialField }: SymbolFieldsGridProps) {
+  const [selected, setSelected] = useState<number | null>(() => {
+    const i = initialField ? rows.findIndex((r) => r.name === initialField) : -1;
+    return i >= 0 ? i : null;
+  });
+  // the rows arrive after the dialog opens (the parent's fields are fetched): the asked-for field is selected once they are there
+  useEffect(() => {
+    if (!initialField) return;
+    const i = rows.findIndex((r) => r.name === initialField);
+    if (i >= 0) setSelected((cur) => cur ?? i);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialField, rows.length]);
   const [more, setMore] = useState(false);
   const nextKey = () => rows.reduce((m, r) => Math.max(m, r.key), 0) + 1;
   const edit = (index: number, patch: Partial<GridRow>) => onChange(rows.map((r, i) => (i === index ? { ...r, ...patch } : r)));

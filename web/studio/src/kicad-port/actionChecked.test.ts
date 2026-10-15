@@ -60,6 +60,11 @@ test("in the Symbol Editor the active tool and the view toggles are pressed", ()
   assert.equal(actionChecked("eeschema.SymbolLibraryControl.showHiddenPins", sym), false);
   assert.equal(actionChecked("eeschema.SymbolLibraryControl.toggleSyncedPinsMode", { ...sym, sym: { ...sym.sym, syncPins: true } }), true);
   assert.equal(actionChecked("eeschema.SymbolLibraryControl.showHiddenPins", base), undefined, "not on another tab");
+  // Show Hidden Fields and the pin alternate icons start on in the Symbol Editor (`SYMBOL_EDITOR_SETTINGS`)
+  assert.equal(actionChecked("eeschema.SymbolLibraryControl.showHiddenFields", sym), true);
+  assert.equal(actionChecked("eeschema.SymbolLibraryControl.showHiddenFields", { ...sym, sym: { ...sym.sym, showHiddenFields: false } }), false);
+  assert.equal(actionChecked("eeschema.EditorControl.togglePinAltIcons", { ...sym, sym: { ...sym.sym, showPinAltIcons: false } }), false);
+  assert.equal(actionChecked("eeschema.EditorControl.togglePinAltIcons", base), undefined);
   for (const action of Object.keys(SYM_TOOL_OF_ACTION)) assert.equal(typeof actionChecked(action, sym), "boolean", action);
 });
 

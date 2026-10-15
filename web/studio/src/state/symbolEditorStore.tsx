@@ -26,6 +26,8 @@ import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymb
 import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureSymbolInProject } from "../api/libraryClient";
 import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
+import { allFields, wireField } from "../kicad-port/symFields";
+import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
 import type { ViewTransform } from "./store";
 
@@ -67,7 +69,7 @@ export interface ImportRequest {
 
 export interface SymMovePreview {
   refs: string[];
-  kind: "pin" | "graphic";
+  kind: "pin" | "graphic" | "field";
   dxUm: number;
   dyUm: number;
 }
@@ -100,6 +102,8 @@ export interface SymbolEditorState {
   pinPropertiesId: string | null;
   pinTableOpen: boolean;
   propertiesOpen: boolean;
+  /** The field the Symbol Properties dialog opens on (a double click on a field of the canvas): its row is the grid's selected one. */
+  propertiesField: string | null;
   /** The symbols the library tree has selected (`GetSelectedLibIds()`); empty = none (the open symbol is the target, `GetTargetLibId`). */
   treeSelection: string[];
   /** `m_ShowPinsElectricalType`: draw each pin's electrical type beside it. On to begin with, as `show_pin_electrical_type` is in `SYMBOL_EDITOR_SETTINGS`. */
@@ -108,6 +112,10 @@ export interface SymbolEditorState {
   showPinNumbers: boolean;
   /** `m_ShowHiddenPins`: draw the pins marked hidden. On to begin with (`show_hidden_lib_pins`). */
   showHiddenPins: boolean;
+  /** `m_ShowHiddenFields`: draw the fields that are not shown, in the hidden-items colour. On to begin with (`SYMBOL_EDITOR_SETTINGS::m_ShowHiddenFields`). */
+  showHiddenFields: boolean;
+  /** `m_ShowPinAltIcons`: the icon beside the name of a pin that has alternate functions. On to begin with (`SYMBOL_EDITOR_SETTINGS::m_ShowPinAltIcons`). */
+  showPinAltIcons: boolean;
   /** `SYMBOL_EDIT_FRAME::m_SyncPinEdit`: Synchronized Pins Mode. On by default for a multi-unit symbol. */
   syncPins: boolean;
   /** The symbols Copy / Cut put on the clipboard: kept beside the clipboard text so Paste of our own copy loses nothing (and works where the browser denies clipboard access). */
@@ -151,10 +159,13 @@ const initialState: SymbolEditorState = {
   pinPropertiesId: null,
   pinTableOpen: false,
   propertiesOpen: false,
+  propertiesField: null,
   treeSelection: [],
   showElectricalTypes: true,
   showPinNumbers: false,
   showHiddenPins: true,
+  showHiddenFields: true,
+  showPinAltIcons: true,
   syncPins: false,
   copied: null,
   saveAs: null,
@@ -190,11 +201,13 @@ export type SymAction =
   | { type: "SET_ACTIVE_BODY_STYLE"; style: number }
   | { type: "SET_PIN_PROPERTIES_ID"; id: string | null }
   | { type: "SET_PIN_TABLE_OPEN"; open: boolean }
-  | { type: "SET_PROPERTIES_OPEN"; open: boolean }
+  | { type: "SET_PROPERTIES_OPEN"; open: boolean; field?: string }
   | { type: "SET_TREE_SELECTION"; names: string[] }
   | { type: "TOGGLE_ELECTRICAL_TYPES" }
   | { type: "TOGGLE_PIN_NUMBERS" }
   | { type: "TOGGLE_HIDDEN_PINS" }
+  | { type: "TOGGLE_HIDDEN_FIELDS" }
+  | { type: "TOGGLE_PIN_ALT_ICONS" }
   | { type: "SET_SYNC_PINS"; on: boolean }
   | { type: "SET_COPIED"; copied: { text: string; symbols: LibrarySymbol[] } | null }
   | { type: "SET_SAVE_AS"; request: SaveAsRequest | null }
@@ -221,6 +234,8 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
         showElectricalTypes: state.showElectricalTypes,
         showPinNumbers: state.showPinNumbers,
         showHiddenPins: state.showHiddenPins,
+        showHiddenFields: state.showHiddenFields,
+        showPinAltIcons: state.showPinAltIcons,
         copied: state.copied,
         lastTextAngle: state.lastTextAngle,
       };
@@ -270,7 +285,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_PIN_TABLE_OPEN":
       return { ...state, pinTableOpen: action.open };
     case "SET_PROPERTIES_OPEN":
-      return { ...state, propertiesOpen: action.open };
+      return { ...state, propertiesOpen: action.open, propertiesField: action.open ? (action.field ?? null) : null };
     case "SET_TREE_SELECTION":
       return { ...state, treeSelection: action.names };
     case "TOGGLE_ELECTRICAL_TYPES":
@@ -279,6 +294,10 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, showPinNumbers: !state.showPinNumbers };
     case "TOGGLE_HIDDEN_PINS":
       return { ...state, showHiddenPins: !state.showHiddenPins };
+    case "TOGGLE_HIDDEN_FIELDS":
+      return { ...state, showHiddenFields: !state.showHiddenFields };
+    case "TOGGLE_PIN_ALT_ICONS":
+      return { ...state, showPinAltIcons: !state.showPinAltIcons };
     case "SET_SYNC_PINS":
       return { ...state, syncPins: action.on };
     case "SET_COPIED":
@@ -331,6 +350,8 @@ export interface SymbolEditorApi {
   pushPinProperty: (sourcePinId: string, field: PushPinField) => Promise<void>;
   addGraphic: (graphic: LibrarySymbolGraphic) => Promise<void>;
   moveGraphic: (id: string, dxMm: number, dyMm: number) => Promise<void>;
+  /** A drag of fields on the canvas (`SCH_FIELD`s moved by the move tool): the named fields of the symbol move by the offset, one undo step. A field the symbol inherits becomes its own. */
+  moveFields: (names: string[], dxMm: number, dyMm: number) => Promise<void>;
   editGraphic: (id: string, strokeMm: number, fill: LibraryFill) => Promise<void>;
   deleteGraphic: (id: string) => Promise<void>;
   editText: (id: string, text: string, angleDeg: number, sizeMm: number) => Promise<void>;
@@ -500,6 +521,24 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const libId = stateRef.current.libId;
       if (!libId) return;
       await runCmd({ op: "move_symbol_graphic", lib_id: libId, id, dx_mm: dxMm, dy_mm: dyMm });
+    },
+    moveFields: async (names, dxMm, dyMm) => {
+      const st = stateRef.current;
+      const libId = st.libId;
+      const flat = st.symbol;
+      if (!libId || !flat || names.length === 0) return;
+      // the symbol's own fields (a derived symbol keeps its own list), with an inherited user field that is moved joining them as the symbol's own copy
+      const own = allFields(st.derivedOwn ?? flat);
+      const moving = new Set(names);
+      for (const f of allFields(flat)) {
+        if (!moving.has(f.name)) continue;
+        const i = own.findIndex((o) => o.name === f.name);
+        // a field the symbol inherits (a parent's user field, or a mandatory one it leaves empty) is what is drawn, so it is what moves: it becomes the symbol's own
+        if (i < 0) own.push(f);
+        else if (own[i]!.text === "" && f.text !== "") own[i] = f;
+      }
+      const fields = movedRows(own, moving, dxMm, dyMm).map(wireField);
+      await runCmd({ op: "edit_library_symbol_fields", lib_id: libId, fields });
     },
     editGraphic: async (id, strokeMm, fill) => {
       const libId = stateRef.current.libId;

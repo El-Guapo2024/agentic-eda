@@ -774,6 +774,69 @@
     t((back.fields ?? []).length === 0 && back.value_visible !== false && !back.reference, "one undo of the Footprint Editor takes the whole panel back");
   });
 
+  // ================================================================================================ 5. symbol fields on the canvas
+  await scenario("Symbol Editor fields: drawn where the symbol puts them, Show Hidden Fields shows the hidden ones, a click picks one, a drag moves it, a double click opens its row", async (t) => {
+    await clickTab("Symbol");
+    await sleep(500);
+    const id = "eda:P17Fields";
+    madeSyms.push(id);
+    let r = await cmd({ op: "new_symbol", lib_id: id });
+    t(r.ok, `new_symbol: ${r.message ?? "ok"}`);
+    r = await cmd({ op: "edit_library_symbol_fields", lib_id: id, fields: [
+      { name: "Reference", text: "U", at: { x: 0, y: 5.08 } }, { name: "Value", text: "P17Fields", at: { x: 0, y: -5.08 } },
+      { name: "Footprint", text: "", hidden: true }, { name: "Datasheet", text: "", hidden: true }, { name: "Description", text: "", hidden: true },
+      { name: "MPN", text: "H-1", at: { x: 10.16, y: 0 }, hidden: true } ] });
+    t(r.ok, `fields set: ${r.message ?? "ok"}`);
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(1000);
+    await __eda.run("common.Control.zoomFitScreen");
+    await sleep(500);
+    const canvas = () => document.querySelector(".editor-canvas-col canvas");
+    /** The pixels near an editor point that are not the background's: the ink of what is drawn there. */
+    const ink = (wx, wy, radiusPx = 14) => {
+      const c = canvas(); const ctx = c.getContext("2d"); const dpr = c.width / parseFloat(c.style.width || c.width);
+      const [sx, sy] = toScreen(wx, wy); const rect = c.getBoundingClientRect();
+      const x = Math.round((sx - rect.left - radiusPx) * dpr), y = Math.round((sy - rect.top - radiusPx) * dpr), w = Math.round(2 * radiusPx * dpr);
+      const d = ctx.getImageData(Math.max(0, x), Math.max(0, y), w, w).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 26) + Math.abs(d[i + 1] - 26) + Math.abs(d[i + 2] - 26) > 90) n++;
+      return n;
+    };
+    const REF = [0, -5080], MPN = [10160, 0], VAL = [0, 5080];
+    const withHidden = ink(...MPN);
+    t(ink(...REF) > 20 && ink(...VAL) > 20, `the Reference and the Value are drawn: ${ink(...REF)}, ${ink(...VAL)} px of ink`);
+    t(withHidden > 20, `the hidden MPN is drawn while Show Hidden Fields is on (it starts on): ${withHidden} px`);
+    t(__eda.actions().some((a) => a.id === "eeschema.SymbolLibraryControl.showHiddenFields" && a.enabled), "Show Hidden Fields is an enabled action of the Symbol tab");
+    await __eda.run("eeschema.SymbolLibraryControl.showHiddenFields");
+    await sleep(400);
+    t(ink(...MPN) < withHidden / 4, `with it off the hidden field is not drawn: ${ink(...MPN)} px`);
+    t(ink(...REF) > 20, "the shown ones stay");
+    // a click picks a field it is on, a hidden one only while it is drawn
+    await clickAt(MPN[0], MPN[1], {}, false);
+    t(__eda.state().selection.length === 0, `nothing hidden is picked with Show Hidden Fields off: ${JSON.stringify(__eda.state().selection)}`);
+    await __eda.run("eeschema.SymbolLibraryControl.showHiddenFields");
+    await sleep(300);
+    await clickAt(MPN[0], MPN[1], {}, false);
+    t(same(__eda.state().selection.map((s) => s.id), ["fld:lib:MPN"]), `with it on a click picks the hidden field: ${JSON.stringify(__eda.state().selection.map((s) => s.id))}`);
+    await clickAt(REF[0], REF[1], {}, false);
+    t(same(__eda.state().selection.map((s) => s.id), ["fld:lib:Reference"]), `a click on the Reference picks it: ${JSON.stringify(__eda.state().selection.map((s) => s.id))}`);
+    // a drag moves it, one undo step
+    await dragFromTo(REF, [REF[0], REF[1] - 2540]);
+    let sym = await symbol(id);
+    const refNow = fieldOf(sym, "Reference");
+    t(refNow && near(refNow.at.y, 7.62, 0.01) && near(refNow.at.x, 0, 0.01), `the dragged Reference is 2.54 mm higher: ${JSON.stringify(refNow?.at)}`);
+    t(fieldOf(sym, "Value")?.at?.y === -5.08, "the other fields stayed");
+    await undoFp();
+    t(near(fieldOf(await symbol(id), "Reference")?.at?.y ?? 0, 5.08, 0.01), "one undo of the Symbol Editor puts it back");
+    // a double click on a field opens Symbol Properties on its row
+    const [sx, sy] = toScreen(VAL[0], VAL[1]);
+    canvasEl().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: sx, clientY: sy, detail: 2 }));
+    await sleep(700);
+    t(!!tid("symbol-properties"), "a double click on a field opens Symbol Properties");
+    t(document.querySelector('[data-testid="field-row-1"]')?.getAttribute("aria-selected") === "true", "on the Value's row");
+    await closeDialogs();
+  });
+
   // ================================================================================================ leave the library as it was
   await closeDialogs();
   for (const n of made) { await cmd({ op: "delete_library_footprint", name: n }); }

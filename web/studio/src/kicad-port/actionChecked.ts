@@ -18,7 +18,7 @@ export interface CheckedContext {
   fpTool: string;
   symTool: string;
   /** The Symbol Editor's view toggles and Synchronized Pins Mode. */
-  sym: { showElectricalTypes: boolean; showHiddenPins: boolean; syncPins: boolean };
+  sym: { showElectricalTypes: boolean; showHiddenPins: boolean; syncPins: boolean; showHiddenFields?: boolean; showPinAltIcons?: boolean };
   dock: DockLayout;
   /** The board editor's right dock tab. */
   rightDockTab: string;
@@ -97,6 +97,10 @@ export function actionChecked(name: string, c: CheckedContext): boolean | undefi
       return c.tab === "symbol" ? c.sym.showElectricalTypes : undefined;
     case "eeschema.SymbolLibraryControl.showHiddenPins":
       return c.tab === "symbol" ? c.sym.showHiddenPins : undefined;
+    case "eeschema.SymbolLibraryControl.showHiddenFields":
+      return c.tab === "symbol" ? (c.sym.showHiddenFields ?? true) : undefined;
+    case "eeschema.EditorControl.togglePinAltIcons":
+      return c.tab === "symbol" ? (c.sym.showPinAltIcons ?? true) : undefined;
     case "eeschema.SymbolLibraryControl.toggleSyncedPinsMode":
       return c.tab === "symbol" ? c.sym.syncPins : undefined;
   }
