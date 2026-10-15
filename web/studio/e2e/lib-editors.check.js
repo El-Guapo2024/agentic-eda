@@ -713,6 +713,67 @@
     await undoFp();
   });
 
+  // ================================================================================================ 4. the Footprint Editor's fields grid
+  await scenario("Footprint Properties has a fields grid: Reference and Value, user fields with their layer, place and visibility; OK is one undo step and the exported .kicad_mod has them", async (t) => {
+    await clickTab("Footprint");
+    await __eda.run("pcbnew.ModuleEditor.newFootprint");
+    await sleep(800);
+    const name = (await fpNames()).find((n) => !libraryBefore.fp.includes(n) && !made.includes(n));
+    made.push(name);
+    await cmd({ op: "add_pad", footprint: name, pad: { ...padOf("1"), at: { x: 0, y: 0 } } });
+    await sleep(500);
+    const r = await __eda.run("pcbnew.ModuleEditor.footprintProperties");
+    await sleep(600);
+    t(/Footprint Properties/.test(r.dialog ?? ""), `the dialog opens: ${r.dialog}`);
+    const row = (i) => document.querySelector(`[data-testid="lib-field-row-${i}"]`);
+    t(row(0)?.getAttribute("data-field") === "Reference" && tid("lib-field-text-0").value === "REF**", `the Reference starts as REF**: ${tid("lib-field-text-0")?.value}`);
+    t(row(1)?.getAttribute("data-field") === "Value" && tid("lib-field-text-1").value === name, `the Value as the footprint's name: ${tid("lib-field-text-1")?.value}`);
+    t(off("lib-field-name-0") && off("lib-field-name-1"), "the names of the two mandatory fields are fixed");
+    t(tid("lib-field-show-0").checked && tid("lib-field-show-1").checked, "both are shown");
+    // delete a mandatory row: refused in KiCad's words
+    row(0).click(); await sleep(60);
+    tid("lib-field-delete").click(); await sleep(120);
+    t(/The first 2 fields are mandatory\./.test(tid("fp-lib-properties-error")?.textContent ?? ""), `${tid("fp-lib-properties-error")?.textContent}`);
+    // add a field: Field<rows>, hidden
+    tid("lib-field-add").click(); await sleep(150);
+    t(row(2)?.getAttribute("data-field") === "Field2" && !tid("lib-field-show-2").checked, `a new field is Field2 and hidden: ${row(2)?.getAttribute("data-field")}`);
+    // a name that is a mandatory field's is refused, with the grid's message
+    await type(tid("lib-field-name-2"), "Datasheet");
+    await click(tid("fp-lib-properties-ok"), 300);
+    t(/is the name of a mandatory field/.test(tid("fp-lib-properties-error")?.textContent ?? "") && !!tid("fp-library-properties"), `refused: ${tid("fp-lib-properties-error")?.textContent}`);
+    await type(tid("lib-field-name-2"), "MPN");
+    await type(tid("lib-field-text-2"), "ABC-1");
+    tid("lib-field-show-2").click(); await sleep(80);
+    await choose(tid("lib-field-layer-2"), "F.SilkS");
+    tid("lib-fields-more").click(); await sleep(150);
+    const unitsMm = __eda.state().units === "mm";
+    const num = (label) => document.querySelector(`[data-testid="lib-field-row-2"] input[aria-label="${label}"]`);
+    await type(num("X offset of MPN"), unitsMm ? "1.5" : "59.055"); // 1.5 mm
+    await type(num("Y offset of MPN"), unitsMm ? "3" : "118.11");
+    tid("lib-field-bold-2").click(); await sleep(60);
+    // the Reference's text and the Value hidden
+    await type(tid("lib-field-text-0"), "J**");
+    tid("lib-field-show-1").click(); await sleep(80);
+    await click(tid("fp-lib-properties-ok"), 1200);
+    t(!tid("fp-library-properties"), "OK closes the dialog");
+    const fp = await footprint(name);
+    const mpn = (fp.fields ?? []).find((f) => f.name === "MPN");
+    t(!!mpn && mpn.value === "ABC-1" && mpn.visible === true, `the user field is stored: ${JSON.stringify(mpn)}`);
+    t(!!mpn?.layout && mpn.layout.layer === "F.SilkS" && mpn.layout.at.x === 1500 && mpn.layout.at.y === 3000 && mpn.layout.bold === true, `with its layout: ${JSON.stringify(mpn?.layout)}`);
+    t(fp.reference?.text === "J**" && fp.value_visible === false, `the Reference reads J** and the Value is hidden: ${JSON.stringify([fp.reference?.text, fp.value_visible])}`);
+    const mod = await (await fetch(`/api/footprint/export?name=${encodeURIComponent(name)}`)).text();
+    t(/\(property "MPN" "ABC-1" \(at 1\.5 3 0\)/.test(mod) && /\(property "Reference" "J\*\*"/.test(mod) && /\(property "Value" "[^"]*" \(at [^)]*\) \(layer "F\.Fab"\) \(hide yes\)/.test(mod), "the exported .kicad_mod has the fields with their places");
+    // reopened, the grid shows what was stored
+    await __eda.run("pcbnew.ModuleEditor.footprintProperties");
+    await sleep(600);
+    t(tid("lib-field-name-2")?.value === "MPN" && tid("lib-field-text-2")?.value === "ABC-1" && tid("lib-field-text-0")?.value === "J**" && !tid("lib-field-show-1").checked, "reopened, the grid is what was stored");
+    await closeDialogs();
+    // one undo takes the whole panel away
+    await undoFp();
+    const back = await footprint(name);
+    t((back.fields ?? []).length === 0 && back.value_visible !== false && !back.reference, "one undo of the Footprint Editor takes the whole panel back");
+  });
+
   // ================================================================================================ leave the library as it was
   await closeDialogs();
   for (const n of made) { await cmd({ op: "delete_library_footprint", name: n }); }

@@ -59,6 +59,7 @@ pub use array::ArrayGeometry;
 mod array_numbering;
 pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
 mod fp_array;
+mod fp_lib_fields;
 mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
@@ -1432,6 +1433,14 @@ pub enum Cmd {
         /// whole panel, so a command that leaves it out clears it.
         #[serde(default)]
         zone_connection: Option<PadConnection>,
+        /// The General tab's fields grid (`PCB_FIELDS_GRID_TABLE`, [`fp_lib_fields`]): the Reference's and the Value's layout (the text they show in its `text`) and the user fields in
+        /// order, each with its layout. Left out, the footprint keeps what it has. The Show check boxes are `reference_visible` and `value_visible` and each field's `visible`.
+        #[serde(default)]
+        reference: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        value: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        fields: Option<Vec<eda_model::ir::FootprintField>>,
     },
     /// `PCB_ACTIONS::setAnchor` ("Place Footprint Anchor"): `at` (in the
     /// footprint's current local frame) becomes the new origin -- every
@@ -2634,8 +2643,11 @@ impl<'a> Board<'a> {
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
-            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection } => {
-                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), models3d.as_deref(), *zone_connection)
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection, reference, value, fields } => {
+                // the grid is judged first: a row that is wrong refuses the panel before anything of it is taken
+                self.check_library_fields(name, reference.as_ref(), value.as_ref(), fields.as_deref())?;
+                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), models3d.as_deref(), *zone_connection)?;
+                self.apply_library_fields(name, reference.as_ref(), value.as_ref(), fields.as_deref())
             }
             Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
             Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
@@ -5445,6 +5457,8 @@ mod array_tests;
 mod fp_array_tests;
 #[cfg(test)]
 mod sym_derive_tests;
+#[cfg(test)]
+mod fp_lib_fields_tests;
 #[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]

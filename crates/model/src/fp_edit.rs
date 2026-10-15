@@ -545,6 +545,26 @@ pub fn default_value_layout(fp: &FootprintInstance) -> FieldLayout {
     l
 }
 
+/// The text a library footprint's Reference shows unless it says otherwise (`FOOTPRINT::GetReference` of a new footprint: `REF**`).
+pub const LIBRARY_REFERENCE_TEXT: &str = "REF**";
+
+/// Where a library footprint's Reference is when the file has none of its own: 1 mm text on the silkscreen above the origin.
+pub fn default_library_reference_layout() -> FieldLayout {
+    FieldLayout::new(Point { x: 0, y: -2000 }, "F.SilkS")
+}
+
+/// Where a library footprint's Value is when the file has none of its own: 1 mm text on the fabrication layer below the origin.
+pub fn default_library_value_layout() -> FieldLayout {
+    FieldLayout::new(Point { x: 0, y: 2000 }, "F.Fab")
+}
+
+/// The layout a new user field of a library footprint starts from (`DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnAddField`): hidden, at the origin, on the fabrication layer.
+pub fn new_library_field_layout() -> FieldLayout {
+    let mut l = FieldLayout::new(Point { x: 0, y: 0 }, "F.Fab");
+    l.visible = false;
+    l
+}
+
 /// The layout a new user field starts from (`DIALOG_FOOTPRINT_PROPERTIES::OnAddField`): hidden, at the footprint's origin, on
 /// the fabrication layer of its side.
 pub fn new_field_layout(fp: &FootprintInstance) -> FieldLayout {

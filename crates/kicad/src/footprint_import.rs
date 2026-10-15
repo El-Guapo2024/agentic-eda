@@ -14,6 +14,7 @@
 //! (chamfer <corners>)] [(rect_delta dx dy)] [(clearance c)] ..)`; a chamfered rectangle is written by KiCad
 //! as `roundrect` plus the chamfer tokens.
 
+use eda_model::fp_edit::{FieldLayout, LIBRARY_REFERENCE_TEXT};
 use eda_model::footprint::{PadKind, PadShape};
 use eda_model::ir::{FootprintAttributes, FootprintField, LibraryFootprint, LibraryPad, LibraryPadShape, Point, Shape, Side, Text, TextJustify};
 
@@ -69,6 +70,9 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     let name = sexpr::txt(root, 1).ok_or("the footprint has no name")?;
     let mut warnings = Vec::new();
 
+    // From KiCad 8 a `(property ..)` is a field with a place and a layer of its own; before it a property held a value and nothing more (`PCB_IO_KICAD_SEXPR_PARSER::parseFOOTPRINT_unchecked`).
+    let version = sexpr::find(root, "version").and_then(|v| sexpr::num(v, 1)).map(|v| v as i64).unwrap_or(i64::MAX);
+    let legacy = version < crate::fp_fields::FIELD_PROPERTIES_VERSION;
     let mut fp = LibraryFootprint::new_empty(name);
     fp.description = sexpr::find(root, "descr").and_then(|d| sexpr::txt(d, 1)).unwrap_or("").to_string();
     fp.keywords = sexpr::find(root, "tags").and_then(|d| sexpr::txt(d, 1)).unwrap_or("").to_string();
@@ -119,22 +123,44 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
             }
             Some("fp_text") => match sexpr::txt(child, 1) {
                 Some("user") => fp.texts.extend(parse_text(child, sexpr::txt(child, 2).unwrap_or(""))),
-                Some("reference") => fp.reference_visible = !hidden(child),
-                Some("value") => fp.value_visible = !hidden(child),
+                // the pre-KiCad-8 form: `(fp_text reference "REF**" (at ..) (layer ..) (effects ..))`
+                Some("reference") => {
+                    let l = field_layout(child, sexpr::txt(child, 2).unwrap_or(""), LIBRARY_REFERENCE_TEXT);
+                    fp.reference_visible = l.visible;
+                    fp.reference = Some(l);
+                }
+                Some("value") => {
+                    let l = field_layout(child, sexpr::txt(child, 2).unwrap_or(""), &fp.name);
+                    fp.value_visible = l.visible;
+                    fp.value = Some(l);
+                }
                 _ => {}
             },
             Some("property") => {
                 let (key, value) = (sexpr::txt(child, 1).unwrap_or(""), sexpr::txt(child, 2).unwrap_or(""));
+                // a field of KiCad 8 has its layout; an older property only the hide flag
+                let layout = (!legacy).then(|| crate::fp_fields::parse_layout(child, Side::Top, 0));
+                let visible = layout.as_ref().map_or(!hidden(child), |l| l.visible);
                 match key {
-                    "Reference" => fp.reference_visible = !hidden(child),
-                    "Value" => fp.value_visible = !hidden(child),
+                    "Reference" => {
+                        fp.reference_visible = visible;
+                        if let Some(l) = layout {
+                            fp.reference = Some(with_text(l, value, LIBRARY_REFERENCE_TEXT));
+                        }
+                    }
+                    "Value" => {
+                        fp.value_visible = visible;
+                        if let Some(l) = layout {
+                            fp.value = Some(with_text(l, value, &fp.name));
+                        }
+                    }
                     "Description" => {
                         if fp.description.is_empty() {
                             fp.description = value.to_string();
                         }
                     }
                     "Datasheet" | "" => {}
-                    _ => fp.fields.push(FootprintField { name: key.to_string(), value: value.to_string(), visible: !hidden(child) }),
+                    _ => fp.fields.push(FootprintField { name: key.to_string(), value: value.to_string(), visible, layout }),
                 }
             }
             Some("zone") | Some("group") | Some("image") | Some("dimension") | Some("fp_text_box") | Some("fp_text_private") => warnings.push(format!("{} items are not supported by the library footprint and were left out", sexpr::tag(child).unwrap_or("?"))),
@@ -148,6 +174,16 @@ pub fn parse_library_footprint(text: &str) -> Result<ParsedFootprint, String> {
     warnings.sort();
     warnings.dedup();
     Ok(ParsedFootprint { footprint: fp, warnings })
+}
+
+/// A `(property ..)` or `(fp_text reference|value ..)`'s layout, with the text it shows when that is not `own` (the footprint's default text for the field).
+fn field_layout(item: &[Sexpr], text: &str, own: &str) -> FieldLayout {
+    with_text(crate::fp_fields::parse_layout(item, Side::Top, 0), text, own)
+}
+
+fn with_text(mut l: FieldLayout, text: &str, own: &str) -> FieldLayout {
+    l.text = (text != own).then(|| text.to_string());
+    l
 }
 
 fn xy_points(item: &[Sexpr]) -> Vec<Point> {
@@ -419,7 +455,16 @@ mod tests {
         let fp = parsed.footprint;
         assert_eq!((fp.description.as_str(), fp.keywords.as_str()), ("Resistor SMD 0603", "resistor"));
         assert!(fp.reference_visible && !fp.value_visible, "the Value property is hidden");
-        assert_eq!(fp.fields, vec![FootprintField { name: "Vendor".into(), value: "ACME".into(), visible: false }]);
+        assert_eq!(fp.fields.len(), 1);
+        let vendor = &fp.fields[0];
+        assert_eq!((vendor.name.as_str(), vendor.value.as_str(), vendor.visible), ("Vendor", "ACME", false));
+        let l = vendor.layout.as_ref().expect("a property of KiCad 8 has its layout");
+        assert_eq!((l.layer.as_str(), l.at, l.size, l.visible), ("F.Fab", Point { x: 0, y: 0 }, (1000, 1000), false));
+        // the Reference and the Value keep their places; the Value's text is the footprint's name, so it stores none of its own
+        let reference = fp.reference.as_ref().expect("the Reference layout");
+        assert_eq!((reference.layer.as_str(), reference.at, reference.text.as_deref(), reference.visible), ("F.SilkS", Point { x: 0, y: -1430 }, None, true));
+        let value = fp.value.as_ref().expect("the Value layout");
+        assert_eq!((value.layer.as_str(), value.at.y, value.visible), ("F.Fab", 1430, false));
         assert!(fp.attributes.smd && fp.attributes.allow_soldermask_bridges);
         let by = |n: &str| fp.pads.iter().find(|p| p.number == n).unwrap();
         assert_eq!((by("1").shape, by("1").roundrect_ratio), (LibraryPadShape::RoundRect, Some(0.25)));

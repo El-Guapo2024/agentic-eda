@@ -2803,9 +2803,10 @@ fn d_true() -> bool {
 
 /// One named field on a footprint (KiCad's `PCB_FIELD`, e.g. a custom
 /// "Vendor" or "Datasheet" field beyond the built-in Reference/Value) --
-/// `dialog_footprint_properties_fp_editor.cpp`'s Fields tab. Position/
-/// orientation/layer are deferred (see PARITY-fpedit.md): only name/value/
-/// visibility are modeled, enough to author one and read it back.
+/// `dialog_footprint_properties_fp_editor.cpp`'s Fields grid: its name, its
+/// text, whether it is shown and, once it has been placed or read from a
+/// file, the layout of its text ([`crate::fp_edit::FieldLayout`]: where, on
+/// which layer, how big, how turned) in the footprint's own frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FootprintField {
@@ -2813,6 +2814,10 @@ pub struct FootprintField {
     pub value: String,
     #[serde(default = "d_true")]
     pub visible: bool,
+    /// Where the text is and how it is drawn (the layout's own `visible` is this field's `visible`); `None` is what a new field starts from
+    /// ([`crate::fp_edit::new_library_field_layout`]: hidden at the origin on the fabrication layer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<crate::fp_edit::FieldLayout>,
 }
 
 /// One pad on a [`LibraryFootprint`], in the footprint's own local frame
@@ -3110,6 +3115,13 @@ pub struct LibraryFootprint {
     pub reference_visible: bool,
     #[serde(default = "d_true")]
     pub value_visible: bool,
+    /// The Reference field's layout, when it was set or read from a file (`(property "Reference" "REF**" (at ..) (layer ..) ..)`); its `text` is the text it shows when that
+    /// is not `REF**`. `None` is KiCad's default ([`crate::fp_edit::default_library_reference_layout`]). Its `visible` follows `reference_visible`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::fp_edit::FieldLayout>,
+    /// The Value field's layout, likewise; its `text` is the text it shows when that is not the footprint's name. Its `visible` follows `value_visible`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<crate::fp_edit::FieldLayout>,
     /// Courtyard half-extents -- same field/meaning as `crate::footprint::
     /// Footprint::courtyard` (`None` derives one from the pad bbox).
     #[serde(default)]
@@ -3164,6 +3176,8 @@ impl Default for LibraryFootprint {
             fields: Vec::new(),
             reference_visible: true,
             value_visible: true,
+            reference: None,
+            value: None,
             courtyard: None,
             model: None,
             models3d: Vec::new(),

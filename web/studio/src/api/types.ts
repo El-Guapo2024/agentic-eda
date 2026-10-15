@@ -696,6 +696,8 @@ export interface FootprintField {
   name: string;
   value: string;
   visible: boolean;
+  /** Where and how its text is drawn (`FieldLayout`; its `visible` is this field's). Absent for a field that was never placed: hidden at the origin on the fabrication layer. */
+  layout?: FieldLayoutCmd;
 }
 
 /** The fields `edit_footprint_properties` commits all at once (dialog_footprint_properties_fp_editor.cpp's General tab) -- factored out so the `Cmd` variant and `FootprintPropertiesDialog`'s own form state share one field list. */
@@ -711,6 +713,13 @@ export interface FootprintPropertiesFields {
   models3d?: Model3dCmd[];
   /** The Clearances tab's "Zone connection" (`FOOTPRINT::GetLocalZoneConnection`); absent/`null` is "inherited". */
   zone_connection?: PadConnection | null;
+  /**
+   * The General tab's fields grid (`PCB_FIELDS_GRID_TABLE`): the Reference's and the Value's layout (the text they show, when it is not `REF**` / the footprint's name, in `text`) and the
+   * user fields, in order, each with its layout. A key left out of a command keeps what the footprint has; the Show check boxes are `reference_visible`, `value_visible` and each field's `visible`.
+   */
+  reference?: FieldLayoutCmd | null;
+  value?: FieldLayoutCmd | null;
+  fields?: FootprintField[];
 }
 
 /**

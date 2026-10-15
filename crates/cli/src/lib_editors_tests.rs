@@ -166,6 +166,141 @@ fn kicad_cli_loads_a_numbered_pad_array_and_keeps_it_through_fp_upgrade() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A footprint made the way a person makes it: a pad, then the General tab of Footprint Properties with the fields grid in it -- the Reference moved and renamed, the Value hidden, a
+/// shown user field `MPN` and a hidden one `Vendor` -- as one `edit_footprint_properties`.
+fn footprint_with_fields_in(dir: &Path) -> String {
+    use eda_model::fp_edit::FieldLayout;
+    use eda_model::ir::FootprintField;
+    let name = "Test:Fielded";
+    step(dir, Cmd::NewFootprint { name: name.into() }, false, "test").unwrap();
+    step(dir, Cmd::AddPad { footprint: name.into(), pad: library_pad("1", 0, 0) }, false, "test").unwrap();
+    let mut reference = FieldLayout::new(Point { x: 500, y: -2500 }, "F.Fab");
+    reference.size = (1200, 1000);
+    reference.text = Some("J**".into());
+    let mut mpn = FieldLayout::new(Point { x: 1500, y: 3000 }, "F.Fab");
+    mpn.bold = true;
+    mpn.halign = -1;
+    step(
+        dir,
+        Cmd::EditFootprintProperties {
+            name: name.into(),
+            description: "with fields".into(),
+            keywords: String::new(),
+            attributes: Default::default(),
+            reference_visible: true,
+            value_visible: false,
+            model: None,
+            models3d: None,
+            zone_connection: None,
+            reference: Some(reference),
+            value: Some(FieldLayout::new(Point { x: 0, y: 2200 }, "F.Fab")),
+            fields: Some(vec![
+                FootprintField { name: "MPN".into(), value: "ABC-1".into(), visible: true, layout: Some(mpn) },
+                FootprintField { name: "Vendor".into(), value: "ACME".into(), visible: false, layout: None },
+            ]),
+        },
+        false,
+        "test",
+    )
+    .unwrap();
+    name.into()
+}
+
+#[test]
+fn the_fields_grid_is_one_undo_step_and_reaches_the_derived_kicad_mod() {
+    let dir = scratch("p17_footprint_fields");
+    setup(&dir);
+    let name = footprint_with_fields_in(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let fp = design.footprint_library.as_ref().unwrap().by_name(&name).unwrap();
+    assert_eq!((fp.fields.len(), fp.value_visible, fp.reference.as_ref().and_then(|l| l.text.clone())), (2, false, Some("J**".to_string())));
+
+    // what the file this studio exports says: KiCad 8's properties with their places, and reading it back gives the same grid
+    let text = eda_kicad::export_kicad_mod(fp);
+    for line in ["(property \"Reference\" \"J**\" (at 0.5 -2.5 0)", "(property \"Value\" \"Test:Fielded\" (at 0 2.2 0)", "(property \"MPN\" \"ABC-1\" (at 1.5 3 0)", "(property \"Vendor\" \"ACME\" (at 0 0 0)"] {
+        assert!(text.contains(line), "{line} is written:\n{text}");
+    }
+    let back = eda_kicad::parse_library_footprint(&text).unwrap().footprint;
+    assert_eq!(back.fields.iter().map(|f| (f.name.as_str(), f.value.as_str(), f.visible)).collect::<Vec<_>>(), [("MPN", "ABC-1", true), ("Vendor", "ACME", false)]);
+    assert!(!back.value_visible && back.reference_visible);
+    assert_eq!(crate::library_api::footprint_kicad_mod_any(&dir, &name).unwrap(), text, "the route that serves the file writes the same text");
+
+    // one undo step of the Footprint Editor takes the whole panel away: the grid and the description with it
+    undo(&dir, "test", Some(Domain::FootprintEditor)).unwrap();
+    let (_, after, _) = load(&dir).unwrap();
+    let fp = after.footprint_library.as_ref().unwrap().by_name(&name).unwrap();
+    assert!(fp.fields.is_empty() && fp.reference.is_none() && fp.description.is_empty() && fp.value_visible, "the panel was one step");
+}
+
+/// Slow tier (kicad-cli): a footprint with a Reference that has moved, a hidden Value and a shown and a hidden user field, written by this studio, loads in kicad-cli, and
+/// `kicad-cli fp upgrade` keeps every field: the same names, texts and shown or hidden, on the same places and layers -- and its plot of the fabrication layer draws the shown user
+/// field and the Reference and leaves the hidden ones out, as ours does.
+#[test]
+fn kicad_cli_loads_a_footprint_with_fields_and_keeps_them_through_fp_upgrade() {
+    if !slow() {
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    }
+    let dir = scratch("p17_footprint_fields_kicad_cli");
+    setup(&dir);
+    let name = footprint_with_fields_in(&dir);
+    let (_, design, _) = load(&dir).unwrap();
+    let ours_text = eda_kicad::export_kicad_mod(design.footprint_library.as_ref().unwrap().by_name(&name).unwrap());
+
+    let work = dir.join("kicad");
+    let (ours_lib, theirs_lib) = (work.join("ours.pretty"), work.join("theirs.pretty"));
+    for lib in [&ours_lib, &theirs_lib] {
+        std::fs::create_dir_all(lib).unwrap();
+        std::fs::write(lib.join("Fielded.kicad_mod"), &ours_text).unwrap();
+    }
+    kicad_cli(&work, &["fp".as_ref(), "upgrade".as_ref(), theirs_lib.as_os_str()]).unwrap_or_else(|e| panic!("kicad-cli fp upgrade: {e}"));
+    let theirs_text = std::fs::read_to_string(theirs_lib.join("Fielded.kicad_mod")).unwrap();
+    assert!(theirs_text.contains("(footprint \"Fielded\""), "kicad-cli wrote the footprint back out:\n{theirs_text}");
+
+    // 1. the fields, read back by this studio's reader from KiCad's own text, are the ones written
+    let summary = |text: &str| {
+        let fp = eda_kicad::parse_library_footprint(text).expect("the reader takes it").footprint;
+        let layout = |l: &Option<eda_model::fp_edit::FieldLayout>| l.as_ref().map(|l| (l.at, l.layer.clone(), l.size, l.visible, l.bold, l.halign));
+        (
+            (fp.reference_visible, fp.value_visible),
+            layout(&fp.reference),
+            fp.reference.as_ref().and_then(|l| l.text.clone()),
+            fp.fields.iter().map(|f| (f.name.clone(), f.value.clone(), f.visible, layout(&f.layout))).collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(summary(&theirs_text), summary(&ours_text), "kicad-cli keeps every field: its text, its place, its layer, its size, shown or hidden");
+    let theirs = summary(&theirs_text);
+    assert_eq!((theirs.2.as_deref(), theirs.3.len()), (Some("J**"), 2));
+    assert_eq!((theirs.3[0].0.as_str(), theirs.3[0].2, theirs.3[1].2), ("MPN", true, false));
+
+    // 2. and draws the same: the fabrication layer of the two libraries is one plot, and it holds the shown fields' text (the plot of the footprint without its fields is smaller)
+    let mut plots = Vec::new();
+    for (label, lib) in [("ours", &ours_lib), ("theirs", &theirs_lib)] {
+        let out_dir = work.join(format!("{label}_svg"));
+        std::fs::create_dir_all(&out_dir).unwrap();
+        kicad_cli(&work, &["fp".as_ref(), "export".as_ref(), "svg".as_ref(), "--layers".as_ref(), "F.Fab".as_ref(), "-o".as_ref(), out_dir.as_os_str(), lib.as_os_str()])
+            .unwrap_or_else(|e| panic!("kicad-cli fp export svg {label}: {e}"));
+        plots.push(std::fs::read_to_string(out_dir.join("Fielded.svg")).expect("an svg"));
+    }
+    let bare_lib = work.join("bare.pretty");
+    std::fs::create_dir_all(&bare_lib).unwrap();
+    let mut bare = design.footprint_library.as_ref().unwrap().by_name(&name).unwrap().clone();
+    bare.fields.clear();
+    bare.reference_visible = false;
+    std::fs::write(bare_lib.join("Fielded.kicad_mod"), eda_kicad::export_kicad_mod(&bare)).unwrap();
+    let bare_out = work.join("bare_svg");
+    std::fs::create_dir_all(&bare_out).unwrap();
+    kicad_cli(&work, &["fp".as_ref(), "export".as_ref(), "svg".as_ref(), "--layers".as_ref(), "F.Fab".as_ref(), "-o".as_ref(), bare_out.as_os_str(), bare_lib.as_os_str()]).unwrap_or_else(|e| panic!("kicad-cli fp export svg bare: {e}"));
+    let bare_plot = std::fs::read_to_string(bare_out.join("Fielded.svg")).expect("an svg");
+    let shapes = |svg: &str| svg.matches("<path").count();
+    assert_eq!(shapes(&plots[0]), shapes(&plots[1]), "the same number of shapes before and after fp upgrade");
+    assert!(shapes(&plots[0]) > shapes(&bare_plot), "the shown fields are drawn: {} paths against {} without them", shapes(&plots[0]), shapes(&bare_plot));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ===================================================================================================================================================== derived symbols
 
 use eda_model::ir::{LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin};

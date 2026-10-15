@@ -1730,6 +1730,9 @@ fn edit_footprint_properties_replaces_the_whole_panel() {
         model: Some("${KICAD10_3DMODEL_DIR}/x.step".into()),
         models3d: None,
         zone_connection: Some(PadConnection::Full),
+        reference: None,
+        value: None,
+        fields: None,
     })
     .unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
@@ -1758,6 +1761,9 @@ fn edit_footprint_properties_takes_the_whole_list_of_3d_models() {
         model: model.map(str::to_string),
         models3d,
         zone_connection: None,
+        reference: None,
+        value: None,
+        fields: None,
     };
     let two = vec![Model3d { offset: [1.0, 2.0, 0.5], rotate: [90.0, 0.0, 0.0], opacity: 0.5, ..Model3d::identity("a.step") }, Model3d { show: false, scale: [2.0, 2.0, 2.0], ..Model3d::identity("b.step") }];
     b.apply(&props(None, Some(two.clone()))).unwrap();
