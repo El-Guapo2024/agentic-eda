@@ -60,7 +60,7 @@ export interface HookState {
   /** The prompt of the picker session running (the delete tool's "Delete: click an item to delete it"), or null. */
   picker: string | null;
   selection: SelectedItem[];
-  /** The group being worked in on the board (`PCB_SELECTION_TOOL::m_enteredGroup`), or null. */
+  /** The group being worked in on the board or the sheet (`PCB_SELECTION_TOOL::m_enteredGroup`, `SCH_SELECTION_TOOL::m_enteredGroup`), or null. */
   entered: string | null;
   counts: Counts;
   /** The display units of the editor (`mm`, `mil`, `in`) and the nets highlighted on the board (the first, then the rest of a multi-net highlight). */
@@ -236,7 +236,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         tool,
         picker: picker.session()?.prompt ?? null,
         selection: selectionWithKinds(selection, kindIndex(lists)),
-        entered: studio.tab === "pcb" ? studio.enteredGroupId : null,
+        entered: studio.tab === "pcb" ? studio.enteredGroupId : studio.tab === "schematic" ? studio.schEnteredGroupId : null,
         counts: countsOf(studio.board, studio.schematic),
         units: studio.units,
         highlight: highlightedNets(studio.netHighlight, studio.bcx.netHighlightMore),

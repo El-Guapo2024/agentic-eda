@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { applyPatch } from "./schMove";
 import type { Schematic, SchField } from "../api/types";
 import type { SchMovePatch } from "../api/schEditTypes";
-import { autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeUm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText } from "./schFieldEdit";
+import { addUserFieldCmd, autoplaceCmd, boxFields, fieldBox, fieldEditCmd, fieldId, fieldItems, fieldSizeUm, fieldVisibilityCmds, findField, hitField, isFieldId, ownerKey, parseFieldId, selectedFields, shownText, fieldTextCmd, isStandardSymbolField, newUserFieldName, removeUserFieldCmd, userFieldNameError, userFieldsOf } from "./schFieldEdit";
 
 // the width of a text in these tests: 600 um a character at 1270 um, in proportion to the size
 const measure = (text: string, size: number) => text.length * 0.5 * size;
@@ -177,4 +177,30 @@ test("the Show column of Symbol Properties sends one edit per field whose visibi
   );
   assert.deepEqual(fieldVisibilityCmds("R1", fields, {}), []);
   assert.deepEqual(fieldVisibilityCmds("R1", undefined, { Value: false }), [], "an older server sends no fields");
+});
+
+test("a field of a symbol that is not one of the four standard ones is user-defined, whatever the case of the standard names", () => {
+  assert.ok(isStandardSymbolField("Value") && isStandardSymbolField("datasheet") && isStandardSymbolField("REFERENCE"));
+  assert.ok(!isStandardSymbolField("MPN") && !isStandardSymbolField("Description"));
+  const fields = [field("Reference", "R1", [0, 0]), field("Value", "330", [0, 0]), field("MPN", "ERJ", [0, 0], { visible: false }), field("Maker", "Panasonic", [0, 0])];
+  assert.deepEqual(userFieldsOf(fields).map((f) => f.name), ["MPN", "Maker"]);
+  assert.deepEqual(userFieldsOf(undefined), []);
+});
+
+test("a new field is called Field<N> and the name is checked against the fields the symbol has", () => {
+  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet"]), "Field4");
+  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet", "Field5"]), "Field6", "the first that no field has");
+  assert.equal(newUserFieldName(["Reference", "Value", "Footprint", "Datasheet", "field5"]), "Field6", "whatever the case");
+  assert.equal(userFieldNameError("MPN", ["MPN"]), 'A field named "MPN" already exists.');
+  assert.equal(userFieldNameError("mpn", ["MPN"]), 'A field named "mpn" already exists.');
+  assert.equal(userFieldNameError("value", []), 'A field named "value" already exists.');
+  assert.equal(userFieldNameError("  ", []), "A field needs a name.");
+  assert.equal(userFieldNameError("${X}", []), '"${X}" is not a valid field name.');
+  assert.equal(userFieldNameError(" Maker ", ["MPN"]), null);
+});
+
+test("the commands of a user-defined field are the backend's verbs", () => {
+  assert.deepEqual(addUserFieldCmd("R1", " Maker ", "Panasonic"), { op: "sch_edit", verb: "add_user_field", id: "R1", name: "Maker", text: "Panasonic" });
+  assert.deepEqual(removeUserFieldCmd("R1", "Maker"), { op: "sch_edit", verb: "remove_user_field", id: "R1", name: "Maker" });
+  assert.deepEqual(fieldTextCmd("U1#2", "MPN", "x"), { op: "sch_edit", verb: "edit_field", id: "fld:U1#2:MPN", text: "x" });
 });

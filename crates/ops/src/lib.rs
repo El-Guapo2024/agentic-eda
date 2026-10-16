@@ -71,6 +71,7 @@ mod part_rename;
 mod reannotate;
 mod pcb_global_edit;
 mod pcb_groups;
+mod sch_groups;
 mod pcb_paste;
 mod pcb_paste_special;
 mod pcb_props;
@@ -2323,10 +2324,12 @@ impl<'a> Board<'a> {
     /// Apply a command, or refuse it. A group keeps only the members that are still on the board afterwards (`pcb_groups.rs`).
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         let groups_before = self.group_universe();
+        let sch_groups_before = self.sch_group_universe();
         let patterns_before = self.tuning_universe();
         let edge_before = outline::snapshot(&self.design);
         self.apply_cmd(cmd)?;
         self.tidy_groups(groups_before);
+        self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);
         outline::refresh_if_changed(&mut self.design, edge_before);
         Ok(())
@@ -5465,6 +5468,7 @@ pub mod episode;
 pub mod flash;
 pub mod sch_edit;
 pub mod sch_move;
+pub mod sch_pin_helpers;
 mod sch_pins;
 mod sch_labels;
 pub mod sch_net_collision;
@@ -5475,7 +5479,13 @@ mod sch_fields;
 #[cfg(test)]
 mod sch_move_tests;
 #[cfg(test)]
+mod sch_groups_tests;
+#[cfg(test)]
 mod sch_fields_tests;
+#[cfg(test)]
+mod sch_user_fields_tests;
+#[cfg(test)]
+mod sch_pin_helpers_tests;
 #[cfg(test)]
 mod sch_body_style_tests;
 #[cfg(test)]

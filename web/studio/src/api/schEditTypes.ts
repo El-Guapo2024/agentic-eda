@@ -120,8 +120,8 @@ export type SchEditCmd =
   /** Put a pin on a sheet's border (`SCH_SHEET::AddPin`); `at` must be on the border (kicad-port/schSheetPins.ts `constrainOnEdge`). */
   | { verb: "add_sheet_pin"; sheet: string; name: string; shape: LabelShape; at: PointXY }
   | { verb: "delete_sheet_pin"; id: string }
-  /** Rename, reshape or move a sheet pin; a field left out is unchanged. */
-  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY }
+  /** Rename, reshape or move a sheet pin, or set the size (0.01 to 1000 mm), bold and italic of its text; a field left out is unchanged. */
+  | { verb: "edit_sheet_pin"; id: string; name?: string; shape?: LabelShape; at?: PointXY; size_um?: Um; bold?: boolean; italic?: boolean }
   /** Give every placed unit of reference `id` the library symbol `lib_id` (`DIALOG_CHANGE_SYMBOLS`, change mode). */
   | { verb: "change_symbol"; id: string; lib_id: string }
   /** Update Symbol(s) from Library: the symbols placed with these library ids resolve from the project's edited library symbol (`published`). */
@@ -161,6 +161,15 @@ export type SchEditCmd =
     }
   /** Autoplace Fields (`SCH_EDIT_TOOL::AutoplaceFields`) on these symbols, power symbols, sheets, or the item each listed field belongs to. */
   | { verb: "autoplace_fields"; ids: string[] }
+  /**
+   * Pin Helpers (`PIN_TRICKS_MENU`): a wire stub, a no-connect or a local, hierarchical or global label on each pin (`pin:<reference>:<number>`) and sheet pin of `pins` (anything else is passed
+   * over; none is refused). A stub is one step of `grid`, the wire grid (um, 0 is 50 mil); a label says the pin's name and reads away from it. One undo step.
+   */
+  | { verb: "pin_helper"; what: "wire" | "no_connect" | "net_label" | "hier_label" | "global_label"; pins: string[]; grid?: Um }
+  /** Add a user-defined field to the symbol `id` (a reference): `DIALOG_SYMBOL_PROPERTIES::OnAddField`. It starts hidden; show it with `edit_field` and `visible`. */
+  | { verb: "add_user_field"; id: string; name: string; text?: string }
+  /** Remove a user-defined field from the symbol `id` (a reference): `OnDeleteField`. The four standard fields cannot go. */
+  | { verb: "remove_user_field"; id: string; name: string }
   /** Text Properties of a free text: its text, its size (um, 0.01 to 1000 mm), its angle (millidegrees; horizontal or vertical) and its justification about the anchor. */
   | { verb: "edit_text"; id: string; text?: string; size_um?: Um; angle?: number; h?: SchHAlign; v?: SchVAlign }
   /** Sheet Properties: the sheet's name and the file it shows (a bare name; one the project has is linked to, a new one gets the content). */
@@ -172,7 +181,17 @@ export type SchEditCmd =
   /** Swap Pin Labels: the net labels on the pins trade texts in selection order. */
   | { verb: "swap_pin_labels"; pins: string[] }
   /** Swap Unit Labels: the placed units of one multi-unit reference trade the net labels on their pins. */
-  | { verb: "swap_unit_labels"; ids: string[] };
+  | { verb: "swap_unit_labels"; ids: string[] }
+  /** Group Items (Ctrl+G, `SCH_GROUP_TOOL::Group`): a new group over `ids` (items and other groups; at least two). Each leaves the group it was in. */
+  | { verb: "group"; ids: string[] }
+  /** Ungroup (`GROUP_TOOL::Ungroup`): every listed group dissolves, its members freed. */
+  | { verb: "ungroup"; ids: string[] }
+  /** Add Items (`GROUP_TOOL::AddToGroup`): `ids` join `group_id`, each leaving the group it was in. */
+  | { verb: "add_to_group"; group_id: string; ids: string[] }
+  /** Remove Items (`GROUP_TOOL::RemoveFromGroup`): each id leaves its group; a group left with fewer than two dissolves. */
+  | { verb: "remove_from_group"; ids: string[] }
+  /** Group Properties (`DIALOG_GROUP_PROPERTIES`): the group is renamed and its members are exactly `member_ids`. */
+  | { verb: "edit_group"; id: string; name: string; member_ids: string[] };
 
 /** One turn made while the items are held (`R`, Shift+`R`, `X`, `Y`). */
 export type SchTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";

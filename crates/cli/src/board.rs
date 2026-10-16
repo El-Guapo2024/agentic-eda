@@ -5749,7 +5749,7 @@ mod tests {
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000, dy: 2_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
-            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None }),
+            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None }),
             Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
             Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
         ];
@@ -5759,6 +5759,165 @@ mod tests {
             undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
             assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The five group verbs, and a move, a turn, a mirror and a delete of a group, each make exactly one undo step on the sheet, and one Undo puts the sheet back exactly
+    /// -- the groups with it (`SCH_COMMIT` keeps the group in the same commit as its members).
+    #[test]
+    fn every_schematic_group_verb_is_one_undo_step_and_the_tree_survives_the_edits() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_group_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let pt = |x: Um, y: Um| Point { x, y };
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "a".into(), at: pt(15_000, 30_000), angle: 0, size_um: 1_270 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_b".into(), content: "b".into(), at: pt(25_000, 30_000), angle: 0, size_um: 1_270 });
+            sch.assign_missing_ids();
+            // inner = {R1, R2}, outer = {inner, txt_a}
+            sch.extras.groups = vec![
+                eda_model::ir::Group { id: "grp_inner".into(), name: "pair".into(), member_ids: vec!["R1".into(), "R2".into()] },
+                eda_model::ir::Group { id: "grp_outer".into(), name: "all".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()] },
+            ];
+        }
+        save(&dir, &design).unwrap();
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let sheet_of = |d: &Design| serde_json::to_value(d.schematic.as_ref().unwrap()).unwrap();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let start = sheet_of(&load(&dir).unwrap().1);
+        let commands = vec![
+            Cmd::SchEdit(V::Group { ids: ids(&["grp_outer", "txt_b"]) }),
+            Cmd::SchEdit(V::Ungroup { ids: ids(&["grp_outer"]) }),
+            Cmd::SchEdit(V::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["txt_b"]) }),
+            Cmd::SchEdit(V::RemoveFromGroup { ids: ids(&["txt_a"]) }),
+            Cmd::SchEdit(V::EditGroup { id: "grp_outer".into(), name: "renamed".into(), member_ids: ids(&["grp_inner", "txt_b"]) }),
+            Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Rotate { ids: ids(&["grp_outer"]), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(M::Mirror { ids: ids(&["grp_outer"]), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+            Cmd::DeleteSchText { id: "txt_a".into() },
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet and its groups back exactly after {cmd:?}");
+        }
+        // the move really took the whole tree: R1, R2 and txt_a are 2.54 mm further right; txt_b, in no group, is where it was
+        step(&dir, on_sheet(Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None })), false, "test").unwrap();
+        let d = load(&dir).unwrap().1;
+        let sch = d.schematic.as_ref().unwrap();
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R1").unwrap().at.x, 12_540);
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R2").unwrap().at.x, 22_540);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_a").unwrap().at.x, 17_540);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_b").unwrap().at.x, 25_000);
+        assert_eq!(sch.extras.groups.len(), 2, "the tree is still the tree");
+        // the studio's sheet carries the groups
+        let json = crate::studio::schematic_json_of(&d, &load(&dir).unwrap().2, "");
+        assert_eq!(json["groups"].as_array().map(Vec::len), Some(2));
+        assert_eq!(json["groups"][0]["name"], "pair");
+        // a refused one is no step at all
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::Group { ids: ids(&["R1"]) })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("at least two"), "{}", reasons(&e));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each Pin Helper (a wire stub, a no-connect, a local, a hierarchical and a global label on a pin) makes exactly one undo step on the sheet, and one Undo puts it back exactly; a
+    /// helper that would change nothing is refused and is no step at all.
+    #[test]
+    fn every_pin_helper_is_one_undo_step() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_pin_helpers::PinHelper as H;
+        let dir = scratch("sch_pin_helper_undo");
+        setup_schematic(&dir);
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        for what in [H::Wire, H::NoConnect, H::NetLabel, H::HierLabel, H::GlobalLabel] {
+            let cmd = Cmd::SchEdit(V::PinHelper { what, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 });
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        // two labels on two pins, the text each pin's: the pins have no name, so `<reference>_<number>`
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NetLabel, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 })), false, "test").unwrap();
+        let d = load(&dir).unwrap().1;
+        let mut texts: Vec<String> = d.schematic.as_ref().unwrap().labels.iter().map(|l| l.net.clone()).collect();
+        texts.sort();
+        assert_eq!(texts, ["R1_1", "R2_1"]);
+        // a no-connect where there is one already changes nothing: refused, and no step
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("have it already"), "{}", reasons(&e));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The verbs of a user-defined field (show it, edit its text, move, turn and mirror it, autoplace the fields, add and remove one) each make exactly one undo step on the
+    /// sheet and one Undo puts it back exactly; the studio's sheet lists the field, hidden until it is shown, with the id every verb takes it by.
+    #[test]
+    fn every_user_field_verb_is_one_undo_step_and_the_studios_sheet_lists_the_field() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_user_field_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        // a sheet this project drew, not one read from a file: only such a sheet has places for its fields
+        design.schematic.as_mut().unwrap().imported_from_kicad = false;
+        design.schematic.as_mut().unwrap().user_fields.entry("R1".into()).or_default().insert("MPN".into(), "ERJ-3EKF".into());
+        save(&dir, &design).unwrap();
+        let field = "fld:R1:MPN".to_string();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let edit = |f: &dyn Fn(&mut Option<String>, &mut Option<bool>)| {
+            let (mut text, mut visible) = (None, None);
+            f(&mut text, &mut visible);
+            Cmd::SchEdit(V::EditField { id: "fld:R1:MPN".into(), text, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None })
+        };
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+
+        // the studio's sheet lists it with the four standard fields, hidden
+        let (_, d0, m0) = load(&dir).unwrap();
+        let json = crate::studio::schematic_json_of(&d0, &m0, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").expect("R1");
+        let names: Vec<&str> = r1["fields"].as_array().unwrap().iter().filter_map(|f| f["name"].as_str()).collect();
+        assert_eq!(names, ["Reference", "Value", "Footprint", "Datasheet", "MPN"]);
+        let mpn = r1["fields"].as_array().unwrap().iter().find(|f| f["name"] == "MPN").unwrap();
+        assert_eq!((mpn["id"].as_str(), mpn["text"].as_str(), mpn["visible"].as_bool()), (Some("fld:R1:MPN"), Some("ERJ-3EKF"), Some(false)));
+
+        let commands = vec![
+            edit(&|_, v| *v = Some(true)),
+            edit(&|t, _| *t = Some("RC0603".into())),
+            Cmd::SchMove(M::Move { ids: vec![field.clone()], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Rotate { ids: vec![field.clone()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(M::Mirror { ids: vec![field.clone()], vertical: false, vertices: Default::default(), about: None, grid: 0 }),
+            Cmd::SchEdit(V::AutoplaceFields { ids: vec!["R1".into()] }),
+            Cmd::SchEdit(V::AddUserField { id: "R1".into(), name: "Maker".into(), text: "Panasonic".into() }),
+            Cmd::SchEdit(V::RemoveUserField { id: "R1".into(), name: "MPN".into() }),
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+
+        // shown, it is listed as visible, and its place is the studio's to draw
+        step(&dir, on_sheet(edit(&|_, v| *v = Some(true))), false, "test").unwrap();
+        let (_, d1, m1) = load(&dir).unwrap();
+        let json = crate::studio::schematic_json_of(&d1, &m1, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap();
+        let mpn = r1["fields"].as_array().unwrap().iter().find(|f| f["name"] == "MPN").unwrap();
+        assert_eq!(mpn["visible"], true);
+        assert!(mpn["at"][0].is_number() && mpn["at"][1].is_number());
+        // a refused one is no step at all
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::RemoveUserField { id: "R1".into(), name: "Value".into() })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("cannot be removed"), "{}", reasons(&e));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

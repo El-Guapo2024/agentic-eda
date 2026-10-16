@@ -1676,6 +1676,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
     let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
+    // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
+    let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
@@ -1768,7 +1770,22 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
-                "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
+                // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
+                "pins": s.pins.iter().map(|p| {
+                    let mut pin = json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] });
+                    if let Some(look) = sch.extras.sheet_pin_looks.get(&p.id) {
+                        if look.size_um > 0 {
+                            pin["size_um"] = json!(look.size_um);
+                        }
+                        if look.bold {
+                            pin["bold"] = json!(true);
+                        }
+                        if look.italic {
+                            pin["italic"] = json!(true);
+                        }
+                    }
+                    pin
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -1793,6 +1810,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "lines": lines,
         "graphics": graphics,
         "locked": locked,
+        "groups": groups,
         "title_block": title_block,
         "page": crate::page_json::page_json(&page),
         "lib_symbols": lib_symbols,

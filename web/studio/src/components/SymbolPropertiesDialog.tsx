@@ -10,20 +10,32 @@
 // simplification (one component to maintain, same backend Cmds either
 // way) rather than building two dialogs with identical plumbing.
 //
-// The "Show" column of the fields table (`DIALOG_SYMBOL_PROPERTIES`) shows or hides each of the four fields, and the Body style choice (Standard / Alternate, only for a symbol
+// The "Show" column of the fields table (`DIALOG_SYMBOL_PROPERTIES`) shows or hides each of the four fields and of the user-defined ones that follow them (the text of
+// each of those is edited here, Add Field makes one -- hidden, as KiCad's `OnAddField` does -- and the x beside it removes it: one undo step with the rest), and the Body style choice (Standard / Alternate, only for a symbol
 // whose library symbol has two) puts the symbol in the other body style (`SCH_EDIT_FRAME::SelectBodyStyle`): both go in the same undo step as the texts. The Footprint
 // field's Browse... button opens the Footprint Chooser.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { fetchAnySymbol } from "../api/libraryClient";
 import type { Cmd } from "../api/types";
 import { uniquePinCount } from "../kicad-port/footprintFilter";
 import { bodyStyleCount, setBodyStyleCmd } from "../kicad-port/schBodyStyle";
-import { fieldVisibilityCmds, ownerKey } from "../kicad-port/schFieldEdit";
+import { addUserFieldCmd, fieldTextCmd, fieldVisibilityCmds, newUserFieldName, ownerKey, removeUserFieldCmd, STANDARD_SYMBOL_FIELDS, userFieldNameError, userFieldsOf } from "../kicad-port/schFieldEdit";
 import { expandStackedPinNotation } from "../kicad-port/stackedPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { FootprintChooserDialog } from "./FootprintChooserDialog";
 
-const MAIN_FIELDS = ["Reference", "Value", "Footprint", "Datasheet"] as const;
+const MAIN_FIELDS = STANDARD_SYMBOL_FIELDS;
+
+/** A user-defined field's row: what the symbol has (`was`), or a field added here (`isNew`), as it stands now. */
+interface UserRow {
+  key: number;
+  name: string;
+  text: string;
+  shown: boolean;
+  isNew: boolean;
+  removed: boolean;
+  was?: { text: string; visible: boolean };
+}
 
 export function SymbolPropertiesDialog() {
   const state = useStudioState();
@@ -40,6 +52,9 @@ export function SymbolPropertiesDialog() {
   /** The "Show" check of each main field, by name; `undefined` for a field the server did not send (an older one). */
   const [shown, setShown] = useState<Record<string, boolean>>({});
   const [bodyStyle, setBodyStyle] = useState(1);
+  /** The user-defined fields of the symbol, the ones it has and the ones added here. */
+  const [userRows, setUserRows] = useState<UserRow[]>([]);
+  const nextKey = useRef(0);
   // The Footprint field's browse button: the Footprint Chooser, narrowed by this symbol's pin count and its library symbol's footprint filters.
   const [choosingFootprint, setChoosingFootprint] = useState(false);
   const [libInfo, setLibInfo] = useState<{ filters: string[]; pins: number } | null>(null);
@@ -71,6 +86,7 @@ export function SymbolPropertiesDialog() {
     setDatasheet(symbol.datasheet ?? "");
     setShown(Object.fromEntries((symbol.fields ?? []).filter((f) => (MAIN_FIELDS as readonly string[]).includes(f.name)).map((f) => [f.name, f.visible])));
     setBodyStyle(symbol.body_style || 1);
+    setUserRows(userFieldsOf(symbol.fields).map((f) => ({ key: nextKey.current++, name: f.name, text: f.text, shown: f.visible, isNew: false, removed: false, was: { text: f.text, visible: f.visible } })));
     setError(null);
     const focusTarget = { reference: refInput, value: valueInput, footprint: footprintInput, datasheet: datasheetInput }[open?.field ?? "reference"];
     // Let the dialog mount before stealing focus.
@@ -93,9 +109,28 @@ export function SymbolPropertiesDialog() {
       setError(`"${trimmedRef}" is already used by another symbol.`);
       return;
     }
-    // One submit, one undo step: the texts (the footprint is the Browse... pick too), the shown fields and the body style, all by the reference the symbol has now, and the
-    // new reference last (a rename moves what is kept under the old one; the server's parts are not renamed until the step is done, so a field edit after it would miss its symbol)
-    const cmds: Cmd[] = [{ op: "edit_symbol_fields", id: symbol.id, value, footprint, datasheet }, ...fieldVisibilityCmds(ownerKey({ id: symbol.id, unit: symbol.unit }), symbol.fields, shown)];
+    // the fields added here need names that no field of the symbol has (`FIELDS_EDITOR_GRID_DATA_MODEL`: the same name twice is no second field)
+    const kept = userRows.filter((r) => !r.removed);
+    const added = kept.filter((r) => r.isNew);
+    for (const r of added) {
+      const taken = kept.filter((o) => o !== r).map((o) => o.name);
+      const why = userFieldNameError(r.name, taken);
+      if (why) {
+        setError(why);
+        return;
+      }
+    }
+    // One submit, one undo step: the texts (the footprint is the Browse... pick too), the user-defined fields taken away, added and edited, the shown fields and the body
+    // style, all by the reference the symbol has now, and the new reference last (a rename moves what is kept under the old one; the server's parts are not renamed until the
+    // step is done, so a field edit after it would miss its symbol)
+    const owner = ownerKey({ id: symbol.id, unit: symbol.unit });
+    const cmds: Cmd[] = [{ op: "edit_symbol_fields", id: symbol.id, value, footprint, datasheet }];
+    for (const r of userRows) if (r.removed && !r.isNew) cmds.push(removeUserFieldCmd(symbol.id, r.name));
+    for (const r of added) cmds.push(addUserFieldCmd(symbol.id, r.name, r.text));
+    for (const r of kept) if (!r.isNew && r.was && r.text !== r.was.text) cmds.push(fieldTextCmd(owner, r.name, r.text));
+    const wanted: Record<string, boolean> = { ...shown };
+    for (const r of kept) wanted[r.name.trim()] = r.shown;
+    cmds.push(...fieldVisibilityCmds(owner, [...(symbol.fields ?? []), ...added.map((r) => ({ name: r.name.trim(), visible: false }))], wanted));
     if (state.schematic && bodyStyle !== (symbol.body_style || 1)) {
       const change = setBodyStyleCmd(state.schematic, [symbol.id], bodyStyle);
       if (change) cmds.push(change);
@@ -109,6 +144,8 @@ export function SymbolPropertiesDialog() {
     close();
   };
   const bodyStyles = state.schematic ? bodyStyleCount(state.schematic, symbol) : 1;
+  // a sheet read from a KiCad file has no places for its fields yet: the server lists none, and a field added there could not be shown
+  const hasPlaces = (symbol.fields?.length ?? 0) > 0;
   /** The "Show" check of a main field's row; nothing for a field the server did not send. */
   const showBox = (name: string) =>
     shown[name] === undefined ? (
@@ -173,6 +210,36 @@ export function SymbolPropertiesDialog() {
               }}
             />
             {showBox("Datasheet")}
+            {userRows
+              .filter((r) => !r.removed)
+              .map((r) => (
+                <Fragment key={r.key}>
+                  {r.isNew ? (
+                    <input aria-label="New field name" value={r.name} onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, name: e.target.value } : o)))} style={{ minWidth: 0 }} />
+                  ) : (
+                    <span title="A user-defined field" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.name}
+                    </span>
+                  )}
+                  <div style={{ display: "flex", gap: 4 }}>
+                    <input
+                      aria-label={`${r.name} value`}
+                      style={{ flex: 1, minWidth: 0 }}
+                      value={r.text}
+                      onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, text: e.target.value } : o)))}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submit();
+                      }}
+                    />
+                    <button type="button" title="Remove this field" aria-label={`Remove ${r.name}`} onClick={() => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, removed: true } : o)))}>
+                      ×
+                    </button>
+                  </div>
+                  <label title={`Show the ${r.name} field on the sheet`} style={{ whiteSpace: "nowrap" }}>
+                    <input type="checkbox" checked={r.shown} onChange={(e) => setUserRows((rows) => rows.map((o) => (o === r ? { ...o, shown: e.target.checked } : o)))} /> Show
+                  </label>
+                </Fragment>
+              ))}
             <span>Library</span>
             <span style={{ opacity: 0.7 }}>{symbol.lib_id ?? "(generic)"}</span>
             <span />
@@ -191,6 +258,22 @@ export function SymbolPropertiesDialog() {
               </>
             )}
           </div>
+          {hasPlaces && (
+            <p style={{ margin: "8px 0 0" }}>
+              <button
+                type="button"
+                title="Add a field of your own to this symbol (hidden until it is shown)"
+                onClick={() =>
+                  setUserRows((rows) => [
+                    ...rows,
+                    { key: nextKey.current++, name: newUserFieldName([...MAIN_FIELDS, ...rows.filter((r) => !r.removed).map((r) => r.name)]), text: "", shown: false, isNew: true, removed: false },
+                  ])
+                }
+              >
+                Add Field
+              </button>
+            </p>
+          )}
           {error && (
             <p style={{ color: "var(--chrome-danger)", fontSize: 11, marginTop: 8 }}>{error}</p>
           )}

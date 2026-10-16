@@ -486,7 +486,7 @@ export interface Drawings {
   tuning_patterns?: TuningPattern[];
 }
 
-/** `crates/model/src/ir.rs` `Group` (task item 5) -- `PCB_GROUP`: a named set of member item ids (a part reference, or a track/via/zone/shape/text id), no geometry of its own. No nested groups in this model. */
+/** `crates/model/src/ir.rs` `Group` -- `PCB_GROUP` (on the board) and `SCH_GROUP` (on a sheet): a named set of member item ids (a part reference, a track/via/zone/shape/text id, a wire, a label ...) and of other groups' ids, no geometry of its own. */
 export interface Group {
   id: string;
   name: string;
@@ -2104,7 +2104,7 @@ export type LibSymbols = Record<string, LibSymbol>;
 
 /** One field of a symbol, power symbol or sheet as `GET /api/schematic` sends it: the text and where KiCad draws it on the sheet (`eda_engine::fields::PageField`). */
 export interface SchField {
-  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
+  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown) and, after them, the symbol's user-defined fields (hidden until shown); a sheet's `Sheetname`, `Sheetfile`. */
   name: string;
   text: string;
   /** What `${NAME}` in `text` stands for (`SCH_FIELD::GetShownText`); absent when it is `text` itself. A Reference never has one: the painter writes it with its unit letter. */
@@ -2317,6 +2317,10 @@ export interface SheetPin {
   name: string;
   shape: LabelShape;
   at: [Um, Um];
+  /** How the pin's text is set (Sheet Pin Properties; `SCH_SHEET_PIN` is an `EDA_TEXT`): absent is 50 mil, regular, upright. */
+  size_um?: Um;
+  bold?: boolean;
+  italic?: boolean;
 }
 
 /** One child sheet placed directly on the schematic view currently being shown -- `GET /api/schematic`'s own `sheets` field, not the whole project's tree (see `sheet_path` for how deep the current view already is). */
@@ -2369,6 +2373,8 @@ export interface Schematic {
   graphics?: SchGraphic[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
   locked?: string[];
+  /** The groups of this sheet (`SCH_GROUP`): a named set of item ids and of other groups' ids. Absent from a backend built before schematic groups. */
+  groups?: Group[];
   /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */

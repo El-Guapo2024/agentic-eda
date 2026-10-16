@@ -483,6 +483,9 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
     use std::fmt::Write as _;
 
     let bare_name = sym.lib_id.rsplit(':').next().unwrap_or(sym.lib_id.as_str());
+    // the sub-blocks are named for the block they are in: `<bare>_<unit>_<style>` of `outer_name` (a symbol's own copy in the cache, `GATE_1`, has `GATE_1_1_1`: KiCad refuses
+    // a sub-block whose name does not start with its parent's)
+    let block_name = outer_name.rsplit(':').next().unwrap_or(outer_name);
     let yn = |b: bool| if b { "yes" } else { "no" };
     let max_style: u32 = if sym.has_alternate_body_style { 2 } else { 1 };
 
@@ -523,7 +526,7 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
         units.extend(sym.pins.iter().filter(|p| p.body_style == 0 || p.body_style == style).map(|p| p.unit));
 
         for unit in units {
-            writeln!(out, "\t\t(symbol \"{bare_name}_{unit}_{style}\"").unwrap();
+            writeln!(out, "\t\t(symbol \"{block_name}_{unit}_{style}\"").unwrap();
             for g in sym.graphics.iter().filter(|g| g.unit() == unit && (g.body_style() == 0 || g.body_style() == style)) {
                 write_symbol_graphic(out, g);
             }

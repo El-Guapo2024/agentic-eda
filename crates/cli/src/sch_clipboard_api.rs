@@ -185,6 +185,7 @@ pub fn parse(dir: &Path, body: &[u8]) -> Value {
         "junctions": new_items(&before, &after, "junctions", &by_id),
         "lines": new_items(&before, &after, "lines", &by_id),
         "graphics": new_items(&before, &after, "graphics", &by_id),
+        "groups": new_items(&before, &after, "groups", &by_id),
         "lib_symbols": lib_symbols,
     });
 

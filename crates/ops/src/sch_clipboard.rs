@@ -164,6 +164,8 @@ impl<'a> Board<'a> {
             new_powers.push(PowerSymbol { id: reference.clone(), lib_id: target, at: Point { x: p.at.x + dx, y: p.at.y + dy }, rot: p.rot, net: p.net.clone(), pin: String::new() });
         }
         let shift = |p: &Point| Point { x: p.x + dx, y: p.y + dy };
+        // the ids the pasted items had in the fragment, in the order they are added (a group of the fragment names its members by them)
+        let wire_olds: Vec<String> = src.wires.iter().filter(|w| w.pts.len() >= 2).map(|w| w.id.clone()).collect();
         let new_wires: Vec<Wire> = src.wires.iter().filter(|w| w.pts.len() >= 2).map(|w| Wire { id: String::new(), net: String::new(), pins: Vec::new(), pts: w.pts.iter().map(shift).collect(), bus: w.bus }).collect();
         let new_labels: Vec<NetLabel> = src.labels.iter().map(|l| NetLabel { id: String::new(), net: l.net.clone(), at: shift(&l.at), kind: l.kind.clone() }).collect();
         let new_texts: Vec<SchematicText> = src.texts.iter().map(|t| SchematicText { id: String::new(), content: t.content.clone(), at: shift(&t.at), angle: t.angle, size_um: t.size_um }).collect();
@@ -192,6 +194,8 @@ impl<'a> Board<'a> {
             .filter_map(|(s, new)| src.user_fields.get(&s.id).map(|f| (new.clone(), f.clone())))
             .collect();
         let sch: &mut SchematicSection = self.schematic_mut_or_create();
+        let (first_wire, first_nc, first_entry, first_line, first_graphic) = (sch.wires.len(), sch.no_connects.len(), sch.bus_entries.len(), sch.lines.len(), sch.extras.graphics.len());
+        let junctions_before: Vec<Point> = sch.junctions.iter().map(|j| j.at).collect();
         sch.symbols.extend(new_symbols);
         sch.symbols.sort_by(|a, b| (&a.id, a.unit).cmp(&(&b.id, b.unit)));
         sch.power_symbols.extend(new_powers);
@@ -214,11 +218,69 @@ impl<'a> Board<'a> {
             sch.user_fields.entry(reference).or_insert(fields);
         }
         sch.assign_missing_ids();
+        // which item each id of the fragment became
+        let mut remap: BTreeMap<String, String> = BTreeMap::new();
+        for (s, new) in src.symbols.iter().zip(symbol_refs) {
+            remap.insert(s.id.clone(), new.clone());
+        }
+        for (p, new) in src.power_symbols.iter().zip(power_refs) {
+            remap.insert(p.id.clone(), new.clone());
+        }
+        for (k, old) in wire_olds.iter().enumerate() {
+            if let Some(w) = sch.wires.get(first_wire + k) {
+                remap.insert(old.clone(), w.id.clone());
+            }
+        }
+        for (k, l) in src.labels.iter().enumerate() {
+            if let Some(n) = sch.labels.get(first_label + k) {
+                remap.insert(l.id.clone(), n.id.clone());
+            }
+        }
+        for (k, t) in src.texts.iter().enumerate() {
+            if let Some(n) = sch.texts.get(first_text + k) {
+                remap.insert(t.id.clone(), n.id.clone());
+            }
+        }
+        for (k, n) in src.no_connects.iter().enumerate() {
+            if let Some(new) = sch.no_connects.get(first_nc + k) {
+                remap.insert(n.id.clone(), new.id.clone());
+            }
+        }
+        for (k, b) in src.bus_entries.iter().enumerate() {
+            if let Some(new) = sch.bus_entries.get(first_entry + k) {
+                remap.insert(b.id.clone(), new.id.clone());
+            }
+        }
+        for (k, l) in src.lines.iter().enumerate() {
+            if let Some(new) = sch.lines.get(first_line + k) {
+                remap.insert(l.id.clone(), new.id.clone());
+            }
+        }
+        for (k, g) in src.extras.graphics.iter().enumerate() {
+            if let Some(new) = sch.extras.graphics.get(first_graphic + k) {
+                remap.insert(g.id.clone(), new.id.clone());
+            }
+        }
+        // a junction the sheet already had is not a pasted one; one the pasted wires imply is not stored
+        for j in &src.junctions {
+            let at = shift(&j.at);
+            if !junctions_before.contains(&at) {
+                if let Some(new) = sch.junctions.iter().find(|n| n.at == at) {
+                    remap.insert(j.id.clone(), new.id.clone());
+                }
+            }
+        }
         // a pasted symbol keeps the body style it was copied in (`SCH_SYMBOL::GetBodyStyle`)
         for (s, new) in src.symbols.iter().zip(symbol_refs) {
             let style = src.body_style_of(s);
             if style > 1 && engine_of.get(&s.lib_id).is_some_and(|e| e.has_alternate_body()) {
                 sch.extras.body_styles.insert(eda_model::ir::field_key(new, s.unit), style);
+            }
+        }
+        // a pasted symbol keeps the places Swap Pins gave its pins (`SchExtras::pin_swaps`; the clipboard names the symbol's own copy of its library symbol, `lib_name`)
+        for (s, new) in src.symbols.iter().zip(symbol_refs) {
+            if let Some(swaps) = src.extras.pin_swaps_of(&eda_model::ir::field_key(&s.id, s.unit)) {
+                sch.extras.pin_swaps.insert(eda_model::ir::field_key(new, s.unit), swaps.clone());
             }
         }
         // a pasted label keeps its spin, size, bold and italic
@@ -240,7 +302,74 @@ impl<'a> Board<'a> {
         }
         // hierarchical sheets: each a new sheet, with copies of the screens it shows (the sheet part of `SCH_EDITOR_CONTROL::Paste`)
         if !src.sheets.is_empty() {
+            let first_sheet = self.schematic()?.sheets.len();
             self.paste_sheets(fragment, dx, dy, mode)?;
+            // they are added by name, naturally (`sortedLoadedItems`)
+            let mut by_name: Vec<&eda_model::ir::SheetInstance> = src.sheets.iter().collect();
+            by_name.sort_by(|a, b| eda_model::sheet_list::str_num_cmp(&a.name, &b.name));
+            let added: Vec<String> = self.schematic()?.sheets.iter().skip(first_sheet).map(|s| s.id.clone()).collect();
+            for (old, new) in by_name.iter().zip(added) {
+                remap.insert(old.id.clone(), new);
+            }
+        }
+        self.paste_groups(fragment, &remap)?;
+        Ok(())
+    }
+}
+
+impl<'a> Board<'a> {
+    /// The groups of a pasted fragment (`SCH_EDITOR_CONTROL::Paste`: the group items are in `loadedItems` with their members, `parseGroup` / `resolveGroups`
+    /// having made them): each becomes a group of the pasted items -- `remap` says which item each id of the fragment became -- and a group in a group
+    /// stays in it. A member that was not pasted (a junction the wires imply, one the sheet had) is left out; a group left with fewer than two dissolves. A
+    /// lock is not carried (`schItem->SetLocked( false )`).
+    fn paste_groups(&mut self, fragment: &SchFragment, remap: &BTreeMap<String, String>) -> Result<(), Vec<CheckResult>> {
+        let tree = fragment.section.extras.group_tree();
+        if fragment.section.extras.groups.is_empty() {
+            return Ok(());
+        }
+        // inner groups first, so the group that holds one names it by the id it got here
+        fn make(tree: eda_model::groups::GroupTree<'_>, id: &str, remap: &mut BTreeMap<String, String>, out: &mut Vec<eda_model::ir::Group>, visiting: &mut Vec<String>) {
+            if remap.contains_key(id) || visiting.iter().any(|v| v == id) {
+                return;
+            }
+            let Some(g) = tree.group(id) else { return };
+            visiting.push(id.to_string());
+            let mut members: Vec<String> = Vec::new();
+            for m in &g.member_ids {
+                if tree.is_group(m) {
+                    make(tree, m, remap, out, visiting);
+                }
+                if let Some(new) = remap.get(m) {
+                    if !members.contains(new) {
+                        members.push(new.clone());
+                    }
+                }
+            }
+            visiting.pop();
+            if members.len() >= 2 {
+                let mut group = eda_model::ir::Group { id: String::new(), name: g.name.clone(), member_ids: members };
+                group.id = format!("pasted:{id}");
+                remap.insert(id.to_string(), group.id.clone());
+                out.push(group);
+            }
+        }
+        let mut remap = remap.clone();
+        let mut made: Vec<eda_model::ir::Group> = Vec::new();
+        for g in &fragment.section.extras.groups {
+            make(tree, &g.id, &mut remap, &mut made, &mut Vec::new());
+        }
+        // name them from the inside out (a group is named after its members)
+        let sch = self.schematic_mut()?;
+        let mut names: BTreeMap<String, String> = BTreeMap::new();
+        for g in &made {
+            let mut g = g.clone();
+            let temp = g.id.clone();
+            g.member_ids = g.member_ids.iter().map(|m| names.get(m).cloned().unwrap_or_else(|| m.clone())).collect();
+            g.id = String::new();
+            sch.extras.groups.push(g);
+            sch.extras.assign_missing_group_ids();
+            let new_id = sch.extras.groups.last().map(|g| g.id.clone()).unwrap_or_default();
+            names.insert(temp, new_id);
         }
         Ok(())
     }
