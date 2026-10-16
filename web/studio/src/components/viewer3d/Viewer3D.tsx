@@ -170,6 +170,8 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const board = state.board;
+  // The zones' fills as KiCad made them: the copper of a pour in the stand-in scene (the render kicad-cli makes has its own).
+  const zoneFill = state.zoneFill;
 
   const containerRef = useRef<HTMLDivElement>(null);
   const threeRef = useRef<ThreeContext | null>(null);
@@ -642,7 +644,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     disposeObject3D(three.boardGroup);
     three.scene.remove(three.boardGroup);
     // The parts are not in this group: partModels draws them (the real models, a box until they are in).
-    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row), colors: resolved }) : new THREE.Group();
+    const nextGroup = board ? buildBoardGroup(board, { visible: (row) => isVisible(layers, row), colors: resolved, zoneFills: zoneFill?.zones }) : new THREE.Group();
     three.scene.add(nextGroup);
     three.boardGroup = nextGroup;
     syncActiveGroupRef.current();
@@ -663,7 +665,7 @@ export function Viewer3D({ onReady }: { onReady?: (api: Viewer3DApi | null) => v
     lastFitBoundsRef.current = bounds;
     if (boundsChanged) three.camera3d.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [board, sceneRows, resolved]);
+  }, [board, sceneRows, resolved, zoneFill]);
 
   // The parts: the through-hole, SMD and virtual rows and the bounding boxes only touch their models.
   const thtShown = isVisible(layers, "th_models");

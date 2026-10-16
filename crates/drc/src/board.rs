@@ -144,22 +144,12 @@ pub struct DrcPad {
     /// `None` for a round-drilled or SMD pad.
     pub drill_slot: Option<(Um, Um)>,
     /// The pad's own (un-rotated) size and shape and its `PAD::GetOrientation()` (millidegrees, KiCad's sign convention, as
-    /// the `.kicad_pcb` stores it): what `ZONE_FILLER::buildThermalSpokes` builds a thermal relief's spokes from.
+    /// the `.kicad_pcb` stores it).
     pub size: (Um, Um),
     pub shape: PadShape,
     pub orientation_mdeg: i64,
     /// The pad's and footprint's zone-connection overrides, thermal gap / spoke width / spoke angle.
     pub zone: PadZoneFacts,
-    /// `PAD::ShapePos`: where the copper's centre is (`center` moved by the pad's shape offset).
-    pub shape_pos: Point,
-    /// `PADSTACK::DefaultThermalSpokeAngleForShape` as the reader applies it, millidegrees: 45 for a circle and for a custom pad with a
-    /// circular anchor, 90 otherwise ([`eda_model::Pad::default_spoke_angle_mdeg`]).
-    pub default_spoke_angle_mdeg: i64,
-    /// A custom pad a zone keeps clear of by its convex hull (`CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`).
-    pub custom_convex_hull: bool,
-    /// The bounding box `(x0, y0, x1, y1)` of a trapezoid, chamfered or custom pad at orientation 0, position 0 and no offset, in the frame
-    /// of `orientation_mdeg` (the file's: mirrored for a bottom-side footprint): what its thermal spokes are cut from. `None`: the pad's `size`.
-    pub spoke_box: Option<(Um, Um, Um, Um)>,
 }
 
 pub struct DrcTrackSeg {
@@ -183,59 +173,6 @@ pub struct DrcVia {
     pub diameter: Um,
     pub from_layer: String,
     pub to_layer: String,
-}
-
-pub struct DrcZone {
-    pub id: String,
-    pub net: Option<String>,
-    pub layer: String,
-    pub outline: Vec<Point>,
-    // ---- fill settings, carried alongside so `eda_drc::fill::fill_all_zones`
-    // can run from a `DrcBoard` alone (no separate `Design`/`ConstraintModel`
-    // pass needed, and no risk of it recursively calling `board::build`
-    // again) -- see that module's doc comment. Mirrors `eda_model::ir::Zone`'s
-    // own fields of the same name.
-    pub priority: u32,
-    pub clearance: Um,
-    pub min_thickness: Um,
-    pub thermal_gap: Um,
-    pub thermal_spoke_width: Um,
-    pub pad_connection: eda_model::ir::PadConnection,
-    pub island_removal_mode: eda_model::ir::IslandRemovalMode,
-    pub min_island_area: i64,
-    /// `ZONE::IsTeardropArea()`: tested "as tracks, not zones" -- left out
-    /// of zone-vs-zone and tested against other zones instead
-    /// (`testTeardropClearances`).
-    pub teardrop: bool,
-    /// The hatch fill and the outline's corner smoothing (`ZONE_SETTINGS`), for the filler.
-    pub fill_mode: eda_model::ir::FillMode,
-    pub hatch_thickness: Um,
-    pub hatch_gap: Um,
-    pub hatch_orientation_mdeg: eda_model::ir::Millideg,
-    pub hatch_smoothing_level: i32,
-    pub hatch_smoothing_value: f64,
-    pub hatch_hole_min_area: f64,
-    pub hatch_border_algorithm: i32,
-    pub smoothing: eda_model::ir::ZoneSmoothing,
-    pub corner_radius: Um,
-}
-
-/// A rule area / keepout (`ZONE::GetIsRuleArea`, task item 3) -- kept
-/// entirely separate from [`DrcZone`] (never pushed into `DrcBoard::zones`)
-/// so every existing provider that already iterates `board.zones` assuming
-/// "this is real copper" keeps working unchanged; a keepout has no fill
-/// settings and is not copper.
-pub struct DrcKeepout {
-    pub id: String,
-    pub layer: String,
-    pub outline: Vec<Point>,
-    pub no_tracks: bool,
-    pub no_vias: bool,
-    pub no_pads: bool,
-    pub no_copper_pour: bool,
-    pub no_footprints: bool,
-    /// `Zone::parent_footprint`: a footprint's own rule area.
-    pub parent_footprint: Option<String>,
 }
 
 pub struct DrcFootprint {
@@ -360,27 +297,11 @@ pub struct DrcBoard {
     pub pads: Vec<DrcPad>,
     pub tracks: Vec<DrcTrackSeg>,
     pub vias: Vec<DrcVia>,
-    pub zones: Vec<DrcZone>,
-    pub keepouts: Vec<DrcKeepout>,
     pub footprints: Vec<DrcFootprint>,
     pub shapes: Vec<IrShape>,
     pub texts: Vec<Text>,
     pub silk_items: Vec<SilkItem>,
     pub mask: MaskData,
-    /// Copper-layer text (`PCB_TEXT` on a copper layer): non-connected
-    /// copper in `m_CopperItemRTreeCache`.
-    pub copper_graphics: Vec<DrcCopperGraphic>,
-}
-
-/// A non-connected copper graphic (text): `IsConnected()` is false.
-#[derive(Clone)]
-pub struct DrcCopperGraphic {
-    pub id: String,
-    pub desc: String,
-    pub layer: String,
-    pub pos: Point,
-    /// `GetEffectiveShape()` -- the text's strokes.
-    pub shape: Shape,
 }
 
 /// A local-frame `(w, h)` box's axis-aligned board-space extent under a
@@ -588,8 +509,6 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
 
     let mut pads = Vec::new();
     let mut footprints = Vec::new();
-    // The netless copper the footprints' own graphics are (a PCB antenna, a logo): a zone keeps clear of it.
-    let mut footprint_copper: Vec<DrcCopperGraphic> = Vec::new();
     let mut mask = MaskData { rules: model.board.solder_mask.clone(), ..Default::default() };
     let extras: HashMap<&str, &eda_model::ir::FootprintExtra> = design.drawings.as_ref().map(|d| d.footprint_extras.iter().map(|e| (e.id.as_str(), e)).collect()).unwrap_or_default();
     if let Some(pl) = &design.placement {
@@ -605,7 +524,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                 net_tie_groups: extra.map(|e| e.net_tie_pad_groups.clone()).unwrap_or_default(),
             });
             // The footprint's silkscreen, mask and copper graphics and its texts (its fields and its own): from its art, put where it is (`crate::fp_art`).
-            crate::fp_art::add_footprint_art(design, part, fp, &footprint, extra, fp_mask_idx, &mut mask, &mut footprint_copper);
+            crate::fp_art::add_footprint_art(design, part, fp, &footprint, extra, fp_mask_idx, &mut mask);
             if let Some(c) = placed_courtyard(model, part, fp) {
                 let outlines = footprint.courtyard_outlines.iter().map(|o| o.iter().map(|&p| pad_center(fp, p)).collect()).collect();
                 footprints.push(DrcFootprint { id: fp.id.clone(), side: fp.side, courtyard: c, outlines });
@@ -651,12 +570,6 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
                     // `pad_file_angle`: the footprint's rotation plus the pad's own (whose sense flips on the bottom), negated.
                     orientation_mdeg: (-(board_rot + if fp.side == Side::Bottom { -(pad.rot as i64) } else { pad.rot as i64 })).rem_euclid(360_000),
                     zone: design.pad_zone_facts(&fp.id, &footprint.name, pad_idx, footprint.pads.len(), &pad.number),
-                    shape_pos: crate::pad_shape::shape_pos(fp, pad, center),
-                    default_spoke_angle_mdeg: pad.default_spoke_angle_mdeg(),
-                    custom_convex_hull: crate::pad_shape::custom_convex_hull(pad),
-                    // The box is in the pad's own frame; KiCad's (the file's) is mirrored for a bottom-side footprint, and the spokes are turned by
-                    // the orientation of that frame.
-                    spoke_box: crate::pad_shape::spoke_box(pad).map(|b| if fp.side == Side::Bottom { (-b.2, b.1, -b.0, b.3) } else { b }),
                 });
             }
         }
@@ -664,8 +577,6 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
 
     let mut tracks = Vec::new();
     let mut vias = Vec::new();
-    let mut zones = Vec::new();
-    let mut keepouts = Vec::new();
     if let Some(rt) = &design.routing {
         for t in &rt.tracks {
             let net = if t.net.is_empty() { None } else { Some(t.net.clone()) };
@@ -683,55 +594,6 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
             mask.vias.push(DrcViaMask { tent_front: t.and_then(|t| t.front), tent_back: t.and_then(|t| t.back) });
             let net = if v.net.is_empty() { None } else { Some(v.net.clone()) };
             vias.push(DrcVia { id: v.id.clone(), net, at: v.at, drill: v.drill, diameter: v.diameter, from_layer: v.from_layer.clone(), to_layer: v.to_layer.clone() });
-        }
-        for z in &rt.zones {
-            if z.outline.len() < 3 {
-                continue;
-            }
-            // A rule area is not copper -- it never becomes a `DrcZone`
-            // (every provider that already iterates `board.zones` assumes
-            // "this is a real copper pour"), only a `DrcKeepout`. See
-            // task item 3 / `DrcKeepout`'s own doc.
-            if z.is_rule_area {
-                keepouts.push(DrcKeepout {
-                    id: z.id.clone(),
-                    layer: z.layer.clone(),
-                    outline: z.outline.clone(),
-                    no_tracks: z.keepout_tracks,
-                    no_vias: z.keepout_vias,
-                    no_pads: z.keepout_pads,
-                    no_copper_pour: z.keepout_copper_pour,
-                    no_footprints: z.keepout_footprints,
-                    parent_footprint: z.parent_footprint.clone(),
-                });
-                continue;
-            }
-            let net = if z.net.is_empty() { None } else { Some(z.net.clone()) };
-            zones.push(DrcZone {
-                id: z.id.clone(),
-                net,
-                layer: z.layer.clone(),
-                outline: z.outline.clone(),
-                priority: z.priority,
-                clearance: z.clearance,
-                min_thickness: z.min_thickness,
-                thermal_gap: z.thermal_gap,
-                thermal_spoke_width: z.thermal_spoke_width,
-                pad_connection: z.pad_connection,
-                island_removal_mode: z.island_removal_mode,
-                min_island_area: z.min_island_area,
-                teardrop: z.teardrop,
-                fill_mode: z.fill_mode,
-                hatch_thickness: z.hatch_thickness,
-                hatch_gap: z.hatch_gap,
-                hatch_orientation_mdeg: z.hatch_orientation_mdeg,
-                hatch_smoothing_level: z.hatch_smoothing_level,
-                hatch_smoothing_value: z.hatch_smoothing_value,
-                hatch_hole_min_area: z.hatch_hole_min_area,
-                hatch_border_algorithm: z.hatch_border_algorithm,
-                smoothing: z.smoothing,
-                corner_radius: z.corner_radius,
-            });
         }
     }
 
@@ -821,17 +683,7 @@ pub fn build(design: &Design, model: &ConstraintModel) -> DrcBoard {
         }
     }
 
-    let mut copper_graphics: Vec<DrcCopperGraphic> = design
-        .drawings
-        .as_ref()
-        .map(|d| d.copper_texts.as_slice())
-        .unwrap_or(&[])
-        .iter()
-        .enumerate()
-        .filter_map(|(i, t)| footprint_text_shape(t).map(|shape| DrcCopperGraphic { id: format!("ctxt{i}"), desc: format!("Text '{}' on {}", t.text.replace('\n', " "), t.layer), layer: t.layer.clone(), pos: t.at, shape }))
-        .collect();
-    copper_graphics.extend(footprint_copper);
-    DrcBoard { layers, outline, board_outline, edge_cuts, pads, tracks, vias, zones, keepouts, footprints, shapes, texts, silk_items, mask, copper_graphics }
+    DrcBoard { layers, outline, board_outline, edge_cuts, pads, tracks, vias, footprints, shapes, texts, silk_items, mask }
 }
 
 impl DrcVia {
@@ -891,8 +743,3 @@ impl DrcTrackSeg {
     }
 }
 
-impl DrcZone {
-    pub fn shape(&self) -> Shape {
-        Shape::Polygon { pts: self.outline.clone() }
-    }
-}

@@ -7,7 +7,7 @@
 //! hole of the one around it. Several outlines are allowed, as KiCad allows them; a closed shape on its own (a circle, a rectangle) is a
 //! contour; an open chain, a self-intersecting one and a contour crossing another are reported, not silently closed.
 //!
-//! The zone filler clips to this outline and keeps its islands inside it, the router and the placement gate read it, and the studio draws the
+//! The router and the placement gate read it, and the studio draws the
 //! 3D board body from it. `kicad-cli pcb drc` makes the same checks on the exported file (`invalid_outline`, "Board has malformed outline"),
 //! and stays the engine that judges the board; this port is the live view the interactive consumers need, so a malformed outline is seen
 //! while it is being drawn.

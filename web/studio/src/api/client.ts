@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
@@ -140,8 +140,9 @@ export async function fetchRatsnest(): Promise<Ratsnest> {
  * answering edits and /api/version while kicad-cli runs, and the report's
  * `revision` says which version of the board it judged, so a caller can tell
  * when the board has moved on (kicad-port/checkRevision.ts). `refillZones` is
- * KiCad's "Refill all zones before performing DRC" -- off by default, because
- * kicad-cli 10.99 skips its courtyard checks when it refills.
+ * KiCad's "Refill all zones before performing DRC": kicad-cli's filler runs first, on a
+ * copy of the board, and the DRC then judges the board with that fill (the fills are kept
+ * like B's).
  */
 export async function fetchDrc(refillZones = false, schematicParity = false): Promise<DrcReport> {
   const asked = [refillZones ? "refill_zones=1" : "", schematicParity ? "schematic_parity=1" : ""].filter(Boolean).join("&");
@@ -164,12 +165,34 @@ export async function fetchLint(): Promise<LintReport> {
   return r;
 }
 
-/** `crates/zone-filler`'s real KiCad fill algorithm, run fresh server-side on every call (B/Ctrl+B -- see state/store.tsx's `zoneFill`). */
+/** The fills KiCad made of the zones (B), as the server holds them (crates/cli/src/fill_api.rs): no computation, a read; a zone without a current fill comes back `filled: false`. */
 export async function fetchFill(withPolys = false): Promise<FillReport> {
   // `polys` (the fill unfractured, outline + holes per island) is what the "Draw Zone Fill Triangulation" display triangulates.
   const r = await getJson<FillReport & { error?: string }>(withPolys ? "/api/fill?polys=1" : "/api/fill");
   if (r.error) throw new ApiError(r.error);
   return r;
+}
+
+/** The Zone Manager's Auto-Assign Priorities (`AutoAssignZonePriorities`): the priorities KiCad would give the copper pours, worked out for the board as it is and not applied. */
+export async function fetchAutoZonePriorities(): Promise<{ changed: boolean; priorities: Record<string, number>; error?: string }> {
+  const r = await getJson<{ changed: boolean; priorities: Record<string, number>; error?: string }>("/api/zone_priorities/auto");
+  if (r.error) throw new ApiError(r.error);
+  return r;
+}
+
+/**
+ * Fill All Zones (B), or only `zones` (Fill Selected Zones): kicad-cli's filler runs on a copy of the derived board (seconds; the board stays editable meanwhile) and its fills
+ * are kept beside the design. Never throws for a run that could not happen (no kicad-cli, a board it refuses): `ok` is false and `message` says why.
+ */
+export async function postFillKicad(zones?: string[]): Promise<KicadFillReply> {
+  const res = await fetch("/api/fill/kicad", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(zones && zones.length > 0 ? { zones } : {}) });
+  if (!res.ok) return { ok: false, message: `HTTP ${res.status}` };
+  return (await res.json()) as KicadFillReply;
+}
+
+/** Unfill All Zones (Ctrl+B), or only `zones`: the fills are taken away, the zones are outlines until the next fill. */
+export async function postFillClear(zones?: string[]): Promise<void> {
+  await fetch("/api/fill/clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(zones && zones.length > 0 ? { zones } : {}) });
 }
 
 /**
@@ -297,9 +320,12 @@ export interface FabReply {
   revision?: string;
 }
 
-/** `useAuxOrigin`: the Plot dialog's "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). */
-export function postFabGerbers(layers?: string[], useAuxOrigin = false): Promise<FabReply> {
-  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin ? { use_aux_origin: true } : {}) });
+/**
+ * `useAuxOrigin`: the Plot dialog's "Use drill/place file origin" (`pcbnew.EditorControl.drillOrigin`). `checkZones`: its "Check zone fills before plotting" -- KiCad's filler
+ * runs first when some zone has no current fill.
+ */
+export function postFabGerbers(layers?: string[], useAuxOrigin = false, checkZones = false): Promise<FabReply> {
+  return postJson<FabReply>("/api/fab/gerbers", { ...(layers && layers.length > 0 ? { layers } : {}), ...(useAuxOrigin ? { use_aux_origin: true } : {}), ...(checkZones ? { check_zones: true } : {}) });
 }
 
 /** `useAuxOrigin`: the drill dialog's Origin choice, "Drill/place file origin" instead of "Absolute". */
@@ -626,6 +652,11 @@ export function postBoardStats(opts: BoardStatsOptions, report?: { units: Length
   return postJson("/api/board_stats", report ? { ...opts, report: true, units: report.units, date: report.date } : opts);
 }
 
+/** The ERC and DRC dialogs' "Save...": a run of kicad-cli that writes its own report file (`ERC_REPORT`, `DRC_REPORT`) for the severities the dialog shows; the text comes back. */
+export function postSavedReport(domain: "erc" | "drc", req: SavedReportRequest): Promise<SavedReportReply> {
+  return postJson(`/api/${domain}/report`, req);
+}
+
 /** Board Setup > Design Rules > Custom Rules, "Check rule syntax": kicad-cli loads the text (crates/cli/src/kicad_engine.rs `check_rules`); nothing is saved. */
 export function postCheckRules(text: string): Promise<RulesCheckReply> {
   return postJson("/api/check_rules", { text });
@@ -663,6 +694,11 @@ export async function fetchErcPinMap(): Promise<ErcPinMapReply> {
 /** The ERC severities Schematic Setup > Violation Severity edits (the table kicad-cli's ERC runs with). */
 export async function fetchErcSeverities(): Promise<ErcSeveritiesReply> {
   return getJson<ErcSeveritiesReply>("/api/sch/erc_severities");
+}
+
+/** The settings of Schematic Setup > Formatting the design keeps (the connection grid). */
+export async function fetchSchFormatting(): Promise<SchFormattingReply> {
+  return getJson<SchFormattingReply>("/api/sch/formatting");
 }
 
 /** `POST /api/inspect/clearance`: `reportClearance` for two items (`aAt`/`bAt`, in micrometres, say which segment of a track was meant). */

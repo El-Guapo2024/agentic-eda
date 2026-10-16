@@ -28,6 +28,12 @@ use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// `eeschema/schematic_settings.h`: `MIN_CONNECTION_GRID_MILS` and `DEFAULT_CONNECTION_GRID_MILS` -- Schematic Setup > Formatting > Connection grid spacing is from
+/// the first to 10000 mils (`PANEL_SETUP_FORMATTING::TransferDataFromWindow`), and 50 mils unless the design says otherwise.
+pub const MIN_CONNECTION_GRID_MILS: u32 = 25;
+pub const DEFAULT_CONNECTION_GRID_MILS: u32 = 50;
+pub const MAX_CONNECTION_GRID_MILS: u32 = 10_000;
+
 /// Items and annotations beyond the core schematic content -- see the module doc.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +44,11 @@ pub struct SchExtras {
     /// KiCad's defaults. `crate::erc_checks` lists the keys. Additive. (Counts in `is_empty`: a table is a reason to write `extras`.)
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub erc_severities: BTreeMap<String, String>,
+    /// Schematic Setup > Formatting > Connection grid spacing (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`, `panel_setup_formatting.cpp`): the grid, in mils, that wire ends and
+    /// pins are expected to be on -- ERC's `endpoint_off_grid` judges by it. Written to the derived project as `schematic.connection_grid_size`, where kicad-cli reads it. `None`:
+    /// KiCad's default, 50 mils. Additive. (Counts in `writes_nothing`, not in `is_empty`: it is a project setting, no part of the drawing.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_grid_mils: Option<u32>,
     /// Drawn graphics and annotations, in drawing order (later ones paint over earlier ones).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub graphics: Vec<SchGraphic>,
@@ -304,10 +315,10 @@ impl LabelSpin {
 }
 
 impl SchExtras {
-    /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty) and no table of ERC severities. The
-    /// severities are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
+    /// Whether design.json has nothing to say for `extras` (it is then not written): [`is_empty`](Self::is_empty), no table of ERC severities and no connection grid. The
+    /// severities and the grid are no part of the schematic KiCad's files draw -- they go to the derived project -- so they are not in `is_empty`.
     pub fn writes_nothing(&self) -> bool {
-        self.is_empty() && self.erc_severities.is_empty()
+        self.is_empty() && self.erc_severities.is_empty() && self.connection_grid_mils.is_none()
     }
 }
 

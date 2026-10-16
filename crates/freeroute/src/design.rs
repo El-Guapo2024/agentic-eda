@@ -1068,7 +1068,7 @@ pub fn routing_section(design: &Design, model: &ConstraintModel, rules: &BoardRu
     let mut zones = design.routing.as_ref().map(|r| r.zones.clone()).unwrap_or_default();
     for p in &plan.planes {
         let (net, layer) = (&plan.nets[p.net].name, &plan.layers[p.layer]);
-        if !zones.iter().any(|z| &z.net == net && &z.layer == layer) {
+        if !zones.iter().any(|z| &z.net == net && z.is_on_layer(layer)) {
             zones.push(eda_model::ir::Zone {
                 id: String::new(),
                 net: net.clone(),

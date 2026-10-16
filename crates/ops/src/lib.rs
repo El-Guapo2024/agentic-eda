@@ -78,6 +78,7 @@ mod pcb_props;
 mod pcb_transform;
 mod tuning;
 mod zone_overrides;
+pub mod zone_priority;
 mod sch_annotate;
 mod sch_clipboard;
 pub mod sch_control;
@@ -393,6 +394,11 @@ pub enum Cmd {
         id: String,
         net: String,
         layer: String,
+        /// `ZONE_SETTINGS::m_Layers`: the layers the zone is on (the dialog's layer list), `layer` being the first. Absent leaves a zone on several
+        /// layers as it is when `layer` is one of them, and puts any other zone on `layer` alone. A zone with no copper layer in its set is a non-copper
+        /// zone (it has no net).
+        #[serde(default)]
+        layers: Option<Vec<String>>,
         clearance: Um,
         min_thickness: Um,
         thermal_gap: Um,
@@ -565,6 +571,10 @@ pub enum Cmd {
     AddDrcExclusions { exclusions: Vec<DrcExclusion> },
     /// "Remove exclusion for this violation": put the violations `exclusions` name back in the report. Refused when none of them is waived.
     DeleteDrcExclusions { exclusions: Vec<DrcExclusionKey> },
+    /// Delete Marker on an excluded marker and Delete All Markers with "Errors, Warnings and Exclusions" (`DIALOG_DRC::OnDeleteOneClick`,
+    /// `OnDeleteAllClick`): the markers go, and `BOARD::RecordDRCExclusions` -- which the next run and the next save make -- keeps the exclusions of the
+    /// markers that are left, so with all of them gone no exclusion is. (One marker's is `DeleteDrcExclusions`.) Refused when none is listed.
+    ClearDrcExclusions,
     /// Schematic Setup > Violation Severity: the ERC checks reported at a severity other than their default, by settings key
     /// (`eda_model::erc_checks`) -> `error` | `warning` | `ignore`. Whole table in, whole table replaced.
     SetErcSeverities { severities: BTreeMap<String, String> },
@@ -1161,12 +1171,33 @@ pub enum Cmd {
     /// applies to kicad-cli's ERC report, so the persisted list needs no
     /// translation.
     /// Refused if `location` is empty (nothing to key on -- the same
-    /// findings `Exclusions` itself can never exclude); adding one
-    /// already excluded is a harmless no-op, not an error.
-    AddErcExclusion { check: String, location: String },
-    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"):
+    /// findings `Exclusions` itself can never exclude). One already excluded
+    /// is replaced, which is how "Edit exclusion comment..." changes the
+    /// comment: `comment` is `SCH_MARKER::GetComment` ("Exclude with
+    /// comment..."), `marker` the marker as the report said it
+    /// (`ErcViolation.marker`; none when it could not) and none leaves the
+    /// marker the exclusion had.
+    AddErcExclusion {
+        check: String,
+        location: String,
+        #[serde(default)]
+        comment: String,
+        #[serde(default)]
+        marker: Option<eda_model::ir::ErcMarker>,
+    },
+    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"; Delete
+    /// Marker on an excluded marker, which is what makes KiCad forget it --
+    /// `RecordERCExclusions` records the markers that are left):
     /// refused if no exclusion with this exact key exists.
     DeleteErcExclusion { check: String, location: String },
+    /// Schematic Setup > Formatting > Connection grid spacing (`panel_setup_formatting.cpp`): the grid, in mils, that ERC expects wire ends and pins on
+    /// (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`). From `MIN_CONNECTION_GRID_MILS` (25) to 10000; 50, KiCad's default, is stored as none.
+    SetConnectionGrid { mils: u32 },
+    /// Delete All Markers with "Errors, Warnings and Exclusions"
+    /// (`DIALOG_ERC::OnDeleteAllClick`): every marker goes, the excluded ones
+    /// too, and KiCad records the markers that are left, so no exclusion
+    /// is. Refused when none is listed.
+    ClearErcExclusions,
 
     /// `L`/`Ctrl+L`/`H`: place a net label. `kind`/`shape` follow
     /// `eda_model::ir::LabelKind`'s own vocabulary (local has no shape).
@@ -1714,6 +1745,8 @@ impl Cmd {
             | Cmd::SchMove(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
+            | Cmd::ClearErcExclusions
+            | Cmd::SetConnectionGrid { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
             | Cmd::AddSchText { .. }
@@ -1794,8 +1827,8 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
-            // A severity table is about the report, not the drawing.
-            Cmd::SetErcSeverities { .. } => false,
+            // A severity table and the findings waived are about the report, not the drawing.
+            Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -1911,6 +1944,7 @@ impl Cmd {
             Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::ClearDrcExclusions => vec!["drc_exclusions"],
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -1954,6 +1988,8 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
+            Cmd::ClearErcExclusions => vec!["erc_exclusions"],
+            Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
@@ -2355,7 +2391,9 @@ impl<'a> Board<'a> {
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
             Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
+            Cmd::ClearDrcExclusions => review::clear_drc_exclusions(&mut self.design),
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
+            Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
@@ -2389,6 +2427,7 @@ impl<'a> Board<'a> {
                 id,
                 net,
                 layer,
+                layers,
                 clearance,
                 min_thickness,
                 thermal_gap,
@@ -2417,6 +2456,7 @@ impl<'a> Board<'a> {
                 id,
                 net,
                 layer,
+                layers.as_deref(),
                 *clearance,
                 *min_thickness,
                 *thermal_gap,
@@ -2528,8 +2568,9 @@ impl<'a> Board<'a> {
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
-            Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
+            Cmd::AddErcExclusion { check, location, comment, marker } => self.add_erc_exclusion(check, location, comment, marker),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
+            Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
             Cmd::AddSchText { content, at, angle_millideg, size_um } => self.add_sch_text(content, *at, *angle_millideg, *size_um),
@@ -3298,14 +3339,27 @@ impl<'a> Board<'a> {
         if !net.is_empty() {
             self.known_net(net)?;
         }
-        self.known_layer(layer)?;
+        self.known_zone_layer(layer)?;
         if outline.len() < 3 {
             return Err(vec![CheckResult::fail("ops_bad_zone", net, "a zone outline needs at least three points")]);
         }
+        // A zone on no copper layer has no net (`if( !zone->IsOnCopperLayer() ) zone->SetNetCode( NETINFO_LIST::UNCONNECTED )`).
+        let net = if eda_model::layers::is_copper_layer_name(layer) { net } else { "" };
         let rt = self.routing_mut();
         rt.zones.push(Zone { id: String::new(), net: net.into(), layer: layer.into(), outline: outline.to_vec(), ..Default::default() });
         rt.assign_missing_ids();
         Ok(())
+    }
+
+    /// The layers a zone can be on: a copper layer the board has, or a technical or user layer it has turned on (`LSET::AllNonCuMask` that Board Editor Layers enables).
+    fn known_zone_layer(&self, layer: &str) -> Result<(), Vec<CheckResult>> {
+        if eda_model::layers::is_copper_layer_name(layer) {
+            return self.known_layer(layer);
+        }
+        if eda_model::layers::is_optional_layer(layer) {
+            return self.layer_is_on(layer, "zone");
+        }
+        Err(vec![CheckResult::fail("ops_unknown_layer", layer, "a zone can be on a copper, technical or user layer")])
     }
 
     fn delete_zone(&mut self, id: &str) -> Result<(), Vec<CheckResult>> {
@@ -3340,6 +3394,7 @@ impl<'a> Board<'a> {
         id: &str,
         net: &str,
         layer: &str,
+        layers: Option<&[String]>,
         clearance: Um,
         min_thickness: Um,
         thermal_gap: Um,
@@ -3370,14 +3425,28 @@ impl<'a> Board<'a> {
         if !net.is_empty() {
             self.known_net(net)?;
         }
-        self.known_layer(layer)?;
+        // The zone's layer set: the dialog's list when it sends one, else `layer` (keeping a set that already holds it).
+        let wanted: Vec<String> = match layers {
+            Some(set) if !set.is_empty() => set.to_vec(),
+            _ => vec![layer.to_string()],
+        };
+        for l in &wanted {
+            self.known_zone_layer(l)?;
+        }
+        let copper = wanted.iter().any(|l| eda_model::layers::is_copper_layer_name(l));
+        if !is_rule_area && copper && wanted.iter().any(|l| !eda_model::layers::is_copper_layer_name(l)) {
+            return Err(vec![CheckResult::fail("ops_bad_zone", id, "a zone is on copper layers or on technical layers, not both (only a rule area can be on both)")]);
+        }
         if clearance < 0 {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "clearance cannot be negative")]);
         }
-        if min_thickness <= 0 {
+        // A zone on no copper layer may have no minimum width at all (`issue22826`'s mask zones; the non-copper dialog does not check it), and has no thermal
+        // spokes to check it against: both are copper pours' (`panel_zone_properties.cpp`'s `AcceptOptions`).
+        let pour = copper && !is_rule_area;
+        if min_thickness < 0 || (min_thickness == 0 && copper) {
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "minimum width must be positive")]);
         }
-        if thermal_spoke_width < min_thickness {
+        if pour && thermal_spoke_width < min_thickness {
             // panel_zone_properties.cpp's AcceptOptions(): "Thermal spoke
             // width cannot be smaller than the minimum width."
             return Err(vec![CheckResult::fail("ops_bad_zone", id, "thermal spoke width cannot be smaller than the minimum width")]);
@@ -3390,8 +3459,11 @@ impl<'a> Board<'a> {
         }
         let rt = self.design.routing.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "the board has no routing yet")])?;
         let z = rt.zones.iter_mut().find(|z| z.id == id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_zone", id, "no zone with this id")])?;
-        z.net = net.into();
-        z.layer = layer.into();
+        if layers.is_some_and(|l| !l.is_empty()) || !z.is_on_layer(layer) {
+            z.set_layer_set(&wanted);
+        }
+        // A zone on no copper layer has no net.
+        z.net = if copper || is_rule_area { net.into() } else { String::new() };
         z.clearance = clearance;
         z.min_thickness = min_thickness;
         z.thermal_gap = thermal_gap;
@@ -3615,6 +3687,7 @@ impl<'a> Board<'a> {
             }
             let mut z = template.clone();
             z.id = String::new();
+            z.uuid.clear();
             z.outline = ring.iter().map(|p| Point { x: p.x, y: p.y }).collect();
             rt.zones.push(z);
         }
@@ -3637,8 +3710,8 @@ impl<'a> Board<'a> {
                 }
             }
             for z in rt.zones.iter_mut() {
-                if let Some(dest) = map.get(z.layer.as_str()) {
-                    z.layer = (*dest).to_string();
+                if z.layer_set().into_iter().any(|l| map.contains_key(l)) {
+                    z.map_layers(|l| map.get(l).map_or_else(|| l.to_string(), |d| (*d).to_string()));
                 }
             }
             // `if( via->GetViaType() == VIATYPE::THROUGH ) continue;` --
@@ -4298,20 +4371,28 @@ impl<'a> Board<'a> {
     }
 
     /// `dialog_erc.cpp`'s "Exclude this violation" -- see `Cmd::AddErcExclusion`'s own doc.
-    fn add_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+    fn add_erc_exclusion(&mut self, check: &str, location: &str, comment: &str, marker: &Option<eda_model::ir::ErcMarker>) -> Result<(), Vec<CheckResult>> {
         if location.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_erc_exclusion", check, "this finding has no location to key an exclusion on")]);
         }
-        let sch = self.schematic_mut_or_create();
-        if !sch.erc_exclusions.iter().any(|e| e.check == check && e.location == location) {
-            sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into() });
-            sch.erc_exclusions.sort();
+        // The list belongs to the schematic as a whole, the root's: a sheet the editor is on does not keep one of its own.
+        let sch = self.design.schematic.get_or_insert_with(empty_schematic_section);
+        match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location) {
+            // Already waived: the comment is the new one (an empty one clears it), the marker the new one when there is one.
+            Some(slot) => {
+                slot.comment = comment.into();
+                if marker.is_some() {
+                    slot.marker = marker.clone();
+                }
+            }
+            None => sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into(), comment: comment.into(), marker: marker.clone() }),
         }
+        sch.erc_exclusions.sort();
         Ok(())
     }
 
     fn delete_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
-        let sch = self.schematic_mut()?;
+        let sch = self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])?;
         let before = sch.erc_exclusions.len();
         sch.erc_exclusions.retain(|e| !(e.check == check && e.location == location));
         if sch.erc_exclusions.len() == before {
@@ -4325,6 +4406,16 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_label", "label", "a label needs a net name")]);
         }
         self.schematic_mut_or_create().labels.push(NetLabel { id: String::new(), net: net.into(), at, kind });
+        Ok(())
+    }
+
+    /// `DIALOG_ERC::OnDeleteAllClick` with the exclusions: see `Cmd::ClearErcExclusions`.
+    fn clear_erc_exclusions(&mut self) -> Result<(), Vec<CheckResult>> {
+        let sch = self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])?;
+        if sch.erc_exclusions.is_empty() {
+            return Err(vec![CheckResult::fail("ops_unknown_erc_exclusion", "erc_exclusions", "no finding is excluded")]);
+        }
+        sch.erc_exclusions.clear();
         Ok(())
     }
 

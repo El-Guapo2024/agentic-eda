@@ -296,6 +296,7 @@ impl DisjointSet {
 mod tests {
     use super::*;
     use crate::algo::{build_graph, search_clusters};
+    use eda_drc::zone_copper::ZoneCopper;
     use crate::tests_support::{pad_center, two_pad_model};
     use eda_model::ir::Track;
 
@@ -319,7 +320,7 @@ mod tests {
         model.nets[0].pins.push("R3.1".into());
         design.placement.as_mut().unwrap().footprints.push(eda_model::ir::FootprintInstance { id: "R3".into(), at: eda_model::ir::Point { x: 10_000, y: 15_000 }, rot: 0, side: eda_model::ir::Side::Top, label: Default::default() });
 
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 3);
         let edges = compute_ratsnest(&graph, &clusters);
@@ -331,7 +332,7 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 1);
         assert!(compute_ratsnest(&graph, &clusters).is_empty());

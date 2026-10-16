@@ -60,6 +60,9 @@ export function StatusBar() {
     ercRunning: state.ercRunning,
     drcStale: state.drc !== null && isStale(state.drcVersion, state.version),
     ercStale: state.erc !== null && isStale(state.ercVersion, state.version),
+    zoneFillRunning: state.zoneFillRunning,
+    // A copper zone with no fill that is current is an outline (`state.zoneFill` is KiCad's, as the server holds it).
+    zonesUnfilled: state.zoneFill ? new Set(state.zoneFill.zones.filter((f) => !f.filled).map((f) => f.id)).size : 0,
   });
 
   return (

@@ -60,6 +60,10 @@ export interface CheckStatus {
   /** A DRC/ERC report is on screen and its revision is no longer the board's. */
   drcStale: boolean;
   ercStale: boolean;
+  /** kicad-cli's zone filler is running (B). */
+  zoneFillRunning?: boolean;
+  /** The copper zones with no fill that is current (never filled, unfilled, or edited since): they show as outlines until the next fill. */
+  zonesUnfilled?: number;
 }
 
 /**
@@ -74,5 +78,9 @@ export function statusNotes(s: CheckStatus): string[] {
   if (s.ercRunning) notes.push("ERC running…");
   if (!s.drcRunning && s.drcStale && s.tab === "pcb") notes.push("DRC out of date");
   if (!s.ercRunning && s.ercStale && s.tab === "schematic") notes.push("ERC out of date");
+  if (s.tab === "pcb") {
+    if (s.zoneFillRunning) notes.push("Filling zones…");
+    else if ((s.zonesUnfilled ?? 0) > 0) notes.push(`${s.zonesUnfilled} zone${s.zonesUnfilled === 1 ? "" : "s"} not filled (B)`);
+  }
   return notes;
 }

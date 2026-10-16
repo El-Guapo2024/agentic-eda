@@ -1,20 +1,25 @@
 // pcbnew.InteractiveDrawing.zone ("Draw Filled Zones") and "E"/double-click
 // on an existing zone -- port of pcbnew/dialogs/panel_zone_properties.cpp
-// (dialog_copper_zones.cpp's one real panel), covering every
-// `ZONE_SETTINGS` field the IR actually models (crates/model/src/ir.rs
-// `Zone`). Two fields real KiCad also shows -- zone Name and per-layer
-// hatch-offset overrides -- have no IR equivalent (no `name`/layer-set
-// concept on this model's single-layer `Zone`) and are left out, same
-// "nothing to show, not a bug" convention this app's other dialogs use for
-// a field with no backing data.
+// (dialog_copper_zones.cpp's one real panel) and of
+// dialog_non_copper_zones_properties.cpp, covering every `ZONE_SETTINGS`
+// field the IR actually models (crates/model/src/ir.rs `Zone`).
 //
-// Also covers Rule Areas / keepouts (task item 3,
-// `pcbnew.InteractiveDrawing.ruleArea`): the "Rule area" checkbox at top
-// swaps the rest of the form between this zone's fill settings and its
-// five keepout restrictions, the same single-dialog-two-panels shape
-// source's own `IsRuleArea()` branch uses. A rule area normally carries no
-// net at all (the Net field disappears, matching source's own dialog,
-// which hides/disables the net picker for a rule area too).
+// Which dialog a zone gets follows its layers (zone_create_helper.cpp
+// `createNewZone`): a zone on a copper layer is a copper pour (`InvokeCopper
+// ZonesEditor`: net, clearance, pad connections, islands, corner smoothing,
+// fill), one on no copper layer is a non-copper zone (`InvokeNonCopper
+// ZonesEditor`: silkscreen, mask, paste and user layers -- no net, no
+// clearances, only the minimum width, the corner smoothing and the fill
+// style), and a rule area has its own panel (`InvokeRuleAreaEditor`). Source
+// swaps panels on `IsRuleArea()` the same way, so this is one dialog with
+// three bodies. Every kind has the layer list (`m_layers`: the copper layers
+// for a pour, the technical and user layers for a non-copper zone, both for
+// a rule area; one or more can be checked), the name and "Locked".
+//
+// Per-layer hatch-offset overrides (Zone Properties' table, the Board Setup >
+// Zone Hatch Offsets page's per-zone counterpart) have no IR equivalent and
+// are left out, same "nothing to show, not a bug" convention this app's other
+// dialogs use for a field with no backing data.
 //
 // KiCad asks for a zone's full settings *before* you draw the outline;
 // this app's canvas draws the outline first (Canvas.tsx's finishDraw()
@@ -25,10 +30,13 @@
 // existing zone's current settings and commits everything through
 // `edit_zone` alone (outline unchanged -- no point editor yet).
 import { useEffect, useMemo, useState } from "react";
-import type { FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
+import type { Cmd, FillMode, IslandRemovalMode, PadConnection, RuleAreaFields, ZoneSettingsFields, ZoneSmoothing } from "../api/types";
 import { DEFAULT_RULE_AREA_SETTINGS, DEFAULT_ZONE_SETTINGS, useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import { duplicatedZoneOutline } from "../kicad-port/boardControl";
+import { enabledOptionalLayers, layerDisplayName } from "../kicad-port/boardLayers";
+import { activeLayerName, isCopper } from "../kicad-port/layerPresets";
+import { orderedLayerSet, zoneDialogKind, zoneLayerChoices, zoneLayers } from "../kicad-port/zoneLayers";
 
 type ZoneFormSettings = ZoneSettingsFields & RuleAreaFields;
 const DEFAULT_FORM_SETTINGS: ZoneFormSettings = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
@@ -63,9 +71,10 @@ const ISLAND_REMOVAL_OPTIONS: { value: IslandRemovalMode; label: string }[] = [
 ];
 
 /** A length field bound to one `ZoneSettingsFields` key, shown/edited in the status bar's current unit -- converts to/from µm only at the input boundary, same spirit `MoveExactDialog.tsx` already uses. */
-function LengthInput({ valueUm, unit, onChange, disabled }: { valueUm: number; unit: Parameters<typeof umTo>[1]; onChange: (um: number) => void; disabled?: boolean }) {
+function LengthInput({ valueUm, unit, onChange, disabled, testid }: { valueUm: number; unit: Parameters<typeof umTo>[1]; onChange: (um: number) => void; disabled?: boolean; testid?: string }) {
   return (
     <input
+      data-testid={testid}
       type="number"
       step="any"
       disabled={disabled}
@@ -78,6 +87,8 @@ function LengthInput({ valueUm, unit, onChange, disabled }: { valueUm: number; u
     />
   );
 }
+
+const SECTION: React.CSSProperties = { color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 };
 
 export function ZoneDialog() {
   const state = useStudioState();
@@ -100,8 +111,15 @@ export function ZoneDialog() {
   }, [state.board]);
 
   const [net, setNet] = useState("");
-  const [layer, setLayer] = useState("");
+  /** The layers checked in the list (`ZONE_SETTINGS::m_Layers`), in the order the board lists them. */
+  const [layers, setLayers] = useState<string[]>([]);
+  const [name, setName] = useState("");
+  const [locked, setLocked] = useState(false);
   const [settings, setSettings] = useState<ZoneFormSettings>(DEFAULT_FORM_SETTINGS);
+
+  const copperLayers = state.board?.layers ?? [];
+  const optionalLayers = enabledOptionalLayers(state.board?.board_rules?.layer_setup);
+  const lockedIds = state.board?.locked;
 
   // (Re)populate whenever the dialog opens on a *different* target --
   // never on every render, or a mid-edit keystroke would be clobbered by
@@ -110,16 +128,23 @@ export function ZoneDialog() {
     if (!open) return;
     if (editZone) {
       setNet(editZone.net);
-      setLayer(editZone.layer);
+      setLayers([...zoneLayers(editZone)]);
+      setName(editZone.name ?? "");
+      setLocked(!!lockedIds?.includes(editZone.id));
       setSettings({ ...editZone });
     } else if (dupZone) {
-      // `zoneSettings << *oldZone`: the copy starts from the original's net, layer and settings.
+      // `zoneSettings << *oldZone`: the copy starts from the original's net, layers, name, lock and settings.
       setNet(dupZone.net);
-      setLayer(dupZone.layer);
+      setLayers([...zoneLayers(dupZone)]);
+      setName(dupZone.name ?? "");
+      setLocked(!!lockedIds?.includes(dupZone.id));
       setSettings({ ...dupZone });
     } else {
+      // `createNewZone`: the zone is on the layer the tool was started on -- a technical layer gets the non-copper dialog.
       setNet("");
-      setLayer("");
+      setLayers([activeLayerName(state.activeLayer, copperLayers[0] ?? "F.Cu")]);
+      setName("");
+      setLocked(false);
       setSettings({ ...DEFAULT_FORM_SETTINGS, is_rule_area: state.nextZoneIsRuleArea });
       dispatch({ type: "SET_NEXT_ZONE_IS_RULE_AREA", value: false });
     }
@@ -128,11 +153,19 @@ export function ZoneDialog() {
 
   if (!open) return null;
 
-  // A rule area normally has no net at all (KiCad's net code 0) -- unlike
-  // a copper-pour zone, never defaulted to the first net on the board.
-  const effectiveNet = settings.is_rule_area ? net : net || nets[0] || "";
-  const effectiveLayer = layer || state.activeLayer || state.board?.layers[0] || "F.Cu";
+  const kind = zoneDialogKind(settings.is_rule_area, layers);
+  const choices = zoneLayerChoices(kind, copperLayers, optionalLayers);
+  // A zone can hold a layer the list does not offer (a rule area's technical layers once the box is unchecked, a layer the board has since turned off): keep it in view.
+  const listed = [...choices, ...layers.filter((l) => !choices.includes(l))];
+  // A rule area normally has no net at all (KiCad's net code 0) -- unlike a copper-pour zone, never defaulted to the first net on the board; a non-copper zone has none.
+  const effectiveNet = kind === "copper" ? net || nets[0] || "" : kind === "rule-area" ? net : "";
   const set = <K extends keyof ZoneFormSettings>(key: K, value: ZoneFormSettings[K]) => setSettings((s) => ({ ...s, [key]: value }));
+  const setRuleArea = (on: boolean) => {
+    set("is_rule_area", on);
+    // Only a rule area is on copper and technical layers at once: unchecking the box keeps the copper layers, else the technical ones.
+    if (!on && layers.some(isCopper) && layers.some((l) => !isCopper(l))) setLayers(layers.filter(isCopper));
+  };
+  const toggleLayer = (layer: string, on: boolean) => setLayers(orderedLayerSet(on ? [...layers, layer] : layers.filter((l) => l !== layer), listed));
 
   const close = () => {
     dispatch({ type: "SET_ZONE_PENDING", outline: null });
@@ -146,48 +179,78 @@ export function ZoneDialog() {
   // so the dialog can disable OK instead of round-tripping a refusal. A
   // rule area skips every fill-engine check (clearance/min-width/thermal
   // spoke are all unused fields for one, matching source) and doesn't
-  // need a net at all.
-  const thermalSpokeTooNarrow = !settings.is_rule_area && settings.thermal_spoke_width < settings.min_thickness;
-  const canSubmit = settings.is_rule_area ? true : !!effectiveNet && !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0;
+  // need a net at all; a non-copper zone has no clearances or spokes
+  // either. "No layer selected." is both KiCad dialogs' check on the list.
+  const noLayer = layers.length === 0;
+  const thermalSpokeTooNarrow = kind === "copper" && settings.thermal_spoke_width < settings.min_thickness;
+  const canSubmit = !noLayer && (kind === "rule-area" ? true : kind === "non-copper" ? settings.min_thickness >= 0 : !!effectiveNet && !thermalSpokeTooNarrow && settings.clearance >= 0 && settings.min_thickness > 0);
+  const firstLayer = layers[0] ?? "F.Cu";
 
   const submit = async () => {
     if (!canSubmit) return;
+    // The zone's net is the form's own; the settings carry the rest (a spread of the zone being edited would bring its old net and layer back over the form's).
+    const form = { ...settings };
     if (editZone) {
-      const ok = await api.cmd({ op: "edit_zone", id: editZone.id, net: effectiveNet, layer: effectiveLayer, ...settings });
+      const cmds: Cmd[] = [{ op: "edit_zone", ...form, id: editZone.id, net: effectiveNet, layer: firstLayer, layers }];
+      if ((editZone.name ?? "") !== name && !settings.is_rule_area) cmds.push({ op: "set_zone_name", id: editZone.id, name });
+      if (!!lockedIds?.includes(editZone.id) !== locked) cmds.push({ op: "set_locked", ids: [editZone.id], locked });
+      const ok = cmds.length === 1 ? await api.cmd(cmds[0]!) : await api.cmdBatch(cmds);
       if (ok) close();
     } else if (addOutline) {
-      await api.addZone(effectiveNet, effectiveLayer, addOutline, settings);
+      const extra = { layers, name: settings.is_rule_area ? "" : name, locked };
+      await api.addZone(effectiveNet, firstLayer, addOutline, form, extra);
       // "Create Zone from Selection": the other outlines the conversion made get the same settings, then the converted sources go.
       const convert = state.pcbx.zoneConvert;
       if (convert) {
-        for (const outline of convert.extraOutlines) await api.addZone(effectiveNet, effectiveLayer, outline, settings);
+        for (const outline of convert.extraOutlines) await api.addZone(effectiveNet, firstLayer, outline, form, extra);
         if (convert.deleteCmds.length > 0) await api.cmdBatch(convert.deleteCmds);
       }
       close();
     } else if (dupZone) {
-      // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layer as the original --
+      // `ZoneDuplicate`: the copy is unfilled (fills are derived here), has the dialog's settings, and -- on the same layers as the original --
       // is offset a bit so it can be picked.
-      await api.addZone(effectiveNet, effectiveLayer, duplicatedZoneOutline(dupZone.outline, effectiveLayer === dupZone.layer), settings);
+      const sameLayers = zoneLayers(dupZone).join("|") === layers.join("|");
+      await api.addZone(effectiveNet, firstLayer, duplicatedZoneOutline(dupZone.outline, sameLayers), form, { layers, name: settings.is_rule_area ? "" : name, locked });
       close();
     }
   };
 
+  const title = editZone
+    ? kind === "rule-area"
+      ? "Rule Area Properties"
+      : kind === "non-copper"
+        ? "Non-copper Zone Properties"
+        : "Zone Properties"
+    : dupZone
+      ? "Zone Properties -- Duplicate Zone onto Layer"
+      : kind === "rule-area"
+        ? "Rule Area Properties -- New Rule Area"
+        : kind === "non-copper"
+          ? "Non-copper Zone Properties -- New Zone"
+          : "Zone Properties -- New Zone";
+
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 460 }} data-testid="zone-dialog" data-zone-dialog={kind} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
-          <span>{editZone ? (settings.is_rule_area ? "Rule Area Properties" : "Zone Properties") : dupZone ? "Zone Properties -- Duplicate Zone onto Layer" : settings.is_rule_area ? "Rule Area Properties -- New Rule Area" : "Zone Properties -- New Zone"}</span>
+          <span>{title}</span>
         </div>
         <div className="dialog-body" style={{ maxHeight: "70vh", overflowY: "auto" }}>
           <label className="filter-row" style={{ display: "block", marginBottom: 8 }} title="ZONE::GetIsRuleArea() -- a keepout instead of a copper pour">
-            <input type="checkbox" checked={settings.is_rule_area} onChange={(e) => set("is_rule_area", e.target.checked)} /> Rule area (keepout)
+            <input type="checkbox" data-testid="zone-rule-area" checked={settings.is_rule_area} onChange={(e) => setRuleArea(e.target.checked)} /> Rule area (keepout)
           </label>
 
           <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
             {!settings.is_rule_area && (
               <>
+                <span>Name</span>
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="(unnamed)" data-testid="zone-name" />
+              </>
+            )}
+            {kind === "copper" && (
+              <>
                 <span>Net</span>
-                <select value={effectiveNet} onChange={(e) => setNet(e.target.value)}>
+                <select value={effectiveNet} onChange={(e) => setNet(e.target.value)} data-testid="zone-net">
                   {nets.length === 0 && <option value="">(no nets on this board)</option>}
                   {nets.map((n) => (
                     <option key={n} value={n}>
@@ -197,19 +260,23 @@ export function ZoneDialog() {
                 </select>
               </>
             )}
-            <span>Layer</span>
-            <select value={effectiveLayer} onChange={(e) => setLayer(e.target.value)}>
-              {(state.board?.layers ?? []).map((l) => (
-                <option key={l} value={l}>
-                  {l}
-                </option>
+            <span>Layers</span>
+            <div role="group" aria-label="Zone layers" style={{ maxHeight: 130, overflowY: "auto", border: "1px solid var(--chrome-border, #444)", padding: "2px 6px" }}>
+              {listed.map((l) => (
+                <label key={l} className="filter-row" style={{ display: "block" }} data-zone-layer={l}>
+                  <input type="checkbox" data-testid={`zone-layer-${l}`} checked={layers.includes(l)} onChange={(e) => toggleLayer(l, e.target.checked)} /> {layerDisplayName(state.board?.board_rules?.layer_setup, l)}
+                </label>
               ))}
-            </select>
+            </div>
           </div>
+          {noLayer && <p style={{ color: "#ef5b5b", fontSize: 11, margin: "4px 0 0" }}>No layer selected.</p>}
+          <label className="filter-row" style={{ display: "block", marginTop: 8 }} title="BOARD_ITEM::IsLocked() -- a locked zone is not moved or edited by the selection tools">
+            <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} data-testid="zone-locked" /> Locked
+          </label>
 
-          {settings.is_rule_area ? (
+          {kind === "rule-area" ? (
             <>
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Keep out</p>
+              <p style={SECTION}>Keep out</p>
               {KEEPOUT_OPTIONS.map((o) => (
                 <label key={o.key} className="filter-row" style={{ display: "block" }}>
                   <input type="checkbox" checked={settings[o.key]} onChange={(e) => set(o.key, e.target.checked)} /> {o.label}
@@ -218,76 +285,89 @@ export function ZoneDialog() {
             </>
           ) : (
             <>
-              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
-                <span>Clearance</span>
-                <span>
-                  <LengthInput valueUm={settings.clearance} unit={units} onChange={(v) => set("clearance", v)} /> {units}
-                </span>
+              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr", marginTop: 8 }}>
+                {kind === "copper" && (
+                  <>
+                    <span>Clearance</span>
+                    <span>
+                      <LengthInput valueUm={settings.clearance} unit={units} onChange={(v) => set("clearance", v)} /> {units}
+                    </span>
+                  </>
+                )}
                 <span>Minimum width</span>
                 <span>
-                  <LengthInput valueUm={settings.min_thickness} unit={units} onChange={(v) => set("min_thickness", v)} /> {units}
+                  <LengthInput valueUm={settings.min_thickness} unit={units} onChange={(v) => set("min_thickness", v)} testid="zone-min-width" /> {units}
                 </span>
-                <span>Priority</span>
-                <span>
-                  <input type="number" step={1} min={0} value={settings.priority} onChange={(e) => set("priority", Math.max(0, Math.round(Number(e.target.value) || 0)))} style={{ width: 90 }} />
-                </span>
-              </div>
-
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Pad connections</p>
-              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
-                <span>Connection</span>
-                <select value={settings.pad_connection} onChange={(e) => set("pad_connection", e.target.value as PadConnection)}>
-                  {PAD_CONNECTION_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                {/* panel_zone_properties.cpp's own comment: thermal gap/spoke width are never disabled by the connection choice above -- a per-pad override can still need them even when the zone itself is Full/None. */}
-                <span>Thermal relief gap</span>
-                <span>
-                  <LengthInput valueUm={settings.thermal_gap} unit={units} onChange={(v) => set("thermal_gap", v)} /> {units}
-                </span>
-                <span>Thermal spoke width</span>
-                <span>
-                  <LengthInput valueUm={settings.thermal_spoke_width} unit={units} onChange={(v) => set("thermal_spoke_width", v)} /> {units}
-                  {thermalSpokeTooNarrow && <span style={{ color: "#ef5b5b", marginLeft: 8 }}>cannot be smaller than minimum width</span>}
-                </span>
-              </div>
-
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Islands</p>
-              <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
-                <span>Remove islands</span>
-                <select value={settings.island_removal_mode} onChange={(e) => set("island_removal_mode", e.target.value as IslandRemovalMode)}>
-                  {ISLAND_REMOVAL_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                {settings.island_removal_mode === "Area" && (
+                {kind === "copper" && (
                   <>
-                    <span>Minimum island area</span>
+                    <span>Priority</span>
                     <span>
-                      <input
-                        type="number"
-                        step="any"
-                        value={settings.min_island_area / 1_000_000}
-                        onChange={(e) => {
-                          const n = Number(e.target.value);
-                          if (Number.isFinite(n)) set("min_island_area", Math.round(n * 1_000_000));
-                        }}
-                        style={{ width: 90 }}
-                      />{" "}
-                      mm&sup2;
+                      <input type="number" step={1} min={0} value={settings.priority} onChange={(e) => set("priority", Math.max(0, Math.round(Number(e.target.value) || 0)))} style={{ width: 90 }} />
                     </span>
                   </>
                 )}
               </div>
 
+              {kind === "copper" && (
+                <>
+                  <p style={SECTION}>Pad connections</p>
+                  <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
+                    <span>Connection</span>
+                    <select value={settings.pad_connection} onChange={(e) => set("pad_connection", e.target.value as PadConnection)}>
+                      {PAD_CONNECTION_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    {/* panel_zone_properties.cpp's own comment: thermal gap/spoke width are never disabled by the connection choice above -- a per-pad override can still need them even when the zone itself is Full/None. */}
+                    <span>Thermal relief gap</span>
+                    <span>
+                      <LengthInput valueUm={settings.thermal_gap} unit={units} onChange={(v) => set("thermal_gap", v)} /> {units}
+                    </span>
+                    <span>Thermal spoke width</span>
+                    <span>
+                      <LengthInput valueUm={settings.thermal_spoke_width} unit={units} onChange={(v) => set("thermal_spoke_width", v)} /> {units}
+                      {thermalSpokeTooNarrow && <span style={{ color: "#ef5b5b", marginLeft: 8 }}>cannot be smaller than minimum width</span>}
+                    </span>
+                  </div>
+
+                  <p style={SECTION}>Islands</p>
+                  <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
+                    <span>Remove islands</span>
+                    <select value={settings.island_removal_mode} onChange={(e) => set("island_removal_mode", e.target.value as IslandRemovalMode)}>
+                      {ISLAND_REMOVAL_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                    {settings.island_removal_mode === "Area" && (
+                      <>
+                        <span>Minimum island area</span>
+                        <span>
+                          <input
+                            type="number"
+                            step="any"
+                            value={settings.min_island_area / 1_000_000}
+                            onChange={(e) => {
+                              const n = Number(e.target.value);
+                              if (Number.isFinite(n)) set("min_island_area", Math.round(n * 1_000_000));
+                            }}
+                            style={{ width: 90 }}
+                          />{" "}
+                          mm&sup2;
+                        </span>
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+
               <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr", marginTop: 12 }}>
                 <span>Corner smoothing</span>
                 <select
+                  data-testid="zone-smoothing"
                   value={settings.smoothing ?? "none"}
                   // `OnCornerSmoothingSelection` hides the radius for None and `AcceptOptions` stores 0 for it.
                   onChange={(e) => setSettings((s) => ({ ...s, smoothing: e.target.value as ZoneSmoothing, corner_radius: e.target.value === "none" ? 0 : s.corner_radius ?? 0 }))}
@@ -301,7 +381,8 @@ export function ZoneDialog() {
                 </select>
                 {(settings.smoothing ?? "none") !== "none" && (
                   <>
-                    <span>Radius</span>
+                    {/* The non-copper dialog names it by the shape (`OnUpdateUI`: "Chamfer distance" / "Fillet radius"). */}
+                    <span>{kind === "non-copper" ? (settings.smoothing === "chamfer" ? "Chamfer distance" : "Fillet radius") : "Radius"}</span>
                     <span>
                       <LengthInput valueUm={settings.corner_radius ?? 0} unit={units} onChange={(v) => set("corner_radius", Math.max(0, v))} /> {units}
                     </span>
@@ -309,10 +390,10 @@ export function ZoneDialog() {
                 )}
               </div>
 
-              <p style={{ color: "var(--chrome-text-dim)", fontSize: 11, margin: "12px 0 4px", fontWeight: 600 }}>Fill</p>
+              <p style={SECTION}>Fill</p>
               <div className="kv-grid" style={{ gridTemplateColumns: "140px 1fr" }}>
                 <span>Fill type</span>
-                <select value={settings.fill_mode} onChange={(e) => set("fill_mode", e.target.value as FillMode)}>
+                <select value={settings.fill_mode} onChange={(e) => set("fill_mode", e.target.value as FillMode)} data-testid="zone-fill-type">
                   <option value="Polygons">Solid fill</option>
                   <option value="HatchPattern">Hatch pattern</option>
                 </select>
@@ -386,8 +467,10 @@ export function ZoneDialog() {
               {settings.is_rule_area ? "Delete Rule Area" : "Delete Zone"}
             </button>
           )}
-          <button onClick={close}>Cancel</button>
-          <button className="primary" disabled={!canSubmit} onClick={submit}>
+          <button onClick={close} data-testid="zone-cancel">
+            Cancel
+          </button>
+          <button className="primary" disabled={!canSubmit} onClick={submit} data-testid="zone-ok">
             {editZone ? "OK" : settings.is_rule_area ? "Add Rule Area" : "Add Zone"}
           </button>
         </div>

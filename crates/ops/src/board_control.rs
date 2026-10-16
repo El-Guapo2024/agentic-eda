@@ -91,7 +91,7 @@ fn edges_touch(a: &[Point], b: &[Point]) -> bool {
 /// an edge of one touches an edge of the other or a corner of one is inside
 /// the other.
 pub fn zones_intersect(a: &Zone, b: &Zone) -> bool {
-    a.layer == b.layer && a.outline.len() >= 3 && b.outline.len() >= 3 && bboxes_meet(&a.outline, &b.outline) && (edges_touch(&a.outline, &b.outline) || b.outline.iter().any(|p| ring_contains(&a.outline, *p)) || a.outline.iter().any(|p| ring_contains(&b.outline, *p)))
+    a.layer_set() == b.layer_set() && a.outline.len() >= 3 && b.outline.len() >= 3 && bboxes_meet(&a.outline, &b.outline) && (edges_touch(&a.outline, &b.outline) || b.outline.iter().any(|p| ring_contains(&a.outline, *p)) || a.outline.iter().any(|p| ring_contains(&b.outline, *p)))
 }
 
 // --------------------------------------------------------------------- merge
@@ -111,7 +111,7 @@ pub fn merge_zones(design: &mut Design, ids: &[String]) -> Result<String, Vec<Ch
     for &c in &chosen {
         let zone = &zones[c];
         // wxLogMessage'd and skipped in the source: a different net, rule-area-ness or layer, or no overlap.
-        if zone.net != zones[first].net || zone.is_rule_area != zones[first].is_rule_area || zone.layer != zones[first].layer {
+        if zone.net != zones[first].net || zone.is_rule_area != zones[first].is_rule_area || zone.layer_set() != zones[first].layer_set() {
             continue;
         }
         let meets = c == first || to_merge.iter().any(|&m| zones_intersect(zone, &zones[m]));
@@ -167,7 +167,7 @@ pub enum ZonePriorityMove {
     Bottom,
 }
 
-/// `getOverlappingZones`: the other copper zones on this zone's layer whose outline touches it or holds it (or is held by it).
+/// `getOverlappingZones`: the other copper zones that share a layer with this one and whose outline touches it or holds it (or is held by it).
 pub fn overlapping_zones(zones: &[Zone], zi: usize) -> Vec<usize> {
     let zone = &zones[zi];
     (0..zones.len())
@@ -176,7 +176,7 @@ pub fn overlapping_zones(zones: &[Zone], zi: usize) -> Vec<usize> {
             ci != zi
                 && !c.is_rule_area
                 && !c.teardrop
-                && c.layer == zone.layer
+                && c.layer_set().into_iter().any(|l| zone.is_on_layer(l))
                 && c.outline.len() >= 3
                 && zone.outline.len() >= 3
                 && bboxes_meet(&zone.outline, &c.outline)

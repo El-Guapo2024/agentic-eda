@@ -1,16 +1,19 @@
 // "Schematic Setup..." (eeschema.EditorControl.schematicSetup -- eeschema/
 // dialogs/dialog_schematic_setup.cpp): a tree of pages on the left and the
 // page on the right, like Board Setup's. The pages this app has a backing
-// setting for are the two of Electrical Rules:
+// setting for are General > Formatting (the connection grid) and the two of Electrical Rules:
 //
+//   Formatting           eeschema/dialogs/panel_setup_formatting.cpp -- Connection grid spacing, written to the
+//                        derived project's `schematic.connection_grid_size` for kicad-cli's `endpoint_off_grid`
 //   Violation Severity   common/dialogs/panel_setup_severities.cpp over eeschema/erc/erc_settings.cpp --
 //                        the severity of each ERC check (schematicSetup/ErcSeveritiesPage.tsx), written
 //                        to the derived project's `erc.rule_severities` for kicad-cli
 //   Pin Conflicts Map    eeschema/dialogs/panel_setup_pinmap.cpp over eeschema/erc/erc_settings.cpp
 //
-// The real dialog's other pages (general options, formatting, annotation,
-// field name templates, net classes, text variables, ...) are not ported
-// -- see PARITY-sch.md -- so they are not shown as dead tabs.
+// The real dialog's other pages (annotation, field name templates, net classes, text
+// variables, ...) are not ported -- see PARITY-sch.md -- so they are not shown as dead tabs.
+// General > Formatting has the one setting of its panel the design keeps, the connection grid
+// (schematicSetup/FormattingPage.tsx).
 //
 // The pin map grid is PANEL_SETUP_PINMAP's: the lower triangle of the 11 pin
 // types ("NC is not included in the pin map as it generates errors
@@ -21,9 +24,9 @@
 // The map actually used by ERC is the design's own `schematic.erc_pin_map`
 // (absent = KiCad's default) -- GET /api/sch/erc_pin_map reports it.
 //
-// A marker menu's "Edit violation severities..." opens this dialog on the
-// first page, "Edit pin-to-pin conflict map..." on the second
-// (`ShowSchematicSetupDialog( _( "Violation Severity" ) )` / `"Pin Conflicts Map"`).
+// A marker menu's "Edit violation severities..." opens this dialog on Violation Severity,
+// "Edit pin-to-pin conflict map..." on the Pin Conflicts Map and "Edit connection grid spacing..."
+// on Formatting (`ShowSchematicSetupDialog( _( "Violation Severity" ) )` / `"Pin Conflicts Map"` / `"Formatting"`).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { fetchErcPinMap } from "../api/client";
 import type { ErcPinMapReply } from "../api/types";
@@ -31,12 +34,14 @@ import { PINMAP_TYPE_COUNT, PIN_TYPE_LABELS, levelGlyph, levelTooltip, nextLevel
 import { getCheckerView, setErcView } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { ErcSeveritiesPage } from "./schematicSetup/ErcSeveritiesPage";
+import { FormattingPage } from "./schematicSetup/FormattingPage";
 import "../styles/boardSetup.css";
 
-type Page = "severities" | "pinmap";
+type Page = "formatting" | "severities" | "pinmap";
 
 /** KiCad's page tree (`DIALOG_SCHEMATIC_SETUP`'s treebook), with its page names; the pages that are not here have nothing in the model to edit. */
 const TREE: ReadonlyArray<{ title: string; pages: ReadonlyArray<{ id: Page; label: string }> }> = [
+  { title: "General", pages: [{ id: "formatting", label: "Formatting" }] },
   {
     title: "Electrical Rules",
     pages: [
@@ -55,11 +60,12 @@ export function SchematicSetupDialog() {
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const open = state.schDialog === "setup";
-  const [page, setPage] = useState<Page>("severities");
+  const [page, setPage] = useState<Page>("formatting");
   const [map, setMap] = useState<ErcPinMapReply | null>(null);
   const [hover, setHover] = useState<{ row: number; col: number } | null>(null);
-  // The severity page has edits not applied yet; Close asks first.
+  // The severity and formatting pages have edits not applied yet; Close asks first.
   const [unapplied, setUnapplied] = useState(false);
+  const [formattingUnapplied, setFormattingUnapplied] = useState(false);
   const [askDiscard, setAskDiscard] = useState(false);
 
   const reload = useCallback(async () => {
@@ -73,13 +79,12 @@ export function SchematicSetupDialog() {
   useEffect(() => {
     if (!open) return;
     setUnapplied(false);
+    setFormattingUnapplied(false);
     setAskDiscard(false);
-    // A marker menu names the page it wants.
+    // A marker menu names the page it wants; without one the dialog opens on its first page, as KiCad's does.
     const wanted = getCheckerView().erc.setupPage;
-    if (wanted) {
-      setPage(wanted);
-      setErcView({ setupPage: null });
-    }
+    setPage(wanted ?? "formatting");
+    if (wanted) setErcView({ setupPage: null });
   }, [open]);
 
   // The undo of a pin map click from outside the dialog shows up here too.
@@ -89,10 +94,10 @@ export function SchematicSetupDialog() {
 
   const leave = useCallback(() => dispatch({ type: "SET_SCH_DIALOG", dialog: null }), [dispatch]);
   const close = useCallback(() => {
-    if (unapplied) setAskDiscard(true);
+    if (unapplied || formattingUnapplied) setAskDiscard(true);
     else leave();
-  }, [unapplied, leave]);
-  const dirty = useMemo(() => (unapplied ? ["severities" as Page] : []), [unapplied]);
+  }, [unapplied, formattingUnapplied, leave]);
+  const dirty = useMemo(() => [...(formattingUnapplied ? ["formatting" as Page] : []), ...(unapplied ? ["severities" as Page] : [])], [unapplied, formattingUnapplied]);
 
   if (!open) return null;
 
@@ -139,6 +144,7 @@ export function SchematicSetupDialog() {
             ))}
           </nav>
 
+          <FormattingPage hidden={page !== "formatting"} onDirty={setFormattingUnapplied} />
           <ErcSeveritiesPage hidden={page !== "severities"} onDirty={setUnapplied} />
 
           <section className="bs-page" hidden={page !== "pinmap"} aria-label="Pin Conflicts Map">
@@ -205,7 +211,7 @@ export function SchematicSetupDialog() {
         <div className="dialog-footer">
           {askDiscard && (
             <>
-              <span style={{ marginRight: "auto", fontSize: 11, color: "var(--chrome-warn)" }}>Violation Severity has changes that were not applied. Close and lose them?</span>
+              <span style={{ marginRight: "auto", fontSize: 11, color: "var(--chrome-warn)" }}>{[formattingUnapplied ? "Formatting" : "", unapplied ? "Violation Severity" : ""].filter(Boolean).join(" and ")} has changes that were not applied. Close and lose them?</span>
               <button onClick={() => setAskDiscard(false)}>Keep editing</button>
               <button className="primary" onClick={leave}>
                 Discard and close

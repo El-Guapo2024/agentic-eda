@@ -58,7 +58,7 @@ import { ercSeverityShown } from "./schematic/displayOptions";
 import { ercMarkerPosition } from "./schematic/ercMarkerPosition";
 import { ERC_MARKER_HIT_UM, nearestMarker } from "../kicad-port/markerHit";
 import { ercKey, rcMenu } from "../kicad-port/rcItems";
-import { ercSettingSeverity, ercTitle, isPinMapCheck, runMarkerMenu, toMenuEntries } from "../actions/checkerOps";
+import { ercMenuContext, runMarkerMenu, selectMarkerErc, showErcInDialog, toMenuEntries } from "../actions/checkerOps";
 import { askExclusionComment } from "../state/checkerView";
 import { summarizeSelection } from "./schematic/schSelectionSummary";
 import { schContextMenu } from "../kicad-port/schContextMenu";
@@ -530,6 +530,15 @@ export function SchematicView() {
     container.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: pointer.clientX, clientY: pointer.clientY, pointerId: 1, pointerType: "mouse", buttons: dragRef.current ? 1 : 0 }));
   }, [state.schematicView]);
 
+  /** The ERC marker on the sheet at (x, y) that is drawn (its severity is switched on in the display options), or -1. */
+  const ercMarkerAt = (s: NonNullable<typeof sch>, x: number, y: number): number =>
+    nearestMarker(
+      (state.erc?.violations ?? []).map((v) => (ercSeverityShown(v.severity, schControl.display) ? (ercMarkerPosition(v.location, s)?.at ?? null) : null)),
+      x,
+      y,
+      ERC_MARKER_HIT_UM
+    );
+
   return (
     <div
       ref={containerRef}
@@ -730,6 +739,15 @@ export function SchematicView() {
         // The item under the pointer (components/schematic/schPick.ts): a pin the pointer is on, a shown field, a symbol, any other placed item (a label, text, power symbol,
         // junction, no-connect, bus entry, sheet or drawn shape -- tight, screen-sized tolerance) and last a wire (`SCH_SELECTION_TOOL::selectPoint`: a click on a wire
         // selects it; the net highlight is a tool of its own). Every kind of item but a pin is picked up and dragged the same way.
+        // A left click on an ERC marker selects it: `SCH_SELECTION_TOOL` takes an `SCH_MARKER` like any item ("always selectable") and `SCH_INSPECTION_TOOL::CrossProbe`
+        // selects its row in the dialog when that is shown. A pin the pointer is exactly on wins (`GuessSelectionCandidates`: "closest" is a pin or a junction).
+        if (!hasModifier(modifiers) && state.activeTool === "select") {
+          const markerIndex = ercMarkerAt(sch, wx, wy);
+          if (markerIndex >= 0 && !pickItem(sch, wx, wy, state.schematicView.scale, selectable, "only")) {
+            selectMarkerErc({ api, dispatch }, markerIndex);
+            return;
+          }
+        }
         const picked0 = pickItem(sch, wx, wy, state.schematicView.scale, selectable, "first");
         // `filterCollectorForHierarchy`: an item of a group is picked as the outermost group that holds it inside the group worked in (a pin and a field as their symbol's); an item outside
         // the group worked in leaves it (`select`: `ExitGroup()`), and so does a click on nothing outside its box (`selectPoint`).
@@ -861,16 +879,11 @@ export function SchematicView() {
         // A right click on an ERC marker (a circle the last run left on the sheet) opens the marker's menu -- Exclude, Exclude all of this type, Change
         // severity, Show in the dialog -- instead of the item menu: an `SCH_MARKER` is an item of its own with its own entries.
         const found = state.erc?.violations ?? [];
-        const markerIndex = nearestMarker(
-          found.map((v) => (ercSeverityShown(v.severity, schControl.display) ? (ercMarkerPosition(v.location, sch)?.at ?? null) : null)),
-          wx,
-          wy,
-          ERC_MARKER_HIT_UM
-        );
+        const markerIndex = ercMarkerAt(sch, wx, wy);
         if (markerIndex >= 0) {
           const v = found[markerIndex]!;
           dispatch({ type: "SET_ERC_SELECTED", index: markerIndex });
-          const spec = rcMenu({ domain: "erc", title: ercTitle(v.check), excluded: v.severity === "excluded", severity: ercSettingSeverity(v), pinMap: isPinMapCheck(v.check), onCanvas: true, comments: false });
+          const spec = rcMenu(ercMenuContext(v, true));
           setContextMenu(null);
           setMarkerMenu({ x: e.clientX, y: e.clientY, entries: toMenuEntries(spec, (id) => void runMarkerMenu({ api, dispatch }, { domain: "erc", index: markerIndex }, id, askExclusionComment), ercKey(v) !== null) });
           return;
@@ -892,6 +905,12 @@ export function SchematicView() {
         // (`SCH_ACTIONS::properties`): the selection the first click made, else the item under the pointer.
         if (sch && state.activeTool === "select" && state.drawState == null) {
           const [wx, wy] = toWorld(e.clientX, e.clientY);
+          // `SCH_EDIT_TOOL::Properties` on an `SCH_MARKER`: `CrossProbe( marker )` -- the ERC dialog comes up with the marker's row selected.
+          const markerHit = ercMarkerAt(sch, wx, wy);
+          if (markerHit >= 0 && !pickItem(sch, wx, wy, state.schematicView.scale || 1, selectable, "only")) {
+            showErcInDialog({ api, dispatch }, markerHit);
+            return;
+          }
           const sheetId = hitSheet(sch.sheets, wx, wy);
           // (a sheet in a group is picked as the group: the double click enters the group, not the sheet)
           const sheetTop = sheetId ? substituteSchSelection(sch, [sheetId], state.schEnteredGroupId).ids[0] : null;

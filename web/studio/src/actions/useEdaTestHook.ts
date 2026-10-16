@@ -18,6 +18,7 @@ import { useFpState } from "../state/footprintEditorStore";
 import { useSymState } from "../state/symbolEditorStore";
 import { useCommonDialogs } from "../state/commonDialogs";
 import { useActionRunner } from "./useActionRunner";
+import { setCheckerRunner } from "./checkerOps";
 import { picker } from "./pcbPicker";
 import { viewer3dProbe, type Viewer3dSnapshot } from "../components/viewer3d/viewer3dProbe";
 import { getGridOverrides } from "../state/gridOverrides";
@@ -271,6 +272,11 @@ export function useEdaTestHook(): void {
   const common = useCommonDialogs();
   const latest = useRef<Latest>(null as unknown as Latest);
   latest.current = { runner, studio, fp, sym, common, getStudio: () => api.getState() };
+  // The Checker windows' Fix entries run actions by id from outside React (actions/checkerOps.ts): this is the one runner that is always mounted.
+  useEffect(() => {
+    setCheckerRunner(runner.run);
+    return () => setCheckerRunner(null);
+  }, [runner.run]);
 
   // The error toasts and the board error are errors the person sees: they go into the log, and the last toast of any kind is what a run reports.
   const noteToast = (toast: { message: string; kind: "error" | "info" } | null) => {

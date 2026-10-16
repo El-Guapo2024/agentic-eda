@@ -13,9 +13,9 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimens
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
-import { patchDrcExcluded, patchDrcSeverity, patchErcSeverity } from "../kicad-port/rcItems";
+import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
-import { fetchDrc, fetchErc, fetchFill, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
+import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
 import type { LengthUnit } from "./units";
 import { STANDARD_LAYERS } from "../components/canvas/layers";
@@ -37,7 +37,7 @@ import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kic
 import { reduceView, type AppearanceOp, type ViewSlice } from "../kicad-port/appearanceOps";
 import { applyAppearanceFile } from "../kicad-port/appearanceFile";
 import { netsContext } from "../kicad-port/appearanceNets";
-import { highlightedNets, keepFilled } from "../kicad-port/boardControl";
+import { highlightedNets } from "../kicad-port/boardControl";
 import type { ArcGeom } from "../kicad-port/arcGeom";
 import type { BezierGeom } from "../kicad-port/bezierGeom";
 import { movableItem } from "../kicad-port/pcbEditActions";
@@ -587,17 +587,13 @@ export interface StudioState {
    * selected ("E", double-click) -- opens DimensionPropertiesDialog. */
   dimensionEditId: string | null;
   /**
-   * `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
-   * zone_filler_tool.cpp): the last GET /api/fill this session asked
-   * for, or null if zones have never been filled (or were just
-   * unfilled) -- the "outline only, nothing computed" state every zone
-   * starts in, same as a freshly drawn KiCad zone. Kept fresh by the
-   * same version-change poll `ratsnest`/`drc` already use, gated on
-   * this being non-null (see StudioProvider's poll loop) -- unlike real
-   * KiCad, there is no "stale fill" hatch state to show, since
-   * `/api/fill` is cheap to recompute and never cached either side.
+   * The zones' fills, as the server holds them (`GET /api/fill`): KiCad's, made by kicad-cli when B (`pcbnew.ZoneFiller.zoneFillAll`, zone_filler_tool.cpp) ran, and kept
+   * beside the design -- there is no other filler. Read on load and whenever the board changes (a zone edited since its fill is then `filled: false`), so the board shows
+   * the last fill, as KiCad does with auto-refill off; a zone with none is drawn as an outline. `null` until the first read.
    */
   zoneFill: FillReport | null;
+  /** kicad-cli's filler is running (B takes seconds); the board stays editable meanwhile. */
+  zoneFillRunning: boolean;
   /**
    * `pcbnew.Control.zoneDisplayEnable`/`zoneDisplayDisable`/
    * `zoneDisplayToggle` (`ZONE_DISPLAY_MODE`): how a zone that DOES have
@@ -795,7 +791,7 @@ export interface StudioState {
   drcError: string | null;
   /** The board revision (the `version` stamp) the current `drc` report was computed on -- the server's own (`drc.revision`); when it differs from `version`, the board has moved on and the report is out of date (kicad-port/checkRevision.ts). */
   drcVersion: string | null;
-  /** "Refill all zones before performing DRC" (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills. */
+  /** "Refill all zones before performing DRC": kicad-cli's filler runs first, on a copy of the board, and the DRC then judges the board with that fill (the courtyard checks stay). Off by default. */
   drcRefillZones: boolean;
   /** "Test for parity between PCB and schematic" (`--schematic-parity`): the next run also compares the board with the schematic (the Schematic Parity tab). */
   drcParity: boolean;
@@ -914,6 +910,7 @@ const initialState: StudioState = {
   nextDimensionKind: "aligned",
   dimensionEditId: null,
   zoneFill: null,
+  zoneFillRunning: false,
   zoneDisplayMode: "filled",
   boardSetupDialogOpen: false,
   boardSetupInitialPage: null,
@@ -1104,6 +1101,11 @@ export type Action =
   | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   /** The same for the schematic (`set_erc_severities`). */
   | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
+  /** Delete Marker / Delete All Markers (`DIALOG_DRC::OnDeleteOneClick`, `OnDeleteAllClick`) on the report on screen: the rows leave the lists and the canvas. `version` is given when the deletion also changed the design (an excluded marker's exclusion goes with it): see `ERC_DELETE_MARKER`. */
+  | { type: "DRC_DELETE_MARKER"; page: DrcPage; index: number; /** The row selected after it (an index of the list as it is then), or null. */ select: number | null; version?: string | null }
+  | { type: "DRC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
+  | { type: "ERC_DELETE_MARKER"; index: number; select: number | null; /** As for `ERC_MARK_EXCLUDED`: given when the deletion also changed the design (an excluded marker's exclusion goes with it). */ version?: string | null }
+  | { type: "ERC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
   | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
@@ -1111,7 +1113,7 @@ export type Action =
   | { type: "ERC_OK"; erc: ErcReport; /** The revision the report was computed on. */ version: string | null }
   | { type: "ERC_ERR"; message: string }
   /** Exclude / un-exclude one finding in the report on screen without re-running kicad-cli (the exclusion itself is a persisted `Cmd`); `version` is the revision the patched report is now valid for (checkRevision.ts's `revisionAfterOwnEdit`): the board's after that Cmd when the report was current, so it is not called out of date by its own exclusion -- the report's own when it already was out of date. */
-  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; version: string | null }
+  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; comment?: string; version: string | null }
   | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_ERC_LINT_SELECTED"; index: number | null }
   | { type: "LINT_OK"; lint: LintReport }
@@ -1121,7 +1123,7 @@ export type Action =
   | { type: "SET_NEXT_DIMENSION_KIND"; kind: CmdDimensionKind["kind"] }
   | { type: "SET_DIMENSION_EDIT_ID"; id: string | null }
   | { type: "FILL_OK"; fill: FillReport }
-  | { type: "CLEAR_ZONE_FILL" }
+  | { type: "ZONE_FILL_RUNNING"; running: boolean }
   | { type: "SET_ZONE_DISPLAY_MODE"; mode: "filled" | "outline" | "fractured" | "triangulated" }
   | { type: "SET_BOARD_SETUP_DIALOG_OPEN"; open: boolean }
   | { type: "SET_BOARD_SETUP_INITIAL_PAGE"; page: string | null }
@@ -1519,6 +1521,18 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "ERC_PATCH_SEVERITY":
       if (!state.erc) return state;
       return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description), ercVersion: action.version, ercSelected: null };
+    case "DRC_DELETE_MARKER":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcDeleteMarker(state.drc, action.page, action.index), drcSelected: action.page === "violations" ? action.select : state.drcSelected, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };
+    case "DRC_DELETE_ALL":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcDeleteAll(state.drc, action.includeExclusions), drcSelected: null, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };
+    case "ERC_DELETE_MARKER":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcDeleteMarker(state.erc, action.index), ercSelected: action.select, ...(action.version !== undefined ? { ercVersion: action.version } : {}) };
+    case "ERC_DELETE_ALL":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcDeleteAll(state.erc, action.includeExclusions), ercSelected: null, ...(action.version !== undefined ? { ercVersion: action.version } : {}) };
     case "SET_DRC_SELECTED":
       return { ...state, drcSelected: action.index, drcLintSelected: action.index === null ? state.drcLintSelected : null };
     case "SET_DRC_LINT_SELECTED":
@@ -1531,17 +1545,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, erc: action.erc, ercRunning: false, ercError: null, ercVersion: action.version, ercSelected: null };
     case "ERC_ERR":
       return { ...state, ercRunning: false, ercError: action.message };
-    case "ERC_MARK_EXCLUDED": {
+    case "ERC_MARK_EXCLUDED":
       if (!state.erc) return state;
-      const counts = { ...state.erc.counts };
-      const violations = state.erc.violations.map((v) => {
-        if (v.check !== action.check || v.location !== action.location) return v;
-        if (action.excluded && v.severity !== "excluded") counts[v.check] = Math.max(0, (counts[v.check] ?? 0) - 1);
-        if (!action.excluded && v.severity === "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
-        return { ...v, severity: action.excluded ? ("excluded" as const) : (v.base_severity ?? ("error" as const)) };
-      });
-      return { ...state, erc: { ...state.erc, violations, counts }, ercVersion: action.version };
-    }
+      return { ...state, erc: patchErcExcluded(state.erc, [{ check: action.check, location: action.location }], action.excluded, action.comment ?? ""), ercVersion: action.version };
     case "SET_ERC_SELECTED":
       return { ...state, ercSelected: action.index, ercLintSelected: action.index === null ? state.ercLintSelected : null };
     case "SET_ERC_LINT_SELECTED":
@@ -1559,13 +1565,9 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_DIMENSION_EDIT_ID":
       return { ...state, dimensionEditId: action.id };
     case "FILL_OK":
-      // Only the zones that are filled show a fill: all of them after Fill All, the named ones after a draft fill of a selection.
-      return { ...state, zoneFill: keepFilled(action.fill, state.bcx.zoneFilled) };
-    case "CLEAR_ZONE_FILL":
-      // zone_filler_tool.cpp ZoneUnfillAll: discards the computed fill;
-      // the canvas falls back to outline-only (painter.ts), same as a
-      // zone that has never been filled at all.
-      return { ...state, zoneFill: null, bcx: { ...state.bcx, zoneFilled: null } };
+      return { ...state, zoneFill: action.fill };
+    case "ZONE_FILL_RUNNING":
+      return { ...state, zoneFillRunning: action.running };
     case "SET_ZONE_DISPLAY_MODE":
       return { ...state, zoneDisplayMode: action.mode };
     case "SET_BOARD_SETUP_DIALOG_OPEN":
@@ -1775,11 +1777,16 @@ export interface StudioApi {
    * `Cmd::AddZone` with inline settings, so every existing caller of that
    * Cmd (the CLI, this app's own tests) keeps its exact three-field shape.
    */
-  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields & RuleAreaFields) => Promise<void>;
-  /** B ("Fill All Zones"): GET /api/fill now, and keep it live-updated (state.zoneFill) until `unfillZones`. */
-  fillZones: () => Promise<void>;
-  /** Ctrl+B ("Unfill All Zones"): back to outline-only, same as a zone that was never filled. */
-  unfillZones: () => void;
+  addZone: (net: string, layer: string, outline: [Um, Um][], settings: ZoneSettingsFields & RuleAreaFields, extra?: { layers?: string[]; name?: string; locked?: boolean }) => Promise<void>;
+  /**
+   * B ("Fill All Zones"), or Fill Selected Zones with `ids`: kicad-cli's filler runs (seconds; `state.zoneFillRunning` meanwhile, the board stays editable) and its fills
+   * are kept beside the design; then they are read (`state.zoneFill`). A run already in flight is not doubled.
+   */
+  fillZones: (ids?: string[]) => Promise<void>;
+  /** Ctrl+B ("Unfill All Zones"), or Unfill Selected Zones with `ids`: the fills are taken away, the zones are outlines until the next fill. */
+  unfillZones: (ids?: string[]) => Promise<void>;
+  /** The fills as the server holds them, read again now. */
+  refreshFill: () => Promise<void>;
 }
 
 const StudioStateContext = createContext<StudioState | null>(null);
@@ -1899,6 +1906,41 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  // Fill All Zones (B) and the selected-zones forms: kicad-cli's filler runs on the server (seconds, the board stays editable), then the fills it kept are read.
+  const fillZones = useCallback(
+    async (ids?: string[]) => {
+      if (stateRef.current.zoneFillRunning) return;
+      dispatch({ type: "ZONE_FILL_RUNNING", running: true });
+      try {
+        const reply = await postFillKicad(ids);
+        if (!reply.ok) {
+          dispatch({ type: "TOAST", message: `Zones not filled: ${reply.message ?? "kicad-cli could not fill them"}`, kind: "error" });
+        } else if ((reply.zones ?? 0) > 0) {
+          dispatch({ type: "TOAST", message: `${reply.engine ?? "kicad-cli"} filled ${reply.zones} zone${reply.zones === 1 ? "" : "s"} in ${(reply.seconds ?? 0).toFixed(1)} s`, kind: "info" });
+        }
+      } catch {
+        dispatch({ type: "TOAST", message: "Zones not filled: the server did not answer", kind: "error" });
+      } finally {
+        dispatch({ type: "ZONE_FILL_RUNNING", running: false });
+        await refreshFill();
+      }
+    },
+    [refreshFill]
+  );
+
+  // Unfill All Zones (Ctrl+B) and Unfill Selected Zones: the server forgets the fills, the board shows outlines.
+  const unfillZones = useCallback(
+    async (ids?: string[]) => {
+      try {
+        await postFillClear(ids);
+      } catch {
+        // the server is restarting; the next read shows what it holds
+      }
+      await refreshFill();
+    },
+    [refreshFill]
+  );
+
   // Poll /api/version (cheap) and only refetch the full /api/state when it
   // changes -- mirrors the old studio.html poll loop so CLI edits and
   // other browser tabs show up here within ~1s without hammering the
@@ -1999,13 +2041,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
           lastLintFetch = v;
           await refreshLint();
         }
-        // Gated on "has been filled at least once this session" (not a
-        // dialog -- there isn't one, B/Ctrl+B just toggle a canvas
-        // rendering mode) -- same reasoning as DRC/ERC above: computing
-        // fills nobody is looking at would be pure waste, but once shown
-        // they should track the board live, same as KiCad's own
-        // auto-refill-on-edit behavior (ZONE_FILLER_TOOL::ZoneFillDirty).
-        if (stateRef.current.zoneFill != null && lastFillFetch !== v) {
+        // The zones' fills are the board's (KiCad's, kept beside the design): read on load and again whenever the board changes, so a zone edited since its fill
+        // is drawn as an outline at once, and B's result appears when it lands (the cache's stamp is part of the version). A read, not a fill: cheap.
+        if ((stateRef.current.tab === "pcb" || stateRef.current.tab === "3d") && lastFillFetch !== v && (stateRef.current.board?.routing?.zones?.length ?? 0) > 0) {
           lastFillFetch = v;
           await refreshFill();
         }
@@ -2381,7 +2419,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       if (!ok) return;
       dispatch({ type: "SET_SELECTION", refs: members, raw: true });
     },
-    addZone: async (net, layer, outline, settings) => {
+    addZone: async (net, layer, outline, settings, extra) => {
       // The board as the backend has it now (several zones can be added one after the other, e.g. "Create Zone from Selection").
       const board = await fetchState().catch(() => null);
       if (!board) return;
@@ -2398,7 +2436,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // already landed on exactly that.
       const defaults = { ...DEFAULT_ZONE_SETTINGS, ...DEFAULT_RULE_AREA_SETTINGS };
       const unchanged = (Object.keys(defaults) as (keyof typeof defaults)[]).every((k) => settings[k] === defaults[k]);
-      if (!unchanged) await runCmd({ op: "edit_zone", id: newId, net, layer, ...settings });
+      // The layer list (`ZONE_SETTINGS::m_Layers`), the name and the lock ride on the zone just made, in one undo step with the settings.
+      const layers = extra?.layers && extra.layers.length > 1 ? extra.layers : undefined;
+      const follow: Cmd[] = [];
+      if (!unchanged || layers) follow.push({ op: "edit_zone", ...settings, id: newId, net, layer, ...(layers ? { layers } : {}) });
+      if (extra?.name) follow.push({ op: "set_zone_name", id: newId, name: extra.name });
+      if (extra?.locked) follow.push({ op: "set_locked", ids: [newId], locked: true });
+      if (follow.length > 0) await runBatch(follow);
     },
     // edit_tool.cpp copyToClipboard: the selection (a pad stands for its footprint, a locked item is copied) as KiCad's own clipboard text, measured
     // from the cursor's grid point or the point Copy with Reference picked -- on the system clipboard, where KiCad can paste it, and here.
@@ -2521,8 +2565,9 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {
       return runCmd({ op: "move_exact", parts, dx, dy, rotate_millideg: rotateMillideg, pivot: pivot ? { x: pivot.x, y: pivot.y } : null });
     },
-    fillZones: refreshFill,
-    unfillZones: () => dispatch({ type: "CLEAR_ZONE_FILL" }),
+    fillZones,
+    unfillZones,
+    refreshFill,
   };
 
   return (

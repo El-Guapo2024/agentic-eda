@@ -18,8 +18,9 @@
 
 pub mod footprint_check;
 
-use eda_kicad::{export_kicad_pcb_mapped, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
-use eda_model::ir::{Design, DrcExclusion};
+use eda_kicad::zone_fills::KicadFills;
+use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
+use eda_model::ir::{Design, DrcExclusion, ErcExclusion};
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -456,12 +457,28 @@ pub fn file_stem(name: &str) -> String {
     if s.is_empty() || s.starts_with('.') { "board".to_string() } else { s }
 }
 
+/// The fills kicad-cli made of the board whose derived files are written into `work` (`eda_kicad::zone_fills`): found only when `work` is that board's `.kicad`
+/// folder, where they are kept (the scratch folders of the gates and of the tests belong to no board and get none).
+fn studio_zone_fills(work: &Path) -> Option<KicadFills> {
+    if work.file_name().and_then(|n| n.to_str()) != Some(".kicad") {
+        return None;
+    }
+    eda_kicad::zone_fills::load(work.parent()?)
+}
+
 /// Export the design as `<stem>.kicad_pcb` (+ project); returns the pcb path
-/// and the uuid -> our id map.
+/// and the uuid -> our id map. The zones carry the fill kicad-cli made of the board (Fill All Zones, kept beside `design.json`) for as long as they are the zones it
+/// filled; a board without one has its zones unfilled.
 fn export_board(design: &Design, model: &ConstraintModel, work: &Path, stem: &str) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
+    let cache = studio_zone_fills(work);
+    export_board_with(design, model, work, stem, cache.as_ref())
+}
+
+/// [`export_board`] with the fills of the zones given.
+fn export_board_with(design: &Design, model: &ConstraintModel, work: &Path, stem: &str, fills: Option<&KicadFills>) -> Result<(PathBuf, HashMap<String, String>), Vec<CheckResult>> {
     work_dir(work)?;
     let date = today();
-    let (pcb, map) = export_kicad_pcb_mapped(design, model, &ExportMeta { date: &date, title: stem })?;
+    let (pcb, map) = export_kicad_pcb_mapped_with(design, model, &ExportMeta { date: &date, title: stem }, fills)?;
     // A net class with a colour (Appearance > Net Classes) can only reach KiCad in the project file, and KiCad reads the project's classes only when the board has
     // none of its own: so then the classes move there whole, and kicad-cli judges the board by the same numbers (`eda_kicad::appearance::split_net_classes`).
     let class_colors = studio_appearance(work).map(|a| eda_kicad::appearance::class_colors(&a)).unwrap_or_default();
@@ -597,6 +614,11 @@ pub struct Violation {
     /// Where the violation's marker may sit, in nanometres: the positions worth writing an exclusion for ([`marker_candidates`]).
     /// kicad-cli's report does not give the marker's position, only its items'.
     pub markers_nm: Vec<(i64, i64)>,
+    /// An ERC violation's sheet: the path (`ERC_SHEET::uuid_path`) of the sheet kicad-cli's report lists it under. Empty for a DRC one.
+    pub sheet: String,
+    /// An ERC violation's marker as KiCad keeps an exclusion (`SCH_MARKER`, `kiapi.schematic.ErcMarker`), when the report says enough to write it to the
+    /// letter ([`eda_kicad::erc_exclusions::marker`]); `None` when it does not, and for a DRC violation.
+    pub marker: Option<eda_model::ir::ErcMarker>,
 }
 
 impl Violation {
@@ -628,7 +650,33 @@ impl Violation {
             excluded: v["excluded"].as_bool().unwrap_or(false),
             comment: v["comment"].as_str().unwrap_or("").to_string(),
             markers_nm: marker_candidates(&at_nm),
+            sheet: String::new(),
+            marker: None,
         }
+    }
+
+    /// The items of an ERC violation as a marker names them: uuid, position in nanometres and name. The schematic's internal unit is a nanometre in the
+    /// nightly the studio runs (10.99.0-5334) and its ERC report prints millimetres as they are; the nightly before it printed a hundredth of that
+    /// (`ERC_REPORT::WriteJsonReport` built its `UNITS_PROVIDER` on the board's scale while the schematic's unit was 100 nm). Nothing when the report is
+    /// not in millimetres.
+    fn marker_items(v: &Value, units_mm: bool) -> Vec<eda_kicad::erc_exclusions::MarkerItem> {
+        if !units_mm {
+            return Vec::new();
+        }
+        let nm = |x: f64| (x * 1_000_000.0).round() as i64;
+        v["items"]
+            .as_array()
+            .map(|is| {
+                is.iter()
+                    .map(|it| eda_kicad::erc_exclusions::MarkerItem {
+                        uuid: it["uuid"].as_str().unwrap_or("").to_string(),
+                        x_nm: nm(it["pos"]["x"].as_f64().unwrap_or(0.0)),
+                        y_nm: nm(it["pos"]["y"].as_f64().unwrap_or(0.0)),
+                        description: it["description"].as_str().unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The studio's DRC shape: `type`, `description`, `severity`, `items`
@@ -742,6 +790,8 @@ pub struct DrcReport {
     /// "kicad-cli 10.99.0".
     pub engine: String,
     pub zones_refilled_by_kicad: bool,
+    /// The fills kicad-cli made when the run refilled the zones first (`DrcOptions::refill_zones`): the caller keeps them beside the design.
+    pub zone_fills: Option<KicadFills>,
     pub violations: Vec<Violation>,
     pub unconnected_items: Vec<Violation>,
     /// `--schematic-parity`: the board's differences from the schematic (`DRC_TEST_PROVIDER_SCHEMATIC_PARITY`: a missing, extra or
@@ -822,7 +872,7 @@ fn run_report_with_output(cmd: Command, report: &Path, what: &str) -> Result<(Va
 /// What a `kicad-cli pcb drc` run is asked for beyond the default.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DrcOptions {
-    /// "Refill all zones before performing DRC" (`--refill-zones`): see [`drc`].
+    /// "Refill all zones before performing DRC": see [`drc`].
     pub refill_zones: bool,
     /// "Test for parity between PCB and schematic" (`--schematic-parity`): the derived schematic goes next to the derived board, where kicad-cli looks for
     /// it, and the report's `schematic_parity` holds what differs.
@@ -831,16 +881,12 @@ pub struct DrcOptions {
 
 /// `kicad-cli pcb drc` on `design` as it is.
 ///
-/// `refill_zones` (KiCad's "Refill all zones before performing DRC") is
-/// opt-in. By default KiCad judges the fills the exported board already
-/// carries -- the ones our own filler computed and the studio shows -- and
-/// that matters: kicad-cli 10.99 skips the courtyard checks
-/// (`courtyards_overlap`, `pth_inside_courtyard`, ...) on a run that
-/// refills, so a default refill would silently turn the placement gates off.
-/// A kicad-cli without `--refill-zones` (9.0) falls back to the same
-/// no-refill run. Every kicad-cli start costs a third of a second, so this
-/// neither asks for its version nor probes its options: the version comes
-/// off the report.
+/// The DRC judges the fills the exported board carries: the ones kicad-cli made when the zones were last filled (Fill All Zones, kept beside the design), or none for
+/// a zone that was never filled, as in KiCad. `refill_zones` (KiCad's "Refill all zones before performing DRC") fills them first: kicad-cli's filler runs on a copy
+/// of the board ([`refill_zones`]) and the DRC then runs on the board with that fill in it, without `--refill-zones`, which in kicad-cli 10.99 skips the courtyard
+/// checks (`courtyards_overlap`, `pth_inside_courtyard`, ...) on a run that refills. The fills come back in [`DrcReport::zone_fills`] for the caller to keep. A
+/// kicad-cli that cannot refill (9.0) gives the DRC of the board as it is. Every kicad-cli start costs a third of a second, so this neither asks for its version nor
+/// probes its options: the version comes off the report.
 pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: bool) -> Result<DrcReport, Vec<CheckResult>> {
     drc_with(design, model, work, DrcOptions { refill_zones, schematic_parity: false })
 }
@@ -850,7 +896,19 @@ pub fn drc(design: &Design, model: &ConstraintModel, work: &Path, refill_zones: 
 /// exclusions included, and each [`Violation`] says whether it is one.
 pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: DrcOptions) -> Result<DrcReport, Vec<CheckResult>> {
     let cli = need_cli()?;
-    let (pcb, map) = export_board(design, model, work, "board")?;
+    // "Refill all zones before performing DRC": kicad-cli's filler runs first, on a copy of the board (`refill_zones`), and the DRC then judges the board with that fill
+    // in it -- not `--refill-zones` on the DRC run itself, which drops the courtyard checks. A kicad-cli that cannot refill (9.0) gives the DRC of the board as it is.
+    let refilled = if opts.refill_zones {
+        match refill_zones(design, model, work) {
+            Ok(fills) => Some(fills),
+            Err(e) if e.iter().any(|c| c.check == "kicad_cli_refill") => None,
+            Err(e) => return Err(e),
+        }
+    } else {
+        None
+    };
+    let cache = if refilled.is_none() { studio_zone_fills(work) } else { None };
+    let (pcb, map) = export_board_with(design, model, work, "board", refilled.as_ref().or(cache.as_ref()))?;
     if opts.schematic_parity {
         // kicad-cli reads the schematic next to the board (`<board stem>.kicad_sch`) to make the netlist the parity test compares with.
         if design.schematic.is_none() {
@@ -859,27 +917,14 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
         export_schematic(design, model, work, "board")?;
     }
     let report = work.join("drc.json");
-    let run = |refill: bool| {
-        let mut cmd = cli_command(&cli, Some(&pcb.with_extension("kicad_pro")));
-        cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
-        if refill {
-            cmd.arg("--refill-zones");
-        }
-        if opts.schematic_parity {
-            cmd.arg("--schematic-parity");
-        }
-        cmd.arg("-o").arg(&report).arg(&pcb);
-        run_report_with_output(cmd, &report, "drc")
-    };
-    let ((raw, said), refilled) = if opts.refill_zones {
-        match run(true) {
-            Ok(raw) => (raw, true),
-            Err(e) if e.iter().any(|c| c.hint.as_deref().is_some_and(|h| h.contains("refill-zones"))) => (run(false)?, false),
-            Err(e) => return Err(e),
-        }
-    } else {
-        (run(false)?, false)
-    };
+    // No `--refill-zones` on this run: a run that refills drops the courtyard checks in kicad-cli 10.99, and the fills it judges are the ones the board carries (above).
+    let mut cmd = cli_command(&cli, Some(&pcb.with_extension("kicad_pro")));
+    cmd.args(["pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]);
+    if opts.schematic_parity {
+        cmd.arg("--schematic-parity");
+    }
+    cmd.arg("-o").arg(&report).arg(&pcb);
+    let (raw, said) = run_report_with_output(cmd, &report, "drc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
     let read = |key: &str| -> Vec<Violation> {
         let mut list: Vec<Violation> = raw[key].as_array().map(|vs| vs.iter().map(|v| Violation::from_json(v, &map, units_mm)).collect()).unwrap_or_default();
@@ -900,13 +945,62 @@ pub fn drc_with(design: &Design, model: &ConstraintModel, work: &Path, opts: Drc
     });
     Ok(DrcReport {
         engine: format!("kicad-cli {version}"),
-        zones_refilled_by_kicad: refilled,
+        zones_refilled_by_kicad: refilled.is_some(),
+        zone_fills: refilled,
         violations: read("violations"),
         unconnected_items: read("unconnected_items"),
         schematic_parity: if opts.schematic_parity { read("schematic_parity") } else { Vec::new() },
         parity,
         ignored_checks: raw["ignored_checks"].as_array().map(|cs| cs.iter().map(IgnoredCheck::from_json).collect()).unwrap_or_default(),
     })
+}
+
+/// Fill All Zones (B) by KiCad's own filler: `kicad-cli pcb drc --refill-zones --save-board` on a copy of the derived board (`refill/refill.kicad_pcb` in
+/// `work`, so the board the other runs read is left as it is), then the `(filled_polygon ..)` of every zone read back from the board kicad-cli
+/// saved. There is no other filler: this is what a fill is. The fills are returned for the design as it is now, each zone's with the fingerprint of the zone it was
+/// made for (`eda_kicad::zone_fills::zone_signature`); keeping them is the caller's (the studio keeps them beside `design.json`, `eda_kicad::zone_fills::store`).
+/// A board with no zone to fill does not start kicad-cli.
+///
+/// The copy starts with no fill at all (kicad-cli replaces every one), and its project ignores every DRC check: the refill is all this run is for. Its DRC report is not
+/// looked at.
+pub fn refill_zones(design: &Design, model: &ConstraintModel, work: &Path) -> Result<KicadFills, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let engine = format!("kicad-cli {}", cli_version(&cli));
+    if !design.routing.as_ref().is_some_and(|r| r.zones.iter().any(eda_kicad::zone_fills::fillable)) {
+        return Ok(KicadFills::new(engine, String::new(), 0, Default::default()));
+    }
+    let started = Instant::now();
+    let stem = "refill";
+    // The copy lives in a folder of its own, with the project's rules but none of the board's library tables, and its project ignores every check, the library checks
+    // too, so [`cli_command`] gives the run the empty settings folder: a DRC job does not start before the footprint libraries are enumerated (every `.kicad_mod` of every
+    // library of the global table is parsed, 5 s and more of a 7 s run) and a fill needs none of them. Measured on a 30-part board with a GND pour on both layers: 8.1 s
+    // with the user's libraries, 1.6 s without, the same fill.
+    let scratch = work.join("refill");
+    let (pcb, map) = export_board_with(design, model, &scratch, stem, None)?;
+    let project = scratch.join(format!("{stem}.kicad_pro"));
+    ignore_every_check(&project)?;
+    let report = scratch.join("refill.json");
+    let _ = std::fs::remove_file(&report);
+    let mut cmd = cli_command(&cli, Some(&project));
+    cmd.args(["pcb", "drc", "--refill-zones", "--save-board", "--format", "json", "--units", "mm", "-o"]).arg(&report).arg(&pcb);
+    let out = output_within(cmd, limit(EXPORT_TIMEOUT))?;
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    // An old kicad-cli does not know the options. One that does has written the refilled board over the copy: a file of its own making, not the one we wrote.
+    let refilled = std::fs::read_to_string(&pcb).map_err(|e| fail("kicad_cli_refill", &pcb.display().to_string(), e.to_string()))?;
+    if !out.status.success() || refilled.contains("(generator \"eda-kicad\")") {
+        let why = said.lines().map(str::trim).filter(|l| !l.is_empty()).last().unwrap_or("it printed nothing");
+        return Err(fail("kicad_cli_refill", "kicad-cli", format!("kicad-cli could not refill the zones (it needs --refill-zones and --save-board): {why}")));
+    }
+    let zones = eda_kicad::zone_fills::entries_by_zone(design, eda_kicad::zone_fills::scan_zone_fills(&refilled), &map);
+    Ok(KicadFills::new(engine, String::new(), started.elapsed().as_millis() as u64, zones))
+}
+
+/// Every DRC check set to `ignore` in a derived project, so kicad-cli runs none of them.
+fn ignore_every_check(project: &Path) -> Result<(), Vec<CheckResult>> {
+    let text = std::fs::read_to_string(project).map_err(|e| fail("kicad_engine_write", &project.display().to_string(), e.to_string()))?;
+    let mut pro: Value = serde_json::from_str(&text).map_err(|e| fail("kicad_engine_write", &project.display().to_string(), e.to_string()))?;
+    pro["board"]["design_settings"]["rule_severities"] = Value::Object(eda_model::rules::DRC_CHECKS.iter().map(|(key, _)| (key.to_string(), Value::String("ignore".into()))).collect());
+    write_file(project, format!("{}\n", serde_json::to_string_pretty(&pro).unwrap_or_default()))
 }
 
 /// [`drc`] in a throwaway directory -- for a design that only exists in
@@ -926,31 +1020,70 @@ pub struct ErcReport {
 }
 
 impl ErcReport {
+    /// The violations the studio lists: kicad-cli's, without the markers its own exclusions made that are not violations. KiCad turns an exclusion
+    /// that matches no marker into an excluded marker of its own (`SCHEMATIC::ResolveERCExclusions`), so the report can hold an excluded entry
+    /// that no check found: one of an item that is gone (no items), a copy of a violation whose own marker the exclusion did not match (the same
+    /// items, and the real one listed beside it, not excluded), or a second marker for one. What is left of those is the one stale marker KiCad
+    /// would show -- an exclusion whose violation is gone -- and a check set to Ignore has none.
+    fn listed(&self) -> Vec<&Violation> {
+        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>());
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for v in &self.violations {
+            if v.excluded {
+                let k = key(v);
+                let ignored = self.ignored_checks.iter().any(|c| c.key == v.kind);
+                let copy = self.violations.iter().any(|w| !w.excluded && key(w) == k);
+                if v.items.is_empty() || ignored || copy || !seen.insert(k) {
+                    continue;
+                }
+            }
+            out.push(v);
+        }
+        out
+    }
+
     /// The studio's ERC shape: `check`, `severity`, `location` (the first
-    /// item's id), `hint`, plus the full `items` list. A finding whose
-    /// `(check, location)` is in `exclusions` reports as `"excluded"`: still
-    /// listed, no longer an error or a warning.
-    pub fn to_json(&self, exclusions: &[(String, String)]) -> Value {
+    /// item's id), `hint`, plus the full `items` list. A finding that kicad-cli
+    /// reports as excluded -- the project lists its marker (`erc.erc_exclusions`) -- or whose
+    /// `(check, location)` is in `exclusions` reports as `"excluded"`: still listed, no longer an
+    /// error or a warning, with the exclusion's `comment`; `kicad_matched` says whether kicad-cli
+    /// itself matched it. `marker` is the marker its exclusion would go into the project as, when the
+    /// report says enough to write it (`eda_kicad::erc_exclusions`), and `sheet` the sheet the
+    /// report lists it under.
+    pub fn to_json(&self, exclusions: &[ErcExclusion]) -> Value {
         let mut counts = BTreeMap::<String, usize>::new();
         let violations: Vec<Value> = self
-            .violations
-            .iter()
+            .listed()
+            .into_iter()
             .map(|v| {
                 let location = v.items.iter().find_map(|i| i.id.clone()).unwrap_or_default();
-                let excluded = !location.is_empty() && exclusions.iter().any(|(c, l)| *c == v.kind && *l == location);
+                let studio = if location.is_empty() { None } else { exclusions.iter().find(|e| e.check == v.kind && e.location == location) };
+                let by_kicad = v.excluded || v.severity == "exclusion";
+                let excluded = by_kicad || studio.is_some();
                 if !excluded {
                     *counts.entry(v.kind.clone()).or_default() += 1;
                 }
+                let comment = studio.map(|e| e.comment.as_str()).unwrap_or(v.comment.as_str());
                 let item_desc: Vec<&str> = v.items.iter().map(|i| i.description.as_str()).filter(|d| !d.is_empty()).collect();
-                json!({
+                let mut j = json!({
                     "check": v.kind,
-                    "severity": if excluded || v.excluded || v.severity == "exclusion" { "excluded" } else { v.severity.as_str() },
+                    "severity": if excluded { "excluded" } else { v.severity.as_str() },
                     // What the finding is when it is not excluded: the report folds the two together, and un-excluding must give the severity back.
                     "base_severity": if v.severity == "warning" { "warning" } else { "error" },
                     "location": location,
                     "hint": format!("{}{}{}", v.description, if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
                     "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
-                })
+                    "comment": if excluded { comment } else { "" },
+                    "kicad_matched": by_kicad,
+                });
+                if let Some(marker) = &v.marker {
+                    j["marker"] = serde_json::to_value(marker).unwrap_or(Value::Null);
+                }
+                if !v.sheet.is_empty() {
+                    j["sheet"] = json!(v.sheet);
+                }
+                j
             })
             .collect();
         json!({ "engine": self.engine, "violations": violations, "counts": counts, "ignored_checks": self.ignored_checks.iter().map(IgnoredCheck::to_json).collect::<Vec<_>>() })
@@ -966,15 +1099,132 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     cmd.args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(&sch);
     let raw = run_report(cmd, &report, "erc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
+    let sheet_count = raw["sheets"].as_array().map_or(0, Vec::len);
     let mut violations = Vec::new();
     for sheet in raw["sheets"].as_array().into_iter().flatten() {
+        let path = sheet["uuid_path"].as_str().unwrap_or("");
         for v in sheet["violations"].as_array().into_iter().flatten() {
-            violations.push(Violation::from_json(v, &map, units_mm));
+            let mut violation = Violation::from_json(v, &map, units_mm);
+            violation.sheet = path.to_string();
+            violation.marker = eda_kicad::erc_exclusions::marker(&violation.kind, &violation.severity, &Violation::marker_items(v, units_mm), path, sheet_count);
+            violations.push(violation);
         }
     }
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
     let ignored_checks = raw["ignored_checks"].as_array().map(|cs| cs.iter().map(IgnoredCheck::from_json).collect()).unwrap_or_default();
     Ok(ErcReport { engine: format!("kicad-cli {version}"), violations, ignored_checks })
+}
+
+// ------------------------------------------------------------------ saved reports
+
+/// The unit a saved report prints lengths in (`--units`): the editor's own, `GetUserUnits()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReportUnits {
+    #[default]
+    Mm,
+    Mils,
+    In,
+}
+
+impl ReportUnits {
+    fn arg(self) -> &'static str {
+        match self {
+            ReportUnits::Mm => "mm",
+            ReportUnits::Mils => "mils",
+            ReportUnits::In => "in",
+        }
+    }
+}
+
+/// What a checker dialog's "Save..." asks of kicad-cli (`DIALOG_ERC::OnSaveReport`, `DIALOG_DRC::OnSaveReport`): the file format and the Show boxes -- the severities
+/// the dialog lists, which is what its report holds (`RC_ITEMS_PROVIDER::GetSeverities`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReportOptions {
+    /// A `.json` file (`WriteJsonReport`); else the text report, `.rpt` (`WriteTextReport`).
+    pub json: bool,
+    pub errors: bool,
+    pub warnings: bool,
+    pub exclusions: bool,
+    pub units: ReportUnits,
+}
+
+impl ReportOptions {
+    /// `--format`, `--units` and the severity flags of `kicad-cli sch erc` / `pcb drc`: all three boxes are `--severity-all`; kicad-cli's own default (errors and
+    /// warnings) is what none checked asks for.
+    fn args(&self) -> Vec<&'static str> {
+        let mut args = vec!["--format", if self.json { "json" } else { "report" }, "--units", self.units.arg()];
+        if self.errors && self.warnings && self.exclusions {
+            args.push("--severity-all");
+        } else {
+            if self.errors {
+                args.push("--severity-error");
+            }
+            if self.warnings {
+                args.push("--severity-warning");
+            }
+            if self.exclusions {
+                args.push("--severity-exclusions");
+            }
+        }
+        args
+    }
+
+    fn extension(&self) -> &'static str {
+        if self.json {
+            "json"
+        } else {
+            "rpt"
+        }
+    }
+}
+
+/// A report kicad-cli wrote for a dialog's "Save...": the name the dialog suggests (`ERC.rpt`, `DRC.json`) and the file's text.
+#[derive(Debug, Clone)]
+pub struct SavedReport {
+    pub file_name: String,
+    pub text: String,
+}
+
+/// Run `cmd` (a `kicad-cli ... -o <out>`) and read the report it wrote.
+fn run_saved_report(cmd: Command, out: &Path, what: &str) -> Result<String, Vec<CheckResult>> {
+    let _ = std::fs::remove_file(out);
+    let run = output_within(cmd, limit(REPORT_TIMEOUT))?;
+    std::fs::read_to_string(out).map_err(|_| fail(&format!("kicad_cli_{what}"), "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr))))
+}
+
+/// The ERC report file of a dialog's "Save..." (`ERC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli sch erc` on the design's schematic -- the exclusions in
+/// the derived project -- asked for `opts`' format, units and severities. A run, not the report on screen: a marker deleted from the list is in it.
+pub fn erc_report(design: &Design, model: &ConstraintModel, work: &Path, opts: &ReportOptions) -> Result<SavedReport, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (sch, _) = export_schematic(design, model, work, "board")?;
+    let out = work.join(format!("erc-report.{}", opts.extension()));
+    let mut cmd = cli_command(&cli, Some(&sch.with_extension("kicad_pro")));
+    cmd.args(["sch", "erc"]).args(opts.args()).arg("-o").arg(&out).arg(&sch);
+    Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text: run_saved_report(cmd, &out, "erc")? })
+}
+
+/// The DRC report file of a dialog's "Save..." (`DRC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli pcb drc` on the derived board, with the dialog's own
+/// options (`refill_zones`, `schematic_parity`) and `opts`' format, units and severities.
+pub fn drc_report(design: &Design, model: &ConstraintModel, work: &Path, drc: DrcOptions, opts: &ReportOptions) -> Result<SavedReport, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (pcb, _) = export_board(design, model, work, "board")?;
+    if drc.schematic_parity {
+        if design.schematic.is_none() {
+            return Err(fail("kicad_cli_parity", "schematic", "the parity test compares the board with the schematic, and this design has none"));
+        }
+        export_schematic(design, model, work, "board")?;
+    }
+    let out = work.join(format!("drc-report.{}", opts.extension()));
+    let mut cmd = cli_command(&cli, Some(&pcb.with_extension("kicad_pro")));
+    cmd.args(["pcb", "drc"]).args(opts.args());
+    if drc.refill_zones {
+        cmd.arg("--refill-zones");
+    }
+    if drc.schematic_parity {
+        cmd.arg("--schematic-parity");
+    }
+    cmd.arg("-o").arg(&out).arg(&pcb);
+    Ok(SavedReport { file_name: format!("DRC.{}", opts.extension()), text: run_saved_report(cmd, &out, "drc")? })
 }
 
 // ------------------------------------------------------------------ statistics
@@ -1502,6 +1752,7 @@ mod tests {
         let rep = DrcReport {
             engine: "kicad-cli test".into(),
             zones_refilled_by_kicad: false,
+            zone_fills: None,
             violations: vec![found("clearance", &["a", "b"], false), found("clearance", &["a", "c"], false), found("annular_width", &["v"], true), found("hole_size", &["v"], false)],
             unconnected_items: vec![found("unconnected_items", &["p", "q"], false)],
             schematic_parity: vec![],
@@ -1576,6 +1827,122 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// `empty_design` with one copper pour on F.Cu, no net: enough for `refill_zones` to have something to fill.
+    fn design_with_a_pour() -> (Design, ConstraintModel) {
+        let (mut design, model) = empty_design();
+        design.routing = Some(
+            serde_json::from_value(json!({
+                "tracks": [], "vias": [],
+                "zones": [{ "id": "pour", "net": "", "layer": "F.Cu", "outline": [{ "x": 1000, "y": 1000 }, { "x": 9000, "y": 1000 }, { "x": 9000, "y": 9000 }, { "x": 1000, "y": 9000 }] }],
+            }))
+            .unwrap(),
+        );
+        (design, model)
+    }
+
+    /// The stand-in kicad-cli of the refill tests: writes what it was given to `$FAKE_LOG`, answers a DRC with an empty report and, asked for `--refill-zones
+    /// --save-board`, saves the board it was given with a `(filled_polygon ..)` in its zone and its own generator, as the real one does.
+    const FILLING_CLI: &str = r#"out=""; pcb=""; prev=""; refill=no; save=no
+for a in "$@"; do
+  if [ "$prev" = "-o" ]; then out="$a"; fi
+  if [ "$a" = "--refill-zones" ]; then refill=yes; fi
+  if [ "$a" = "--save-board" ]; then save=yes; fi
+  pcb="$a"; prev="$a"
+done
+echo "$refill $save config=$KICAD_CONFIG_HOME $*" >> "$FAKE_LOG"
+cp "$pcb" "$pcb.given"
+echo '{"coordinate_units":"mm","kicad_version":"10.99.0-fake","violations":[],"unconnected_items":[]}' > "$out"
+if [ $refill = yes ] && [ $save = yes ] && [ -z "$FAKE_CANNOT_REFILL" ]; then
+  awk '/\(polygon/ && !done { print "(filled_polygon (layer \"F.Cu\") (pts (xy 1 1) (xy 9 1) (xy 9 9)))"; done = 1 } { gsub(/\(generator "eda-kicad"\)/, "(generator \"pcbnew\")"); print }' "$pcb" > "$pcb.saved" && mv "$pcb.saved" "$pcb"
+fi"#;
+
+    #[test]
+    fn fill_all_zones_runs_kicad_clis_filler_on_a_copy_through_cli_command_and_reads_its_fills_back() {
+        let mut env = Env::take();
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_refill_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls.log");
+        env.set("FAKE_LOG", &log);
+        env.set("EDA_KICAD_CLI", script(&dir, "filling.sh", FILLING_CLI));
+        env.set("EDA_KICAD_CONFIG_HOME", dir.join("settings"));
+        let work = dir.join("work");
+
+        // A board with no pour has nothing to fill: kicad-cli is not started.
+        let (bare, model) = empty_design();
+        let none = refill_zones(&bare, &model, &work).expect("nothing to fill");
+        assert!(none.zones.is_empty() && !log.exists(), "kicad-cli was started for a board with no zone");
+
+        let (design, model) = design_with_a_pour();
+        let fills = refill_zones(&design, &model, &work).expect("a refill");
+        assert_eq!(fills.engine, "kicad-cli 10.99.0-fake");
+        let entry = &fills.zones["pour"];
+        assert_eq!(entry.sig, eda_kicad::zone_fills::zone_signature(&design.routing.as_ref().unwrap().zones[0]), "the fill is the fill of the zone as it is now");
+        assert_eq!(entry.layers["F.Cu"][0].pts, vec![[1_000_000, 1_000_000], [9_000_000, 1_000_000], [9_000_000, 9_000_000]], "nanometres, as kicad-cli stored them");
+
+        // One launch, the filler's: the copy of the board in a folder of its own, saved, with the settings folder of `cli_command` (no user libraries to enumerate).
+        let calls = std::fs::read_to_string(&log).unwrap();
+        assert_eq!(calls.lines().count(), 1, "{calls}");
+        assert!(calls.starts_with("yes yes "), "--refill-zones and --save-board: {calls}");
+        assert!(calls.contains("pcb drc --refill-zones --save-board"), "{calls}");
+        if std::env::var_os("EDA_KICAD_USER_CONFIG").is_none() {
+            let home = dir.join("settings").join("empty");
+            assert!(calls.contains(&format!("config={}", home.display())), "the empty settings folder of cli_command, not a folder of the refill's own: {calls}");
+            assert!(home.is_dir());
+        }
+        assert!(work.join("refill").join("refill.kicad_pcb").exists() && !work.join("board.kicad_pcb").exists(), "the board the other runs read is left as it is");
+        let given = std::fs::read_to_string(work.join("refill").join("refill.kicad_pcb.given")).unwrap();
+        assert!(given.contains("(generator \"eda-kicad\")") && !given.contains("(filled_polygon"), "kicad-cli was given the board unfilled, as we write it");
+        let pro: Value = serde_json::from_str(&std::fs::read_to_string(work.join("refill").join("refill.kicad_pro")).unwrap()).unwrap();
+        let severities = pro["board"]["design_settings"]["rule_severities"].as_object().unwrap();
+        assert!(!severities.is_empty() && severities.values().all(|v| v == "ignore"), "the copy's project ignores every check: the refill is all the run is for");
+
+        // A kicad-cli that cannot refill (9.0 does not know the options) leaves the board as we wrote it: said so, never taken for a fill.
+        env.set("FAKE_CANNOT_REFILL", "1");
+        let e = refill_zones(&design, &model, &work).unwrap_err();
+        assert_eq!(e[0].check, "kicad_cli_refill", "{e:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_drc_refills_first_on_a_copy_and_judges_the_board_with_that_fill_in_it_not_with_refill_zones() {
+        let mut env = Env::take();
+        let dir = std::env::temp_dir().join(format!("eda_kicad_engine_drc_refill_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("calls.log");
+        env.set("FAKE_LOG", &log);
+        env.set("EDA_KICAD_CLI", script(&dir, "filling.sh", FILLING_CLI));
+        env.set("EDA_KICAD_CONFIG_HOME", dir.join("settings"));
+        let (design, model) = design_with_a_pour();
+        let work = dir.join("work");
+
+        let report = drc(&design, &model, &work, true).expect("refill, then DRC");
+        assert!(report.zones_refilled_by_kicad);
+        assert_eq!(report.zone_fills.as_ref().map(|k| k.counts()), Some((1, 1)), "the fills come back for the caller to keep");
+        let calls: Vec<String> = std::fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
+        assert_eq!(calls.len(), 2, "the refill, then the DRC: {calls:?}");
+        assert!(calls[0].starts_with("yes yes "), "{calls:?}");
+        assert!(calls[1].starts_with("no no ") && !calls[1].contains("--refill-zones"), "kicad-cli 10.99 drops its courtyard checks on a run that refills: {calls:?}");
+        let judged = std::fs::read_to_string(work.join("board.kicad_pcb.given")).unwrap();
+        assert!(judged.contains("(filled_polygon"), "the DRC judges the board with the fill in it");
+        let flat = judged.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(flat.contains("(filled_polygon (layer \"F.Cu\") (pts (xy 1 1) (xy 9 1) (xy 9 9) ) )"), "KiCad's own ring, as it stored it");
+
+        // Not asked for: the board as it is, the fills kept beside the design (none here), no refill.
+        let _ = std::fs::remove_file(&log);
+        let plain = drc(&design, &model, &work, false).expect("a plain DRC");
+        assert!(!plain.zones_refilled_by_kicad && plain.zone_fills.is_none());
+        assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+        assert!(!std::fs::read_to_string(work.join("board.kicad_pcb.given")).unwrap().contains("(filled_polygon"), "a zone never filled is exported unfilled, as in KiCad");
+
+        // A kicad-cli that cannot refill gives the DRC of the board as it is.
+        env.set("FAKE_CANNOT_REFILL", "1");
+        let fallback = drc(&design, &model, &work, true).expect("the DRC without a refill");
+        assert!(!fallback.zones_refilled_by_kicad && fallback.zone_fills.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_derived_files_are_named_after_the_project_with_safe_characters() {
         assert_eq!(file_stem("mcu_board_30plus"), "mcu_board_30plus");
@@ -1601,13 +1968,86 @@ mod tests {
             ],
             ignored_checks: vec![],
         };
-        let j = rep.to_json(&[("pin_not_connected".into(), "U1.2".into())]);
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.2".into(), comment: "unused".into(), ..Default::default() }]);
         assert_eq!(j["violations"][0]["severity"], "error");
         assert_eq!(j["violations"][1]["severity"], "excluded");
         assert_eq!(j["counts"]["pin_not_connected"], 1);
         assert_eq!(j["violations"][0]["location"], "U1.1");
         assert_eq!(j["violations"][1]["base_severity"], "error", "an excluded finding says what it is when it is not");
         assert_eq!(j["violations"][0]["hint"], "Pin not connected: Pin 1");
+        assert_eq!(j["violations"][1]["comment"], "unused", "the exclusion's comment comes with it");
+        assert_eq!(j["violations"][1]["kicad_matched"], false, "the studio's own exclusion: kicad-cli's project did not hold it");
+        assert_eq!(j["violations"][0]["comment"], "");
+    }
+
+    /// kicad-cli's own ERC report items for the tests below.
+    fn erc_item(desc: &str, id: Option<&str>, uuid: &str) -> Item {
+        Item { description: desc.into(), pos: (0, 0), id: id.map(str::to_string), uuid: uuid.into() }
+    }
+
+    fn erc_violation(kind: &str, items: Vec<Item>, excluded: bool) -> Violation {
+        Violation { kind: kind.into(), description: "x".into(), severity: "error".into(), items, excluded, comment: if excluded { "from kicad".into() } else { String::new() }, ..Default::default() }
+    }
+
+    #[test]
+    fn a_finding_kicad_cli_matched_is_excluded_with_its_comment_and_counted_by_nobody() {
+        let a = erc_item("Pin 1", Some("U1.1"), "u-a");
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![erc_violation("pin_not_connected", vec![a.clone()], true), erc_violation("pin_not_connected", vec![erc_item("Pin 2", Some("U1.2"), "u-b")], false)], ignored_checks: vec![] };
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.1".into(), comment: "reviewed".into(), marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1, 2], items: vec!["u-a".into()], ..Default::default() }) }]);
+        assert_eq!(j["violations"][0]["severity"], "excluded");
+        assert_eq!(j["violations"][0]["kicad_matched"], true, "kicad-cli itself matched the marker text");
+        assert_eq!(j["violations"][0]["comment"], "reviewed", "the studio's comment is the exclusion's");
+        assert_eq!(j["counts"]["pin_not_connected"], 1, "only the other one counts");
+        // A finding kicad-cli excluded with no exclusion of the studio's behind it (a foreign project) keeps kicad-cli's comment.
+        let j = rep.to_json(&[]);
+        assert_eq!((j["violations"][0]["severity"].as_str(), j["violations"][0]["comment"].as_str()), (Some("excluded"), Some("from kicad")));
+    }
+
+    /// `SCHEMATIC::ResolveERCExclusions` makes an excluded marker of a text that matched nothing, and kicad-cli's report lists it: it is no violation.
+    #[test]
+    fn the_markers_an_unmatched_exclusion_made_are_not_findings() {
+        let real = erc_violation("footprint_link_issues", vec![erc_item("Symbol C1", Some("C1"), "u-c1")], false);
+        let copy = erc_violation("footprint_link_issues", vec![erc_item("Symbol C1", Some("C1"), "u-c1")], true);
+        let gone = erc_violation("pin_not_connected", vec![], true);
+        let stale = erc_violation("wire_dangling", vec![erc_item("Wire", Some("w9"), "u-w")], true);
+        let stale_twice = erc_violation("wire_dangling", vec![erc_item("Wire", Some("w9"), "u-w")], true);
+        let ignored = erc_violation("simulation_model_issue", vec![erc_item("Symbol R1", Some("R1"), "u-r1")], true);
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![real, copy, gone, stale, stale_twice, ignored], ignored_checks: vec![IgnoredCheck { key: "simulation_model_issue".into(), description: "x".into() }] };
+        let j = rep.to_json(&[ErcExclusion { check: "footprint_link_issues".into(), location: "C1".into(), ..Default::default() }]);
+        let listed: Vec<(&str, &str)> = j["violations"].as_array().unwrap().iter().map(|v| (v["check"].as_str().unwrap(), v["severity"].as_str().unwrap())).collect();
+        assert_eq!(listed, vec![("footprint_link_issues", "excluded"), ("wire_dangling", "excluded")], "the real finding (waived by the studio), and the one stale marker of an exclusion whose violation is gone");
+        assert_eq!(j["counts"].as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn an_erc_entry_offers_the_marker_its_exclusion_would_be_and_the_sheet_it_is_under() {
+        // The report's positions are millimetres as they are, and the marker's are nanometres: 115.57 mm is 115570000.
+        let v = json!({ "type": "pin_not_connected", "description": "Pin not connected", "severity": "error",
+            "items": [{ "description": "Symbol #PWR03 Pin 1 [Power input, Line]", "pos": { "x": 115.57, "y": 110.49 }, "uuid": "693a38f5-591c-4c06-9786-e8973d13af99" }] });
+        let items = Violation::marker_items(&v, true);
+        assert_eq!((items[0].x_nm, items[0].y_nm), (115_570_000, 110_490_000));
+        assert!(Violation::marker_items(&v, false).is_empty(), "inches: not known");
+        let mut violation = Violation::from_json(&v, &HashMap::new(), true);
+        violation.sheet = "/r".into();
+        violation.marker = eda_kicad::erc_exclusions::marker("pin_not_connected", "error", &items, "/r", 1);
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![violation], ignored_checks: vec![] };
+        let j = rep.to_json(&[]);
+        assert_eq!(
+            j["violations"][0]["marker"],
+            json!({ "error_type": "ERCET_PIN_NOT_CONNECTED", "at_nm": [115_570_000, 110_490_000], "items": ["693a38f5-591c-4c06-9786-e8973d13af99"], "sheet": ["r"], "main_sheet": ["r"] })
+        );
+        assert_eq!(j["violations"][0]["sheet"], "/r");
+    }
+
+    #[test]
+    fn a_saved_report_asks_kicad_cli_for_its_format_its_units_and_the_severities_the_dialog_shows() {
+        let all = ReportOptions { json: false, errors: true, warnings: true, exclusions: true, units: ReportUnits::Mm };
+        assert_eq!(all.args(), ["--format", "report", "--units", "mm", "--severity-all"], "the three boxes are all severities");
+        assert_eq!(all.extension(), "rpt");
+        let some = ReportOptions { json: true, errors: true, warnings: false, exclusions: true, units: ReportUnits::Mils };
+        assert_eq!(some.args(), ["--format", "json", "--units", "mils", "--severity-error", "--severity-exclusions"]);
+        assert_eq!(some.extension(), "json");
+        assert_eq!(ReportOptions { units: ReportUnits::In, ..Default::default() }.args(), ["--format", "report", "--units", "in"], "none asked for: kicad-cli's own default");
     }
 
     #[test]

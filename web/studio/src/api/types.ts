@@ -371,8 +371,8 @@ export interface RuleAreaFields {
 /**
  * `crates/model/src/ir.rs` `Zone` -- id/net/layer/outline plus the full
  * `ZONE_SETTINGS` (`ZoneSettingsFields`) and rule-area flags
- * (`RuleAreaFields`), ported into the IR so `crates/zone-filler` can read
- * them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
+ * (`RuleAreaFields`), kept in the IR and written to the derived `.kicad_pcb`, where
+ * kicad-cli's filler reads them; see `ZoneDialog.tsx`. Every settings field has a KiCad-matching
  * server-side default (`Zone::default()`) once `add_zone` creates a zone,
  * so these are never actually absent from a real `/api/state` response --
  * not marked optional, same convention this file uses for every other
@@ -381,7 +381,14 @@ export interface RuleAreaFields {
 export interface Zone extends ZoneSettingsFields, RuleAreaFields {
   id: string;
   net: string;
+  /** The zone's first layer (`ZONE::GetFirstLayer`): the front-most copper layer of its set, else its first technical layer. */
   layer: string;
+  /**
+   * `ZONE::GetLayerSet()`: every layer the zone is on, `layer` first, in the order the Layers tab lists them (the copper stack from the front, then the technical layers) --
+   * one layer for a zone on one. A zone with no copper layer in it is a non-copper zone (`fillNonCopperZone`: silkscreen, mask, paste and user layers; no net).
+   * Absent from a backend that predates layer sets: read it with `zoneLayers` (`kicad-port/zoneLayers.ts`).
+   */
+  layers?: string[];
   /** Task item 4: true for a generated teardrop (`eda_model::ir::Zone::teardrop`), never a hand-drawn zone. */
   teardrop: boolean;
   /** `ZONE::GetZoneName()` ("" = unnamed); absent from a backend built before the Properties panel. */
@@ -1350,6 +1357,7 @@ export type Cmd =
   | { op: "add_drc_exclusions"; exclusions: DrcExclusionSpec[] }
   /** "Remove exclusion for this violation" (and "Remove all exclusions ..."): put the violations back in the report. */
   | { op: "delete_drc_exclusions"; exclusions: Array<{ check: string; items: string[] }> }
+  | { op: "clear_drc_exclusions" }
   /** Schematic Setup > Violation Severity (`panel_setup_severities.cpp`): ERC settings key -> severity, the whole table (see `ErcSeveritiesReply`). */
   | { op: "set_erc_severities"; severities: Record<string, RuleSeverity> }
   /** `GLOBAL_EDIT_TOOL::SwapLayers` -- "move items on" -> "to layer" pairs (components/SwapLayersDialog.tsx). */
@@ -1386,7 +1394,7 @@ export type Cmd =
    * one field of the panel, the whole thing commits together. Outline is
    * untouched (no point editor yet, see PARITY-pcb.md).
    */
-  | ({ op: "edit_zone"; id: string; net: string; layer: string } & ZoneSettingsFields & RuleAreaFields)
+  | ({ op: "edit_zone"; id: string; net: string; layer: string; /** The layers the zone is on (`ZONE_SETTINGS::m_Layers`); absent leaves a set that holds `layer` as it is. */ layers?: string[] } & ZoneSettingsFields & RuleAreaFields)
   /** `pcb_point_editor.cpp`'s zone-outline editing (drag/add/remove a corner) -- the whole edited outline, replacing it wholesale (no live point-by-point Cmd). */
   | { op: "set_zone_outline"; id: string; outline: PointXY[] }
   | { op: "add_shape"; shape: CmdShape }
@@ -1559,8 +1567,10 @@ export type Cmd =
   /** `eeschema.EditorControl.incrementAnnotations`: every reference with the start's letters and a number at least its own moves by `increment`. */
   | { op: "increment_annotations"; start: string; increment: number }
   /** `dialog_erc.cpp`'s "Exclude this violation" / un-exclude -- `(check, location)` keys exactly one `ErcViolation`, matching it byte-for-byte against the same `location` string GET /api/erc reported (see `ErcViolation.location`'s own doc for the shapes that can be). Refused server-side when `location` is empty -- nothing to key an exclusion on. */
-  | { op: "add_erc_exclusion"; check: string; location: string }
+  | { op: "add_erc_exclusion"; check: string; location: string; comment?: string; marker?: ErcMarker }
   | { op: "delete_erc_exclusion"; check: string; location: string }
+  | { op: "clear_erc_exclusions" }
+  | { op: "set_connection_grid"; mils: number }
   /** Symbol Fields Table's Apply (dialog_symbol_fields_table.cpp) -- ONE verb for the whole staged batch so a single undo reverts it all. Applied remove -> rename -> add -> edits; edits address the FINAL field names. */
   | { op: "set_symbol_fields"; edits: SymbolFieldEdit[]; add_fields?: string[]; rename_fields?: SymbolFieldRename[]; remove_fields?: string[] }
   /** Find and Replace's Replace / Replace All (sch_find_replace_tool.cpp): `items` = `FindMatch.key`s to restrict to (one = "Replace"), omitted/null = "Replace All". */
@@ -1926,27 +1936,55 @@ export interface Ratsnest {
 
 // ---------------------------------------------------------------- fill
 //
-// GET /api/fill. Source of truth: crates/cli/src/studio.rs `fill_json()`,
-// `crates/zone-filler` via `eda_drc::fill::fill_all_zones` -- the real
-// KiCad zone-fill algorithm (clearance/thermal-relief/min-width/island
-// knockouts), computed fresh on every call (no caching, same reasoning as
-// /api/drc). `pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll` (B/Ctrl+B,
-// zone_filler_tool.cpp) are this app's own fetch/clear of this report --
-// see state/store.tsx's `zoneFill`.
+// GET /api/fill. Source of truth: crates/cli/src/fill_api.rs `report()`. The zone fill is
+// KiCad's, made by `kicad-cli pcb drc --refill-zones --save-board` (B, "Fill All Zones") and kept
+// beside design.json (`eda_kicad::zone_fills`); there is no other filler. Between fills the board
+// shows the last one, as KiCad does with auto-refill off. A zone that was never filled, or was edited
+// since, has none: `filled` is false, there are no fragments and the canvas draws its outline
+// (`pcbnew.ZoneFiller.zoneFillAll`/`zoneUnfillAll`, B/Ctrl+B, zone_filler_tool.cpp -- see
+// state/store.tsx's `zoneFill`).
 
-/** One zone's computed fill -- possibly several disjoint fragments (islands). Each fragment is a single closed ring, already "Fracture"d (slit at any hole), never a separate outer+holes pair. */
+/** One zone's fill on one layer -- possibly several disjoint fragments (islands). Each fragment is a single closed ring, already "Fracture"d (slit at any hole), never a separate outer+holes pair. */
 export interface FillZone {
   id: string;
   net: string;
   layer: string;
+  /** The zone has a fill that is current: it was filled by kicad-cli and not edited since. False: no copper yet, drawn as an outline. */
+  filled: boolean;
   area_um2: number;
   fragments: [Um, Um][][];
   /** Only with `GET /api/fill?polys=1`: the same fill unfractured, one outline and its holes per island (what the triangulation display needs). */
   polys?: { outline: [Um, Um][]; holes: [Um, Um][][] }[];
 }
 
+/** Whose fill the board holds: `null` when no zone has ever been filled (or the fills were all taken away). */
+export interface FillSource {
+  /** "kicad-cli 10.99.0", or "the .kicad_pcb that was imported" for the fills a file was saved with. */
+  engine: string;
+  /** The design revision (`/api/version`) the run started from. */
+  revision: string;
+  /** How long kicad-cli took. */
+  seconds: number;
+  /** Zones with a fill that is current, and zones with one that was edited since (they show as outlines). */
+  zones: number;
+  stale: number;
+}
+
 export interface FillReport {
   zones: FillZone[];
+  source: FillSource | null;
+}
+
+/** POST /api/fill/kicad: kicad-cli's filler ran (`ok`), or could not (`message`). */
+export interface KicadFillReply {
+  ok: boolean;
+  message?: string;
+  engine?: string;
+  seconds?: number;
+  layers?: number;
+  rings?: number;
+  zones?: number;
+  revision?: string;
 }
 
 // ---------------------------------------------------------------- board.glb
@@ -2550,7 +2588,7 @@ export interface DrcReport {
   engine?: string;
   /** The ratsnest kicad-cli reports as `unconnected_items`. */
   unconnected_items?: DrcViolation[];
-  /** Whether kicad-cli refilled zones itself (`--refill-zones`). Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills, so it judges the fills the exported board already carries (the ones the studio shows). */
+  /** Whether kicad-cli's filler ran before the DRC ("Refill all zones before performing DRC"): on a copy of the board, the DRC then judging the board with that fill. Off by default: the DRC judges the fills the board holds. */
   zones_refilled_by_kicad?: boolean;
   /** The design revision this run started from: the stamp GET /api/version served at that moment. The report is out of date once the board's revision is another one (kicad-port/checkRevision.ts). Absent from a server that does not stamp. */
   revision?: string;
@@ -2562,6 +2600,8 @@ export interface DrcReport {
   schematic_parity_error?: string;
   /** The checks whose severity is Ignore (the Ignored Tests tab). */
   ignored_checks?: IgnoredCheck[];
+  /** Set by Delete All Markers (`DIALOG_DRC::OnDeleteAllClick`, `m_drcRun = false`): the lists were emptied by hand, not by a clean board; Run DRC makes a report again. */
+  markers_deleted?: boolean;
 }
 
 // ---------------------------------------------------------------- ERC
@@ -2586,6 +2626,20 @@ export interface ErcItem {
   id: string | null;
 }
 
+/** An ERC marker as the report offers it and `add_erc_exclusion` keeps it (`eda_model::ir::ErcMarker`). */
+export interface ErcMarker {
+  /** KiCad's name for the kind of finding (`ERCET_PIN_NOT_CONNECTED`, ...). */
+  error_type: string;
+  /** Where the marker is, in nanometres. */
+  at_nm: [number, number];
+  /** The uuids of the items it names in the derived schematic, main first. */
+  items: string[];
+  /** The sheet paths of the marker (the uuids from the root sheet down); absent when it has none. */
+  sheet?: string[];
+  main_sheet?: string[];
+  aux_sheet?: string[];
+}
+
 export interface ErcViolation {
   /** KiCad's own ERC type name ("pin_not_connected", "wire_dangling", ...) for a kicad-cli violation; the readability check's own name ("schematic_wire_overlap", ...) for a lint finding. */
   check: string;
@@ -2603,6 +2657,14 @@ export interface ErcViolation {
   hint: string | null;
   /** kicad-cli violations only: every item it names. */
   items?: ErcItem[];
+  /** Why it was waived (`SCH_MARKER::GetComment`); empty for none. kicad-cli findings only. */
+  comment?: string;
+  /** Whether kicad-cli itself matched the exclusion in the derived project (`erc.erc_exclusions`). An exclusion the studio holds can be one kicad-cli's own report still lists: its marker is not known to the letter. */
+  kicad_matched?: boolean;
+  /** The finding's marker as KiCad keeps an exclusion (`kiapi.schematic.ErcMarker`), when the report says enough to write it to the letter: what `add_erc_exclusion` keeps for the derived project. */
+  marker?: ErcMarker;
+  /** The sheet kicad-cli's report lists the finding under (`ERC_SHEET::uuid_path`). */
+  sheet?: string;
 }
 
 export interface ErcReport {
@@ -2615,6 +2677,40 @@ export interface ErcReport {
   revision?: string;
   /** The checks whose severity is Ignore (the Ignored Tests tab). */
   ignored_checks?: IgnoredCheck[];
+  /** Set by Delete All Markers (`DIALOG_ERC::OnDeleteAllClick`, `m_ercRun = false`): see `DrcReport.markers_deleted`. */
+  markers_deleted?: boolean;
+}
+
+/** What the checker dialogs' "Save..." asks for (`POST /api/erc/report`, `/api/drc/report`): the file type, the Show boxes and the units; the DRC dialog's own checkboxes too. */
+export interface SavedReportRequest {
+  /** "report": the text file, `.rpt` (`WriteTextReport`); "json": `.json` (`WriteJsonReport`). */
+  format: "report" | "json";
+  errors: boolean;
+  warnings: boolean;
+  exclusions: boolean;
+  units: "mm" | "mil" | "in";
+  refill_zones?: boolean;
+  schematic_parity?: boolean;
+}
+
+/** The report kicad-cli wrote: the file name the dialog suggests (`ERC.rpt`, `DRC.json`) and its text. */
+export interface SavedReportReply {
+  ok: boolean;
+  message?: string;
+  file_name?: string;
+  report?: string;
+}
+
+/** GET /api/sch/formatting: the settings of Schematic Setup > Formatting the design keeps. */
+export interface SchFormattingReply {
+  ok: boolean;
+  message?: string;
+  /** Connection grid spacing in mils: the design's own, else KiCad's default (50). */
+  connection_grid_mils: number;
+  min_connection_grid_mils: number;
+  max_connection_grid_mils: number;
+  /** True when the design stores a setting of its own. */
+  custom: boolean;
 }
 
 /** GET /api/sch/erc_severities: the ERC severities Schematic Setup > Violation Severity edits. */
