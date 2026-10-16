@@ -18,7 +18,8 @@
 //!
 //! Options: `--format NAME` (kicad-cli's importer: `altium`, `eagle`, `cadstar`, `pads`, ...; default `auto`), `--kind board|schematic` (for a file both could be: EasyEDA's
 //! `.json`, a `.zip`, PADS' and LTspice's `.asc`), `--layer-map FILE` (a JSON object, source layer name to KiCad layer name, for the layers the importer's guess should not
-//! decide; a board only), `--report FILE|-`, `--no-pair`.
+//! decide; a board only), `--keep-kicad-layer-names` (a board from another format shows its layers by their standard names, not the names that application gave them),
+//! `--report FILE|-`, `--no-pair`.
 //!
 //! # A board with a schematic
 //!
@@ -50,7 +51,7 @@ struct Meta {
     spacing_um: i64,
 }
 
-const USAGE: &str = "usage: eda import-kicad <board.kicad_pcb | schematic.kicad_sch | file of another EDA format> -o <dir> [--format NAME] [--kind board|schematic] [--layer-map FILE] [--report FILE|-] [--no-pair]";
+const USAGE: &str = "usage: eda import-kicad <board.kicad_pcb | schematic.kicad_sch | file of another EDA format> -o <dir> [--format NAME] [--kind board|schematic] [--layer-map FILE] [--keep-kicad-layer-names] [--report FILE|-] [--no-pair]";
 
 #[derive(Debug)]
 struct Args {
@@ -60,6 +61,8 @@ struct Args {
     kind: Option<Kind>,
     report: Option<String>,
     pair: bool,
+    /// The dialog's "Keep KiCad layer names" (`m_ImportKeepKiCadLayerNames`): a board from another format shows its layers by their standard names.
+    keep_names: bool,
 }
 
 fn parse(rest: &[String]) -> Result<Args, Vec<CheckResult>> {
@@ -81,7 +84,7 @@ fn parse(rest: &[String]) -> Result<Args, Vec<CheckResult>> {
             options.layer_map.insert(from.clone(), to.to_string());
         }
     }
-    Ok(Args { input, out, options, kind, report: flag(rest, "--report"), pair: !rest.iter().any(|a| a == "--no-pair") })
+    Ok(Args { input, out, options, kind, report: flag(rest, "--report"), pair: !rest.iter().any(|a| a == "--no-pair"), keep_names: rest.iter().any(|a| a == "--keep-kicad-layer-names") })
 }
 
 /// What was converted, and for the report what kicad-cli said.
@@ -203,6 +206,9 @@ fn write(args: &Args, sources: Sources) -> Result<(), Vec<CheckResult>> {
     let (design, model, notes, setup) = match &sources.board {
         Some((name, text, project_dir)) => {
             let (design, mut model, notes) = eda::import_kicad_pcb(text)?;
+            if args.keep_names && project_dir.is_none() {
+                model.board.layer_setup.names.clear();
+            }
             let mut setup = None;
             // A real project's net classes live in the sidecar `.kicad_pro`, not the `.kicad_pcb` itself (see `eda_kicad::merge_project_net_classes`'s doc comment) -- merge
             // it in when the board came from a real project directory rather than a bare, single-file board. (A board kicad-cli made from another format has no project.)
@@ -395,10 +401,10 @@ mod tests {
     #[test]
     fn the_command_line_names_a_file_a_folder_and_what_kicad_cli_is_told() {
         let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let got = parse(&a(&["b.brd", "-o", "out", "--format", "eagle", "--kind", "pcb", "--report", "-", "--no-pair"])).unwrap();
-        assert_eq!((got.input.as_str(), got.out.to_str(), got.options.format.as_deref(), got.kind, got.report.as_deref(), got.pair), ("b.brd", Some("out"), Some("eagle"), Some(Kind::Board), Some("-"), false));
+        let got = parse(&a(&["b.brd", "-o", "out", "--format", "eagle", "--kind", "pcb", "--report", "-", "--no-pair", "--keep-kicad-layer-names"])).unwrap();
+        assert_eq!((got.input.as_str(), got.out.to_str(), got.options.format.as_deref(), got.kind, got.report.as_deref(), got.pair, got.keep_names), ("b.brd", Some("out"), Some("eagle"), Some(Kind::Board), Some("-"), false, true));
         let plain = parse(&a(&["b.brd", "--out", "out"])).unwrap();
-        assert!(plain.pair && plain.kind.is_none() && plain.options.format.is_none());
+        assert!(plain.pair && plain.kind.is_none() && plain.options.format.is_none() && !plain.keep_names);
         assert_eq!(parse(&a(&["-o", "out"])).unwrap_err()[0].check, "kicad_import_usage", "a file first");
         assert_eq!(parse(&a(&["b.brd"])).unwrap_err()[0].check, "kicad_import_usage", "and a folder");
         assert_eq!(parse(&a(&["b.brd", "-o", "o", "--kind", "both"])).unwrap_err()[0].check, "kicad_import_usage");

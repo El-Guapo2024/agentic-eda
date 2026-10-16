@@ -747,6 +747,9 @@ pub enum Cmd {
         text: String,
         #[serde(default)]
         name: String,
+        /// The dialog's "Keep KiCad layer names" (`m_ImportKeepKiCadLayerNames`): the layers show their standard names, not the names the other application gave them.
+        #[serde(default)]
+        keep_kicad_layer_names: bool,
     },
     /// File > Import > Non-KiCad Schematic File... (`eeschema.EditorControl.importNonKicadSchematic`, `SCH_EDIT_FRAME::OnImportProject`): the schematic -- the root sheet and every
     /// sheet under it -- is replaced by the one kicad-cli made of another EDA format's file (`content`, read by `eda_kicad::load_sheet_file`; `name` is the file it came from).
@@ -2561,7 +2564,7 @@ impl<'a> Board<'a> {
                 None => Err(vec![CheckResult::fail("ops_sheet_file_not_read", source, format!("the file '{source}' was not read, so there is nothing to import"))]),
             },
             Cmd::ReplaceSchematic { content, name } => self.replace_schematic(content, name),
-            Cmd::ReplaceBoard { text, name } => self.replace_board(text, name),
+            Cmd::ReplaceBoard { text, name, keep_kicad_layer_names } => self.replace_board(text, name, *keep_kicad_layer_names),
             Cmd::SwapSchItems { a, b } => self.swap_sch_items(a, b),
             Cmd::PasteSch { fragment, dx, dy, mode } => self.paste_sch(fragment, *dx, *dy, *mode),
             Cmd::SchEdit(c) => self.apply_sch_edit(c),

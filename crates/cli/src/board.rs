@@ -1351,7 +1351,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddSchLine { pts, .. } => format!("schematic line --points {}", pts.len()),
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
         Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
-        Cmd::ReplaceBoard { name, text } => format!("import-board {name:?} ({} bytes of .kicad_pcb)", text.len()),
+        Cmd::ReplaceBoard { name, text, .. } => format!("import-board {name:?} ({} bytes of .kicad_pcb)", text.len()),
         Cmd::ReplaceSchematic { name, content } => format!("import-schematic {name:?} ({} sheet(s))", 1 + content.screens.len()),
         Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, .. } => format!("schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}", if *as_sheet { "--as-sheet" } else { "--contents" }, mm(at.x), mm(at.y), if *keep_annotations { " --keep-annotations" } else { "" }),
         Cmd::SwapSchItems { a, b } => format!("schematic swap {a} {b}"),

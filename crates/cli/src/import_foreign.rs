@@ -211,11 +211,15 @@ pub(crate) fn file_name_of(name: &str) -> String {
 /// `board::step` before the command, from the same text the command carries, so the file is there for whatever loads the board after it -- an undo or a redo included
 /// (the file is named by the hash of the text, and left where it is).
 pub(crate) fn prepare_board(cmd: &Cmd, dir: &Path) -> Result<(), Vec<CheckResult>> {
-    let Cmd::ReplaceBoard { text, name } = cmd else { return Ok(()) };
-    let (design, model, notes) = eda::import_kicad_pcb(text).map_err(|e| fail("ops_bad_board", name, format!("'{name}' did not convert to a board this reader takes: {}", e.iter().filter_map(|c| c.hint.clone()).collect::<Vec<_>>().join("; "))))?;
-    let file = eda_ops::imported_intent_file(&design.provenance.intent_hash);
+    let Cmd::ReplaceBoard { text, name, keep_kicad_layer_names } = cmd else { return Ok(()) };
+    let (design, mut model, notes) = eda::import_kicad_pcb(text).map_err(|e| fail("ops_bad_board", name, format!("'{name}' did not convert to a board this reader takes: {}", e.iter().filter_map(|c| c.hint.clone()).collect::<Vec<_>>().join("; "))))?;
+    let file = eda_ops::imported_intent_file(&design.provenance.intent_hash, *keep_kicad_layer_names);
     let path = dir.join(&file);
     if !path.is_file() {
+        // `OpenProjectFiles`: with "Keep KiCad layer names" every layer of the loaded board gets its standard name back (`SetLayerName( layer, wxEmptyString )`).
+        if *keep_kicad_layer_names {
+            model.board.layer_setup.names.clear();
+        }
         let yaml = serde_yaml::to_string(&model).map_err(|e| fail("import_encode", &file, e.to_string()))?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| fail("io", &parent.display().to_string(), e.to_string()))?;
@@ -340,10 +344,10 @@ mod tests {
     fn a_board_brings_its_model_as_a_file_under_the_boards_folder_named_by_the_hash_of_its_text() {
         let d = scratch("prepare");
         let text = "(kicad_pcb (version 20260901) (generator \"pcbnew\") (layers (0 \"F.Cu\" signal) (2 \"B.Cu\" signal)) (footprint \"L:A\" (layer \"F.Cu\") (uuid \"f\") (at 1 1) (property \"Reference\" \"R1\" (at 0 0 0) (layer \"F.SilkS\") (uuid \"p\")) (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net \"SIG\") (uuid \"a\"))))";
-        let cmd = Cmd::ReplaceBoard { text: text.into(), name: "x.brd".into() };
+        let cmd = Cmd::ReplaceBoard { text: text.into(), name: "x.brd".into(), keep_kicad_layer_names: false };
         prepare_board(&cmd, &d).unwrap();
         let (design, _, _) = eda::import_kicad_pcb(text).unwrap();
-        let file = d.join(eda_ops::imported_intent_file(&design.provenance.intent_hash));
+        let file = d.join(eda_ops::imported_intent_file(&design.provenance.intent_hash, false));
         assert!(file.is_file(), "{}", file.display());
         let model: eda_model::ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(model.parts.iter().map(|p| p.reference.as_str()).collect::<Vec<_>>(), vec!["R1"]);
@@ -353,7 +357,7 @@ mod tests {
         prepare_board(&cmd, &d).unwrap();
         assert_eq!(std::fs::metadata(&file).unwrap().modified().unwrap(), first);
         prepare_board(&Cmd::Rip { part: "R1".into() }, &d).unwrap();
-        let bad = Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into() };
+        let bad = Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false };
         assert_eq!(prepare_board(&bad, &d).unwrap_err()[0].check, "ops_bad_board");
         assert_eq!(std::fs::read_dir(d.join("imports")).unwrap().count(), 1);
         let _ = std::fs::remove_dir_all(&d);
@@ -427,6 +431,24 @@ mod tests {
         (gr_line (start 0 40) (end 0 0) (stroke (width 0.1) (type solid)) (layer "Edge.Cuts") (uuid "55555555-5555-5555-5555-555555555554"))
     )"#;
 
+    /// "Keep KiCad layer names": the names the other application gave the layers are the board's, unless the person keeps the standard ones -- another model of the same text.
+    #[test]
+    fn a_board_keeps_the_names_its_layers_came_with_unless_asked_to_use_kicads() {
+        let d = scratch("names");
+        let text = FOREIGN_BOARD.replace("(0 \"F.Cu\" signal)", "(0 \"F.Cu\" signal \"Top Layer\")");
+        let model_of = |keep: bool| {
+            let cmd = Cmd::ReplaceBoard { text: text.clone(), name: "x.brd".into(), keep_kicad_layer_names: keep };
+            prepare_board(&cmd, &d).unwrap();
+            let (design, _, _) = eda::import_kicad_pcb(&text).unwrap();
+            let yaml = std::fs::read_to_string(d.join(eda_ops::imported_intent_file(&design.provenance.intent_hash, keep))).unwrap();
+            serde_yaml::from_str::<eda_model::ConstraintModel>(&yaml).unwrap()
+        };
+        assert_eq!(model_of(false).board.layer_setup.names.get("F.Cu").map(String::as_str), Some("Top Layer"));
+        assert!(model_of(true).board.layer_setup.names.is_empty(), "every layer shows its standard name");
+        assert_eq!(std::fs::read_dir(d.join("imports")).unwrap().count(), 2, "two models of one text, two files");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
     /// File > Import > Non-KiCad Board is one step of the history: the parts, nets and footprints of the file replace the board's (not the intent's file, which is
     /// the old board's and stays), the gates do not refuse it, and an undo brings the old board back with its model; a redo, the imported one.
     #[test]
@@ -434,7 +456,7 @@ mod tests {
         use eda_ops::Domain;
         let dir = board_dir("replace");
         assert_eq!(parts(&dir), vec!["J9"]);
-        let cmd = Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into() };
+        let cmd = Cmd::ReplaceBoard { text: FOREIGN_BOARD.into(), name: "x.brd".into(), keep_kicad_layer_names: false };
         // `strict`: the gates would refuse a move that makes the board worse; an import is not one.
         crate::board::step(&dir, cmd, true, "test").expect("the import");
         assert_eq!(parts(&dir), vec!["R1"], "the old board's J9 is gone, the file's R1 is the board");
@@ -457,7 +479,7 @@ mod tests {
         assert_eq!(parts(&dir), vec!["R1"], "the imported board again, from the file the first run left");
         // A second import replaces the first, and undoes back to it.
         let other = FOREIGN_BOARD.replace("\"R1\"", "\"C7\"");
-        crate::board::step(&dir, Cmd::ReplaceBoard { text: other, name: "y.brd".into() }, false, "test").unwrap();
+        crate::board::step(&dir, Cmd::ReplaceBoard { text: other, name: "y.brd".into(), keep_kicad_layer_names: false }, false, "test").unwrap();
         assert_eq!(parts(&dir), vec!["C7"]);
         crate::board::undo(&dir, "test", Some(Domain::Pcb)).unwrap();
         assert_eq!(parts(&dir), vec!["R1"]);
@@ -469,7 +491,7 @@ mod tests {
     fn a_file_that_is_no_board_changes_nothing() {
         let dir = board_dir("refused");
         let before = std::fs::read_to_string(dir.join("design.json")).unwrap();
-        let e = crate::board::step(&dir, Cmd::ReplaceBoard { text: "not a board".into(), name: "x.brd".into() }, false, "test").unwrap_err();
+        let e = crate::board::step(&dir, Cmd::ReplaceBoard { text: "not a board".into(), name: "x.brd".into(), keep_kicad_layer_names: false }, false, "test").unwrap_err();
         assert_eq!(e[0].check, "ops_bad_board");
         assert_eq!(std::fs::read_to_string(dir.join("design.json")).unwrap(), before);
         assert!(!dir.join("imports").exists());
