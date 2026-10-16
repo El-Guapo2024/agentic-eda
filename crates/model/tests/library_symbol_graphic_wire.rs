@@ -4,6 +4,7 @@
 //! library symbol graphic unreadable -- opening `Device:R` for editing was enough. `LibrarySymbolGraphic` is read field by field now.
 
 use eda_model::ir::{LibraryFill, LibrarySymbol, LibrarySymbolGraphic};
+use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
 use eda_model::symbol::SPoint;
 
 fn p(x: f64, y: f64) -> SPoint {
@@ -17,6 +18,23 @@ fn all_kinds() -> Vec<LibrarySymbolGraphic> {
         LibrarySymbolGraphic::Circle { id: String::new(), unit: 1, body_style: 1, center: p(0.0, 0.0), radius_mm: 2.54, stroke_mm: 0.254, fill: LibraryFill::Outline },
         LibrarySymbolGraphic::Arc { id: "sym_d".into(), unit: 0, body_style: 1, start: p(1.0, 0.0), mid: p(0.7071, 0.7071), end: p(0.0, 1.0), stroke_mm: 0.254, fill: LibraryFill::None },
         LibrarySymbolGraphic::Text { id: "sym_e".into(), unit: 0, body_style: 1, text: "TEXT".into(), at: p(1.27, -1.27), angle_deg: 90.0, size_mm: 1.27 },
+        LibrarySymbolGraphic::TextBox {
+            id: "sym_f".into(),
+            unit: 2,
+            body_style: 1,
+            text: "10V\nREF".into(),
+            start: p(-17.78, 6.35),
+            end: p(-10.16, -1.27),
+            angle_deg: 90.0,
+            size_mm: 0.635,
+            bold: true,
+            italic: true,
+            h_align: FieldHAlign::Center,
+            v_align: FieldVAlign::Bottom,
+            margin_mm: 0.508,
+            stroke_mm: -0.0001,
+            fill: LibraryFill::Background,
+        },
     ]
 }
 
@@ -67,7 +85,39 @@ fn the_defaults_are_the_ones_the_enum_had() {
 }
 
 #[test]
+fn a_text_box_keeps_its_defaults_a_left_and_top_box_with_the_default_margin() {
+    let t: LibrarySymbolGraphic = serde_json::from_str(r#"{"kind":"text_box","text":"x","start":{"x":0,"y":0},"end":{"x":5,"y":-2},"size_mm":1.27,"stroke_mm":0.1524}"#).unwrap();
+    assert_eq!(
+        t,
+        LibrarySymbolGraphic::TextBox {
+            id: String::new(),
+            unit: 0,
+            body_style: 1,
+            text: "x".into(),
+            start: p(0.0, 0.0),
+            end: p(5.0, -2.0),
+            angle_deg: 0.0,
+            size_mm: 1.27,
+            bold: false,
+            italic: false,
+            h_align: FieldHAlign::Left,
+            v_align: FieldVAlign::Top,
+            margin_mm: 0.0,
+            stroke_mm: 0.1524,
+            fill: LibraryFill::None
+        }
+    );
+    // what is false or zero is not written, and the rest is
+    let text = serde_json::to_string(&t).unwrap();
+    assert!(!text.contains("bold") && !text.contains("margin_mm") && text.contains("\"h_align\":\"left\""), "{text}");
+}
+
+#[test]
 fn a_field_that_does_not_belong_to_the_kind_is_still_refused() {
+    let e = serde_json::from_str::<LibrarySymbolGraphic>(r#"{"kind":"text_box","text":"x","start":{"x":0,"y":0},"end":{"x":1,"y":1},"size_mm":1.27,"stroke_mm":0.2,"at":{"x":0,"y":0}}"#).unwrap_err().to_string();
+    assert!(e.contains("at"), "{e}");
+    let e = serde_json::from_str::<LibrarySymbolGraphic>(r#"{"kind":"rectangle","start":{"x":0,"y":0},"end":{"x":1,"y":1},"stroke_mm":0.254,"bold":true}"#).unwrap_err().to_string();
+    assert!(e.contains("bold"), "{e}");
     let e = serde_json::from_str::<LibrarySymbolGraphic>(r#"{"kind":"rectangle","start":{"x":0,"y":0},"end":{"x":1,"y":1},"stroke_mm":0.254,"radius_mm":1.5}"#).unwrap_err().to_string();
     assert!(e.contains("radius_mm"), "{e}");
     let e = serde_json::from_str::<LibrarySymbolGraphic>(r#"{"kind":"text","text":"x","at":{"x":0,"y":0},"size_mm":1.27,"fill":"none"}"#).unwrap_err().to_string();

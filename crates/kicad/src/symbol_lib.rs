@@ -618,6 +618,41 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
         G::Text { text, at, angle_deg, size_mm, .. } => {
             writeln!(out, "\t\t\t(text {} (at {} {} {}) (effects (font (size {} {}))))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg), crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm)).unwrap();
         }
+        // `SCH_IO_KICAD_SEXPR_LIB_CACHE::saveTextBox`: the box is its start, its angle and the size from the start to the opposite corner (both in the symbol's Y-up mm), the four margins, the
+        // stroke and the fill, and `EDA_TEXT::Format`'s effects. A border of no width is the width -1 of a schematic's units, 0.0001 mm (`STROKE_PARAMS`); the file's default
+        // alignment is centre, so a text box written left and top says so.
+        G::TextBox { text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, stroke_mm, fill: f, .. } => {
+            use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+            let margin = crate::fmt_mm_f(eda_model::ir::text_box_margin_mm(*size_mm, *margin_mm));
+            let width = if *stroke_mm < 0.0 { "-0.0001".to_string() } else { crate::fmt_mm_f(*stroke_mm) };
+            let mut justify: Vec<&str> = Vec::new();
+            match h_align {
+                FieldHAlign::Left => justify.push("left"),
+                FieldHAlign::Right => justify.push("right"),
+                FieldHAlign::Center => {}
+            }
+            match v_align {
+                FieldVAlign::Top => justify.push("top"),
+                FieldVAlign::Bottom => justify.push("bottom"),
+                FieldVAlign::Center => {}
+            }
+            let justify = if justify.is_empty() { String::new() } else { format!(" (justify {})", justify.join(" ")) };
+            let size = crate::fmt_mm_f(*size_mm);
+            writeln!(
+                out,
+                "\t\t\t(text_box {} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type default)) {} (effects (font (size {size} {size}){}{}){justify}))",
+                crate::sexpr_str(text),
+                crate::fmt_mm_f(start.x),
+                crate::fmt_mm_f(start.y),
+                crate::fmt_mm_f(*angle_deg),
+                crate::fmt_mm_f(end.x - start.x),
+                crate::fmt_mm_f(end.y - start.y),
+                fill(*f),
+                if *bold { " bold" } else { "" },
+                if *italic { " italic" } else { "" },
+            )
+            .unwrap();
+        }
     }
 }
 

@@ -1438,6 +1438,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => format!("symbol-shape move {lib_id:?} {id} --dx {dx_mm:.2} --dy {dy_mm:.2}"),
         Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, .. } => format!("symbol-shape edit {lib_id:?} {id} --width {stroke_mm:.2}"),
         Cmd::EditSymbolText { lib_id, id, text, .. } => format!("symbol-text edit {lib_id:?} {id} --content {text:?}"),
+        Cmd::ReplaceSymbolGraphic { lib_id, id, .. } => format!("symbol-shape replace {lib_id:?} {id}"),
         Cmd::DeriveSymbol { parent, lib_id, .. } => format!("symbol derive {lib_id:?} --from {parent:?}"),
         Cmd::FlattenSymbol { lib_id } => format!("symbol flatten {lib_id:?}"),
         Cmd::UpdateSymbolFields { lib_id, fields, .. } => format!("symbol update-fields {lib_id:?} --fields {}", fields.join(",")),
@@ -1617,7 +1618,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
         Cmd::DeriveSymbol { .. } | Cmd::FlattenSymbol { .. } | Cmd::UpdateSymbolFields { .. } | Cmd::SetSymbolParent { .. } | Cmd::EditLibrarySymbolFields { .. } => "symbol-derive",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
-        Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } => "symbol-shape",
+        Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } | Cmd::ReplaceSymbolGraphic { .. } => "symbol-shape",
         Cmd::EditSymbolText { .. } => "symbol-text",
     }
 }

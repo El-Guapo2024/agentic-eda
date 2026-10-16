@@ -1404,8 +1404,10 @@ pub(crate) fn fmt_double_2_str(v: f64) -> String {
     }
 }
 
+/// `OUTPUTFORMATTER::Quotes`: a string in quotes with a backslash, a quote, a line feed and a carriage return escaped -- a raw line feed inside a string is a library
+/// KiCad cannot load ("Unable to load library"), and a text box's text has them.
 pub(crate) fn sexpr_str(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r"))
 }
 
 /// KiCad stores a pad's drawn rotation as its footprint's own file angle

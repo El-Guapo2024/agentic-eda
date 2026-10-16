@@ -588,3 +588,137 @@ fn kicad_cli_loads_pin_alternates_and_keeps_them_through_sym_upgrade() {
     assert_eq!(with.matches("<path").count(), without.matches("<path").count(), "the alternates add nothing to the plot");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ======================================================================================================================================== shape properties and text boxes
+
+fn text_box_at(text: &str, start: (f64, f64), end: (f64, f64)) -> LibrarySymbolGraphic {
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    LibrarySymbolGraphic::TextBox {
+        id: String::new(),
+        unit: 1,
+        body_style: 1,
+        text: text.into(),
+        start: SPoint { x: start.0, y: start.1 },
+        end: SPoint { x: end.0, y: end.1 },
+        angle_deg: 0.0,
+        size_mm: 1.27,
+        bold: false,
+        italic: false,
+        h_align: FieldHAlign::Left,
+        v_align: FieldVAlign::Top,
+        margin_mm: 0.0,
+        stroke_mm: 0.254,
+        fill: eda_model::ir::LibraryFill::None,
+    }
+}
+
+/// A shape's properties dialog and a text box are each one undo step of the Symbol Editor, and the derived `.kicad_sym` has the text box as KiCad writes one: the start and the size, the
+/// line break as `\n` (a raw one is a library kicad-cli cannot load), the margins and the stroke.
+#[test]
+fn a_shapes_properties_and_a_text_box_are_one_undo_step_each_and_reach_the_derived_kicad_sym() {
+    let dir = scratch("p17_text_boxes");
+    setup(&dir);
+    step(&dir, Cmd::PutLibrarySymbol { symbol: base_symbol(), overwrite: false }, false, "test").unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let rect_id = design.symbol_library.as_ref().unwrap().by_lib_id("Lib:Base").unwrap().graphics[0].id().to_string();
+    // Shape Properties: a width of 0.5, the body background colour, common to all units
+    step(&dir, Cmd::EditSymbolGraphic { lib_id: "Lib:Base".into(), id: rect_id.clone(), stroke_mm: 0.5, fill: eda_model::ir::LibraryFill::Background, unit: Some(0), body_style: None }, false, "test").unwrap();
+    step(&dir, Cmd::AddSymbolGraphic { lib_id: "Lib:Base".into(), graphic: text_box_at("10V\nREF", (-17.78, 6.35), (-10.16, -1.27)) }, false, "test").unwrap();
+    let text = crate::library_api::symbol_kicad_sym_any(&dir, "Lib:Base").unwrap();
+    assert!(
+        text.contains("(text_box \"10V\\nREF\" (at -17.78 6.35 0) (size 7.62 -7.62) (margins 1.016 1.016 1.016 1.016) (stroke (width 0.254) (type default)) (fill (type none)) (effects (font (size 1.27 1.27)) (justify left top)))"),
+        "{text}"
+    );
+    assert!(text.contains("(stroke (width 0.5) (type default)) (fill (type background))"), "the shape's edit is written too: {text}");
+    // the box is on the unit the editor was on; one undo takes it away, the next the shape's edit
+    undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let sym = design.symbol_library.as_ref().unwrap().by_lib_id("Lib:Base").unwrap();
+    assert!(!sym.graphics.iter().any(|g| matches!(g, LibrarySymbolGraphic::TextBox { .. })), "one undo takes the text box");
+    assert_eq!(sym.graphics[0].unit(), 0, "and leaves the shape's edit");
+    undo(&dir, "test", Some(Domain::SymbolEditor)).unwrap();
+    let (_, design, _) = load(&dir).unwrap();
+    let g = &design.symbol_library.as_ref().unwrap().by_lib_id("Lib:Base").unwrap().graphics[0];
+    assert!(matches!(g, LibrarySymbolGraphic::Rectangle { stroke_mm, fill: eda_model::ir::LibraryFill::None, .. } if *stroke_mm == 0.254) && g.unit() == 1, "one more undo takes the whole dialog back: {g:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Slow tier (kicad-cli, `EDA_SLOW_TESTS=1`): a library with text boxes written by this studio loads in kicad-cli, and
+/// (1) a text box of no text plots exactly as the rectangle of its two corners (the start, the size and the Y-up mm are the file's own);
+/// (2) `kicad-cli sym upgrade` keeps every text box -- text, corners, angle, size, bold, italic, alignment, margin, border and fill;
+/// (3) kicad-cli draws the text of each: the plot has its stroked lines, and the upgraded file plots as the one this studio wrote.
+#[test]
+fn kicad_cli_loads_text_boxes_keeps_them_through_sym_upgrade_and_draws_their_text() {
+    use eda_model::ir::LibraryFill;
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    if !slow() {
+        return;
+    }
+    if eda_kicad_engine::find_cli().is_none() {
+        eprintln!("skipped: no kicad-cli");
+        return;
+    }
+    let dir = scratch("p17_text_boxes_kicad_cli");
+    setup(&dir);
+    let work = dir.join("kicad");
+    std::fs::create_dir_all(&work).unwrap();
+    let write = |name: &str, graphics: Vec<LibrarySymbolGraphic>| -> std::path::PathBuf {
+        let mut s = LibrarySymbol::new_empty("Boxed");
+        s.graphics = graphics;
+        s.assign_missing_ids();
+        let path = work.join(name);
+        std::fs::write(&path, eda_kicad::export_kicad_sym_library(&[&s])).unwrap();
+        path
+    };
+
+    // (1) the geometry: a box with no text is a rectangle, to the 0.1 um
+    let empty = write("empty_box.kicad_sym", vec![text_box_at("", (-5.0, 5.0), (5.0, -5.0))]);
+    let rect = write("rect.kicad_sym", vec![LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: 1, start: SPoint { x: -5.0, y: 5.0 }, end: SPoint { x: 5.0, y: -5.0 }, stroke_mm: 0.254, fill: LibraryFill::None }]);
+    assert_eq!(plotted_symbol(&work, &empty, "Boxed", "empty_box", &[]), plotted_symbol(&work, &rect, "Boxed", "rect", &[]), "a text box of no text is the rectangle of its corners");
+
+    // (2) and (3): three boxes of different looks
+    let mut multi = text_box_at("10V\nREF", (-17.78, 6.35), (-10.16, -1.27));
+    let mut tall = text_box_at("5k", (-13.335, -8.89), (-12.065, -12.7));
+    let mut plain = text_box_at("a longer text that has to wrap inside its box", (2.54, 7.62), (12.7, 0.0));
+    if let LibrarySymbolGraphic::TextBox { bold, .. } = &mut multi {
+        *bold = true;
+    }
+    if let LibrarySymbolGraphic::TextBox { angle_deg, size_mm, italic, h_align, v_align, stroke_mm, fill, .. } = &mut tall {
+        (*angle_deg, *size_mm, *italic, *h_align, *v_align, *stroke_mm, *fill) = (90.0, 0.635, true, FieldHAlign::Center, FieldVAlign::Center, -0.0001, LibraryFill::Background);
+    }
+    if let LibrarySymbolGraphic::TextBox { margin_mm, h_align, .. } = &mut plain {
+        (*margin_mm, *h_align) = (0.5, FieldHAlign::Right);
+    }
+    let ours = vec![multi, tall, plain];
+    let path = write("boxes.kicad_sym", ours.clone());
+    let upgraded = work.join("boxes_upgraded.kicad_sym");
+    std::fs::copy(&path, &upgraded).unwrap();
+    kicad_cli(&work, &["sym".as_ref(), "upgrade".as_ref(), upgraded.as_os_str()]).unwrap_or_else(|e| panic!("kicad-cli sym upgrade: {e}"));
+    let theirs_text = std::fs::read_to_string(&upgraded).unwrap();
+    assert_eq!(theirs_text.matches("(text_box ").count(), 3, "kicad-cli kept the three boxes:\n{theirs_text}");
+    let theirs = eda_kicad::parse_library_symbols(&theirs_text).expect("the reader takes KiCad's text");
+    assert!(theirs.warnings.is_empty(), "{:?}", theirs.warnings);
+    let theirs_boxes: Vec<&LibrarySymbolGraphic> = theirs.symbols[0].graphics.iter().collect();
+    assert_eq!(theirs_boxes.len(), 3);
+    for (mine, kicad) in ours.iter().zip(&theirs_boxes) {
+        let (LibrarySymbolGraphic::TextBox { text: t0, start: s0, end: e0, angle_deg: a0, size_mm: z0, bold: b0, italic: i0, h_align: h0, v_align: v0, margin_mm: m0, stroke_mm: k0, fill: f0, .. }, LibrarySymbolGraphic::TextBox { text: t1, start: s1, end: e1, angle_deg: a1, size_mm: z1, bold: b1, italic: i1, h_align: h1, v_align: v1, margin_mm: m1, stroke_mm: k1, fill: f1, .. }) = (mine, *kicad) else {
+            panic!("{mine:?} {kicad:?}")
+        };
+        let near = |a: f64, b: f64| (a - b).abs() < 1e-6;
+        assert_eq!(t0, t1, "the text, line breaks included");
+        assert!(near(s0.x, s1.x) && near(s0.y, s1.y) && near(e0.x, e1.x) && near(e0.y, e1.y), "{t0:?}: the corners {s0:?} {e0:?} against {s1:?} {e1:?}");
+        assert_eq!((a0, b0, i0, h0, v0, f0), (a1, b1, i1, h1, v1, f1), "{t0:?}: the way it runs and looks");
+        assert!(near(*z0, *z1), "{t0:?}: the text size");
+        assert!(near(text_margin(*z0, *m0), text_margin(*z1, *m1)), "{t0:?}: the margin ({m0} against {m1})");
+        assert!(near(*k0, *k1) || (*k0 < 0.0 && *k1 < 0.0), "{t0:?}: the border width {k0} against {k1}");
+    }
+    let (ours_svg, theirs_svg) = (plotted_symbol(&work, &path, "Boxed", "boxes_ours", &[]), plotted_symbol(&work, &upgraded, "Boxed", "boxes_upgraded", &[]));
+    assert!(ours_svg.matches("stroked-text").count() >= 4, "kicad-cli draws the text of every box ({} stroked texts)", ours_svg.matches("stroked-text").count());
+    assert_eq!(ours_svg, theirs_svg, "the library this studio wrote plots as KiCad's own rewrite of it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A text box's margin as the file has it: its own, or the default four fifths of the text height.
+fn text_margin(size_mm: f64, margin_mm: f64) -> f64 {
+    eda_model::ir::text_box_margin_mm(size_mm, margin_mm)
+}

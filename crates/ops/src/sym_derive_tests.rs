@@ -150,7 +150,7 @@ fn a_derived_symbol_refuses_every_edit_of_the_drawing_it_does_not_have() {
         Cmd::AddSymbolGraphic { lib_id: "Lib:Child".into(), graphic: shape.clone() },
         Cmd::DeleteSymbolGraphic { lib_id: "Lib:Child".into(), id: shape.id().to_string() },
         Cmd::MoveSymbolGraphic { lib_id: "Lib:Child".into(), id: shape.id().to_string(), dx_mm: 1.0, dy_mm: 1.0 },
-        Cmd::EditSymbolGraphic { lib_id: "Lib:Child".into(), id: shape.id().to_string(), stroke_mm: 0.1, fill: LibraryFill::None },
+        Cmd::EditSymbolGraphic { lib_id: "Lib:Child".into(), id: shape.id().to_string(), stroke_mm: 0.1, fill: LibraryFill::None, unit: None, body_style: None },
         Cmd::SetSymbolAnchor { lib_id: "Lib:Child".into(), at },
     ];
     for cmd in refused {

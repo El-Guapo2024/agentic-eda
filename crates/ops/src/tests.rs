@@ -2457,7 +2457,7 @@ fn add_edit_and_delete_symbol_graphic_round_trip() {
     assert_ne!(id, "ignored");
 
     b.apply(&Cmd::MoveSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), dx_mm: 1.0, dy_mm: 1.0 }).unwrap();
-    b.apply(&Cmd::EditSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), stroke_mm: 0.5, fill: LibraryFill::Background }).unwrap();
+    b.apply(&Cmd::EditSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), stroke_mm: 0.5, fill: LibraryFill::Background, unit: None, body_style: None }).unwrap();
     let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
     match &sym.graphics[0] {
         LibrarySymbolGraphic::Rectangle { start, stroke_mm, fill, .. } => {

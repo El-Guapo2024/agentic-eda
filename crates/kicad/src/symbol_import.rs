@@ -7,8 +7,9 @@
 //! footprint filters and no body styles, so a copy that went through it would lose all of them. This
 //! reader is the inverse of [`export_kicad_sym`](crate::export_kicad_sym) instead: everything that
 //! writer emits comes back, so copy -> paste and export -> import are lossless for the studio's own
-//! symbols, and a real KiCad file loses only what the editable type cannot hold (text boxes, bezier
-//! curves -- each reported in `warnings`, never dropped silently); a pin's alternate functions come back as the pin's `alternates`.
+//! symbols, and a real KiCad file loses only what the editable type cannot hold (bezier curves, the colours and line
+//! styles of a shape -- a lost kind of item is reported in `warnings`, never dropped silently); a pin's alternate functions come back as the pin's `alternates`, a `(text_box ...)`
+//! as a text box.
 //!
 //! Grammar notes confirmed against the KiCad source this repo ports (`eeschema/sch_io/kicad_sexpr`):
 //! a symbol's own `(symbol "Name_<unit>_<style>" ...)` sub-blocks carry the drawn items (unit 0 = shared
@@ -354,12 +355,62 @@ fn drawn_items(item: &[Sexpr], warnings: &mut Vec<String>) -> (Vec<LibrarySymbol
                     }
                 }
                 Some("bezier") => warnings.push("bezier curves are not supported by the library symbol and were left out".to_string()),
-                Some("text_box") => warnings.push("text boxes are not supported by the library symbol and were left out".to_string()),
+                Some("text_box") => match text_box(child, unit, style) {
+                    Some(tb) => graphics.push(tb),
+                    None => warnings.push("a text box without a position or a size was left out".to_string()),
+                },
                 _ => {}
             }
         }
     }
     (graphics, pins, max_unit, alt_style)
+}
+
+/// `SCH_IO_KICAD_SEXPR_PARSER::parseSymbolTextBox`: `(text_box [private] "text" (at x y angle) (size w h) (margins l t r b) (stroke ...) (fill ...) (effects ...))`. A box begun at `(at ..)`
+/// and `(size w h)` long, the size in the file's Y-up mm; the four margins are kept as the greatest of them; with no stroke the width is the default one (6 mil), and with no
+/// `(effects ...)` the box is left and top (the constructor's alignment) where an `(effects ...)` without `(justify ...)` is centred (the file format's default).
+fn text_box(item: &[Sexpr], unit: u32, body_style: u32) -> Option<LibrarySymbolGraphic> {
+    let text_at = if item.get(1).and_then(Sexpr::text) == Some("private") { 2 } else { 1 };
+    let text = sexpr::txt(item, text_at)?.to_string();
+    let at = sexpr::find(item, "at")?;
+    let start = SPoint { x: sexpr::num(at, 1)?, y: sexpr::num(at, 2)? };
+    let angle_deg = sexpr::num(at, 3).unwrap_or(0.0);
+    let size = sexpr::find(item, "size")?;
+    // the file is in 0.1 um: the far corner is the sum of two such numbers, without the float noise
+    let um = |v: f64| (v * 10_000.0).round() / 10_000.0;
+    let end = SPoint { x: um(start.x + sexpr::num(size, 1)?), y: um(start.y + sexpr::num(size, 2)?) };
+    let margin_mm = sexpr::find(item, "margins").map(|m| (1..=4).filter_map(|i| sexpr::num(m, i)).fold(0.0_f64, f64::max)).unwrap_or(0.0);
+    let stroke_mm = sexpr::find(item, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).unwrap_or(0.1524);
+    let (mut size_mm, mut bold, mut italic) = (1.27, false, false);
+    let (mut h_align, mut v_align) = (FieldHAlign::Left, FieldVAlign::Top);
+    if let Some(effects) = sexpr::find(item, "effects") {
+        (h_align, v_align) = (FieldHAlign::Center, FieldVAlign::Center);
+        if let Some(font) = sexpr::find(effects, "font") {
+            size_mm = sexpr::find(font, "size").and_then(|s| sexpr::num(s, 1)).unwrap_or(size_mm);
+            bold = bare_or_yes(font, "bold");
+            italic = bare_or_yes(font, "italic");
+        }
+        if let Some(justify) = sexpr::find(effects, "justify") {
+            for c in justify.iter().skip(1).filter_map(Sexpr::text) {
+                match c {
+                    "left" => h_align = FieldHAlign::Left,
+                    "right" => h_align = FieldHAlign::Right,
+                    "top" => v_align = FieldVAlign::Top,
+                    "bottom" => v_align = FieldVAlign::Bottom,
+                    _ => {}
+                }
+            }
+        }
+    }
+    Some(LibrarySymbolGraphic::TextBox { id: String::new(), unit, body_style, text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, stroke_mm, fill: fill_of(item) })
+}
+
+/// A flag of a node that is a bare token or `(key yes)` (`parseMaybeAbsentBool`).
+fn bare_or_yes(node: &[Sexpr], key: &str) -> bool {
+    node.iter().skip(1).any(|c| match c {
+        Sexpr::Atom(a) => a == key,
+        Sexpr::List(l) => sexpr::tag(l) == Some(key) && sexpr::txt(l, 1).map(|v| v == "yes").unwrap_or(true),
+    })
 }
 
 /// `(pin <type> <shape> (at x y angle) (length L) [hide] (name "N" (effects ...)) (number "N" (effects ...)))`.
@@ -498,6 +549,50 @@ mod tests {
         assert_eq!(again.symbols[0].pins[0].alternates, *alts);
     }
 
+    /// `(text_box ...)`: read as KiCad writes it (a real one from the standard library `Analog_ADC`, which says nothing of alignment and so is centred), written as KiCad writes it
+    /// (the box by its start and its size, the four margins, a border of no width as the width -0.0001 of a schematic's units, a line break as `\\n`) and read back the same.
+    #[test]
+    fn a_text_box_is_read_as_kicad_writes_it_and_written_as_kicad_reads_it() {
+        use eda_model::ir::LibraryFill;
+        let kicad = r#"(kicad_symbol_lib (version 20241209) (generator "kicad_symbol_editor")
+            (symbol "ADC" (symbol "ADC_1_1"
+                (text_box "10V\nREF" (at -17.78 6.35 0) (size 7.62 -7.62) (margins 1.016 1.016 1.016 1.016)
+                    (stroke (width 0.254) (type default)) (fill (type none)) (effects (font (size 1.27 1.27) (bold yes))))
+                (text_box "5k" (at -13.335 -8.89 90) (size 1.27 -3.81) (margins 0.508 0.508 0.508 0.508)
+                    (stroke (width -0.0001) (type default)) (fill (type background)) (effects (font (size 0.635 0.635) italic) (justify left top)))
+                (text_box private "bare" (at 1 2 0) (size 3 -4)))))"#;
+        let parsed = parse_library_symbols(kicad).unwrap();
+        assert!(parsed.warnings.is_empty(), "{:?}", parsed.warnings);
+        let boxes: Vec<&LibrarySymbolGraphic> = parsed.symbols[0].graphics.iter().collect();
+        assert_eq!(boxes.len(), 3);
+        let LibrarySymbolGraphic::TextBox { text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, stroke_mm, fill, unit, .. } = boxes[0] else { panic!("{:?}", boxes[0]) };
+        assert_eq!((text.as_str(), *unit), ("10V\nREF", 1), "a line break is read as one");
+        assert_eq!((*start, *end), (SPoint { x: -17.78, y: 6.35 }, SPoint { x: -10.16, y: -1.27 }), "the box runs from its start by the size, the height down");
+        assert_eq!((*angle_deg, *size_mm, *bold, *italic, *margin_mm, *stroke_mm, *fill), (0.0, 1.27, true, false, 1.016, 0.254, LibraryFill::None));
+        assert_eq!((*h_align, *v_align), (FieldHAlign::Center, FieldVAlign::Center), "no (justify): the file format's default");
+        let LibrarySymbolGraphic::TextBox { angle_deg, stroke_mm, fill, italic, h_align, v_align, size_mm, .. } = boxes[1] else { panic!() };
+        assert_eq!((*angle_deg, *stroke_mm, *fill, *italic, *size_mm, *h_align, *v_align), (90.0, -0.0001, LibraryFill::Background, true, 0.635, FieldHAlign::Left, FieldVAlign::Top));
+        let LibrarySymbolGraphic::TextBox { text, stroke_mm, size_mm, h_align, v_align, .. } = boxes[2] else { panic!() };
+        assert_eq!((text.as_str(), *stroke_mm, *size_mm, *h_align, *v_align), ("bare", 0.1524, 1.27, FieldHAlign::Left, FieldVAlign::Top), "no stroke and no effects: the constructor's own defaults");
+
+        // written, then read again: the same boxes
+        let written = export_kicad_sym(&parsed.symbols[0]);
+        assert!(written.contains("(text_box \"10V\\nREF\" (at -17.78 6.35 0) (size 7.62 -7.62) (margins 1.016 1.016 1.016 1.016) (stroke (width 0.254) (type default)) (fill (type none)) (effects (font (size 1.27 1.27) bold)))"), "{written}");
+        assert!(written.contains("(at -13.335 -8.89 90) (size 1.27 -3.81) (margins 0.508 0.508 0.508 0.508) (stroke (width -0.0001) (type default)) (fill (type background)) (effects (font (size 0.635 0.635) italic) (justify left top))"), "{written}");
+        assert!(!written.contains('\n') || !written.contains("10V\nREF\""), "a raw line break would not load in KiCad");
+        let back = parse_library_symbols(&written).unwrap();
+        assert!(back.warnings.is_empty(), "{:?}", back.warnings);
+        assert_eq!(back.symbols[0].graphics.len(), 3);
+        for (a, b) in parsed.symbols[0].graphics.iter().zip(&back.symbols[0].graphics) {
+            let (LibrarySymbolGraphic::TextBox { text: ta, start: sa, end: ea, .. }, LibrarySymbolGraphic::TextBox { text: tb, start: sb, end: eb, .. }) = (a, b) else { panic!() };
+            assert_eq!((ta, sa, ea), (tb, sb, eb));
+        }
+        // a box with no margin of its own has the default one: four fifths of the text height (1.016 for a text 1.27 high)
+        let LibrarySymbolGraphic::TextBox { margin_mm, .. } = &boxes[2] else { panic!() };
+        assert_eq!(*margin_mm, 0.0);
+        assert!(written.contains("(at 1 2 0) (size 3 -4) (margins 1.016 1.016 1.016 1.016)"), "{written}");
+    }
+
     #[test]
     fn export_then_import_gives_back_everything_the_writer_emits() {
         let sym = sample();
@@ -581,12 +676,12 @@ mod tests {
         assert_eq!((child.description.as_str(), child.datasheet.as_str()), ("derived", ""), "its own properties only: the Datasheet is the parent's until flattened");
         let value = child.field("Value").unwrap();
         assert_eq!((value.text.as_str(), value.at.x, value.at.y, value.size_mm, value.bold, value.h_align, value.v_align), ("CH", 1.0, 2.0, 1.0, true, FieldHAlign::Left, FieldVAlign::Bottom));
-        assert_eq!(parsed.warnings.len(), 2, "{:?}", parsed.warnings);
-        assert!(parsed.warnings.iter().any(|w| w.contains("bezier")) && parsed.warnings.iter().any(|w| w.contains("text box")));
+        assert_eq!(parsed.warnings.len(), 1, "{:?}", parsed.warnings);
+        assert!(parsed.warnings.iter().any(|w| w.contains("bezier")), "a bezier is still left out, and said so; a text box no longer is");
 
         let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols };
         let flat = section.flatten("Child").unwrap();
-        assert_eq!((flat.pins.len(), flat.graphics.len()), (1, 1), "the base's pin and rectangle");
+        assert_eq!((flat.pins.len(), flat.graphics.len()), (1, 2), "the base's pin, its rectangle and its text box");
         assert_eq!((flat.datasheet.as_str(), flat.description.as_str()), ("http://x", "derived"));
         assert_eq!(flat.field("Value").unwrap().text, "CH");
     }

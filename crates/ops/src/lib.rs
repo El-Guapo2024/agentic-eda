@@ -1648,8 +1648,19 @@ pub enum Cmd {
     /// Shape Properties' editable fields (stroke width, fill) -- geometry
     /// has no dialog field to edit either, only by dragging its own
     /// points (no point editor, same gap `EditShape`'s own doc notes for
-    /// the PCB side).
-    EditSymbolGraphic { lib_id: String, id: String, stroke_mm: f64, fill: LibraryFill },
+    /// the PCB side). `unit` and `body_style` are the dialog's "Common to all units in symbol" and "Common to all body styles"
+    /// (`DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow`: 0 for a box that is checked, the unit and the body style the editor is
+    /// showing for one that is not); left out they stay as they are. A negative `stroke_mm` is the border switched off, kept as -0.0001 (`STROKE_PARAMS` width -1).
+    EditSymbolGraphic {
+        lib_id: String,
+        id: String,
+        stroke_mm: f64,
+        fill: LibraryFill,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body_style: Option<u32>,
+    },
     /// `LibrarySymbolGraphic::Text`'s own fields (content/angle/size) --
     /// split from `EditSymbolGraphic` the same way the footprint editor's
     /// `EditFootprintText` is split from `EditFootprintGraphic` (a
@@ -1657,6 +1668,9 @@ pub enum Cmd {
     /// generic `MoveSymbolGraphic` (text is still one `LibrarySymbolGraphic`
     /// entry, addressed by the same `id`).
     EditSymbolText { lib_id: String, id: String, text: String, angle_deg: f64, size_mm: f64 },
+    /// The properties dialog of a library graphic that has more to it than a stroke and a fill (`DIALOG_TEXT_PROPERTIES` of a text box: the text, its size, bold and italic, its
+    /// alignment and way, the border, the fill, the unit and the body style): `graphic` takes the place of the one with `id` -- the same kind, the same place in the list, the id kept.
+    ReplaceSymbolGraphic { lib_id: String, id: String, graphic: LibrarySymbolGraphic },
 
     // ------------------------------------------------------- derived symbols
     //
@@ -1856,6 +1870,7 @@ impl Cmd {
             | Cmd::MoveSymbolGraphic { .. }
             | Cmd::EditSymbolGraphic { .. }
             | Cmd::EditSymbolText { .. }
+            | Cmd::ReplaceSymbolGraphic { .. }
             | Cmd::DeriveSymbol { .. }
             | Cmd::FlattenSymbol { .. }
             | Cmd::UpdateSymbolFields { .. }
@@ -2089,6 +2104,7 @@ impl Cmd {
             | Cmd::MoveSymbolGraphic { lib_id, .. }
             | Cmd::EditSymbolGraphic { lib_id, .. }
             | Cmd::EditSymbolText { lib_id, .. }
+            | Cmd::ReplaceSymbolGraphic { lib_id, .. }
             | Cmd::FlattenSymbol { lib_id }
             | Cmd::UpdateSymbolFields { lib_id, .. }
             | Cmd::SetSymbolParent { lib_id, .. }
@@ -2725,8 +2741,9 @@ impl<'a> Board<'a> {
             Cmd::AddSymbolGraphic { lib_id, graphic } => self.add_symbol_graphic(lib_id, graphic.clone()),
             Cmd::DeleteSymbolGraphic { lib_id, id } => self.delete_symbol_graphic(lib_id, id),
             Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => self.move_symbol_graphic(lib_id, id, *dx_mm, *dy_mm),
-            Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, fill } => self.edit_symbol_graphic(lib_id, id, *stroke_mm, *fill),
+            Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, fill, unit, body_style } => self.edit_symbol_graphic(lib_id, id, *stroke_mm, *fill, *unit, *body_style),
             Cmd::EditSymbolText { lib_id, id, text, angle_deg, size_mm } => self.edit_symbol_text(lib_id, id, text.clone(), *angle_deg, *size_mm),
+            Cmd::ReplaceSymbolGraphic { lib_id, id, graphic } => self.replace_symbol_graphic(lib_id, id, graphic.clone()),
         }
     }
 
@@ -5374,12 +5391,42 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn add_symbol_graphic(&mut self, lib_id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
-        if let LibrarySymbolGraphic::Polyline { pts, .. } = &graphic {
-            if pts.len() < 2 {
-                return Err(vec![CheckResult::fail("ops_bad_shape", lib_id, "a polyline needs at least two points")]);
+    /// What a library graphic must be to be kept: a polyline of two points or more, a text box with a text size the dialog takes (`DIALOG_TEXT_PROPERTIES`: 0.01 to 1000 mm), that runs
+    /// along the box or up it, with margins that are not negative.
+    fn check_symbol_graphic(lib_id: &str, graphic: &LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
+        match graphic {
+            LibrarySymbolGraphic::Polyline { pts, .. } if pts.len() < 2 => Err(vec![CheckResult::fail("ops_bad_shape", lib_id, "a polyline needs at least two points")]),
+            LibrarySymbolGraphic::TextBox { size_mm, angle_deg, margin_mm, .. } => {
+                if !(0.01..=1000.0).contains(size_mm) {
+                    return Err(vec![CheckResult::fail("ops_bad_text", lib_id, "the text size must be between 0.01 and 1000 mm")]);
+                }
+                if *angle_deg != 0.0 && *angle_deg != 90.0 {
+                    return Err(vec![CheckResult::fail("ops_bad_text", lib_id, "a text box's text runs along it (0) or up it (90 degrees)")]);
+                }
+                if *margin_mm < 0.0 {
+                    return Err(vec![CheckResult::fail("ops_bad_text", lib_id, "the margin cannot be negative")]);
+                }
+                Ok(())
             }
+            _ => Ok(()),
         }
+    }
+
+    fn replace_symbol_graphic(&mut self, lib_id: &str, id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
+        Self::check_symbol_graphic(id, &graphic)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_graphic_scope(sym, id, Some(graphic.unit()), Some(graphic.body_style()))?;
+        let slot = Self::find_symbol_graphic_mut(sym, id)?;
+        if std::mem::discriminant(slot) != std::mem::discriminant(&graphic) {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "a graphic cannot become another kind of graphic")]);
+        }
+        graphic.set_id(id.to_string());
+        *slot = graphic;
+        Ok(())
+    }
+
+    fn add_symbol_graphic(&mut self, lib_id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
+        Self::check_symbol_graphic(lib_id, &graphic)?;
         graphic.set_id(String::new());
         let sym = self.drawing_symbol_mut(lib_id)?;
         sym.graphics.push(graphic);
@@ -5407,11 +5454,11 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn edit_symbol_graphic(&mut self, lib_id: &str, id: &str, stroke_mm: f64, fill: LibraryFill) -> Result<(), Vec<CheckResult>> {
-        if stroke_mm < 0.0 {
-            return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width cannot be negative")]);
-        }
+    fn edit_symbol_graphic(&mut self, lib_id: &str, id: &str, stroke_mm: f64, fill: LibraryFill, unit: Option<u32>, body_style: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        // a negative width is the border switched off (`DIALOG_SHAPE_PROPERTIES`: `stroke.SetWidth( -1 )`, a schematic's smallest unit, 0.0001 mm)
+        let stroke_mm = if stroke_mm < 0.0 { NO_BORDER_MM } else { stroke_mm };
         let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_graphic_scope(sym, id, unit, body_style)?;
         let g = Self::find_symbol_graphic_mut(sym, id)?;
         match g {
             LibrarySymbolGraphic::Rectangle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Polyline { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Circle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Arc { stroke_mm: s, fill: f, .. } => {
@@ -5419,6 +5466,29 @@ impl<'a> Board<'a> {
                 *f = fill;
             }
             LibrarySymbolGraphic::Text { .. } => return Err(vec![CheckResult::fail("ops_bad_shape", id, "this is a text item -- use edit_symbol_text")]),
+            LibrarySymbolGraphic::TextBox { .. } => return Err(vec![CheckResult::fail("ops_bad_shape", id, "this is a text box -- use replace_symbol_graphic")]),
+        }
+        if let Some(u) = unit {
+            g.set_unit(u);
+        }
+        if let Some(b) = body_style {
+            g.set_body_style(b);
+        }
+        Ok(())
+    }
+
+    /// The unit and the body style a graphic is moved to (`DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow`, `DIALOG_TEXT_PROPERTIES`): 0 is "common to all", and a number
+    /// the symbol has otherwise -- a unit up to its unit count, the second body style only when the symbol has one.
+    fn check_graphic_scope(sym: &LibrarySymbol, id: &str, unit: Option<u32>, body_style: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        if let Some(u) = unit {
+            if u > sym.unit_count.max(1) {
+                return Err(vec![CheckResult::fail("ops_bad_shape", id, format!("the symbol has no unit {u}"))]);
+            }
+        }
+        if let Some(b) = body_style {
+            if b > if sym.has_alternate_body_style { 2 } else { 1 } {
+                return Err(vec![CheckResult::fail("ops_bad_shape", id, format!("the symbol has no body style {b}"))]);
+            }
         }
         Ok(())
     }
@@ -5440,6 +5510,9 @@ impl<'a> Board<'a> {
         }
     }
 }
+
+/// The width of a library shape with no border: -1 of a schematic's internal units (0.1 um), what `STROKE_PARAMS` holds and a file says as `(width -0.0001)`.
+const NO_BORDER_MM: f64 = -0.0001;
 
 /// Rotate `pt` by `angle_millideg` around `pivot` -- the same matrix
 /// `crates/model/src/footprint.rs`'s `to_board` applies to a pad's local
@@ -5494,6 +5567,8 @@ mod sym_derive_tests;
 mod fp_lib_fields_tests;
 #[cfg(test)]
 mod pin_alternates_tests;
+#[cfg(test)]
+mod sym_graphic_tests;
 #[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]
