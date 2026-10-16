@@ -269,13 +269,14 @@ fn kicad_cli_converts_the_qa_schematics_and_our_reader_reads_the_symbols_it_plac
         return;
     }
     let root = qa_dir();
-    // The schematics of the QA data in the formats kicad-cli converts: Eagle's two, and the two sheets of the Altium project (an Altium project file itself is not a schematic to
+    // The schematics of the QA data in the formats kicad-cli converts: Eagle's two, EasyEDA's, and the two sheets of the Altium project (an Altium project file itself is not a schematic to
     // kicad-cli; `PrjPcb` is how a project lists its sheets). The gEDA ones of `eeschema/io/geda` have no importer in kicad-cli's `sch import` (its --format names no gEDA).
     let mut files = vec![
         "pcbnew/plugins/eagle/Adafruit-AHT20-PCB/Adafruit AHT20 Temperature & Humidity.sch",
         "eeschema/io/eagle/eagle-import-testfile.sch",
         "pcbnew/plugins/altium/eDP_adapter_dvt1_source/power.SchDoc",
         "pcbnew/plugins/altium/eDP_adapter_dvt1_source/it6251_core.SchDoc",
+        "pcbnew/plugins/easyeda/SCH_ESP32-PICO-D4 smart watch_2023-09-02.json",
     ];
     if let Ok(only) = std::env::var("EDA_IMPORT_FILES") {
         let wanted: Vec<&str> = only.split(',').filter(|s| !s.is_empty()).collect();

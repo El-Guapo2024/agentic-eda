@@ -1484,7 +1484,7 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
     if design.schematic.is_some() {
         return eda::render_schematic(&design, &model);
     }
-    let when = std::fs::metadata(&meta.intent).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+    let when = std::fs::metadata(board::intent_path(dir, &meta, &design)).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
     if let Ok(c) = cache.lock() {
         if let Some((t, svg)) = c.as_ref() {
             if *t == when {
