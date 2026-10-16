@@ -39,6 +39,8 @@
 //!   (default all). A partial run keeps the other parts' results from the `roundtrip.json`
 //!   already on disk instead of erasing them.
 //! - `EDA_PARITY_REEXPORT_CAP`: how many boards part 3 takes (default 12).
+//! - `EDA_PARITY_REEXPORT_ONLY`: part 3 on these boards only (a comma list of file names without `.kicad_pcb`), for working on one
+//!   difference; such a run does not write `roundtrip.json`. The files it makes are in `<temp dir>/eda_parity_reexport/`.
 //! - `EDA_PARITY_DRC_TIMEOUT_SECS`: how long one kicad-cli DRC may run (default 600).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -409,10 +411,24 @@ struct ReexportFidelity {
     identical_type_counts: bool,
 }
 
+/// The original board with its project and custom rules, copied to `<temp dir>/eda_parity_reexport/orig/`: kicad-cli writes the report (and a
+/// `.kicad_prl`) beside the board it loads, and the KiCad sources' `qa/data` is read-only.
+fn stage_original(pcb: &Path) -> PathBuf {
+    let dir = std::env::temp_dir().join("eda_parity_reexport").join("orig");
+    std::fs::create_dir_all(&dir).expect("temp dir for the original board");
+    for ext in ["kicad_pcb", "kicad_pro", "kicad_dru"] {
+        let from = pcb.with_extension(ext);
+        if from.exists() {
+            let _ = std::fs::copy(&from, dir.join(from.file_name().expect("file name")));
+        }
+    }
+    dir.join(pcb.file_name().expect("file name"))
+}
+
 fn reexport_fidelity(cli: &Path, pcb: &Path) -> ReexportFidelity {
     let name = pcb.file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
     let result = catch(AssertUnwindSafe(|| {
-        let (original_types, original_parses) = kicad_type_counts(cli, pcb, "orig");
+        let (original_types, original_parses) = kicad_type_counts(cli, &stage_original(pcb), "orig");
         let text = std::fs::read_to_string(pcb).unwrap_or_else(|e| panic!("read: {e}"));
         let (design, mut model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb: {e:?}"));
         // The project the board came from, as `eda import-kicad` reads it: net classes, severities and the
@@ -421,6 +437,8 @@ fn reexport_fidelity(cli: &Path, pcb: &Path) -> ReexportFidelity {
             eda_kicad::merge_project_net_classes(&mut model, &pro);
             eda_kicad::merge_project_rule_severities(&mut model, &pro);
             eda_kicad::merge_project_design_rules(&mut model, &pro);
+            // Board Setup's smaller pages: Formatting's footprint boxes, the Length-tuning Patterns, the Tuning Profiles and the profile each net class names.
+            eda_kicad::merge_project_setup_pages(&mut model, &pro);
         }
         if let Ok(dru) = std::fs::read_to_string(pcb.with_extension("kicad_dru")) {
             eda_kicad::merge_custom_rules(&mut model, &dru);
@@ -496,7 +514,12 @@ fn parity_roundtrip_harness() {
     let mut reexport: Vec<ReexportFidelity> = Vec::new();
     if let (Some(cli), Some(root)) = (find_kicad_cli().filter(|_| wants("reexport")), qa_root()) {
         let cap = std::env::var("EDA_PARITY_REEXPORT_CAP").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
-        let subset = select_subset(&root, cap);
+        let mut subset = select_subset(&root, cap);
+        // A run on some of the boards only (a comma list of file names without `.kicad_pcb`): for working on one difference; it leaves `roundtrip.json` alone.
+        let only: Vec<String> = std::env::var("EDA_PARITY_REEXPORT_ONLY").ok().map(|s| s.split(',').map(|b| b.trim().to_string()).filter(|b| !b.is_empty()).collect()).unwrap_or_default();
+        if !only.is_empty() {
+            subset.retain(|p| p.file_stem().and_then(|s| s.to_str()).is_some_and(|n| only.iter().any(|o| o == n)));
+        }
         println!("\n=== Part 3: re-export fidelity on {} boards ===", subset.len());
         for pcb in &subset {
             let r = reexport_fidelity(&cli, pcb);
@@ -513,6 +536,10 @@ fn parity_roundtrip_harness() {
         qa_corpus_pcb_import_notes: Option<PcbCorpusStats>,
         qa_corpus_sch_import_notes: Option<SchCorpusStats>,
         reexport_fidelity_subset: Vec<ReexportFidelity>,
+    }
+    if std::env::var("EDA_PARITY_REEXPORT_ONLY").is_ok_and(|s| !s.trim().is_empty()) {
+        println!("\nEDA_PARITY_REEXPORT_ONLY is set: a partial run, {} left alone", repo.join("docs/parity/raw/roundtrip.json").display());
+        return;
     }
     let report = Report { own_pipeline_roundtrip: own, qa_corpus_pcb_import_notes: pcb_stats, qa_corpus_sch_import_notes: sch_stats, reexport_fidelity_subset: reexport };
     let out_dir = repo.join("docs/parity/raw");
