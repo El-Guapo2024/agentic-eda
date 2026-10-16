@@ -951,6 +951,7 @@ pub(crate) fn write_footprint(
 
     // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
+    let mut pad_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for &(pad_idx, pad) in &pads {
         let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
         let nth = {
@@ -983,8 +984,15 @@ pub(crate) fn write_footprint(
         // Pad numbers repeat by design (a connector's shield tab, several
         // physical pads on one pin), so the number alone cannot make a
         // unique uuid; the position can, since two pads of one footprint
-        // never coincide.
-        let uuid = crate::duid_for(&format!("pad:{}:{}:{}:{}", fp.id, pad.number, pad.at.0, pad.at.1), &format!("{}.{}", fp.id, pad.number));
+        // almost never coincide. The ones that do (a registration mark's crossed bars, all numbered "": `complex_hierarchy`'s MIRE has two
+        // rectangles on one point) would share one uuid, and KiCad would tell the second from the first by a uuid of its own making: the later
+        // pad's seed carries its index.
+        let mut seed = format!("pad:{}:{}:{}:{}", fp.id, pad.number, pad.at.0, pad.at.1);
+        if !pad_seeds.insert(seed.clone()) {
+            seed = format!("{seed}:{pad_idx}");
+            pad_seeds.insert(seed.clone());
+        }
+        let uuid = crate::duid_for(&seed, &format!("{}.{}", fp.id, pad.number));
         // KiCad stores a pad's orientation as its footprint's own angle
         // plus the pad's own (0 for the overwhelming majority of pads) --
         // see `pad_file_angle` for the mirroring subtlety.
@@ -2659,5 +2667,35 @@ mod tests {
         };
         assert_eq!(held("U1"), vec![placed.clone()]);
         assert_eq!(held("C1"), vec![placed], "read back, the bottom footprint's model is the one it was written from");
+    }
+
+    /// Two pads of one footprint on the same point with the same number (`complex_hierarchy`'s MIRE: crossed bars, every pad numbered "", two of them on one
+    /// point) are two items with two uuids. With one uuid for both, kicad-cli reported the pair as a copper clearance violation (8 of them on that board).
+    #[test]
+    fn two_pads_on_one_point_with_one_number_are_written_with_two_uuids() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "MIRE" (layer "F.Cu") (at 10 10)
+    (property "Reference" "MIRE" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "*" (at 0 0 0) (layer "F.Fab"))
+    (attr through_hole)
+    (pad "" thru_hole rect (at -1.5 0) (size 2.3 0.25) (drill 0.76) (layers "*.Cu" "*.Mask"))
+    (pad "" thru_hole rect (at -1.5 0) (size 2.8 0.25) (drill 0.76) (layers "*.Cu" "*.Mask"))
+    (pad "" thru_hole rect (at 1.5 0) (size 2.8 0.25) (drill 0.76) (layers "*.Cu" "*.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let uuids: Vec<&str> = out.lines().filter(|l| l.trim_start().starts_with("(pad ")).filter_map(|l| l.split("(uuid \"").nth(1)).filter_map(|r| r.split('"').next()).collect();
+        assert_eq!(uuids.len(), 3, "{out}");
+        let distinct: std::collections::BTreeSet<&&str> = uuids.iter().collect();
+        assert_eq!(distinct.len(), 3, "each pad has a uuid of its own: {uuids:?}");
+        // The uuids are still a function of the board alone (a saved DRC exclusion names its items by uuid).
+        let again = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out, again);
     }
 }
