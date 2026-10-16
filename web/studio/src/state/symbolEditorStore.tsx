@@ -29,9 +29,10 @@ import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
 import { allFields, wireField } from "../kicad-port/symFields";
 import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
+import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kicad-port/symTextBox";
 import type { ViewTransform } from "./store";
 
-export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor";
+export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_textbox" | "text" | "anchor";
 
 export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   select: "Select item(s)",
@@ -43,12 +44,13 @@ export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
   draw_polygon: "Polygon: click points, Enter/double-click to finish (the shape closes), Esc to cancel",
+  draw_textbox: "Text box: click one corner, then the opposite one, then enter the text",
   text: "Text: click where it goes, then type it",
   anchor: "Move the symbol anchor: click the point that becomes the symbol's origin",
 };
 
 /** Same "click to add point(s), commit on the last one" shape the Footprint Editor's own `FpDrawState` uses. Points are internal-space µm (see this file's own unit-convention doc). `lines` is the open multi-point polyline (`drawSymbolLines`), `polygon` the closed one. */
-export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon"; pts: [number, number][] };
+export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "textbox"; pts: [number, number][] };
 
 /** `DIALOG_SAVE_SYMBOL_AS` (Save As / Save Copy As): which of the two it is. */
 export interface SaveAsRequest {
@@ -133,6 +135,12 @@ export interface SymbolEditorState {
   textDialog: { atUm: [number, number] } | null;
   /** The text the dialog was OK'd with, following the cursor until the click that places it (`TwoClickPlace`'s `item` while `IS_MOVING`). */
   pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
+  /** Text Box Properties (`DIALOG_TEXT_PROPERTIES` of a `SCH_TEXTBOX`): `id` is the box being edited, `null` for the one the Text Box tool has just drawn and the dialog is about to add. */
+  textBoxDialog: { id: string | null; box: LibTextBox } | null;
+  /** Shape Properties (`DIALOG_SHAPE_PROPERTIES`): the shape it is open on (double click, `E`, the context menu). */
+  shapeDialogId: string | null;
+  /** What the Text Box tool carries from one box to the next (`m_lastTextBold`, `m_lastTextJust`, `m_lastFillStyle`, `m_lastStroke`...). */
+  lastTextBox: LastTextBox;
   /** `m_lastTextAngle`: the text angle the next Text dialog starts with. */
   lastTextAngle: number;
   toast: { message: string; kind: "error" | "info" } | null;
@@ -176,6 +184,9 @@ const initialState: SymbolEditorState = {
   updateFieldsOpen: false,
   textDialog: null,
   pendingText: null,
+  textBoxDialog: null,
+  shapeDialogId: null,
+  lastTextBox: INITIAL_LAST_TEXT_BOX,
   lastTextAngle: 0,
   toast: null,
 };
@@ -217,6 +228,11 @@ export type SymAction =
   | { type: "SET_UPDATE_FIELDS_OPEN"; open: boolean }
   | { type: "SET_TEXT_DIALOG"; at: [number, number] | null }
   | { type: "SET_PENDING_TEXT"; pending: { text: string; sizeMm: number; angleDeg: number } | null }
+  /** Opens Text Box Properties on a box (`id` set: an existing one), or closes it. A box the tool drew (`id` null) is added by the dialog's OK, which also makes its looks the next box's. */
+  | { type: "SET_TEXT_BOX_DIALOG"; dialog: { id: string | null; box: LibTextBox } | null }
+  /** `m_lastTextBold`, `m_lastTextItalic`, `m_lastTextAngle`, `m_lastTextJust`, `m_lastFillStyle`, `m_lastStroke`: the looks of the box the tool has just added, for the next. */
+  | { type: "SET_LAST_TEXT_BOX"; last: LastTextBox }
+  | { type: "SET_SHAPE_DIALOG_ID"; id: string | null }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -238,6 +254,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
         showPinAltIcons: state.showPinAltIcons,
         copied: state.copied,
         lastTextAngle: state.lastTextAngle,
+        lastTextBox: state.lastTextBox,
       };
     case "SYMBOL_OK":
       // `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()` each time a symbol is loaded: on for a multi-unit symbol.
@@ -314,6 +331,12 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, updateFieldsOpen: action.open };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.at ? { atUm: action.at } : null };
+    case "SET_TEXT_BOX_DIALOG":
+      return { ...state, textBoxDialog: action.dialog, drawState: null };
+    case "SET_LAST_TEXT_BOX":
+      return { ...state, lastTextBox: action.last };
+    case "SET_SHAPE_DIALOG_ID":
+      return { ...state, shapeDialogId: action.id };
     case "SET_PENDING_TEXT":
       return { ...state, pendingText: action.pending, textDialog: null, lastTextAngle: action.pending ? action.pending.angleDeg : state.lastTextAngle };
     case "TOAST":
@@ -352,7 +375,9 @@ export interface SymbolEditorApi {
   moveGraphic: (id: string, dxMm: number, dyMm: number) => Promise<void>;
   /** A drag of fields on the canvas (`SCH_FIELD`s moved by the move tool): the named fields of the symbol move by the offset, one undo step. A field the symbol inherits becomes its own. */
   moveFields: (names: string[], dxMm: number, dyMm: number) => Promise<void>;
-  editGraphic: (id: string, strokeMm: number, fill: LibraryFill) => Promise<void>;
+  editGraphic: (id: string, strokeMm: number, fill: LibraryFill, scope?: { unit?: number; bodyStyle?: number }) => Promise<boolean>;
+  /** A text box's dialog: the whole graphic as it was left (`replace_symbol_graphic`). */
+  replaceGraphic: (id: string, graphic: LibrarySymbolGraphic) => Promise<boolean>;
   deleteGraphic: (id: string) => Promise<void>;
   editText: (id: string, text: string, angleDeg: number, sizeMm: number) => Promise<void>;
   editProperties: (fields: SymbolPropertiesFields) => Promise<boolean>;
@@ -540,10 +565,15 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       const fields = movedRows(own, moving, dxMm, dyMm).map(wireField);
       await runCmd({ op: "edit_library_symbol_fields", lib_id: libId, fields });
     },
-    editGraphic: async (id, strokeMm, fill) => {
+    editGraphic: async (id, strokeMm, fill, scope) => {
       const libId = stateRef.current.libId;
-      if (!libId) return;
-      await runCmd({ op: "edit_symbol_graphic", lib_id: libId, id, stroke_mm: strokeMm, fill });
+      if (!libId) return false;
+      return runCmd({ op: "edit_symbol_graphic", lib_id: libId, id, stroke_mm: strokeMm, fill, ...(scope?.unit !== undefined ? { unit: scope.unit } : {}), ...(scope?.bodyStyle !== undefined ? { body_style: scope.bodyStyle } : {}) });
+    },
+    replaceGraphic: async (id, graphic) => {
+      const libId = stateRef.current.libId;
+      if (!libId) return false;
+      return runCmd({ op: "replace_symbol_graphic", lib_id: libId, id, graphic });
     },
     deleteGraphic: async (id) => {
       const libId = stateRef.current.libId;

@@ -7,6 +7,8 @@ import { useEffect } from "react";
 import { useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { SymbolEditorCanvas } from "./SymbolEditorCanvas";
 import { PinPropertiesDialog } from "./PinPropertiesDialog";
+import { SymbolShapePropertiesDialog } from "./SymbolShapePropertiesDialog";
+import { SymbolTextBoxDialog } from "./SymbolTextBoxDialog";
 import { PinTableDialog } from "./PinTableDialog";
 import { LibrarySymbolPropertiesDialog } from "./SymbolPropertiesDialog";
 import { SymbolLibraryPanel } from "./SymbolLibraryPanel";
@@ -50,6 +52,8 @@ export function SymbolEditorView() {
         <Toolbar id="drawing" editor="symbol" />
       </div>
       <PinPropertiesDialog />
+      <SymbolShapePropertiesDialog />
+      <SymbolTextBoxDialog />
       <PinTableDialog />
       <LibrarySymbolPropertiesDialog />
       <SaveSymbolAsDialog />

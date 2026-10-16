@@ -31,9 +31,10 @@ import { electricalTypeLayout, pinLabelsShown, pinShown } from "../../kicad-port
 import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/symPinAltIcon";
 import { DEFAULT_PIN_TEXTS, PIN_TEXT_SIZE_UM, shownPinName, type PinTexts } from "../schematic/pinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
+import { boxOfTextBox, layoutLibTextBox, type LibTextBox } from "../../kicad-port/symTextBox";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
-export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon";
+export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "textbox";
 
 /** Half the cap height, the shift that centres stroke text on its line (`MIDDLE_OFFSET_FACTOR` of `components/schematic/painter.ts`). */
 const MIDDLE_OFFSET_FACTOR = 0.35;
@@ -47,7 +48,7 @@ export function toLibPin(p: LibrarySymbolPin): LibPin {
 }
 
 /** A `LibrarySymbolGraphic` resolved to internal (µm, Y-down) space via the exact same `resolveLibPoint` pipeline a placed instance's own graphics go through. */
-function resolveGraphic(g: LibrarySymbolGraphic): ResolvedGraphic {
+function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" }>): ResolvedGraphic {
   const pt = (p: { x: number; y: number }) => resolveLibPoint([p.x, p.y], IDENTITY, [0, 0]);
   switch (g.kind) {
     case "rectangle":
@@ -115,6 +116,30 @@ function drawOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform) {
   ctx.restore();
 }
 
+/**
+ * `SCH_PAINTER::draw( SCH_TEXTBOX )` for a box of the symbol (`LAYER_DEVICE`): the fill first (the body's background colour, or the outline colour), the wrapped text in the box
+ * (kicad-port/symTextBox.ts), and the border when it has a width -- 0 is the default line width, a negative one is no border.
+ */
+function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, color: string) {
+  const b = boxOfTextBox(g);
+  if (g.fill !== "none") {
+    ctx.fillStyle = g.fill === "background" ? layerColor("LAYER_DEVICE_BACKGROUND") : color;
+    ctx.fillRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+  }
+  const sizeUm = g.size_mm * 1000;
+  const layout = layoutLibTextBox(g, measureStrokeText);
+  ctx.save();
+  ctx.translate(layout.origin[0], layout.origin[1]);
+  if (layout.vertical) ctx.rotate(-Math.PI / 2);
+  for (const l of layout.lines) drawStrokeText(ctx, l.text, l.u, l.v, { sizeUm, justify: l.justify, italic: !!g.italic, thicknessUm: g.bold ? sizeUm / 5 : undefined, color });
+  ctx.restore();
+  if (g.stroke_mm >= 0) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = g.stroke_mm > 0 ? Math.max(g.stroke_mm * 1000, 21.2) : 152.4;
+    ctx.strokeRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+  }
+}
+
 /** Rubber-band preview for the graphics tool currently in progress -- points already internal-space (µm), same convention the Footprint/PCB editors' own `drawInProgress` uses. */
 function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: SymShapeKind; pts: [number, number][] } | null, cursorUm: { x: number; y: number } | null) {
   if (!draw) return;
@@ -131,7 +156,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw
     ctx.beginPath();
     ctx.arc(cx, cy, Math.hypot(ex - cx, ey - cy), 0, Math.PI * 2);
     ctx.stroke();
-  } else if (draw.shapeKind === "rect") {
+  } else if (draw.shapeKind === "rect" || draw.shapeKind === "textbox") {
     const [x0, y0] = pts[0]!;
     const [x1, y1] = pts[pts.length - 1]!;
     ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
@@ -238,7 +263,8 @@ export function paintSymbol(
     const color = selected ? layerColor("selection") : strokeColor;
     // `drawRealGraphic` strokes with whatever `strokeStyle` is current (a placed symbol's painter sets it first); left alone it is the canvas default, black.
     ctx.strokeStyle = color;
-    drawRealGraphic(ctx, resolveGraphic(g), color);
+    if (g.kind === "text_box") drawLibTextBox(ctx, g, color);
+    else drawRealGraphic(ctx, resolveGraphic(g), color);
     ctx.restore();
   }
 

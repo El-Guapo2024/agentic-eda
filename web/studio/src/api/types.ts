@@ -1665,8 +1665,11 @@ export type Cmd =
   | { op: "add_symbol_graphic"; lib_id: string; graphic: LibrarySymbolGraphic }
   | { op: "delete_symbol_graphic"; lib_id: string; id: string }
   | { op: "move_symbol_graphic"; lib_id: string; id: string; dx_mm: Mm; dy_mm: Mm }
-  | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill }
+  /** Shape Properties: the width (negative: no border), the fill and -- when given -- the unit and the body style the shape is on (0: common to all). */
+  | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill; unit?: number; body_style?: number }
   | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm }
+  /** A text box's properties dialog: the whole graphic, of the same kind, as the dialog left it. */
+  | { op: "replace_symbol_graphic"; lib_id: string; id: string; graphic: LibrarySymbolGraphic }
   // ---------------------------------------------------------------- derived symbols
   /** `deriveFromExistingSymbol` (`DIALOG_LIB_NEW_SYMBOL` with a parent): `lib_id`, a new symbol in the parent's library, derived from `parent`. */
   | { op: "derive_symbol"; parent: string; lib_id: string; keep_footprint?: boolean; keep_datasheet?: boolean; transfer_user_fields?: boolean; keep_content_user_fields?: boolean; overwrite?: boolean }
@@ -2447,7 +2450,30 @@ export type LibrarySymbolGraphic =
   | { kind: "polyline"; id?: string; unit: number; body_style: number; pts: MmPoint[]; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "circle"; id?: string; unit: number; body_style: number; center: MmPoint; radius_mm: Mm; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "arc"; id?: string; unit: number; body_style: number; start: MmPoint; mid: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
-  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm };
+  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm }
+  /**
+   * `SCH_TEXTBOX` of a library symbol (`(text_box ...)`): `start` and `end` are two opposite corners (Y up, mm), the text runs along the box (`angle_deg` 0) or up it (90) and is
+   * wrapped to it. `margin_mm` 0 is the default margin (`kicad-port/symTextBox.ts`), a negative `stroke_mm` is no border, 0 the default line width. The server leaves out what is
+   * false or zero (`bold`, `italic`, `margin_mm`).
+   */
+  | {
+      kind: "text_box";
+      id?: string;
+      unit: number;
+      body_style: number;
+      text: string;
+      start: MmPoint;
+      end: MmPoint;
+      angle_deg: Degrees;
+      size_mm: Mm;
+      bold?: boolean;
+      italic?: boolean;
+      h_align: FieldHAlign;
+      v_align: FieldVAlign;
+      margin_mm?: Mm;
+      stroke_mm: Mm;
+      fill: LibraryFill;
+    };
 
 /** `crates/model/src/ir.rs` `PinAlternate` -- one alternate function of a pin (`SCH_PIN::ALT`, `(alternate "name" type shape)`): a name, an electrical type and a graphic style. A pin keeps each name once, in the order of the names. */
 export interface PinAlternate {

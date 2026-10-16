@@ -26,7 +26,7 @@
   const cmd = async (c) => (await fetch("/api/cmd", { method: "POST", body: JSON.stringify({ strict: false, cmd: c }) })).json();
   const tid = (id) => document.querySelector(`[data-testid="${id}"]`);
   const clickTab = async (label) => { [...document.querySelectorAll("button, [role=tab]")].find((b) => b.textContent.trim() === label)?.click(); await sleep(700); };
-  const type = async (el, value) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(el, String(value)); el.dispatchEvent(new Event("input", { bubbles: true })); await sleep(70); };
+  const type = async (el, value) => { const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, "value").set.call(el, String(value)); el.dispatchEvent(new Event("input", { bubbles: true })); await sleep(70); };
   const choose = async (el, value) => { Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set.call(el, value); el.dispatchEvent(new Event("change", { bubbles: true })); await sleep(70); };
   const click = async (el, ms = 120) => { el.click(); await sleep(ms); };
   const until = async (cond, ms = 15000, step = 120) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await cond()) return true; await sleep(step); } return false; };
@@ -573,6 +573,8 @@
     fire("pointerup", to[0], to[1], mods); await sleep(700);
   };
   const near = (a, b, tol = 2) => Math.abs(a - b) <= tol;
+  /** A double click on the canvas at the editor's point. */
+  const dbl = async (wx, wy) => { const [sx, sy] = toScreen(wx, wy); canvasEl().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: sx, clientY: sy, detail: 2 })); await sleep(600); };
   const onGrid = (v, g) => Math.abs(v - Math.round(v / g) * g) < 1e-6 * Math.max(1, Math.abs(v)) + 1e-6;
 
   await scenario("Footprint Editor snapping: a pad tool click goes to the centre of a pad under it, Shift puts it on the grid, Ctrl+Shift leaves it where it is", async (t) => {
@@ -876,7 +878,6 @@
 
     // double click on the pin: Pin Properties, the pane for alternates starts closed
     const PIN1 = [-4000, 0];
-    const dbl = async (wx, wy) => { const [sx, sy] = toScreen(wx, wy); canvasEl().dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, clientX: sx, clientY: sy, detail: 2 })); await sleep(600); };
     await dbl(...PIN1);
     t(!!tid("pin-alternates") && !tid("pin-alternates-add"), "Pin Properties has the alternates pane, closed while the pin has none");
     tid("pin-alternates-toggle").click(); await sleep(150);
@@ -946,6 +947,178 @@
     r = await cmd({ op: "edit_symbol_pin", lib_id: id, id: cur.pins.find((p) => p.number === "1").id, pin: { ...cur.pins.find((p) => p.number === "1"), alternates: [{ name: "A", electrical_type: "input", shape: "line" }] } });
     t(!r.ok && /multiple body styles/.test(r.message ?? JSON.stringify(r)), `the verb refuses alternates: ${r.message ?? JSON.stringify(r)}`);
   }, [/body styles/i]);
+
+  // ================================================================================================ 7. the shape properties dialog
+  await scenario("Shape Properties: a double click on a rectangle opens it with the shape's border, width and fill; OK is one undo step (width, fill, common to all units); Border off is the width KiCad keeps for none", async (t) => {
+    await clickTab("Symbol");
+    await sleep(500);
+    const id = "eda:P17Shape";
+    madeSyms.push(id);
+    let r = await cmd({ op: "new_symbol", lib_id: id });
+    t(r.ok, `new_symbol: ${r.message ?? "ok"}`);
+    r = await cmd({ op: "add_symbol_graphic", lib_id: id, graphic: { kind: "rectangle", unit: 1, body_style: 1, start: { x: -5.08, y: 5.08 }, end: { x: 5.08, y: -5.08 }, stroke_mm: 0.254, fill: "none" } });
+    t(r.ok, `rectangle: ${r.message ?? "ok"}`);
+    const cur = await symbol(id);
+    r = await cmd({ op: "edit_symbol_properties", lib_id: id, reference_prefix: "U", description: "", keywords: "", datasheet: "", power: false, in_bom: true, on_board: true, pin_numbers_hidden: false, pin_names_hidden: false, pin_name_offset_mm: cur.pin_name_offset_mm ?? 0.508, unit_count: 2, has_alternate_body_style: false, footprint_filters: [] });
+    t(r.ok, `two units: ${r.message ?? "ok"}`);
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(1000);
+    await __eda.run("common.Control.zoomFitScreen");
+    await sleep(500);
+    const EDGE = [-5080, 0]; // the middle of the rectangle's left edge, the editor's um (Y down): the top and bottom edges are where a new symbol puts its Reference and Value
+    await dbl(...EDGE);
+    t(!!tid("shape-properties"), "a double click on the rectangle's edge opens the dialog");
+    t(/Rectangle Properties/.test(tid("shape-properties")?.textContent ?? ""), `titled by the shape: ${tid("shape-properties")?.getAttribute("aria-label")}`);
+    t(tid("shape-border")?.checked === true && tid("shape-width")?.value === "0.254", `the border is on at 0.254: ${tid("shape-width")?.value}`);
+    t(tid("shape-fill-none")?.checked === true, "no fill");
+    t(!off("shape-common-units") && off("shape-common-styles"), "Common to all units is enabled for two units, Common to all body styles is not (one body style)");
+    t(/Set border width to 0 to use schematic's default line width\./.test(tid("shape-properties")?.textContent ?? ""), "with KiCad's help line");
+    await type(tid("shape-width"), "0.5");
+    tid("shape-fill-outline").click(); await sleep(80);
+    tid("shape-common-units").click(); await sleep(80);
+    await click(tid("shape-ok"), 900);
+    t(!tid("shape-properties"), "OK closes the dialog");
+    let g = (await symbol(id)).graphics[0];
+    t(g.stroke_mm === 0.5 && g.fill === "outline" && g.unit === 0, `width 0.5, outline fill, common to all units: ${JSON.stringify([g.stroke_mm, g.fill, g.unit])}`);
+    // Border off: the width KiCad keeps for none, written to the file as it
+    await dbl(...EDGE);
+    t(tid("shape-width")?.value === "0.5" && tid("shape-common-units")?.checked === true, "reopened on what was stored");
+    tid("shape-border").click(); await sleep(80);
+    t(off("shape-width"), "the width is off while the border is");
+    await click(tid("shape-ok"), 900);
+    g = (await symbol(id)).graphics[0];
+    t(g.stroke_mm === -0.0001, `no border is -0.0001: ${g.stroke_mm}`);
+    const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
+    t(/\(stroke \(width -0\.0001\) \(type default\)\) \(fill \(type outline\)\)/.test(text), "the exported .kicad_sym says (width -0.0001)");
+    // the right-click menu has Properties... for the one selected shape
+    await clickAt(...EDGE, {}, false);
+    const [sx, sy] = toScreen(...EDGE);
+    canvasEl().dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: sx, clientY: sy, button: 2 }));
+    await sleep(300);
+    const labels = [...document.querySelectorAll('[role="menuitem"]')].map((m) => m.textContent.trim());
+    t(labels.includes("Properties..."), `the context menu offers Properties...: ${JSON.stringify(labels)}`);
+    await closeMenu();
+    // one undo per OK
+    await undoFp();
+    g = (await symbol(id)).graphics[0];
+    t(g.stroke_mm === 0.5 && g.fill === "outline", "one undo takes the Border off back");
+    await undoFp();
+    g = (await symbol(id)).graphics[0];
+    t(g.stroke_mm === 0.254 && g.fill === "none" && g.unit === 1, `one more takes the first OK back: ${JSON.stringify([g.stroke_mm, g.fill, g.unit])}`);
+  });
+
+  // ================================================================================================ 8. the symbol text box
+  await scenario("Symbol Editor text box: the tool draws a box with two clicks and Text Box Properties adds it (Cancel drops it); it is written, wrapped and picked as KiCad does, remembered for the next, edited, moved, deleted", async (t) => {
+    await clickTab("Symbol");
+    await sleep(500);
+    const id = "eda:P17TextBox";
+    madeSyms.push(id);
+    let r = await cmd({ op: "new_symbol", lib_id: id });
+    t(r.ok, `new_symbol: ${r.message ?? "ok"}`);
+    await selectRow(id);
+    await __eda.run("eeschema.SymbolLibraryControl.editSymbol");
+    await sleep(1000);
+    await __eda.run("common.Control.zoomFitScreen");
+    await sleep(500);
+    const canvas = () => document.querySelector(".editor-canvas-col canvas");
+    /** The pixels near an editor point that are not the background's: the ink of what is drawn there. */
+    const inkIn = (x0, y0, x1, y1) => {
+      const c = canvas(); const ctx = c.getContext("2d"); const dpr = c.width / parseFloat(c.style.width || c.width); const rect = c.getBoundingClientRect();
+      const [ax, ay] = toScreen(x0, y0); const [bx, by] = toScreen(x1, y1);
+      const px = Math.max(0, Math.round((Math.min(ax, bx) - rect.left) * dpr)), py = Math.max(0, Math.round((Math.min(ay, by) - rect.top) * dpr));
+      const w = Math.max(1, Math.round(Math.abs(bx - ax) * dpr)), h = Math.max(1, Math.round(Math.abs(by - ay) * dpr));
+      const d = ctx.getImageData(px, py, w, h).data;
+      let n = 0; for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - 26) + Math.abs(d[i + 1] - 26) + Math.abs(d[i + 2] - 26) > 90) n++;
+      return n;
+    };
+    const boxes = async () => (await symbol(id)).graphics.filter((g) => g.kind === "text_box");
+    const A = [-7620, -5080], B = [7620, 5080]; // the corners, the editor's um (Y down): 15.24 by 10.16 mm
+    t(__eda.actions().some((a) => a.id === "eeschema.SymbolDrawing.drawSymbolTextBox" && a.enabled), "Draw Text Box is an enabled action of the Symbol tab");
+    await arm("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
+    t(__eda.state().tool === "draw_textbox", `the tool is armed: ${__eda.state().tool}`);
+    await clickAt(...A, {}, false);
+    t(!tid("text-box-properties"), "one click only begins the box");
+    await clickAt(...B, {}, true);
+    t(!!tid("text-box-properties"), "the second click opens Text Box Properties");
+    t(tid("tb-text")?.value === "" && tid("tb-size")?.value === "1.27" && tid("tb-bold")?.checked === false && tid("tb-h-left")?.checked === true && tid("tb-v-top")?.checked === true && tid("tb-horizontal")?.checked === true, "it starts empty, 1.27 mm, left and top, horizontal, not bold");
+    t(tid("tb-border")?.checked === true && tid("tb-filled")?.checked === false, "with a border and no fill");
+    t((await boxes()).length === 0, "nothing is added before OK");
+    // Cancel drops the box
+    await click(tid("tb-cancel"), 500);
+    t(!tid("text-box-properties") && (await boxes()).length === 0, "Cancel adds nothing");
+    // again: a text of two lines, bold
+    await arm("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
+    await clickAt(...A, {}, false);
+    await clickAt(...B, {}, true);
+    await type(tid("tb-text"), "10V\nREF");
+    tid("tb-bold").click(); await sleep(80);
+    await click(tid("tb-ok"), 1000);
+    t(!tid("text-box-properties"), "OK closes the dialog");
+    let bs = await boxes();
+    t(bs.length === 1, `OK adds the box: ${bs.length}`);
+    const b0 = bs[0];
+    t(b0?.text === "10V\nREF" && b0.bold === true && b0.h_align === "left" && b0.v_align === "top" && b0.size_mm === 1.27 && (b0.angle_deg ?? 0) === 0, `what the dialog said: ${JSON.stringify(b0)}`);
+    t(b0 && near(b0.start.x, -7.62, 0.001) && near(b0.start.y, 5.08, 0.001) && near(b0.end.x, 7.62, 0.001) && near(b0.end.y, -5.08, 0.001), `the corners are the clicks (Y up): ${JSON.stringify([b0?.start, b0?.end])}`);
+    t(b0?.unit === 1 && b0.margin_mm === 1.016 && b0.stroke_mm === 0, `on the unit being edited, with the margin of four fifths of the text and the default width: ${JSON.stringify([b0?.unit, b0?.margin_mm, b0?.stroke_mm])}`);
+    const text = await (await fetch(`/api/symbol/export?lib_id=${encodeURIComponent(id)}`)).text();
+    t(text.includes('(text_box "10V\\nREF" (at -7.62 5.08 0) (size 15.24 -10.16) (margins 1.016 1.016 1.016 1.016)'), "the exported .kicad_sym has the box as KiCad writes it, the line break as \\n");
+    t(inkIn(-7000, -4500, 7000, -3000) > 40, `the text is drawn in the box (${inkIn(-7000, -4500, 7000, -3000)} px)`);
+    t(inkIn(-8200, -5800, 8200, -5600) > 40, "and the border is drawn");
+    // a click in the box picks it, anywhere in it (not on the border alone)
+    await __eda.run("common.InteractiveSelection.selectionTool");
+    await sleep(200);
+    await clickAt(0, 2500, {}, false);
+    t(same(__eda.state().selection.map((s) => s.id), [b0.id]), `a click inside the box picks it: ${JSON.stringify(__eda.state().selection.map((s) => s.id))}`);
+    // the next box starts as the last one was: bold
+    await arm("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
+    await clickAt(-12700, 7620, {}, false);
+    await clickAt(-10160, 10160, {}, true);
+    t(tid("tb-bold")?.checked === true, "the tool remembers bold for the next box (m_lastTextBold)");
+    await click(tid("tb-cancel"), 500);
+    await __eda.run("common.InteractiveSelection.selectionTool");
+    // edit: a double click opens it on what it holds
+    await dbl(0, 0);
+    t(!!tid("text-box-properties") && tid("tb-text")?.value === "10V\nREF" && tid("tb-bold")?.checked === true, `a double click opens the box: ${tid("tb-text")?.value}`);
+    await type(tid("tb-text"), "5k");
+    tid("tb-vertical").click(); await sleep(60);
+    tid("tb-border").click(); await sleep(60);
+    tid("tb-filled").click(); await sleep(60);
+    tid("tb-h-center").click(); await sleep(60);
+    await type(tid("tb-size"), "0.635");
+    await click(tid("tb-ok"), 1000);
+    bs = await boxes();
+    const e0 = bs[0];
+    t(bs.length === 1 && e0.id === b0.id && e0.text === "5k" && e0.angle_deg === 90 && e0.stroke_mm === -0.0001 && e0.fill === "background" && e0.h_align === "center" && e0.size_mm === 0.635, `the edit replaced the box and kept its id: ${JSON.stringify(e0)}`);
+    t(e0.margin_mm === 1.016, `and the margin it had: ${e0.margin_mm}`);
+    // a size the dialog refuses
+    await dbl(0, 0);
+    await type(tid("tb-size"), "0");
+    await click(tid("tb-ok"), 300);
+    t(/between 0\.01 mm and 1000 mm/.test(tid("tb-error")?.textContent ?? "") && !!tid("text-box-properties"), `a text size of 0 is refused: ${tid("tb-error")?.textContent}`);
+    await click(tid("tb-cancel"), 400);
+    // moved by a drag: both corners
+    const before = (await boxes())[0];
+    await dragFromTo([0, 0], [2540, 1270]);
+    const after = (await boxes())[0];
+    t(near(after.start.x - before.start.x, 2.54, 0.001) && near(after.end.x - before.end.x, 2.54, 0.001) && near(after.start.y - before.start.y, -1.27, 0.001), `a drag moves both corners: ${JSON.stringify([before.start, after.start])}`);
+    await undoFp();
+    // one undo per step: the move, the edit, the add
+    t(near((await boxes())[0].start.x, before.start.x, 0.001), "one undo takes the move back");
+    await undoFp();
+    t((await boxes())[0]?.text === "10V\nREF", "one undo takes the edit back");
+    await undoFp();
+    t((await boxes()).length === 0, "one undo takes the whole box away");
+    // the Select Tool while a box is begun drops it and ends the tool: the next click only selects
+    await arm("eeschema.SymbolDrawing.drawSymbolTextBox", "draw_textbox");
+    await clickAt(...A, {}, false);
+    await __eda.run("common.InteractiveSelection.selectionTool");
+    await sleep(300);
+    t(__eda.state().tool === "select", `the Select Tool leaves the Text Box tool: ${__eda.state().tool}`);
+    await clickAt(...B, {}, true);
+    t(!tid("text-box-properties") && (await boxes()).length === 0, "and the box that was begun is gone: no dialog, no box");
+    await closeDialogs();
+  }, [/derived|text size/i]);
 
   // ================================================================================================ leave the library as it was
   await closeDialogs();

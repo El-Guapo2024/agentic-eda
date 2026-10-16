@@ -56,6 +56,7 @@ export const SYM_TOOL_OF_ACTION: Readonly<Record<string, string>> = {
   "eeschema.InteractiveDrawing.drawArc": "draw_arc",
   "eeschema.SymbolDrawing.drawSymbolLines": "draw_lines",
   "eeschema.SymbolDrawing.drawSymbolPolygon": "draw_polygon",
+  "eeschema.SymbolDrawing.drawSymbolTextBox": "draw_textbox",
   "eeschema.SymbolDrawing.placeSymbolAnchor": "anchor",
 };
 

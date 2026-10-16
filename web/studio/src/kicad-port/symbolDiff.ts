@@ -67,6 +67,8 @@ function graphicOfLibrary(g: LibrarySymbolGraphic): string {
       return `Arc ${pts([p(g.start), p(g.mid), p(g.end)])} stroke ${round(g.stroke_mm)} fill ${g.fill} [${where}]`;
     case "text":
       return `Text '${g.text}' ${pts([p(g.at)])} ${round(g.angle_deg)} deg size ${round(g.size_mm)} [${where}]`;
+    case "text_box":
+      return `Text box '${g.text}' ${pts([p(g.start), p(g.end)])} ${round(g.angle_deg)} deg size ${round(g.size_mm)} stroke ${round(g.stroke_mm)} fill ${g.fill} [${where}]`;
   }
 }
 

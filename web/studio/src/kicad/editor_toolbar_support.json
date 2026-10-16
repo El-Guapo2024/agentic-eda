@@ -109,7 +109,7 @@
     "common.InteractiveSelection.selectionTool": "supported",
     "eeschema.SymbolDrawing.placeSymbolPin": "supported",
     "eeschema.SymbolDrawing.placeSymbolText": "supported",
-    "eeschema.SymbolDrawing.drawSymbolTextBox": "not ported: text boxes",
+    "eeschema.SymbolDrawing.drawSymbolTextBox": "supported",
     "eeschema.InteractiveDrawing.drawRectangle": "supported",
     "eeschema.InteractiveDrawing.drawCircle": "supported",
     "eeschema.InteractiveDrawing.drawArc": "supported",

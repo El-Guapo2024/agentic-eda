@@ -6,7 +6,7 @@
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: `pcbnew.ModuleEditor.createFootprint` (the footprint wizard), the five
 // `pcbnew.MicrowaveTool.*` (board-only footprints and custom pads), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol
-// Viewer) and `eeschema.SymbolDrawing.drawSymbolTextBox`. The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
+// Viewer). The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
 // board (actions/footprintCheckerActions.ts).
 import type { Dispatch } from "react";
 import type { Action as StudioAction } from "../state/store";
@@ -250,7 +250,7 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   m.set("eeschema.PinEditing.pushPinNumSize", pushPin("number_size"));
 
   // Draw Lines / Draw Polygons / Move Symbol Anchor / Draw Text -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape (SEGMENT / POLY), PlaceAnchor, TwoClickPlace: arm the tool.
-  const armSymTool = (tool: "draw_lines" | "draw_polygon" | "anchor" | "text") =>
+  const armSymTool = (tool: "draw_lines" | "draw_polygon" | "draw_textbox" | "anchor" | "text") =>
     symTab(() => {
       const st = ctx.symApi.getState();
       if (!st.symbol) return symToast("Open a symbol first.");
@@ -258,6 +258,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
     });
   m.set("eeschema.SymbolDrawing.drawSymbolLines", armSymTool("draw_lines"));
   m.set("eeschema.SymbolDrawing.drawSymbolPolygon", armSymTool("draw_polygon"));
+  // Draw Text Box -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawSymbolTextBox (`doDrawShape` without a shape): two clicks, then Text Box Properties.
+  m.set("eeschema.SymbolDrawing.drawSymbolTextBox", armSymTool("draw_textbox"));
   m.set("eeschema.SymbolDrawing.placeSymbolAnchor", armSymTool("anchor"));
   m.set("eeschema.SymbolDrawing.placeSymbolText", armSymTool("text"));
 }

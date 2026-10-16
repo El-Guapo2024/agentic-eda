@@ -186,6 +186,8 @@ function graphicBox(g: LibrarySymbolGraphic): Box | null {
       const w = Math.max(g.text.length, 1) * size * 0.6;
       return [x - w / 2, y - size / 2, x + w / 2, y + size / 2];
     }
+    case "text_box":
+      return boxOfPoints([mmToUm([g.start.x, g.start.y]), mmToUm([g.end.x, g.end.y])]);
   }
 }
 
