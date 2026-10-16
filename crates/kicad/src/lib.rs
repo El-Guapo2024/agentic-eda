@@ -1407,8 +1407,22 @@ pub(crate) fn fmt_double_2_str(v: f64) -> String {
     }
 }
 
+/// A string as `OUTPUTFORMATTER::Quotes` writes it: quoted, with a newline as `\n`, a carriage return as `\r`, a backslash doubled and a quote escaped. (A raw newline
+/// inside the quotes is a parse error in KiCad, whose lexer reads a line at a time.)
 pub(crate) fn sexpr_str(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// KiCad stores a pad's drawn rotation as its footprint's own file angle

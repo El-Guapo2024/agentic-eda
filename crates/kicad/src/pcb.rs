@@ -2698,4 +2698,24 @@ mod tests {
         let again = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out, again);
     }
+
+    /// A text of several lines is written with KiCad's `\n` escape (a raw newline inside the quotes is a parse error for it) and read back with its lines; a quote, a
+    /// backslash and a carriage return come back as they went. `complex_hierarchy`'s "Actionneur\nPiezo New Amp\nV02" came back as one line with backslashes in it, 60 mm
+    /// wide, and kicad-cli reported it shorting the nets under it.
+    #[test]
+    fn a_texts_lines_quotes_and_backslashes_are_written_as_kicad_writes_them_and_read_back() {
+        let (mut design, model) = fixture();
+        let content = "Actionneur\nPiezo \"New\" Amp\\V02\r\nline 3";
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: 1000, y: 2000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let line = out.lines().find(|l| l.contains("(gr_text ")).expect("the text is written");
+        assert!(line.starts_with("\t(gr_text \"Actionneur\\nPiezo \\\"New\\\" Amp\\\\V02\\r\\nline 3\" (at 1 2 0)"), "{line}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let texts = &back.drawings.as_ref().expect("drawings").texts;
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].content, content);
+    }
 }

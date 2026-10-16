@@ -101,13 +101,14 @@ fn parse_atom(input: &str, bytes: &[u8], pos: &mut usize) -> String {
     input[start..*pos].to_string()
 }
 
-/// Contents of a `"..."` string, unescaping `\\` and `\"` (the only two
-/// escapes our own writer ever produces -- see `sexpr_str` in `lib.rs`).
-/// Every delimiter byte we scan for (`"`, `\`) is ASCII, and ASCII bytes
-/// never occur as part of a multi-byte UTF-8 sequence, so slicing on these
-/// byte offsets always lands on a `char` boundary.
+/// Contents of a `"..."` string, with the escapes `DSNLEXER::NextTok` reads (`common/dsnlexer.cpp`, the delimited-string branch): `\"` and `\\`, the
+/// control characters `\a \b \f \n \r \t \v`, a hex byte `\xH` or `\xHH` and an octal byte `\O`, `\OO` or `\OOO`. A backslash that starts none of them is a
+/// backslash (KiCad's "goofed" escape: the character after it is read as itself).
+///
+/// The bytes an escape stands for are collected as bytes: a `\xE2\x82\xAC` is the three bytes of a euro sign, as it is in KiCad's lexer. Every delimiter we scan for
+/// (`"`, `\`) is ASCII, and ASCII bytes never occur as part of a multi-byte UTF-8 sequence, so copying the other bytes through keeps every character whole.
 fn parse_quoted(input: &str, bytes: &[u8], pos: &mut usize) -> Result<String, String> {
-    let mut out = String::new();
+    let mut out: Vec<u8> = Vec::new();
     loop {
         if *pos >= bytes.len() {
             return Err(format!("unterminated string starting near line {}", line_of(input, *pos)));
@@ -115,27 +116,45 @@ fn parse_quoted(input: &str, bytes: &[u8], pos: &mut usize) -> Result<String, St
         match bytes[*pos] {
             b'"' => {
                 *pos += 1;
-                return Ok(out);
+                return Ok(String::from_utf8(out).unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned()));
             }
             b'\\' if *pos + 1 < bytes.len() => {
                 let next = bytes[*pos + 1];
+                *pos += 2;
                 match next {
-                    b'"' | b'\\' => out.push(next as char),
-                    // Unknown escape: keep it literal rather than guessing.
+                    b'"' | b'\\' => out.push(next),
+                    b'a' => out.push(0x07),
+                    b'b' => out.push(0x08),
+                    b'f' => out.push(0x0c),
+                    b'n' => out.push(b'\n'),
+                    b'r' => out.push(b'\r'),
+                    b't' => out.push(b'\t'),
+                    b'v' => out.push(0x0b),
+                    // One or two hex digits; none at all reads the `x` itself.
+                    b'x' => {
+                        let digits = bytes[*pos..].iter().take(2).take_while(|b| b.is_ascii_hexdigit()).count();
+                        if digits == 0 {
+                            out.push(b'x');
+                        } else {
+                            out.push(u8::from_str_radix(&input[*pos..*pos + digits], 16).expect("hex digits"));
+                            *pos += digits;
+                        }
+                    }
+                    // One to three octal digits (the one already read is the first); none at all is a backslash, and the character is read again as itself.
+                    b'0'..=b'7' => {
+                        let digits = 1 + bytes[*pos..].iter().take(2).take_while(|b| (b'0'..=b'7').contains(b)).count();
+                        out.push(u32::from_str_radix(&input[*pos - 1..*pos - 1 + digits], 8).expect("octal digits") as u8);
+                        *pos += digits - 1;
+                    }
                     _ => {
-                        out.push('\\');
-                        out.push(next as char);
+                        out.push(b'\\');
+                        *pos -= 1;
                     }
                 }
-                *pos += 2;
             }
-            _ => {
-                // Copy one UTF-8 character's worth of bytes at a time so we
-                // never split a multi-byte sequence.
-                let rest = &input[*pos..];
-                let ch = rest.chars().next().expect("pos < bytes.len()");
-                out.push(ch);
-                *pos += ch.len_utf8();
+            b => {
+                out.push(b);
+                *pos += 1;
             }
         }
     }
@@ -193,6 +212,22 @@ mod tests {
         assert_eq!(txt(net, 2), Some("Net-(U1-Pad1)"));
         let path = find(root, "path").unwrap();
         assert_eq!(txt(path, 1), Some("a\"b\\c"));
+    }
+
+    /// `DSNLEXER` reads `\n` as a newline and `\t`, `\r`, `\xHH` and `\OOO` as the characters they name; a backslash before anything else is a backslash.
+    #[test]
+    fn reads_the_escapes_kicads_lexer_reads() {
+        let one = |text: &str| -> String {
+            let tree = parse(&format!("(t \"{text}\")")).unwrap();
+            tree.as_list().unwrap()[1].text().unwrap().to_string()
+        };
+        assert_eq!(one(r"Actionneur\nPiezo New Amp\nV02"), "Actionneur\nPiezo New Amp\nV02");
+        assert_eq!(one(r"a\tb\rc\\d\\n"), "a\tb\rc\\d\\n");
+        assert_eq!(one(r"\x41\x4a\x4B\101\60\7"), "AJKA0\u{7}");
+        // A euro sign written as the three bytes of its UTF-8, and a goofed escape (`\q`, `\x` with no digit, `\8`).
+        assert_eq!(one(r"\xE2\x82\xAC"), "\u{20ac}");
+        assert_eq!(one(r"\q\xg\8"), "\\qxg\\8");
+        assert_eq!(one("caf\u{e9} \u{20ac}"), "caf\u{e9} \u{20ac}");
     }
 
     #[test]

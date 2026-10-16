@@ -205,8 +205,8 @@ fn read_text(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Option<FpText> {
     let font = sexpr::find(item, "effects").and_then(|e| sexpr::find(e, "font"));
     let face = font.and_then(|f| sexpr::find(f, "face")).and_then(|f| sexpr::txt(f, 1)).filter(|f| !f.is_empty()).map(str::to_string);
     let line_spacing_permille = font.and_then(|f| sexpr::find(f, "line_spacing")).and_then(|s| sexpr::num(s, 1)).map(|v| (v * 1000.0).round() as i64).filter(|v| *v != 1000).unwrap_or(0);
-    // `%V` and `%R` are the old spellings of `${VALUE}` and `${REFERENCE}`; the lexer's `\n` is a newline.
-    let text = raw.replace("%V", "${VALUE}").replace("%R", "${REFERENCE}").replace("\\n", "\n");
+    // `%V` and `%R` are the old spellings of `${VALUE}` and `${REFERENCE}` (the lexer has already made the `\n` of the file a newline).
+    let text = raw.replace("%V", "${VALUE}").replace("%R", "${REFERENCE}");
     Some(FpText { text, layout: l, face, line_spacing_permille })
 }
 
@@ -329,9 +329,9 @@ pub(crate) fn pad_layers_token(base: &[&str], art: &[String], side: Side) -> Str
     layers_token(&all)
 }
 
-/// A string as KiCad's `Quotew` writes it: a newline is `\n`.
+/// A string as KiCad's `Quotew` writes it (a newline is `\n`: [`sexpr_str`]).
 fn quote(s: &str) -> String {
-    sexpr_str(s).replace('\n', "\\n")
+    sexpr_str(s)
 }
 
 /// The art of the footprint `fp`, in the file's frame: shapes, then texts (`format( FOOTPRINT )` writes the drawings sorted by type, shapes before
