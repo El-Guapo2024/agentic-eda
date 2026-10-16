@@ -292,20 +292,31 @@ fn kicad_cli_converts_the_qa_schematics_and_our_reader_reads_the_symbols_it_plac
                     return;
                 }
             };
-            let placed = placed_symbols(&got.text);
-            let file = match load_sheet_file(&got.output) {
+            // The converted file and, when the schematic has several sheets that none places, the file of each: `x.kicad_sch`, `x_2.kicad_sch` (kicad-cli says "2 sheets were
+            // written, but only 'x.kicad_sch' is reachable"). The oracle counts the symbols every one of them places; the reader reads the first with the sheets it places and
+            // each of the others the same way.
+            let first = match load_sheet_file(&got.output) {
                 Ok(f) => f,
                 Err(e) => {
                     bad.push(format!("{rel}: our reader could not read the converted schematic: {e:?}"));
                     return;
                 }
             };
-            let read: usize = file.all_screens().map(|(_, s)| s.symbols.len() + s.power_symbols.len()).sum();
+            let own = got.output.file_name().unwrap().to_string_lossy().into_owned();
+            let siblings: Vec<&String> = got.files.iter().filter(|f| f.ends_with(".kicad_sch") && !f.contains('/') && **f != own && !first.screens.contains_key(f.as_str())).collect();
+            let mut placed = placed_symbols(&got.text);
+            let mut files = vec![first];
+            for f in &siblings {
+                let path = got.output.parent().unwrap().join(f);
+                placed += placed_symbols(&std::fs::read_to_string(&path).unwrap());
+                files.push(load_sheet_file(&path).unwrap_or_else(|e| panic!("{rel}: {f}: {e:?}")));
+            }
+            let read: usize = files.iter().flat_map(|f| f.all_screens().map(|(_, s)| s.symbols.len() + s.power_symbols.len())).sum();
             // The reader drops a symbol whose library symbol the file lacks, and says so in the file's notes.
-            let dropped: usize = file.notes.iter().filter_map(|n| n.split_whitespace().next()?.parse::<usize>().ok()).sum();
-            eprintln!("{rel}: {} placed, {read} read, {dropped} left out, report: {:?}", placed, got.report.statistics);
+            let dropped: usize = files.iter().flat_map(|f| f.notes.iter()).filter_map(|n| n.split_whitespace().next()?.parse::<usize>().ok()).sum();
+            eprintln!("{rel}: {} placed in {} file(s), {read} read, {dropped} left out, report: {:?}", placed, files.len(), got.report.statistics);
             if read + dropped != placed {
-                bad.push(format!("{rel}: the converted file places {placed} symbols; our reader made {read} and left out {dropped}: {:?}", file.notes));
+                bad.push(format!("{rel}: the converted files place {placed} symbols; our reader made {read} and left out {dropped}: {:?}", files.iter().flat_map(|f| f.notes.clone()).collect::<Vec<_>>()));
             }
             if got.report.statistics.get("symbols").copied() != Some(placed as i64) {
                 bad.push(format!("{rel}: kicad-cli's report says {:?} symbols, its file places {placed}", got.report.statistics.get("symbols")));

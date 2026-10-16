@@ -560,4 +560,20 @@ mod tests {
             let _ = std::fs::remove_dir_all(d);
         }
     }
+
+    /// An Eagle schematic of two sheets that none places: kicad-cli writes a file each and reaches only the first; both are read, and placed on a root as an Altium project's sheets are.
+    /// The board of the same name beside it comes with it (KiCad's project import pairs them by name).
+    #[test]
+    fn a_schematic_of_several_top_level_sheets_is_read_whole_and_its_board_comes_with_it() {
+        let Some(sch) = qa("eeschema/io/eagle/eagle-import-testfile.sch") else { return };
+        let out = scratch("eagle_two_sheets");
+        import(&args(&sch, &out, &[]));
+        let (_, design, _) = crate::board::load(&out).expect("a board the studio opens");
+        assert_eq!(placed_symbols(&design), 24, "20 on the first sheet and 4 on the second: kicad-cli's report counts 24");
+        let root = design.schematic.as_ref().unwrap();
+        assert_eq!(root.sheets.len(), 2, "two sheets placed on a root: {:?}", root.sheets.iter().map(|s| &s.name).collect::<Vec<_>>());
+        assert_eq!(design.sheet_contents.as_ref().map(|c| c.len()), Some(2));
+        assert!(design.placement.as_ref().unwrap().footprints.len() > 3, "the board of the same name: {}", design.placement.as_ref().unwrap().footprints.len());
+        let _ = std::fs::remove_dir_all(&out);
+    }
 }

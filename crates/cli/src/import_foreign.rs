@@ -136,8 +136,36 @@ fn find_ignoring_case(path: &Path) -> Option<PathBuf> {
 }
 
 /// The converted schematic as a [`SheetFile`]: the file kicad-cli wrote, its sheets and its library symbols, read as `Import Sheet` reads a file.
+///
+/// A schematic of several sheets that are not placed one on another (an Eagle file of several sheets, KiCad 10's "top-level sheets") is written as one file each --
+/// `<name>.kicad_sch`, `<name>_2.kicad_sch`, ... -- and only the first is reachable from the output: the others are recorded in a project file, which `kicad-cli sch import` does not
+/// write ("2 sheets were written, but only 'x.kicad_sch' is reachable"). Their files are beside the output, so they are read too, and the top-level sheets are placed on a root as
+/// [`combine_sheets`] places an Altium project's.
 pub(crate) fn sheet_file_of(import: &ForeignImport) -> Result<SheetFile, Vec<CheckResult>> {
-    eda_kicad::load_sheet_file(&import.output)
+    let first = eda_kicad::load_sheet_file(&import.output)?;
+    let extra = top_level_siblings(import, &first);
+    if extra.is_empty() {
+        return Ok(first);
+    }
+    let stem = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "sheet".to_string());
+    let mut parts = vec![(stem(&import.output), first)];
+    for path in extra {
+        parts.push((stem(&path), eda_kicad::load_sheet_file(&path)?));
+    }
+    let mut all = combine_sheets(parts);
+    all.notes.push(format!("the file has {} sheets that no sheet places: placed on a root sheet, as KiCad 10 keeps them in its project", all.root.sheets.len()));
+    Ok(all)
+}
+
+/// The `.kicad_sch` files kicad-cli wrote beside the output that the output does not reach (`first` is what it reaches): the other top-level sheets, in the order of their numbers.
+pub(crate) fn top_level_siblings(import: &ForeignImport, first: &SheetFile) -> Vec<PathBuf> {
+    let Some(dir) = import.output.parent() else { return Vec::new() };
+    let reached: std::collections::BTreeSet<&str> = first.screens.keys().map(String::as_str).collect();
+    let own = import.output.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut extra: Vec<String> = import.files.iter().filter(|f| f.ends_with(".kicad_sch") && !f.contains('/') && **f != own && !reached.contains(f.as_str())).cloned().collect();
+    // `x_2`, `x_3` .. `x_10`: by length, then by name, so that ten follows nine
+    extra.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+    extra.into_iter().map(|f| dir.join(f)).collect()
 }
 
 /// Several schematics as one, the way `SCH_IO_ALTIUM::LoadSchematicProject` makes a schematic of a project's `.SchDoc`s: a root that places each of them as a sheet (a grid of
@@ -539,5 +567,25 @@ mod tests {
         assert_eq!(parts(&dir), vec!["J9"]);
         assert!(model.nets.iter().any(|n| n.name == "OLD"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The sheets kicad-cli wrote that the output does not reach are the other top-level sheets, in the order of their numbers (ten after nine), and the screens a sheet places are not.
+    #[test]
+    fn the_files_the_output_does_not_reach_are_the_other_top_level_sheets_in_the_order_of_their_numbers() {
+        use eda_kicad_engine::foreign::{ImportReport, Kind};
+        let import = ForeignImport {
+            engine: "kicad-cli test".into(),
+            kind: Kind::Schematic,
+            output: PathBuf::from("/work/sch-out/x.kicad_sch"),
+            text: String::new(),
+            report: ImportReport::default(),
+            log: vec![],
+            files: ["x-eagle-import.kicad_sym", "x_10.kicad_sch", "x_2.kicad_sch", "child.kicad_sch", "x_3.kicad_sch", "sym-lib-table", "sub/inner.kicad_sch", "x.kicad_sch"].map(String::from).to_vec(),
+        };
+        let mut first = SheetFile::default();
+        first.screens.insert("child.kicad_sch".into(), SchematicSection::default());
+        let extra: Vec<String> = top_level_siblings(&import, &first).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(extra, vec!["x_2.kicad_sch", "x_3.kicad_sch", "x_10.kicad_sch"], "the output itself, a sheet it places, a library and a file in a folder are not top-level sheets");
+        assert!(top_level_siblings(&import, &SheetFile { screens: ["child.kicad_sch", "x_2.kicad_sch", "x_3.kicad_sch", "x_10.kicad_sch"].map(|f| (f.to_string(), SchematicSection::default())).into_iter().collect(), ..Default::default() }).is_empty(), "when the output places them they are its own");
     }
 }
