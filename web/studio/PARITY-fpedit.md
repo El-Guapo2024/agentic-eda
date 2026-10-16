@@ -72,8 +72,8 @@ authoritative answer; see `padNumbering.ts`'s own header comment.
 | Name / description / keywords | partial (name is read-only here) | `dialog_footprint_properties_fp_editor.cpp`'s General tab. Renaming a footprint (and updating every board instance's `Part::footprint` string to match) has no `Cmd` yet -- `FootprintLibraryPropertiesDialog.tsx` shows the name but does not let it be edited |
 | Attributes (SMD/THT/exclude from BOM/position files/board only/DNP/allow missing courtyard/allow solder mask bridges) | identical | `FOOTPRINT_ATTR_T` (`footprint.h:83-91`) plus the dialog's two related non-attribute-bit checkboxes -- all eight map onto `FootprintAttributes` one field each |
 | 3D models | **done** (2026-10-13, section 11) | the dialog has a `3D Models` tab (`PANEL_FP_PROPERTIES_3D_MODEL`: the list with each model's offset, scale, rotation, opacity and Show, a path chooser, a preview) where it had one path in a text field; `LibraryFootprint::models3d` is the list and `model` its first path. Left there: the Extruded 3D Body box and the embedded files |
-| Reference / Value field visibility | partial | source positions and styles these as real text items on the footprint (`PCB_FIELD`s with their own at/layer/size/orientation); this app only models whether each is shown at all (`reference_visible`/`value_visible`), not where or how |
-| Fields grid (custom fields beyond Reference/Value) | missing (modeled, no UI) | `dialog_footprint_properties_fp_editor.cpp`'s Fields grid (`PCB_FIELDS_GRID_TABLE`). `FootprintField` exists in the IR (`ir.rs`) and round-trips through JSON, but no dialog edits it yet |
+| Reference / Value field visibility | **done** (2026-10-15, section 15) | the Reference and the Value are rows of the fields grid with their own place, layer, size, orientation and look |
+| Fields grid (custom fields beyond Reference/Value) | **done** (2026-10-15, section 15) | `dialog_footprint_properties_fp_editor.cpp`'s Fields grid (`PCB_FIELDS_GRID_TABLE`) |
 | Layers tab (private/custom user layers) | missing | this app's board has a fixed layer set; no private-layer concept to assign from |
 | Clearances tab | partial: "Zone connection" only | `dialog_footprint_properties_fp_editor.cpp`'s Clearances tab, `FOOTPRINT::SetLocalZoneConnection`: a "Clearance overrides and settings" group in `footprint/FootprintPropertiesDialog.tsx` with the footprint's zone connection (inherited, solid, thermal relief, PTH-only thermal, none), stored as `LibraryFootprint.zone_connection` and published with the footprint. Not built: the footprint's clearance, solder mask margin, solder paste margin and ratio. The same connection and a clearance can be set on a footprint that is on the board, in its own Footprint Properties (`PARITY-pcb.md` section 8) |
 | Net-tie / jumper pad groups | n/a | no net-tie concept in this model |
@@ -148,9 +148,9 @@ cleared; a library symbol with a graphic made `design.json` unreadable (see `PAR
 |---|---|---|
 | A press becomes a drag after more than 8 px along an axis (on macOS also a motion after 300 ms held); a click is at the press | identical | `tool_dispatcher.cpp:handleMouseButton` -- `kicad-port/dragThreshold.ts`, `FootprintCanvas.tsx` (`gestureRef`, `justPannedRef`); a move drag that ends where it started commits nothing |
 | `Toggle Grid Overrides` (`Ctrl+Shift+G`, the toolbar button): what a tool places or moves snaps to the grid of its category -- a pad on connected items, a shape on graphics, text on text, the pad and anchor tools on the current grid; what is picked up snaps on the coarsest of its items' grids | identical for the grid; the pointer is not warped | `pcb_grid_helper.cpp:GetItemGrid` / `GetSelectionGrid`, `pad_tool.cpp` (`GRID_CURRENT`), `drawing_tool.cpp` (`GRID_GRAPHICS`, `GRID_TEXT`) -- `FootprintCanvas.tsx` (`toolGrid`, `heldGrid`), `kicad-port/gridOverrides.ts`; the footprint editor's own overrides (Edit Grids... > Footprint Editor), all off by default as KiCad's board editors' are |
-| Snapping to other items' anchors (pads, graphics' corners, intersections), the hysteresis, snap lines and construction geometry | **missing** | the footprint editor snaps to the grid only; `PcbGridHelper` (`kicad-port/pcbGridHelper.ts`) is wired into the board editor (`PARITY-pcb.md` section 2), not here |
+| Snapping to other items' anchors (pads, graphics' corners, intersections), the hysteresis, snap lines and construction geometry | **done** (2026-10-14, section 14) | `PcbGridHelper` (`kicad-port/pcbGridHelper.ts`) is wired into this editor too |
 
-Not click-tested for the snapped coordinates: `window.__eda.state().view` is null on this tab, so the check script cannot place a pointer on the canvas. The grid it picks is the unit-tested `gridSizeFor` / `selectionGrid` (`gridOverrides.test.ts`); the tab mounts and arms its tools with no console error.
+`window.__eda.state().view` is the library editors' view now (it was null on this tab), and the snapped coordinates are checked by real pointer events in `e2e/lib-editors.check.js` (section 14).
 
 ## 10. Trapezoid, chamfered and custom pads (GAPS.md items 9, 13 and 19, 2026-10-10)
 
@@ -234,6 +234,37 @@ which writes it back with the same twelve pads (number, place, size), and `kicad
 - The circle's "Pad numbering start" follows its own "Initial Pad Number" radio; KiCad's also follows the grid's "Renumber pads" box (which the circle ignores when it numbers: `SetShouldNumber( m_isFootprintEditor )`), so there its entry greys out after that box is cleared on the other tab.
 - The dialog's picture shows where the first item goes; the numbers are a line of text under it, not labels on the points.
 - A field is not selectable in this editor (the footprint's Reference and Value are not items of the canvas), so none is skipped as `PCB_FIELD_T` is.
+
+## 14. Snapping to other items' anchors (GAPS.md item 14, package P17, 2026-10-14)
+
+The Footprint Editor's tools call `PcbGridHelper::BestSnapAnchor` (`kicad-port/pcbGridHelper.ts`) through `components/footprint/footprintSnap.ts`, fed with the open footprint's pads, graphics and texts (`kicad-port/fpSnapScene.ts`), so a click or a drag goes to a pad's centre, the end of a line, a corner, the middle of a segment or an intersection,
+with the hysteresis, the snap lines and the construction geometry the board editor has.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| The items offered: with a pad "always" magnetic, the centre and the outline of the pad under the cursor; a graphic's end points, middle and centre; a text's anchor. A pad is the box of its copper (a turned pad's bounding box, round for a circle or an oval) on its layers. The footprint is no item here: it is the document, and `queryVisible` skips it ("If we are in the footprint editor, don't use the footprint itself"), so its origin and the centre of its box are no anchors | **done** | `PCB_GRID_HELPER::computeAnchors`, `queryVisible` (`kicad-port/fpSnapScene.ts`) |
+| The layers: a shape or a text snaps only to items of its own layer, the active one; the pad tool and the anchor tool to every layer (`AllLayersMask`); an item snaps only when the layers intersect unless "all layers" is set | **done** | `PCB_GRID_HELPER::BestSnapAnchor` (the `aLayers` argument, `m_magneticSettings->allLayers`) |
+| The magnetic settings are the footprint editor's own, whatever Preferences > Magnetic Points says for the board: pads Always, tracks none, graphics on, all layers off | **done**; the Preferences page is the board's | `footprint_editor_settings.cpp` (`m_MagneticItems`) |
+| Ctrl (Cmd on a Mac) turns the grid off, Shift the anchors; with both off the point is where the pointer is; a click on the grid category's grid otherwise (overrides as in section 9) | **done** | `GRID_HELPER::SetSnap`, `SetUseGrid` |
+| A move starts from the point it holds (`BestDragOrigin`) and follows the held cursor; the marker, the snap lines and the rubber band follow the snapped cursor. The pointer is not warped | **done**; no warp | `PCB_GRID_HELPER::BestDragOrigin`, `kicad-port/heldCursor.ts` |
+
+Tests: `kicad-port/fpSnapScene.test.ts` 7 (the scene a footprint gives and its layers); `pcbGridHelper.test.ts` is the board editor's own 26. Seen in the browser (port 8831): `e2e/lib-editors.check.js` clicks and drags on the canvas with real pointer events -- the pad tool goes to the centre of a pad under it, with Shift to the grid, with Ctrl+Shift where the pointer is; the line tool goes to the end of a line on the active layer and not to a pad on another layer; a dragged line lands its end on another line's end.
+**Left:** Preferences > Magnetic Points is the board's: the footprint editor keeps KiCad's own defaults and its page of that setting (`FOOTPRINT_EDITOR_SETTINGS`) is not offered.
+
+## 15. The fields grid of Footprint Properties (GAPS.md item 19, package P17, 2026-10-15)
+
+The library editor's Footprint Properties has the fields grid of `DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR` (`PCB_FIELDS_GRID_TABLE`): the Reference and the Value, which are always there ("The first 2 fields are mandatory."), and the user fields, each with its text, whether it is shown, its size, thickness, layer and place.
+`FootprintField` carries a `FieldLayout` and the library footprint keeps the Reference's and the Value's layout; the `.kicad_mod` reader keeps every `(property ...)` of KiCad 8 (and the `fp_text reference` and `value` of older files) with its place and layer, and the writer writes them as `PCB_IO_KICAD_SEXPR` does
+(the Reference and the Value only when the footprint has a layout for them or hides one, as before). `edit_footprint_properties` takes the grid (`reference`, `value`, `fields`) and judges it first with the board dialog's rules -- the name, the mandatory and `ki_` names, a name used twice, the size, the pen -- and OK is one undo step.
+
+| Behavior | Status | KiCad file:function |
+|---|---|---|
+| Columns Name, Value, Show, Width, Height, Thickness, Layer and, behind "More columns", Italic, Bold, Orientation, Keep Upright, X Offset, Y Offset, Knockout, Mirrored and the justification | **done**; the layer is a select of the board's layers (Board Setup > Board Editor Layers) | `PCB_FIELDS_GRID_TABLE` (`PFC_*` columns) |
+| Add Field (a hidden field named `Field<n>` at the origin on F.Fab, its name selected), Delete ("The first 2 fields are mandatory."), Move Up and Down (never into the mandatory rows) | **done** | `DIALOG_FOOTPRINT_PROPERTIES_FP_EDITOR::OnAddField`, `OnDeleteField`, `OnMoveUp`, `OnMoveDown` |
+| A field with no name ("Fields must have a name."), one named as a mandatory field or one of the footprint's own keywords (`ki_...`), a name used twice, a text size out of range and a pen too thick for the text are refused with the grid's message and the dialog stays open | **done** | `DIALOG_FOOTPRINT_PROPERTIES::Validate`, `TransferDataFromWindow` (`kicad-port/fpFields.ts` `checkFieldRow`, `fpLibFields.ts`) |
+
+Tests: `crates/ops/src/fp_lib_fields_tests.rs` 3, `crates/kicad/src/fp_fields.rs` 10 (the `.kicad_mod` properties read and written as KiCad does), `crates/cli/src/lib_editors_tests.rs` (one undo step, the derived `.kicad_mod`), `kicad-port/fpLibFields.test.ts` 6; the scenario "Footprint Properties has a fields grid" of `e2e/lib-editors.check.js` (the mandatory rows, the refusals, a user field with its layer, place and visibility, the exported file, one undo step).
+The proof against kicad-cli (`EDA_SLOW_TESTS=1`): a footprint with fields written by this studio loads, `kicad-cli fp upgrade` keeps them (text, place, layer, look, visibility) and the plot draws the ones that are shown.
 
 ## Known gaps summary (ranked, highest first)
 

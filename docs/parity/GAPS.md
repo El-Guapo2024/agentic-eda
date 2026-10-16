@@ -118,7 +118,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | done 2026-10-13 on `task-fp-3d` (not merged); item 30 lists what is left | M |
 | 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | open | S-M |
 | 16 | P16 PCB item kinds the IR lacks | 24 | text box, tables (stackup table), barcode, point, reference image, hatch fill | deferred | L |
-| 17 | P17 Library editor leftovers | 19, 22 | no snap to anchors in the editors, no pad array numbering, no derived symbols, no alternate pin functions | open | L |
+| 17 | P17 Library editor leftovers | 14, 19, 22 | snap to anchors in the editors, the pad array numbering, derived symbols, a fields grid in Footprint Properties, symbol fields on the canvas, alternate pin functions, the symbol text box, a shape properties dialog | **done 2026-10-16 on `task-lib-editors` (not merged)**; items 19 and 22 list what is left | L |
 | 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | after P3, P4 | L |
 | 19 | P19 Microwave tools and Specctra | 9, 27 | the five microwave tools; DSN export and SES import | open | S-M |
 | 20 | P20 Browser checks for the older areas | 33 | most earlier work was never clicked | standing | M each |
@@ -375,12 +375,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `pcbnew/teardrop/`.
 
 ### 14. Snap, grid and the click-versus-drag rule
-**Closed 2026-10-09 for the board, the schematic and the click rule (`358606b`); the footprint and symbol editors snap to the grid only.** Hit: every drag. Blocks: no.
+**Closed 2026-10-09 for the board, the schematic and the click rule (`358606b`); the footprint and symbol editors snap to other items' anchors since 2026-10-14 (P17, `task-lib-editors`, not merged).** Hit: every drag. Blocks: no.
 - Done: the click rule (`kicad-port/dragThreshold.ts`: a drag after more than 8 px along an axis, or on macOS a motion after 300 ms held, in all four editors); the board's `PCB_GRID_HELPER::BestSnapAnchor`
   with hysteresis, snap lines, construction geometry and intersections (`kicad-port/{snapGeom,snapScene,snapAnchors,constructionManager,gridHelperBase,pcbGridHelper}.ts`, 67 tests); grid overrides per category
   (`Toggle Grid Overrides`, `Ctrl+Shift+G`); the schematic's grid list, Next / Previous Grid, fast grids, Edit Grids and `EE_GRID_HELPER::BestSnapAnchor` (`kicad-port/schGridHelper.ts`); Magnetic Points in
   Preferences. `e2e/snap-grid.check.js` runs 43 checks. 1521 unit tests pass.
-- Left: the footprint and symbol editors snap to the grid of the category, not to other items' anchors (`PcbGridHelper` / `SchGridHelper` are not wired there) and were not click-tested; with the default
+- Done 2026-10-14 (P17, `PARITY-fpedit.md` section 14, `PARITY-symedit.md` "Snapping to the pins of the symbol"): the Footprint Editor's tools call `PcbGridHelper` on the open footprint's pads, graphics and texts (`kicad-port/fpSnapScene.ts`: the editor's own magnetic defaults, the
+  active layer for shapes and text, every layer for pads and the anchor; the footprint itself is no item) and the Symbol Editor's `SchGridHelper` on the pins of the unit being edited (`kicad-port/symSnapItems.ts`); real pointer events in `e2e/lib-editors.check.js`.
+- Left: Preferences > Magnetic Points is the board's (the footprint editor keeps KiCad's own defaults); with the default
   Magnetic Points ("In Track Tool") a move or a shape does not snap to pads or tracks until they are set to Always (KiCad's default too); the junction tool keeps its own 12 px snap; the schematic context menu
   has no Zoom and Grid submenus; the server still snaps a part's placement to 100 um (`meta.snap_um`) whatever grid is shown; the studio never moves the real pointer, so a Move computes the cursor
   KiCad's warp would give (`kicad-port/heldCursor.ts`).
@@ -423,11 +425,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/widgets/appearance_controls.cpp`.
 
 ### 19. Footprint and symbol editor leftovers
-**Partial.** Hit: library work. Blocks: no. Packages P7 and P17 (P14, the 3D model tab, is done: item 30).
+**Mostly done (P17 2026-10-16 on `task-lib-editors`, not merged).** Hit: library work. Blocks: no. Packages P7 and P17 (P14, the 3D model tab, is done: item 30).
 - Exists: both editors with library trees, pad and pin tools, dialogs, tables, import and export (`PARITY-fpedit.md`, `PARITY-symedit.md`).
-- Missing: Explode and Recombine of a custom pad (item 31); the library editor's Footprint
-  Properties has no fields grid (the board's has one since 10-09); derived symbols; alternate pin functions; symbol fields on the canvas; a shape properties dialog; snapping to other items' anchors in both
-  editors (item 14). (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
+- Done 2026-10-14 to 16 (P17; `PARITY-fpedit.md` sections 13 to 15, `PARITY-symedit.md` the five new sections; `e2e/lib-editors.check.js`, 24 scenarios; the slow kicad-cli proofs in `crates/cli/src/lib_editors_tests.rs`): derived symbols (`extends`, Derive from Existing Symbol, Flatten, Update Symbol Fields,
+  Bulk Edit Related Symbol Fields, the fields grid of Symbol Properties; a library with derived symbols written by this studio loads in kicad-cli, `sym upgrade` keeps it and kicad-cli plots the derived symbol as it plots the flat one), a fields grid in the library editor's Footprint Properties, symbol fields on the canvas with
+  Show Hidden Fields, alternate pin functions (`(alternate ...)`, the Pin Properties grid, Show Pin Alternate Icons), the symbol text box (Draw Text Box, Text Box Properties, `(text_box ...)`), a Shape Properties dialog for library shapes, snapping to other items' anchors in both editors (item 14).
+- Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), and has no alternate pin functions (`LibPin` has none); the border's colour and
+  style, a custom fill colour and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog; the fields table has no simulation fields; no named body styles. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls
@@ -457,8 +461,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done (`PARITY-pcb.md` section 17; `crates/ops/src/array.rs`, `kicad-port/arrayOptions.ts`, `components/CreateArrayDialog.tsx`): Create Array makes grid and circular arrays of footprints, tracks, vias, zones,
   graphics, text, dimensions and groups, as copies or as an arrangement of the selected items, in one undo step; KiCad's tabs, boxes and wording, stagger, skew, centring, Full circle, "Rotate items", reference
   designators ("Assign unique" via `ReannotateDuplicates`, or keep). 23 Rust tests, 17 `node --test` cases, the browser check.
-- Missing: the footprint editor's array of pads and its numbering (`ARRAY_AXIS`: numerals, hexadecimal, alphabets, 2D coordinates, `ARRAY_PAD_NUMBER_PROVIDER`; package P17); the original keeps the first point
-  where KiCad's reverse loop leaves it on the last (same points, same references); the circle's centre starts at the selection, where KiCad's dialog ignores the origin it is given.
+- Done 2026-10-13 (P17, `task-lib-editors`, not merged; `PARITY-fpedit.md` section 13): the footprint editor's array of pads, graphics and texts with the numbering (`ARRAY_AXIS`: numerals, hexadecimal, the two alphabets, 2D coordinates, `ARRAY_PAD_NUMBER_PROVIDER`:
+  Use first free number, serpentine, direction, the Coordinate scheme), `create_footprint_array`, one undo step; a footprint with a 3 x 4 BGA array written by this studio loads in kicad-cli and `fp upgrade` keeps its twelve pads.
+- Missing: the original keeps the first point
+  where KiCad's reverse loop leaves it on the last (same points, same references); the circle's centre starts at the selection, where KiCad's dialog ignores the origin it is given; the circle's "Pad numbering start" follows its own initial-number radio.
 - Port from: `pcbnew/tools/array_tool.cpp`, `pcbnew/dialogs/dialog_create_array.cpp`, `pcbnew/array_pad_number_provider.cpp`.
 
 ### 23. The 3D viewer
@@ -946,8 +952,12 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `tools/drawing_tool.cpp`, `eeschema/sch_{table,bitmap}.cpp`, `eeschema/tools/sch_edit_table_tool.cpp`.
 - Conflicts: P1 (`painter.ts`, `ir`, `kio`), P6 (`Canvas.tsx`), P7 (`ir`).
 
-### P17. Library editor leftovers (items 19, 22). Size L. Rank 17. After P7 and P3.
-- Snapping to other items' anchors in both editors (wire `PcbGridHelper` and `SchGridHelper`), the footprint editor's pad array and numbering (`ARRAY_AXIS`, `ARRAY_PAD_NUMBER_PROVIDER`), a fields grid in the library editor's Footprint Properties, derived symbols
+### P17. Library editor leftovers (items 14, 19, 22). Size L. Rank 17. **Done 2026-10-16 on `task-lib-editors`, waiting for its merge; items 19 and 22 list what is left.**
+- Done there, one commit per step: the footprint editor's pad array and numbering, derived symbols (backend and editor), snapping in both editors, a fields grid in the library editor's Footprint Properties, symbol fields on the canvas, alternate pin functions, the symbol text box and
+  a Shape Properties dialog. Every step has Rust tests, `node --test` cases and a scenario of `web/studio/e2e/lib-editors.check.js` (24 scenarios through `window.__eda`, run in a headless Chromium); the kicad-cli proofs (behind `EDA_SLOW_TESTS=1`, in `crates/cli/src/lib_editors_tests.rs`): a BGA pad array,
+  a footprint with fields, a library with derived symbols (and a flat symbol plotted as kicad-cli plots the derived one), alternate pin functions and text boxes each load and `fp upgrade` / `sym upgrade` keep them. `PARITY-fpedit.md` sections 13 to 15, `PARITY-symedit.md`.
+  Shared effects: a raw line feed inside a quoted string made kicad-cli refuse the library, so `sexpr_str` writes `\n` and `\r` as `OUTPUTFORMATTER::Quotes` does and `sexpr::parse_quoted` reads them back (this also fixes a multi-line text box of the schematic's sheet).
+- The plan was: snapping to other items' anchors in both editors (wire `PcbGridHelper` and `SchGridHelper`), the footprint editor's pad array and numbering (`ARRAY_AXIS`, `ARRAY_PAD_NUMBER_PROVIDER`), a fields grid in the library editor's Footprint Properties, derived symbols
   (`extends`, Flatten, Update Symbol Fields, the related-fields table), symbol fields on the canvas (Show Hidden Fields), alternate pin functions (`togglePinAltIcons`), the symbol text box, a shape properties dialog.
 - Files: `crates/model/src/symbol.rs`, `crates/ops/src/library_editors.rs`, `crates/kicad/src/{symbol_lib,symbol_import,footprint_lib}.rs`, `components/{footprint,symbol}/*`, `kicad-port/{padNumbering,pinNumbering,pcbGridHelper,schGridHelper}.ts`.
 - KiCad: `eeschema/symbol_editor/*`, `eeschema/lib_symbol.cpp`, `pcbnew/tools/array_tool.cpp`, `pcbnew/array_pad_number_provider.cpp`, `pcbnew/dialogs/dialog_create_array.cpp`.
