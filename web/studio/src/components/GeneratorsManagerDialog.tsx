@@ -1,7 +1,7 @@
 // Port of pcbnew/dialogs/dialog_generators.cpp (`pcbnew.Generator.showManager`, "Generators Manager"): the generators of the board by type, a table for each type with the
 // columns `GetRowData` gives (a tuning pattern: its Net and its Tuning, "12.3 mm (tuned)"), "Rebuild Selected" / "Rebuild this type" / "Rebuild All". Selecting rows
 // selects the generators on the board. The type is one here -- the tuning pattern, the only generator this studio makes.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { tunePatterns, tuneRegenerate } from "../api/tuneClient";
 import type { TunePatternRow } from "../api/tuneTypes";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
@@ -15,8 +15,9 @@ export function GeneratorsManagerDialog() {
   const [rows, setRows] = useState<TunePatternRow[]>([]);
   const [picked, setPicked] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const close = () => dispatch({ type: "PCBX", patch: { generatorsManagerOpen: false } });
-  useEscape(open ? close : () => undefined);
+  const close = useCallback(() => dispatch({ type: "PCBX", patch: { generatorsManagerOpen: false } }), [dispatch]);
+  // The dialog is always mounted (App.tsx), so the key is taken only while it is open; closed, Escape goes on to the canvas and the tools.
+  useEscape(open ? close : null);
 
   // the board changed under it (a pattern added, removed, rebuilt): the table follows (`RebuildModels` on every board event)
   useEffect(() => {
