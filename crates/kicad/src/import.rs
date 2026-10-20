@@ -1523,6 +1523,7 @@ fn import_footprints(
 /// `(net_tie_pad_groups ..)`.
 fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> FootprintExtra {
     let mut e = FootprintExtra { id: reference.to_string(), ..Default::default() };
+    e.uuid = sexpr::find(fp, "uuid").or_else(|| sexpr::find(fp, "tstamp")).and_then(|u| sexpr::txt(u, 1)).filter(|u| !u.is_empty()).map(str::to_string);
     // `(footprint "D5" ..)`: a name with no `Library:` in front of it is a footprint with no library link (`LIB_ID::GetLibNickname()` is empty).
     let name = sexpr::txt(fp, 1).unwrap_or_default();
     if !name.contains(':') {

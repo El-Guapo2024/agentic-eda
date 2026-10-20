@@ -2735,6 +2735,10 @@ pub struct FootprintHole {
 pub struct FootprintExtra {
     /// The footprint instance's reference designator.
     pub id: String,
+    /// The uuid the board file gave the footprint (`uuid`, or the `tstamp` of an older file), written back as it was: a text can name a footprint by it (`${uuid:REFERENCE}`),
+    /// and `kicad-cli pcb diff` matches items by it. Absent for a footprint made here, whose uuid is derived from its reference. When two footprints claim one, the first keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
     /// Footprint-level `(solder_mask_margin ..)` (`GetLocalSolderMaskMargin`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solder_mask_margin: Option<Um>,

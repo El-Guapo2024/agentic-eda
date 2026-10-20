@@ -898,7 +898,20 @@ pub(crate) fn write_footprint(
     // `footprint::to_board` output and `kicad-cli pcb drc` unconnected-item
     // positions for a rotated part.
     let rot_deg = fmt_mm_f(-(fp.rot as f64) / 1000.0);
-    let uuid = crate::duid_for(&format!("footprint:{}", fp.id), &fp.id);
+    // A footprint imported from a KiCad file keeps the uuid it had there (the first footprint to claim one), as a pour does: a text can name a footprint by its uuid
+    // (`${uuid:REFERENCE}`) and `kicad-cli pcb diff` matches items by it.
+    let kept_uuid = design.drawings.as_ref().and_then(|d| {
+        let mine = d.footprint_extras.iter().position(|e| e.id == fp.id)?;
+        let uuid = d.footprint_extras[mine].uuid.as_deref().filter(|u| !u.is_empty())?;
+        (d.footprint_extras.iter().position(|e| e.uuid.as_deref() == Some(uuid)) == Some(mine)).then(|| uuid.to_string())
+    });
+    let uuid = match kept_uuid {
+        Some(uuid) => {
+            crate::note_uuid(&uuid, &fp.id);
+            uuid
+        }
+        None => crate::duid_for(&format!("footprint:{}", fp.id), &fp.id),
+    };
     let lib_name = part.footprint.clone().unwrap_or_else(|| footprint.name.clone());
     // A `#2`, `#3` ... slot is the importer's way to keep apart instances of one library footprint whose pads, models or graphics differ (`dedup_footprint_key`): in the file it is
     // still that library's footprint.
@@ -3110,5 +3123,44 @@ mod tests {
         assert!(pad("1").contains("thru_hole") && !pad("1").contains("(drill"), "{}", pad("1"));
         assert!(pad("2").contains("(drill 0.8)"), "{}", pad("2"));
         assert!(crate::import_kicad_pcb(&out).is_ok());
+    }
+
+    /// A footprint keeps the uuid its board file gave it, so a text that names a footprint by uuid (`${uuid:REFERENCE}`, KiCad's cross-reference) still finds it: re-exported with a
+    /// uuid of its own, `issue4257`'s text read `<Unknown reference: ..>`, was longer than the original's and touched the pads beside it. Two footprints that claim one uuid
+    /// are not both written with it, and a footprint made here has the uuid derived from its reference as always.
+    #[test]
+    fn a_footprint_keeps_the_uuid_its_file_gave_it() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_text "Text: ${LAYER} ${00000000-0000-0000-0000-00005e384273:REFERENCE}" (at 5 5) (layer "F.SilkS") (uuid "a1000000-0000-0000-0000-000000000001") (effects (font (size 1 1))))
+  (footprint "L:A" (layer "F.Cu") (uuid "00000000-0000-0000-0000-00005e384273") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:A" (layer "F.Cu") (tstamp 11111111-1111-1111-1111-111111111111) (at 20 10)
+    (property "Reference" "U2" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:A" (layer "F.Cu") (uuid "11111111-1111-1111-1111-111111111111") (at 30 10)
+    (property "Reference" "U3" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let uuid_of = |out: &str, reference: &str| -> String {
+            let start = out.find(&format!("(property \"Reference\" \"{reference}\"")).unwrap_or_else(|| panic!("{reference}"));
+            let head = out[..start].rfind("\t(footprint ").expect("footprint start");
+            let line = out[head..start].lines().find(|l| l.trim_start().starts_with("(uuid ")).expect("uuid line");
+            line.trim().trim_start_matches("(uuid \"").trim_end_matches("\")").to_string()
+        };
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(uuid_of(&out, "U1"), "00000000-0000-0000-0000-00005e384273");
+        assert_eq!(uuid_of(&out, "U2"), "11111111-1111-1111-1111-111111111111", "a tstamp is the uuid of an older file");
+        assert_ne!(uuid_of(&out, "U3"), "11111111-1111-1111-1111-111111111111", "the second claimant gets a uuid of its own");
+        assert_eq!(out.matches("(uuid \"11111111-1111-1111-1111-111111111111\")").count(), 1);
+        // Written again from what was read again, the same.
+        let (again, again_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(uuid_of(&export_kicad_pcb(&again, &again_model, &meta()).unwrap(), "U1"), "00000000-0000-0000-0000-00005e384273");
     }
 }
