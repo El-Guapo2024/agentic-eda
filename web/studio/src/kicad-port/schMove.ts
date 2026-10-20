@@ -150,7 +150,10 @@ export function holdPoint(origin: { x: number; y: number } | null, dxUm: number,
 }
 
 /** The points of a wire the last click picked, when the selection is still exactly that wire (what `G` and a drag start from). */
-export function pickedVertices(state: { selection: ReadonlySet<string>; schWirePick: { id: string; vertices: number[] } | null }): Record<string, number[]> | undefined {
+export function pickedVertices(state: { selection: ReadonlySet<string>; schWirePick: { id: string; vertices: number[] } | null; schPickedEnds?: Record<string, number[]> | null }): Record<string, number[]> | undefined {
+  // the ends of the wire stubs Pin Helpers handed to the Drag tool, while the selection is those wires
+  const ends = state.schPickedEnds;
+  if (ends && state.selection.size > 0 && [...state.selection].every((id) => ends[id])) return Object.fromEntries([...state.selection].map((id) => [id, ends[id]!]));
   const pick = state.schWirePick;
   if (!pick || state.selection.size !== 1 || !state.selection.has(pick.id)) return undefined;
   return { [pick.id]: pick.vertices };

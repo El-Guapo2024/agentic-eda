@@ -16,7 +16,7 @@ pub mod fp_edit;
 pub mod fp_exchange;
 pub mod fp_models;
 pub mod gensym;
-mod groups;
+pub mod groups;
 pub mod tuning;
 pub mod ir;
 pub mod kicad_font;
@@ -36,6 +36,7 @@ pub mod setup_pages;
 pub mod sheet_file;
 pub mod sheet_list;
 pub mod symbol;
+pub mod sym_fields;
 pub mod text_vars;
 
 pub use footprint::{Footprint, Pad, PadKind, PadShape};

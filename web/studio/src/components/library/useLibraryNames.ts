@@ -4,11 +4,13 @@
 // the library names the moment the tree mounts, one library's item names when it is opened (`load`), every library's names only when the
 // search box needs them (`ensureSearchIndex`). Everything installed is read from the server once and kept (api/libraryIndexClient.ts).
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { SymbolEditorNames } from "../../api/types";
 import { fetchFootprintLibraryNames, fetchSymbolEditorNames } from "../../api/client";
 import { fetchAllInstalledItems, fetchInstalledItems, fetchInstalledLibraries, knownInstalledItems, knownInstalledLibraries, knownSearchIndex, onInstalledLibrariesReset, type LibraryKind } from "../../api/libraryIndexClient";
 import type { InstalledLib, TreeItem } from "../../kicad-port/libraryTreeModel";
 
 const listeners = new Set<() => void>();
+const NO_DERIVED: Readonly<Record<string, string>> = {};
 
 /** Tell every mounted library tree to re-read its names now. */
 export function notifyLibraryChanged(): void {
@@ -20,6 +22,8 @@ export type { LibraryKind };
 export interface LibraryNames {
   /** What the editor already lists: the project's entries, what the board's model resolves, the built-in table. */
   items: TreeItem[];
+  /** The derived symbols of the project library, each with its parent (`(extends ...)`); empty for the footprint tree. */
+  derived: Readonly<Record<string, string>>;
   refresh: () => Promise<void>;
   /** KiCad's installed libraries (names, counts where cheap). */
   installed: InstalledLib[];
@@ -36,6 +40,7 @@ export interface LibraryNames {
 
 export function useLibraryNames(kind: LibraryKind): LibraryNames {
   const [items, setItems] = useState<TreeItem[]>([]);
+  const [derived, setDerived] = useState<Readonly<Record<string, string>>>(NO_DERIVED);
   const [installed, setInstalled] = useState<InstalledLib[]>(() => knownInstalledLibraries(kind) ?? []);
   const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly string[]>>(() => knownInstalledItems(kind));
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
@@ -58,6 +63,9 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
       const r = kind === "footprint" ? await fetchFootprintLibraryNames() : await fetchSymbolEditorNames();
       const project = new Set(r.project ?? []);
       setItems(r.names.map((name) => ({ name, project: project.has(name) })));
+      const d: Readonly<Record<string, string>> | undefined = kind === "symbol" ? (r as SymbolEditorNames).derived : undefined;
+      // keep the same object while nothing changed, so the tree menu is not rebuilt on every poll
+      setDerived((prev) => (JSON.stringify(prev) === JSON.stringify(d ?? NO_DERIVED) ? prev : d ?? NO_DERIVED));
     } catch {
       /* the backend is busy or restarting: keep the list we have */
     }
@@ -144,5 +152,5 @@ export function useLibraryNames(kind: LibraryKind): LibraryNames {
       });
   }, [kind]);
 
-  return { items, refresh, installed, loaded, loading, load, searchIndex, ensureSearchIndex };
+  return { items, derived, refresh, installed, loaded, loading, load, searchIndex, ensureSearchIndex };
 }

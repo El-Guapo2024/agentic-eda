@@ -85,7 +85,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 13 | Zone fill: spokes, hatch, smoothing, iterative refill; pad and footprint overrides | Partly | `eabaf91` (10-09) |
 | 14 | Snap, grid and click versus drag | **Closed** (board, schematic) | `358606b` (10-09) |
 | 16 | PCB context menu | Mostly done | `4c041a6` (10-09) |
-| 17 | Groups, nested | Mostly done (board) | `4c041a6` (10-09) |
+| 17 | Groups, nested | Mostly done (board and sheet) | `4c041a6` (10-09), `task-sch-groups` (10-13, not merged) |
 | 18 | Appearance panel | Mostly done | `6611ade` (10-09) |
 | 21 | Find on the PCB | Mostly done | `4c041a6` (10-09) |
 | 22 | Create Array | Mostly done | `afcb91b` (10-09) |
@@ -111,14 +111,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview. (Another EDA's board and schematic come in since 2026-10-15: P22, `task-import-foreign`, not merged) | mostly done | S |
 | 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
-| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | no schematic groups, a user-defined field has no place on the sheet, no Pin Helpers menu (done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
+| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | a label's own fields (schematic groups, a user-defined field's place on the sheet and Pin Helpers done on `task-sch-groups`, 2026-10-13 to 15, not merged; done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
 | 11 | P11 Search and inspection | 21, 29 | **done 2026-10-13 on `task-search-inspect` (not merged)**: Find by Properties (the From Selection tab and the Query tab on KiCad's expression language), Find following user fields, hidden fields and zone names, Clearance Resolution and Constraints Resolution (a rule engine in `crates/drc`: the implicit rules, the `.kicad_dru`, `EvalRules` with KiCad's report text), the Footprint Checker (kicad-cli's DRC on a scratch board). Items 21 and 29 list what is left | done (not merged) | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
 | 13 | P13 Zone leftovers | 13 | zone fill is KiCad's now (kicad-cli, `crates/zone-filler` deleted); non-copper and multi-layer zones, Auto-Assign Priorities, the Zone Manager preview, the zone lock | done 2026-10-13 on `task-zones` (not merged); item 13 lists what is left | L |
 | 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | done 2026-10-13 on `task-fp-3d` (not merged); item 30 lists what is left | M |
-| 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | open | S-M |
+| 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | done 2026-10-14 on `task-review` (not merged); item 11 lists what is left | S-M |
 | 16 | P16 PCB item kinds the IR lacks | 24 | text box, tables (stackup table), barcode, point, reference image, hatch fill | deferred | L |
-| 17 | P17 Library editor leftovers | 19, 22 | no snap to anchors in the editors, no pad array numbering, no derived symbols, no alternate pin functions | open | L |
+| 17 | P17 Library editor leftovers | 14, 19, 22 | snap to anchors in the editors, the pad array numbering, derived symbols, a fields grid in Footprint Properties, symbol fields on the canvas, alternate pin functions, the symbol text box, a shape properties dialog | **done 2026-10-16 on `task-lib-editors` (not merged)**; items 19 and 22 list what is left | L |
 | 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | after P3, P4 | L |
 | 19 | P19 Microwave tools and Specctra | 9, 27 | the five microwave tools; DSN export and SES import | open | S-M |
 | 20 | P20 Browser checks for the older areas | 33 | most earlier work was never clicked | standing | M each |
@@ -146,12 +146,15 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   itself when it is placed, edited in Label Properties, moved and dragged (`AutoRotateItem`); a free text has a justification (`SchExtras::text_justify`) that is written, read back and flipped by Rotate and Mirror as `SCH_TEXT` flips it;
   the net-collision overlay of a Move or Drag (`SCH_DRAG_NET_COLLISION_MONITOR`: circles at the junctions the held items would make between two nets, marks where a connection is pulled apart, the warning cursor); the Symbol Fields Table's attribute
   columns (DNP, Exclude from BOM, board, simulation), Include 'DNP' / 'Exclude from BOM' symbols and KiCad's four built-in views; a power symbol's Symbol Properties (Reference, Value as the net, Show checks); Copy as Text.
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 29): the sheet's groups (item 17): the selection tool picks the outermost group of a member, enters and leaves it, boxes take a group whole or by any member, and Move, Drag, Rotate, Mirror, Lock, Delete, Copy, Paste and Duplicate take the tree.
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 30): a symbol's user-defined fields (`SchematicSection::user_fields`) are fields of the sheet after the four standard ones: hidden until shown, placed by Autoplace Fields with the others, picked, moved, turned, mirrored, edited in Field Properties, hidden with Delete, added, shown and removed in Symbol Properties, kept or dropped with their places by the Symbol Fields Table, written as `(property ..)` where the sheet keeps them and read back by `import_kicad_sch` (text, look, place and hide, for every turn and mirror).
+- Done 2026-10-15 (`task-sch-groups`, P10b; `PARITY-sch.md` section 31): Pin Helpers (`PIN_TRICKS_MENU`): the submenu of a selection of pins and sheet pins with Wire (a stub one wire-grid step out of the pin, held by the Drag tool: a click drops it, Escape takes it away), No Connect and a Net, Hierarchical and Global Label named by the pin, reading away from it, in the shape of its type (`SchCmd::PinHelper`); and swapped pins
+  through a file and the clipboard: the reader reads a symbol's `lib_name` copy of its library symbol as the places traded, Copy writes it, Paste and Duplicate keep the swap under the new reference (kicad-cli reads the clipboard with the wires on the pins they were on).
 - Measured on `task-sch-details`: 76 new Rust tests (ops 62: pins 13, sheet pins 8, labels and text 26, net collision 9, fields table 6; kicad 5, one slow with kicad-cli; model 4; cli 5) and about 50 new `node --test` cases; the kicad-cli proof
   (`crates/kicad/tests/sch_details.rs`, `EDA_SLOW_TESTS=1`: a file with swapped pins, a sheet pin moved to the top edge and justified texts loads, its ERC reports the sheet pin at the moved place, and `kicad-cli sch upgrade` writes the justification,
   the angle, the pin and the cached copy of the symbol back as we wrote them); `web/studio/e2e/sch-details.check.js` (nine scenarios through `window.__eda`, 72 checks, every scenario undoes itself).
-- Missing: Pin Helpers (`PIN_TRICKS_MENU`: Wire, No Connect, Net Label, Hierarchical Label and Global Label on a selected pin or sheet pin); a sheet's border and fill; a user-defined field has no place on the sheet (`FieldPlacement::name` can name one in `SchematicSection::field_layout`, but the editor
-  lists, draws and autoplaces only the standard fields and `user_fields` holds values only: package P10 step 8, not reached); a sheet pin's font, size, bold, italic and colour have no place in the IR; a power symbol's Properties has no footprint, datasheet, exclusion flags or
-  pin table; Autoplace Fields does not read the swapped pin places and the reader does not turn a `lib_name` copy back into a swap (so a copy, paste or duplicate of a symbol with swapped pins has the library's pins); the Symbol Fields Table has no variants and no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
+- Missing: a sheet's border and fill; a sheet pin's font face and colour have no place in the IR (its size, bold and italic do since 2026-10-15); a power symbol's Properties has no footprint, datasheet, exclusion flags or
+  pin table; Autoplace Fields does not read the swapped pin places; the Symbol Fields Table has no variants and no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
   `eda_engine::placed` (older note, not re-checked since the overlap fix, `f24fa31`, which made generated symbols draw their pins as KiCad's do).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
@@ -333,17 +336,29 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
 
 ### 11. The DRC and ERC dialogs
-**Mostly closed (2026-10-08, `02f383c`).** Hit: every review pass. Blocks: no. Package P15.
+**Mostly closed (2026-10-08, `02f383c`; the leftovers 2026-10-14, package P15 on `task-review`).** Hit: every review pass. Blocks: no.
 - Done: Run DRC and Run ERC through kicad-cli with a running state, out-of-date marking and lint tabs; the list is `RC_TREE_MODEL`'s; DRC exclusions as an undoable verb
   (`Cmd::AddDrcExclusions` / `DeleteDrcExclusions`, `design.drawings.drc_exclusions`) written into the derived `.kicad_pro`; Next, Previous and Exclude Marker; a marker menu in both dialogs and on both
   canvases; the Ignored Tests and Schematic Parity pages (`--schematic-parity`); a Violation Severity page in Schematic Setup. `web/studio/e2e/drc-review.check.js` drives it. Details:
   `PARITY-pcb.md` section 9a, `PARITY-sch.md` sections 4 and 9, `PARITY-common.md` section 5.
-- Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its exact text, position included, and kicad-cli's report gives
+- Done by P15 (`PARITY-pcb.md` section 33, `PARITY-sch.md` section 28): **ERC exclusions reach kicad-cli, with their comments** (`erc.erc_exclusions` of the derived project, from the marker kicad-cli reported:
+  `eda_kicad::erc_exclusions`, `ErcViolation.marker`, `Cmd::AddErcExclusion { comment, marker }`); the exclusions of both domains are written as the records kicad-cli 10.99.0-5334 keeps in a project
+  (`kiapi.board.DrcExclusion`, `kiapi.schematic.ErcExclusion`, protobuf JSON, positions in nanometres) with the section's schema said (`board.design_settings.meta.version` 3, `erc.meta.version` 1) -- not the
+  pipe-delimited texts of `SerializeToString`, which that nightly migrates only out of a section at an older schema; **Delete Marker and Delete All Markers** in both dialogs (an excluded marker that is deleted takes its
+  exclusion with it, as `RecordDRCExclusions` / `RecordERCExclusions` keep only the markers that are left: `delete_*_exclusion`, `Cmd::ClearDrcExclusions` / `ClearErcExclusions`, one undo step each); **a marker
+  selected by a left click** on the board and on the sheet, a double click bringing the dialog up on it; **Exclude with comment / Edit exclusion comment** in the ERC menu; **Exclude all violations of rule '...'**
+  (the rule is read from the violation's text); the **Inspect and Fix entries** of both menus (`InspectDRCErrorMenuText`, `FixDRCErrorMenuText`, `InspectERCErrorMenuText`, `FixERCErrorMenuText`);
+  **Save...** from both dialogs (`kicad-cli ... --format report|json`, the Show boxes as the severities); **Edit connection grid spacing...** and Schematic Setup > General > Formatting (`Cmd::SetConnectionGrid`,
+  `schematic.connection_grid_size`). `web/studio/e2e/review.check.js` drives it; the kicad-cli proofs (slow tier) are in `crates/cli/src/review_tests.rs` and `board.rs` (`drc_exclusions`).
+- Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its kind, position and items, and kicad-cli's report gives
   the items' positions and never the marker's, so the studio writes the positions worth trying (`eda_kicad::drc_exclusions`) and waives the rest in the studio's report alone (`kicad_matched: false`). A
-  KiCad patch adding the marker position to `RC_JSON::VIOLATION` would close it; that is upstream work and not planned. **ERC exclusions are the studio's alone**: the derived project has no
-  `erc.erc_exclusions`, though their serialization (`SCH_MARKER::SerializeToString`: key, position, the two item uuids, sheet paths) is within reach -- the exporter mints the uuids, so the DRC method
-  of guessing the position applies -- and they have no comment. Not ported: selecting a marker with a left click, Delete Marker / Delete All Markers and Save report, "Exclude all violations of rule
-  '...'", the Inspect / Fix menu entries, Edit connection grid spacing (Schematic Setup has no Formatting page).
+  KiCad patch adding the marker position to `RC_JSON::VIOLATION` would close it; that is upstream work and not planned. **An ERC exclusion reaches it only for the checks whose marker is known to the letter**
+  (`eda_kicad::erc_exclusions::rule`): not `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`, `unresolved_variable`,
+  `field_name_whitespace`, `label_multiple_wires`, `four_way_junction`, `no_connect_connected`, `hier_label_mismatch`, `similar_*`, `same_local_global_*`, `bus_definition_conflict`, `duplicate_pins`; a DRC check whose marker
+  carries a layer (`copper_sliver`, `starved_thermal`, `generic-*`, `unresolved_variable`) is waived in the studio alone too. **The records are what kicad-cli 10.99.0-5334 reads**: an older kicad-cli
+  (up to the pinned source, `8303b2ad`) reads the pipe-delimited texts only and would ignore them. Not ported: the ERC Fix entry "Edit Netclasses..." (Schematic Setup has no Net Classes page), Report all errors
+  for each track (`--all-track-errors`), the cross-probe options, the other pages of Schematic Setup > Formatting (text sizes, line widths, junction and hop-over sizes, intersheet references), and a file dialog
+  for Save... (the page downloads the report).
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `eeschema/sch_marker.cpp`, `eeschema/schematic.cpp` (`ResolveERCExclusions`), `eeschema/erc/erc_settings.cpp`,
   `common/rc_item.cpp`, `common/dialogs/panel_setup_severities.cpp`.
 
@@ -356,7 +371,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `SchExtras::body_styles`, Cycle Body Style). 44 Rust tests, 17 `node --test` cases.
 - Done 2026-10-12 (`PARITY-sch.md` sections 21 and 23): a free text's justification (`SchExtras::text_justify`: stored when it is not left and bottom, written as `(justify ..)`, read back, flipped by Rotate and Mirror, carried by copy and paste); a label's Auto
   (`LabelLook::auto_rotate`); a symbol's pins are items, and Swap Pins keeps each pin's place in `SchExtras::pin_swaps`.
-- Missing: a field's font face and colour, a label's own fields (netclass, intersheet references) and a user-defined field's place on the sheet have no place in the IR; the
+- Done 2026-10-13 (`task-sch-groups`, `PARITY-sch.md` section 30): a user-defined field's place on the sheet (`FieldPlacement::name` names it in `field_layout`; `symbol_specs_in`, the writer, the reader, the editor); a sheet read from a KiCad file keeps the places of its user fields and no others.
+- Missing: a field's font face and colour and a label's own fields (netclass, intersheet references) have no place in the IR; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
@@ -399,12 +415,14 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   (`JobExportDrc`: `--refill-zones`, `--save-board`), `pcb_io/kicad_sexpr/` (`format( const ZONE* )`: the layer set and the filled polygons), `pcbnew/teardrop/`.
 
 ### 14. Snap, grid and the click-versus-drag rule
-**Closed 2026-10-09 for the board, the schematic and the click rule (`358606b`); the footprint and symbol editors snap to the grid only.** Hit: every drag. Blocks: no.
+**Closed 2026-10-09 for the board, the schematic and the click rule (`358606b`); the footprint and symbol editors snap to other items' anchors since 2026-10-14 (P17, `task-lib-editors`, not merged).** Hit: every drag. Blocks: no.
 - Done: the click rule (`kicad-port/dragThreshold.ts`: a drag after more than 8 px along an axis, or on macOS a motion after 300 ms held, in all four editors); the board's `PCB_GRID_HELPER::BestSnapAnchor`
   with hysteresis, snap lines, construction geometry and intersections (`kicad-port/{snapGeom,snapScene,snapAnchors,constructionManager,gridHelperBase,pcbGridHelper}.ts`, 67 tests); grid overrides per category
   (`Toggle Grid Overrides`, `Ctrl+Shift+G`); the schematic's grid list, Next / Previous Grid, fast grids, Edit Grids and `EE_GRID_HELPER::BestSnapAnchor` (`kicad-port/schGridHelper.ts`); Magnetic Points in
   Preferences. `e2e/snap-grid.check.js` runs 43 checks. 1521 unit tests pass.
-- Left: the footprint and symbol editors snap to the grid of the category, not to other items' anchors (`PcbGridHelper` / `SchGridHelper` are not wired there) and were not click-tested; with the default
+- Done 2026-10-14 (P17, `PARITY-fpedit.md` section 14, `PARITY-symedit.md` "Snapping to the pins of the symbol"): the Footprint Editor's tools call `PcbGridHelper` on the open footprint's pads, graphics and texts (`kicad-port/fpSnapScene.ts`: the editor's own magnetic defaults, the
+  active layer for shapes and text, every layer for pads and the anchor; the footprint itself is no item) and the Symbol Editor's `SchGridHelper` on the pins of the unit being edited (`kicad-port/symSnapItems.ts`); real pointer events in `e2e/lib-editors.check.js`.
+- Left: Preferences > Magnetic Points is the board's (the footprint editor keeps KiCad's own defaults); with the default
   Magnetic Points ("In Track Tool") a move or a shape does not snap to pads or tracks until they are set to Always (KiCad's default too); the junction tool keeps its own 12 px snap; the schematic context menu
   has no Zoom and Grid submenus; the server still snaps a part's placement to 100 um (`meta.snap_um`) whatever grid is shown; the studio never moves the real pointer, so a Move computes the cursor
   KiCad's warp would give (`kicad-port/heldCursor.ts`).
@@ -430,12 +448,16 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`, `board_inspection_tool.cpp`, `router/router_tool.cpp`.
 
 ### 17. Groups
-**Mostly done on the board (2026-10-08/09, `4c041a6`); the schematic and the footprint editor have none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
+**Mostly done on the board (2026-10-08/09, `4c041a6`) and on the schematic sheet (2026-10-13, `task-sch-groups`, not merged); the footprint editor has none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
 - Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`Cmd::EditGroup`); groups nest (`EDA_GROUP`; `crates/model/src/groups.rs`,
   `crates/ops/src/pcb_groups.rs`); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree; the entered group is drawn with its box and name; the `.kicad_pcb` file and the clipboard hold the tree.
 - Done 2026-10-10 (`task-pcb-edit-details`): items drawn, pasted, duplicated or arrayed while a group is entered join it (`BOARD_COMMIT::Push`; `Cmd::InGroup`, `crates/ops/src/pcb_groups.rs`; `PARITY-pcb.md` section 16).
-- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the schematic (P10's last step, `sch_group_tool.cpp`: not reached on `task-sch-details`) or the footprint editor.
-- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 29): the sheet has the same groups. `eda_model::groups::{GroupTree, GroupHost}` is the one tree and the one set of list edits the board's drawings and the sheet's `SchExtras::groups` both run; Group, Ungroup, Add Items, Remove Items and
+  Group Properties are `SchCmd` verbs (one undo step each) with the studio's whole-group selection, Enter and Leave Group, window and crossing boxes, the Grouping and Enter Group entries of the context menu, the group's box and name, Properties on a group, and Move, Drag, Rotate, Mirror (a lone group turns on itself), Lock,
+  Delete, Copy, Cut, Paste and Duplicate taking the whole tree; what is made while a group is entered joins it; `(group "name" (uuid ..) (members ..))` is written as `saveGroup` writes it and read back (the writer names every item's uuid for it). 7 model, 23 ops, 8 kicad (one slow: kicad-cli loads nested groups, runs ERC, `sch upgrade` keeps them), 1 cli and 12 `node --test` cases;
+  `web/studio/e2e/sch-groups.check.js` (thirteen scenarios through `window.__eda`).
+- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the footprint editor. On the sheet: Reorganize into Module Sheets drops the groups of the sheets it takes items out of; a group of one member dissolves (KiCad keeps it); a lone group's turn point counts a text or a label by its anchor; Group Properties does not take the view to a row's item; the Align and Distribute verbs are not group-aware.
+- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
 
 ### 18. Appearance and display options
 **Mostly done (2026-10-09, `6611ade`).** Hit: every session. Blocks: no.
@@ -447,11 +469,13 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/widgets/appearance_controls.cpp`.
 
 ### 19. Footprint and symbol editor leftovers
-**Partial.** Hit: library work. Blocks: no. Packages P7 and P17 (P14, the 3D model tab, is done: item 30).
+**Mostly done (P17 2026-10-16 on `task-lib-editors`, not merged).** Hit: library work. Blocks: no. Packages P7 and P17 (P14, the 3D model tab, is done: item 30).
 - Exists: both editors with library trees, pad and pin tools, dialogs, tables, import and export (`PARITY-fpedit.md`, `PARITY-symedit.md`).
-- Missing: Explode and Recombine of a custom pad (item 31); the library editor's Footprint
-  Properties has no fields grid (the board's has one since 10-09); derived symbols; alternate pin functions; symbol fields on the canvas; a shape properties dialog; snapping to other items' anchors in both
-  editors (item 14). (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
+- Done 2026-10-14 to 16 (P17; `PARITY-fpedit.md` sections 13 to 15, `PARITY-symedit.md` the five new sections; `e2e/lib-editors.check.js`, 24 scenarios; the slow kicad-cli proofs in `crates/cli/src/lib_editors_tests.rs`): derived symbols (`extends`, Derive from Existing Symbol, Flatten, Update Symbol Fields,
+  Bulk Edit Related Symbol Fields, the fields grid of Symbol Properties; a library with derived symbols written by this studio loads in kicad-cli, `sym upgrade` keeps it and kicad-cli plots the derived symbol as it plots the flat one), a fields grid in the library editor's Footprint Properties, symbol fields on the canvas with
+  Show Hidden Fields, alternate pin functions (`(alternate ...)`, the Pin Properties grid, Show Pin Alternate Icons), the symbol text box (Draw Text Box, Text Box Properties, `(text_box ...)`), a Shape Properties dialog for library shapes, snapping to other items' anchors in both editors (item 14).
+- Missing: Explode and Recombine of a custom pad (item 31); a placed symbol gets a library text box as its border and fill only, not its text (the engine's `SymbolGraphic` has no text box), and has no alternate pin functions (`LibPin` has none); the border's colour and
+  style, a custom fill colour and Private to Symbol Editor of a library shape and text box; a plain text of a symbol and the Footprint Editor's graphics and texts have no Properties dialog; the fields table has no simulation fields; no named body styles. (The pad clearance and thermal overrides are read by the zone filler since 10-08; the note that no check reads them is gone.)
 - Port from: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_pad_properties.cpp`, `eeschema/symbol_editor/`.
 
 ### 20. Schematic view controls
@@ -481,8 +505,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done (`PARITY-pcb.md` section 17; `crates/ops/src/array.rs`, `kicad-port/arrayOptions.ts`, `components/CreateArrayDialog.tsx`): Create Array makes grid and circular arrays of footprints, tracks, vias, zones,
   graphics, text, dimensions and groups, as copies or as an arrangement of the selected items, in one undo step; KiCad's tabs, boxes and wording, stagger, skew, centring, Full circle, "Rotate items", reference
   designators ("Assign unique" via `ReannotateDuplicates`, or keep). 23 Rust tests, 17 `node --test` cases, the browser check.
-- Missing: the footprint editor's array of pads and its numbering (`ARRAY_AXIS`: numerals, hexadecimal, alphabets, 2D coordinates, `ARRAY_PAD_NUMBER_PROVIDER`; package P17); the original keeps the first point
-  where KiCad's reverse loop leaves it on the last (same points, same references); the circle's centre starts at the selection, where KiCad's dialog ignores the origin it is given.
+- Done 2026-10-13 (P17, `task-lib-editors`, not merged; `PARITY-fpedit.md` section 13): the footprint editor's array of pads, graphics and texts with the numbering (`ARRAY_AXIS`: numerals, hexadecimal, the two alphabets, 2D coordinates, `ARRAY_PAD_NUMBER_PROVIDER`:
+  Use first free number, serpentine, direction, the Coordinate scheme), `create_footprint_array`, one undo step; a footprint with a 3 x 4 BGA array written by this studio loads in kicad-cli and `fp upgrade` keeps its twelve pads.
+- Missing: the original keeps the first point
+  where KiCad's reverse loop leaves it on the last (same points, same references); the circle's centre starts at the selection, where KiCad's dialog ignores the origin it is given; the circle's "Pad numbering start" follows its own initial-number radio.
 - Port from: `pcbnew/tools/array_tool.cpp`, `pcbnew/dialogs/dialog_create_array.cpp`, `pcbnew/array_pad_number_provider.cpp`.
 
 ### 23. The 3D viewer
@@ -681,7 +707,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | **Closed** | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`, `88c8c0a`); schematic Align and Align to Grid move each item's wires with it (`kicad-port/schAlign.ts`, `2a8bf8f`). |
 | 26 | Array tool | Partial | `Cmd::CreateArray` (`crates/ops/src/array.rs`), `CreateArrayDialog.tsx`: footprints and every other kind, since 2026-10-09 (`afcb91b`); the footprint editor's pad numbering is left (item 22). |
-| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic and the footprint editor have no groups; item 17. |
+| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic sheet's groups are done on `task-sch-groups` (`SchCmd::Group` family in `crates/ops/src/sch_groups.rs`, `kicad-port/schGroups.ts`, `PARITY-sch.md` section 29); the footprint editor has no groups; item 17. |
 | 28 | Dimensions and measure | **Closed** | `crates/connectivity/src/dimension.rs`, `Cmd::AddDimension` family, `components/DimensionPropertiesDialog.tsx`, the measure tool. Left: the interactive height click, text border, manual text position, export (item 2). |
 | 29 | Pan | Partial | `kicad-port/viewControls.ts`, `Canvas.tsx` (PCB); item 20. |
 | 30 | Context menu | **Closed** | `kicad-port/pcbContextMenu.ts` (KiCad's `CONDITIONAL_MENU` and the entries of every tool's `Init()`), `pcbSelectionSummary.ts`, `components/canvas/pcbMenuBuilder.ts`, `Canvas.tsx`. Left: table cells, gate swap, generators, most of the router's via and posture entries (item 16, item 7). |
@@ -919,11 +945,15 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `common/dialogs/{panel_text_variables,panel_setup_netclasses}.cpp`, `common/project/component_class_settings.cpp`, `pcbnew/drc/rule_editor/` (82 files), `pcbnew/tools/drc_rule_editor_tool.cpp`.
 - Conflicts: P15 (the project writer in `kicad-engine`: a hunk); `ops`, `runner` hunks.
 
-### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged); schematic groups, a user-defined field's place and Pin Helpers are left.**
+### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged) and, for the schematic's groups, on `task-sch-groups` (2026-10-13 to 15, P10b, not merged); a label's own fields are left.**
 - Done there: pin selection (`SCH_PIN_T`: Swap Pins, Swap Pin Labels, Swap Unit Labels, the pin-level highlight and Select Node), sheet pins one by one, the net-collision overlay of a drag, `AutoRotateItem` after a label lands, a power symbol's Properties dialog,
   text justification flipping on a mirror, pan with the middle and right button and auto-pan while drawing and moving, the Symbol Fields Table's attribute columns and Exclude DNP filter, Copy as Text, part of the item 15 schematic list. `PARITY-sch.md` sections 21 to 27;
   `web/studio/e2e/sch-details.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_details.rs`.
-- Left: schematic groups (`sch_group_tool.cpp`), a user-defined field's place on the sheet (`SchematicSection::field_layout`), Pin Helpers, a sheet pin's text look, a label's own fields.
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 29): schematic groups (`sch_group_tool.cpp`, `group_tool.cpp`; item 17): Group, Ungroup, Add and Remove Items, Group Properties, whole-group selection, enter and leave, the tree under move, turn, delete and the clipboard, `(group ...)` in the file; `web/studio/e2e/sch-groups.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_groups.rs`.
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 30): a user-defined field's place on the sheet (item 12): the symbol's user fields listed, drawn, placed, moved, turned, edited, added, removed, written and read back; `crates/kicad/tests/sch_user_fields.rs` and the slow proof in `sch_groups.rs` (kicad-cli draws the field where we put it).
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 31): Pin Helpers and swapped pins through the file and the clipboard (items 1, 12); `crates/kicad/tests/sch_pin_swaps.rs`, `crates/ops/src/sch_pin_helpers_tests.rs`.
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 32): a sheet pin's text look (size, bold, italic: Sheet Pin Properties, the painter, the pin's box, `(effects (font ..))` written and read; `SchExtras::sheet_pin_looks`).
+- Left: a label's own fields (netclass, intersheet references), a sheet pin's font face and colour.
 - Files: `web/studio/src/components/SchematicView.tsx`, `components/schematic/{schItems,schHit,schSelectionSummary}.ts`, `kicad-port/{schMove,selection,schConnection}.ts`, `components/SymbolFieldsTableDialog.tsx`,
   `crates/ops/src/{sch_move,sch_edit,sch_props,sch_fields,fields_table}.rs`, `crates/model/src/sch_extras.rs`.
 - KiCad: `eeschema/tools/{sch_edit_tool,sch_selection_tool,sch_drag_net_collision,sch_group_tool,sch_move_tool}.cpp`, `sch_label.cpp`, `sch_pin.cpp`, `dialogs/dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`, `common/view/wx_view_controls.cpp`.
@@ -965,7 +995,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/3d_cache/`.
 - Conflicts: P2 and P7 (`fp_edit.rs`), P1 (the footprint), P17 (the editor dialog).
 
-### P15. Review workflow leftovers (item 11). Size S-M. Rank 15.
+### P15. Review workflow leftovers (item 11). Size S-M. Rank 15. **Done 2026-10-14 on `task-review`, waiting for its merge; item 11 lists what is left.**
 - ERC exclusions into the derived project (`erc.erc_exclusions`, `SCH_MARKER::SerializeToString`, positions guessed as `eda_kicad::drc_exclusions` does) with their comments; Delete Marker, Delete All Markers and Save report; "Exclude all violations of
   rule"; a marker selected by a left click; the Inspect / Fix entries; Edit connection grid spacing. The kicad-cli marker position stays upstream and unplanned.
 - Files: `crates/kicad-engine/src/lib.rs`, `crates/kicad/src/drc_exclusions.rs` and a new `erc_exclusions.rs`, `crates/ops` (`AddErcExclusion` gets a comment), `components/{ErcDialog,DrcDialog,SchematicSetupDialog}.tsx`.
@@ -980,8 +1010,12 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `tools/drawing_tool.cpp`, `eeschema/sch_{table,bitmap}.cpp`, `eeschema/tools/sch_edit_table_tool.cpp`.
 - Conflicts: P1 (`painter.ts`, `ir`, `kio`), P6 (`Canvas.tsx`), P7 (`ir`).
 
-### P17. Library editor leftovers (items 19, 22). Size L. Rank 17. After P7 and P3.
-- Snapping to other items' anchors in both editors (wire `PcbGridHelper` and `SchGridHelper`), the footprint editor's pad array and numbering (`ARRAY_AXIS`, `ARRAY_PAD_NUMBER_PROVIDER`), a fields grid in the library editor's Footprint Properties, derived symbols
+### P17. Library editor leftovers (items 14, 19, 22). Size L. Rank 17. **Done 2026-10-16 on `task-lib-editors`, waiting for its merge; items 19 and 22 list what is left.**
+- Done there, one commit per step: the footprint editor's pad array and numbering, derived symbols (backend and editor), snapping in both editors, a fields grid in the library editor's Footprint Properties, symbol fields on the canvas, alternate pin functions, the symbol text box and
+  a Shape Properties dialog. Every step has Rust tests, `node --test` cases and a scenario of `web/studio/e2e/lib-editors.check.js` (24 scenarios through `window.__eda`, run in a headless Chromium); the kicad-cli proofs (behind `EDA_SLOW_TESTS=1`, in `crates/cli/src/lib_editors_tests.rs`): a BGA pad array,
+  a footprint with fields, a library with derived symbols (and a flat symbol plotted as kicad-cli plots the derived one), alternate pin functions and text boxes each load and `fp upgrade` / `sym upgrade` keep them. `PARITY-fpedit.md` sections 13 to 15, `PARITY-symedit.md`.
+  Shared effects: a raw line feed inside a quoted string made kicad-cli refuse the library, so `sexpr_str` writes `\n` and `\r` as `OUTPUTFORMATTER::Quotes` does and `sexpr::parse_quoted` reads them back (this also fixes a multi-line text box of the schematic's sheet).
+- The plan was: snapping to other items' anchors in both editors (wire `PcbGridHelper` and `SchGridHelper`), the footprint editor's pad array and numbering (`ARRAY_AXIS`, `ARRAY_PAD_NUMBER_PROVIDER`), a fields grid in the library editor's Footprint Properties, derived symbols
   (`extends`, Flatten, Update Symbol Fields, the related-fields table), symbol fields on the canvas (Show Hidden Fields), alternate pin functions (`togglePinAltIcons`), the symbol text box, a shape properties dialog.
 - Files: `crates/model/src/symbol.rs`, `crates/ops/src/library_editors.rs`, `crates/kicad/src/{symbol_lib,symbol_import,footprint_lib}.rs`, `components/{footprint,symbol}/*`, `kicad-port/{padNumbering,pinNumbering,pcbGridHelper,schGridHelper}.ts`.
 - KiCad: `eeschema/symbol_editor/*`, `eeschema/lib_symbol.cpp`, `pcbnew/tools/array_tool.cpp`, `pcbnew/array_pad_number_provider.cpp`, `pcbnew/dialogs/dialog_create_array.cpp`.

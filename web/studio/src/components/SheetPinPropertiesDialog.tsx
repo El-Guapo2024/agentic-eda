@@ -2,11 +2,13 @@
 // (`SCH_EDIT_TOOL::Properties`: `case SCH_SHEET_PIN_T`).
 //
 // The name is a combo of the hierarchical labels the sheet's own file has (`TransferDataToWindow`: every `SCH_HIER_LABEL_T` of the sheet's screen), and choosing one takes that
-// label's shape (`onComboBox`); the shape is one of the five a hierarchical label has. OK sends one `edit_sheet_pin` -- one undo step, nothing when nothing changed. Not here because
-// the drawing model has no place for them: the pin's font, size, bold, italic and colour.
+// label's shape (`onComboBox`); the shape is one of the five a hierarchical label has; the text's size, bold and italic are set as a label's are (the size between 0.01 and 1000 mm).
+// OK sends one `edit_sheet_pin` -- one undo step, nothing when nothing changed. Not here because the drawing model has no place for them: the pin's font face and colour.
 import { useEffect, useState } from "react";
 import type { LabelShape } from "../api/types";
-import { sheetPinEditCmd, SHEET_PIN_SHAPES } from "../kicad-port/schSheetPins";
+import { FIELD_SIZE_MAX_UM, FIELD_SIZE_MIN_UM } from "../kicad-port/schFieldEdit";
+import { mmToUm, umToMm } from "../kicad-port/schProperties";
+import { sheetPinEditCmd, SHEET_PIN_DEFAULT_SIZE_UM, SHEET_PIN_SHAPES } from "../kicad-port/schSheetPins";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
 import { loadHierLabels } from "./schematic/schPinTool";
@@ -20,12 +22,15 @@ export function SheetPinPropertiesDialog({ id }: { id: string }) {
   return <Form key={id} sheetId={sheet.id} pin={pin} />;
 }
 
-function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: string; shape: LabelShape } }) {
+function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: string; shape: LabelShape; size_um?: number; bold?: boolean; italic?: boolean } }) {
   const state = useStudioState();
   const dispatch = useStudioDispatch();
   const api = useStudioApi();
   const [name, setName] = useState(pin.name);
   const [shape, setShape] = useState<LabelShape>(pin.shape);
+  const [size, setSize] = useState(umToMm(pin.size_um && pin.size_um > 0 ? pin.size_um : SHEET_PIN_DEFAULT_SIZE_UM));
+  const [bold, setBold] = useState(!!pin.bold);
+  const [italic, setItalic] = useState(!!pin.italic);
   const [labels, setLabels] = useState<HierLabel[]>([]);
   // the labels of the sheet's own file, read from its page
   useEffect(() => {
@@ -36,7 +41,10 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
     };
   }, [state.currentSheetPath, sheetId]);
   const close = () => dispatch({ type: "SET_SCH_TOOL_DIALOG", dialog: null });
-  const canOk = name.trim().length > 0;
+  // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
+  const sizeUm = mmToUm(size);
+  const sizeOk = sizeUm !== null && sizeUm >= FIELD_SIZE_MIN_UM && sizeUm <= FIELD_SIZE_MAX_UM;
+  const canOk = name.trim().length > 0 && sizeOk;
   const pick = (text: string) => {
     setName(text);
     // `onComboBox`: a name that is one of the file's labels takes that label's shape
@@ -45,7 +53,7 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
   };
   const submit = async () => {
     if (!canOk) return;
-    const cmd = sheetPinEditCmd(pin, { name, shape });
+    const cmd = sheetPinEditCmd(pin, { name, shape, sizeUm: sizeUm ?? undefined, bold, italic });
     if (!cmd || (await api.cmd(cmd))) close();
   };
   return (
@@ -59,6 +67,17 @@ function Form({ sheetId, pin }: { sheetId: string; pin: { id: string; name: stri
               <option key={l.name} value={l.name} />
             ))}
           </datalist>
+        </span>
+        <span>Text size (mm)</span>
+        <input data-testid="sheet-pin-size" value={size} onChange={(e) => setSize(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void submit()} title="0.01 to 1000 mm" style={sizeOk ? { width: 80 } : { width: 80, outline: "1px solid var(--error, #d33)" }} />
+        <span>Style</span>
+        <span style={{ display: "flex", gap: 14 }}>
+          <label>
+            <input type="checkbox" data-testid="sheet-pin-bold" checked={bold} onChange={(e) => setBold(e.target.checked)} /> Bold
+          </label>
+          <label>
+            <input type="checkbox" data-testid="sheet-pin-italic" checked={italic} onChange={(e) => setItalic(e.target.checked)} /> Italic
+          </label>
         </span>
         <span>Shape</span>
         <span style={{ display: "flex", flexDirection: "column", gap: 2 }}>

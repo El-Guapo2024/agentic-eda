@@ -94,7 +94,7 @@ export async function placeSchPaste(api: StudioApi, dispatch: Dispatch<Action>, 
   if (!ok || !before) return;
   try {
     const ids = newIdsAfter(before, await fetchSchematic(paste.sheet));
-    if (ids.length > 0) dispatch({ type: "SET_SELECTION", refs: ids });
+    if (ids.length > 0) dispatch({ type: "SET_SELECTION", refs: ids, raw: true });
   } catch {
     // The poll will show the new items; only the selection of them is lost.
   }

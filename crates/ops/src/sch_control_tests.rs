@@ -165,6 +165,8 @@ fn a_symbol_of_the_project_library_is_a_link_target_even_when_it_was_put_there_a
         graphics: vec![],
         pins: vec![],
         published: false,
+        extends: None,
+        fields: vec![],
     };
     b.apply(&Cmd::SetSymbolLibIds { changes: vec![("Device:R".into(), "mylib:R".into())], update_fields: false }).unwrap_err();
     b.apply(&Cmd::PutLibrarySymbol { symbol: sym, overwrite: false }).unwrap();

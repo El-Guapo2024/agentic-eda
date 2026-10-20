@@ -7,7 +7,8 @@
 // whole paste away. Here the studio asks the server for what a paste would add (`POST /api/sch/clipboard/parse`: the new items, already
 // numbered, drawn the way the sheet draws them), shows them shifted by the cursor, and a click sends `paste_sch` with that shift.
 // This module is the part with no React in it: the shift, the ghost of the paste on a sheet, and which items a paste made.
-import type { LibSymbols, Schematic, SchField } from "../api/types";
+import type { Group, LibSymbols, Schematic, SchField } from "../api/types";
+import { substituteSchSelection } from "./schGroups";
 import type { SchGraphic, SchGraphicShape } from "../api/schEditTypes";
 
 /** `PASTE_MODE` (dialog_paste_special.h): what Paste Special does to the reference designators. */
@@ -34,6 +35,8 @@ export interface SchPastePreview {
   junctions: NonNullable<Schematic["junctions"]>;
   lines: NonNullable<Schematic["lines"]>;
   graphics: SchGraphic[];
+  /** The groups the paste brings (`SCH_GROUP`s among the pasted items), their members the ids above. Absent from an older server. */
+  groups?: Group[];
   lib_symbols: LibSymbols;
 }
 
@@ -93,7 +96,7 @@ export function shiftPreview(p: SchPastePreview, dx: number, dy: number): SchPas
 
 /** The ids of everything the preview holds (what the canvas draws as selected while the paste is carried). */
 export function previewIds(p: SchPastePreview): string[] {
-  return [...p.symbols, ...p.power_symbols, ...p.wires, ...p.labels, ...p.texts, ...(p.sheets ?? []), ...p.no_connects, ...p.bus_entries, ...p.junctions, ...p.lines, ...p.graphics].map((x) => x.id).filter((id) => id !== "");
+  return [...p.symbols, ...p.power_symbols, ...p.wires, ...p.labels, ...p.texts, ...(p.sheets ?? []), ...p.no_connects, ...p.bus_entries, ...p.junctions, ...p.lines, ...p.graphics, ...(p.groups ?? [])].map((x) => x.id).filter((id) => id !== "");
 }
 
 /** `sch` with the paste drawn on it, shifted by `(dx, dy)`. A library symbol the sheet already draws is left as the sheet has it. */
@@ -112,6 +115,7 @@ export function withPaste(sch: Schematic, preview: SchPastePreview, dx: number, 
     junctions: [...(sch.junctions ?? []), ...p.junctions],
     lines: [...(sch.lines ?? []), ...p.lines],
     graphics: [...(sch.graphics ?? []), ...p.graphics],
+    groups: [...(sch.groups ?? []), ...(p.groups ?? [])],
     lib_symbols: { ...p.lib_symbols, ...sch.lib_symbols },
   };
 }
@@ -135,7 +139,10 @@ export function newIdsAfter(before: Schematic, after: Schematic): string[] {
     for (const x of list) if (!known.has(x.id)) take(x.id);
   }
   for (const s of after.symbols) if (!units.has(`${s.id}#${s.unit}`)) take(s.id);
-  return ids;
+  // the pasted groups are what is selected, not the items in them (`Paste` selects the loaded items, a member of a group being carried by its group)
+  const oldGroups = new Set((before.groups ?? []).map((g) => g.id));
+  for (const g of after.groups ?? []) if (!oldGroups.has(g.id)) take(g.id);
+  return substituteSchSelection(after, ids, null).ids;
 }
 
 /** The text KiCad's duplicate buffer / the system clipboard handed back, ready for `parse`; null when there is none. */

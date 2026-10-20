@@ -25,7 +25,7 @@ pub use foreign::{import_foreign_pcb, import_foreign_sch, ForeignImport, Foreign
 
 use eda_kicad::zone_fills::KicadFills;
 use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
-use eda_model::ir::{Design, DrcExclusion};
+use eda_model::ir::{Design, DrcExclusion, ErcExclusion};
 use eda_model::{CheckResult, ConstraintModel};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -619,6 +619,11 @@ pub struct Violation {
     /// Where the violation's marker may sit, in nanometres: the positions worth writing an exclusion for ([`marker_candidates`]).
     /// kicad-cli's report does not give the marker's position, only its items'.
     pub markers_nm: Vec<(i64, i64)>,
+    /// An ERC violation's sheet: the path (`ERC_SHEET::uuid_path`) of the sheet kicad-cli's report lists it under. Empty for a DRC one.
+    pub sheet: String,
+    /// An ERC violation's marker as KiCad keeps an exclusion (`SCH_MARKER`, `kiapi.schematic.ErcMarker`), when the report says enough to write it to the
+    /// letter ([`eda_kicad::erc_exclusions::marker`]); `None` when it does not, and for a DRC violation.
+    pub marker: Option<eda_model::ir::ErcMarker>,
 }
 
 impl Violation {
@@ -650,7 +655,33 @@ impl Violation {
             excluded: v["excluded"].as_bool().unwrap_or(false),
             comment: v["comment"].as_str().unwrap_or("").to_string(),
             markers_nm: marker_candidates(&at_nm),
+            sheet: String::new(),
+            marker: None,
         }
+    }
+
+    /// The items of an ERC violation as a marker names them: uuid, position in nanometres and name. The schematic's internal unit is a nanometre in the
+    /// nightly the studio runs (10.99.0-5334) and its ERC report prints millimetres as they are; the nightly before it printed a hundredth of that
+    /// (`ERC_REPORT::WriteJsonReport` built its `UNITS_PROVIDER` on the board's scale while the schematic's unit was 100 nm). Nothing when the report is
+    /// not in millimetres.
+    fn marker_items(v: &Value, units_mm: bool) -> Vec<eda_kicad::erc_exclusions::MarkerItem> {
+        if !units_mm {
+            return Vec::new();
+        }
+        let nm = |x: f64| (x * 1_000_000.0).round() as i64;
+        v["items"]
+            .as_array()
+            .map(|is| {
+                is.iter()
+                    .map(|it| eda_kicad::erc_exclusions::MarkerItem {
+                        uuid: it["uuid"].as_str().unwrap_or("").to_string(),
+                        x_nm: nm(it["pos"]["x"].as_f64().unwrap_or(0.0)),
+                        y_nm: nm(it["pos"]["y"].as_f64().unwrap_or(0.0)),
+                        description: it["description"].as_str().unwrap_or("").to_string(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The studio's DRC shape: `type`, `description`, `severity`, `items`
@@ -994,31 +1025,70 @@ pub struct ErcReport {
 }
 
 impl ErcReport {
+    /// The violations the studio lists: kicad-cli's, without the markers its own exclusions made that are not violations. KiCad turns an exclusion
+    /// that matches no marker into an excluded marker of its own (`SCHEMATIC::ResolveERCExclusions`), so the report can hold an excluded entry
+    /// that no check found: one of an item that is gone (no items), a copy of a violation whose own marker the exclusion did not match (the same
+    /// items, and the real one listed beside it, not excluded), or a second marker for one. What is left of those is the one stale marker KiCad
+    /// would show -- an exclusion whose violation is gone -- and a check set to Ignore has none.
+    fn listed(&self) -> Vec<&Violation> {
+        let key = |v: &Violation| (v.kind.clone(), v.items.iter().map(|i| i.uuid.clone()).collect::<Vec<_>>());
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for v in &self.violations {
+            if v.excluded {
+                let k = key(v);
+                let ignored = self.ignored_checks.iter().any(|c| c.key == v.kind);
+                let copy = self.violations.iter().any(|w| !w.excluded && key(w) == k);
+                if v.items.is_empty() || ignored || copy || !seen.insert(k) {
+                    continue;
+                }
+            }
+            out.push(v);
+        }
+        out
+    }
+
     /// The studio's ERC shape: `check`, `severity`, `location` (the first
-    /// item's id), `hint`, plus the full `items` list. A finding whose
-    /// `(check, location)` is in `exclusions` reports as `"excluded"`: still
-    /// listed, no longer an error or a warning.
-    pub fn to_json(&self, exclusions: &[(String, String)]) -> Value {
+    /// item's id), `hint`, plus the full `items` list. A finding that kicad-cli
+    /// reports as excluded -- the project lists its marker (`erc.erc_exclusions`) -- or whose
+    /// `(check, location)` is in `exclusions` reports as `"excluded"`: still listed, no longer an
+    /// error or a warning, with the exclusion's `comment`; `kicad_matched` says whether kicad-cli
+    /// itself matched it. `marker` is the marker its exclusion would go into the project as, when the
+    /// report says enough to write it (`eda_kicad::erc_exclusions`), and `sheet` the sheet the
+    /// report lists it under.
+    pub fn to_json(&self, exclusions: &[ErcExclusion]) -> Value {
         let mut counts = BTreeMap::<String, usize>::new();
         let violations: Vec<Value> = self
-            .violations
-            .iter()
+            .listed()
+            .into_iter()
             .map(|v| {
                 let location = v.items.iter().find_map(|i| i.id.clone()).unwrap_or_default();
-                let excluded = !location.is_empty() && exclusions.iter().any(|(c, l)| *c == v.kind && *l == location);
+                let studio = if location.is_empty() { None } else { exclusions.iter().find(|e| e.check == v.kind && e.location == location) };
+                let by_kicad = v.excluded || v.severity == "exclusion";
+                let excluded = by_kicad || studio.is_some();
                 if !excluded {
                     *counts.entry(v.kind.clone()).or_default() += 1;
                 }
+                let comment = studio.map(|e| e.comment.as_str()).unwrap_or(v.comment.as_str());
                 let item_desc: Vec<&str> = v.items.iter().map(|i| i.description.as_str()).filter(|d| !d.is_empty()).collect();
-                json!({
+                let mut j = json!({
                     "check": v.kind,
-                    "severity": if excluded || v.excluded || v.severity == "exclusion" { "excluded" } else { v.severity.as_str() },
+                    "severity": if excluded { "excluded" } else { v.severity.as_str() },
                     // What the finding is when it is not excluded: the report folds the two together, and un-excluding must give the severity back.
                     "base_severity": if v.severity == "warning" { "warning" } else { "error" },
                     "location": location,
                     "hint": format!("{}{}{}", v.description, if item_desc.is_empty() { "" } else { ": " }, item_desc.join("; ")),
                     "items": v.items.iter().map(|i| json!({ "description": i.description, "pos": [i.pos.0, i.pos.1], "id": i.id, "uuid": i.uuid })).collect::<Vec<_>>(),
-                })
+                    "comment": if excluded { comment } else { "" },
+                    "kicad_matched": by_kicad,
+                });
+                if let Some(marker) = &v.marker {
+                    j["marker"] = serde_json::to_value(marker).unwrap_or(Value::Null);
+                }
+                if !v.sheet.is_empty() {
+                    j["sheet"] = json!(v.sheet);
+                }
+                j
             })
             .collect();
         json!({ "engine": self.engine, "violations": violations, "counts": counts, "ignored_checks": self.ignored_checks.iter().map(IgnoredCheck::to_json).collect::<Vec<_>>() })
@@ -1034,15 +1104,132 @@ pub fn erc(design: &Design, model: &ConstraintModel, work: &Path) -> Result<ErcR
     cmd.args(["sch", "erc", "--format", "json", "--severity-all", "--units", "mm", "-o"]).arg(&report).arg(&sch);
     let raw = run_report(cmd, &report, "erc")?;
     let units_mm = raw["coordinate_units"].as_str().unwrap_or("mm") == "mm";
+    let sheet_count = raw["sheets"].as_array().map_or(0, Vec::len);
     let mut violations = Vec::new();
     for sheet in raw["sheets"].as_array().into_iter().flatten() {
+        let path = sheet["uuid_path"].as_str().unwrap_or("");
         for v in sheet["violations"].as_array().into_iter().flatten() {
-            violations.push(Violation::from_json(v, &map, units_mm));
+            let mut violation = Violation::from_json(v, &map, units_mm);
+            violation.sheet = path.to_string();
+            violation.marker = eda_kicad::erc_exclusions::marker(&violation.kind, &violation.severity, &Violation::marker_items(v, units_mm), path, sheet_count);
+            violations.push(violation);
         }
     }
     let version = raw["kicad_version"].as_str().map(str::to_string).unwrap_or_else(|| cli_version(&cli));
     let ignored_checks = raw["ignored_checks"].as_array().map(|cs| cs.iter().map(IgnoredCheck::from_json).collect()).unwrap_or_default();
     Ok(ErcReport { engine: format!("kicad-cli {version}"), violations, ignored_checks })
+}
+
+// ------------------------------------------------------------------ saved reports
+
+/// The unit a saved report prints lengths in (`--units`): the editor's own, `GetUserUnits()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReportUnits {
+    #[default]
+    Mm,
+    Mils,
+    In,
+}
+
+impl ReportUnits {
+    fn arg(self) -> &'static str {
+        match self {
+            ReportUnits::Mm => "mm",
+            ReportUnits::Mils => "mils",
+            ReportUnits::In => "in",
+        }
+    }
+}
+
+/// What a checker dialog's "Save..." asks of kicad-cli (`DIALOG_ERC::OnSaveReport`, `DIALOG_DRC::OnSaveReport`): the file format and the Show boxes -- the severities
+/// the dialog lists, which is what its report holds (`RC_ITEMS_PROVIDER::GetSeverities`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ReportOptions {
+    /// A `.json` file (`WriteJsonReport`); else the text report, `.rpt` (`WriteTextReport`).
+    pub json: bool,
+    pub errors: bool,
+    pub warnings: bool,
+    pub exclusions: bool,
+    pub units: ReportUnits,
+}
+
+impl ReportOptions {
+    /// `--format`, `--units` and the severity flags of `kicad-cli sch erc` / `pcb drc`: all three boxes are `--severity-all`; kicad-cli's own default (errors and
+    /// warnings) is what none checked asks for.
+    fn args(&self) -> Vec<&'static str> {
+        let mut args = vec!["--format", if self.json { "json" } else { "report" }, "--units", self.units.arg()];
+        if self.errors && self.warnings && self.exclusions {
+            args.push("--severity-all");
+        } else {
+            if self.errors {
+                args.push("--severity-error");
+            }
+            if self.warnings {
+                args.push("--severity-warning");
+            }
+            if self.exclusions {
+                args.push("--severity-exclusions");
+            }
+        }
+        args
+    }
+
+    fn extension(&self) -> &'static str {
+        if self.json {
+            "json"
+        } else {
+            "rpt"
+        }
+    }
+}
+
+/// A report kicad-cli wrote for a dialog's "Save...": the name the dialog suggests (`ERC.rpt`, `DRC.json`) and the file's text.
+#[derive(Debug, Clone)]
+pub struct SavedReport {
+    pub file_name: String,
+    pub text: String,
+}
+
+/// Run `cmd` (a `kicad-cli ... -o <out>`) and read the report it wrote.
+fn run_saved_report(cmd: Command, out: &Path, what: &str) -> Result<String, Vec<CheckResult>> {
+    let _ = std::fs::remove_file(out);
+    let run = output_within(cmd, limit(REPORT_TIMEOUT))?;
+    std::fs::read_to_string(out).map_err(|_| fail(&format!("kicad_cli_{what}"), "kicad-cli", format!("no report: {}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr))))
+}
+
+/// The ERC report file of a dialog's "Save..." (`ERC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli sch erc` on the design's schematic -- the exclusions in
+/// the derived project -- asked for `opts`' format, units and severities. A run, not the report on screen: a marker deleted from the list is in it.
+pub fn erc_report(design: &Design, model: &ConstraintModel, work: &Path, opts: &ReportOptions) -> Result<SavedReport, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (sch, _) = export_schematic(design, model, work, "board")?;
+    let out = work.join(format!("erc-report.{}", opts.extension()));
+    let mut cmd = cli_command(&cli, Some(&sch.with_extension("kicad_pro")));
+    cmd.args(["sch", "erc"]).args(opts.args()).arg("-o").arg(&out).arg(&sch);
+    Ok(SavedReport { file_name: format!("ERC.{}", opts.extension()), text: run_saved_report(cmd, &out, "erc")? })
+}
+
+/// The DRC report file of a dialog's "Save..." (`DRC_REPORT::WriteTextReport` / `WriteJsonReport`): `kicad-cli pcb drc` on the derived board, with the dialog's own
+/// options (`refill_zones`, `schematic_parity`) and `opts`' format, units and severities.
+pub fn drc_report(design: &Design, model: &ConstraintModel, work: &Path, drc: DrcOptions, opts: &ReportOptions) -> Result<SavedReport, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    let (pcb, _) = export_board(design, model, work, "board")?;
+    if drc.schematic_parity {
+        if design.schematic.is_none() {
+            return Err(fail("kicad_cli_parity", "schematic", "the parity test compares the board with the schematic, and this design has none"));
+        }
+        export_schematic(design, model, work, "board")?;
+    }
+    let out = work.join(format!("drc-report.{}", opts.extension()));
+    let mut cmd = cli_command(&cli, Some(&pcb.with_extension("kicad_pro")));
+    cmd.args(["pcb", "drc"]).args(opts.args());
+    if drc.refill_zones {
+        cmd.arg("--refill-zones");
+    }
+    if drc.schematic_parity {
+        cmd.arg("--schematic-parity");
+    }
+    cmd.arg("-o").arg(&out).arg(&pcb);
+    Ok(SavedReport { file_name: format!("DRC.{}", opts.extension()), text: run_saved_report(cmd, &out, "drc")? })
 }
 
 // ------------------------------------------------------------------ statistics
@@ -1786,13 +1973,86 @@ fi"#;
             ],
             ignored_checks: vec![],
         };
-        let j = rep.to_json(&[("pin_not_connected".into(), "U1.2".into())]);
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.2".into(), comment: "unused".into(), ..Default::default() }]);
         assert_eq!(j["violations"][0]["severity"], "error");
         assert_eq!(j["violations"][1]["severity"], "excluded");
         assert_eq!(j["counts"]["pin_not_connected"], 1);
         assert_eq!(j["violations"][0]["location"], "U1.1");
         assert_eq!(j["violations"][1]["base_severity"], "error", "an excluded finding says what it is when it is not");
         assert_eq!(j["violations"][0]["hint"], "Pin not connected: Pin 1");
+        assert_eq!(j["violations"][1]["comment"], "unused", "the exclusion's comment comes with it");
+        assert_eq!(j["violations"][1]["kicad_matched"], false, "the studio's own exclusion: kicad-cli's project did not hold it");
+        assert_eq!(j["violations"][0]["comment"], "");
+    }
+
+    /// kicad-cli's own ERC report items for the tests below.
+    fn erc_item(desc: &str, id: Option<&str>, uuid: &str) -> Item {
+        Item { description: desc.into(), pos: (0, 0), id: id.map(str::to_string), uuid: uuid.into() }
+    }
+
+    fn erc_violation(kind: &str, items: Vec<Item>, excluded: bool) -> Violation {
+        Violation { kind: kind.into(), description: "x".into(), severity: "error".into(), items, excluded, comment: if excluded { "from kicad".into() } else { String::new() }, ..Default::default() }
+    }
+
+    #[test]
+    fn a_finding_kicad_cli_matched_is_excluded_with_its_comment_and_counted_by_nobody() {
+        let a = erc_item("Pin 1", Some("U1.1"), "u-a");
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![erc_violation("pin_not_connected", vec![a.clone()], true), erc_violation("pin_not_connected", vec![erc_item("Pin 2", Some("U1.2"), "u-b")], false)], ignored_checks: vec![] };
+        let j = rep.to_json(&[ErcExclusion { check: "pin_not_connected".into(), location: "U1.1".into(), comment: "reviewed".into(), marker: Some(eda_model::ir::ErcMarker { error_type: "ERCET_PIN_NOT_CONNECTED".into(), at_nm: [1, 2], items: vec!["u-a".into()], ..Default::default() }) }]);
+        assert_eq!(j["violations"][0]["severity"], "excluded");
+        assert_eq!(j["violations"][0]["kicad_matched"], true, "kicad-cli itself matched the marker text");
+        assert_eq!(j["violations"][0]["comment"], "reviewed", "the studio's comment is the exclusion's");
+        assert_eq!(j["counts"]["pin_not_connected"], 1, "only the other one counts");
+        // A finding kicad-cli excluded with no exclusion of the studio's behind it (a foreign project) keeps kicad-cli's comment.
+        let j = rep.to_json(&[]);
+        assert_eq!((j["violations"][0]["severity"].as_str(), j["violations"][0]["comment"].as_str()), (Some("excluded"), Some("from kicad")));
+    }
+
+    /// `SCHEMATIC::ResolveERCExclusions` makes an excluded marker of a text that matched nothing, and kicad-cli's report lists it: it is no violation.
+    #[test]
+    fn the_markers_an_unmatched_exclusion_made_are_not_findings() {
+        let real = erc_violation("footprint_link_issues", vec![erc_item("Symbol C1", Some("C1"), "u-c1")], false);
+        let copy = erc_violation("footprint_link_issues", vec![erc_item("Symbol C1", Some("C1"), "u-c1")], true);
+        let gone = erc_violation("pin_not_connected", vec![], true);
+        let stale = erc_violation("wire_dangling", vec![erc_item("Wire", Some("w9"), "u-w")], true);
+        let stale_twice = erc_violation("wire_dangling", vec![erc_item("Wire", Some("w9"), "u-w")], true);
+        let ignored = erc_violation("simulation_model_issue", vec![erc_item("Symbol R1", Some("R1"), "u-r1")], true);
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![real, copy, gone, stale, stale_twice, ignored], ignored_checks: vec![IgnoredCheck { key: "simulation_model_issue".into(), description: "x".into() }] };
+        let j = rep.to_json(&[ErcExclusion { check: "footprint_link_issues".into(), location: "C1".into(), ..Default::default() }]);
+        let listed: Vec<(&str, &str)> = j["violations"].as_array().unwrap().iter().map(|v| (v["check"].as_str().unwrap(), v["severity"].as_str().unwrap())).collect();
+        assert_eq!(listed, vec![("footprint_link_issues", "excluded"), ("wire_dangling", "excluded")], "the real finding (waived by the studio), and the one stale marker of an exclusion whose violation is gone");
+        assert_eq!(j["counts"].as_object().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn an_erc_entry_offers_the_marker_its_exclusion_would_be_and_the_sheet_it_is_under() {
+        // The report's positions are millimetres as they are, and the marker's are nanometres: 115.57 mm is 115570000.
+        let v = json!({ "type": "pin_not_connected", "description": "Pin not connected", "severity": "error",
+            "items": [{ "description": "Symbol #PWR03 Pin 1 [Power input, Line]", "pos": { "x": 115.57, "y": 110.49 }, "uuid": "693a38f5-591c-4c06-9786-e8973d13af99" }] });
+        let items = Violation::marker_items(&v, true);
+        assert_eq!((items[0].x_nm, items[0].y_nm), (115_570_000, 110_490_000));
+        assert!(Violation::marker_items(&v, false).is_empty(), "inches: not known");
+        let mut violation = Violation::from_json(&v, &HashMap::new(), true);
+        violation.sheet = "/r".into();
+        violation.marker = eda_kicad::erc_exclusions::marker("pin_not_connected", "error", &items, "/r", 1);
+        let rep = ErcReport { engine: "kicad-cli test".into(), violations: vec![violation], ignored_checks: vec![] };
+        let j = rep.to_json(&[]);
+        assert_eq!(
+            j["violations"][0]["marker"],
+            json!({ "error_type": "ERCET_PIN_NOT_CONNECTED", "at_nm": [115_570_000, 110_490_000], "items": ["693a38f5-591c-4c06-9786-e8973d13af99"], "sheet": ["r"], "main_sheet": ["r"] })
+        );
+        assert_eq!(j["violations"][0]["sheet"], "/r");
+    }
+
+    #[test]
+    fn a_saved_report_asks_kicad_cli_for_its_format_its_units_and_the_severities_the_dialog_shows() {
+        let all = ReportOptions { json: false, errors: true, warnings: true, exclusions: true, units: ReportUnits::Mm };
+        assert_eq!(all.args(), ["--format", "report", "--units", "mm", "--severity-all"], "the three boxes are all severities");
+        assert_eq!(all.extension(), "rpt");
+        let some = ReportOptions { json: true, errors: true, warnings: false, exclusions: true, units: ReportUnits::Mils };
+        assert_eq!(some.args(), ["--format", "json", "--units", "mils", "--severity-error", "--severity-exclusions"]);
+        assert_eq!(some.extension(), "json");
+        assert_eq!(ReportOptions { units: ReportUnits::In, ..Default::default() }.args(), ["--format", "report", "--units", "in"], "none asked for: kicad-cli's own default");
     }
 
     #[test]

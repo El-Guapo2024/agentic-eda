@@ -19,10 +19,12 @@
 //! * A pad or a field in the selection stands for its footprint, once (`GetParentFootprint`, `fpDeDupe`).
 //!
 //! The footprint editor's half of the dialog -- numbering the pads of the new copies (`ARRAY_AXIS`, `ARRAY_PAD_NUMBER_PROVIDER`) -- is
-//! not ported: the library editor has no array tool, and the board editor never shows those controls
-//! (`enableArrayNumbering = m_isFootprintEditor`). The grid's numbering direction and the serpentine (`horizontal_then_vertical`,
-//! `reverse_alternate`) are here because they decide which point is which; the board dialog leaves them at KiCad's defaults.
+//! [`crate::fp_array`] and [`crate::array_numbering`]: the board editor never shows those controls (`enableArrayNumbering =
+//! m_isFootprintEditor`). The grid's numbering direction and the serpentine (`horizontal_then_vertical`, `reverse_alternate`) are here
+//! because they decide which point is which; the board dialog leaves them at KiCad's defaults, and [`ArrayGeometry::item_number`] names
+//! a point for the footprint editor's numbering.
 
+use super::array_numbering::NumberingAxes;
 use super::pcb_paste::{Copies, Member};
 use super::pcb_transform::{part_pose, transform_dimension, transform_shape, transform_text, transform_track, transform_via, transform_zone, Xform};
 use super::{rotate_point_about, Board};
@@ -145,6 +147,19 @@ impl ArrayGeometry {
         }
     }
 
+    /// `ARRAY_GRID_OPTIONS::GetItemNumber` / `ARRAY_CIRCULAR_OPTIONS::GetItemNumber`: the number of the `n`-th point, with the axes the dialog's
+    /// numbering entries made ([`PadNumbering::resolve`](crate::array_numbering::PadNumbering::resolve)). A grid numbered by coordinates names a
+    /// point by its column on the primary axis and its row on the secondary one, in the order the grid is walked (the serpentine included).
+    pub fn item_number(&self, n: i64, axes: &NumberingAxes) -> String {
+        match *self {
+            ArrayGeometry::Grid { nx, ny, horizontal_then_vertical, reverse_alternate, .. } if axes.two_d => {
+                let (x, y) = Self::grid_coords(n, nx, ny, horizontal_then_vertical, reverse_alternate);
+                format!("{}{}", axes.primary.item_number(x), axes.secondary.item_number(y))
+            }
+            _ => axes.primary.item_number(n),
+        }
+    }
+
     /// `DIALOG_CREATE_ARRAY::TransferDataFromWindow`'s checks of the numbers: at least one row and column, no zero spacing between
     /// several, no zero angle between several points. `Err` carries the dialog's message.
     pub fn validate(&self) -> Result<(), String> {
@@ -176,7 +191,7 @@ impl ArrayGeometry {
 // ----------------------------------------------------------------------------------------------------- positions
 
 /// `EDA_SHAPE::getPosition`: the centre of an arc or a circle, the first vertex of a polygon, the start of everything else.
-fn shape_position(s: &Shape) -> Point {
+pub(crate) fn shape_position(s: &Shape) -> Point {
     match s {
         Shape::Arc { start, mid, end, .. } => arc_centre(*start, *mid, *end).unwrap_or(*start),
         Shape::Circle { center, .. } => *center,

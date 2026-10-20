@@ -13,7 +13,7 @@ import type { BoardState, BoardText, Cmd, CmdDimension, CmdDimensionKind, Dimens
 import { defaultSearch } from "../kicad-port/schFind";
 import { initialNavHistory, pushToHistory, type NavHistory } from "../kicad-port/navHistory";
 import { revisionOf } from "../kicad-port/checkRevision";
-import { patchDrcExcluded, patchDrcSeverity, patchErcSeverity } from "../kicad-port/rcItems";
+import { patchDrcDeleteAll, patchDrcDeleteMarker, patchDrcExcluded, patchDrcSeverity, patchErcDeleteAll, patchErcDeleteMarker, patchErcExcluded, patchErcSeverity, type DrcPage } from "../kicad-port/rcItems";
 import type { LineMode } from "../kicad-port/schLineMode";
 import { fetchDrc, fetchErc, fetchFill, postFillClear, postFillKicad, fetchLint, fetchRatsnest, fetchSchematic, fetchState, fetchVersion, fetchView, postCarry, postClipboardCopy, postCmd, postRedo, postRoute, postUndo, postView, type SharedView } from "../api/client";
 import { fitTransform } from "../kicad-port/view";
@@ -30,6 +30,7 @@ import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { substituteSelection } from "../kicad-port/groupTree";
+import { substituteSchSelection } from "../kicad-port/schGroups";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
 import { DEFAULT_BOARD_CONTROL, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
@@ -552,6 +553,8 @@ export interface StudioState {
    * its own members selects that member alone instead of the whole group
    * (see `withGroupSubstitution` in this file). `null` outside any group. */
   enteredGroupId: string | null;
+  /** The group of the sheet in view that is being worked in (`SCH_SELECTION_TOOL::m_enteredGroup`): its own members, and the groups directly in it, are picked one by one. `null` outside any group. */
+  schEnteredGroupId: string | null;
   /** Refs to flash/outline because a problem in the panel references them. */
   hot: Set<string>;
   netHighlight: string | null;
@@ -737,6 +740,11 @@ export interface StudioState {
    */
   schWirePick: { id: string; vertices: number[] } | null;
   /**
+   * The ends of several wires picked at once: what the Drag tool takes when the wire stubs of Pin Helpers > Wire are handed to it (`SetFlags( ENDPOINT )` on each new wire). Read by
+   * `pickedVertices` while the selection is those wires; cleared when the drag is dropped or cancelled.
+   */
+  schPickedEnds: Record<string, number[]> | null;
+  /**
    * base_screen.cpp's `m_LocalOrigin` (default (0,0), same as source) --
    * the status bar's dx/dy/dist is always relative to THIS point, set by
    * Space (common.Control.resetLocalCoords, pcb_base_frame.cpp's
@@ -886,6 +894,7 @@ const initialState: StudioState = {
   glbError: null,
   selection: new Set(),
   enteredGroupId: null,
+  schEnteredGroupId: null,
   hot: new Set(),
   netHighlight: null,
   schLineMode: 1,
@@ -966,6 +975,7 @@ const initialState: StudioState = {
   cursorUm: null,
   moveOriginUm: null,
   schWirePick: null,
+  schPickedEnds: null,
   localOriginUm: { x: 0, y: 0 },
   prefs: loadPreferences(browserStorage()),
   preferencesDialogOpen: false,
@@ -1024,6 +1034,9 @@ export type Action =
   | { type: "SET_ENTERED_GROUP"; id: string | null }
   /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
   | { type: "ENTER_GROUP"; id: string }
+  | { type: "SET_SCH_ENTERED_GROUP"; id: string | null }
+  /** `SCH_SELECTION_TOOL::EnterGroup`: the group of the sheet becomes the one worked in, and its members are selected. */
+  | { type: "ENTER_SCH_GROUP"; id: string }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -1067,6 +1080,7 @@ export type Action =
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
   | { type: "SET_SCH_WIRE_PICK"; pick: { id: string; vertices: number[] } | null }
+  | { type: "SET_SCH_PICKED_ENDS"; ends: Record<string, number[]> | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SET_PREFERENCES"; prefs: Preferences }
@@ -1087,6 +1101,11 @@ export type Action =
   | { type: "DRC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
   /** The same for the schematic (`set_erc_severities`). */
   | { type: "ERC_PATCH_SEVERITY"; check: string; severity: "error" | "warning" | "ignore"; description: string; version: string | null }
+  /** Delete Marker / Delete All Markers (`DIALOG_DRC::OnDeleteOneClick`, `OnDeleteAllClick`) on the report on screen: the rows leave the lists and the canvas. `version` is given when the deletion also changed the design (an excluded marker's exclusion goes with it): see `ERC_DELETE_MARKER`. */
+  | { type: "DRC_DELETE_MARKER"; page: DrcPage; index: number; /** The row selected after it (an index of the list as it is then), or null. */ select: number | null; version?: string | null }
+  | { type: "DRC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
+  | { type: "ERC_DELETE_MARKER"; index: number; select: number | null; /** As for `ERC_MARK_EXCLUDED`: given when the deletion also changed the design (an excluded marker's exclusion goes with it). */ version?: string | null }
+  | { type: "ERC_DELETE_ALL"; includeExclusions: boolean; version?: string | null }
   | { type: "SET_DRC_SELECTED"; index: number | null }
   | { type: "SET_DRC_LINT_SELECTED"; index: number | null }
   | { type: "SET_ERC_DIALOG_OPEN"; open: boolean }
@@ -1094,7 +1113,7 @@ export type Action =
   | { type: "ERC_OK"; erc: ErcReport; /** The revision the report was computed on. */ version: string | null }
   | { type: "ERC_ERR"; message: string }
   /** Exclude / un-exclude one finding in the report on screen without re-running kicad-cli (the exclusion itself is a persisted `Cmd`); `version` is the revision the patched report is now valid for (checkRevision.ts's `revisionAfterOwnEdit`): the board's after that Cmd when the report was current, so it is not called out of date by its own exclusion -- the report's own when it already was out of date. */
-  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; version: string | null }
+  | { type: "ERC_MARK_EXCLUDED"; check: string; location: string; excluded: boolean; comment?: string; version: string | null }
   | { type: "SET_ERC_SELECTED"; index: number | null }
   | { type: "SET_ERC_LINT_SELECTED"; index: number | null }
   | { type: "LINT_OK"; lint: LintReport }
@@ -1232,7 +1251,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_TAB":
       return { ...state, tab: action.tab };
     case "SET_SHEET_PATH":
-      return { ...state, currentSheetPath: action.path, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
+      // `SCH_SELECTION_TOOL::Reset`: a new sheet leaves the group that was entered
+      return { ...state, currentSheetPath: action.path, schEnteredGroupId: null, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
     case "SET_SCH_NAV":
       return { ...state, schNav: action.nav };
     case "SET_SCH_LINE_MODE":
@@ -1246,6 +1266,12 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION": {
+      // On the schematic the groups are the sheet's: a pin, a field or a sheet pin takes the group of its symbol or sheet (`getClosestGroup`).
+      if (state.tab === "schematic" && state.schematic) {
+        if (action.raw || (state.schematic.groups ?? []).length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
+        const { ids, exits } = substituteSchSelection(state.schematic, action.refs, state.schEnteredGroupId);
+        return { ...state, selection: new Set(ids), armed: null, armedFootprint: null, schEnteredGroupId: exits ? null : state.schEnteredGroupId };
+      }
       const groups = state.board?.drawings?.groups;
       if (action.raw || !groups || groups.length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
       // Selecting something outside the entered group leaves it (`PCB_SELECTION_TOOL::select`: `ExitGroup()`).
@@ -1254,6 +1280,14 @@ function reducer(state: StudioState, action: Action): StudioState {
     }
     case "SET_ENTERED_GROUP":
       return { ...state, enteredGroupId: action.id };
+    case "SET_SCH_ENTERED_GROUP":
+      return { ...state, schEnteredGroupId: action.id };
+    case "ENTER_SCH_GROUP": {
+      // `SCH_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its direct members -- each as it is, a group inside it too.
+      const group = (state.schematic?.groups ?? []).find((g) => g.id === action.id);
+      if (!group) return state;
+      return { ...state, schEnteredGroupId: group.id, selection: new Set(group.member_ids), armed: null };
+    }
     case "ENTER_GROUP": {
       // `PCB_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its members -- each as it is, a group inside it too.
       const group = state.board?.drawings?.groups.find((g) => g.id === action.id);
@@ -1314,6 +1348,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           armed: null,
           armedFootprint: null,
           movePreview: null,
+          schPickedEnds: null,
           activeTool: "select",
           drawState: null,
           zonePending: null,
@@ -1339,6 +1374,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       }
       // Nothing selected but still inside a group: the selection tool's next `else if` tier, `ExitGroup()` -- which leaves the group and does not select
       // it (`ExitGroup( bool aSelectGroup = false )`; only the Leave Group action, `ExitGroup( true )`, does).
+      if (state.tab === "schematic" && state.schEnteredGroupId != null) {
+        return { ...state, schEnteredGroupId: null };
+      }
       if (state.enteredGroupId != null) {
         return { ...state, enteredGroupId: null };
       }
@@ -1368,7 +1406,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, movePreview: board ? { ...p, rotateStepDeg: state.prefs.rotationStepDeg, flipDirection: state.prefs.flipDirection } : p };
     }
     case "SET_ACTIVE_TOOL":
-      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null };
+      // (the ends of the wires Pin Helpers handed to the Drag tool are the Drag tool's: they go when it does)
+      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null, schPickedEnds: action.tool === "drag" ? state.schPickedEnds : null };
     case "SET_VIEW":
       return { ...state, view: action.view };
     case "SET_SCHEMATIC_VIEW":
@@ -1440,6 +1479,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, moveOriginUm: action.at };
     case "SET_SCH_WIRE_PICK":
       return { ...state, schWirePick: action.pick };
+    case "SET_SCH_PICKED_ENDS":
+      return { ...state, schPickedEnds: action.ends };
     case "SET_LOCAL_ORIGIN":
       return { ...state, localOriginUm: action.at };
     case "TOGGLE_AUTO_PAN":
@@ -1448,8 +1489,11 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, prefs: action.prefs };
     case "SET_PREFERENCES_DIALOG_OPEN":
       return { ...state, preferencesDialogOpen: action.open };
-    case "SCHEMATIC_OK":
-      return { ...state, schematic: action.schematic, schematicError: null, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
+    case "SCHEMATIC_OK": {
+      // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
+      const schEntered = state.schEnteredGroupId != null && (action.schematic.groups ?? []).some((g) => g.id === state.schEnteredGroupId) ? state.schEnteredGroupId : null;
+      return { ...state, schematic: action.schematic, schematicError: null, schEnteredGroupId: schEntered, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
+    }
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":
@@ -1477,6 +1521,18 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "ERC_PATCH_SEVERITY":
       if (!state.erc) return state;
       return { ...state, erc: patchErcSeverity(state.erc, action.check, action.severity, action.description), ercVersion: action.version, ercSelected: null };
+    case "DRC_DELETE_MARKER":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcDeleteMarker(state.drc, action.page, action.index), drcSelected: action.page === "violations" ? action.select : state.drcSelected, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };
+    case "DRC_DELETE_ALL":
+      if (!state.drc) return state;
+      return { ...state, drc: patchDrcDeleteAll(state.drc, action.includeExclusions), drcSelected: null, ...(action.version !== undefined ? { drcVersion: action.version } : {}) };
+    case "ERC_DELETE_MARKER":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcDeleteMarker(state.erc, action.index), ercSelected: action.select, ...(action.version !== undefined ? { ercVersion: action.version } : {}) };
+    case "ERC_DELETE_ALL":
+      if (!state.erc) return state;
+      return { ...state, erc: patchErcDeleteAll(state.erc, action.includeExclusions), ercSelected: null, ...(action.version !== undefined ? { ercVersion: action.version } : {}) };
     case "SET_DRC_SELECTED":
       return { ...state, drcSelected: action.index, drcLintSelected: action.index === null ? state.drcLintSelected : null };
     case "SET_DRC_LINT_SELECTED":
@@ -1489,17 +1545,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, erc: action.erc, ercRunning: false, ercError: null, ercVersion: action.version, ercSelected: null };
     case "ERC_ERR":
       return { ...state, ercRunning: false, ercError: action.message };
-    case "ERC_MARK_EXCLUDED": {
+    case "ERC_MARK_EXCLUDED":
       if (!state.erc) return state;
-      const counts = { ...state.erc.counts };
-      const violations = state.erc.violations.map((v) => {
-        if (v.check !== action.check || v.location !== action.location) return v;
-        if (action.excluded && v.severity !== "excluded") counts[v.check] = Math.max(0, (counts[v.check] ?? 0) - 1);
-        if (!action.excluded && v.severity === "excluded") counts[v.check] = (counts[v.check] ?? 0) + 1;
-        return { ...v, severity: action.excluded ? ("excluded" as const) : (v.base_severity ?? ("error" as const)) };
-      });
-      return { ...state, erc: { ...state.erc, violations, counts }, ercVersion: action.version };
-    }
+      return { ...state, erc: patchErcExcluded(state.erc, [{ check: action.check, location: action.location }], action.excluded, action.comment ?? ""), ercVersion: action.version };
     case "SET_ERC_SELECTED":
       return { ...state, ercSelected: action.index, ercLintSelected: action.index === null ? state.ercLintSelected : null };
     case "SET_ERC_LINT_SELECTED":
@@ -1710,6 +1758,12 @@ export interface StudioApi {
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
    */
   placeNewSchItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
+  /**
+   * A schematic command that puts new items on the sheet and hands them to the Drag tool at once, as Pin Helpers > Wire does (`RunSynchronousAction( SCH_ACTIONS::drag, &commit )`): the step is held
+   * open (`carry: "begin"`), `plan` reads the sheet before and after and says what to select, which ends of which wires are picked and where the hold is, the drop joins the step and Escape takes
+   * the new items away again (`revertCarriedPlacement`). False when the command was refused; a command that made nothing to drag stands as a step of its own.
+   */
+  dragNewSchItems: (cmd: Cmd, plan: (before: Schematic, after: Schematic) => { ids: string[]; ends: Record<string, number[]>; at: { x: number; y: number } } | null) => Promise<boolean>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
   /**
@@ -1756,7 +1810,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
   const carriedPlacementRef = useRef(false);
   useEffect(() => {
     // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
-    if (state.activeTool !== "move" && carriedPlacementRef.current) {
+    if (state.activeTool !== "move" && state.activeTool !== "drag" && carriedPlacementRef.current) {
       carriedPlacementRef.current = false;
       void postCarry("commit");
     }
@@ -2010,7 +2064,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
       // With a group entered on the board, what a command adds joins it (`BOARD_COMMIT::Push`: `Cmd::InGroup`).
       const st = stateRef.current;
-      const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : cmd;
+      // (On the schematic the same holds for the group of the sheet: `SCH_COMMIT::Push` adds what a command made to `enteredGroup`.)
+      const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
@@ -2485,6 +2540,26 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }
+      return true;
+    },
+    dragNewSchItems: async (cmd, plan) => {
+      const st = stateRef.current;
+      const sheet = st.currentSheetPath;
+      const before = st.schematic;
+      if (!before) return false;
+      const ok = await runCmd(cmd, "begin");
+      if (!ok) return false;
+      const after = await fetchSchematic(sheet).catch(() => null);
+      const dragging = after ? plan(before, after) : null;
+      if (!dragging || dragging.ids.length === 0) {
+        await postCarry("commit"); // nothing to drag: what the command did stands
+        return true;
+      }
+      carriedPlacementRef.current = true;
+      dispatch({ type: "SET_SELECTION", refs: dragging.ids, raw: true });
+      dispatch({ type: "SET_SCH_PICKED_ENDS", ends: dragging.ends });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: dragging.at });
       return true;
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {

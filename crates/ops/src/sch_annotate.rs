@@ -596,6 +596,10 @@ pub(crate) fn rename_in_section(sch: &mut SchematicSection, renames: &[SecRename
     }
     sch.extras.locked.sort();
     sch.extras.locked.dedup();
+    // and so does its place in a group
+    for (old, new) in &whole {
+        crate::sch_groups::rename_member(sch, old, new);
+    }
     // and the symbols themselves
     for r in renames {
         match r.item {

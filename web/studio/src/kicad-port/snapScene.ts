@@ -164,7 +164,7 @@ export function padHit(pad: Pick<Pad, "x" | "y" | "w" | "h" | "round" | "outline
 const COPPER = (layers: readonly string[] | undefined): readonly string[] => (layers && layers.length > 0 ? layers.filter((l) => l.endsWith(".Cu")) : ["F.Cu", "B.Cu"]);
 
 /** `PCB_SHAPE` -> `GetBoardIntersectable`: a segment, circle, arc or rectangle (a polygon and a Bezier have none). */
-function shapeGeom(s: Shape): Geom | undefined {
+export function shapeGeom(s: Shape): Geom | undefined {
   switch (s.kind) {
     case "segment":
       return seg(s.start, s.end);
@@ -179,7 +179,7 @@ function shapeGeom(s: Shape): Geom | undefined {
   }
 }
 
-function shapeHit(s: Shape): (p: Pt) => boolean {
+export function shapeHit(s: Shape): (p: Pt) => boolean {
   const half = s.stroke_width / 2;
   switch (s.kind) {
     case "segment":

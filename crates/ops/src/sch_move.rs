@@ -228,12 +228,41 @@ fn grid_of(g: Um) -> Um {
 
 /// Resolve `ids` (and which points of a wire are picked) to the scene's items. A locked item is left out
 /// (`FilterSelectionForLockedItems`); no item left is an error, so an edit that would change nothing leaves no undo step.
+///
+/// A group stands for the items below it, nested groups opened (`SCH_GROUP::Move`, `Rotate`, `Mirror` hand the work to each member, and a member that is a
+/// group hands it on). Those items are held as the group holds them ([`Scene::rigid`]), and a selection that is one group alone is turned on itself
+/// ([`Scene::lone_group`]). A group with a locked item anywhere below it is no selection at all (`FilterSelectionForLockedItems`:
+/// `lockedDescendant`).
 pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<String, Vec<usize>>) -> Result<(), Vec<CheckResult>> {
     if ids.is_empty() {
         return Err(fail("ops_nothing_selected", "selection", "nothing is selected"));
     }
     let mut locked_skipped = 0usize;
+    // what is asked for, and whether it comes through a group
+    let mut wanted: Vec<(String, bool)> = Vec::new();
+    let (mut groups_in, mut loose_in) = (0usize, 0usize);
     for id in ids {
+        if scene.sch.extras.is_group(id) {
+            if crate::sch_groups::group_has_locked(&scene.sch, id) {
+                locked_skipped += 1;
+                continue;
+            }
+            groups_in += 1;
+            for leaf in scene.sch.extras.group_leaves(id) {
+                if !wanted.iter().any(|(w, _)| *w == leaf) {
+                    wanted.push((leaf, true));
+                }
+            }
+        } else {
+            loose_in += 1;
+            match wanted.iter_mut().find(|(w, _)| w == id) {
+                Some(entry) => entry.1 = false,
+                None => wanted.push((id.clone(), false)),
+            }
+        }
+    }
+    scene.lone_group = groups_in == 1 && loose_in == 0;
+    for (id, via_group) in &wanted {
         // a field picked on its own (`SCH_FIELD`): of a locked item it cannot be (`SCH_FIELD::IsLocked`)
         if crate::sch_fields::is_field_id(id) {
             let Some(f) = scene.find_field(id) else {
@@ -248,13 +277,19 @@ pub(crate) fn select(scene: &mut Scene, ids: &[String], vertices: &BTreeMap<Stri
         }
         let items = find_items(scene, id);
         if items.is_empty() {
+            if *via_group {
+                continue; // a member the sheet no longer has: the group is read as it stands
+            }
             return Err(fail("ops_unknown_item", id, "no item with this id on the sheet"));
         }
-        if scene.sch.extras.is_locked(id) || scene.sch.extras.is_locked(id.split('#').next().unwrap_or(id)) {
+        if crate::sch_groups::locked_in_tree(&scene.sch, id) {
             locked_skipped += 1;
             continue;
         }
         for it in items {
+            if *via_group {
+                scene.rigid.insert(it);
+            }
             match it {
                 Item::Seg(i) => {
                     let Some((wi, k)) = scene.segs[i].from else { continue };
@@ -463,6 +498,23 @@ fn selection_center(scene: &Scene, items: &[Item], fields: &[FieldSel]) -> Point
     }
 }
 
+/// `SCH_GROUP::GetPosition`: the centre of the box of the items below the group -- every kind counted (a text or a label by its anchor: the sheet has no
+/// text metrics here).
+fn group_center(scene: &Scene, items: &[Item]) -> Point {
+    let mut lo: Option<Point> = None;
+    let mut hi: Option<Point> = None;
+    for it in items {
+        if let Some((a, b)) = scene.item_box(*it) {
+            lo = Some(lo.map_or(a, |l| Point { x: l.x.min(a.x), y: l.y.min(a.y) }));
+            hi = Some(hi.map_or(b, |h| Point { x: h.x.max(b.x), y: h.y.max(b.y) }));
+        }
+    }
+    match (lo, hi) {
+        (Some(l), Some(h)) => box_center((l, h)),
+        _ => Point::default(),
+    }
+}
+
 /// How many items `SCH_EDIT_TOOL::Rotate` counts: a wire is a line per segment.
 fn principal_count(scene: &Scene, items: &[Item]) -> usize {
     items.iter().map(|it| match it {
@@ -503,6 +555,25 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um,
     let reference = if moving { about } else { None };
 
     match turn {
+        Turn::RotCcw | Turn::RotCw if scene.lone_group => {
+            // `case SCH_GROUP_T`: "Rotate the group on itself. Groups do not have an anchor point." -- about the half-grid point nearest its centre (even while it is
+            // held: the case sets `rotPoint` after the reference point was taken), then moved so that point is again the nearest one to its centre
+            let ccw = turn == Turn::RotCcw;
+            let pivot = half_grid(group_center(scene, &all), grid);
+            for &it in &all {
+                if matches!(it, Item::SheetPin(s, _) if sheets.contains(&s)) {
+                    continue; // the sheet turns its pins
+                }
+                rotate_item(scene, it, pivot, ccw, grid);
+            }
+            let back = half_grid(group_center(scene, &all), grid);
+            let shift = Point { x: pivot.x - back.x, y: pivot.y - back.y };
+            if shift != (Point { x: 0, y: 0 }) {
+                for &it in &all {
+                    scene.move_item(it, shift);
+                }
+            }
+        }
         Turn::RotCcw | Turn::RotCw => {
             let ccw = turn == Turn::RotCcw;
             if principal_count(scene, &principal) + loose.len() == 1 && principal.is_empty() {
@@ -530,6 +601,17 @@ fn turn_selection(scene: &mut Scene, turn: Turn, about: Option<Point>, grid: Um,
                 for f in &loose {
                     scene.rotate_field_about(f, center, ccw);
                 }
+            }
+        }
+        Turn::MirrorH | Turn::MirrorV if scene.lone_group => {
+            // a lone item mirrors about its own position, and a group's position is the centre of its box (`default: item->MirrorHorizontally( item->GetPosition().x )`)
+            let vertical = turn == Turn::MirrorV;
+            let c = group_center(scene, &all);
+            for &it in &all {
+                if matches!(it, Item::SheetPin(s, _) if sheets.contains(&s)) {
+                    continue;
+                }
+                mirror_item(scene, it, c, vertical, grid);
             }
         }
         Turn::MirrorH | Turn::MirrorV => {
@@ -950,7 +1032,7 @@ fn rotate_sheet_pin(sheet: &mut SheetInstance, pin: usize, before: &SheetInstanc
 }
 
 /// 0 top, 1 right, 2 bottom, 3 left.
-fn side_of(sheet: &SheetInstance, p: Point) -> u8 {
+pub(crate) fn side_of(sheet: &SheetInstance, p: Point) -> u8 {
     let (l, t, r, b) = (sheet.at.x, sheet.at.y, sheet.at.x + sheet.size.0, sheet.at.y + sheet.size.1);
     if p.x <= l {
         3

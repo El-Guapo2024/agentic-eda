@@ -111,3 +111,72 @@ fn a_power_symbols_value_is_below_ground_and_above_a_supply() {
     let flipped = PowerSymbol { rot: 180_000, ..gnd };
     assert_eq!(power_fields(&sch, &flipped)[1].at, (10_000.0, 10_000.0 - 3_810.0));
 }
+
+// ------------------------------------------------------------------------------------------------------ user-defined fields
+
+fn with_user_fields(fields: &[(&str, &str)]) -> SchematicSection {
+    let mut sch = SchematicSection::default();
+    let map = sch.user_fields.entry("R1".into()).or_default();
+    for (name, text) in fields {
+        map.insert(name.to_string(), text.to_string());
+    }
+    sch
+}
+
+#[test]
+fn the_specs_of_a_symbol_are_the_four_standard_fields_then_its_user_fields_hidden() {
+    let sym = resistor(Point { x: 50_800, y: 50_800 }, 0, false);
+    let plain = symbol_specs_in(&SchematicSection::default(), &sym, None, "");
+    assert_eq!(plain, symbol_specs(&sym, None, ""), "no user fields: the four");
+    let sch = with_user_fields(&[("MPN", "ERJ-3EKF"), ("Manufacturer", "Panasonic"), ("value", "dropped"), ("DATASHEET", "dropped")]);
+    let specs = symbol_specs_in(&sch, &sym, None, "");
+    let names: Vec<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Reference", "Value", "Footprint", "Datasheet", "MPN", "Manufacturer"], "by name, and not a field named like a standard one");
+    assert!(specs[4..].iter().all(|s| !s.visible && s.can_autoplace));
+    assert_eq!(specs[4].text, "ERJ-3EKF");
+    // a user field of another symbol is not this one's
+    let other = SymbolInstance { id: "R2".into(), ..sym };
+    assert_eq!(symbol_specs_in(&sch, &other, None, "").len(), 4);
+}
+
+#[test]
+fn a_user_field_is_placed_with_the_others_and_a_hidden_one_takes_the_first_ones_place() {
+    let lib = eda_model::symbol::builtin("Device:R");
+    let sym = resistor(Point { x: 50_800, y: 50_800 }, 0, false);
+    let sch = with_user_fields(&[("MPN", "ERJ-3EKF")]);
+    let geom = SymbolGeom::of(&sym, &part("R1", 2), lib.as_ref());
+    let hidden = symbol_specs_in(&sch, &sym, None, "");
+    let placed = autoplace_symbol(&sym, &geom, &hidden);
+    assert_eq!(placed.len(), 5);
+    assert!(!placed[4].visible);
+    assert_eq!((placed[4].dx, placed[4].dy), (placed[0].dx, placed[0].dy), "a hidden field takes the Reference's place");
+    // shown, it is the third of the fields that stack beside the symbol
+    let mut shown = hidden.clone();
+    shown[4].visible = true;
+    let placed = autoplace_symbol(&sym, &geom, &shown);
+    assert!(placed[4].visible);
+    let at = |p: &FieldPlacement| page_field(sym.at, sym.rot, sym.mirrored, geom.width, p, "x").at;
+    let (r, v, m) = (at(&placed[0]), at(&placed[1]), at(&placed[4]));
+    assert!(m.1 > v.1 && v.1 > r.1, "stacked downwards: {r:?} {v:?} {m:?}");
+    assert!((m.0 - r.0).abs() < 1e-6, "on one left edge");
+}
+
+#[test]
+fn a_page_position_taken_into_the_symbols_frame_and_back_is_the_same_whatever_the_turn_and_mirror() {
+    // what the reader of a file does with a user field's `(at x y angle)` and the writer undoes (`local_placement_on_page` then `page_field`)
+    let at = Point { x: 50_800, y: 50_800 };
+    for rot in [0, 90_000, 180_000, 270_000] {
+        for mirrored in [false, true] {
+            for width in [0.0, 5_080.0] {
+                for (h, v, vertical) in [(TextJustify::Left, TextVAlign::Center, false), (TextJustify::Right, TextVAlign::Top, true), (TextJustify::Center, TextVAlign::Bottom, false)] {
+                    let anchor = (57_150.0, 44_450.0);
+                    let local = local_placement_on_page(at, rot, mirrored, width, "MPN", anchor, vertical, h, v, true);
+                    let back = page_field(at, rot, mirrored, width, &local, "x");
+                    assert!((back.at.0 - anchor.0).abs() < 1.0 && (back.at.1 - anchor.1).abs() < 1.0, "rot {rot} mirrored {mirrored} width {width}: {:?}", back.at);
+                    assert_eq!(back.vertical, vertical, "rot {rot} mirrored {mirrored}");
+                    assert_eq!((back.h, back.v), (to_hj(h), to_vj(v)), "rot {rot} mirrored {mirrored} vertical {vertical}");
+                }
+            }
+        }
+    }
+}

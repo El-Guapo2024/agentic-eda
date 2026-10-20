@@ -58,7 +58,7 @@ import { ercSeverityShown } from "./schematic/displayOptions";
 import { ercMarkerPosition } from "./schematic/ercMarkerPosition";
 import { ERC_MARKER_HIT_UM, nearestMarker } from "../kicad-port/markerHit";
 import { ercKey, rcMenu } from "../kicad-port/rcItems";
-import { ercSettingSeverity, ercTitle, isPinMapCheck, runMarkerMenu, toMenuEntries } from "../actions/checkerOps";
+import { ercMenuContext, runMarkerMenu, selectMarkerErc, showErcInDialog, toMenuEntries } from "../actions/checkerOps";
 import { askExclusionComment } from "../state/checkerView";
 import { summarizeSelection } from "./schematic/schSelectionSummary";
 import { schContextMenu } from "../kicad-port/schContextMenu";
@@ -77,6 +77,11 @@ import { hitSheet } from "../kicad-port/schControl";
 import { netAtClick } from "../actions/schControlActions";
 import type { Cmd } from "../api/types";
 import { placeSchPaste } from "../actions/schClipboardActions";
+import { boxSelectionWithGroups, groupsOf, leafIds, substituteSchSelection } from "../kicad-port/schGroups";
+import { groupBounds, sheetBoxOf } from "./schematic/schGroupBounds";
+import { isGroup } from "../kicad-port/groupTree";
+import { picker } from "../actions/pcbPicker";
+import { pickNewMemberAt } from "../actions/schGroupActions";
 import { pasteOffset, previewIds, withPaste } from "../kicad-port/schClipboard";
 import { cancelSchPaste, useSchPaste } from "../state/schPasteStore";
 import "../styles/canvas.css";
@@ -334,7 +339,7 @@ export function SchematicView() {
     );
     // `SCH_DRAG_NET_COLLISION_MONITOR`: where the held selection would short two nets or pull a connection apart (the server sends it with the preview)
     const collisionOverlay = held && patch ? patch.net_collision : undefined;
-    paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display });
+    paintSchematic(ctx, state.schematicView, displaySch, { selection: pasteSelection ?? state.selection, netHighlight: state.netHighlight, ercViolations: state.erc?.violations ?? null, ercStale: isStale(state.ercVersion, state.version), ercSelected: state.ercSelected, lintViolations: state.ercDialogOpen ? (state.lint?.schematic.violations ?? null) : null, lintSelected: state.ercLintSelected, display: schControl.display, enteredGroup: state.schEnteredGroupId });
     if (collisionOverlay) paintNetCollision(ctx, state.schematicView.scale || 1, collisionOverlay);
     if (state.drawState?.kind === "wire") {
       // sch_line_wire_bus_tool.cpp doDrawSegments + computeBreakPoint: the
@@ -400,7 +405,7 @@ export function SchematicView() {
     }
     ctx.restore();
     ctx.restore();
-  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display]);
+  }, [sch, displaySch, held, patch, pasteSelection, state.schLineMode, state.schPosture, state.schematicView, state.selection, state.netHighlight, containerSize, state.board?.name, marquee, state.drawState, state.cursorUm, state.erc, state.ercVersion, state.version, state.ercSelected, state.ercDialogOpen, state.lint, state.ercLintSelected, state.activeTool, schControl.display, state.schEnteredGroupId]);
 
   const empty = state.schematicError ?? (!sch ? "Loading schematic…" : null);
 
@@ -525,6 +530,15 @@ export function SchematicView() {
     container.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: pointer.clientX, clientY: pointer.clientY, pointerId: 1, pointerType: "mouse", buttons: dragRef.current ? 1 : 0 }));
   }, [state.schematicView]);
 
+  /** The ERC marker on the sheet at (x, y) that is drawn (its severity is switched on in the display options), or -1. */
+  const ercMarkerAt = (s: NonNullable<typeof sch>, x: number, y: number): number =>
+    nearestMarker(
+      (state.erc?.violations ?? []).map((v) => (ercSeverityShown(v.severity, schControl.display) ? (ercMarkerPosition(v.location, s)?.at ?? null) : null)),
+      x,
+      y,
+      ERC_MARKER_HIT_UM
+    );
+
   return (
     <div
       ref={containerRef}
@@ -558,6 +572,13 @@ export function SchematicView() {
         // A paste in progress: this click drops it where the cursor holds it (`SCH_MOVE_TOOL`'s click, then `commit.Push( _( "Paste" ) )`).
         if (paste) {
           void placeSchPaste(api, dispatch, snapToGrid(wx, wy));
+          return;
+        }
+
+        // PICKER_TOOL::Main: while a pick session runs (actions/pcbPicker.ts: Group Properties' "Click on new member...") a left click answers it -- with the item under it, the outermost
+        // group it is in -- and does nothing else.
+        if (picker.session()) {
+          picker.click({ point: { x: wx, y: wy }, item: () => pickNewMemberAt(sch, wx, wy, state.schematicView.scale, state.schSelectionFilter, state.schEnteredGroupId) });
           return;
         }
 
@@ -718,7 +739,23 @@ export function SchematicView() {
         // The item under the pointer (components/schematic/schPick.ts): a pin the pointer is on, a shown field, a symbol, any other placed item (a label, text, power symbol,
         // junction, no-connect, bus entry, sheet or drawn shape -- tight, screen-sized tolerance) and last a wire (`SCH_SELECTION_TOOL::selectPoint`: a click on a wire
         // selects it; the net highlight is a tool of its own). Every kind of item but a pin is picked up and dragged the same way.
-        const picked = pickItem(sch, wx, wy, state.schematicView.scale, selectable, "first");
+        // A left click on an ERC marker selects it: `SCH_SELECTION_TOOL` takes an `SCH_MARKER` like any item ("always selectable") and `SCH_INSPECTION_TOOL::CrossProbe`
+        // selects its row in the dialog when that is shown. A pin the pointer is exactly on wins (`GuessSelectionCandidates`: "closest" is a pin or a junction).
+        if (!hasModifier(modifiers) && state.activeTool === "select") {
+          const markerIndex = ercMarkerAt(sch, wx, wy);
+          if (markerIndex >= 0 && !pickItem(sch, wx, wy, state.schematicView.scale, selectable, "only")) {
+            selectMarkerErc({ api, dispatch }, markerIndex);
+            return;
+          }
+        }
+        const picked0 = pickItem(sch, wx, wy, state.schematicView.scale, selectable, "first");
+        // `filterCollectorForHierarchy`: an item of a group is picked as the outermost group that holds it inside the group worked in (a pin and a field as their symbol's); an item outside
+        // the group worked in leaves it (`select`: `ExitGroup()`), and so does a click on nothing outside its box (`selectPoint`).
+        const pickedSub = picked0 ? substituteSchSelection(sch, [picked0], state.schEnteredGroupId) : null;
+        const enteredBox = state.schEnteredGroupId ? groupBounds(sch, state.schEnteredGroupId) : null;
+        const outsideEntered = !picked0 && enteredBox != null && (wx < enteredBox.minX || wx > enteredBox.maxX || wy < enteredBox.minY || wy > enteredBox.maxY);
+        if (pickedSub?.exits || outsideEntered) dispatch({ type: "SET_SCH_ENTERED_GROUP", id: null });
+        const picked = pickedSub ? (pickedSub.ids[0] ?? null) : null;
         const wireId = picked && sch.wires.some((w) => w.id === picked) ? picked : null;
         if (picked) {
           dispatch({ type: "SET_NET_HIGHLIGHT", net: null });
@@ -752,7 +789,7 @@ export function SchematicView() {
           const wire = wireId ? sch.wires.find((w) => w.id === wireId) : undefined;
           const vertices = wire && refs.length === 1 ? (wirePick(wire, [wx, wy], tolerance) ?? undefined) : undefined;
           dispatch({ type: "SET_SCH_WIRE_PICK", pick: wire && vertices && refs.length === 1 ? { id: wire.id, vertices } : null });
-          const dragOrigin = snap.dragOrigin([wx, wy], refs);
+          const dragOrigin = snap.dragOrigin([wx, wy], leafIds(sch, refs));
           const origin: [number, number] = [dragOrigin[0], dragOrigin[1]];
           dispatch({ type: "SET_MOVE_ORIGIN", at: { x: wx, y: wy } });
           dragRef.current = { kind: "move", refs, startWorld: [wx, wy], origin, moved: false, vertices: wire && vertices ? { [wire.id]: vertices } : undefined };
@@ -783,8 +820,10 @@ export function SchematicView() {
           // (KiCad warps the pointer to the held point when the move starts; a page may not, so the cursor is that point plus the pointer's travel since: the item stays where it was grabbed.)
           const origin = state.moveOriginUm ?? { x: wx, y: wy };
           const ids = [...state.selection];
-          const [ox, oy] = snap.dragOrigin([origin.x, origin.y], ids);
-          const [sx, sy] = snap.moveCursor(heldCursor([ox, oy], [origin.x, origin.y], [wx, wy]), modsRef.current, ids);
+          // a group is held as the items below it (`SCH_GROUP::Move`): the reference point and the grid are theirs
+          const held = leafIds(sch, ids);
+          const [ox, oy] = snap.dragOrigin([origin.x, origin.y], held);
+          const [sx, sy] = snap.moveCursor(heldCursor([ox, oy], [origin.x, origin.y], [wx, wy]), modsRef.current, held);
           // R, Shift+R, X and Y pressed since the items were picked up stay on the preview as it follows the cursor
           // (Whole micrometres, as KiCad's integer coordinates are: with the grid off (Ctrl) the cursor is wherever the pointer is, and the verbs take integer deltas.)
           dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: ids, kind: armedKind, dxUm: Math.round(sx - ox), dyUm: Math.round(sy - oy), holdUm: [sx, sy], vertices: pickedVertices(state), turns: state.movePreview?.turns } });
@@ -818,7 +857,7 @@ export function SchematicView() {
           // of travel along an axis, or on macOS a motion after 300 ms held -- nothing is picked up, so the release is still a plain click.
           if (!motion?.dragging) return;
           drag.moved = true;
-          const [sx, sy] = snap.moveCursor(heldCursor(drag.origin, drag.startWorld, [wx, wy]), modsRef.current, drag.refs);
+          const [sx, sy] = snap.moveCursor(heldCursor(drag.origin, drag.startWorld, [wx, wy]), modsRef.current, leafIds(sch, drag.refs));
           dispatch({ type: "SET_MOVE_PREVIEW", preview: { refs: drag.refs, kind: "sch_drag", dxUm: Math.round(sx - drag.origin[0]), dyUm: Math.round(sy - drag.origin[1]), holdUm: [sx, sy], vertices: drag.vertices, turns: state.movePreview?.turns } });
         }
       }}
@@ -840,16 +879,11 @@ export function SchematicView() {
         // A right click on an ERC marker (a circle the last run left on the sheet) opens the marker's menu -- Exclude, Exclude all of this type, Change
         // severity, Show in the dialog -- instead of the item menu: an `SCH_MARKER` is an item of its own with its own entries.
         const found = state.erc?.violations ?? [];
-        const markerIndex = nearestMarker(
-          found.map((v) => (ercSeverityShown(v.severity, schControl.display) ? (ercMarkerPosition(v.location, sch)?.at ?? null) : null)),
-          wx,
-          wy,
-          ERC_MARKER_HIT_UM
-        );
+        const markerIndex = ercMarkerAt(sch, wx, wy);
         if (markerIndex >= 0) {
           const v = found[markerIndex]!;
           dispatch({ type: "SET_ERC_SELECTED", index: markerIndex });
-          const spec = rcMenu({ domain: "erc", title: ercTitle(v.check), excluded: v.severity === "excluded", severity: ercSettingSeverity(v), pinMap: isPinMapCheck(v.check), onCanvas: true, comments: false });
+          const spec = rcMenu(ercMenuContext(v, true));
           setContextMenu(null);
           setMarkerMenu({ x: e.clientX, y: e.clientY, entries: toMenuEntries(spec, (id) => void runMarkerMenu({ api, dispatch }, { domain: "erc", index: markerIndex }, id, askExclusionComment), ercKey(v) !== null) });
           return;
@@ -858,26 +892,41 @@ export function SchematicView() {
         // The menu opens at the cursor, which is where the actions it offers (Break, Slice, ...) read their position from.
         dispatch({ type: "SET_CURSOR", at: { x: wx, y: wy } });
         const scale = state.schematicView.scale || 1;
-        const hit = pickItem(sch, wx, wy, scale, selectable, "first");
+        const hit0 = pickItem(sch, wx, wy, scale, selectable, "first");
+        const hit = hit0 ? (substituteSchSelection(sch, [hit0], state.schEnteredGroupId).ids[0] ?? hit0) : null;
         let ids = [...state.selection];
         if (hit && !state.selection.has(hit)) ids = [hit];
         else if (!hit && ids.length > 0) ids = [];
         if (ids.length !== state.selection.size || ids.some((id) => !state.selection.has(id))) dispatch({ type: "SET_SELECTION", refs: ids });
-        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps })) });
+        setContextMenu({ x: e.clientX, y: e.clientY, nodes: schContextMenu(summarizeSelection(sch, ids, [wx, wy], 10 / scale, { allowPinSwaps: state.prefs.allowUnconstrainedPinSwaps, inGroup: state.schEnteredGroupId != null })) });
       }}
       onDoubleClick={(e) => {
         // A double-click on a hierarchical sheet enters it (`SCH_SELECTION_TOOL` -> `SCH_ACTIONS::enterSheet`); on any other item it opens its Properties
         // (`SCH_ACTIONS::properties`): the selection the first click made, else the item under the pointer.
         if (sch && state.activeTool === "select" && state.drawState == null) {
           const [wx, wy] = toWorld(e.clientX, e.clientY);
+          // `SCH_EDIT_TOOL::Properties` on an `SCH_MARKER`: `CrossProbe( marker )` -- the ERC dialog comes up with the marker's row selected.
+          const markerHit = ercMarkerAt(sch, wx, wy);
+          if (markerHit >= 0 && !pickItem(sch, wx, wy, state.schematicView.scale || 1, selectable, "only")) {
+            showErcInDialog({ api, dispatch }, markerHit);
+            return;
+          }
           const sheetId = hitSheet(sch.sheets, wx, wy);
-          if (sheetId) {
+          // (a sheet in a group is picked as the group: the double click enters the group, not the sheet)
+          const sheetTop = sheetId ? substituteSchSelection(sch, [sheetId], state.schEnteredGroupId).ids[0] : null;
+          if (sheetId && sheetTop === sheetId) {
             void api.navigateToSheet([...state.currentSheetPath, sheetId]);
             return;
           }
           const scale = state.schematicView.scale || 1;
-          const under = pickItem(sch, wx, wy, scale, selectable, "none");
+          const under0 = pickItem(sch, wx, wy, scale, selectable, "none");
+          const under = under0 ? (substituteSchSelection(sch, [under0], state.schEnteredGroupId).ids[0] ?? under0) : null;
           const ids = promoteLonePin(state.selection.size > 0 ? [...state.selection] : under ? [under] : []);
+          // `SCH_SELECTION_TOOL::Main`: "else if( m_selection.GetSize() == 1 && m_selection[0]->Type() == SCH_GROUP_T ) EnterGroup()"
+          if (ids.length === 1 && isGroup(groupsOf(sch), ids[0]!)) {
+            dispatch({ type: "ENTER_SCH_GROUP", id: ids[0]! });
+            return;
+          }
           if (openSchProperties(sch, ids, dispatch)) return;
         }
         const draw = state.drawState;
@@ -925,7 +974,9 @@ export function SchematicView() {
             const [x1, y1] = toWorld(e.clientX, e.clientY);
             const [x0, y0] = drag.startWorld;
             const box: [number, number, number, number] = [Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1)];
-            const hits = boxItems(sch, box, marquee.crossing, (id) => pickable(id) !== null);
+            // a window takes a group only when it holds the group's whole box, and a member only through its group; a crossing box takes the group of any member it touches
+            const found = boxItems(sch, box, marquee.crossing, (id) => pickable(id) !== null);
+            const hits = boxSelectionWithGroups(sch, found, { minX: box[0], minY: box[1], maxX: box[2], maxY: box[3] }, marquee.crossing, state.schEnteredGroupId, sheetBoxOf(sch), (id) => pickable(id) !== null);
             if (hits.length > 0 || hasModifier(modifiers)) {
               dispatch({ type: "SET_SELECTION", refs: applyBoxSelectionModifiers(state.selection, hits, modifiers) });
             }

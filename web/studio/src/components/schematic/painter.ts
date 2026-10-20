@@ -50,6 +50,7 @@ import { DEFAULT_SCH_DISPLAY, ercSeverityShown, type SchDisplayOptions } from ".
 import { bodyBoundsOf } from "./symbolMarkers";
 import { drawSymbolMarkers } from "./symbolMarkersDraw";
 import { dashPattern, drawSelectionBox, paintGraphics, rgba } from "./schGraphicsPainter";
+import { drawGroups } from "./schGroupPainter";
 import type { SchStroke } from "../../api/schEditTypes";
 import { allItems, itemBounds } from "./schItems";
 import { fieldAnchors, isVerticalTwoPin, type FieldBox } from "../../kicad-port/schFields";
@@ -87,6 +88,8 @@ export interface SchematicPaintOptions {
   lintSelected?: number | null;
   /** The View menu's toggles (hidden pins, which ERC markers, simulation marks); KiCad's defaults when omitted. */
   display?: SchDisplayOptions;
+  /** The group worked in (`SCH_SELECTION_TOOL::m_enteredGroup`): drawn in a box with its name. A group that is selected is drawn so too. */
+  enteredGroup?: string | null;
 }
 
 const REF_FONT = 1.6;
@@ -828,14 +831,19 @@ function drawSheet(ctx: CanvasRenderingContext2D, view: ViewTransform, s: Sheet,
     const [px, py] = p.at;
     const edge = px <= x ? "left" : px >= x + w ? "right" : py <= y ? "top" : "bottom";
     const spin: LabelSpin = edge === "left" ? "right" : edge === "right" ? "left" : edge === "top" ? "bottom" : "up";
+    // the size, bold and italic Sheet Pin Properties set (`SCH_SHEET_PIN` is an `EDA_TEXT`): a bold text is written with a fifth of its size for a pen, an italic one leans
+    const sizeUm = p.size_um && p.size_um > 0 ? p.size_um : LABEL_TEXT_SIZE_UM;
+    const look = { thicknessUm: p.bold ? Math.round(sizeUm / 5) : undefined, italic: p.italic };
     ctx.beginPath();
-    hierLabelOutline(p.shape, spin, [px, py]).forEach(([ox, oy], i) => (i === 0 ? ctx.moveTo(ox, oy) : ctx.lineTo(ox, oy)));
+    hierLabelOutline(p.shape, spin, [px, py], sizeUm).forEach(([ox, oy], i) => (i === 0 ? ctx.moveTo(ox, oy) : ctx.lineTo(ox, oy)));
     ctx.stroke();
-    const gap = 1_270 + 500; // past the flag
-    const sizeUm = 1000;
-    if (edge === "left") drawStrokeText(ctx, p.name, px + gap, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color: pinColor });
-    else if (edge === "right") drawStrokeText(ctx, p.name, px - gap, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "right", color: pinColor });
-    else drawStrokeText(ctx, p.name, px + 600, edge === "top" ? py + gap : py - gap, { sizeUm, justify: "left", color: pinColor });
+    // the name runs into the sheet from the flag (`SCH_HIERLABEL::GetSchematicTextOffset`: `GetTextOffset() + GetTextWidth()`, the text offset being 0.15 of the size), along the
+    // sheet on the left and right borders and up it on the top and bottom ones (`SetSide`'s spin)
+    const dist = Math.round(0.15 * sizeUm) + sizeUm;
+    if (edge === "left") drawStrokeText(ctx, p.name, px + dist, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "left", color: pinColor, ...look });
+    else if (edge === "right") drawStrokeText(ctx, p.name, px - dist, py + sizeUm * MIDDLE_OFFSET_FACTOR, { sizeUm, justify: "right", color: pinColor, ...look });
+    else if (edge === "top") drawStrokeText(ctx, p.name, px, py + dist, { sizeUm, angleRad: -Math.PI / 2, justify: "left", color: pinColor, ...look });
+    else drawStrokeText(ctx, p.name, px, py - dist, { sizeUm, angleRad: -Math.PI / 2, justify: "right", color: pinColor, ...look });
   }
   ctx.restore();
 }
@@ -1101,6 +1109,9 @@ export function paintSchematic(ctx: CanvasRenderingContext2D, view: ViewTransfor
       }
     }
   }
+
+  // The groups: a box around a selected group and around the one worked in (`SCH_PAINTER::draw( SCH_GROUP )`).
+  drawGroups(ctx, view, sch, opts.selection, opts.enteredGroup ?? null);
 
   // ERC markers last of all -- an overlay above every sheet layer, matching real KiCad (and this app's own canvas/painter.ts for DRC).
   if (opts.ercViolations) drawErcMarkers(ctx, view, sch, opts.ercViolations, opts.ercSelected ?? null, opts.ercStale, display);

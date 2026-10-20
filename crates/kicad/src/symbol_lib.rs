@@ -183,55 +183,57 @@ pub(crate) fn build_symbol_table(list: &[Sexpr]) -> LibraryTable {
     out
 }
 
-/// Build one `LibSymbol` from its raw `(symbol "Name" ...)` node. `extends`
-/// borrows the base's graphics/pins/power flag (one level only -- no
-/// library in practice chains more than one deep); the derived symbol's
-/// own properties always win.
+/// Build one `LibSymbol` from its raw `(symbol "Name" ...)` node, as `LIB_SYMBOL::Flatten` would give it: a derived symbol (`extends`, to any depth) is a copy of its
+/// root -- the drawing, the units, the power flag and the pin text options -- with the fields of every symbol on the way down laid over it (a mandatory field with a text of
+/// its own replaces the parent's) and the in-BOM and on-board flags of its nearest parent. A parent the file lacks, or a cycle, ends the chain there.
 fn build_symbol(name: &str, item: &[Sexpr], raw: &HashMap<&str, &[Sexpr]>) -> LibSymbol {
-    let extends = sexpr::find(item, "extends").and_then(|e| sexpr::txt(e, 1)).map(String::from);
-    let base = extends.as_deref().and_then(|b| raw.get(b));
+    // this symbol, its parent, the parent's parent ...
+    let mut chain: Vec<&[Sexpr]> = vec![item];
+    let mut seen: Vec<&str> = vec![name];
+    let mut cur = item;
+    while let Some(parent) = sexpr::find(cur, "extends").and_then(|e| sexpr::txt(e, 1)) {
+        let Some(&p) = raw.get(parent) else { break };
+        if seen.contains(&parent) || chain.len() > 32 {
+            break;
+        }
+        seen.push(parent);
+        chain.push(p);
+        cur = p;
+    }
+    let root = *chain.last().expect("a chain has this symbol");
+    let nearest = chain.get(1).copied().unwrap_or(item);
 
-    let own = graphics_and_pins(item);
-    let Bodies { graphics, pins, unit_count, alternate } = match base {
-        // `extends` with no graphics/pins of its own (the common case --
-        // AMS1117-3.3 only overrides properties): borrow the base's
-        // wholesale. A derived symbol that *does* draw its own graphics
-        // (rare, but legal -- an alternate body style) keeps them.
-        Some(base_item) if own.graphics.is_empty() && own.pins.is_empty() && own.alternate.is_none() => graphics_and_pins(base_item),
-        _ => own,
-    };
-    let power = item.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power"))) || base.is_some_and(|b| b.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power"))));
+    let Bodies { graphics, pins, unit_count, alternate } = graphics_and_pins(root);
+    let power = root.iter().any(|it| it.as_list().is_some_and(|l| sexpr::tag(l) == Some("power")));
 
+    // a mandatory field's text: the nearest symbol that gives it one (an empty text is not an override)
     let prop = |key: &str| -> String {
-        sexpr::find_all(item, "property")
-            .find(|p| sexpr::txt(p, 1) == Some(key))
-            .or_else(|| base.map(|b| sexpr::find_all(b, "property")).into_iter().flatten().find(|p| sexpr::txt(p, 1) == Some(key)))
-            .and_then(|p| sexpr::txt(p, 2))
-            .unwrap_or("")
-            .to_string()
+        chain
+            .iter()
+            .find_map(|node| {
+                sexpr::find_all(node, "property").find(|p| sexpr::txt(p, 1) == Some(key)).and_then(|p| sexpr::txt(p, 2)).filter(|t| !t.is_empty()).map(str::to_string)
+            })
+            .unwrap_or_default()
     };
-    let bool_field = |key: &str, default: bool| -> bool {
-        sexpr::find(item, key).and_then(|f| sexpr::txt(f, 1)).map(|v| v == "yes").unwrap_or(default)
-    };
+    let bool_field = |node: &[Sexpr], key: &str, default: bool| -> bool { sexpr::find(node, key).and_then(|f| sexpr::txt(f, 1)).map(|v| v == "yes").unwrap_or(default) };
 
-    // `(pin_names (offset x) (hide yes))` and `(pin_numbers (hide yes))` (or the bare `hide` of older files); a derived symbol takes
-    // its base's when it says nothing itself
+    // `(pin_names (offset x) (hide yes))` and `(pin_numbers (hide yes))` (or the bare `hide` of older files)
     let hidden = |node: &[Sexpr]| {
         node.iter().skip(1).any(|c| match c {
             Sexpr::Atom(a) => a == "hide",
             Sexpr::List(l) => sexpr::tag(l) == Some("hide") && sexpr::txt(l, 1).map(|v| v == "yes").unwrap_or(true),
         })
     };
-    let pin_names = sexpr::find(item, "pin_names").or_else(|| base.and_then(|b| sexpr::find(b, "pin_names")));
-    let pin_numbers = sexpr::find(item, "pin_numbers").or_else(|| base.and_then(|b| sexpr::find(b, "pin_numbers")));
+    let pin_names = sexpr::find(root, "pin_names");
+    let pin_numbers = sexpr::find(root, "pin_numbers");
 
     LibSymbol {
         lib_id: name.to_string(),
         graphics,
         pins,
         power,
-        in_bom: bool_field("in_bom", true),
-        on_board: bool_field("on_board", true),
+        in_bom: bool_field(nearest, "in_bom", true),
+        on_board: bool_field(nearest, "on_board", true),
         datasheet: prop("Datasheet"),
         description: prop("Description"),
         reference_prefix: prop("Reference"),
@@ -482,9 +484,20 @@ fn write_symbol(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
 pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibrarySymbol, outer_name: &str) {
     use std::fmt::Write as _;
 
-    let bare_name = sym.lib_id.rsplit(':').next().unwrap_or(sym.lib_id.as_str());
+    // the sub-blocks are named for the block they are in: `<bare>_<unit>_<style>` of `outer_name` (a symbol's own copy in the cache, `GATE_1`, has `GATE_1_1_1`: KiCad refuses
+    // a sub-block whose name does not start with its parent's)
+    let block_name = outer_name.rsplit(':').next().unwrap_or(outer_name);
     let yn = |b: bool| if b { "yes" } else { "no" };
     let max_style: u32 = if sym.has_alternate_body_style { 2 } else { 1 };
+
+    // `SCH_IO_KICAD_SEXPR_LIB_CACHE::SaveSymbol` of a derived symbol: `(symbol "Name" (extends "Parent")`, its fields and the keywords and footprint filters it has -- no drawing,
+    // no unit or pin options (they are its root's).
+    if let Some(parent) = &sym.extends {
+        writeln!(out, "\t(symbol {} (extends {})", crate::sexpr_str(outer_name), crate::sexpr_str(eda_model::sym_fields::bare_name(parent))).unwrap();
+        write_fields(out, sym);
+        writeln!(out, "\t)").unwrap();
+        return;
+    }
 
     writeln!(out, "\t(symbol {}", crate::sexpr_str(outer_name)).unwrap();
     writeln!(out, "\t\t(pin_numbers (hide {}))", yn(sym.pin_numbers_hidden)).unwrap();
@@ -493,26 +506,7 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
     if sym.power {
         writeln!(out, "\t\t(power)").unwrap();
     }
-
-    let prop = |out: &mut String, key: &str, value: &str, y: f64, hidden: bool| {
-        // `hide` goes inside `effects` (`(effects (font ...) (hide yes))`, as the schematic writer has it): a bare `hide` after the closing
-        // parenthesis is no KiCad syntax, and kicad-cli answers "Unable to load library" to a file that has one.
-        let effects = if hidden { "(effects (font (size 1.27 1.27)) (hide yes))" } else { "(effects (font (size 1.27 1.27)))" };
-        writeln!(out, "\t\t(property {} {} (at 0 {} 0) {effects})", crate::sexpr_str(key), crate::sexpr_str(value), crate::fmt_mm_f(y)).unwrap();
-    };
-    prop(out, "Reference", if sym.reference_prefix.is_empty() { "U" } else { &sym.reference_prefix }, 5.08, false);
-    prop(out, "Value", bare_name, 2.54, false);
-    prop(out, "Footprint", "", 0.0, true);
-    prop(out, "Datasheet", &sym.datasheet, 0.0, true);
-    if !sym.description.is_empty() {
-        prop(out, "Description", &sym.description, 0.0, true);
-    }
-    if !sym.keywords.is_empty() {
-        prop(out, "ki_keywords", &sym.keywords, 0.0, true);
-    }
-    if !sym.footprint_filters.is_empty() {
-        prop(out, "ki_fp_filters", &sym.footprint_filters.join(" "), 0.0, true);
-    }
+    write_fields(out, sym);
 
     for style in 1..=max_style {
         let mut units: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
@@ -523,7 +517,7 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
         units.extend(sym.pins.iter().filter(|p| p.body_style == 0 || p.body_style == style).map(|p| p.unit));
 
         for unit in units {
-            writeln!(out, "\t\t(symbol \"{bare_name}_{unit}_{style}\"").unwrap();
+            writeln!(out, "\t\t(symbol \"{block_name}_{unit}_{style}\"").unwrap();
             for g in sym.graphics.iter().filter(|g| g.unit() == unit && (g.body_style() == 0 || g.body_style() == style)) {
                 write_symbol_graphic(out, g);
             }
@@ -535,6 +529,64 @@ pub(crate) fn write_symbol_named(out: &mut String, sym: &eda_model::ir::LibraryS
     }
 
     writeln!(out, "\t)").unwrap();
+}
+
+/// The symbol's `(property ...)` forms (`saveField` for each field in order, then `saveDcmInfoAsFields`: the keywords and the footprint filters, hidden, only when there are some).
+fn write_fields(out: &mut String, sym: &eda_model::ir::LibrarySymbol) {
+    for f in sym.all_fields() {
+        write_field(out, &f);
+    }
+    if !sym.keywords.is_empty() {
+        write_field(out, &hidden_field("ki_keywords", &sym.keywords));
+    }
+    if !sym.footprint_filters.is_empty() {
+        write_field(out, &hidden_field("ki_fp_filters", &sym.footprint_filters.join(" ")));
+    }
+}
+
+fn hidden_field(name: &str, text: &str) -> eda_model::sym_fields::LibrarySymbolField {
+    eda_model::sym_fields::LibrarySymbolField { hidden: true, ..eda_model::sym_fields::LibrarySymbolField::named(name, text) }
+}
+
+/// `saveField`: `(property "Name" "text" (at x y angle) (show_name yes) (do_not_autoplace yes) (effects (font (size h h) bold italic) (justify left top) (hide yes)))` -- the
+/// `show_name` and `do_not_autoplace` forms only when they are on, and `hide` inside `effects` (`(effects (font ...) (hide yes))`, as the schematic writer has it: a bare `hide`
+/// after the closing parenthesis is no KiCad syntax, and kicad-cli answers "Unable to load library" to a file that has one).
+fn write_field(out: &mut String, f: &eda_model::sym_fields::LibrarySymbolField) {
+    use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+    use std::fmt::Write as _;
+    let mut font = format!("(font (size {} {})", crate::fmt_mm_f(f.size_mm), crate::fmt_mm_f(f.size_mm));
+    if f.bold {
+        font.push_str(" bold");
+    }
+    if f.italic {
+        font.push_str(" italic");
+    }
+    font.push(')');
+    let mut justify: Vec<&str> = Vec::new();
+    match f.h_align {
+        FieldHAlign::Left => justify.push("left"),
+        FieldHAlign::Right => justify.push("right"),
+        FieldHAlign::Center => {}
+    }
+    match f.v_align {
+        FieldVAlign::Top => justify.push("top"),
+        FieldVAlign::Bottom => justify.push("bottom"),
+        FieldVAlign::Center => {}
+    }
+    let justify = if justify.is_empty() { String::new() } else { format!(" (justify {})", justify.join(" ")) };
+    let hide = if f.hidden { " (hide yes)" } else { "" };
+    let show_name = if f.show_name { " (show_name yes)" } else { "" };
+    let do_not_autoplace = if f.do_not_autoplace { " (do_not_autoplace yes)" } else { "" };
+    writeln!(
+        out,
+        "\t\t(property {} {} (at {} {} {}){show_name}{do_not_autoplace} (effects {font}{justify}{hide}))",
+        crate::sexpr_str(&f.name),
+        crate::sexpr_str(&f.text),
+        crate::fmt_mm_f(f.at.x),
+        crate::fmt_mm_f(f.at.y),
+        crate::fmt_mm_f(f.angle_deg)
+    )
+    .unwrap();
 }
 
 fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphic) {
@@ -568,6 +620,41 @@ fn write_symbol_graphic(out: &mut String, g: &eda_model::ir::LibrarySymbolGraphi
         G::Text { text, at, angle_deg, size_mm, .. } => {
             writeln!(out, "\t\t\t(text {} (at {} {} {}) (effects (font (size {} {}))))", crate::sexpr_str(text), crate::fmt_mm_f(at.x), crate::fmt_mm_f(at.y), crate::fmt_mm_f(*angle_deg), crate::fmt_mm_f(*size_mm), crate::fmt_mm_f(*size_mm)).unwrap();
         }
+        // `SCH_IO_KICAD_SEXPR_LIB_CACHE::saveTextBox`: the box is its start, its angle and the size from the start to the opposite corner (both in the symbol's Y-up mm), the four margins, the
+        // stroke and the fill, and `EDA_TEXT::Format`'s effects. A border of no width is the width -1 of a schematic's units, 0.0001 mm (`STROKE_PARAMS`); the file's default
+        // alignment is centre, so a text box written left and top says so.
+        G::TextBox { text, start, end, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm, stroke_mm, fill: f, .. } => {
+            use eda_model::sym_fields::{FieldHAlign, FieldVAlign};
+            let margin = crate::fmt_mm_f(eda_model::ir::text_box_margin_mm(*size_mm, *margin_mm));
+            let width = if *stroke_mm < 0.0 { "-0.0001".to_string() } else { crate::fmt_mm_f(*stroke_mm) };
+            let mut justify: Vec<&str> = Vec::new();
+            match h_align {
+                FieldHAlign::Left => justify.push("left"),
+                FieldHAlign::Right => justify.push("right"),
+                FieldHAlign::Center => {}
+            }
+            match v_align {
+                FieldVAlign::Top => justify.push("top"),
+                FieldVAlign::Bottom => justify.push("bottom"),
+                FieldVAlign::Center => {}
+            }
+            let justify = if justify.is_empty() { String::new() } else { format!(" (justify {})", justify.join(" ")) };
+            let size = crate::fmt_mm_f(*size_mm);
+            writeln!(
+                out,
+                "\t\t\t(text_box {} (at {} {} {}) (size {} {}) (margins {margin} {margin} {margin} {margin}) (stroke (width {width}) (type default)) {} (effects (font (size {size} {size}){}{}){justify}))",
+                crate::sexpr_str(text),
+                crate::fmt_mm_f(start.x),
+                crate::fmt_mm_f(start.y),
+                crate::fmt_mm_f(*angle_deg),
+                crate::fmt_mm_f(end.x - start.x),
+                crate::fmt_mm_f(end.y - start.y),
+                fill(*f),
+                if *bold { " bold" } else { "" },
+                if *italic { " italic" } else { "" },
+            )
+            .unwrap();
+        }
     }
 }
 
@@ -579,9 +666,9 @@ fn write_symbol_pin(out: &mut String, p: &eda_model::ir::LibrarySymbolPin) {
     if p.hidden {
         write!(out, " hide").unwrap();
     }
-    writeln!(
+    write!(
         out,
-        " (name {} (effects (font (size {} {})))) (number {} (effects (font (size {} {})))))",
+        " (name {} (effects (font (size {} {})))) (number {} (effects (font (size {} {}))))",
         crate::sexpr_str(if p.name.is_empty() { "~" } else { &p.name }),
         crate::fmt_mm_f(name_size),
         crate::fmt_mm_f(name_size),
@@ -590,6 +677,13 @@ fn write_symbol_pin(out: &mut String, p: &eda_model::ir::LibrarySymbolPin) {
         crate::fmt_mm_f(number_size),
     )
     .unwrap();
+    // `SCH_IO_KICAD_SEXPR_LIB_CACHE::savePin`: the alternates in the map's order (by name), "any invalid alternates" -- one with no name -- left out
+    let mut alts: Vec<&eda_model::ir::PinAlternate> = p.alternates.iter().filter(|a| !a.name.is_empty()).collect();
+    alts.sort_by(|a, b| a.name.cmp(&b.name));
+    for a in alts {
+        write!(out, " (alternate {} {} {})", crate::sexpr_str(&a.name), a.electrical_type, a.shape).unwrap();
+    }
+    writeln!(out, ")").unwrap();
 }
 
 #[cfg(test)]
@@ -844,6 +938,41 @@ mod tests {
         assert_eq!(conn.pins.len(), 4);
     }
 
+    #[test]
+    fn a_derived_symbol_of_a_derived_symbol_is_its_roots_drawing_with_the_fields_of_every_step() {
+        let text = r##"(kicad_symbol_lib (version 20231120)
+            (symbol "Root" (pin_names (offset 0) (hide yes)) (in_bom yes) (power)
+                (property "Reference" "U") (property "Datasheet" "http://root") (property "Description" "root description")
+                (symbol "Root_0_1" (rectangle (start -1 -1) (end 1 1)))
+                (symbol "Root_1_1" (pin input line (at 0 3.81 270) (length 1.27) (name "A") (number "1")))
+                (symbol "Root_2_1" (pin input line (at 0 3.81 270) (length 1.27) (name "B") (number "2"))))
+            (symbol "Mid" (extends "Root") (in_bom no) (property "Datasheet" "http://mid") (property "Description" ""))
+            (symbol "Leaf" (extends "Mid") (property "Reference" "") (property "Description" "leaf")))"##;
+        let table = parse_symbol_library(text).unwrap();
+        let leaf = &table["Leaf"];
+        assert_eq!((leaf.pins.len(), leaf.graphics.len(), leaf.unit_count), (2, 1, 2), "the root's drawing and units, two levels down");
+        assert_eq!(leaf.datasheet, "http://mid", "the nearest step with a text");
+        assert_eq!(leaf.description, "leaf");
+        assert_eq!(leaf.reference_prefix, "U", "an empty text does not override the parent's");
+        assert!(leaf.power && leaf.pin_names_hidden && leaf.pin_name_offset_mm == 0.0, "the root's power flag and pin text options");
+        assert!(!leaf.in_bom, "the flags come from the nearest parent");
+        let mid = &table["Mid"];
+        assert!(mid.in_bom, "Mid's nearest parent is the root, which is in the BOM");
+        assert_eq!(table["Root"].in_bom, true);
+        assert_eq!(mid.description, "root description", "Mid's empty description is the root's");
+    }
+
+    #[test]
+    fn a_parent_the_file_lacks_or_a_cycle_ends_the_chain_without_looping() {
+        let text = r##"(kicad_symbol_lib (version 20231120)
+            (symbol "Orphan" (extends "Gone") (property "Reference" "X"))
+            (symbol "A" (extends "B") (property "Reference" "A") (symbol "A_1_1" (pin input line (at 0 0 0) (length 1) (name "a") (number "1"))))
+            (symbol "B" (extends "A") (property "Reference" "B")))"##;
+        let table = parse_symbol_library(text).unwrap();
+        assert_eq!(table["Orphan"].reference_prefix, "X");
+        assert!(table.contains_key("A") && table.contains_key("B"));
+    }
+
     // -------------------------------------------------- export_kicad_sym
 
     fn lib_pin(number: &str, unit: u32, body_style: u32, x: f64, y: f64, hidden: bool) -> eda_model::ir::LibrarySymbolPin {
@@ -861,6 +990,7 @@ mod tests {
             hidden,
             name_size_mm: Some(1.27),
             number_size_mm: Some(1.27),
+            alternates: Vec::new(),
         }
     }
 
@@ -884,6 +1014,8 @@ mod tests {
             graphics: vec![eda_model::ir::LibrarySymbolGraphic::Rectangle { id: "g1".into(), unit: 0, body_style: 1, start: eda_model::symbol::SPoint::new(-2.54, -2.54), end: eda_model::symbol::SPoint::new(2.54, 2.54), stroke_mm: 0.254, fill: eda_model::ir::LibraryFill::Background }],
             pins: vec![lib_pin("1", 1, 1, 0.0, 5.08, false), lib_pin("2", 1, 1, 0.0, -5.08, false), lib_pin("3", 2, 1, 0.0, 5.08, true)],
             published: false,
+            extends: None,
+            fields: vec![],
         };
 
         let text = export_kicad_sym(&sym);
@@ -924,6 +1056,8 @@ mod tests {
             graphics: vec![],
             pins: vec![lib_pin(pin, 1, 1, 0.0, 5.08, false)],
             published: false,
+            extends: None,
+            fields: vec![],
         };
         let (a, b) = (mk("eda:Alpha", "1"), mk("eda:Beta", "7"));
         let text = export_kicad_sym_library(&[&a, &b]);
@@ -958,6 +1092,8 @@ mod tests {
             graphics: vec![],
             pins: vec![],
             published: false,
+            extends: None,
+            fields: vec![],
         };
         let text = export_kicad_sym(&sym);
         assert!(text.contains("(property \"Footprint\" \"\" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))"), "{text}");

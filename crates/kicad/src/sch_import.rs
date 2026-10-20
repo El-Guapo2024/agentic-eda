@@ -26,10 +26,10 @@ use std::path::Path;
 
 use eda_model::ir::{Design, LabelKind, LabelShape, Millideg, NoConnect, Point, PowerSymbol, Provenance, SchematicSection, SchematicText, SheetInstance, SymbolInstance, TitleBlock, Wire};
 use eda_model::sch_extras::{JunctionLook, SchStroke};
-use eda_model::symbol::{LibSymbol, SPoint};
+use eda_model::symbol::{LibPin, LibSymbol, SPoint};
 use eda_model::{CheckResult, ConstraintModel, Net, Part, Pin};
 
-use crate::sch_extras_io::parse_bool;
+use crate::sch_extras_io::{parse_bool, read_effects, uuid_of, EffectsLook};
 use crate::sexpr::{self, Sexpr};
 use crate::symbol_lib::build_symbol_table;
 
@@ -91,10 +91,13 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // `(locked yes)` of each item, parallel to the vector it was read into -- resolved to ids once ids exist (see below).
     let is_locked = |node: &[Sexpr]| parse_bool(node, "locked").unwrap_or(false);
     let mut nc_locked: Vec<bool> = Vec::new();
+    // the `(uuid ..)` of each item, parallel to the vector it was read into: a `(group ..)` names its members by them (see below)
+    let mut nc_uuid: Vec<Option<String>> = Vec::new();
     for nc in sexpr::find_all(root, "no_connect") {
         if let Some(at) = sexpr::find(nc, "at").and_then(point_mm) {
             no_connects.push(NoConnect { id: String::new(), at: mm_point_to_um(at), pin: String::new() });
             nc_locked.push(is_locked(nc));
+            nc_uuid.push(uuid_of(nc));
         }
     }
     let nc_points: std::collections::BTreeSet<Point> = no_connects.iter().map(|nc| nc.at).collect();
@@ -125,8 +128,15 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         exclude_from_bom: bool,
         exclude_from_board: bool,
         exclude_from_sim: bool,
+        uuid: Option<String>,
+        /// The properties beyond the standard fields: user-defined fields (`FIELD_T::USER`), with where and how each is drawn.
+        user_fields: Vec<RawUserField>,
+        /// The places Swap Pins traded, read from the symbol's own copy of its library symbol (`(lib_name ..)`): pin number -> the pin whose place it has (`SchExtras::pin_swaps`).
+        swaps: BTreeMap<String, String>,
     }
     let mut raw: Vec<RawInstance> = Vec::new();
+    // each power symbol's `(uuid ..)`, parallel to `power_symbols`
+    let mut power_uuid: Vec<Option<String>> = Vec::new();
     let mut locked_refs: BTreeSet<String> = BTreeSet::new();
     // `SCH_SYMBOL_INSTANCE`-style per-sheet-instance overrides -- only ever
     // non-empty when this screen is placed by more than one `SheetInstance`
@@ -164,6 +174,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let body_style = sexpr::find(item, "body_style").or_else(|| sexpr::find(item, "convert")).and_then(|b| sexpr::num(b, 1)).unwrap_or(1.0).max(1.0) as u32;
         let at_um = Point { x: crate::import::mm_to_um(x_mm), y: crate::import::mm_to_um(y_mm) };
         let rot = import_rot_millideg_sch(angle_deg);
+        // `(lib_name "<cache>")`: the symbol's own copy of its library symbol in the sheet's cache, which Swap Pins gave other places for some of its pins
+        let swaps = sexpr::find(item, "lib_name").and_then(|l| sexpr::txt(l, 1)).filter(|name| *name != lib_id).and_then(|name| lib_table.get(name)).map(|cached| pin_swaps_between(resolved, cached, unit, body_style)).unwrap_or_default();
 
         let reference = property_text(item, "Reference").unwrap_or_default();
         let value = property_text(item, "Value").unwrap_or_default();
@@ -182,11 +194,12 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             let world = transform_local_point(pin_local, angle_deg, mirrored, mirror_y);
             let at_pin = Point { x: at_um.x + crate::import::mm_to_um(world.x), y: at_um.y + crate::import::mm_to_um(world.y) };
             power_symbols.push(PowerSymbol { id: reference, lib_id: lib_id.to_string(), at: at_pin, rot, net: value, pin: String::new() });
+            power_uuid.push(uuid_of(item));
             continue;
         }
 
         overrides.extend(parse_instance_overrides(item, at_um));
-        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim });
+        raw.push(RawInstance { lib_id: lib_id.to_string(), at_um, rot, angle_deg, mirrored, mirror_y, unit, body_style, reference, value, footprint, datasheet, dnp, exclude_from_bom, exclude_from_board, exclude_from_sim, uuid: uuid_of(item), user_fields: user_fields_of(item), swaps });
     }
 
     if opts.unique_references {
@@ -238,6 +251,11 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     // `(body_style 2)` of the symbols placed in the alternate body style of a library symbol that has one, by `field_key` (`SchExtras::body_styles`)
     let mut body_style_entries: Vec<(String, u32)> = Vec::new();
+    // the places Swap Pins traded, by `field_key` (`SchExtras::pin_swaps`)
+    let mut pin_swap_entries: Vec<(String, BTreeMap<String, String>)> = Vec::new();
+    // the user-defined fields of the symbols (`SchematicSection::user_fields`, by reference) and where each unit draws them (`field_layout`, by `field_key`)
+    let mut user_fields_read: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+    let mut field_layout_read: BTreeMap<String, Vec<eda_model::ir::FieldPlacement>> = BTreeMap::new();
     for reference in order {
         let idxs = &by_ref[&reference];
         // Every instance of one reference is the same real part (one
@@ -268,7 +286,14 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                     Some(owner) => {
                         // the pin where the owner's body style puts it (`SCH_SYMBOL::UpdatePins`: "the body style may have a different pin layout")
                         let styled = (owner.body_style > 1 && resolved.has_alternate_body()).then(|| resolved.in_style(owner.body_style));
-                        let local = styled.as_ref().and_then(|s| s.pins.iter().find(|q| q.number == p.number && (q.unit == 0 || q.unit == owner.unit))).map_or(p.at, |q| q.at);
+                        // and the place it has: its own, or the one of the pin it traded with (`SwapPinGeometry`, read from the symbol's own copy)
+                        let source = owner.swaps.get(&p.number).map(String::as_str).unwrap_or(p.number.as_str());
+                        let place_pins: &[LibPin] = styled.as_ref().map_or(&resolved.pins, |s| &s.pins);
+                        let local = if source == p.number.as_str() {
+                            styled.as_ref().and_then(|s| s.pins.iter().find(|q| q.number == p.number && (q.unit == 0 || q.unit == owner.unit))).map_or(p.at, |q| q.at)
+                        } else {
+                            place_pins.iter().find(|q| q.number == source && (q.unit == 0 || q.unit == owner.unit)).map_or(p.at, |q| q.at)
+                        };
                         let world = transform_local_point(local, owner.angle_deg, owner.mirrored, owner.mirror_y);
                         let at_pin = Point { x: owner.at_um.x + crate::import::mm_to_um(world.x), y: owner.at_um.y + crate::import::mm_to_um(world.y) };
                         pin_world.insert(format!("{reference}.{}", p.number), at_pin);
@@ -301,6 +326,9 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             if r.body_style > 1 && lib_table.get(r.lib_id.as_str()).is_some_and(|l| l.has_alternate_body()) {
                 body_style_entries.push((eda_model::ir::field_key(&reference, r.unit), r.body_style.min(2)));
             }
+            if !r.swaps.is_empty() {
+                pin_swap_entries.push((eda_model::ir::field_key(&reference, r.unit), r.swaps.clone()));
+            }
             symbols.push(SymbolInstance {
                 id: reference.clone(),
                 at: r.at_um,
@@ -317,17 +345,31 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                 exclude_from_board: r.exclude_from_board,
                 exclude_from_sim: r.exclude_from_sim,
             });
+            if !r.user_fields.is_empty() {
+                // the text of a user field is the symbol's, whatever the unit; the place is each unit's own, in the frame the writer measures it in
+                // (`eda_engine::fields::page_field`: from the symbol's origin, through its turn and mirror and the width of the box a mirror is about)
+                let part = parts.last().expect("the part of this reference");
+                let sym = symbols.last().expect("the symbol just pushed");
+                let lib_for_geometry = resolved.map(|l| if r.body_style > 1 && l.has_alternate_body() { l.in_style(r.body_style).into_owned() } else { l.clone() });
+                let width = eda_engine::symgeom::SymbolGeom::of(sym, part, lib_for_geometry.as_ref()).width;
+                for u in &r.user_fields {
+                    user_fields_read.entry(reference.clone()).or_default().entry(u.name.clone()).or_insert_with(|| u.text.clone());
+                }
+                field_layout_read.insert(eda_model::ir::field_key(&reference, r.unit), r.user_fields.iter().map(|u| u.placement(sym, width)).collect());
+            }
         }
     }
 
     let mut wires: Vec<Wire> = Vec::new();
     let mut wire_locked: Vec<bool> = Vec::new();
+    let mut wire_uuid: Vec<Option<String>> = Vec::new();
     // each wire's, bus's, bus entry's and polyline's `(stroke ...)` and each junction's `(diameter ...) (color ...)`, kept beside its lock flag
     let mut wire_stroke: Vec<SchStroke> = Vec::new();
     for w in sexpr::find_all(root, "wire") {
         if let Some(pts) = import_pts(w) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: false });
             wire_locked.push(is_locked(w));
+            wire_uuid.push(uuid_of(w));
             wire_stroke.push(stroke_of(w));
         }
     }
@@ -338,6 +380,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         if let Some(pts) = import_pts(b) {
             wires.push(Wire { id: String::new(), net: String::new(), pins: vec![], pts, bus: true });
             wire_locked.push(is_locked(b));
+            wire_uuid.push(uuid_of(b));
             wire_stroke.push(stroke_of(b));
         }
     }
@@ -360,18 +403,24 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     let mut junctions: Vec<eda_model::ir::Junction> = Vec::new();
     let mut junction_locked: Vec<bool> = Vec::new();
     let mut junction_look: Vec<JunctionLook> = Vec::new();
+    // the uuids of the junctions read into each place: two dots on one point are one junction here
+    let mut junction_uuid: Vec<Vec<String>> = Vec::new();
     for j in sexpr::find_all(root, "junction") {
         let Some(at) = sexpr::find(j, "at").and_then(point_mm) else { continue };
         let at = mm_point_to_um(at);
-        if !junctions.iter().any(|x| x.at == at) {
+        if let Some(i) = junctions.iter().position(|x| x.at == at) {
+            junction_uuid[i].extend(uuid_of(j));
+        } else {
             junctions.push(eda_model::ir::Junction { id: String::new(), at });
             junction_locked.push(is_locked(j));
             junction_look.push(look_of(j));
+            junction_uuid.push(uuid_of(j).into_iter().collect());
         }
     }
     // `(polyline (pts ...) (stroke (width w) ...))`: a graphic line on the notes layer (`SchLine`).
     let mut lines: Vec<eda_model::ir::SchLine> = Vec::new();
     let mut line_locked: Vec<bool> = Vec::new();
+    let mut line_uuid: Vec<Option<String>> = Vec::new();
     let mut line_stroke: Vec<SchStroke> = Vec::new();
     for pl in sexpr::find_all(root, "polyline") {
         // A filled polyline is a polygon shape (`SchGraphic`), read below with the other shapes.
@@ -383,6 +432,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             let width_um = sexpr::find(pl, "stroke").and_then(|s| sexpr::find(s, "width")).and_then(|w| sexpr::num(w, 1)).map(crate::import::mm_to_um).unwrap_or(0);
             lines.push(eda_model::ir::SchLine { id: String::new(), pts, width_um });
             line_locked.push(is_locked(pl));
+            line_uuid.push(uuid_of(pl));
             // the width is the line's own (`SchLine::width_um`); the entry carries the style and the colour
             line_stroke.push(SchStroke { width_um: 0, ..stroke_of(pl) });
         }
@@ -411,6 +461,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
 
     let mut labels: Vec<eda_model::ir::NetLabel> = Vec::new();
     let mut label_locked: Vec<bool> = Vec::new();
+    let mut label_uuid: Vec<Option<String>> = Vec::new();
     // each label's spin and look, parallel to `labels`: the file's own, not an inference from the wires
     let mut label_geometry: Vec<(eda_model::sch_extras::LabelSpin, crate::sch_extras_io::EffectsLook)> = Vec::new();
     for (tag, global) in [("label", None), ("global_label", Some(true)), ("hierarchical_label", Some(false))] {
@@ -437,6 +488,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             };
             labels.push(eda_model::ir::NetLabel { id: String::new(), net, at: mm_point_to_um(at), kind });
             label_locked.push(is_locked(l));
+            label_uuid.push(uuid_of(l));
             label_geometry.push((spin, look));
         }
     }
@@ -446,6 +498,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     // below.
     let mut texts: Vec<SchematicText> = Vec::new();
     let mut text_locked: Vec<bool> = Vec::new();
+    let mut text_uuid: Vec<Option<String>> = Vec::new();
     // each text's justification, parallel to `texts` (`SchExtras::text_justify`)
     let mut text_lie: Vec<eda_model::sch_extras::SchTextJustify> = Vec::new();
     for t in sexpr::find_all(root, "text") {
@@ -457,11 +510,14 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         let (angle, justify) = crate::sch_extras_io::read_text_lie(t, &crate::sch_extras_io::read_effects(t));
         texts.push(SchematicText { id: String::new(), content, at: mm_point_to_um(SPoint::new(x_mm, y_mm)), angle, size_um: crate::import::mm_to_um(size_mm) });
         text_locked.push(is_locked(t));
+        text_uuid.push(uuid_of(t));
         text_lie.push(justify);
     }
 
     let mut sheets: Vec<SheetInstance> = Vec::new();
     let mut sheet_locked: Vec<bool> = Vec::new();
+    // how each sheet pin's text is set, by the pin's id (`SchExtras::sheet_pin_looks`)
+    let mut sheet_pin_looks: Vec<(String, eda_model::sch_extras::LabelLook)> = Vec::new();
     for s in sexpr::find_all(root, "sheet") {
         let id = sexpr::find(s, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
         let name = sheet_property_text(s, "Sheetname").unwrap_or_default();
@@ -474,6 +530,12 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
                 let shape = sexpr::txt(p, 2).map(label_shape_from_token).unwrap_or_default();
                 let at = sexpr::find(p, "at").and_then(point_mm)?;
                 let id = sexpr::find(p, "uuid").and_then(|u| sexpr::txt(u, 1)).unwrap_or_default().to_string();
+                // `(effects (font (size h w) bold italic) ..)`: how the pin's text is set (`SCH_SHEET_PIN` is an `EDA_TEXT`); the default one is no entry
+                let effects = read_effects(p);
+                let look = eda_model::sch_extras::LabelLook { size_um: if effects.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { effects.size_um }, bold: effects.bold, italic: effects.italic, auto_rotate: false };
+                if !id.is_empty() && !look.is_default() {
+                    sheet_pin_looks.push((id.clone(), look));
+                }
                 Some(eda_model::ir::SheetPin { id, name, shape, at: mm_point_to_um(at) })
             })
             .collect();
@@ -492,10 +554,25 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         notes.sheets_not_descended += 1;
     }
 
+    // (uuid, id) of the symbols and the power symbols, whose ids are their references (final now: `unique_references` has numbered them)
+    let mut uuid_ids: HashMap<String, Vec<String>> = HashMap::new();
+    for r in &raw {
+        if let Some(u) = &r.uuid {
+            let ids = uuid_ids.entry(u.clone()).or_default();
+            if !ids.contains(&r.reference) {
+                ids.push(r.reference.clone());
+            }
+        }
+    }
+    for (p, u) in power_symbols.iter().zip(&power_uuid) {
+        if let Some(u) = u {
+            uuid_ids.entry(u.clone()).or_default().push(p.id.clone());
+        }
+    }
     let junction_points: Vec<Point> = junctions.iter().map(|j| j.at).collect();
     let nets = reconcile(&pin_world, &mut wires, &labels, &mut power_symbols, &mut no_connects, &junction_points);
 
-    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: Default::default(), imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() }, field_layout: Default::default() };
+    let sch = SchematicSection { symbols, wires, labels, texts, power_symbols, no_connects, bus_entries, junctions, lines, erc_exclusions: Vec::new(), erc_pin_map: None, user_fields: user_fields_read, imported_from_kicad: true, title_block, sheets, instance_overrides: overrides, extras: eda_model::sch_extras::SchExtras { page: crate::page::import_page(root).and_then(|p| p.sheet_parts().1), ..Default::default() }, field_layout: field_layout_read };
     let mut design = Design {
         schema: 1,
         provenance: Provenance { engine_version: env!("CARGO_PKG_VERSION").into(), intent_hash: blake3::hash(text.as_bytes()).to_hex().to_string(), seed: 0, stage_hashes: vec![] },
@@ -511,6 +588,7 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
     if let Some(sch) = design.schematic.as_mut() {
         let graphics = crate::sch_extras_io::read_graphics(root);
         let graphic_locked: Vec<bool> = graphics.iter().map(|g| g.locked).collect();
+        let graphic_uuid: Vec<Option<String>> = graphics.iter().map(|g| g.uuid.clone()).collect();
         sch.extras.graphics = graphics.into_iter().map(|g| g.graphic).collect();
         sch.assign_missing_ids();
         let mut locked: Vec<String> = Vec::new();
@@ -529,6 +607,8 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
             sch.extras.set_locked(&id, true);
         }
         sch.extras.body_styles.extend(body_style_entries);
+        sch.extras.pin_swaps.extend(pin_swap_entries);
+        sch.extras.sheet_pin_looks.extend(sheet_pin_looks);
         // A label's spin, size, bold and italic, as the file has them (`SchExtras::label_spins`, `label_looks`); a look equal to the default keeps no entry.
         for (id, (spin, look)) in sch.labels.iter().map(|l| l.id.clone()).zip(label_geometry) {
             if id.is_empty() {
@@ -554,6 +634,47 @@ pub fn import_kicad_sch_with(text: &str, opts: &ImportOptions) -> Result<(Design
         }
         for (id, look) in sch.junctions.iter().map(|j| j.id.clone()).zip(junction_look).filter(|(id, l)| !id.is_empty() && !l.is_default()) {
             sch.extras.junction_looks.insert(id, look);
+        }
+
+        // Groups (`SCH_IO_KICAD_SEXPR_PARSER::resolveGroups`): `(group "name" (uuid ..) (members "uuid" ..))` names its members by the uuids of the file, which are
+        // ours now. A segment of a wire is a wire here, so a member that is a segment is that wire; the one item a group of one holds is not in a group.
+        let mut by_uuid = uuid_ids;
+        let mut note = |uuid: Option<String>, id: &str| {
+            if let (Some(u), false) = (uuid, id.is_empty()) {
+                by_uuid.entry(u).or_default().push(id.to_string());
+            }
+        };
+        for (u, w) in wire_uuid.into_iter().zip(&sch.wires) {
+            note(u, &w.id);
+        }
+        for (u, l) in label_uuid.into_iter().zip(&sch.labels) {
+            note(u, &l.id);
+        }
+        for (u, t) in text_uuid.into_iter().zip(&sch.texts) {
+            note(u, &t.id);
+        }
+        for (u, n) in nc_uuid.into_iter().zip(&sch.no_connects) {
+            note(u, &n.id);
+        }
+        for (u, l) in line_uuid.into_iter().zip(&sch.lines) {
+            note(u, &l.id);
+        }
+        for (us, j) in junction_uuid.into_iter().zip(&sch.junctions) {
+            for u in us {
+                note(Some(u), &j.id);
+            }
+        }
+        for (u, g) in graphic_uuid.into_iter().zip(&sch.extras.graphics) {
+            note(u, &g.id);
+        }
+        // a bus entry and a sheet are known by the uuid of the file already
+        for id in sch.bus_entries.iter().map(|b| &b.id).chain(sch.sheets.iter().map(|s| &s.id)) {
+            note(Some(id.clone()), id);
+        }
+        let (groups, locked_groups) = crate::import_items::build_groups(&by_uuid, &crate::import_items::import_groups(root), std::collections::BTreeSet::new());
+        sch.extras.groups = groups;
+        for id in locked_groups {
+            sch.extras.set_locked(&id, true);
         }
     }
 
@@ -673,6 +794,113 @@ pub(crate) fn import_title_block(root: &[Sexpr]) -> Option<TitleBlock> {
         comments.pop();
     }
     Some(TitleBlock { title: text("title"), date: text("date"), rev: text("rev"), company: text("company"), comments, paper })
+}
+
+/// The places Swap Pins traded, read from the symbol's own copy of its library symbol: `SwapPinGeometry` swaps the position, orientation and length of two `SCH_PIN`s in the
+/// copy (`SCH_SCREEN::Append` keeps such a symbol under a name of its own, `(lib_name ...)`), so a pin of `cached` that is not where the library's pin of that number is sits where
+/// another pin of the library symbol is. The result is `pin number -> the number of the pin whose place it has` for the pins of `unit` (`SchExtras::pin_swaps`), and is empty
+/// when the copy is no copy of `lib` (other pin numbers), when a pin sits where no pin of the library symbol does (a frame of its own) or where several do, or when what moved
+/// is no exchange of places -- a copy this reader cannot read as swaps is read as the library symbol, as it always was.
+fn pin_swaps_between(lib: &LibSymbol, cached: &LibSymbol, unit: u32, body_style: u32) -> BTreeMap<String, String> {
+    let styled = |s: &LibSymbol| if body_style > 1 && s.has_alternate_body() { s.in_style(body_style).into_owned() } else { s.clone() };
+    let (lib, cached) = (styled(lib), styled(cached));
+    let on_unit = |p: &&LibPin| p.unit == 0 || p.unit == unit;
+    let place = |p: &LibPin| ((p.at.x * 1000.0).round() as i64, (p.at.y * 1000.0).round() as i64, p.angle_deg.rem_euclid(360.0).round() as i64, (p.length_mm * 1000.0).round() as i64);
+    let (lib_pins, cached_pins): (Vec<&LibPin>, Vec<&LibPin>) = (lib.pins.iter().filter(on_unit).collect(), cached.pins.iter().filter(on_unit).collect());
+    let mut swaps: BTreeMap<String, String> = BTreeMap::new();
+    for cp in &cached_pins {
+        let Some(lp) = lib_pins.iter().find(|q| q.number == cp.number) else { return BTreeMap::new() };
+        if place(cp) == place(lp) {
+            continue;
+        }
+        let sources: Vec<&&LibPin> = lib_pins.iter().filter(|q| place(q) == place(cp)).collect();
+        if sources.len() != 1 {
+            return BTreeMap::new();
+        }
+        swaps.insert(cp.number.clone(), sources[0].number.clone());
+    }
+    // an exchange of places: what a pin took is what another pin that moved left
+    let sources: std::collections::BTreeSet<&String> = swaps.values().collect();
+    if sources.len() != swaps.len() || !swaps.keys().all(|k| sources.contains(k)) {
+        return BTreeMap::new();
+    }
+    swaps
+}
+
+/// A user-defined field of a placed symbol as the file has it (`SCH_IO_KICAD_SEXPR_PARSER::parseSchField`): the text, where its anchor is on the sheet and
+/// at what angle, how it is set, and whether it is drawn.
+struct RawUserField {
+    name: String,
+    text: String,
+    at_um: Point,
+    angle_deg: f64,
+    look: EffectsLook,
+    hidden: bool,
+    show_name: bool,
+    do_not_autoplace: bool,
+}
+
+impl RawUserField {
+    /// The field as a placement in the frame of `sym` (`SCH_FIELD::SetPosition`: the page position taken back through the symbol's transform; `eda_engine::fields::
+    /// local_placement_on_page`), `width` being the box a mirror is about.
+    fn placement(&self, sym: &SymbolInstance, width: f64) -> eda_model::ir::FieldPlacement {
+        use eda_model::ir::{TextJustify, TextVAlign};
+        let has = |w: &str| self.look.justify.iter().any(|j| j == w);
+        let h = if has("left") {
+            TextJustify::Left
+        } else if has("right") {
+            TextJustify::Right
+        } else {
+            TextJustify::Center
+        };
+        let v = if has("top") {
+            TextVAlign::Top
+        } else if has("bottom") {
+            TextVAlign::Bottom
+        } else {
+            TextVAlign::Center
+        };
+        // a field is along the sheet or up it (`keepUpright`)
+        let vertical = eda_model::kicad_geom::keep_upright_is_vertical(self.angle_deg);
+        let mut p = eda_engine::fields::local_placement_on_page(sym.at, sym.rot, sym.mirrored, width, &self.name, (self.at_um.x as f64, self.at_um.y as f64), vertical, h, v, !self.hidden);
+        p.size_um = if self.look.size_um == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { self.look.size_um };
+        p.bold = self.look.bold;
+        p.italic = self.look.italic;
+        p.name_shown = self.show_name;
+        p.no_autoplace = self.do_not_autoplace;
+        p
+    }
+}
+
+/// The properties of a placed symbol that are no standard field (`FIELD_T::USER`): every `(property ...)` but Reference, Value, Footprint, Datasheet and
+/// Description (matched without regard to case, as `parseSchField` does), in file order, the first of a name. `(property private "Name" "text" ...)` is read too
+/// (the flag is not kept).
+fn user_fields_of(item: &[Sexpr]) -> Vec<RawUserField> {
+    let mut out: Vec<RawUserField> = Vec::new();
+    for p in sexpr::find_all(item, "property") {
+        // `private` is a word of its own before the name; a field called "private" has a list (its position) where the text would end
+        let shift = usize::from(sexpr::txt(p, 1) == Some("private") && p.get(3).is_some_and(|n| n.text().is_some()));
+        let (Some(name), Some(text)) = (sexpr::txt(p, 1 + shift), sexpr::txt(p, 2 + shift)) else { continue };
+        if name.is_empty() || ["Reference", "Value", "Footprint", "Datasheet", "Description"].iter().any(|m| m.eq_ignore_ascii_case(name)) || out.iter().any(|f| f.name == name) {
+            continue;
+        }
+        let at = sexpr::find(p, "at");
+        let at_um = at.and_then(|a| Some(Point { x: crate::import::mm_to_um(sexpr::num(a, 1)?), y: crate::import::mm_to_um(sexpr::num(a, 2)?) })).unwrap_or(Point { x: 0, y: 0 });
+        let effects = sexpr::find(p, "effects");
+        // `(hide yes)`: KiCad 9 writes it in the property, before `(effects ...)`, and in it for a file we wrote; a bare `hide` is older still
+        let hidden = parse_bool(p, "hide").unwrap_or(false) || effects.is_some_and(|e| parse_bool(e, "hide").unwrap_or(false) || e.iter().skip(1).any(|c| c.text() == Some("hide")));
+        out.push(RawUserField {
+            name: name.to_string(),
+            text: text.to_string(),
+            at_um,
+            angle_deg: at.and_then(|a| sexpr::num(a, 3)).unwrap_or(0.0),
+            look: read_effects(p),
+            hidden,
+            show_name: parse_bool(p, "show_name").unwrap_or(false),
+            do_not_autoplace: parse_bool(p, "do_not_autoplace").unwrap_or(false),
+        });
+    }
+    out
 }
 
 /// A symbol instance's own `(property "Name" "Value" ...)` text, by name.

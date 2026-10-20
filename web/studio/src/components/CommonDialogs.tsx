@@ -3,7 +3,7 @@ import { useState } from "react";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { closeGroupDialog, updateGroupDialog, useCommonDialogs } from "../state/commonDialogs";
 import { removeMemberAt } from "../kicad-port/groupEdit";
-import { describeBoardItem } from "../actions/editorAdapter";
+import { describeBoardItem, describeSchematicItem } from "../actions/editorAdapter";
 import { useActionRunner } from "../actions/useActionRunner";
 import { AboutDialog } from "./AboutDialog";
 import { PageSettingsDialog } from "./PageSettingsDialog";
@@ -36,7 +36,8 @@ function GroupPropertiesDialog() {
   const ok = async () => {
     setBusy(true);
     try {
-      const done = await api.cmd({ op: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members });
+      // the group of the sheet in view is the sheet's (`SCH_GROUP`), the board's otherwise
+      const done = await api.cmd(state.tab === "schematic" ? { op: "sch_edit", verb: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members } : { op: "edit_group", id: dlg.id, name: dlg.name, member_ids: dlg.members });
       if (!done) return;
       dispatch({ type: "SET_HOT", refs: [] });
       setRow(null);
@@ -72,13 +73,13 @@ function GroupPropertiesDialog() {
                 }}
                 style={{ padding: "3px 8px", cursor: "default", background: row === i ? "var(--chrome-active)" : undefined, fontSize: 12 }}
               >
-                {describeBoardItem(state.board, { id, kind: id })}
+                {state.tab === "schematic" ? describeSchematicItem(state.schematic, { id, kind: id }) : describeBoardItem(state.board, { id, kind: id })}
               </div>
             ))}
             {dlg.members.length === 0 && <div style={{ padding: "6px 8px", color: "var(--chrome-text-dim)", fontSize: 12 }}>No members.</div>}
           </div>
           <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-            <button title="Add a member: click it on the board" onClick={() => run("common.Groups.selectNewGroupMember")}>
+            <button title={state.tab === "schematic" ? "Add a member: click it on the sheet" : "Add a member: click it on the board"} onClick={() => run("common.Groups.selectNewGroupMember")}>
               +
             </button>
             <button

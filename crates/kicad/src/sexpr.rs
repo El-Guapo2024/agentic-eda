@@ -101,8 +101,8 @@ fn parse_atom(input: &str, bytes: &[u8], pos: &mut usize) -> String {
     input[start..*pos].to_string()
 }
 
-/// Contents of a `"..."` string, unescaping `\\` and `\"` (the only two
-/// escapes our own writer ever produces -- see `sexpr_str` in `lib.rs`).
+/// Contents of a `"..."` string, unescaping `\\`, `\"`, `\n` and `\r` (the escapes
+/// KiCad's own writer produces, and ours -- see `sexpr_str` in `lib.rs`).
 /// Every delimiter byte we scan for (`"`, `\`) is ASCII, and ASCII bytes
 /// never occur as part of a multi-byte UTF-8 sequence, so slicing on these
 /// byte offsets always lands on a `char` boundary.
@@ -121,6 +121,9 @@ fn parse_quoted(input: &str, bytes: &[u8], pos: &mut usize) -> Result<String, St
                 let next = bytes[*pos + 1];
                 match next {
                     b'"' | b'\\' => out.push(next as char),
+                    // The two escapes KiCad's own writer emits for a line break (`OUTPUTFORMATTER::Quotes`), which its lexer reads back as the characters.
+                    b'n' => out.push('\n'),
+                    b'r' => out.push('\r'),
                     // Unknown escape: keep it literal rather than guessing.
                     _ => {
                         out.push('\\');

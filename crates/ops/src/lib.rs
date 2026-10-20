@@ -56,6 +56,11 @@ mod review;
 pub mod library_editors;
 mod array;
 pub use array::ArrayGeometry;
+mod array_numbering;
+pub use array_numbering::{alphabetic_from_index, ArrayAxis, AxisSpec, NumberingAxes, NumberingType, PadNumberProvider, PadNumbering};
+mod fp_array;
+mod fp_lib_fields;
+mod sym_derive;
 mod fix_shapes;
 mod fp_edit;
 mod fp_models;
@@ -73,6 +78,7 @@ mod part_rename;
 mod reannotate;
 mod pcb_global_edit;
 mod pcb_groups;
+mod sch_groups;
 mod pcb_paste;
 mod pcb_paste_special;
 mod pcb_props;
@@ -572,6 +578,10 @@ pub enum Cmd {
     AddDrcExclusions { exclusions: Vec<DrcExclusion> },
     /// "Remove exclusion for this violation": put the violations `exclusions` name back in the report. Refused when none of them is waived.
     DeleteDrcExclusions { exclusions: Vec<DrcExclusionKey> },
+    /// Delete Marker on an excluded marker and Delete All Markers with "Errors, Warnings and Exclusions" (`DIALOG_DRC::OnDeleteOneClick`,
+    /// `OnDeleteAllClick`): the markers go, and `BOARD::RecordDRCExclusions` -- which the next run and the next save make -- keeps the exclusions of the
+    /// markers that are left, so with all of them gone no exclusion is. (One marker's is `DeleteDrcExclusions`.) Refused when none is listed.
+    ClearDrcExclusions,
     /// Schematic Setup > Violation Severity: the ERC checks reported at a severity other than their default, by settings key
     /// (`eda_model::erc_checks`) -> `error` | `warning` | `ignore`. Whole table in, whole table replaced.
     SetErcSeverities { severities: BTreeMap<String, String> },
@@ -1191,12 +1201,33 @@ pub enum Cmd {
     /// applies to kicad-cli's ERC report, so the persisted list needs no
     /// translation.
     /// Refused if `location` is empty (nothing to key on -- the same
-    /// findings `Exclusions` itself can never exclude); adding one
-    /// already excluded is a harmless no-op, not an error.
-    AddErcExclusion { check: String, location: String },
-    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"):
+    /// findings `Exclusions` itself can never exclude). One already excluded
+    /// is replaced, which is how "Edit exclusion comment..." changes the
+    /// comment: `comment` is `SCH_MARKER::GetComment` ("Exclude with
+    /// comment..."), `marker` the marker as the report said it
+    /// (`ErcViolation.marker`; none when it could not) and none leaves the
+    /// marker the exclusion had.
+    AddErcExclusion {
+        check: String,
+        location: String,
+        #[serde(default)]
+        comment: String,
+        #[serde(default)]
+        marker: Option<eda_model::ir::ErcMarker>,
+    },
+    /// Un-exclude (the dialog's own "Ignored Tests" tab, "Remove"; Delete
+    /// Marker on an excluded marker, which is what makes KiCad forget it --
+    /// `RecordERCExclusions` records the markers that are left):
     /// refused if no exclusion with this exact key exists.
     DeleteErcExclusion { check: String, location: String },
+    /// Schematic Setup > Formatting > Connection grid spacing (`panel_setup_formatting.cpp`): the grid, in mils, that ERC expects wire ends and pins on
+    /// (`SCHEMATIC_SETTINGS::m_ConnectionGridSize`). From `MIN_CONNECTION_GRID_MILS` (25) to 10000; 50, KiCad's default, is stored as none.
+    SetConnectionGrid { mils: u32 },
+    /// Delete All Markers with "Errors, Warnings and Exclusions"
+    /// (`DIALOG_ERC::OnDeleteAllClick`): every marker goes, the excluded ones
+    /// too, and KiCad records the markers that are left, so no exclusion
+    /// is. Refused when none is listed.
+    ClearErcExclusions,
 
     /// `L`/`Ctrl+L`/`H`: place a net label. `kind`/`shape` follow
     /// `eda_model::ir::LabelKind`'s own vocabulary (local has no shape).
@@ -1459,6 +1490,14 @@ pub enum Cmd {
         /// whole panel, so a command that leaves it out clears it.
         #[serde(default)]
         zone_connection: Option<PadConnection>,
+        /// The General tab's fields grid (`PCB_FIELDS_GRID_TABLE`, [`fp_lib_fields`]): the Reference's and the Value's layout (the text they show in its `text`) and the user fields in
+        /// order, each with its layout. Left out, the footprint keeps what it has. The Show check boxes are `reference_visible` and `value_visible` and each field's `visible`.
+        #[serde(default)]
+        reference: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        value: Option<eda_model::fp_edit::FieldLayout>,
+        #[serde(default)]
+        fields: Option<Vec<eda_model::ir::FootprintField>>,
     },
     /// `PCB_ACTIONS::setAnchor` ("Place Footprint Anchor"): `at` (in the
     /// footprint's current local frame) becomes the new origin -- every
@@ -1535,6 +1574,19 @@ pub enum Cmd {
     EditFootprintText { footprint: String, id: String, content: String, angle: Millideg, layer: String, size_um: Um, stroke_width: Um, justify: TextJustify, mirror: bool },
     DeleteFootprintText { footprint: String, id: String },
     MoveFootprintText { footprint: String, id: String, x: Um, y: Um },
+    /// `pcbnew.Array.createArray` (Ctrl+T) in the Footprint Editor, `ARRAY_TOOL::CreateArray` with `m_isFootprintEditor` -- see [`fp_array`]: a grid or a
+    /// circular array of the pads, graphics and texts `ids` name, in one undo step. `arrange` puts the selected items on the points instead of copying them
+    /// (and numbers nothing); `numbering`, when given, renumbers the pads of the array ([`PadNumbering`]: "Renumber pads" with its scheme, direction and
+    /// start), and left out the copies keep the number of their source.
+    CreateFootprintArray {
+        footprint: String,
+        ids: Vec<String>,
+        geometry: ArrayGeometry,
+        #[serde(default)]
+        arrange: bool,
+        #[serde(default)]
+        numbering: Option<PadNumbering>,
+    },
 
     // ----------------------------------------------------- symbol editor
     //
@@ -1653,8 +1705,19 @@ pub enum Cmd {
     /// Shape Properties' editable fields (stroke width, fill) -- geometry
     /// has no dialog field to edit either, only by dragging its own
     /// points (no point editor, same gap `EditShape`'s own doc notes for
-    /// the PCB side).
-    EditSymbolGraphic { lib_id: String, id: String, stroke_mm: f64, fill: LibraryFill },
+    /// the PCB side). `unit` and `body_style` are the dialog's "Common to all units in symbol" and "Common to all body styles"
+    /// (`DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow`: 0 for a box that is checked, the unit and the body style the editor is
+    /// showing for one that is not); left out they stay as they are. A negative `stroke_mm` is the border switched off, kept as -0.0001 (`STROKE_PARAMS` width -1).
+    EditSymbolGraphic {
+        lib_id: String,
+        id: String,
+        stroke_mm: f64,
+        fill: LibraryFill,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body_style: Option<u32>,
+    },
     /// `LibrarySymbolGraphic::Text`'s own fields (content/angle/size) --
     /// split from `EditSymbolGraphic` the same way the footprint editor's
     /// `EditFootprintText` is split from `EditFootprintGraphic` (a
@@ -1662,6 +1725,59 @@ pub enum Cmd {
     /// generic `MoveSymbolGraphic` (text is still one `LibrarySymbolGraphic`
     /// entry, addressed by the same `id`).
     EditSymbolText { lib_id: String, id: String, text: String, angle_deg: f64, size_mm: f64 },
+    /// The properties dialog of a library graphic that has more to it than a stroke and a fill (`DIALOG_TEXT_PROPERTIES` of a text box: the text, its size, bold and italic, its
+    /// alignment and way, the border, the fill, the unit and the body style): `graphic` takes the place of the one with `id` -- the same kind, the same place in the list, the id kept.
+    ReplaceSymbolGraphic { lib_id: String, id: String, graphic: LibrarySymbolGraphic },
+
+    // ------------------------------------------------------- derived symbols
+    //
+    // `(extends "Parent")`: a symbol that inherits its parent's drawing and overrides its fields -- `eda_model::sym_fields`, `crates/ops/src/sym_derive.rs`.
+    /// `eeschema.SymbolLibraryControl.deriveFromExistingSymbol` (`DIALOG_LIB_NEW_SYMBOL` with a parent, `LIB_SYMBOL_LIBRARY_MANAGER::CreateSymbol`): `lib_id`, a new symbol in
+    /// `parent`'s library, derived from `parent` (a project-library entry). The five mandatory fields are copied from the parent (the Footprint and the Datasheet emptied unless
+    /// kept); `transfer_user_fields` copies its user fields too (their text emptied unless `keep_content_user_fields`). Refused when the name is taken unless `overwrite`.
+    DeriveSymbol {
+        parent: String,
+        lib_id: String,
+        #[serde(default)]
+        keep_footprint: bool,
+        #[serde(default)]
+        keep_datasheet: bool,
+        #[serde(default)]
+        transfer_user_fields: bool,
+        #[serde(default)]
+        keep_content_user_fields: bool,
+        #[serde(default)]
+        overwrite: bool,
+    },
+    /// `eeschema.SymbolLibraryControl.flattenSymbol` (`SYMBOL_EDITOR_CONTROL::FlattenSymbol`): the derived symbol `lib_id` becomes the flat symbol it stands for -- the root's
+    /// drawing and everything it inherits, no parent. Refused for a symbol that is not derived.
+    FlattenSymbol { lib_id: String },
+    /// `eeschema.SymbolLibraryControl.updateSymbolFields` (`DIALOG_UPDATE_SYMBOL_FIELDS`): the fields `fields` (by name) of the derived symbol `lib_id` follow its parent's (flattened):
+    /// the text, the visibility, the sizes and styles and the places, as each box asks; `remove_extras` takes away a field the parent lacks and `reset_empty` lets an empty
+    /// parent field empty the symbol's. Refused for a symbol that is not derived ("Symbol is not derived from another symbol.").
+    UpdateSymbolFields {
+        lib_id: String,
+        fields: Vec<String>,
+        #[serde(default)]
+        remove_extras: bool,
+        #[serde(default)]
+        reset_empty: bool,
+        #[serde(default = "d_true")]
+        reset_text: bool,
+        #[serde(default = "d_true")]
+        reset_visibility: bool,
+        #[serde(default = "d_true")]
+        reset_effects: bool,
+        #[serde(default = "d_true")]
+        reset_positions: bool,
+    },
+    /// `DIALOG_LIB_SYMBOL_PROPERTIES`' "Derive from" choice: the derived symbol `lib_id` extends `parent` instead. The parent must be a symbol of the same library, not the symbol
+    /// itself and not one derived from it (that would make a cycle).
+    SetSymbolParent { lib_id: String, parent: String },
+    /// The Symbol Properties dialog's fields grid (`DIALOG_LIB_SYMBOL_PROPERTIES::TransferDataFromWindow`): the symbol's fields, all at once -- the five mandatory ones and the user
+    /// fields with their text, place, size, alignment and visibility. A user field needs a name that is not taken (nor one of the `ki_` properties, which are the symbol's keywords
+    /// and footprint filters); one with neither a name nor a text is dropped.
+    EditLibrarySymbolFields { lib_id: String, fields: Vec<eda_model::sym_fields::LibrarySymbolField> },
 }
 
 /// A schematic with nothing on it: what the first schematic verb creates, and the screen a new
@@ -1745,6 +1861,8 @@ impl Cmd {
             | Cmd::SchMove(_)
             | Cmd::AddErcExclusion { .. }
             | Cmd::DeleteErcExclusion { .. }
+            | Cmd::ClearErcExclusions
+            | Cmd::SetConnectionGrid { .. }
             | Cmd::AddLabel { .. }
             | Cmd::DeleteLabel { .. }
             | Cmd::AddSchText { .. }
@@ -1791,7 +1909,8 @@ impl Cmd {
             | Cmd::AddFootprintText { .. }
             | Cmd::EditFootprintText { .. }
             | Cmd::DeleteFootprintText { .. }
-            | Cmd::MoveFootprintText { .. } => Domain::FootprintEditor,
+            | Cmd::MoveFootprintText { .. }
+            | Cmd::CreateFootprintArray { .. } => Domain::FootprintEditor,
             Cmd::OpenSymbolForEdit { .. }
             | Cmd::NewSymbol { .. }
             | Cmd::DeleteLibrarySymbol { .. }
@@ -1810,7 +1929,13 @@ impl Cmd {
             | Cmd::DeleteSymbolGraphic { .. }
             | Cmd::MoveSymbolGraphic { .. }
             | Cmd::EditSymbolGraphic { .. }
-            | Cmd::EditSymbolText { .. } => Domain::SymbolEditor,
+            | Cmd::EditSymbolText { .. }
+            | Cmd::ReplaceSymbolGraphic { .. }
+            | Cmd::DeriveSymbol { .. }
+            | Cmd::FlattenSymbol { .. }
+            | Cmd::UpdateSymbolFields { .. }
+            | Cmd::SetSymbolParent { .. }
+            | Cmd::EditLibrarySymbolFields { .. } => Domain::SymbolEditor,
             _ => Domain::Pcb,
         }
     }
@@ -1825,8 +1950,8 @@ impl Cmd {
         match self {
             Cmd::Batch { cmds } => cmds.iter().any(Cmd::edits_connectivity),
             Cmd::OnSheet { cmd, .. } | Cmd::InGroup { cmd, .. } => cmd.edits_connectivity(),
-            // A severity table is about the report, not the drawing.
-            Cmd::SetErcSeverities { .. } => false,
+            // A severity table and the findings waived are about the report, not the drawing.
+            Cmd::SetErcSeverities { .. } | Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions | Cmd::SetConnectionGrid { .. } => false,
             Cmd::MoveSymbol { .. } | Cmd::DragSymbol { .. } | Cmd::RotateSymbol { .. } | Cmd::MirrorSymbol { .. } | Cmd::MirrorSymbolVertical { .. } => false,
             Cmd::SchMove(c) => c.edits_connectivity(),
             Cmd::SchEdit(c) => c.edits_connectivity(),
@@ -1956,6 +2081,7 @@ impl Cmd {
             Cmd::SetTuningProfiles { .. } => vec!["tuning_profiles"],
             Cmd::AddDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
             Cmd::DeleteDrcExclusions { exclusions } => exclusions.iter().map(|e| e.check.as_str()).collect(),
+            Cmd::ClearDrcExclusions => vec!["drc_exclusions"],
             Cmd::SetErcSeverities { .. } => vec!["erc_severities"],
             Cmd::SwapLayers { .. } => vec!["swap_layers"],
             Cmd::SetLocked { ids, .. } => ids.iter().map(String::as_str).collect(),
@@ -2000,6 +2126,8 @@ impl Cmd {
             Cmd::SchEdit(c) => c.ids(),
             Cmd::SchMove(c) => c.ids(),
             Cmd::AddErcExclusion { location, .. } | Cmd::DeleteErcExclusion { location, .. } => vec![location.as_str()],
+            Cmd::ClearErcExclusions => vec!["erc_exclusions"],
+            Cmd::SetConnectionGrid { .. } => vec!["connection_grid"],
             Cmd::AddLabel { net, .. } => vec![net.as_str()],
             Cmd::AddSchText { content, .. } => vec![content.as_str()],
             Cmd::AddPowerSymbol { net, .. } => vec![net.as_str()],
@@ -2038,7 +2166,8 @@ impl Cmd {
             | Cmd::AddFootprintText { footprint, .. }
             | Cmd::EditFootprintText { footprint, .. }
             | Cmd::DeleteFootprintText { footprint, .. }
-            | Cmd::MoveFootprintText { footprint, .. } => vec![footprint.as_str()],
+            | Cmd::MoveFootprintText { footprint, .. }
+            | Cmd::CreateFootprintArray { footprint, .. } => vec![footprint.as_str()],
 
             Cmd::PutLibrarySymbol { symbol, .. } => vec![symbol.lib_id.as_str()],
             Cmd::RenameLibrarySymbol { lib_id, .. } | Cmd::SetSymbolAnchor { lib_id, .. } => vec![lib_id.as_str()],
@@ -2052,7 +2181,13 @@ impl Cmd {
             | Cmd::DeleteSymbolGraphic { lib_id, .. }
             | Cmd::MoveSymbolGraphic { lib_id, .. }
             | Cmd::EditSymbolGraphic { lib_id, .. }
-            | Cmd::EditSymbolText { lib_id, .. } => vec![lib_id.as_str()],
+            | Cmd::EditSymbolText { lib_id, .. }
+            | Cmd::ReplaceSymbolGraphic { lib_id, .. }
+            | Cmd::FlattenSymbol { lib_id }
+            | Cmd::UpdateSymbolFields { lib_id, .. }
+            | Cmd::SetSymbolParent { lib_id, .. }
+            | Cmd::EditLibrarySymbolFields { lib_id, .. } => vec![lib_id.as_str()],
+            Cmd::DeriveSymbol { lib_id, parent, .. } => vec![lib_id.as_str(), parent.as_str()],
         }
     }
 
@@ -2334,10 +2469,12 @@ impl<'a> Board<'a> {
     /// Apply a command, or refuse it. A group keeps only the members that are still on the board afterwards (`pcb_groups.rs`).
     pub fn apply(&mut self, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
         let groups_before = self.group_universe();
+        let sch_groups_before = self.sch_group_universe();
         let patterns_before = self.tuning_universe();
         let edge_before = outline::snapshot(&self.design);
         self.apply_cmd(cmd)?;
         self.tidy_groups(groups_before);
+        self.tidy_sch_groups(sch_groups_before);
         self.tidy_tuning_patterns(patterns_before);
         outline::refresh_if_changed(&mut self.design, edge_before);
         Ok(())
@@ -2399,7 +2536,9 @@ impl<'a> Board<'a> {
             Cmd::SetRuleSeverities { severities } => board_setup::set_severities(&mut self.design, severities),
             Cmd::AddDrcExclusions { exclusions } => review::add_drc_exclusions(&mut self.design, exclusions),
             Cmd::DeleteDrcExclusions { exclusions } => review::delete_drc_exclusions(&mut self.design, exclusions),
+            Cmd::ClearDrcExclusions => review::clear_drc_exclusions(&mut self.design),
             Cmd::SetErcSeverities { severities } => review::set_erc_severities(&mut self.design, severities),
+            Cmd::SetConnectionGrid { mils } => review::set_connection_grid(&mut self.design, *mils),
             Cmd::SetCustomRules { text } => board_setup::set_custom_rules(&mut self.design, text),
             Cmd::SetTextVariables { variables } => board_setup::set_text_variables(&mut self.design, variables),
             Cmd::SetBoardLayers { settings } => board_setup::set_board_layers(&mut self.design, self.model, settings),
@@ -2576,8 +2715,9 @@ impl<'a> Board<'a> {
             Cmd::InGroup { group, cmd } => self.in_group(group, cmd),
             Cmd::ReorganizeSheets => self.reorganize_sheets(),
             Cmd::DeleteNoConnect { id } => self.delete_no_connect(id),
-            Cmd::AddErcExclusion { check, location } => self.add_erc_exclusion(check, location),
+            Cmd::AddErcExclusion { check, location, comment, marker } => self.add_erc_exclusion(check, location, comment, marker),
             Cmd::DeleteErcExclusion { check, location } => self.delete_erc_exclusion(check, location),
+            Cmd::ClearErcExclusions => self.clear_erc_exclusions(),
             Cmd::AddLabel { net, at, kind } => self.add_label(net, *at, kind.clone()),
             Cmd::DeleteLabel { id } => self.delete_label(id),
             Cmd::AddSchText { content, at, angle_millideg, size_um } => self.add_sch_text(content, *at, *angle_millideg, *size_um),
@@ -2606,8 +2746,11 @@ impl<'a> Board<'a> {
             Cmd::PutLibraryFootprint { footprint, overwrite } => self.put_library_footprint(footprint, *overwrite),
             Cmd::RenameLibraryFootprint { name, new_name, overwrite } => self.rename_library_footprint(name, new_name, *overwrite),
             Cmd::RepairFootprint { name } => self.repair_footprint(name),
-            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection } => {
-                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), models3d.as_deref(), *zone_connection)
+            Cmd::EditFootprintProperties { name, description, keywords, attributes, reference_visible, value_visible, model, models3d, zone_connection, reference, value, fields } => {
+                // the grid is judged first: a row that is wrong refuses the panel before anything of it is taken
+                self.check_library_fields(name, reference.as_ref(), value.as_ref(), fields.as_deref())?;
+                self.edit_footprint_properties(name, description.clone(), keywords.clone(), *attributes, *reference_visible, *value_visible, model.clone(), models3d.as_deref(), *zone_connection)?;
+                self.apply_library_fields(name, reference.as_ref(), value.as_ref(), fields.as_deref())
             }
             Cmd::SetFootprintAnchor { name, at } => self.set_footprint_anchor(name, *at),
             Cmd::UpdateFootprintOnBoard { name } => self.update_footprint_on_board(name),
@@ -2633,6 +2776,25 @@ impl<'a> Board<'a> {
             }
             Cmd::DeleteFootprintText { footprint, id } => self.delete_footprint_text(footprint, id),
             Cmd::MoveFootprintText { footprint, id, x, y } => self.move_footprint_text(footprint, id, *x, *y),
+            Cmd::CreateFootprintArray { footprint, ids, geometry, arrange, numbering } => self.create_footprint_array(footprint, ids, geometry, *arrange, numbering.as_ref()),
+            Cmd::DeriveSymbol { parent, lib_id, keep_footprint, keep_datasheet, transfer_user_fields, keep_content_user_fields, overwrite } => {
+                self.derive_symbol_verb(parent, lib_id, eda_model::sym_fields::DeriveOptions { keep_footprint: *keep_footprint, keep_datasheet: *keep_datasheet, transfer_user_fields: *transfer_user_fields, keep_content_user_fields: *keep_content_user_fields }, *overwrite)
+            }
+            Cmd::FlattenSymbol { lib_id } => self.flatten_symbol_verb(lib_id),
+            Cmd::UpdateSymbolFields { lib_id, fields, remove_extras, reset_empty, reset_text, reset_visibility, reset_effects, reset_positions } => self.update_symbol_fields_verb(
+                lib_id,
+                eda_model::sym_fields::UpdateFieldsOptions {
+                    fields: fields.iter().cloned().collect(),
+                    remove_extras: *remove_extras,
+                    reset_empty: *reset_empty,
+                    reset_text: *reset_text,
+                    reset_visibility: *reset_visibility,
+                    reset_effects: *reset_effects,
+                    reset_positions: *reset_positions,
+                },
+            ),
+            Cmd::SetSymbolParent { lib_id, parent } => self.set_symbol_parent_verb(lib_id, parent),
+            Cmd::EditLibrarySymbolFields { lib_id, fields } => self.edit_library_symbol_fields_verb(lib_id, fields),
 
             Cmd::OpenSymbolForEdit { lib_id } => self.open_symbol_for_edit(lib_id),
             Cmd::DeleteLibrarySymbol { lib_id } => self.delete_library_symbol(lib_id),
@@ -2666,8 +2828,9 @@ impl<'a> Board<'a> {
             Cmd::AddSymbolGraphic { lib_id, graphic } => self.add_symbol_graphic(lib_id, graphic.clone()),
             Cmd::DeleteSymbolGraphic { lib_id, id } => self.delete_symbol_graphic(lib_id, id),
             Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => self.move_symbol_graphic(lib_id, id, *dx_mm, *dy_mm),
-            Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, fill } => self.edit_symbol_graphic(lib_id, id, *stroke_mm, *fill),
+            Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, fill, unit, body_style } => self.edit_symbol_graphic(lib_id, id, *stroke_mm, *fill, *unit, *body_style),
             Cmd::EditSymbolText { lib_id, id, text, angle_deg, size_mm } => self.edit_symbol_text(lib_id, id, text.clone(), *angle_deg, *size_mm),
+            Cmd::ReplaceSymbolGraphic { lib_id, id, graphic } => self.replace_symbol_graphic(lib_id, id, graphic.clone()),
         }
     }
 
@@ -4378,20 +4541,28 @@ impl<'a> Board<'a> {
     }
 
     /// `dialog_erc.cpp`'s "Exclude this violation" -- see `Cmd::AddErcExclusion`'s own doc.
-    fn add_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
+    fn add_erc_exclusion(&mut self, check: &str, location: &str, comment: &str, marker: &Option<eda_model::ir::ErcMarker>) -> Result<(), Vec<CheckResult>> {
         if location.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_erc_exclusion", check, "this finding has no location to key an exclusion on")]);
         }
-        let sch = self.schematic_mut_or_create();
-        if !sch.erc_exclusions.iter().any(|e| e.check == check && e.location == location) {
-            sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into() });
-            sch.erc_exclusions.sort();
+        // The list belongs to the schematic as a whole, the root's: a sheet the editor is on does not keep one of its own.
+        let sch = self.design.schematic.get_or_insert_with(empty_schematic_section);
+        match sch.erc_exclusions.iter_mut().find(|e| e.check == check && e.location == location) {
+            // Already waived: the comment is the new one (an empty one clears it), the marker the new one when there is one.
+            Some(slot) => {
+                slot.comment = comment.into();
+                if marker.is_some() {
+                    slot.marker = marker.clone();
+                }
+            }
+            None => sch.erc_exclusions.push(ErcExclusion { check: check.into(), location: location.into(), comment: comment.into(), marker: marker.clone() }),
         }
+        sch.erc_exclusions.sort();
         Ok(())
     }
 
     fn delete_erc_exclusion(&mut self, check: &str, location: &str) -> Result<(), Vec<CheckResult>> {
-        let sch = self.schematic_mut()?;
+        let sch = self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])?;
         let before = sch.erc_exclusions.len();
         sch.erc_exclusions.retain(|e| !(e.check == check && e.location == location));
         if sch.erc_exclusions.len() == before {
@@ -4405,6 +4576,16 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_bad_label", "label", "a label needs a net name")]);
         }
         self.schematic_mut_or_create().labels.push(NetLabel { id: String::new(), net: net.into(), at, kind });
+        Ok(())
+    }
+
+    /// `DIALOG_ERC::OnDeleteAllClick` with the exclusions: see `Cmd::ClearErcExclusions`.
+    fn clear_erc_exclusions(&mut self) -> Result<(), Vec<CheckResult>> {
+        let sch = self.design.schematic.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_no_schematic", "schematic", "this board has no schematic section yet")])?;
+        if sch.erc_exclusions.is_empty() {
+            return Err(vec![CheckResult::fail("ops_unknown_erc_exclusion", "erc_exclusions", "no finding is excluded")]);
+        }
+        sch.erc_exclusions.clear();
         Ok(())
     }
 
@@ -5131,6 +5312,16 @@ impl<'a> Board<'a> {
             .ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "this symbol has not been opened in the Symbol Editor yet")])
     }
 
+    /// [`library_symbol_mut`](Self::library_symbol_mut) for an edit of the symbol's drawing -- a pin, a graphic, the anchor: refused for a derived symbol, whose graphics and pins
+    /// are its parent's (`SYMBOL_EDIT_FRAME::IsSymbolEditable`: "Symbol %s is a derived symbol. Symbol graphics will not be editable.").
+    pub(crate) fn drawing_symbol_mut(&mut self, lib_id: &str) -> Result<&mut LibrarySymbol, Vec<CheckResult>> {
+        let derived_from = self.design.symbol_library.as_ref().filter(|l| l.is_derived(lib_id)).and_then(|l| l.by_lib_id(lib_id)).and_then(|s| s.extends.clone());
+        if let Some(parent) = derived_from {
+            return Err(vec![CheckResult::fail("ops_derived_symbol", lib_id, format!("this symbol is derived from {parent}: its graphics and pins are the parent's -- edit them in the parent, or flatten the symbol first"))]);
+        }
+        self.library_symbol_mut(lib_id)
+    }
+
     fn open_symbol_for_edit(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
         if lib_id.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_symbol", "symbol", "a symbol needs a lib_id")]);
@@ -5169,10 +5360,15 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
+    /// The symbol and, with it, every symbol derived from it (`LIB_BUFFER::DeleteBuffer`: "Remove all derived symbols to prevent broken inheritance").
     fn delete_library_symbol(&mut self, lib_id: &str) -> Result<(), Vec<CheckResult>> {
-        let lib = self.design.symbol_library.as_mut().ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")])?;
+        if self.design.symbol_library.is_none() {
+            return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")]);
+        }
+        let gone = self.symbols_to_delete(lib_id);
+        let lib = self.design.symbol_library.as_mut().expect("checked above");
         let before = lib.symbols.len();
-        lib.symbols.retain(|s| s.lib_id != lib_id);
+        lib.symbols.retain(|s| !gone.contains(&s.lib_id));
         if lib.symbols.len() == before {
             return Err(vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the library")]);
         }
@@ -5238,6 +5434,35 @@ impl<'a> Board<'a> {
         if pin.length_mm < 0.0 {
             return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "pin length cannot be negative")]);
         }
+        // `DIALOG_PIN_PROPERTIES::TransferDataFromWindow`: every alternate function has a name; its type and style are the ones a file can say
+        for a in &pin.alternates {
+            if a.name.is_empty() {
+                return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "Alternate pin definitions must have a name.")]);
+            }
+            if !library_editors::PIN_TYPE_TOKENS.contains(&a.electrical_type.as_str()) {
+                return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("alternate {:?}: {:?} is not a pin electrical type", a.name, a.electrical_type))]);
+            }
+            if !library_editors::PIN_SHAPE_TOKENS.contains(&a.shape.as_str()) {
+                return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, format!("alternate {:?}: {:?} is not a pin graphic style", a.name, a.shape))]);
+            }
+        }
+        Ok(())
+    }
+
+    /// `alternates[ alt.m_Name ] = alt` for each row of the grid: a name once (the last definition stays), in the map's order.
+    fn normalize_alternates(pin: &mut LibrarySymbolPin) {
+        let mut map: std::collections::BTreeMap<String, eda_model::ir::PinAlternate> = std::collections::BTreeMap::new();
+        for a in std::mem::take(&mut pin.alternates) {
+            map.insert(a.name.clone(), a);
+        }
+        pin.alternates = map.into_values().collect();
+    }
+
+    /// "Alternate pin assignments are not available for symbols with multiple body styles." (`DIALOG_PIN_PROPERTIES`: the alternates panel is disabled for them.)
+    fn check_alternates_allowed(sym: &LibrarySymbol, pin: &LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
+        if !pin.alternates.is_empty() && sym.has_alternate_body_style {
+            return Err(vec![CheckResult::fail("ops_bad_pin", &pin.number, "Alternate pin assignments are not available for symbols with multiple body styles.")]);
+        }
         Ok(())
     }
 
@@ -5247,21 +5472,23 @@ impl<'a> Board<'a> {
 
     fn add_symbol_pin(&mut self, lib_id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
         pin.id = String::new(); // ids are ours to assign, never the caller's
+        Self::normalize_alternates(&mut pin);
         Self::validate_pin(&pin)?;
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_alternates_allowed(sym, &pin)?;
         sym.pins.push(pin);
         sym.assign_missing_ids();
         Ok(())
     }
 
     fn move_symbol_pin(&mut self, lib_id: &str, id: &str, x: f64, y: f64) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         Self::find_pin_mut(sym, id)?.at = eda_model::symbol::SPoint { x, y };
         Ok(())
     }
 
     fn delete_symbol_pin(&mut self, lib_id: &str, id: &str) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let before = sym.pins.len();
         sym.pins.retain(|p| p.id != id);
         if sym.pins.len() == before {
@@ -5272,15 +5499,17 @@ impl<'a> Board<'a> {
 
     fn edit_symbol_pin(&mut self, lib_id: &str, id: &str, mut pin: LibrarySymbolPin) -> Result<(), Vec<CheckResult>> {
         pin.id = id.to_string();
+        Self::normalize_alternates(&mut pin);
         Self::validate_pin(&pin)?;
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_alternates_allowed(sym, &pin)?;
         let slot = Self::find_pin_mut(sym, id)?;
         *slot = pin;
         Ok(())
     }
 
     fn push_pin_property(&mut self, lib_id: &str, source_pin_id: &str, field: PushPinField, body_style: Option<u32>) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let src = sym.pins.iter().find(|p| p.id == source_pin_id).cloned().ok_or_else(|| vec![CheckResult::fail("ops_unknown_pin", source_pin_id, "no pin with this id")])?;
         let shown_style = body_style.unwrap_or(src.body_style);
         for p in sym.pins.iter_mut().filter(|p| p.id != source_pin_id) {
@@ -5299,21 +5528,51 @@ impl<'a> Board<'a> {
         Ok(())
     }
 
-    fn add_symbol_graphic(&mut self, lib_id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
-        if let LibrarySymbolGraphic::Polyline { pts, .. } = &graphic {
-            if pts.len() < 2 {
-                return Err(vec![CheckResult::fail("ops_bad_shape", lib_id, "a polyline needs at least two points")]);
+    /// What a library graphic must be to be kept: a polyline of two points or more, a text box with a text size the dialog takes (`DIALOG_TEXT_PROPERTIES`: 0.01 to 1000 mm), that runs
+    /// along the box or up it, with margins that are not negative.
+    fn check_symbol_graphic(lib_id: &str, graphic: &LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
+        match graphic {
+            LibrarySymbolGraphic::Polyline { pts, .. } if pts.len() < 2 => Err(vec![CheckResult::fail("ops_bad_shape", lib_id, "a polyline needs at least two points")]),
+            LibrarySymbolGraphic::TextBox { size_mm, angle_deg, margin_mm, .. } => {
+                if !(0.01..=1000.0).contains(size_mm) {
+                    return Err(vec![CheckResult::fail("ops_bad_text", lib_id, "the text size must be between 0.01 and 1000 mm")]);
+                }
+                if *angle_deg != 0.0 && *angle_deg != 90.0 {
+                    return Err(vec![CheckResult::fail("ops_bad_text", lib_id, "a text box's text runs along it (0) or up it (90 degrees)")]);
+                }
+                if *margin_mm < 0.0 {
+                    return Err(vec![CheckResult::fail("ops_bad_text", lib_id, "the margin cannot be negative")]);
+                }
+                Ok(())
             }
+            _ => Ok(()),
         }
+    }
+
+    fn replace_symbol_graphic(&mut self, lib_id: &str, id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
+        Self::check_symbol_graphic(id, &graphic)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_graphic_scope(sym, id, Some(graphic.unit()), Some(graphic.body_style()))?;
+        let slot = Self::find_symbol_graphic_mut(sym, id)?;
+        if std::mem::discriminant(slot) != std::mem::discriminant(&graphic) {
+            return Err(vec![CheckResult::fail("ops_bad_shape", id, "a graphic cannot become another kind of graphic")]);
+        }
+        graphic.set_id(id.to_string());
+        *slot = graphic;
+        Ok(())
+    }
+
+    fn add_symbol_graphic(&mut self, lib_id: &str, mut graphic: LibrarySymbolGraphic) -> Result<(), Vec<CheckResult>> {
+        Self::check_symbol_graphic(lib_id, &graphic)?;
         graphic.set_id(String::new());
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         sym.graphics.push(graphic);
         sym.assign_missing_ids();
         Ok(())
     }
 
     fn delete_symbol_graphic(&mut self, lib_id: &str, id: &str) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let before = sym.graphics.len();
         sym.graphics.retain(|g| g.id() != id);
         if sym.graphics.len() == before {
@@ -5327,16 +5586,16 @@ impl<'a> Board<'a> {
     }
 
     fn move_symbol_graphic(&mut self, lib_id: &str, id: &str, dx_mm: f64, dy_mm: f64) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         Self::find_symbol_graphic_mut(sym, id)?.translate(dx_mm, dy_mm);
         Ok(())
     }
 
-    fn edit_symbol_graphic(&mut self, lib_id: &str, id: &str, stroke_mm: f64, fill: LibraryFill) -> Result<(), Vec<CheckResult>> {
-        if stroke_mm < 0.0 {
-            return Err(vec![CheckResult::fail("ops_bad_shape", id, "line width cannot be negative")]);
-        }
-        let sym = self.library_symbol_mut(lib_id)?;
+    fn edit_symbol_graphic(&mut self, lib_id: &str, id: &str, stroke_mm: f64, fill: LibraryFill, unit: Option<u32>, body_style: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        // a negative width is the border switched off (`DIALOG_SHAPE_PROPERTIES`: `stroke.SetWidth( -1 )`, a schematic's smallest unit, 0.0001 mm)
+        let stroke_mm = if stroke_mm < 0.0 { NO_BORDER_MM } else { stroke_mm };
+        let sym = self.drawing_symbol_mut(lib_id)?;
+        Self::check_graphic_scope(sym, id, unit, body_style)?;
         let g = Self::find_symbol_graphic_mut(sym, id)?;
         match g {
             LibrarySymbolGraphic::Rectangle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Polyline { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Circle { stroke_mm: s, fill: f, .. } | LibrarySymbolGraphic::Arc { stroke_mm: s, fill: f, .. } => {
@@ -5344,6 +5603,29 @@ impl<'a> Board<'a> {
                 *f = fill;
             }
             LibrarySymbolGraphic::Text { .. } => return Err(vec![CheckResult::fail("ops_bad_shape", id, "this is a text item -- use edit_symbol_text")]),
+            LibrarySymbolGraphic::TextBox { .. } => return Err(vec![CheckResult::fail("ops_bad_shape", id, "this is a text box -- use replace_symbol_graphic")]),
+        }
+        if let Some(u) = unit {
+            g.set_unit(u);
+        }
+        if let Some(b) = body_style {
+            g.set_body_style(b);
+        }
+        Ok(())
+    }
+
+    /// The unit and the body style a graphic is moved to (`DIALOG_SHAPE_PROPERTIES::TransferDataFromWindow`, `DIALOG_TEXT_PROPERTIES`): 0 is "common to all", and a number
+    /// the symbol has otherwise -- a unit up to its unit count, the second body style only when the symbol has one.
+    fn check_graphic_scope(sym: &LibrarySymbol, id: &str, unit: Option<u32>, body_style: Option<u32>) -> Result<(), Vec<CheckResult>> {
+        if let Some(u) = unit {
+            if u > sym.unit_count.max(1) {
+                return Err(vec![CheckResult::fail("ops_bad_shape", id, format!("the symbol has no unit {u}"))]);
+            }
+        }
+        if let Some(b) = body_style {
+            if b > if sym.has_alternate_body_style { 2 } else { 1 } {
+                return Err(vec![CheckResult::fail("ops_bad_shape", id, format!("the symbol has no body style {b}"))]);
+            }
         }
         Ok(())
     }
@@ -5352,7 +5634,7 @@ impl<'a> Board<'a> {
         if size_mm <= 0.0 {
             return Err(vec![CheckResult::fail("ops_bad_text", id, "text size must be positive")]);
         }
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         let g = Self::find_symbol_graphic_mut(sym, id)?;
         match g {
             LibrarySymbolGraphic::Text { text: t, angle_deg: a, size_mm: s, .. } => {
@@ -5365,6 +5647,9 @@ impl<'a> Board<'a> {
         }
     }
 }
+
+/// The width of a library shape with no border: -1 of a schematic's internal units (0.1 um), what `STROKE_PARAMS` holds and a file says as `(width -0.0001)`.
+const NO_BORDER_MM: f64 = -0.0001;
 
 /// Rotate `pt` by `angle_millideg` around `pivot` -- the same matrix
 /// `crates/model/src/footprint.rs`'s `to_board` applies to a pad's local
@@ -5412,6 +5697,16 @@ mod pcb_transform_tests;
 #[cfg(test)]
 mod array_tests;
 #[cfg(test)]
+mod fp_array_tests;
+#[cfg(test)]
+mod sym_derive_tests;
+#[cfg(test)]
+mod fp_lib_fields_tests;
+#[cfg(test)]
+mod pin_alternates_tests;
+#[cfg(test)]
+mod sym_graphic_tests;
+#[cfg(test)]
 mod fp_edit_tests;
 #[cfg(test)]
 mod fp_models_tests;
@@ -5457,6 +5752,7 @@ pub mod episode;
 pub mod flash;
 pub mod sch_edit;
 pub mod sch_move;
+pub mod sch_pin_helpers;
 mod sch_pins;
 mod sch_labels;
 pub mod sch_net_collision;
@@ -5467,7 +5763,13 @@ mod sch_fields;
 #[cfg(test)]
 mod sch_move_tests;
 #[cfg(test)]
+mod sch_groups_tests;
+#[cfg(test)]
 mod sch_fields_tests;
+#[cfg(test)]
+mod sch_user_fields_tests;
+#[cfg(test)]
+mod sch_pin_helpers_tests;
 #[cfg(test)]
 mod sch_body_style_tests;
 #[cfg(test)]

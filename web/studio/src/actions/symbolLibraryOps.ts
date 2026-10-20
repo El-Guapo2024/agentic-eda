@@ -8,12 +8,15 @@
 // Duplicate and Save Copy As read any symbol; Delete and Rename need a project-library entry.
 import type { Dispatch } from "react";
 import type { Cmd, LibrarySymbol } from "../api/types";
-import { fetchSymbolEditorNames } from "../api/client";
+import { fetchLibrarySymbolFlat, fetchSymbolEditorNames } from "../api/client";
 import { fetchAnySymbol, fetchSymbolKicadSymText, parseSymbolText, pickTextFile, readClipboardText, saveCanvasPng, saveTextFile, writeClipboardText } from "../api/libraryClient";
 import { ensureUniqueLibId, joinLibName, PROJECT_LIBRARY, splitLibName, symbolLibIdError } from "../kicad-port/libraryNames";
 import { PROJECT_SYMBOL_LIB } from "../kicad-port/symEditActions";
 import { clipboardTextForSymbols, looksLikeSymbolText } from "../kicad-port/symClipboard";
-import { askConfirm, askText } from "../components/library/libraryDialogs";
+import { bareName, descendantsOf, treeConditions } from "../kicad-port/symFields";
+import { planImport, planPaste } from "../kicad-port/symImportPlan";
+import type { ConflictStrategy } from "../kicad-port/symSaveAsPlan";
+import { askChoice, askConfirm, askText } from "../components/library/libraryDialogs";
 import { notifyLibraryChanged } from "../components/library/useLibraryNames";
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 
@@ -31,9 +34,9 @@ export function targetIds(c: SymCtx): string[] {
   return st.treeSelection.length > 0 ? st.treeSelection : st.libId ? [st.libId] : [];
 }
 
-async function names(): Promise<{ all: string[]; project: Set<string> }> {
+async function names(): Promise<{ all: string[]; project: Set<string>; derived: Record<string, string> }> {
   const r = await fetchSymbolEditorNames();
-  return { all: r.names, project: new Set(r.project ?? []) };
+  return { all: r.names, project: new Set(r.project ?? []), derived: r.derived ?? {} };
 }
 
 /** The library a new symbol lands in: the target's own (`getTargetLib()`), else the project library. */
@@ -88,8 +91,10 @@ export async function copySymbols(c: SymCtx, cut: boolean): Promise<void> {
   try {
     const symbols: LibrarySymbol[] = [];
     const texts: string[] = [];
+    const { derived } = await names();
     for (const id of ids) {
-      symbols.push((await fetchAnySymbol(id)).symbol);
+      // `CopySymbolToClipboard` copies `symbol->Flatten()`: a derived symbol goes as the flat symbol it stands for
+      symbols.push(id in derived ? await fetchLibrarySymbolFlat(id) : (await fetchAnySymbol(id)).symbol);
       texts.push(await fetchSymbolKicadSymText(id));
     }
     const text = clipboardTextForSymbols(texts);
@@ -120,19 +125,12 @@ export async function pasteSymbols(c: SymCtx): Promise<void> {
     if (symbols.length === 0) return;
     const lib = targetLibrary(c);
     const { all } = await names();
-    const taken = [...all];
-    const cmds: Cmd[] = [];
-    const created: string[] = [];
-    for (const sym of symbols) {
-      const item = splitLibName(sym.lib_id).item;
-      const libId = ensureUniqueLibId(joinLibName(lib, item), taken); // `ensureUniqueName`
-      taken.push(libId);
-      created.push(libId);
-      cmds.push({ op: "put_library_symbol", symbol: { ...sym, lib_id: libId, published: false } });
-    }
+    // each symbol under a free name (`ensureUniqueName`); a derived one (a file's clipboard text can hold them) follows its parent's name and comes after it
+    const { puts, ids } = planPaste(symbols, lib, all, ensureUniqueLibId, joinLibName);
+    const cmds = puts.map((sym): Cmd => ({ op: "put_library_symbol", symbol: { ...sym, published: false } }));
     if (!(await runBatch(c, cmds))) return;
-    await c.api.openSymbol(created[0]!);
-    select(c, [created[0]!]);
+    await c.api.openSymbol(ids[0]!);
+    select(c, [ids[0]!]);
   } catch (e) {
     fail(c, e);
   }
@@ -159,15 +157,28 @@ export async function deleteSymbols(c: SymCtx): Promise<void> {
   const ids = targetIds(c);
   if (ids.length === 0) return info(c, "No symbol selected.");
   try {
-    const { project } = await names();
-    const deletable = ids.filter((id) => project.has(id));
+    const { project, derived } = await names();
+    const inProject = ids.filter((id) => project.has(id));
     const refused = ids.filter((id) => !project.has(id));
     if (refused.length > 0) fail(c, new Error(`${refused.join(", ")} ${refused.length === 1 ? "is" : "are"} not in the project library (defined by a library file or the built-in table), so there is nothing to delete.`));
+    // "Deleting a base symbol will delete all symbols derived from it": asked for each base symbol, and the Cancel button leaves that one alone
+    const deletable: string[] = [];
+    for (const id of inProject) {
+      const kids = descendantsOf(derived, id);
+      if (kids.length > 0) {
+        const message = `Deleting a base symbol will delete all symbols derived from it.\n\n${bareName(id)} (base)\n${kids.map(bareName).join("\n")}\n`;
+        if (!(await askConfirm({ title: "Warning", message, okLabel: "Delete All Listed Symbols", cancelLabel: "Cancel" }))) continue;
+      }
+      deletable.push(id);
+    }
     if (deletable.length === 0) return;
+    // a symbol that goes with its base symbol is not deleted a second time
+    const alone = deletable.filter((id) => !deletable.some((other) => other !== id && descendantsOf(derived, other).includes(id)));
     const open = c.api.getState().libId;
-    const cmds: Cmd[] = deletable.map((lib_id): Cmd => ({ op: "delete_library_symbol", lib_id }));
+    const cmds: Cmd[] = alone.map((lib_id): Cmd => ({ op: "delete_library_symbol", lib_id }));
     if (!(await runBatch(c, cmds))) return;
-    if (open && deletable.includes(open)) c.api.closeSymbol();
+    // the symbol on the canvas leaves it when it, or a symbol it derives from, was deleted (`GetParentChain( *GetCurSymbol() )` holds the deleted id)
+    if (open && alone.some((id) => id === open || descendantsOf(derived, id).includes(open))) c.api.closeSymbol();
     select(c, []);
   } catch (e) {
     fail(c, e);
@@ -243,28 +254,32 @@ export async function importSymbol(c: SymCtx): Promise<void> {
  * the library already has is skipped or overwritten as the dialog's resolution says (`CONFLICT_RESOLUTION::SKIP` / `OVERWRITE`). The first
  * imported symbol is loaded, and a skipped count is reported ("Imported %d symbol(s), skipped %d.").
  */
-export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbol[], resolutions: Record<string, "skip" | "overwrite">): Promise<void> {
+export async function performImport(c: SymCtx, lib: string, chosen: LibrarySymbol[], resolutions: Record<string, "skip" | "overwrite">, file: LibrarySymbol[] = chosen): Promise<void> {
   try {
     const { all } = await names();
     const taken = new Set(all);
-    const cmds: Cmd[] = [];
-    const imported: string[] = [];
+    const wanted: LibrarySymbol[] = [];
     let skipped = 0;
     for (const sym of chosen) {
       const libId = joinLibName(lib, splitLibName(sym.lib_id).item);
-      const exists = taken.has(libId);
-      if (exists && (resolutions[sym.lib_id] ?? "overwrite") === "skip") {
+      if (taken.has(libId) && (resolutions[sym.lib_id] ?? "overwrite") === "skip") {
         skipped++;
         continue;
       }
-      cmds.push({ op: "put_library_symbol", symbol: { ...sym, lib_id: libId, published: false }, overwrite: exists });
-      imported.push(libId);
+      wanted.push(sym);
     }
-    if (cmds.length === 0) return info(c, skipped > 0 ? `Skipped ${skipped} symbol(s).` : "Nothing to import.");
+    if (wanted.length === 0) return info(c, skipped > 0 ? `Skipped ${skipped} symbol(s).` : "Nothing to import.");
+    // a derived symbol comes after its parent, and brings the parent along when the library lacks it and it was not ticked
+    const present = new Set(all.filter((n) => (splitLibName(n).lib || PROJECT_LIBRARY) === lib).map((n) => splitLibName(n).item));
+    const cmds: Cmd[] = planImport(file, wanted, present).map((sym): Cmd => {
+      const libId = joinLibName(lib, splitLibName(sym.lib_id).item);
+      return { op: "put_library_symbol", symbol: { ...sym, lib_id: libId, published: false }, overwrite: taken.has(libId) };
+    });
+    const first = joinLibName(lib, splitLibName(wanted[0]!.lib_id).item);
     if (!(await runBatch(c, cmds))) return;
-    await c.api.openSymbol(imported[0]!);
-    select(c, [imported[0]!]);
-    info(c, skipped > 0 ? `Imported ${imported.length} symbol(s), skipped ${skipped}.` : `Imported ${imported.length} symbol(s).`);
+    await c.api.openSymbol(first);
+    select(c, [first]);
+    info(c, skipped > 0 ? `Imported ${wanted.length} symbol(s), skipped ${skipped}.` : `Imported ${wanted.length} symbol(s).`);
   } catch (e) {
     fail(c, e);
   }
@@ -277,21 +292,77 @@ export function saveSymbolAs(c: SymCtx, openCopy: boolean): void {
   c.dispatch({ type: "SET_SAVE_AS", request: { openCopy, libId: id } });
 }
 
+/** What the Save As dialog's validator asks about: the symbol and its parents (own entries, the symbol first), the symbol with everything it inherits, the names in use. */
+export async function saveAsContext(c: SymCtx, libId: string): Promise<{ chain: LibrarySymbol[]; flat: LibrarySymbol; taken: Set<string>; derived: Record<string, string> }> {
+  const { all, derived } = await names();
+  const ids = [libId];
+  for (let at = derived[libId]; at && ids.length < 64 && !ids.includes(at); at = derived[at]) ids.push(at);
+  const chain: LibrarySymbol[] = [];
+  for (const id of ids) chain.push((await fetchAnySymbol(id)).symbol);
+  void c;
+  return { chain, flat: libId in derived ? await fetchLibrarySymbolFlat(libId) : chain[0]!, taken: new Set(all), derived };
+}
+
 /**
- * The dialog's OK: `SYMBOL_SAVE_AS_HANDLER::DoSave` -- the symbol is stored under `newLibId`; a name the library already has is overwritten
- * only after the caller's confirmation (`ID_OVERWRITE_CONFLICTS`). `openCopy` loads the copy afterwards.
+ * The dialog's OK: `SYMBOL_SAVE_AS_HANDLER::DoSave` -- the symbols of `savePlan` (the copy, and with it its parents when it goes to another library) are stored; a name the library
+ * already has is overwritten only after the caller's confirmation (`ID_OVERWRITE_CONFLICTS`). `openCopy` loads the copy afterwards.
  */
-export async function performSaveAs(c: SymCtx, req: { libId: string; openCopy: boolean }, newLibId: string, overwrite: boolean): Promise<boolean> {
+export async function performSaveAs(c: SymCtx, req: { libId: string; openCopy: boolean }, puts: LibrarySymbol[], taken: ReadonlySet<string>): Promise<boolean> {
   try {
-    const { symbol } = await fetchAnySymbol(req.libId);
-    if (!(await runBatch(c, [{ op: "put_library_symbol", symbol: { ...symbol, lib_id: newLibId, published: false }, overwrite }]))) return false;
-    if (req.openCopy) await c.api.openSymbol(newLibId);
-    select(c, [newLibId]);
+    const cmds = puts.map((symbol): Cmd => ({ op: "put_library_symbol", symbol, overwrite: taken.has(symbol.lib_id) || symbol.lib_id === req.libId }));
+    if (!(await runBatch(c, cmds))) return false;
+    const copy = puts[puts.length - 1]!.lib_id; // the root comes first and the symbol itself last
+    if (req.openCopy) await c.api.openSymbol(copy);
+    select(c, [copy]);
     return true;
   } catch (e) {
     fail(c, e);
     return false;
   }
+}
+
+/** The wording of the Save As validator's conflict question, for the dialog. */
+export async function askSaveAsConflicts(lib: string, symbolName: string, typed: string, conflicts: string[]): Promise<ConflictStrategy | null> {
+  if (conflicts.length === 1 && conflicts[0] === typed) {
+    return (await askConfirm({ title: "Confirmation", message: `Symbol '${typed}' already exists in library '${lib}'. Do you want to overwrite it?`, okLabel: "Overwrite" })) ? "overwrite" : null;
+  }
+  // "If there are conflicts in the parental chain, we need to ask the user if they want to overwrite all of them"
+  const message = `The following symbols in the inheritance chain of '${symbolName}' already exist in library '${lib}':\n${conflicts.map((n) => `  ${n}\n`).join("")}\nDo you want to overwrite all of them, or rename the new symbols?`;
+  const choice = await askChoice({ title: "Confirmation", message, okLabel: "Overwrite All", altLabel: "Rename All", cancelLabel: "Cancel" });
+  return choice === "ok" ? "overwrite" : choice === "alt" ? "rename" : null;
+}
+
+/** `SYMBOL_EDITOR_CONTROL::AddSymbol` for `deriveFromExistingSymbol`: the Derive from Existing Symbol dialog on the tree's selected symbol (`CreateNewSymbol( target.GetLibItemName() )`). */
+export function deriveFromExisting(c: SymCtx): void {
+  const id = targetIds(c)[0];
+  if (!id) return info(c, "Select a symbol in the library tree first.");
+  c.dispatch({ type: "SET_DERIVE_REQUEST", parent: id });
+}
+
+/** `SYMBOL_EDITOR_CONTROL::FlattenSymbol`: the tree's selected symbol becomes the flat symbol it stands for (`UpdateSymbol( libMgr, Flatten() )`). */
+export async function flattenSymbol(c: SymCtx): Promise<void> {
+  const id = targetIds(c)[0];
+  if (!id) return info(c, "No symbol to flatten");
+  try {
+    const { derived } = await names();
+    if (!treeConditions(derived, id).isDerived) return fail(c, new Error("Symbol is not derived from another symbol."));
+    await runBatch(c, [{ op: "flatten_symbol", lib_id: id }]);
+  } catch (e) {
+    fail(c, e);
+  }
+}
+
+/** `SYMBOL_EDITOR_EDIT_TOOL::UpdateSymbolFields`: the dialog for the open symbol -- nothing without one, an error when it is not derived. */
+export function updateSymbolFields(c: SymCtx): void {
+  const st = c.api.getState();
+  if (!st.symbol) return;
+  if (!st.derivedOwn) return fail(c, new Error("Symbol is not derived from another symbol."));
+  c.dispatch({ type: "SET_UPDATE_FIELDS_OPEN", open: true });
+}
+
+/** `SYMBOL_EDITOR_CONTROL::ShowLibraryTable` for `showRelatedLibFieldsTable`: the fields table with the scope "Related Symbols" (the target's root and everything derived from it). */
+export function showFieldsTable(c: SymCtx, scope: "library" | "related"): void {
+  c.dispatch({ type: "SET_FIELDS_TABLE_OPEN", open: true, scope });
 }
 
 /**

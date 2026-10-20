@@ -6,7 +6,7 @@
 
 import { localClock } from "../kicad-port/textVariablesRules";
 import { routerSettingsToWire, type RouterSettings } from "../kicad-port/routerSettings";
-import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, Schematic, SchematicSymbol, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
+import type { BoardGlbResult, BoardState, BoardStatsOptions, BoardStatsReply, BomExportReply, BomFmt, CleanupOptions, CleanupReply, Cmd, CmdReply, DiffPairPreview, DpFixReply, DragPreview, DrcReport, ErcPinMapReply, ErcReport, ErcSeveritiesReply, FieldsTableReply, FieldsTableSpec, FillReport, FindReply, FootprintLibraryNames, FpCheckReply, InspectReply, KicadFillReply, LibraryFootprint, LibrarySymbol, LintReport, Ratsnest, RouteFixReply, RouteMode, RoutePreview, RouteReply, RulesCheckReply, SavedReportReply, SavedReportRequest, Schematic, SchematicSymbol, SchFormattingReply, SchSearchData, SymbolEditorNames, SymbolFieldEdit, SymbolFieldRename, SymbolLibrary, Um } from "./types";
 import type { LengthUnit } from "../state/units";
 import type { SchMovePatch } from "./schEditTypes";
 
@@ -94,6 +94,7 @@ export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Sch
     lines: s.lines ?? [],
     graphics: s.graphics ?? [],
     locked: s.locked ?? [],
+    groups: s.groups ?? [],
     // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
     // existed has no such field at all, not even `false`.
     wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),
@@ -427,6 +428,28 @@ export async function fetchLibrarySymbol(libId: string): Promise<LibrarySymbol> 
   return withDefaults(s); // the server leaves out every field that has its default value (a unit or body style of 1, empty text fields)
 }
 
+/** `GET /api/symbol?flatten=1`: the symbol with everything it inherits from its parents (`LIB_SYMBOL::Flatten`) -- what the editor draws of a derived symbol. */
+export async function fetchLibrarySymbolFlat(libId: string): Promise<LibrarySymbol> {
+  const s = await getJson<LibrarySymbol & { error?: string }>(`/api/symbol?lib_id=${encodeURIComponent(libId)}&flatten=1`);
+  if (s.error) throw new ApiError(s.error);
+  return withDefaults(s);
+}
+
+/**
+ * The symbol open in the Symbol Editor: `symbol` is what is drawn (a derived symbol with everything it inherits), `own` the symbol's own entry when it is derived (its parent,
+ * its own fields), else null.
+ */
+export async function fetchSymbolForEditor(libId: string): Promise<{ symbol: LibrarySymbol; own: LibrarySymbol | null }> {
+  const own = await fetchLibrarySymbol(libId);
+  if (!own.extends) return { symbol: own, own: null };
+  try {
+    return { symbol: await fetchLibrarySymbolFlat(libId), own };
+  } catch {
+    // the parent is gone (a hand-edited design): show the symbol as it is, with nothing drawn
+    return { symbol: own, own };
+  }
+}
+
 export async function fetchSymbolEditorNames(): Promise<SymbolEditorNames> {
   const r = await getJson<SymbolEditorNames & { error?: string }>("/api/symbol_editor/names");
   if (r.error) throw new ApiError(r.error);
@@ -651,6 +674,11 @@ export function postBoardStats(opts: BoardStatsOptions, report?: { units: Length
   return postJson("/api/board_stats", report ? { ...opts, report: true, units: report.units, date: report.date } : opts);
 }
 
+/** The ERC and DRC dialogs' "Save...": a run of kicad-cli that writes its own report file (`ERC_REPORT`, `DRC_REPORT`) for the severities the dialog shows; the text comes back. */
+export function postSavedReport(domain: "erc" | "drc", req: SavedReportRequest): Promise<SavedReportReply> {
+  return postJson(`/api/${domain}/report`, req);
+}
+
 /** Board Setup > Design Rules > Custom Rules, "Check rule syntax": kicad-cli loads the text (crates/cli/src/kicad_engine.rs `check_rules`); nothing is saved. */
 export function postCheckRules(text: string): Promise<RulesCheckReply> {
   return postJson("/api/check_rules", { text });
@@ -688,6 +716,11 @@ export async function fetchErcPinMap(): Promise<ErcPinMapReply> {
 /** The ERC severities Schematic Setup > Violation Severity edits (the table kicad-cli's ERC runs with). */
 export async function fetchErcSeverities(): Promise<ErcSeveritiesReply> {
   return getJson<ErcSeveritiesReply>("/api/sch/erc_severities");
+}
+
+/** The settings of Schematic Setup > Formatting the design keeps (the connection grid). */
+export async function fetchSchFormatting(): Promise<SchFormattingReply> {
+  return getJson<SchFormattingReply>("/api/sch/formatting");
 }
 
 /** `POST /api/inspect/clearance`: `reportClearance` for two items (`aAt`/`bAt`, in micrometres, say which segment of a track was meant). */

@@ -37,6 +37,9 @@ export function symbolPreviewBounds(symbol: { graphics: readonly LibrarySymbolGr
       case "text":
         pts.push(toUm(g.at.x, g.at.y));
         break;
+      case "text_box":
+        pts.push(toUm(g.start.x, g.start.y), toUm(g.end.x, g.end.y));
+        break;
     }
   }
   for (const p of symbol.pins) {

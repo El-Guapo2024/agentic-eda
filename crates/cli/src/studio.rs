@@ -651,6 +651,9 @@ fn handle(
             offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
+        // The dialogs' "Save...": kicad-cli's own report file (`ERC_REPORT`, `DRC_REPORT`), for the severities and units the dialog shows.
+        ("POST", "/api/erc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::erc_report),
+        ("POST", "/api/drc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::drc_report),
         ("GET", "/api/lint") => {
             let v = crate::kicad_engine::lint(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -668,6 +671,7 @@ fn handle(
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
+        ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
@@ -702,7 +706,13 @@ fn handle(
         ("GET", "/api/symbol") => {
             // A lib_id is `Library:Name`; the client sends it `encodeURIComponent`-escaped (`Device%3AR`).
             let lib_id = query_value(target, "lib_id");
-            let v = symbol_edit_json(dir, &lib_id).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `flatten=1`: the symbol with everything it inherits from its parents -- what the editor draws of a derived symbol
+            let v = if query_value(target, "flatten") == "1" {
+                crate::library_api::symbol_flattened(dir, &lib_id).map_err(|e| e).and_then(|s| serde_json::to_value(s).map_err(|e| vec![CheckResult::fail("board_bad_design", &lib_id, e.to_string())]))
+            } else {
+                symbol_edit_json(dir, &lib_id)
+            }
+            .unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/symbol_editor/names") => {
@@ -1675,6 +1685,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
     let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
+    // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
+    let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
@@ -1767,7 +1779,22 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
-                "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
+                // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
+                "pins": s.pins.iter().map(|p| {
+                    let mut pin = json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] });
+                    if let Some(look) = sch.extras.sheet_pin_looks.get(&p.id) {
+                        if look.size_um > 0 {
+                            pin["size_um"] = json!(look.size_um);
+                        }
+                        if look.bold {
+                            pin["bold"] = json!(true);
+                        }
+                        if look.italic {
+                            pin["italic"] = json!(true);
+                        }
+                    }
+                    pin
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -1792,6 +1819,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "lines": lines,
         "graphics": graphics,
         "locked": locked,
+        "groups": groups,
         "title_block": title_block,
         "page": crate::page_json::page_json(&page),
         "lib_symbols": lib_symbols,
@@ -2209,18 +2237,23 @@ fn symbol_edit_json(dir: &Path, lib_id: &str) -> Result<Value, Vec<CheckResult>>
 /// enumeration function) -- so "New Symbol" always has at least
 /// `Device:R`/`C`/`L`/`D`/`LED` to start editing from, even with no real
 /// KiCad install and nothing on the sheet yet.
-fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+pub(crate) fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let mut names: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();
     names.extend(eda_model::symbol::builtin_catalog().into_iter().map(|s| s.lib_id));
     // `project`: the entries of the project library itself -- see `footprint_library_json`.
     let mut project: Vec<String> = Vec::new();
+    // `derived`: each derived symbol of the project library with its parent -- the library tree offers Flatten and the related fields table for them
+    let mut derived = serde_json::Map::new();
     if let Some(lib) = &design.symbol_library {
         names.extend(lib.symbols.iter().map(|s| s.lib_id.clone()));
         project = lib.symbols.iter().map(|s| s.lib_id.clone()).collect();
         project.sort();
+        for s in lib.symbols.iter().filter(|s| s.extends.is_some()) {
+            derived.insert(s.lib_id.clone(), json!(s.extends));
+        }
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project, "derived": derived }))
 }
 
 /// `GET /api/symbol/export?lib_id=<id>` -- the derived, standalone

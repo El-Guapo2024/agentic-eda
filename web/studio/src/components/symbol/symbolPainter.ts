@@ -16,7 +16,7 @@
 // able to disagree. Only the grid/anchor/in-progress-draw/move-preview
 // chrome below is new, mirroring `components/footprint/footprintPainter
 // .ts`'s own small set of editor-only additions to its own board painter.
-import type { LibPin, LibrarySymbolGraphic, LibrarySymbolPin } from "../../api/types";
+import type { LibPin, LibrarySymbolGraphic, LibrarySymbolPin, SchField } from "../../api/types";
 import type { ViewTransform } from "../../kicad-port/view";
 import { hairlineUm } from "../../kicad-port/view";
 import { layerColor } from "../canvas/layers";
@@ -24,13 +24,17 @@ import { drawPinDecoration, drawPinText, drawRealGraphic } from "../schematic/pa
 import type { ResolvedGraphic } from "../schematic/libSymbol";
 import { resolveLibPoint, resolvePin, symbolTransformMatrix } from "../schematic/transform";
 import { computeVisibleGridSize, isMajorGridLine, DEFAULT_GRID_STYLE, MAJOR_GRID_LINE_WIDTH_RATIO } from "../../kicad-port/grid";
-import { drawStrokeText } from "../text/strokeFont";
+import { drawStrokeText, measureStrokeText } from "../text/strokeFont";
+import { defaultPenUm, textOrigin, FIELD_SIZE_UM } from "../../kicad-port/schText";
+import { shownText } from "../../kicad-port/schFieldEdit";
 import { electricalTypeLayout, pinLabelsShown, pinShown } from "../../kicad-port/symPinText";
+import { altIconStrokes, pinAltIcon, type PinAltIcon } from "../../kicad-port/symPinAltIcon";
+import { DEFAULT_PIN_TEXTS, PIN_TEXT_SIZE_UM, shownPinName, type PinTexts } from "../schematic/pinText";
 import { polyPreview } from "../../kicad-port/symPolyDraw";
-import { snapPoint } from "../canvas/gridHelper";
+import { boxOfTextBox, layoutLibTextBox, type LibTextBox } from "../../kicad-port/symTextBox";
 
 /** `eeschema.SymbolDrawing.*` shapes in progress: `lines` (Draw Lines) and `polygon` (Draw Polygons) are the same open-ended polyline tool. */
-export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon";
+export type SymShapeKind = "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "textbox";
 
 /** Half the cap height, the shift that centres stroke text on its line (`MIDDLE_OFFSET_FACTOR` of `components/schematic/painter.ts`). */
 const MIDDLE_OFFSET_FACTOR = 0.35;
@@ -44,7 +48,7 @@ export function toLibPin(p: LibrarySymbolPin): LibPin {
 }
 
 /** A `LibrarySymbolGraphic` resolved to internal (µm, Y-down) space via the exact same `resolveLibPoint` pipeline a placed instance's own graphics go through. */
-function resolveGraphic(g: LibrarySymbolGraphic): ResolvedGraphic {
+function resolveGraphic(g: Exclude<LibrarySymbolGraphic, { kind: "text_box" }>): ResolvedGraphic {
   const pt = (p: { x: number; y: number }) => resolveLibPoint([p.x, p.y], IDENTITY, [0, 0]);
   switch (g.kind) {
     case "rectangle":
@@ -112,6 +116,30 @@ function drawOrigin(ctx: CanvasRenderingContext2D, view: ViewTransform) {
   ctx.restore();
 }
 
+/**
+ * `SCH_PAINTER::draw( SCH_TEXTBOX )` for a box of the symbol (`LAYER_DEVICE`): the fill first (the body's background colour, or the outline colour), the wrapped text in the box
+ * (kicad-port/symTextBox.ts), and the border when it has a width -- 0 is the default line width, a negative one is no border.
+ */
+function drawLibTextBox(ctx: CanvasRenderingContext2D, g: LibTextBox, color: string) {
+  const b = boxOfTextBox(g);
+  if (g.fill !== "none") {
+    ctx.fillStyle = g.fill === "background" ? layerColor("LAYER_DEVICE_BACKGROUND") : color;
+    ctx.fillRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+  }
+  const sizeUm = g.size_mm * 1000;
+  const layout = layoutLibTextBox(g, measureStrokeText);
+  ctx.save();
+  ctx.translate(layout.origin[0], layout.origin[1]);
+  if (layout.vertical) ctx.rotate(-Math.PI / 2);
+  for (const l of layout.lines) drawStrokeText(ctx, l.text, l.u, l.v, { sizeUm, justify: l.justify, italic: !!g.italic, thicknessUm: g.bold ? sizeUm / 5 : undefined, color });
+  ctx.restore();
+  if (g.stroke_mm >= 0) {
+    ctx.strokeStyle = color;
+    ctx.lineWidth = g.stroke_mm > 0 ? Math.max(g.stroke_mm * 1000, 21.2) : 152.4;
+    ctx.strokeRect(b.left, b.top, b.right - b.left, b.bottom - b.top);
+  }
+}
+
 /** Rubber-band preview for the graphics tool currently in progress -- points already internal-space (µm), same convention the Footprint/PCB editors' own `drawInProgress` uses. */
 function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw: { shapeKind: SymShapeKind; pts: [number, number][] } | null, cursorUm: { x: number; y: number } | null) {
   if (!draw) return;
@@ -128,7 +156,7 @@ function drawInProgress(ctx: CanvasRenderingContext2D, view: ViewTransform, draw
     ctx.beginPath();
     ctx.arc(cx, cy, Math.hypot(ex - cx, ey - cy), 0, Math.PI * 2);
     ctx.stroke();
-  } else if (draw.shapeKind === "rect") {
+  } else if (draw.shapeKind === "rect" || draw.shapeKind === "textbox") {
     const [x0, y0] = pts[0]!;
     const [x1, y1] = pts[pts.length - 1]!;
     ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
@@ -161,8 +189,52 @@ export interface SymPaintOptions {
   showHiddenPins: boolean;
   /** `m_ShowPinNumbers`: force the pin numbers on even where the symbol hides them. */
   showPinNumbers: boolean;
+  /** `m_ShowPinAltIcons`: the icon beside the name of a pin that has alternate functions. */
+  showPinAltIcons?: boolean;
   /** The Text tool's text between its dialog and the placing click: it follows the cursor (`SYMBOL_EDITOR_DRAWING_TOOLS::TwoClickPlace`). */
   pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
+  /** The symbol's fields that are on show (kicad-port/symFieldLayout.ts `fieldsOnShow`: the ones with a text, the hidden ones only while Show Hidden Fields is on). */
+  fields?: SchField[];
+}
+
+/** The colour KiCad draws a field of that name in (`SCH_PAINTER::draw( SCH_FIELD )`): the reference, the value, or a field's own. */
+function fieldColor(name: string): string {
+  return layerColor(name === "Reference" ? "LAYER_REFERENCEPART" : name === "Value" ? "LAYER_VALUEPART" : "LAYER_FIELDS");
+}
+
+/** One field where KiCad puts it: the anchor, the justification in the text's own axes, a text at 90 degrees turned a quarter counter-clockwise about its anchor. */
+function drawField(ctx: CanvasRenderingContext2D, f: SchField, color: string) {
+  const text = shownText(f);
+  if (!text) return;
+  const sizeUm = f.size_um && f.size_um > 0 ? f.size_um : FIELD_SIZE_UM;
+  // a bold text is written with a fifth of its size for a pen (`GetPenSizeForBold`), an italic one leans
+  const thickness = f.bold ? Math.round(sizeUm / 5) : defaultPenUm(sizeUm);
+  const [dx, dy] = textOrigin(measureStrokeText(text, sizeUm), sizeUm, thickness, f.h, f.v);
+  ctx.save();
+  ctx.translate(f.at[0], f.at[1]);
+  if (f.vertical) ctx.rotate(-Math.PI / 2);
+  drawStrokeText(ctx, text, dx, dy, { sizeUm, thicknessUm: thickness, justify: "left", color, italic: f.italic });
+  ctx.restore();
+}
+
+/** `drawAltPinModesIcon`: the strokes of the glyph, turned a quarter counter-clockwise about its centre beside a pin that runs up or down. */
+export function drawPinAltIcon(ctx: CanvasRenderingContext2D, icon: PinAltIcon, color: string) {
+  const g = altIconStrokes(icon.sizeUm);
+  ctx.save();
+  ctx.translate(icon.center[0], icon.center[1]);
+  if (icon.vertical) ctx.rotate(-Math.PI / 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = g.widthUm;
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  for (const [x1, y1, x2, y2] of g.lines) {
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+  }
+  ctx.moveTo(g.arc.cx + g.arc.r * Math.cos(g.arc.from), g.arc.cy + g.arc.r * Math.sin(g.arc.from));
+  ctx.arc(g.arc.cx, g.arc.cy, g.arc.r, g.arc.from, g.arc.to, true);
+  ctx.stroke();
+  ctx.restore();
 }
 
 export function paintSymbol(
@@ -170,7 +242,7 @@ export function paintSymbol(
   view: ViewTransform,
   widthPx: number,
   heightPx: number,
-  symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean } | null,
+  symbol: { graphics: LibrarySymbolGraphic[]; pins: LibrarySymbolPin[]; pin_names_hidden?: boolean; pin_numbers_hidden?: boolean; pin_name_offset_mm?: number } | null,
   opts: SymPaintOptions
 ) {
   if (opts.gridVisible) drawGrid(ctx, view, widthPx, heightPx, opts.gridUm);
@@ -191,11 +263,14 @@ export function paintSymbol(
     const color = selected ? layerColor("selection") : strokeColor;
     // `drawRealGraphic` strokes with whatever `strokeStyle` is current (a placed symbol's painter sets it first); left alone it is the canvas default, black.
     ctx.strokeStyle = color;
-    drawRealGraphic(ctx, resolveGraphic(g), color);
+    if (g.kind === "text_box") drawLibTextBox(ctx, g, color);
+    else drawRealGraphic(ctx, resolveGraphic(g), color);
     ctx.restore();
   }
 
   const labels = pinLabelsShown(symbol, opts.showPinNumbers);
+  // `(pin_names (offset x))`: the names are inside the body from `x` on, over the pin line when it is zero (`GetPinNameInfo`)
+  const texts: PinTexts = { ...DEFAULT_PIN_TEXTS, nameOffsetUm: symbol.pin_name_offset_mm === undefined ? DEFAULT_PIN_TEXTS.nameOffsetUm : symbol.pin_name_offset_mm * 1000 };
   const hiddenColor = layerColor("LAYER_HIDDEN");
   for (const p of symbol.pins) {
     // `SCH_PAINTER::draw( SCH_PIN )`: a pin marked invisible is drawn only while hidden pins are shown, and then in the hidden colour
@@ -213,7 +288,12 @@ export function paintSymbol(
     ctx.stroke();
     // The labels are the symbol's call (`GetShowPinNames` / `GetShowPinNumbers`): blank what is not shown, the shared painter draws the rest.
     const shownPin = { ...rp.pin, name: labels.names ? rp.pin.name : "", number: labels.numbers ? rp.pin.number : "" };
-    drawPinText(ctx, { ...rp, pin: shownPin }, p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined);
+    drawPinText(ctx, { ...rp, pin: shownPin }, p.hidden ? { name: hiddenColor, number: hiddenColor } : undefined, texts);
+    // `SCH_PAINTER::draw( SCH_PIN )`: beside the name, in its colour, when the pin has alternates and the name is drawn
+    if (opts.showPinAltIcons !== false && p.alternates?.length && labels.names && shownPinName(p.name) !== "") {
+      const nameWidth = measureStrokeText(shownPinName(p.name), PIN_TEXT_SIZE_UM);
+      drawPinAltIcon(ctx, pinAltIcon(rp.tip, rp.root, { widthUm: nameWidth, sizeUm: PIN_TEXT_SIZE_UM }, texts.nameOffsetUm), p.hidden ? hiddenColor : layerColor("LAYER_PINNAM"));
+    }
     if (opts.showElectricalTypes && p.electrical_type !== "no_connect") {
       // `GetPinElectricalTypeInfo`, drawn in `LAYER_PRIVATE_NOTES` (the hidden colour on a hidden pin).
       const l = electricalTypeLayout(p, rp.tip, rp.dir);
@@ -225,10 +305,20 @@ export function paintSymbol(
     ctx.restore();
   }
 
+  // The fields (`SCH_FIELD` items of the symbol): a field that is not shown is drawn, in the hidden-items colour, because the list holds it only while Show Hidden Fields is on.
+  for (const f of opts.fields ?? []) {
+    const mv = moved(f.id);
+    ctx.save();
+    if (mv) ctx.translate(mv.dxUm, mv.dyUm);
+    drawField(ctx, f, opts.selection.has(f.id ?? "") ? layerColor("selection") : !f.visible ? hiddenColor : fieldColor(f.name));
+    ctx.restore();
+  }
+
   drawOrigin(ctx, view);
   drawInProgress(ctx, view, opts.drawState, opts.cursorUm);
   if (opts.pendingText && opts.cursorUm) {
-    const [x, y] = snapPoint(opts.cursorUm.x, opts.cursorUm.y, opts.gridUm);
+    // (the canvas hands over the cursor its grid helper gave -- on the text grid, or an anchor -- while the Text tool runs)
+    const [x, y] = [opts.cursorUm.x, opts.cursorUm.y];
     drawRealGraphic(ctx, { kind: "text", content: opts.pendingText.text, at: [x, y], angleDeg: opts.pendingText.angleDeg, sizeUm: opts.pendingText.sizeMm * 1000 }, layerColor("selection"));
   }
 }

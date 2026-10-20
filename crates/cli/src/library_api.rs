@@ -68,7 +68,7 @@ fn resolve_footprint(model: &ConstraintModel, name: &str) -> Option<eda_model::F
 }
 
 /// A symbol by `lib_id` from the project library, else KiCad's installed libraries, else the resolved one (the board's model, the builtin table).
-fn symbol_any(dir: &Path, lib_id: &str) -> Result<(LibrarySymbol, bool), Vec<CheckResult>> {
+pub(crate) fn symbol_any(dir: &Path, lib_id: &str) -> Result<(LibrarySymbol, bool), Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     symbol_in(dir, &design, &model, lib_id).ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "no symbol with this lib_id in the project library or anything it loads")])
 }
@@ -163,9 +163,23 @@ pub fn footprint(dir: &Path, name: &str) -> Value {
     }
 }
 
-/// The derived `.kicad_sym` of any symbol (`Export...`, `Copy`): the project entry, else the resolved one.
+/// The derived `.kicad_sym` of any symbol (`Export...`, `Copy`): the project entry, else the resolved one -- a derived symbol as the flat symbol it stands for, as KiCad's
+/// `ExportSymbol` and `CopySymbolToClipboard` write it (`LIB_SYMBOL::Flatten`), so the file or the clipboard text stands on its own.
 pub fn symbol_kicad_sym_any(dir: &Path, lib_id: &str) -> Result<String, Vec<CheckResult>> {
-    symbol_any(dir, lib_id).map(|(sym, _)| eda_kicad::export_kicad_sym(&sym))
+    let (_, design, _) = board::load(dir)?;
+    let (sym, _) = symbol_any(dir, lib_id)?;
+    let flat = match design.symbol_library.as_ref().filter(|l| l.is_derived(lib_id)) {
+        Some(lib) => lib.flatten(lib_id).map_err(|e| vec![CheckResult::fail("ops_bad_symbol", lib_id, e)])?,
+        None => sym,
+    };
+    Ok(eda_kicad::export_kicad_sym(&flat))
+}
+
+/// `GET /api/symbol?lib_id=&flatten=1`: the project-library symbol with everything it inherits -- what the Symbol Editor draws of a derived symbol -- or the symbol itself.
+pub fn symbol_flattened(dir: &Path, lib_id: &str) -> Result<LibrarySymbol, Vec<CheckResult>> {
+    let (_, design, _) = board::load(dir)?;
+    let lib = design.symbol_library.as_ref().ok_or_else(|| vec![CheckResult::fail("ops_unknown_symbol", lib_id, "the project symbol library is empty")])?;
+    lib.flatten(lib_id).map_err(|e| vec![CheckResult::fail("ops_bad_symbol", lib_id, e)])
 }
 
 /// The derived `.kicad_mod` of any footprint (`Export Current Footprint...`).

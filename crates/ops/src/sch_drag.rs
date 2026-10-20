@@ -94,6 +94,10 @@ impl<'m> Scene<'m> {
         // all but labels first, so a junction is not dragged when the wire it sits on is going to be
         let mut stage_two: Vec<Item> = Vec::new();
         for &it in &selection {
+            // an item held through a group is moved by the group, which has no connection points: nothing attached to it follows
+            if self.rigid.contains(&it) {
+                continue;
+            }
             let points: Vec<Point> = match it {
                 Item::Label(_) | Item::SheetPin(..) => {
                     stage_two.push(it);
