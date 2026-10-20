@@ -401,6 +401,12 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let uuid = write_text_with(&mut out, t, is_locked(&t.id), drawings.text_extra(&t.id));
             written.entry(t.id.clone()).or_default().push(uuid);
         }
+        let mut barcodes: Vec<&eda_model::barcode::Barcode> = drawings.barcodes.iter().collect();
+        barcodes.sort_by(|a, b| a.id.cmp(&b.id));
+        for b in &barcodes {
+            let uuid = crate::barcode_io::write(&mut out, b, is_locked(&b.id));
+            written.entry(b.id.clone()).or_default().push(uuid);
+        }
         // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place
         // (`eda_connectivity::dimension`); KiCad recomputes both when it loads the file.
         let mut dims: Vec<&eda_model::ir::Dimension> = drawings.dimensions.iter().collect();
@@ -2978,6 +2984,49 @@ mod tests {
         let derived: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
         assert_eq!(derived["component_class_settings"]["assignments"][0]["conditions"]["REFERENCE"]["primary"], "R*");
         assert_eq!(derived["component_class_settings"]["sheet_component_classes"]["enabled"], true);
+    }
+
+    /// A board's barcodes (`api_kitchen_sink` has a QR code and a Data Matrix) are read and written back as `format( const PCB_BARCODE* )` writes them: the layer, the size,
+    /// the text and its height, the kind, a QR code's error correction level, the margins and the flags. kicad-cli keeps a barcode a visual separation from the board edge
+    /// (`clearance`); a re-export without them lost that finding.
+    #[test]
+    fn a_boards_barcodes_are_written_back_as_kicad_writes_them() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user "F.Silkscreen") (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (barcode (at 258.5 141.5 90) (layer "F.Cu") (size 42 44) (text "acode") (text_height 3) (type qr) (ecc_level M) (hide no) (knockout no) (uuid "705675f1-5a54-4ef0-bc6c-93b7d057008e"))
+  (barcode (locked yes) (at 255 44.5 180) (layer "F.SilkS") (size 42 44) (text "differentcode") (text_height 2) (type datamatrix) (hide yes) (knockout yes) (margins 1 2) (uuid "11111111-5a54-4ef0-bc6c-93b7d057008e"))
+  (barcode (at 1 2) (layer "F.SilkS") (type code128) (text "123") (uuid "22222222-5a54-4ef0-bc6c-93b7d057008e"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let dr = design.drawings.as_ref().expect("drawings");
+        assert_eq!(dr.barcodes.len(), 3);
+        assert!(dr.barcodes.iter().all(|b| b.id.starts_with("bar_")), "{:?}", dr.barcodes.iter().map(|b| &b.id).collect::<Vec<_>>());
+        let qr = dr.barcodes.iter().find(|b| b.text == "acode").unwrap();
+        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_um, qr.height_um, qr.text_height_um), (Point { x: 258_500, y: 141_500 }, 90_000, "F.Cu", 42_000, 44_000, 3_000));
+        assert_eq!((qr.kind, qr.ecc, qr.show_text, qr.knockout), (eda_model::barcode::BarcodeKind::Qr, eda_model::barcode::EccLevel::M, true, false));
+        let dm = dr.barcodes.iter().find(|b| b.text == "differentcode").unwrap();
+        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_um, dm.margin_y_um), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, 1_000, 2_000));
+        assert!(dr.locked_ids.contains(&dm.id), "a locked barcode comes back locked");
+        // What the file left out is PCB_BARCODE's own: 40 mm square, the text printed.
+        let plain = dr.barcodes.iter().find(|b| b.text == "123").unwrap();
+        assert_eq!((plain.width_um, plain.height_um, plain.show_text, plain.kind), (40_000, 40_000, true, eda_model::barcode::BarcodeKind::Code128));
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let line = |text: &str| out.lines().find(|l| l.contains("(barcode") && l.contains(&format!("(text \"{text}\")"))).unwrap_or_else(|| panic!("{text} in {out}")).trim().to_string();
+        let l = line("acode");
+        assert!(l.starts_with("(barcode (at 258.5 141.5 90) (layer \"F.Cu\") (size 42 44) (text \"acode\") (text_height 3) (type qr) (ecc_level M) (hide no) (knockout no) (uuid \""), "{l}");
+        let l = line("differentcode");
+        assert!(l.starts_with("(barcode (locked yes) (at 255 44.5 180) (layer \"F.SilkS\") (size 42 44) (text \"differentcode\") (text_height 2) (type datamatrix) (hide yes) (knockout yes) (margins 1 2) (uuid \""), "{l}");
+        assert!(!l.contains("ecc_level"), "only the QR kinds have an error correction level: {l}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let strip = |d: &Design| -> Vec<eda_model::barcode::Barcode> { d.drawings.as_ref().unwrap().barcodes.iter().cloned().map(|mut b| { b.id.clear(); b }).collect() };
+        let (mut a, mut b) = (strip(&design), strip(&back));
+        a.sort_by(|x, y| x.text.cmp(&y.text));
+        b.sort_by(|x, y| x.text.cmp(&y.text));
+        assert_eq!(a, b, "read again, the same barcodes");
     }
 
     /// KiCad 10's files carry no table of the nets and name a net on every item that is on one (`(net "net_1")`): a net that only a track, a via or a zone is on is one of the

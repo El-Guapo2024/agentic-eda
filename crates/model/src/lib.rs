@@ -3,6 +3,7 @@
 //! JSON internally, YAML at LLM-facing edges.
 
 pub mod annotate;
+pub mod barcode;
 pub mod bezier;
 pub mod board;
 pub mod board_text;

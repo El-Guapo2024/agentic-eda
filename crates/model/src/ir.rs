@@ -2465,6 +2465,10 @@ pub struct DrawingsSection {
     /// `design.json` reads as "every text is a square-sized, vertically centred, regular line". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub text_extras: Vec<crate::board_text::TextExtra>,
+    /// The barcodes of the board (`(barcode ..)`, KiCad's `PCB_BARCODE`) -- see [`crate::barcode`]. Additive: absent in an older `design.json` reads as "none". Lives here
+    /// for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub barcodes: Vec<crate::barcode::Barcode>,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
@@ -2829,7 +2833,7 @@ impl DrawingsSection {
     /// whose `id` is still empty. See [`RoutingSection::assign_missing_ids`]
     /// -- same contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
-        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).chain(self.barcodes.iter().map(|b| b.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
 
         for i in 0..self.tuning_patterns.len() {
             if self.tuning_patterns[i].id.is_empty() {
@@ -2876,6 +2880,16 @@ impl DrawingsSection {
                 let id = next_item_id("dim", &self.dimensions[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.dimensions[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.barcodes.len()).collect();
+        order.sort_by(|&a, &b| (&self.barcodes[a].text, self.barcodes[a].at).cmp(&(&self.barcodes[b].text, self.barcodes[b].at)));
+        for i in order {
+            if self.barcodes[i].id.is_empty() {
+                let id = next_item_id("bar", &self.barcodes[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.barcodes[i].id = id;
             }
         }
     }
