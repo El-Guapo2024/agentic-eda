@@ -1071,6 +1071,61 @@ fn add_edit_move_delete_text() {
     assert_eq!(b.apply(&Cmd::EditText { id, content: String::new(), angle: 0, layer: "F.Fab".into(), size_um: 100, stroke_width: 10, justify: TextJustify::Center, mirror: false }).unwrap_err()[0].check, "ops_unknown_text");
 }
 
+/// What an imported board text kept beyond `Text`'s fields (`DrawingsSection::text_extras`) follows the text's verbs: it stays through an edit that leaves the size and the
+/// stroke width alone, a new size is a square one again, a stroke width given is not the automatic one, and deleting the text takes its extras with it (the next text
+/// with the same content at the same place gets the same id, and must not come back bold).
+#[test]
+fn a_texts_imported_looks_follow_its_edits_and_leave_with_it() {
+    use eda_model::board_text::TextExtra;
+    let m = net_model();
+    let mut b = board(&m);
+    b.apply(&Cmd::AddText { text: Text { id: String::new(), content: "REV A".into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 125, justify: TextJustify::Center, mirror: false } }).unwrap();
+    let id = b.design().drawings.as_ref().unwrap().texts[0].id.clone();
+    let mut d = b.design().clone();
+    d.drawings.as_mut().unwrap().text_extras = vec![TextExtra { id: id.clone(), width_um: Some(800), auto_thickness: true, bold: true, ..Default::default() }];
+    let mut b = Board::new(d, &m, 100, 300);
+    let extra = |b: &Board| b.design().drawings.as_ref().unwrap().text_extra(&id).cloned();
+
+    // The same size and stroke width: moved, turned, restyled otherwise, and the looks stay.
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1000, stroke_width: 125, justify: TextJustify::Left, mirror: true }).unwrap();
+    assert_eq!(extra(&b).map(|x| (x.width_um, x.auto_thickness, x.bold)), Some((Some(800), true, true)));
+    // A new size is square again.
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1500, stroke_width: 125, justify: TextJustify::Left, mirror: true }).unwrap();
+    assert_eq!(extra(&b).map(|x| (x.width_um, x.auto_thickness, x.bold)), Some((None, true, true)));
+    // A stroke width given is not the automatic one.
+    b.apply(&Cmd::EditText { id: id.clone(), content: "REV B".into(), angle: 90_000, layer: "F.Fab".into(), size_um: 1500, stroke_width: 200, justify: TextJustify::Left, mirror: true }).unwrap();
+    assert_eq!(extra(&b).map(|x| (x.width_um, x.auto_thickness, x.bold)), Some((None, false, true)));
+
+    b.apply(&Cmd::DeleteText { id: id.clone() }).unwrap();
+    assert!(b.design().drawings.as_ref().unwrap().text_extras.is_empty(), "the looks leave with the text");
+}
+
+/// Set Text and Graphics to Layer Defaults, and a size or a stroke width in Edit Text and Graphics Properties, replace the glyph width and the automatic stroke width an
+/// imported text kept; a text that is not in the selection keeps both.
+#[test]
+fn the_global_text_edit_takes_the_imported_glyph_width_and_automatic_stroke_with_it() {
+    use eda_model::board_text::TextExtra;
+    let m = net_model();
+    let mut b = board(&m);
+    for content in ["one", "two", "three"] {
+        b.apply(&Cmd::AddText { text: Text { id: String::new(), content: content.into(), at: Point { x: 0, y: 0 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 125, justify: TextJustify::Center, mirror: false } }).unwrap();
+    }
+    let ids: Vec<String> = b.design().drawings.as_ref().unwrap().texts.iter().map(|t| t.id.clone()).collect();
+    let mut d = b.design().clone();
+    d.drawings.as_mut().unwrap().text_extras = ids.iter().map(|id| TextExtra { id: id.clone(), width_um: Some(800), auto_thickness: true, italic: true, ..Default::default() }).collect();
+    let mut b = Board::new(d, &m, 100, 300);
+    let edit = |ids: &[String], layer_defaults: bool, text_size: Option<Um>, text_thickness: Option<Um>| Cmd::EditTextAndGraphics { shape_ids: vec![], text_ids: ids.to_vec(), dimension_ids: vec![], layer_defaults, layer: None, line_width: None, text_size, text_thickness };
+    let looks = |b: &Board, id: &str| b.design().drawings.as_ref().unwrap().text_extra(id).map(|x| (x.width_um, x.auto_thickness, x.italic));
+
+    b.apply(&edit(&ids[..1], false, Some(1500), None)).unwrap();
+    assert_eq!(looks(&b, &ids[0]), Some((None, true, true)), "a size: square again, the stroke width still automatic");
+    b.apply(&edit(&ids[1..2], false, None, Some(200))).unwrap();
+    assert_eq!(looks(&b, &ids[1]), Some((Some(800), false, true)), "a stroke width: not automatic, the glyph width stays");
+    b.apply(&edit(&ids[2..], true, None, None)).unwrap();
+    assert_eq!(looks(&b, &ids[2]), Some((None, false, true)), "layer defaults: both, and what is not size or stroke stays");
+    assert_eq!(looks(&b, &ids[1]), Some((Some(800), false, true)), "a text outside the selection is left alone");
+}
+
 // ------------------------------------- global edit: text & graphics
 
 #[test]

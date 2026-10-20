@@ -453,9 +453,9 @@ impl FpArt {
     }
 
     /// The reverse: the shapes and texts as the editor lists them. What the editor's types have no field for (a dash style, a hatch, a vertical
-    /// justification, bold, italic ...) is not carried.
+    /// justification, bold, italic ...) is not carried, and neither is a hidden text (the editor's has no way to hide one).
     pub fn to_library(&self) -> (Vec<Shape>, Vec<Text>) {
-        (self.shapes.iter().map(|s| s.shape.clone()).collect(), self.texts.iter().map(FpText::to_library).collect())
+        (self.shapes.iter().map(|s| s.shape.clone()).collect(), self.texts.iter().filter(|t| t.layout.visible).map(FpText::to_library).collect())
     }
 }
 
@@ -649,5 +649,17 @@ mod tests {
         // and yaml, which an imported board's intent is written in
         let back: FpArt = serde_yaml::from_str(&serde_yaml::to_string(&art).unwrap()).unwrap();
         assert_eq!(back, art);
+    }
+
+    /// The footprint editor's texts have no way to hide one, so a hidden text is not handed to it as a visible one.
+    #[test]
+    fn a_hidden_text_is_not_a_library_text() {
+        let mut art = FpArt::default();
+        art.texts.push(FpText::new("shown", p(0, 0), "F.SilkS"));
+        let mut hidden = FpText::new("hidden", p(0, 500), "F.Fab");
+        hidden.layout.visible = false;
+        art.texts.push(hidden);
+        let (_, texts) = art.to_library();
+        assert_eq!(texts.iter().map(|t| t.content.as_str()).collect::<Vec<_>>(), ["shown"]);
     }
 }

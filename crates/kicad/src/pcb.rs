@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, TextJustify, Track, Um, Via, Zone};
+use eda_model::ir::{Design, FootprintInstance, Shape, Side, Text, Track, Um, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::{CheckResult, ConstraintModel, Pad, PadKind, Part};
 
@@ -107,6 +107,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     }
     writeln!(out, "\t\t(allow_soldermask_bridges_in_footprints {})", if sm.allow_bridges_in_footprints { "yes" } else { "no" }).unwrap();
     writeln!(out, "\t\t(tenting (front {}) (back {}))", if sm.tent_vias_front { "yes" } else { "no" }, if sm.tent_vias_back { "yes" } else { "no" }).unwrap();
+    // KiCad 10's defaults for the vias that say nothing of their own: covering, plugging, capping, filling.
+    for token in design.drawings.iter().flat_map(|d| d.setup_tokens.iter()) {
+        writeln!(out, "\t\t{token}").unwrap();
+    }
     // Zone Hatch Offsets (`formatSetup`'s `(zone_defaults (property (layer ..) (hatch_position (xy x y))))`), in `PCB_LAYER_ID` order, for the copper layers the board has.
     {
         let mut offsets: Vec<(&String, &eda_model::setup_pages::HatchOffset)> = model.board.hatch_offsets.iter().filter(|(l, o)| !o.is_zero() && model.board.layers.contains(l)).collect();
@@ -367,9 +371,11 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let lock = if is_locked(&v.id) { " (locked yes)" } else { "" };
             let uuid = crate::duid_for(&format!("via:{}:{}:{}", v.net, v.at.x, v.at.y), &v.id);
             written.entry(v.id.clone()).or_default().push(uuid.clone());
+            // The via's type and the tokens after its layers (`remove_unused_layers`, `tenting`, `padstack`, ..) as the file had them.
+            let (kind, tokens) = crate::via_io::words(design.drawings.as_ref().and_then(|d| d.via_extra(&v.id)));
             writeln!(
                 out,
-                "\t(via (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}){lock} (net {n}) (uuid \"{uuid}\"))",
+                "\t(via{kind} (at {x} {y}) (size {dia}) (drill {drill}) (layers {} {}){tokens}{lock} (net {n}) (uuid \"{uuid}\"))",
                 sexpr_str(&v.from_layer),
                 sexpr_str(&v.to_layer)
             )
@@ -398,8 +404,14 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         let mut texts: Vec<&Text> = drawings.texts.iter().collect();
         texts.sort_by(|a, b| a.id.cmp(&b.id));
         for t in &texts {
-            let uuid = write_text(&mut out, t, is_locked(&t.id));
+            let uuid = write_text_with(&mut out, t, is_locked(&t.id), drawings.text_extra(&t.id));
             written.entry(t.id.clone()).or_default().push(uuid);
+        }
+        let mut barcodes: Vec<&eda_model::barcode::Barcode> = drawings.barcodes.iter().collect();
+        barcodes.sort_by(|a, b| a.id.cmp(&b.id));
+        for b in &barcodes {
+            let uuid = crate::barcode_io::write(&mut out, b, is_locked(&b.id));
+            written.entry(b.id.clone()).or_default().push(uuid);
         }
         // `PCB_DIMENSION_BASE`: the geometry and the text are worked out in one place
         // (`eda_connectivity::dimension`); KiCad recomputes both when it loads the file.
@@ -423,6 +435,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     // with arcs, circles, cutouts, ...), `placement.outline` is only their summary and is not written: they were, above.
     if pl.outline.len() >= 2 && !eda_model::outline::outline_is_shapes(design) {
         let n = pl.outline.len();
+        // The width the lines were drawn at, when the board says (an imported outline of lines of one width).
+        let stroke = design.drawings.as_ref().and_then(|d| d.outline_width_um).map(|w| format!(" (stroke (width {}) (type default))", mm(w))).unwrap_or_default();
         for i in 0..n {
             let a = pl.outline[i];
             let b = pl.outline[(i + 1) % n];
@@ -431,7 +445,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let x2 = mm(b.x);
             let y2 = mm(b.y);
             let uuid = crate::duid_for(&format!("edge:{i}:{}:{}:{}:{}", a.x, a.y, b.x, b.y), "outline");
-            writeln!(out, "\t(gr_line (start {x1} {y1}) (end {x2} {y2}) (layer \"Edge.Cuts\") (uuid \"{uuid}\"))").unwrap();
+            writeln!(out, "\t(gr_line (start {x1} {y1}) (end {x2} {y2}){stroke} (layer \"Edge.Cuts\") (uuid \"{uuid}\"))").unwrap();
         }
     }
 
@@ -442,6 +456,11 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
+    }
+
+    // The items nothing reads (a text box, a reference image, a target ..), as the file had them.
+    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()) {
+        writeln!(out, "\t{item}").unwrap();
     }
 
     writeln!(out, ")").unwrap();
@@ -682,6 +701,10 @@ pub fn export_kicad_pro(model: &ConstraintModel) -> String {
     if net_classes_in_project(model) {
         project["net_settings"] = project_net_settings(model);
     }
+    // Component Classes: the project's assignment rules (`COMPONENT_CLASS_SETTINGS`), which a DRC rule reads as `A.Component_Class`.
+    if !b.component_classes.is_default() {
+        project["component_class_settings"] = b.component_classes.to_project_json();
+    }
     let mut text = serde_json::to_string_pretty(&project).unwrap_or_else(|_| "{}".into());
     text.push('\n');
     text
@@ -764,7 +787,7 @@ fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
 
 /// A net name as a pattern that matches that name and no other, read as a regular expression (`NET_SETTINGS`' matchers read every pattern as a wildcard pattern and as a regular
 /// expression): each character a regular expression gives a meaning to is escaped.
-fn exact_pattern(net: &str) -> String {
+pub(crate) fn exact_pattern(net: &str) -> String {
     let mut out = String::with_capacity(net.len());
     for c in net.chars() {
         if ".+*?()[]{}|^$\\".contains(c) {
@@ -886,7 +909,20 @@ pub(crate) fn write_footprint(
     // `footprint::to_board` output and `kicad-cli pcb drc` unconnected-item
     // positions for a rotated part.
     let rot_deg = fmt_mm_f(-(fp.rot as f64) / 1000.0);
-    let uuid = crate::duid_for(&format!("footprint:{}", fp.id), &fp.id);
+    // A footprint imported from a KiCad file keeps the uuid it had there (the first footprint to claim one), as a pour does: a text can name a footprint by its uuid
+    // (`${uuid:REFERENCE}`) and `kicad-cli pcb diff` matches items by it.
+    let kept_uuid = design.drawings.as_ref().and_then(|d| {
+        let mine = d.footprint_extras.iter().position(|e| e.id == fp.id)?;
+        let uuid = d.footprint_extras[mine].uuid.as_deref().filter(|u| !u.is_empty())?;
+        (d.footprint_extras.iter().position(|e| e.uuid.as_deref() == Some(uuid)) == Some(mine)).then(|| uuid.to_string())
+    });
+    let uuid = match kept_uuid {
+        Some(uuid) => {
+            crate::note_uuid(&uuid, &fp.id);
+            uuid
+        }
+        None => crate::duid_for(&format!("footprint:{}", fp.id), &fp.id),
+    };
     let lib_name = part.footprint.clone().unwrap_or_else(|| footprint.name.clone());
     // A `#2`, `#3` ... slot is the importer's way to keep apart instances of one library footprint whose pads, models or graphics differ (`dedup_footprint_key`): in the file it is
     // still that library's footprint.
@@ -894,7 +930,11 @@ pub(crate) fn write_footprint(
         Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && model.footprints.iter().any(|f| f.name == base) => base.to_string(),
         _ => lib_name,
     };
-    let lib_id = if lib_name.contains(':') { lib_name } else { format!("eda:{lib_name}") };
+    // A footprint the file wrote with no library link is written with none (`LIB_ID::Format`: the bare item name); the others, built here and named for no library,
+    // are in the `eda` library, which the board file stands for.
+    let own_extra = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id));
+    let lib_name_written = lib_name.clone();
+    let lib_id = if lib_name.contains(':') || own_extra.is_some_and(|e| e.unlinked_name.as_deref() == Some(lib_name.as_str())) { lib_name } else { format!("eda:{lib_name}") };
 
     writeln!(out, "\t(footprint {}", sexpr_str(&lib_id)).unwrap();
     if locked {
@@ -907,6 +947,28 @@ pub(crate) fn write_footprint(
     // The Reference, the Value and the user fields (`format( PCB_FIELD )`), then the footprint's attributes. A footprint nothing was
     // edited on gets the Reference beside its courtyard and the Value below its origin, as it always has (`eda_model::fp_edit`).
     write_fields(out, fp, part, footprint, extra);
+    // The classes the file gave the footprint, and the sheet its symbol is on (`format( FOOTPRINT )` writes them after the properties).
+    if let Some(e) = own_extra {
+        // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
+        if e.source_name == lib_name_written {
+            for token in &e.tokens {
+                writeln!(out, "\t\t{token}").unwrap();
+            }
+        }
+        if !e.component_classes.is_empty() {
+            write!(out, "\t\t(component_classes").unwrap();
+            for class in &e.component_classes {
+                write!(out, " (class {})", sexpr_str(class)).unwrap();
+            }
+            writeln!(out, ")").unwrap();
+        }
+        if let Some(name) = e.sheetname.as_deref().filter(|n| !n.is_empty()) {
+            writeln!(out, "\t\t(sheetname {})", sexpr_str(name)).unwrap();
+        }
+        if let Some(file) = e.sheetfile.as_deref().filter(|n| !n.is_empty()) {
+            writeln!(out, "\t\t(sheetfile {})", sexpr_str(file)).unwrap();
+        }
+    }
     write_attr(out, &extra.attrs);
 
     // The pads in number order, each with its index in the footprint (what the zone-connection facts are addressed by).
@@ -915,6 +977,10 @@ pub(crate) fn write_footprint(
 
     // The footprint's own clearance and zone connection (`FOOTPRINT::SetLocalClearance`, `SetLocalZoneConnection`): the
     // facts a pad inherits. Resolved as `DRC_ENGINE::EvalZoneConnection` does, so kicad-cli's fill and DRC see what the studio shows.
+    // The footprint's own solder mask margin (`FOOTPRINT::SetLocalSolderMaskMargin`), which the pads that have none of their own take (`PAD::GetSolderMaskExpansion`).
+    if let Some(m) = own_extra.and_then(|e| e.solder_mask_margin) {
+        writeln!(out, "\t\t(solder_mask_margin {})", mm(m)).unwrap();
+    }
     if let Some(&(first, first_pad)) = pads.first() {
         let facts = design.pad_zone_facts(&fp.id, &footprint.name, first, footprint.pads.len(), &first_pad.number);
         if let Some(c) = facts.footprint_clearance {
@@ -951,8 +1017,10 @@ pub(crate) fn write_footprint(
 
     // The k-th pad that carries a number is the one the studio and a `PadEdit` name `NUM#k`.
     let mut seen: BTreeMap<&str, u32> = BTreeMap::new();
+    let mut pad_seeds: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for &(pad_idx, pad) in &pads {
         let art_layers: &[String] = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.art_layers.as_slice()).unwrap_or_default();
+        let (no_paste, no_mask, connector) = pad_infos.and_then(|p| p.get(pad_idx)).map_or((false, false, false), |i| (i.no_paste, i.no_mask, i.connector));
         let nth = {
             let n = seen.entry(pad.number.as_str()).or_insert(0);
             *n += 1;
@@ -973,6 +1041,7 @@ pub(crate) fn write_footprint(
         let wmm = mm(w);
         let hmm = mm(h);
         let kind = match pad.kind {
+            PadKind::Smd if connector => "connect",
             PadKind::Smd => "smd",
             PadKind::ThroughHole => "thru_hole",
             PadKind::NonPlatedHole => "np_thru_hole",
@@ -983,8 +1052,15 @@ pub(crate) fn write_footprint(
         // Pad numbers repeat by design (a connector's shield tab, several
         // physical pads on one pin), so the number alone cannot make a
         // unique uuid; the position can, since two pads of one footprint
-        // never coincide.
-        let uuid = crate::duid_for(&format!("pad:{}:{}:{}:{}", fp.id, pad.number, pad.at.0, pad.at.1), &format!("{}.{}", fp.id, pad.number));
+        // almost never coincide. The ones that do (a registration mark's crossed bars, all numbered "": `complex_hierarchy`'s MIRE has two
+        // rectangles on one point) would share one uuid, and KiCad would tell the second from the first by a uuid of its own making: the later
+        // pad's seed carries its index.
+        let mut seed = format!("pad:{}:{}:{}:{}", fp.id, pad.number, pad.at.0, pad.at.1);
+        if !pad_seeds.insert(seed.clone()) {
+            seed = format!("{seed}:{pad_idx}");
+            pad_seeds.insert(seed.clone());
+        }
+        let uuid = crate::duid_for(&seed, &format!("{}.{}", fp.id, pad.number));
         // KiCad stores a pad's orientation as its footprint's own angle
         // plus the pad's own (0 for the overwhelming majority of pads) --
         // see `pad_file_angle` for the mirroring subtlety.
@@ -996,18 +1072,23 @@ pub(crate) fn write_footprint(
         match pad.kind {
             PadKind::ThroughHole | PadKind::NonPlatedHole => {
                 // Footprint::validate guarantees a through-hole/non-plated
-                // pad declares a drill, round or slot; inventing one here
-                // shipped a different hole than the circuit-json writer
-                // invented.
+                // pad of a footprint built here declares a drill, round or slot;
+                // inventing one here shipped a different hole than the
+                // circuit-json writer invented.
                 // `(drill D)` / `(drill oval W H)`, with the copper shape's offset inside it (`format( PAD )`).
                 let offset = shape_text.offset.map(|(ox, oy)| format!(" (offset {} {})", mm(ox), mm(oy))).unwrap_or_default();
                 match (pad.drill, pad.drill_slot) {
                     (Some(d), _) => write!(out, " (drill {}{offset})", mm(d)).unwrap(),
                     (None, Some((w, h))) => write!(out, " (drill oval {} {}{offset})", mm(w), mm(h)).unwrap(),
-                    (None, None) => unreachable!("Footprint::validate requires a drill on a through-hole/non-plated pad"),
+                    // A pad of a board's file that says no drill (the Allegro importer makes them): `format( PAD )` writes the token for a hole of some size only.
+                    (None, None) => {}
                 }
-                if art_layers.is_empty() {
+                if art_layers.is_empty() && !no_mask {
                     write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
+                } else if art_layers.is_empty() {
+                    write!(out, " (layers \"*.Cu\")").unwrap();
+                } else if no_mask {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu"], art_layers, fp.side)).unwrap();
                 } else {
                     write!(out, " {}", crate::fp_art_io::pad_layers_token(&["F.Cu", "B.Cu", "F.Mask", "B.Mask"], art_layers, fp.side)).unwrap();
                 }
@@ -1021,10 +1102,16 @@ pub(crate) fn write_footprint(
                 } else {
                     ("F.Cu", "F.Paste", "F.Mask")
                 };
-                if art_layers.is_empty() {
-                    write!(out, " (layers {} {} {})", sexpr_str(cu), sexpr_str(paste), sexpr_str(mask)).unwrap();
+                // The layers the pad had: its side's copper, and its paste and mask unless the file's pad had none; an edge connector pad has mask on both sides and no paste.
+                let base: Vec<&str> = if connector {
+                    std::iter::once(cu).chain((!no_mask).then_some(["F.Mask", "B.Mask"]).into_iter().flatten()).collect()
                 } else {
-                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&[cu, paste, mask], art_layers, fp.side)).unwrap();
+                    std::iter::once(cu).chain((!no_paste).then_some(paste)).chain((!no_mask).then_some(mask)).collect()
+                };
+                if art_layers.is_empty() {
+                    write!(out, " (layers {})", base.iter().map(|l| sexpr_str(l)).collect::<Vec<_>>().join(" ")).unwrap();
+                } else {
+                    write!(out, " {}", crate::fp_art_io::pad_layers_token(&base, art_layers, fp.side)).unwrap();
                 }
             }
         }
@@ -1035,6 +1122,18 @@ pub(crate) fn write_footprint(
                     write!(out, " (net {n} {})", sexpr_str(net_name)).unwrap();
                 }
             }
+        }
+        // `(pintype "free")` and the other pin types a pad was given (`PAD::SetPinType`): a free pad takes part in no net, and the copper clearance, solder mask and
+        // connectivity checks leave it be (`PAD::IsFreePad`). Written after the net, as `format( const PAD* )` does.
+        if let Some(function) = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_function.as_str()).filter(|t| !t.is_empty()) {
+            write!(out, " (pinfunction {})", sexpr_str(function)).unwrap();
+        }
+        if let Some(pin_type) = pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.pin_type.as_str()).filter(|t| !t.is_empty()) {
+            write!(out, " (pintype {})", sexpr_str(pin_type)).unwrap();
+        }
+        // The pad's other tokens as the file had them (`remove_unused_layers`, `teardrops`, `tenting`, `property pad_prop_heatsink`, `die_length`, ..).
+        for token in pad_infos.and_then(|p| p.get(pad_idx)).map(|i| i.tokens.as_slice()).unwrap_or_default() {
+            write!(out, " {token}").unwrap();
         }
         // The margins of a pad edit (`solder_mask_margin`, `solder_paste_margin`, `solder_paste_margin_ratio`), then the zone facts: KiCad's order.
         out.push_str(&pad_extra.margins);
@@ -1094,7 +1193,16 @@ pub(crate) fn write_footprint(
     // `Footprint::courtyard_half` derives -- the same one the placer keeps
     // clear.
     let crtyd_layer = if fp.side == Side::Bottom { "B.CrtYd" } else { "F.CrtYd" };
-    if footprint.courtyard_outlines.is_empty() {
+    // The courtyard graphics the file had, as it had them, while the part is on that footprint and that side: a courtyard of lines, arcs or a circle is not a polygon to
+    // KiCad's comparison with the library's copy (`FOOTPRINT::FootprintNeedsUpdate`).
+    let own_courtyard = own_extra.filter(|e| !e.courtyard_items.is_empty() && e.source_name == lib_name_written && e.courtyard_bottom == (fp.side == Side::Bottom));
+    if let Some(e) = own_courtyard {
+        for item in &e.courtyard_items {
+            writeln!(out, "\t\t{item}").unwrap();
+        }
+    } else if footprint.courtyard_outlines.is_empty() && own_extra.is_some_and(|e| e.no_courtyard) {
+        // The footprint the file had has no courtyard: none is made up for it.
+    } else if footprint.courtyard_outlines.is_empty() {
         let (hw, hh) = footprint.courtyard_half();
         let uuid = crate::duid_for(&format!("footprint:{}:crtyd", fp.id), &fp.id);
         writeln!(
@@ -1201,28 +1309,24 @@ pub(crate) fn write_shape(out: &mut String, shape: &Shape, locked: bool) -> Stri
 /// not centred/unmirrored (exactly KiCad's own rule, so a plain centred
 /// label round-trips without growing a token it never had).
 pub(crate) fn write_text(out: &mut String, text: &Text, locked: bool) -> String {
+    write_text_with(out, text, locked, None)
+}
+
+/// [`write_text`] with the looks `Text` has no fields for (`TextExtra`: a glyph width that is not the height, a vertical justification, bold, italic, a knockout, line
+/// spacing, a font face, an automatic stroke width).
+pub(crate) fn write_text_with(out: &mut String, text: &Text, locked: bool, extra: Option<&eda_model::board_text::TextExtra>) -> String {
     let uuid = crate::duid_for(&format!("text:{}", text.id), &text.id);
     let lock = if locked { " (locked yes)" } else { "" };
     let angle_deg = fmt_mm_f(text.angle as f64 / 1000.0);
-    let size_mm = mm(text.size_um);
-    let thickness_mm = mm(text.stroke_width);
-    let mut justify = String::new();
-    match text.justify {
-        TextJustify::Left => justify.push_str(" left"),
-        TextJustify::Right => justify.push_str(" right"),
-        TextJustify::Center => {}
-    }
-    if text.mirror {
-        justify.push_str(" mirror");
-    }
-    let justify_tok = if justify.is_empty() { String::new() } else { format!(" (justify{justify})") };
+    let knockout = if extra.is_some_and(|e| e.knockout) { " knockout" } else { "" };
     writeln!(
         out,
-        "\t(gr_text {}{lock} (at {} {} {angle_deg}) (layer {}) (uuid \"{uuid}\")\n\t\t(effects (font (size {size_mm} {size_mm}) (thickness {thickness_mm})){justify_tok})\n\t)",
+        "\t(gr_text {}{lock} (at {} {} {angle_deg}) (layer {}{knockout}) (uuid \"{uuid}\")\n\t\t{}\n\t)",
         sexpr_str(&text.content),
         mm(text.at.x),
         mm(text.at.y),
-        sexpr_str(&text.layer)
+        sexpr_str(&text.layer),
+        crate::board_text_io::effects(text, extra)
     )
     .unwrap();
     uuid
@@ -1231,7 +1335,7 @@ pub(crate) fn write_text(out: &mut String, text: &Text, locked: bool) -> String 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection};
+    use eda_model::ir::{PlacementSection, Point, Provenance, RoutingSection, TextJustify};
     use eda_model::{Net, Pin, PinKind};
 
     fn pin(number: &str, kind: PinKind) -> Pin {
@@ -2663,5 +2767,728 @@ mod tests {
         };
         assert_eq!(held("U1"), vec![placed.clone()]);
         assert_eq!(held("C1"), vec![placed], "read back, the bottom footprint's model is the one it was written from");
+    }
+
+    /// Two pads of one footprint on the same point with the same number (`complex_hierarchy`'s MIRE: crossed bars, every pad numbered "", two of them on one
+    /// point) are two items with two uuids. With one uuid for both, kicad-cli reported the pair as a copper clearance violation (8 of them on that board).
+    #[test]
+    fn two_pads_on_one_point_with_one_number_are_written_with_two_uuids() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "MIRE" (layer "F.Cu") (at 10 10)
+    (property "Reference" "MIRE" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "*" (at 0 0 0) (layer "F.Fab"))
+    (attr through_hole)
+    (pad "" thru_hole rect (at -1.5 0) (size 2.3 0.25) (drill 0.76) (layers "*.Cu" "*.Mask"))
+    (pad "" thru_hole rect (at -1.5 0) (size 2.8 0.25) (drill 0.76) (layers "*.Cu" "*.Mask"))
+    (pad "" thru_hole rect (at 1.5 0) (size 2.8 0.25) (drill 0.76) (layers "*.Cu" "*.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let uuids: Vec<&str> = out.lines().filter(|l| l.trim_start().starts_with("(pad ")).filter_map(|l| l.split("(uuid \"").nth(1)).filter_map(|r| r.split('"').next()).collect();
+        assert_eq!(uuids.len(), 3, "{out}");
+        let distinct: std::collections::BTreeSet<&&str> = uuids.iter().collect();
+        assert_eq!(distinct.len(), 3, "each pad has a uuid of its own: {uuids:?}");
+        // The uuids are still a function of the board alone (a saved DRC exclusion names its items by uuid).
+        let again = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out, again);
+    }
+
+    /// A text of several lines is written with KiCad's `\n` escape (a raw newline inside the quotes is a parse error for it) and read back with its lines; a quote, a
+    /// backslash and a carriage return come back as they went. `complex_hierarchy`'s "Actionneur\nPiezo New Amp\nV02" came back as one line with backslashes in it, 60 mm
+    /// wide, and kicad-cli reported it shorting the nets under it.
+    #[test]
+    fn a_texts_lines_quotes_and_backslashes_are_written_as_kicad_writes_them_and_read_back() {
+        let (mut design, model) = fixture();
+        let content = "Actionneur\nPiezo \"New\" Amp\\V02\r\nline 3";
+        design.drawings = Some(eda_model::ir::DrawingsSection {
+            texts: vec![Text { id: "t1".into(), content: content.into(), at: Point { x: 1000, y: 2000 }, angle: 0, layer: "F.SilkS".into(), size_um: 1000, stroke_width: 150, justify: TextJustify::Center, mirror: false }],
+            ..Default::default()
+        });
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let line = out.lines().find(|l| l.contains("(gr_text ")).expect("the text is written");
+        assert!(line.starts_with("\t(gr_text \"Actionneur\\nPiezo \\\"New\\\" Amp\\\\V02\\r\\nline 3\" (at 1 2 0)"), "{line}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let texts = &back.drawings.as_ref().expect("drawings").texts;
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].content, content);
+    }
+
+    /// A board text keeps its whole `(effects ..)`: `(size HEIGHT WIDTH)` with a width that is not the height (`complex_hierarchy`'s "Actionneur" text is 2.032 high and 1.524
+    /// wide), `justify left bottom` (`connection_width_rules`' labels sit above their anchors), bold, italic, a knockout, the line spacing, a font face, and no
+    /// `(thickness ..)` when the file had none. kicad-cli measured those texts against their neighbours: written as square, centred, regular lines they overlapped tracks the
+    /// originals do not.
+    #[test]
+    fn a_board_texts_size_justification_weight_and_looks_are_written_back_as_they_were_read() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_text "High_current netclass:" (at 106.147 73.939) (layer "F.Cu") (tstamp dd7b0757-fb61-40bd-84e1-598677c91625)
+    (effects (font (size 0.2 0.2) (thickness 0.04) bold) (justify left bottom))
+  )
+  (gr_text "Actionneur" (at 176.149 64.643 0) (layer "B.Cu" knockout) (tstamp ef157bdf-7633-496c-93fa-91119bb1ecd2)
+    (effects (font (face "Arial") (size 2.032 1.524) (line_spacing 1.5) (thickness 0.3048) italic) (justify right top mirror))
+  )
+  (gr_text "plain" (at 1 2 0) (layer "F.SilkS") (tstamp 00000000-0000-0000-0000-000000000001)
+    (effects (font (size 1 1) (thickness 0.15)))
+  )
+  (gr_text "auto" (at 3 4 0) (layer "F.SilkS") (tstamp 00000000-0000-0000-0000-000000000002)
+    (effects (font (size 1.2 1.6)) (justify bottom))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let dr = design.drawings.as_ref().expect("drawings");
+        let by_text = |content: &str| dr.texts.iter().find(|t| t.content == content).unwrap_or_else(|| panic!("{content}"));
+        let extra = |content: &str| dr.text_extra(&by_text(content).id).cloned();
+        // The square, centred, regular text with a stroke width is the model's own default and keeps no extras.
+        assert_eq!(extra("plain"), None);
+        assert_eq!((by_text("plain").size_um, by_text("plain").stroke_width), (1000, 150));
+
+        let labels = extra("High_current netclass:").expect("bold, bottom");
+        assert!(labels.bold && !labels.italic && labels.valign == eda_model::ir::TextVAlign::Bottom && labels.width_um.is_none() && !labels.auto_thickness, "{labels:?}");
+        assert_eq!((by_text("High_current netclass:").justify, by_text("High_current netclass:").stroke_width), (TextJustify::Left, 40));
+
+        let wide = extra("Actionneur").expect("italic, narrow");
+        assert_eq!((wide.width_um, wide.italic, wide.knockout, wide.line_spacing_permille, wide.face.as_deref(), wide.valign), (Some(1524), true, true, 1500, Some("Arial"), eda_model::ir::TextVAlign::Top));
+        assert_eq!((by_text("Actionneur").size_um, by_text("Actionneur").stroke_width, by_text("Actionneur").justify, by_text("Actionneur").mirror), (2032, 305, TextJustify::Right, true));
+
+        // No thickness in the file: KiCad's automatic stroke width (an eighth of the glyph width), and none is written back.
+        let auto = extra("auto").expect("auto thickness");
+        assert_eq!((auto.auto_thickness, auto.width_um, by_text("auto").size_um, by_text("auto").stroke_width), (true, Some(1600), 1200, 200));
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let block = |content: &str| -> String {
+            let start = out.find(&format!("(gr_text \"{content}\"")).unwrap_or_else(|| panic!("{content} in {out}"));
+            out[start..].lines().take(2).collect::<Vec<_>>().join("\n")
+        };
+        let labels = block("High_current netclass:");
+        assert!(labels.contains("(layer \"F.Cu\")") && labels.contains("(effects (font (size 0.2 0.2) (thickness 0.04) bold) (justify left bottom))"), "{labels}");
+        let wide = block("Actionneur");
+        assert!(wide.contains("(layer \"B.Cu\" knockout)"), "{wide}");
+        assert!(wide.contains("(effects (font (face \"Arial\") (size 2.032 1.524) (line_spacing 1.5) (thickness 0.305) italic) (justify right top mirror))"), "{wide}");
+        assert!(block("plain").contains("(effects (font (size 1 1) (thickness 0.15)))"), "{}", block("plain"));
+        let auto = block("auto");
+        assert!(auto.contains("(effects (font (size 1.2 1.6)) (justify bottom))"), "{auto}");
+
+        // Read again, the same extras and the same texts.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let (a, b) = (design.drawings.as_ref().unwrap(), back.drawings.as_ref().unwrap());
+        assert_eq!(a.texts.len(), b.texts.len());
+        for t in &a.texts {
+            let u = b.texts.iter().find(|u| u.content == t.content).unwrap();
+            assert_eq!((t.size_um, t.stroke_width, t.justify, t.mirror, t.angle, &t.layer), (u.size_um, u.stroke_width, u.justify, u.mirror, u.angle, &u.layer));
+            assert_eq!(a.text_extra(&t.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)), b.text_extra(&u.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)));
+        }
+    }
+
+    /// A board with a few footprints, for the tests of what a footprint of a KiCad file keeps: `D5` has no library link and no courtyard, `R1` has both, and the
+    /// courtyard of `Q1` is a pair of `fp_line`s that close nothing.
+    const FOOTPRINT_BOARD: &str = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "D5" (layer "F.Cu") (at 10 10)
+    (property "Reference" "D1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "D" (at 0 0 0) (layer "F.Fab"))
+    (attr through_hole)
+    (pad "1" thru_hole rect (at -2.54 0) (size 1.8 1.8) (drill 0.9) (layers "*.Cu" "*.Mask"))
+    (pad "2" thru_hole circle (at 2.54 0) (size 1.8 1.8) (drill 0.9) (layers "*.Cu" "*.Mask"))
+  )
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 20 10)
+    (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+    (pad "2" smd roundrect (at 0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  )
+)"#;
+
+    /// A footprint the file gave no library link (`(footprint "D5" ..)`, `LIB_ID::GetLibNickname()` empty) is written with none, as `LIB_ID::Format` writes it: the bare name.
+    /// Written as `eda:D5` it linked the footprint to a library that does not exist, and a project that checks library links reported it (72 times on `complex_hierarchy`,
+    /// `lib_footprint_issues`). A footprint built here, named for no library, is in the `eda` library as it always was.
+    #[test]
+    fn a_footprint_with_no_library_link_is_written_with_none() {
+        let (design, model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(footprint \"D5\"\n"), "{out}");
+        assert!(out.contains("(footprint \"Resistor_SMD:R_0603_1608Metric\"\n"), "{out}");
+        assert!(!out.contains("\"eda:"), "{out}");
+        // Read again: the same, and the board is stable.
+        let (back, back_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        let again = export_kicad_pcb(&back, &back_model, &meta()).unwrap();
+        assert!(again.contains("(footprint \"D5\"\n") && !again.contains("\"eda:"), "{again}");
+        // A part built here is still in the `eda` library.
+        let (made, made_model) = fixture();
+        assert!(export_kicad_pcb(&made, &made_model, &meta()).unwrap().contains("(footprint \"eda:SOT-23\""));
+        // The footprint exchanged for another one is not the unlinked one any more.
+        let (swapped, mut swapped_model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
+        swapped_model.parts.iter_mut().find(|p| p.reference == "D1").unwrap().footprint = Some("SOT-23".into());
+        let out = export_kicad_pcb(&swapped, &swapped_model, &meta()).unwrap();
+        assert!(out.contains("(footprint \"eda:SOT-23\""), "{out}");
+    }
+
+    /// A footprint with nothing on its courtyard layers gets none in the file; before, it got the box its pads derive, and two such boxes overlapped
+    /// (`courtyards_overlap` on `complex_hierarchy`'s R20 and Q8, which the original does not report).
+    #[test]
+    fn a_footprint_that_had_no_courtyard_is_written_without_one() {
+        let (design, model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
+        let extras = &design.drawings.as_ref().unwrap().footprint_extras;
+        assert_eq!((extras.iter().find(|e| e.id == "D1").unwrap().no_courtyard, extras.iter().find(|e| e.id == "R1").unwrap().no_courtyard), (true, false));
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let block = |reference: &str| -> String {
+            let start = out.find(&format!("(property \"Reference\" \"{reference}\"")).expect("footprint");
+            let begin = out[..start].rfind("\t(footprint ").unwrap();
+            let end = out[start..].find("\n\t(footprint ").map_or(out.len(), |i| start + i);
+            out[begin..end].to_string()
+        };
+        assert!(!block("D1").contains("CrtYd"), "{}", block("D1"));
+        assert!(block("R1").contains("(layer \"F.CrtYd\")"), "{}", block("R1"));
+        // The footprints built here keep the box the placer keeps clear.
+        let (made, made_model) = fixture();
+        assert!(export_kicad_pcb(&made, &made_model, &meta()).unwrap().contains("CrtYd"));
+    }
+
+    /// The width of the lines of an imported outline is kept (`complex_hierarchy`'s Edge.Cuts are 0.2032 mm wide, written at the 0.1 KiCad gives a line that says none, and
+    /// kicad-cli measures edge clearance from the drawn line and plots it at its width). Lines of different widths are not one loop of lines here: they stay shapes, each
+    /// at its own width.
+    #[test]
+    fn the_width_of_an_imported_outline_is_written_back() {
+        let outline = |widths: [&str; 4]| -> String {
+            format!(
+                r#"(kicad_pcb (version 20240108) (generator "pcbnew") (general (thickness 1.6)) (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user)) (setup (pad_to_mask_clearance 0)) (net 0 "")
+  (gr_line (start 0 0) (end 20 0) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+  (gr_line (start 20 0) (end 20 10) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+  (gr_line (start 20 10) (end 0 10) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+  (gr_line (start 0 10) (end 0 0) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+)"#,
+                widths[0], widths[1], widths[2], widths[3]
+            )
+        };
+        let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.2032"; 4])).unwrap();
+        assert_eq!(notes.outline_source, "lines");
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_um), Some(203));
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let lines: Vec<&str> = out.lines().filter(|l| l.contains("\"Edge.Cuts\")") && l.contains("(gr_line")).collect();
+        assert_eq!(lines.len(), 4, "{out}");
+        assert!(lines.iter().all(|l| l.contains("(stroke (width 0.203) (type default))")), "{lines:?}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_um), Some(203));
+
+        // An outline made here says no width, and is written as it always was.
+        let (made, made_model) = fixture();
+        let plain = export_kicad_pcb(&made, &made_model, &meta()).unwrap();
+        assert!(plain.lines().filter(|l| l.contains("\"Edge.Cuts\")")).all(|l| !l.contains("stroke")), "{plain}");
+
+        // Four widths: shapes, each as it was.
+        let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.1", "0.2", "0.1", "0.2"])).unwrap();
+        assert_eq!(notes.outline_source, "shapes");
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_um), None);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("(stroke (width 0.2)").count(), 2, "{out}");
+    }
+
+    /// The classes a board file gives its footprints (`(component_classes (class "CLASS2") (class "CLASS3"))`) and the project's assignment rules are written back, so a DRC rule
+    /// that reads `A.Component_Class` judges the re-export as it judged the original (`component_classes_drc`: two assertion failures became four, because no footprint
+    /// had a class). The sheet a footprint is on comes with them, for a project that makes a class of every sheet.
+    #[test]
+    fn component_classes_and_the_sheet_of_a_footprint_are_written_back_and_the_projects_rules_with_them() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 10 10)
+    (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (component_classes (class "CLASS2") (class "CLASS3") (class "CLASS2"))
+    (path "/0acad4a2-8e97-4c0c-9dc3-627d0a5dadd5")
+    (sheetname "/sub/")
+    (sheetfile "sub.kicad_sch")
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  )
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 20 10)
+    (property "Reference" "R2" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  )
+)"#;
+        let (design, mut model, _) = crate::import_kicad_pcb(board).unwrap();
+        let extras = &design.drawings.as_ref().unwrap().footprint_extras;
+        let r1 = extras.iter().find(|e| e.id == "R1").unwrap();
+        assert_eq!(r1.component_classes, vec!["CLASS2".to_string(), "CLASS3".to_string()], "each class once, in the file's order");
+        assert_eq!((r1.sheetname.as_deref(), r1.sheetfile.as_deref()), (Some("/sub/"), Some("sub.kicad_sch")));
+        assert!(extras.iter().find(|e| e.id == "R2").unwrap().component_classes.is_empty());
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let r1_block = &out[out.find("(property \"Reference\" \"R1\"").unwrap()..out.find("(property \"Reference\" \"R2\"").unwrap()];
+        assert!(r1_block.contains("(component_classes (class \"CLASS2\") (class \"CLASS3\"))"), "{r1_block}");
+        assert!(r1_block.contains("(sheetname \"/sub/\")") && r1_block.contains("(sheetfile \"sub.kicad_sch\")"), "{r1_block}");
+        assert!(!r1_block.contains("(path "), "the link to the symbol is not written: the derived schematic's symbols have uuids of their own");
+        let r2_block = &out[out.find("(property \"Reference\" \"R2\"").unwrap()..];
+        assert!(!r2_block.contains("component_classes") && !r2_block.contains("sheetname"), "{r2_block}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let back_r1 = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().clone();
+        assert_eq!((back_r1.component_classes, back_r1.sheetname), (r1.component_classes.clone(), r1.sheetname.clone()));
+
+        // The project's rules reach the derived project, and a project without any has no `component_class_settings` at all.
+        assert!(serde_json::from_str::<serde_json::Value>(&export_kicad_pro(&model)).unwrap().get("component_class_settings").is_none());
+        let pro = serde_json::json!({ "component_class_settings": { "assignments": [{ "component_class": "RES", "conditions": { "REFERENCE": { "primary": "R*" } }, "conditions_operator": "ALL" }], "meta": { "version": 0 }, "sheet_component_classes": { "enabled": true } } });
+        crate::merge_project_setup_pages(&mut model, &pro.to_string());
+        assert!(model.board.component_classes.sheet_classes && model.board.component_classes.assignments.len() == 1);
+        let derived: serde_json::Value = serde_json::from_str(&export_kicad_pro(&model)).unwrap();
+        assert_eq!(derived["component_class_settings"]["assignments"][0]["conditions"]["REFERENCE"]["primary"], "R*");
+        assert_eq!(derived["component_class_settings"]["sheet_component_classes"]["enabled"], true);
+    }
+
+    /// A board's barcodes (`api_kitchen_sink` has a QR code and a Data Matrix) are read and written back as `format( const PCB_BARCODE* )` writes them: the layer, the size,
+    /// the text and its height, the kind, a QR code's error correction level, the margins and the flags. kicad-cli keeps a barcode a visual separation from the board edge
+    /// (`clearance`); a re-export without them lost that finding.
+    #[test]
+    fn a_boards_barcodes_are_written_back_as_kicad_writes_them() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (5 "F.SilkS" user "F.Silkscreen") (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (barcode (at 258.5 141.5 90) (layer "F.Cu") (size 42 44) (text "acode") (text_height 3) (type qr) (ecc_level M) (hide no) (knockout no) (uuid "705675f1-5a54-4ef0-bc6c-93b7d057008e"))
+  (barcode (locked yes) (at 255 44.5 180) (layer "F.SilkS") (size 42 44) (text "differentcode") (text_height 2) (type datamatrix) (hide yes) (knockout yes) (margins 1 2) (uuid "11111111-5a54-4ef0-bc6c-93b7d057008e"))
+  (barcode (at 1 2) (layer "F.SilkS") (type code128) (text "123") (uuid "22222222-5a54-4ef0-bc6c-93b7d057008e"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let dr = design.drawings.as_ref().expect("drawings");
+        assert_eq!(dr.barcodes.len(), 3);
+        assert!(dr.barcodes.iter().all(|b| b.id.starts_with("bar_")), "{:?}", dr.barcodes.iter().map(|b| &b.id).collect::<Vec<_>>());
+        let qr = dr.barcodes.iter().find(|b| b.text == "acode").unwrap();
+        assert_eq!((qr.at, qr.angle, qr.layer.as_str(), qr.width_um, qr.height_um, qr.text_height_um), (Point { x: 258_500, y: 141_500 }, 90_000, "F.Cu", 42_000, 44_000, 3_000));
+        assert_eq!((qr.kind, qr.ecc, qr.show_text, qr.knockout), (eda_model::barcode::BarcodeKind::Qr, eda_model::barcode::EccLevel::M, true, false));
+        let dm = dr.barcodes.iter().find(|b| b.text == "differentcode").unwrap();
+        assert_eq!((dm.kind, dm.show_text, dm.knockout, dm.margin_x_um, dm.margin_y_um), (eda_model::barcode::BarcodeKind::DataMatrix, false, true, 1_000, 2_000));
+        assert!(dr.locked_ids.contains(&dm.id), "a locked barcode comes back locked");
+        // What the file left out is PCB_BARCODE's own: 40 mm square, the text printed.
+        let plain = dr.barcodes.iter().find(|b| b.text == "123").unwrap();
+        assert_eq!((plain.width_um, plain.height_um, plain.show_text, plain.kind), (40_000, 40_000, true, eda_model::barcode::BarcodeKind::Code128));
+
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let line = |text: &str| out.lines().find(|l| l.contains("(barcode") && l.contains(&format!("(text \"{text}\")"))).unwrap_or_else(|| panic!("{text} in {out}")).trim().to_string();
+        let l = line("acode");
+        assert!(l.starts_with("(barcode (at 258.5 141.5 90) (layer \"F.Cu\") (size 42 44) (text \"acode\") (text_height 3) (type qr) (ecc_level M) (hide no) (knockout no) (uuid \""), "{l}");
+        let l = line("differentcode");
+        assert!(l.starts_with("(barcode (locked yes) (at 255 44.5 180) (layer \"F.SilkS\") (size 42 44) (text \"differentcode\") (text_height 2) (type datamatrix) (hide yes) (knockout yes) (margins 1 2) (uuid \""), "{l}");
+        assert!(!l.contains("ecc_level"), "only the QR kinds have an error correction level: {l}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let strip = |d: &Design| -> Vec<eda_model::barcode::Barcode> { d.drawings.as_ref().unwrap().barcodes.iter().cloned().map(|mut b| { b.id.clear(); b }).collect() };
+        let (mut a, mut b) = (strip(&design), strip(&back));
+        a.sort_by(|x, y| x.text.cmp(&y.text));
+        b.sort_by(|x, y| x.text.cmp(&y.text));
+        assert_eq!(a, b, "read again, the same barcodes");
+    }
+
+    /// KiCad 10's files carry no table of the nets and name a net on every item that is on one (`(net "net_1")`): a net that only a track, a via or a zone is on is one of the
+    /// board's nets, and the board exports (it failed with `kicad.unknown_net`; `connection_width_rules` has copper on four nets and no pad on any).
+    #[test]
+    fn a_net_only_copper_names_is_a_net_of_the_board() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (segment (start 0 0) (end 5 0) (width 0.25) (layer "F.Cu") (net "net_1") (uuid "00000000-0000-0000-0000-000000000001"))
+  (segment (start 0 1) (end 5 1) (width 0.25) (layer "F.Cu") (net "net_HC") (uuid "00000000-0000-0000-0000-000000000002"))
+  (via (at 5 0) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "net_via") (uuid "00000000-0000-0000-0000-000000000003"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["net_1", "net_HC", "net_via"]);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(net 1 \"net_1\")") && out.contains("(net 2 \"net_HC\")") && out.contains("(net 3 \"net_via\")"), "{out}");
+    }
+
+    /// A pad's pin type is written back (`(pintype "free")`): KiCad's copper clearance and solder mask checks and its connectivity leave a free pad out
+    /// (`PAD::IsFreePad`), so a re-export that dropped the type judged the pad as the copper it is not.
+    #[test]
+    fn a_pads_pin_type_is_written_back() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (net 1 "GND")
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 10 10)
+    (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25) (net 1 "GND") (pinfunction "A") (pintype "passive"))
+    (pad "2" smd circle (at 0.8 0) (size 0.8 0.8) (layers "F.Cu" "F.Mask") (pintype "free"))
+    (pad "3" smd circle (at 0 1) (size 0.8 0.8) (layers "F.Cu" "F.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\""))).unwrap_or_else(|| panic!("pad {number} in {out}")).to_string();
+        assert!(pad("1").contains("(net 1 \"GND\") (pinfunction \"A\") (pintype \"passive\")"), "{}", pad("1"));
+        assert!(pad("2").contains("(pintype \"free\")") && !pad("2").contains("(net "), "{}", pad("2"));
+        assert!(!pad("3").contains("pintype"), "{}", pad("3"));
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let types: Vec<String> = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().pads.iter().map(|p| p.pin_type.clone()).collect();
+        assert_eq!(types, ["passive", "free", ""]);
+        let functions: Vec<String> = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().pads.iter().map(|p| p.pin_function.clone()).collect();
+        assert_eq!(functions, ["A", "", ""]);
+    }
+
+    /// The layers a pad was on are the layers it is written on: an SMD pad with no paste layer (a fiducial) gets none, a pad with no mask layer gets none, and the pads that have
+    /// both (nearly all) are written as they always were. Written with the paste of every SMD pad, a fiducial had a stencil aperture the original does not.
+    #[test]
+    fn the_layers_of_a_pad_are_written_as_they_were_read_with_or_without_paste_and_mask() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Test:Pads" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd rect (at -3 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Mask"))
+    (pad "3" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste"))
+    (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu"))
+    (pad "5" thru_hole circle (at -3 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask"))
+    (pad "6" thru_hole circle (at -1 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu"))
+    (pad "7" thru_hole circle (at 1 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask" "F.SilkS"))
+    (pad "8" thru_hole circle (at 3 2) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "F.SilkS"))
+    (pad "9" connect roundrect (at -3 4) (size 2.5 8) (layers "*.Mask" "F.Cu") (roundrect_rratio 0.098))
+    (pad "10" connect roundrect (at -1 4) (size 2.5 8) (layers "*.Mask" "B.Cu") (roundrect_rratio 0.098))
+  )
+  (footprint "Test:Bottom" (layer "B.Cu") (at 30 10)
+    (property "Reference" "U2" (at 0 0 0) (layer "B.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "B.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "B.CrtYd"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "B.Cu" "B.Paste" "B.Mask"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "B.Cu" "B.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let layers_of = |reference: &str, number: &str| -> String {
+            let start = out.find(&format!("(property \"Reference\" \"{reference}\"")).unwrap_or_else(|| panic!("{reference}"));
+            let end = out[start..].find("\n\t(footprint ").map_or(out.len(), |i| start + i);
+            let pad = out[start..end].lines().find(|l| l.contains(&format!("(pad \"{number}\""))).unwrap_or_else(|| panic!("pad {number} of {reference}")).to_string();
+            pad[pad.find("(layers").expect("layers")..].split(')').next().unwrap().to_string() + ")"
+        };
+        assert_eq!(layers_of("U1", "1"), "(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")");
+        assert_eq!(layers_of("U1", "2"), "(layers \"F.Cu\" \"F.Mask\")");
+        assert_eq!(layers_of("U1", "3"), "(layers \"F.Cu\" \"F.Paste\")");
+        assert_eq!(layers_of("U1", "4"), "(layers \"F.Cu\")");
+        assert_eq!(layers_of("U1", "5"), "(layers \"*.Cu\" \"*.Mask\")");
+        assert_eq!(layers_of("U1", "6"), "(layers \"*.Cu\")");
+        assert_eq!(layers_of("U1", "7"), "(layers \"*.Cu\" \"*.Mask\" \"F.SilkS\")");
+        assert_eq!(layers_of("U1", "8"), "(layers \"*.Cu\" \"F.SilkS\")");
+        // An edge connector pad stays a connector pad: copper on its side, mask on both, no paste.
+        assert_eq!(layers_of("U1", "9"), "(layers \"F.Cu\" \"F.Mask\" \"B.Mask\")");
+        assert_eq!(layers_of("U1", "10"), "(layers \"B.Cu\" \"F.Mask\" \"B.Mask\")");
+        let kind_of = |number: &str| -> String { let l = out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap(); l.split_whitespace().nth(2).unwrap().to_string() };
+        assert_eq!((kind_of("9"), kind_of("10"), kind_of("1")), ("connect".to_string(), "connect".to_string(), "smd".to_string()));
+        // A back-side footprint's pads are on its side.
+        assert_eq!(layers_of("U2", "1"), "(layers \"B.Cu\" \"B.Paste\" \"B.Mask\")");
+        assert_eq!(layers_of("U2", "2"), "(layers \"B.Cu\" \"B.Mask\")");
+        // Read again, the same flags; and the pads of a footprint built here keep the paste and mask they always had.
+        let (back, back_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        // (The writer lists the pads by number, so the pads are compared by number.)
+        let flags = |d: &Design, m: &ConstraintModel, reference: &str| -> BTreeMap<String, (bool, bool)> {
+            let part = m.parts.iter().find(|p| p.reference == reference).unwrap();
+            let footprint = m.footprint_of(part).unwrap();
+            let infos = &d.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == reference).unwrap().pads;
+            footprint.pads.iter().zip(infos).map(|(pad, i)| (pad.number.clone(), (i.no_paste, i.no_mask))).collect()
+        };
+        assert_eq!(flags(&design, &model, "U1"), flags(&back, &back_model, "U1"));
+        let expected: BTreeMap<String, (bool, bool)> = [("1", (false, false)), ("2", (true, false)), ("3", (false, true)), ("4", (true, true)), ("5", (false, false)), ("6", (false, true)), ("7", (false, false)), ("8", (false, true)), ("9", (true, false)), ("10", (true, false))]
+            .into_iter()
+            .map(|(n, f)| (n.to_string(), f))
+            .collect();
+        assert_eq!(flags(&design, &model, "U1"), expected);
+        let (made, made_model) = fixture();
+        let plain = export_kicad_pcb(&made, &made_model, &meta()).unwrap();
+        assert!(plain.contains("(layers \"F.Cu\" \"F.Paste\" \"F.Mask\")") && plain.contains("(layers \"B.Cu\" \"B.Paste\" \"B.Mask\")"), "{plain}");
+    }
+
+    /// A via keeps what its tokens say beyond its position, size, drill, layers and net: its type, the mode of the layers it does not connect, `free`, the zone layer
+    /// connections, its tenting, capping and covering, its own padstack and teardrop settings, whatever a newer KiCad adds. The file had them on 10370 of the QA corpus's vias
+    /// for the tenting alone, and the writer dropped every one: `api_kitchen_sink`'s two untented vias came back tented, with no opening in the solder mask plot.
+    #[test]
+    fn a_vias_type_and_tokens_are_written_back_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (4 "In1.Cu" signal) (6 "In2.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (via blind (at 10 10) (size 0.6) (drill 0.3) (layers "F.Cu" "In2.Cu") (remove_unused_layers yes) (keep_end_layers yes) (free yes) (zone_layer_connections "F.Cu" "In1.Cu") (tenting (front no) (back no)) (capping yes) (covering (front no) (back yes)) (net "A") (uuid "00000000-0000-0000-0000-000000000001"))
+  (via micro (at 20 10) (size 0.3) (drill 0.1) (layers "F.Cu" "In1.Cu") (padstack (mode front_inner_back) (layer "Inner" (size 0.35)) (layer "B.Cu" (size 0.4))) (teardrops (best_length_ratio 0.5) (max_length 1) (curved_edges no)) (net "B") (uuid "00000000-0000-0000-0000-000000000002"))
+  (via (at 30 10) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "C") (uuid "00000000-0000-0000-0000-000000000003"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let extras = &design.drawings.as_ref().expect("drawings").via_extras;
+        assert_eq!(extras.len(), 2, "the plain via keeps no entry: {extras:?}");
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        // The nets are numbered by name: A is 1, B is 2, C is 3.
+        let line = |net: usize| out.lines().find(|l| l.contains("(via") && l.contains(&format!("(net {net}) "))).unwrap_or_else(|| panic!("via on net {net} in {out}")).trim().to_string();
+        let blind = line(1);
+        assert!(blind.starts_with("(via blind (at 10 10) (size 0.6) (drill 0.3) (layers \"F.Cu\" \"In2.Cu\") (remove_unused_layers yes) (keep_end_layers yes) (free yes) (zone_layer_connections \"F.Cu\" \"In1.Cu\") (tenting (front no) (back no)) (capping yes) (covering (front no) (back yes)) (net "), "{blind}");
+        let micro = line(2);
+        assert!(micro.starts_with("(via micro (at 20 10) (size 0.3) (drill 0.1) (layers \"F.Cu\" \"In1.Cu\") (padstack (mode front_inner_back) (layer \"Inner\" (size 0.35)) (layer \"B.Cu\" (size 0.4))) (teardrops (best_length_ratio 0.5) (max_length 1) (curved_edges no)) (net "), "{micro}");
+        let plain = line(3);
+        assert!(plain.starts_with("(via (at 30 10) (size 0.8) (drill 0.4) (layers \"F.Cu\" \"B.Cu\") (net "), "{plain}");
+        // Read again, the same.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let strip = |d: &Design| -> Vec<(eda_model::via_extra::ViaKind, Vec<String>)> { d.drawings.as_ref().unwrap().via_extras.iter().map(|e| (e.kind, e.tokens.clone())).collect() };
+        assert_eq!(strip(&design), strip(&back));
+        // The tenting is still what the in-house checks read.
+        assert!(design.drawings.as_ref().unwrap().via_tenting.iter().any(|t| (t.front, t.back) == (Some(false), Some(false))));
+    }
+
+    /// A pad keeps the tokens its fields do not stand for: the unconnected-layer mode (`remove_unused_layers`, `keep_end_layers`), `zone_layer_connections`, its teardrop
+    /// settings, its tenting, a `(property pad_prop_heatsink)` (a heatsink pad, a castellated one ..), `die_length` (the pad-to-die length a length check adds), whatever a newer
+    /// KiCad adds. The writer dropped all of them: the corpus has them on thousands of pads of two dozen boards.
+    #[test]
+    fn a_pads_other_tokens_are_written_back_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (footprint "Test:Heatsink" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -5 -5) (end 5 5) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" thru_hole circle (at -2 0) (size 1.6 1.6) (drill 0.8) (layers "*.Cu" "*.Mask") (remove_unused_layers yes) (keep_end_layers no) (zone_layer_connections "F.Cu") (tenting (front no) (back yes)) (teardrops (best_length_ratio 0.5) (curved_edges no)) (die_length 0.25) (property pad_prop_heatsink))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask") (clearance 0.2) (locked yes))
+    (pad "3" smd rect (at 4 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let tokens: Vec<Vec<String>> = design.drawings.as_ref().unwrap().footprint_extras[0].pads.iter().map(|p| p.tokens.clone()).collect();
+        assert_eq!(
+            tokens,
+            vec![
+                vec!["(remove_unused_layers yes)", "(keep_end_layers no)", "(zone_layer_connections \"F.Cu\")", "(tenting (front no) (back yes))", "(teardrops (best_length_ratio 0.5) (curved_edges no))", "(die_length 0.25)", "(property pad_prop_heatsink)"],
+                vec!["(locked yes)"],
+                vec![],
+            ]
+        );
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number}")).trim().to_string();
+        assert!(pad("1").contains("(layers \"*.Cu\" \"*.Mask\") (remove_unused_layers yes) (keep_end_layers no) (zone_layer_connections \"F.Cu\") (tenting (front no) (back yes)) (teardrops (best_length_ratio 0.5) (curved_edges no)) (die_length 0.25) (property pad_prop_heatsink)"), "{}", pad("1"));
+        assert!(pad("2").contains("(locked yes)") && pad("2").contains("(clearance 0.2)"), "{}", pad("2"));
+        assert!(pad("3").ends_with("))") && !pad("3").contains("locked"), "{}", pad("3"));
+        // Written once: the fields the pad stands for are not among the tokens.
+        assert_eq!(pad("1").matches("(layers").count(), 1);
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let again: Vec<Vec<String>> = back.drawings.as_ref().unwrap().footprint_extras[0].pads.iter().map(|p| p.tokens.clone()).collect();
+        assert_eq!(again.iter().map(|t| t.len()).collect::<Vec<_>>(), tokens.iter().map(|t| t.len()).collect::<Vec<_>>());
+    }
+
+    /// A footprint keeps its description, tags, jumper pad groups and its Datasheet and Description fields -- `duplicate_pad_numbers_are_jumpers` makes the pads that share a number
+    /// one pad to the connectivity -- and the board keeps the items nothing reads (a text box, a reference image, a target), as the file had them. The footprint's link to its symbol
+    /// is not written, and the footprint's text goes when the part is exchanged for another footprint.
+    #[test]
+    fn a_footprints_other_tokens_and_the_boards_unread_items_are_written_back_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user) (37 "F.SilkS" user) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0) (covering (front yes) (back no)) (capping yes))
+  (net 0 "")
+  (footprint "Jumper:Jumper_2" (layer "F.Cu") (at 10 10)
+    (descr "Jumper, 2 pads \"closed\"")
+    (tags "jumper solder")
+    (property "Reference" "JP1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "J" (at 0 0 0) (layer "F.Fab"))
+    (property "Datasheet" "~" (at 0 0 0) (unlocked yes) (layer "F.Fab") (hide yes) (effects (font (size 1.27 1.27))))
+    (property "Description" "Jumper" (at 0 0 0) (unlocked yes) (layer "F.Fab") (hide yes) (effects (font (size 1.27 1.27))))
+    (path "/00000000-0000-0000-0000-000000000042")
+    (attr smd)
+    (duplicate_pad_numbers_are_jumpers yes)
+    (jumper_pad_groups ("1" "2"))
+    (solder_mask_margin 0.02)
+    (solder_paste_margin -0.01)
+    (fp_rect (start -2 -1) (end 2 1) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (gr_text_box "Box\nof text" (start 20 20) (end 30 25) (margins 1 1 1 1) (layer "F.SilkS") (border yes) (stroke (width 0.12) (type dot)) (effects (font (size 1 1)) (justify top)))
+  (target x (at 40 40) (size 5) (width 0.15) (layer "Edge.Cuts") (tstamp 1234))
+)"#;
+        let (design, mut model, notes) = crate::import_kicad_pcb(board).unwrap();
+        assert_eq!(notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["gr_text_box", "target"]);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in [
+            "(descr \"Jumper, 2 pads \\\"closed\\\"\")",
+            "(tags \"jumper solder\")",
+            "(covering (front yes) (back no))",
+            "(capping yes)",
+            "(duplicate_pad_numbers_are_jumpers yes)",
+            "(jumper_pad_groups (\"1\" \"2\"))",
+            // The footprint's own margins reach the pads that have none of their own (`PAD::GetSolderMaskExpansion`): the mask margin is written from `FootprintExtra`, the paste
+            // margin as the file had it, and the mask and paste checks of kicad-cli judge the pads by them.
+            "(solder_mask_margin 0.02)",
+            "(solder_paste_margin -0.01)",
+            "(property \"Datasheet\" \"~\" (at 0 0 0) (unlocked yes) (layer \"F.Fab\") (hide yes) (effects (font (size 1.27 1.27))))",
+            "(property \"Description\" \"Jumper\"",
+            "(gr_text_box \"Box\\nof text\" (start 20 20) (end 30 25) (margins 1 1 1 1) (layer \"F.SilkS\") (border yes) (stroke (width 0.12) (type dot)) (effects (font (size 1 1)) (justify top)))",
+            "(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))",
+        ] {
+            assert!(out.contains(want), "{want} in {out}");
+        }
+        assert!(!out.contains("(path "), "{out}");
+        assert!(out.trim_end().ends_with("(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))\n)"), "the unread items close the board: {}", &out[out.len().saturating_sub(300)..]);
+        // Read again, the same.
+        let (back, _, back_notes) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back_notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["gr_text_box", "target"]);
+        let tokens = |d: &Design| d.drawings.as_ref().unwrap().footprint_extras[0].tokens.clone();
+        assert_eq!(tokens(&design), tokens(&back));
+        // The part exchanged for another footprint is not described by the old one's text.
+        model.parts.iter_mut().find(|p| p.reference == "JP1").unwrap().footprint = Some("SOT-23".into());
+        let swapped = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(!swapped.contains("(tags \"jumper solder\")") && !swapped.contains("duplicate_pad_numbers_are_jumpers"), "{swapped}");
+        assert!(swapped.contains("(gr_text_box"), "the board's items stay");
+    }
+
+    /// A footprint's courtyard is written as the file had it, so a courtyard of four lines or a circle is still that and the footprint matches the library's copy (a courtyard
+    /// polygon made of the lines made `TestPoint_Pad_1.0x1.0mm` and a mounting hole's circle `lib_footprint_mismatch` on every board that has one). On the other side, or on
+    /// another footprint, it is the polygon outlines as before.
+    #[test]
+    fn a_footprints_courtyard_graphics_are_written_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (46 "B.CrtYd" user "B.Courtyard") (47 "F.CrtYd" user "F.Courtyard") (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "L:Lines" (layer "F.Cu") (uuid "a0000000-0000-0000-0000-000000000001") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (fp_line (start -1 -1) (end -1 1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000001"))
+    (fp_line (start -1 -1) (end 1 -1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000002"))
+    (fp_line (start 1 1) (end -1 1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000003"))
+    (fp_line (start 1 1) (end 1 -1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000004"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:Round" (layer "F.Cu") (uuid "a0000000-0000-0000-0000-000000000002") (at 20 10)
+    (property "Reference" "U2" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (fp_circle (center 0 0) (end 2.6 0) (stroke (width 0.05) (type solid)) (fill no) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000005"))
+    (pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:Back" (layer "B.Cu") (uuid "a0000000-0000-0000-0000-000000000003") (at 30 10)
+    (property "Reference" "U3" (at 0 0 0) (layer "B.SilkS")) (property "Value" "U" (at 0 0 0) (layer "B.Fab"))
+    (fp_arc (start 1 0) (mid 0 1) (end -1 0) (stroke (width 0.05) (type solid)) (layer "B.CrtYd") (uuid "b0000000-0000-0000-0000-000000000006"))
+    (fp_line (start -1 0) (end 1 0) (stroke (width 0.05) (type solid)) (layer "B.CrtYd") (uuid "b0000000-0000-0000-0000-000000000007"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "B.Cu" "B.Paste" "B.Mask")))
+)"#;
+        let (design, mut model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in [
+            "(fp_line (start -1 -1) (end -1 1) (stroke (width 0.05) (type solid)) (layer \"F.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000001\"))",
+            "(fp_line (start 1 1) (end 1 -1) (stroke (width 0.05) (type solid)) (layer \"F.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000004\"))",
+            "(fp_circle (center 0 0) (end 2.6 0) (stroke (width 0.05) (type solid)) (fill no) (layer \"F.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000005\"))",
+            "(fp_arc (start 1 0) (mid 0 1) (end -1 0) (stroke (width 0.05) (type solid)) (layer \"B.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000006\"))",
+        ] {
+            assert!(out.contains(want), "{want} in {out}");
+        }
+        assert!(!out.contains("(fp_poly") && !out.contains("(fp_rect"), "no courtyard polygon beside the graphics: {out}");
+        // Read again, the same.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let items = |d: &Design| -> Vec<Vec<String>> { d.drawings.as_ref().unwrap().footprint_extras.iter().map(|e| e.courtyard_items.clone()).collect() };
+        assert_eq!(items(&design), items(&back));
+        // A part moved to the other side is not described by the courtyard of this one.
+        let mut flipped = design.clone();
+        flipped.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U2").unwrap().side = Side::Bottom;
+        let on_back = export_kicad_pcb(&flipped, &model, &meta()).unwrap();
+        assert!(!on_back.contains("b0000000-0000-0000-0000-000000000005") && on_back.contains("(layer \"B.CrtYd\")"), "{on_back}");
+        // And so is a part exchanged for another footprint.
+        model.parts.iter_mut().find(|p| p.reference == "U1").unwrap().footprint = Some("SOT-23".into());
+        let swapped = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(!swapped.contains("b0000000-0000-0000-0000-000000000001"), "{swapped}");
+    }
+
+    /// A through-hole pad the board's file gave no drill (KiCad's Allegro importer makes them: 155 on one of the QA boards) is written with none, as `format( PAD )` does for a
+    /// hole of no size; the export used to panic on it ("Footprint::validate requires a drill").
+    #[test]
+    fn a_through_hole_pad_with_no_drill_is_written_with_none() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Test:NoDrill" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (fp_rect (start -2 -2) (end 2 2) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" thru_hole rect (at -1 0) (size 1.5 1.5) (layers "*.Cu" "*.Mask"))
+    (pad "2" thru_hole circle (at 1 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number} in {out}")).to_string();
+        assert!(pad("1").contains("thru_hole") && !pad("1").contains("(drill"), "{}", pad("1"));
+        assert!(pad("2").contains("(drill 0.8)"), "{}", pad("2"));
+        assert!(crate::import_kicad_pcb(&out).is_ok());
+    }
+
+    /// A footprint keeps the uuid its board file gave it, so a text that names a footprint by uuid (`${uuid:REFERENCE}`, KiCad's cross-reference) still finds it: re-exported with a
+    /// uuid of its own, `issue4257`'s text read `<Unknown reference: ..>`, was longer than the original's and touched the pads beside it. Two footprints that claim one uuid
+    /// are not both written with it, and a footprint made here has the uuid derived from its reference as always.
+    #[test]
+    fn a_footprint_keeps_the_uuid_its_file_gave_it() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (gr_text "Text: ${LAYER} ${00000000-0000-0000-0000-00005e384273:REFERENCE}" (at 5 5) (layer "F.SilkS") (uuid "a1000000-0000-0000-0000-000000000001") (effects (font (size 1 1))))
+  (footprint "L:A" (layer "F.Cu") (uuid "00000000-0000-0000-0000-00005e384273") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:A" (layer "F.Cu") (tstamp 11111111-1111-1111-1111-111111111111) (at 20 10)
+    (property "Reference" "U2" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:A" (layer "F.Cu") (uuid "11111111-1111-1111-1111-111111111111") (at 30 10)
+    (property "Reference" "U3" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let uuid_of = |out: &str, reference: &str| -> String {
+            let start = out.find(&format!("(property \"Reference\" \"{reference}\"")).unwrap_or_else(|| panic!("{reference}"));
+            let head = out[..start].rfind("\t(footprint ").expect("footprint start");
+            let line = out[head..start].lines().find(|l| l.trim_start().starts_with("(uuid ")).expect("uuid line");
+            line.trim().trim_start_matches("(uuid \"").trim_end_matches("\")").to_string()
+        };
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(uuid_of(&out, "U1"), "00000000-0000-0000-0000-00005e384273");
+        assert_eq!(uuid_of(&out, "U2"), "11111111-1111-1111-1111-111111111111", "a tstamp is the uuid of an older file");
+        assert_ne!(uuid_of(&out, "U3"), "11111111-1111-1111-1111-111111111111", "the second claimant gets a uuid of its own");
+        assert_eq!(out.matches("(uuid \"11111111-1111-1111-1111-111111111111\")").count(), 1);
+        // Written again from what was read again, the same.
+        let (again, again_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(uuid_of(&export_kicad_pcb(&again, &again_model, &meta()).unwrap(), "U1"), "00000000-0000-0000-0000-00005e384273");
     }
 }

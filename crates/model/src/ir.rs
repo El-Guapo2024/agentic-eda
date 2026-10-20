@@ -2462,6 +2462,34 @@ pub struct DrawingsSection {
     /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outline_is_shapes: bool,
+    /// The stroke width of the lines of `placement.outline` when they are written as `gr_line`s on `Edge.Cuts` (an imported board whose outline is one closed loop of lines
+    /// of one width keeps the width: kicad-cli measures edge clearances from the drawn line, and plots it at that width). `None` is the width KiCad gives a line that
+    /// says none. Additive: absent in an older `design.json` reads as `None`. Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_width_um: Option<Um>,
+    /// What a board text has beyond [`Text`]'s fields (a glyph width that is not the height, a vertical justification, bold, italic, a knockout, the line spacing,
+    /// a font face, an automatic stroke width), one entry per text that has any, keyed by the text's id -- see [`crate::board_text`]. Additive: absent in an older
+    /// `design.json` reads as "every text is a square-sized, vertically centred, regular line". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub text_extras: Vec<crate::board_text::TextExtra>,
+    /// The barcodes of the board (`(barcode ..)`, KiCad's `PCB_BARCODE`) -- see [`crate::barcode`]. Additive: absent in an older `design.json` reads as "none". Lives here
+    /// for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub barcodes: Vec<crate::barcode::Barcode>,
+    /// The board setup's tokens the writer does not make from `BoardRules`, as the file wrote them: KiCad 10's defaults for the vias that say nothing of their own,
+    /// `(covering (front no) (back no))`, `(plugging ..)`, `(capping no)` and `(filling no)`. Additive: absent reads as "none".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_tokens: Vec<String>,
+    /// The items of the board file that nothing reads (a text box, a reference image, a target, a table, a board-level property, whatever a newer KiCad adds), each as the file
+    /// wrote it on one line: not in the design, not on the canvas, and written back where the board ends, so that the file kicad-cli judges and plots has them. Additive: absent
+    /// in an older `design.json` reads as "none". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_items: Vec<String>,
+    /// What a via says beyond `Via`'s fields (its type, the unconnected-layer mode, `free`, the zone layer connections, tenting, capping, covering, plugging, filling, its padstack
+    /// and teardrop settings, ..), one entry per via that has any, keyed by the via's id -- see [`crate::via_extra`]. Additive: absent in an older `design.json` reads as
+    /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via_extras: Vec<crate::via_extra::ViaExtra>,
     /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
     /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
     /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`
@@ -2520,6 +2548,27 @@ pub struct PadMaskInfo {
     /// `(pintype "..")`, e.g. `"free"` (see `PAD::IsFreePad`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub pin_type: String,
+    /// The pad's other tokens as the file wrote them, in file order: `(remove_unused_layers ..)`, `(keep_end_layers ..)`, `(zone_layer_connections ..)`, `(teardrops ..)`, `(tenting ..)`,
+    /// `(property pad_prop_heatsink)`, `(die_length ..)`, `(padstack ..)`, whatever a newer KiCad adds. What the pad's fields stand for (position, size, shape, drill, layers, net, margins,
+    /// clearance, thermal settings, custom primitives, pin function and type) is not in the list. The model does not read them; the writer gives them back.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<String>,
+    /// `(pinfunction "..")`: the name of the symbol pin the pad is wired to (`PAD::GetPinFunction`), which a netlist update writes on every netted pad of a board made
+    /// from a schematic and a rule reads as `A.Pin_Name`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pin_function: String,
+    /// An SMD pad whose `(layers ..)` has no paste layer (a fiducial, a test point, a thermal pad covered by its own paste pads): the writer leaves the paste layer out, as the
+    /// pad had it, where an SMD pad otherwise gets its side's paste layer (a stencil aperture of its own).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_paste: bool,
+    /// The pad is an edge connector pad (`(pad "1" connect ..)`, `PAD_ATTRIB::CONN`): copper on one side, solder mask on both, no paste. The model holds it as an SMD pad; the writer
+    /// gives it back its type and its layers, which kicad-cli's padstack check and the mask plot tell from an SMD pad's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub connector: bool,
+    /// A pad whose `(layers ..)` has no solder mask layer (copper under the mask, a pad the mask covers): the writer leaves the mask layer out, where a pad otherwise gets its
+    /// side's (a through-hole pad both sides').
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_mask: bool,
     /// `(clearance C)` (`PAD::GetLocalClearance`): the pad's own copper clearance, which replaces the net class's and the
     /// zone's for this pad (`DRC_ENGINE::EvalRules`: a local override wins over everything but the board minimum). `None`
     /// inherits the footprint's, then the rules'. Pre-9.0 files: 0 meant "inherit".
@@ -2734,6 +2783,10 @@ pub struct FootprintHole {
 pub struct FootprintExtra {
     /// The footprint instance's reference designator.
     pub id: String,
+    /// The uuid the board file gave the footprint (`uuid`, or the `tstamp` of an older file), written back as it was: a text can name a footprint by it (`${uuid:REFERENCE}`),
+    /// and `kicad-cli pcb diff` matches items by it. Absent for a footprint made here, whose uuid is derived from its reference. When two footprints claim one, the first keeps it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
     /// Footprint-level `(solder_mask_margin ..)` (`GetLocalSolderMaskMargin`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solder_mask_margin: Option<Um>,
@@ -2756,6 +2809,45 @@ pub struct FootprintExtra {
     /// The non-plated holes of the footprint that are on no copper layer ([`FootprintHole`]). Not in `Footprint::pads`: they have no copper to measure, draw or route round.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holes: Vec<FootprintHole>,
+    /// The name the footprint had in the file when it had no library link (`(footprint "D5" ..)`: `LIB_ID::GetLibNickname()` empty, which `LIB_ID::Format` writes as the bare
+    /// item name). The writer gives a footprint the `eda` library unless the footprint it writes is this one: a board that came from a KiCad file keeps its footprints as
+    /// unlinked as it had them, and kicad-cli's library check (`lib_footprint_issues`) has no `eda` library to report as missing. `None` for a footprint that was linked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unlinked_name: Option<String>,
+    /// The footprint has no courtyard of its own (no item on `F.CrtYd`/`B.CrtYd` in the file): nothing is written for it, where a footprint without one gets the box
+    /// `Footprint::courtyard_half` derives from its pads (so the placer has a keep-out to respect). kicad-cli judges what the file says: that box made courtyards of
+    /// footprints that had none overlap (`courtyards_overlap`), and `missing_courtyard` could not be reported.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub no_courtyard: bool,
+    /// The footprint's other tokens as the file wrote them, in file order: `(descr ..)`, `(tags ..)`, `(jumper_pad_groups ..)`, `(duplicate_pad_numbers_are_jumpers yes)` (the
+    /// pads that share a number are one pad to the connectivity), `autoplace_cost`, and the `Datasheet`, `Description` and `ki_*` properties. The model reads none of them;
+    /// the writer gives them back, while the part is on the footprint they were read from ([`Self::source_name`]). The footprint's `(path ..)`, the link to its symbol, is not among
+    /// them: the derived schematic's symbols have uuids of their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<String>,
+    /// The courtyard graphics as the file wrote them (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve` on `F.CrtYd` or `B.CrtYd`), in file order. The checks here
+    /// work from the outlines made of them (`Footprint::courtyard_outlines`), but a courtyard of four lines, or a circle, is not one polygon, and a footprint on the board whose
+    /// courtyard is no longer the library's does not match the library's copy (`lib_footprint_mismatch`): these are written back, in place of the polygons, while the part is
+    /// on the footprint they were read from ([`Self::source_name`]) and on the side they were read for ([`Self::courtyard_bottom`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub courtyard_items: Vec<String>,
+    /// The footprint was on the back side when [`Self::courtyard_items`] were read: they are in the file's frame for that side and mean nothing for the other.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub courtyard_bottom: bool,
+    /// The footprint's name in the file when [`Self::tokens`] and [`Self::courtyard_items`] were read: they describe that footprint and are written only for it (a part exchanged
+    /// for another footprint is not described by the old one's text). Empty for a footprint made here.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_name: String,
+    /// `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint itself (`FOOTPRINT::GetStaticComponentClass`). A DRC rule reads them as
+    /// `A.Component_Class` and `A.hasComponentClass('A')`, together with the classes the project's assignment rules give (`BoardRules::component_classes`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub component_classes: Vec<String>,
+    /// `(sheetname ..)` and `(sheetfile ..)`: the schematic sheet the footprint's symbol is on, which a project that makes a class of every sheet reads
+    /// (`FOOTPRINT::GetSheetname`). The footprint's `(path ..)`, the link to its symbol, is not kept: the derived schematic has symbols of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheetname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sheetfile: Option<String>,
     /// The pads with a mask layer and no copper, as mask apertures in board space (`FootprintGraphic::pad_number` is set). A
     /// design imported before footprints had graphics of their own holds the footprint's silk and mask graphics here as well
     /// (`pad_number` is `None`); the importer no longer writes those, they are [`crate::Footprint::art`], and the DRC reads them
@@ -2812,7 +2904,7 @@ impl DrawingsSection {
     /// whose `id` is still empty. See [`RoutingSection::assign_missing_ids`]
     /// -- same contract, same reason for a stable per-kind processing order.
     pub fn assign_missing_ids(&mut self) {
-        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
+        let mut existing: std::collections::BTreeSet<String> = self.shapes.iter().map(Shape::id).chain(self.texts.iter().map(|t| t.id.as_str())).chain(self.groups.iter().map(|g| g.id.as_str())).chain(self.dimensions.iter().map(|d| d.id.as_str())).chain(self.tuning_patterns.iter().map(|t| t.id.as_str())).chain(self.barcodes.iter().map(|b| b.id.as_str())).filter(|s| !s.is_empty()).map(String::from).collect();
 
         for i in 0..self.tuning_patterns.len() {
             if self.tuning_patterns[i].id.is_empty() {
@@ -2859,6 +2951,16 @@ impl DrawingsSection {
                 let id = next_item_id("dim", &self.dimensions[i].id_seed(), &existing);
                 existing.insert(id.clone());
                 self.dimensions[i].id = id;
+            }
+        }
+
+        let mut order: Vec<usize> = (0..self.barcodes.len()).collect();
+        order.sort_by(|&a, &b| (&self.barcodes[a].text, self.barcodes[a].at).cmp(&(&self.barcodes[b].text, self.barcodes[b].at)));
+        for i in order {
+            if self.barcodes[i].id.is_empty() {
+                let id = next_item_id("bar", &self.barcodes[i].id_seed(), &existing);
+                existing.insert(id.clone());
+                self.barcodes[i].id = id;
             }
         }
     }

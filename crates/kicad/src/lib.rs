@@ -21,6 +21,10 @@ use eda_model::ir::{Design, FieldPlacement, NetLabel, NoConnect, PowerSymbol, Sc
 use eda_model::page::PageSettings;
 use eda_model::{CheckResult, ConstraintModel, Part, PinKind};
 
+mod barcode_io;
+mod board_text_io;
+mod bold_text;
+mod via_io;
 mod fp_art_io;
 mod fp_fields;
 mod pad_shape;

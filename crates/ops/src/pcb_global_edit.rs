@@ -118,6 +118,16 @@ impl Board<'_> {
                 t.stroke_width = th;
             }
         }
+        // A size or a stroke width set here replaces the glyph width and the automatic stroke width an imported text kept (`DrawingsSection::text_extras`).
+        let (new_size, new_stroke) = (e.layer_defaults || e.text_size.is_some(), e.layer_defaults || e.text_thickness.is_some());
+        for x in dr.text_extras.iter_mut().filter(|x| texts.contains(x.id.as_str())) {
+            if new_size {
+                x.width_um = None;
+            }
+            if new_stroke {
+                x.auto_thickness = false;
+            }
+        }
         for d in dr.dimensions.iter_mut().filter(|d| dims.contains(d.id.as_str())) {
             if e.layer_defaults {
                 // `PCB_TEXT::StyleFromSettings`, then `PCB_DIMENSION_BASE::StyleFromSettings`.

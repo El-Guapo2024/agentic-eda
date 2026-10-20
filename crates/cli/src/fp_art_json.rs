@@ -50,6 +50,10 @@ pub(crate) fn add_art(p: &mut Value, part: &Part, fp: &FootprintInstance, footpr
                 .iter()
                 .enumerate()
                 .filter_map(|(i, t)| {
+                    // A hidden text (a MountingHole's `${REFERENCE}` on its fab layer) is in the file and not on the canvas.
+                    if !art.texts[i].layout.visible {
+                        return None;
+                    }
                     let t = t.placed(fp, &vars);
                     (!t.text.is_empty()).then(|| {
                         let raw = art.texts[i].text.as_str();
@@ -160,5 +164,21 @@ mod tests {
         assert_eq!(placed_body(&pose(Side::Top, 0), &footprint()), Some((8_500, 19_000, 11_500, 21_000)));
         assert_eq!(placed_body(&pose(Side::Top, 90_000), &footprint()), Some((9_000, 18_500, 11_000, 21_500)));
         assert_eq!(placed_body(&pose(Side::Top, 0), &Footprint::default()), None);
+    }
+
+    /// A hidden text is in the file and not on the canvas.
+    #[test]
+    fn a_hidden_text_is_not_sent_to_the_canvas() {
+        let mut fp = footprint();
+        fp.art.texts.push({
+            let mut t = FpText::new("hidden", p(0, 100), "F.Fab");
+            t.layout.visible = false;
+            t
+        });
+        let mut v = json!({});
+        add_art(&mut v, &part(), &pose(Side::Top, 0), &fp);
+        let texts = v["texts"].as_array().unwrap();
+        assert_eq!(texts.len(), 1, "{texts:?}");
+        assert_ne!(texts[0]["text"], "hidden");
     }
 }

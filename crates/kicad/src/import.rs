@@ -60,7 +60,7 @@
 
 use std::collections::BTreeMap;
 
-use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, TextJustify, Track, Via, Zone};
+use eda_model::ir::{Design, DrawingsSection, FillMode, FootprintExtra, FootprintGraphic, FootprintInstance, FootprintText, PadMaskInfo, ViaTenting, IslandRemovalMode, PadConnection, Point, PlacementSection, Provenance, RoutingSection, Shape, Side, Text, Track, Via, Zone};
 use eda_model::layers::{LayerSetup, LayerType};
 use eda_model::outline as edge;
 use eda_model::{BoardRules, CheckResult, ConstraintModel, Footprint, Net, NetClass, Pad, PadKind, PadShape, Part, Pin, PinKind};
@@ -118,6 +118,10 @@ pub struct ImportNotes {
     /// place it is at, mm (`eda_drc::outline::check_edge_cuts`).
     #[serde(default)]
     pub outline_errors: Vec<String>,
+    /// The kinds of board item the file has and this importer has no reader for (`gr_text_box`, `image`, `table`, a board-level `property`, `target`, ..), and how many of
+    /// each: they are not in the design and not in what is exported from it. Nothing is listed for a kind that is read.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unread_items: BTreeMap<String, usize>,
     /// The `(filled_polygon ..)` the file stored for its zones (KiCad's own fill, as saved): not part of the design. The caller that keeps the board files
     /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
     #[serde(skip)]
@@ -132,12 +136,16 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         .map_err(|e| vec![CheckResult::fail("kicad_import.parse", "file", format!("not a valid s-expression file: {e}"))])?;
     // KiCad 10's footprint `(transform ...)` and library-frame footprint zones, rewritten into the layout the readers below take (`fp_transform`).
     let footprints_scaled = crate::fp_transform::normalize(&mut tree);
+    // KiCad 10's bold text, whose thickness is the width before the bold factor, in the older meaning every reader here has (`bold_text`).
+    crate::bold_text::normalize(&mut tree);
     let root = tree
         .as_list()
         .filter(|l| sexpr::tag(l) == Some("kicad_pcb"))
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_board", "file", "top-level form is not (kicad_pcb ...); not a KiCad PCB file")])?;
 
-    let mut notes = ImportNotes { footprints_scaled, ..ImportNotes::default() };
+    let mut notes = ImportNotes { footprints_scaled, unread_items: unread_items(root), ..ImportNotes::default() };
+    // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`), except the embedded files, whose data a re-quoting would break.
+    let raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !READ_ITEMS.contains(&t) && t != "embedded_files")).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
 
     let layers = import_layers(root);
     let net_names = import_net_names(root);
@@ -147,11 +155,12 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // file can be turned into ids once the items have them.
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
-    let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
-    let (mut shapes, texts) = import_drawings(root, &mut refs);
+    let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
+    let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
-    let (outline, outline_is_shapes) = import_outline(root, &mut shapes, &mut refs, &mut notes);
+    let (outline, outline_is_shapes, outline_width_um) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
+    let barcodes = crate::barcode_io::read_all(root, &mut refs.barcodes);
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
@@ -191,9 +200,17 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_um.is_none() && barcodes.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_um, barcodes, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
+    if !raw_items.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).raw_items = raw_items;
+    }
+    // The vias' protection defaults of KiCad 10's `(setup ..)`.
+    let setup_tokens: Vec<String> = sexpr::find(root, "setup").map(|s| s.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| matches!(sexpr::tag(l), Some("covering") | Some("plugging") | Some("capping") | Some("filling"))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect()).unwrap_or_default();
+    if !setup_tokens.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).setup_tokens = setup_tokens;
+    }
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
     if let Some(aux) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "aux_axis_origin")) {
         if let (Some(x), Some(y)) = (sexpr::num(aux, 1), sexpr::num(aux, 2)) {
@@ -225,6 +242,15 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // deterministic ids a fresh route or a hand-add would get, so an
     // imported board is addressable from the moment it lands.
     design.assign_missing_ids();
+    // The vias' tokens beyond `Via`'s fields, named by the ids the vias have just been given.
+    let via_extras: Vec<eda_model::via_extra::ViaExtra> = design.routing.iter().flat_map(|r| r.vias.iter()).zip(via_extras).filter(|(_, x)| !x.is_default()).map(|(v, mut x)| { x.id = v.id.clone(); x }).collect();
+    if !via_extras.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).via_extras = via_extras;
+    }
+    // The texts' looks beyond `Text`'s fields, named by the ids the texts have just been given.
+    if let Some(dr) = design.drawings.as_mut() {
+        dr.text_extras = dr.texts.iter().zip(text_extras).filter(|(_, x)| !x.is_default()).map(|(t, mut x)| { x.id = t.id.clone(); x }).collect();
+    }
     // The file's groups and locks, now that every item has its id: a `(group ..)` names its members by file
     // uuid, and `locked` rides on each item (`BOARD_ITEM::IsLocked()`).
     let (groups, locked_ids) = refs.resolve(&design, &import_items::import_groups(root));
@@ -253,6 +279,24 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         solver: Default::default(),
     };
     Ok((design, model, notes))
+}
+
+/// The kinds of top-level item a reader here takes: everything `import_kicad_pcb` reads below, the header (`version`, `generator`, `general`, `paper`, `title_block`, `layers`,
+/// `setup`, nets and net classes) and `embedded_fonts`, which is a flag. The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
+const READ_ITEMS: &[&str] = &[
+    "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
+    "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "dimension", "group", "generated", "barcode", "embedded_fonts",
+];
+
+/// The top-level items of the board whose kind no reader here takes ([`READ_ITEMS`]), counted by kind.
+fn unread_items(root: &[Sexpr]) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
+    for item in root.iter().skip(1).filter_map(Sexpr::as_list) {
+        if let Some(tag) = sexpr::tag(item).filter(|t| !READ_ITEMS.contains(t)) {
+            *out.entry(tag.to_string()).or_insert(0) += 1;
+        }
+    }
+    out
 }
 
 pub fn mm_to_um(mm: f64) -> i64 {
@@ -599,6 +643,10 @@ pub fn merge_project_setup_pages(model: &mut eda_model::ConstraintModel, project
             b.tuning_profiles.profiles = profiles.into_iter().filter(|p| eda_model::setup_pages::TuningProfiles { profiles: vec![p.clone()], class_profiles: Default::default() }.validate(&copper).is_ok()).collect();
         }
     }
+    // Component Classes: the project's assignment rules and the sheet classes switch.
+    if let Some(settings) = root.get("component_class_settings").filter(|s| s.is_object()) {
+        b.component_classes = eda_model::component_classes::ComponentClassSettings::from_project_json(settings);
+    }
     if let Some(classes) = root.get("net_settings").and_then(|n| n.get("classes")).and_then(|v| v.as_array()) {
         for class in classes {
             let (Some(name), Some(profile)) = (class.get("name").and_then(|v| v.as_str()), class.get("tuning_profile").and_then(|v| v.as_str())) else { continue };
@@ -802,12 +850,22 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
         key(a).cmp(&key(b))
     });
     let patterns = net_settings.get("netclass_patterns").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    // `netclass_assignments`: the nets the schematic's net class labels and directives put in classes (`NET_SETTINGS::m_netClassLabelAssignments`, net name -> class names), by exact
+    // name. `GetEffectiveNetClass` collects them with the pattern assignments, so a net is in every class either names; each is written as the pattern that matches that net and no
+    // other. A class they name that `classes` does not have is an implicit class: no parameters of its own, but a rule reads it (`A.hasNetclass('X')`).
+    let assigned: Vec<(String, String)> = net_settings
+        .get("netclass_assignments")
+        .and_then(|v| v.as_object())
+        .map(|m| m.iter().flat_map(|(net, cs)| cs.as_array().into_iter().flatten().filter_map(|c| c.as_str()).map(move |c| (c.to_string(), crate::pcb::exact_pattern(net)))).collect())
+        .unwrap_or_default();
 
     let num_mm = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_f64()).map(mm_to_um);
 
     let mut out = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
     for class in &classes {
         let Some(name) = class.get("name").and_then(|v| v.as_str()) else { continue };
+        seen.push(name.to_string());
         if name == "Default" {
             continue; // the board-default fields already cover this; see the doc comment above
         }
@@ -815,6 +873,7 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
             .iter()
             .filter(|p| p.get("netclass").and_then(|v| v.as_str()) == Some(name))
             .filter_map(|p| p.get("pattern").and_then(|v| v.as_str()).map(String::from))
+            .chain(assigned.iter().filter(|(class, _)| class == name).map(|(_, pattern)| pattern.clone()))
             .collect();
         if nets.is_empty() {
             continue; // an unused class matches nothing; not worth carrying (same rule import_board_rules uses)
@@ -831,6 +890,27 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
             diff_pair_width: num_mm(class, "diff_pair_width"),
             diff_pair_gap: num_mm(class, "diff_pair_gap"),
             diff_pair_via_gap: num_mm(class, "diff_pair_via_gap"),
+            priority: out.len() as i32,
+        });
+    }
+    // The implicit classes, after the defined ones (`getOrAddImplicitNetcless`: a priority past every defined class).
+    for (class, _) in &assigned {
+        if class == "Default" || seen.contains(class) {
+            continue;
+        }
+        seen.push(class.clone());
+        out.push(NetClass {
+            name: class.clone(),
+            nets: assigned.iter().filter(|(c, _)| c == class).map(|(_, pattern)| pattern.clone()).collect(),
+            track_width: None,
+            clearance: None,
+            via_diameter: None,
+            via_drill: None,
+            microvia_diameter: None,
+            microvia_drill: None,
+            diff_pair_width: None,
+            diff_pair_gap: None,
+            diff_pair_via_gap: None,
             priority: out.len() as i32,
         });
     }
@@ -1486,6 +1566,55 @@ fn import_footprints(
 /// `(net_tie_pad_groups ..)`.
 fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> FootprintExtra {
     let mut e = FootprintExtra { id: reference.to_string(), ..Default::default() };
+    e.uuid = sexpr::find(fp, "uuid").or_else(|| sexpr::find(fp, "tstamp")).and_then(|u| sexpr::txt(u, 1)).filter(|u| !u.is_empty()).map(str::to_string);
+    // `(footprint "D5" ..)`: a name with no `Library:` in front of it is a footprint with no library link (`LIB_ID::GetLibNickname()` is empty).
+    let name = sexpr::txt(fp, 1).unwrap_or_default();
+    if !name.contains(':') {
+        e.unlinked_name = Some(name.to_string());
+    }
+    // The tokens nothing else reads or regenerates, as the file had them (see `FootprintExtra::tokens`).
+    // (`solder_mask_margin` is `FootprintExtra::solder_mask_margin`, which the writer makes it from; `thermal_width` and `thermal_gap` are read and dropped by KiCad itself.)
+    const OWN: &[&str] = &[
+        "layer", "uuid", "tstamp", "tedit", "at", "transform", "locked", "attr", "clearance", "zone_connect", "solder_mask_margin", "thermal_width", "thermal_gap", "net_tie_pad_groups", "fp_line", "fp_arc",
+        "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "path", "embedded_fonts", "embedded_files",
+    ];
+    for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
+        let tag = sexpr::tag(item);
+        let kept = match tag {
+            Some("property") => matches!(sexpr::txt(item, 1), Some("Datasheet") | Some("Description") | Some("ki_fp_filters") | Some("ki_keywords") | Some("ki_locked") | Some("ki_description")),
+            // In pre-9.0 files a paste margin of 0 meant "inherit" (the parser reads it so, `parseFOOTPRINT_unchecked`); written to a new file it would be a margin of its own.
+            Some("solder_paste_margin") | Some("solder_paste_ratio") | Some("solder_paste_margin_ratio") => !(file_version <= 20240201 && sexpr::num(item, 1) == Some(0.0)),
+            Some(t) => !OWN.contains(&t),
+            None => false,
+        };
+        if kept {
+            e.tokens.push(sexpr::to_text(&Sexpr::List(item.to_vec())));
+        }
+    }
+    e.source_name = name.to_string();
+    // `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint (`parseFOOTPRINT_unchecked`'s `T_component_classes`), without repeats.
+    if let Some(classes) = sexpr::find(fp, "component_classes") {
+        for name in sexpr::find_all(classes, "class").filter_map(|c| sexpr::txt(c, 1)) {
+            if !e.component_classes.iter().any(|known| known == name) {
+                e.component_classes.push(name.to_string());
+            }
+        }
+    }
+    // The sheet the footprint's symbol is on.
+    e.sheetname = sexpr::find(fp, "sheetname").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
+    e.sheetfile = sexpr::find(fp, "sheetfile").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
+    // A footprint with nothing on its courtyard layers has no courtyard (`BuildCourtyardCaches` finds none, and kicad-cli says `missing_courtyard` or nothing).
+    e.no_courtyard = !["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"].iter().any(|tag| sexpr::find_all(fp, tag).any(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"))));
+    // The courtyard graphics as the file wrote them, in file order (see `FootprintExtra::courtyard_items`).
+    e.courtyard_items = fp
+        .iter()
+        .skip(2)
+        .filter_map(Sexpr::as_list)
+        .filter(|it| matches!(sexpr::tag(it), Some("fp_line") | Some("fp_arc") | Some("fp_circle") | Some("fp_rect") | Some("fp_poly") | Some("fp_curve")))
+        .filter(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd")))
+        .map(|it| sexpr::to_text(&Sexpr::List(it.to_vec())))
+        .collect();
+    e.courtyard_bottom = sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu");
     if let Some(m) = sexpr::find(fp, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_um(m);
         e.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
@@ -1537,6 +1666,12 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
         // The layers beyond copper, paste and mask, as for a top-side footprint (see `PadMaskInfo::art_layers`).
         info.art_layers = info.layers.iter().filter(|l| !(l.ends_with(".Cu") || l.ends_with(".Mask") || l.ends_with(".Paste"))).map(|l| eda_model::fp_art::layer_on_side(l, side)).collect();
         info.art_layers.sort();
+        // What the pad lacks of the layers its kind has: an SMD pad's paste (every SMD pad written here has its side's), a pad's mask. An edge connector pad is an SMD pad
+        // with mask on both sides (`connector`).
+        info.connector = sexpr::txt(pad, 2) == Some("connect");
+        let smd = matches!(sexpr::txt(pad, 2), Some("smd") | Some("connect"));
+        info.no_paste = smd && !info.layers.iter().any(|l| l.ends_with(".Paste"));
+        info.no_mask = !info.layers.iter().any(|l| l.ends_with(".Mask"));
     }
     if let Some(m) = sexpr::find(pad, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_um(m);
@@ -1550,6 +1685,15 @@ fn pad_mask_info(pad: &[Sexpr], copper: &[String], file_version: i64, side: Side
     if let Some(t) = sexpr::find(pad, "pintype").and_then(|f| sexpr::txt(f, 1)) {
         info.pin_type = t.to_string();
     }
+    if let Some(f) = sexpr::find(pad, "pinfunction").and_then(|f| sexpr::txt(f, 1)) {
+        info.pin_function = f.to_string();
+    }
+    // Every other token of the pad, as the file had it (see `PadMaskInfo::tokens`): the ones the pad's fields and the shape reader stand for are not among them.
+    const OWN: &[&str] = &[
+        "at", "size", "rect_delta", "roundrect_rratio", "chamfer_ratio", "chamfer", "drill", "layers", "net", "pinfunction", "pintype", "solder_mask_margin", "solder_paste_margin", "solder_paste_margin_ratio",
+        "clearance", "zone_connect", "thermal_bridge_width", "thermal_width", "thermal_bridge_angle", "thermal_gap", "options", "primitives", "uuid", "tstamp",
+    ];
+    info.tokens = pad.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| !sexpr::tag(l).is_some_and(|t| OWN.contains(&t))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
     // `parsePAD`: `(zone_connect N)`, `(thermal_bridge_width ..)` (legacy `(thermal_width ..)`), `(thermal_bridge_angle ..)`, `(thermal_gap ..)`.
     if let Some(c) = sexpr::find(pad, "clearance").and_then(|f| sexpr::num(f, 1)) {
         let c = mm_to_um(c);
@@ -1738,7 +1882,7 @@ fn parse_text_on(item: &[Sexpr], text: &str, tf: &dyn Fn(Point) -> Point, keep_u
 
 // ---------------------------------------------------------------- routing
 
-fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>) {
+fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut ImportNotes, refs: &mut Refs) -> (Vec<Track>, Vec<Via>, Vec<ViaTenting>, Vec<eda_model::via_extra::ViaExtra>) {
 
     let mut tracks = Vec::new();
     for seg in sexpr::find_all(root, "segment") {
@@ -1768,6 +1912,8 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 
     let mut vias = Vec::new();
     let mut via_tenting = Vec::new();
+    // What each via says beyond `Via`'s fields, one per via in the same order, for the caller to name once the vias have ids.
+    let mut via_extras = Vec::new();
     for via in sexpr::find_all(root, "via") {
         let Some(at) = sexpr::find(via, "at").and_then(xy_point) else { continue };
         let net = net_ref(sexpr::find(via, "net"), net_names);
@@ -1785,10 +1931,11 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
             }
         }
         vias.push(Via { id: String::new(), net, at, drill, diameter: dia, from_layer, to_layer });
+        via_extras.push(crate::via_io::read(via));
         refs.vias.push(ItemRef::of(via));
     }
 
-    (tracks, vias, via_tenting)
+    (tracks, vias, via_tenting, via_extras)
 }
 
 // Track arcs go through `Track::new_arc` (eda_model), which keeps the true
@@ -1802,7 +1949,7 @@ fn import_routing(root: &[Sexpr], net_names: &BTreeMap<i64, String>, notes: &mut
 /// Board-level graphics (`gr_line`/`gr_arc`/`gr_rect`/`gr_circle`/
 /// `gr_poly`/`gr_curve`) and text (`gr_text`), any layer. Those on Edge.Cuts are
 /// the board outline's items; [`import_outline`] decides what becomes of them.
-fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
+fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>, Vec<eda_model::board_text::TextExtra>) {
     let mut shapes = Vec::new();
     for item in sexpr::find_all(root, "gr_line") {
         if let Some(shape) = graphic_shape(item, "gr_line", |p| p) {
@@ -1819,32 +1966,22 @@ fn import_drawings(root: &[Sexpr], refs: &mut Refs) -> (Vec<Shape>, Vec<Text>) {
         }
     }
 
+    // Each text's looks: `Text` holds the square size, the stroke width and the horizontal justification, and the rest of `(effects ..)` (a glyph width that is not the
+    // height, a vertical justification, bold, italic, a knockout, ..) goes to `extras`, one per text in the same order, for the caller to name once the texts have ids.
     let mut texts = Vec::new();
+    let mut extras = Vec::new();
     for item in sexpr::find_all(root, "gr_text") {
         let Some(content) = sexpr::txt(item, 1) else { continue };
         let Some(at) = sexpr::find(item, "at") else { continue };
         let (Some(x), Some(y)) = (sexpr::num(at, 1), sexpr::num(at, 2)) else { continue };
         let angle = ((sexpr::num(at, 3).unwrap_or(0.0) * 1000.0).round() as i64).rem_euclid(360_000) as u32;
-        let effects = sexpr::find(item, "effects");
-        let font = effects.and_then(|e| sexpr::find(e, "font"));
-        let size_um = font.and_then(|f| sexpr::find(f, "size")).and_then(|s| sexpr::num(s, 1)).map(mm_to_um).unwrap_or(1000);
-        let stroke_width = font.and_then(|f| sexpr::find(f, "thickness")).and_then(|t| sexpr::num(t, 1)).map(mm_to_um).unwrap_or(150);
-        let (mut justify, mut mirror) = (TextJustify::Center, false);
-        if let Some(j) = effects.and_then(|e| sexpr::find(e, "justify")) {
-            for tok in j.iter().skip(1).filter_map(Sexpr::text) {
-                match tok {
-                    "left" => justify = TextJustify::Left,
-                    "right" => justify = TextJustify::Right,
-                    "mirror" => mirror = true,
-                    _ => {}
-                }
-            }
-        }
-        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um, stroke_width, justify, mirror });
+        let style = crate::board_text_io::read_style(item);
+        texts.push(Text { id: String::new(), content: content.to_string(), at: Point { x: mm_to_um(x), y: mm_to_um(y) }, angle, layer: layer_of(item), size_um: style.size_um, stroke_width: style.stroke_width, justify: style.justify, mirror: style.mirror });
+        extras.push(style.extra);
         refs.texts.push(ItemRef::of(item));
     }
 
-    (shapes, texts)
+    (shapes, texts, extras)
 }
 
 /// An item's `(stroke (width ..))`, or the `(width ..)` of the files before it (KiCad 6 and older), micrometres.
@@ -1954,18 +2091,20 @@ fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs)
 /// what they make. An outline that does not chain is kept as it is, too, and reported ([`ImportNotes::outline_errors`]): the exported file then
 /// has the same gap, and kicad-cli says so, instead of a loop closed behind the user's back.
 ///
-/// Returns the polygon for `placement.outline` and whether the shapes are the outline.
-fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool) {
+/// Returns the polygon for `placement.outline`, whether the shapes are the outline, and, when the outline is the loop of lines, the one width they are drawn at
+/// (`DrawingsSection::outline_width_um`; lines of different widths are not one loop of lines here, they stay shapes).
+fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool, Option<i64>) {
     footprint_edge_cuts(root, shapes, refs);
     let items: Vec<Shape> = shapes.iter().filter(|s| edge::is_edge_cuts(s)).cloned().collect();
     if items.is_empty() {
         notes.outline_source = "none";
-        return (Vec::new(), false);
+        return (Vec::new(), false, None);
     }
 
     let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_UM as f64, edge::CHAINING_EPSILON_UM, true);
     let one_loop = chained && polys.outline_count() == 1 && !polys.has_holes();
-    if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) {
+    let line_widths: std::collections::BTreeSet<i64> = items.iter().filter_map(|s| if let Shape::Segment { stroke_width, .. } = s { Some(*stroke_width) } else { None }).collect();
+    if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) && line_widths.len() == 1 {
         // The loop, in the order its sides chain; the sides themselves are not kept.
         let ring: Vec<Point> = polys.outline(0).iter().map(|p| Point { x: p.x, y: p.y }).collect();
         let keep: Vec<bool> = shapes.iter().map(|s| !edge::is_edge_cuts(s)).collect();
@@ -1974,7 +2113,7 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
         let mut k = keep.iter();
         refs.shapes.retain(|_| *k.next().expect("one flag per shape"));
         notes.outline_source = "lines";
-        return (ring, false);
+        return (ring, false, line_widths.into_iter().next().filter(|w| *w > 0));
     }
 
     let built = eda_drc::outline::board_outline_of(&items, true);
@@ -1982,7 +2121,7 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
     notes.outline_open = !built.valid;
     notes.outline_shapes = items.len();
     notes.outline_errors = eda_drc::outline::check_edge_cuts(&items).iter().map(|e| format!("{} at ({:.3}, {:.3}) mm", e.describe(), e.at.x as f64 / 1000.0, e.at.y as f64 / 1000.0)).collect();
-    (built.main_ring(), true)
+    (built.main_ring(), true, None)
 }
 
 // ---------------------------------------------------------------- zones
@@ -2165,25 +2304,39 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
     out
 }
 
-/// Points of a `gr_poly`'s `(pts ...)` list: `xy` entries verbatim, `arc`
-/// sub-entries by their start/end (curvature dropped, as elsewhere).
+/// Points of a `gr_poly`'s (or a zone's) `(pts ...)` list: `xy` entries verbatim, and an `(arc (start ..) (mid ..) (end ..))` of KiCad 9's polygons as the polyline
+/// `SHAPE_ARC::ConvertToPolyline` makes of it at the 5 micrometres KiCad flattens arcs to everywhere else (`eda_model::outline::Arc::polyline`): a polygon with rounded
+/// corners keeps them, where the chord between an arc's ends made chamfers of them. (A line joins the end of one arc to the start of the next, as in the file.)
 fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
     let pts = sexpr::find(p, "pts")?;
-    let mut out = Vec::new();
+    let mut out: Vec<Point> = Vec::new();
+    fn push(pt: Point, out: &mut Vec<Point>) {
+        if out.last() != Some(&pt) {
+            out.push(pt);
+        }
+    }
     for item in &pts[1..] {
         let Some(l) = item.as_list() else { continue };
         match sexpr::tag(l) {
             Some("xy") => {
                 if let Some(pt) = xy_point(l) {
-                    out.push(pt);
+                    push(pt, &mut out);
                 }
             }
             Some("arc") => {
-                if let Some(s) = sexpr::find(l, "start").and_then(xy_point) {
-                    out.push(s);
-                }
-                if let Some(e) = sexpr::find(l, "end").and_then(xy_point) {
-                    out.push(e);
+                let (start, mid, end) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "mid").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point));
+                match (start, mid, end) {
+                    (Some(s), Some(m), Some(e)) => {
+                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_UM as f64) {
+                            push(pt, &mut out);
+                        }
+                    }
+                    // An arc with no middle: its ends, as the chord.
+                    (s, _, e) => {
+                        for pt in s.into_iter().chain(e) {
+                            push(pt, &mut out);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -2195,6 +2348,87 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eda_model::ir::TextJustify;
+
+    /// The import says which kinds of board item it has no reader for, and how many of each: a text box, a reference image, a target or a board-level property is in the file and
+    /// not in the design (nor in what is exported from it), where a silent import left the user to find out at the first plot.
+    #[test]
+    fn the_import_counts_the_kinds_of_item_it_has_no_reader_for() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6)) (paper "A4") (embedded_fonts no)
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (property "Owner" "me")
+  (gr_text_box "one" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1))))
+  (gr_text_box "two" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1))))
+  (image (at 79 138.5) (layer "B.Cu") (scale 2) (data "AAAA"))
+  (gr_text "kept" (at 1 1 0) (layer "F.SilkS") (effects (font (size 1 1))))
+  (barcode (at 1 2) (layer "F.SilkS") (type qr) (text "123"))
+  (gr_line (start 0 0) (end 5 0) (stroke (width 0.1) (type default)) (layer "Edge.Cuts"))
+)"#;
+        let (_, _, notes) = import_kicad_pcb(board).unwrap();
+        assert_eq!(notes.unread_items.iter().map(|(k, n)| (k.as_str(), *n)).collect::<Vec<_>>(), [("gr_text_box", 2), ("image", 1), ("property", 1)]);
+        let (_, _, plain) = import_kicad_pcb(r#"(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 "F.Cu" signal)) (net 0 ""))"#).unwrap();
+        assert!(plain.unread_items.is_empty());
+    }
+
+    /// In a pre-9.0 file a footprint margin of 0 means "inherit" (`parseFOOTPRINT_unchecked`): neither the mask margin nor a paste margin token of 0 comes through as a margin
+    /// of its own, which in the file the writer makes (a new version) it would be. A margin that is not 0 comes through in any version.
+    #[test]
+    fn a_footprint_margin_of_zero_in_an_old_file_is_no_margin() {
+        let board = |version: &str, fp_tokens: &str| {
+            format!(
+                r#"(kicad_pcb (version {version}) (generator "pcbnew") (general (thickness 1.6)) (paper "A4") (layers (0 "F.Cu" signal) (31 "B.Cu" signal)) (net 0 "")
+  (footprint "L:F" (layer "F.Cu") (at 1 1) (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab")) {fp_tokens}
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))))"#
+            )
+        };
+        let extra = |text: &str| {
+            let (design, _, _) = import_kicad_pcb(text).unwrap();
+            design.drawings.and_then(|d| d.footprint_extras.into_iter().find(|e| e.id == "U1")).unwrap_or_default()
+        };
+        let old = extra(&board("20240108", "(solder_mask_margin 0) (solder_paste_margin 0) (solder_paste_ratio 0) (solder_paste_margin_ratio 0)"));
+        assert_eq!((old.solder_mask_margin, old.tokens.is_empty()), (None, true), "{old:?}");
+        let new = extra(&board("20241229", "(solder_mask_margin 0) (solder_paste_margin 0) (solder_paste_margin_ratio 0)"));
+        assert_eq!(new.solder_mask_margin, Some(0), "{new:?}");
+        assert_eq!(new.tokens, ["(solder_paste_margin 0)", "(solder_paste_margin_ratio 0)"]);
+        let nonzero = extra(&board("20240108", "(solder_mask_margin 0.02) (solder_paste_margin -0.01)"));
+        assert_eq!((nonzero.solder_mask_margin, nonzero.tokens), (Some(20), vec!["(solder_paste_margin -0.01)".to_string()]));
+    }
+
+    /// A polygon's `(arc (start ..) (mid ..) (end ..))` is the arc, flattened as KiCad flattens it (5 micrometres from the curve), and no longer the chord between its
+    /// ends: `api_kitchen_sink`'s silkscreen polygon with four rounded corners came back with four chamfers.
+    #[test]
+    fn the_arcs_of_a_polygon_keep_their_curvature() {
+        // A 6 x 4 mm rectangle whose four corners are quarter circles of radius 1 (a gr_poly of arcs and lines, as KiCad 9 writes a rounded polygon).
+        let s2 = std::f64::consts::FRAC_1_SQRT_2;
+        let corner = |cx: f64, cy: f64, sx: f64, sy: f64, ex: f64, ey: f64, sign: (f64, f64)| format!("(arc (start {sx} {sy}) (mid {} {}) (end {ex} {ey}))", cx + sign.0 * s2, cy + sign.1 * s2);
+        let poly = format!(
+            "(gr_poly (pts {} {} {} {}) (stroke (width 0.1) (type solid)) (fill none) (layer \"F.SilkS\"))",
+            corner(5.0, 1.0, 5.0, 0.0, 6.0, 1.0, (1.0, -1.0)),
+            corner(5.0, 3.0, 6.0, 3.0, 5.0, 4.0, (1.0, 1.0)),
+            corner(1.0, 3.0, 1.0, 4.0, 0.0, 3.0, (-1.0, 1.0)),
+            corner(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, (-1.0, -1.0)),
+        );
+        let tree = crate::sexpr::parse(&poly).unwrap();
+        let item = tree.as_list().unwrap();
+        let pts = poly_points(item).expect("a polygon");
+        // Chords would leave 8 points; the arcs are polylines.
+        assert!(pts.len() > 16, "{} points", pts.len());
+        // Every point sits on one of the four circles, within the 5 micrometres the flattening is held to, and the ends of the arcs are exact.
+        let centres = [(5000.0, 1000.0), (5000.0, 3000.0), (1000.0, 3000.0), (1000.0, 1000.0)];
+        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x as f64 - c.0).hypot(p.y as f64 - c.1) - 1000.0).abs() <= 5.0);
+        assert!(pts.iter().all(on_arc), "{pts:?}");
+        for exact in [Point { x: 5000, y: 0 }, Point { x: 6000, y: 1000 }, Point { x: 6000, y: 3000 }, Point { x: 5000, y: 4000 }, Point { x: 1000, y: 4000 }, Point { x: 0, y: 3000 }, Point { x: 0, y: 1000 }, Point { x: 1000, y: 0 }] {
+            assert!(pts.contains(&exact), "{exact:?} in {pts:?}");
+        }
+        // The area is the rounded rectangle's, 24 - (4 - pi) = 23.14 mm^2; the chords of the four arcs would leave 22.
+        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x as f64 * b.y as f64 - b.x as f64 * a.y as f64 }).sum::<f64>().abs() / 2.0 / 1.0e6;
+        assert!((area - (24.0 - (4.0 - std::f64::consts::PI))).abs() < 0.01, "area {area}");
+        // An arc with no middle is its chord, as before.
+        let broken = crate::sexpr::parse("(gr_poly (pts (xy 0 0) (arc (start 1 0) (end 1 1)) (xy 0 1)))").unwrap();
+        assert_eq!(poly_points(broken.as_list().unwrap()).unwrap().len(), 4);
+    }
 
     /// KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))`: the end is the start turned by A about the centre (`SetArcAngleAndEnd`), the
     /// middle by A/2, in the file's own axes, whichever way A goes.
@@ -2416,6 +2650,33 @@ mod tests {
         assert_eq!(model.board.track_width, 250);
         assert_eq!(model.board.via_diameter, 600);
         assert_eq!(model.board.via_drill, 300);
+    }
+
+    /// The nets a schematic's net class labels assign are in the project as `netclass_assignments` (net name -> class names), beside the patterns: a net is in the classes of both
+    /// (`NET_SETTINGS::GetEffectiveNetClass`), and a class only a label names is a class a rule can read. Dropped, `time_calculations`' seven classes matched no net and its
+    /// skew rule judged nothing.
+    #[test]
+    fn the_nets_a_label_assigns_to_a_class_are_in_the_class() {
+        let project = r#"{"net_settings": {
+            "classes": [
+                {"name": "Default", "clearance": 0.2, "track_width": 0.25, "via_diameter": 0.8, "via_drill": 0.4},
+                {"name": "CLASS1", "priority": 1, "clearance": 0.3},
+                {"name": "CLASS2", "priority": 0},
+                {"name": "UNUSED", "priority": 2}
+            ],
+            "netclass_assignments": {"Net-(R1-Pad2)": ["CLASS1", "ONLYALABEL"], "/NET_P": ["CLASS2"], "/NET_N": ["CLASS2", "CLASS1"]},
+            "netclass_patterns": [{"netclass": "CLASS1", "pattern": "PWR*"}]
+        }}"#;
+        let classes = parse_project_net_classes(project);
+        let by = |name: &str| classes.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("class {name} in {:?}", classes.iter().map(|c| &c.name).collect::<Vec<_>>()));
+        assert_eq!(classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS2", "CLASS1", "ONLYALABEL"], "by priority, then the implicit classes; UNUSED names no net");
+        assert!(by("CLASS1").matches("PWR3") && by("CLASS1").matches("Net-(R1-Pad2)") && by("CLASS1").matches("/NET_N") && !by("CLASS1").matches("/NET_P"));
+        assert!(by("CLASS2").matches("/NET_P") && by("CLASS2").matches("/NET_N") && !by("CLASS2").matches("Net-R1-Pad2"), "a net named with a parenthesis matches only itself, not what the parentheses would group");
+        assert!(by("ONLYALABEL").matches("Net-(R1-Pad2)") && by("ONLYALABEL").clearance.is_none());
+        let mut model = eda_model::ConstraintModel::default();
+        merge_project_net_classes(&mut model, project);
+        assert_eq!(model.board.matching_classes("Net-(R1-Pad2)").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS1", "ONLYALABEL"]);
+        assert_eq!(model.board.clearance, 200);
     }
 
     #[test]

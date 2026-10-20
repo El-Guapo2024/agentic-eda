@@ -50,7 +50,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
      every item kind (item 1, `2a8bf8f`) and so do the PCB ones (item 8, `88c8c0a`). Before closing any action, run it on every item kind.
   2. *The KiCad files we write drop design data, and kicad-cli judges those files.* The writer keeps zone settings, keepouts, dimensions, groups,
      locks, arcs, teardrops (`b145f0e`), the board outline as Edge.Cuts items (`a46fd29`) and the footprint's own graphics: part outline, pin-1 mark, fab body
-     and texts, on the canvas, in the file and in the silkscreen kicad-cli plots (item 25, `task-fp-graphics`). **What it still drops: the mask-only pads, barcodes, component classes and tuning profiles.**
+     and texts, on the canvas, in the file and in the silkscreen kicad-cli plots (item 25, `task-fp-graphics`). **Since P23 (2026-10-19) the re-export of the 12 real QA boards is judged by kicad-cli as the originals are, finding by finding; what the files still drop is in item 2.**
   3. *One root sits under several gaps: the constraint model built from the intent has no edit verbs.* It now has an overlay for the rules
      (`drawings.rules`), for the nets (`design.nets`), for the libraries, for footprint fields, attributes and pad edits
      (`drawings.footprint_edits`), for the zone filler's pad and footprint settings (`drawings.zone_overrides`) and for footprints that exist only on
@@ -62,7 +62,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
      the schematic editors, Board Setup, the choosers, the router, the PCB edit tools, the zones and the hierarchy have none (item 33).
 - **Docs.** Action level: `UI-ACTIONS.md`, with `STALE-REASONS.md` beside it. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl,common}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 310 added since have not been compared) and `CODE-COMPARE-router.md`,
-  `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md` (deleted 2026-10-13: the zone fill is KiCad's; item 13). Measured round trip and connectivity: `REPORT.md` (the re-export part re-measured 2026-10-11, after P1).
+  `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md` (deleted 2026-10-13: the zone fill is KiCad's; item 13). Measured round trip and connectivity: `REPORT.md` (the re-export part re-measured 2026-10-19, after P23: 12 of 12).
   Engines: `ARCHITECTURE.md`. The "Missing" lists below were re-read against the code where a merge touched them; a bullet no merge touched is
   carried forward from 2026-10-07 and says so.
 
@@ -71,7 +71,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | item | what | state | merge |
 |---|---|---|---|
 | 1 | Schematic item editing: Move, Drag, Rotate, Mirror, Align, Properties for every kind | **Closed** | `2a8bf8f` (10-08) |
-| 2 | KiCad files keep zone settings, keepouts, arcs, groups; the outline as Edge.Cuts items | Mostly done | `b145f0e` (10-08), `a46fd29` (10-09) |
+| 2 | KiCad files keep zone settings, keepouts, arcs, groups; the outline as Edge.Cuts items; the re-export of a real board is judged by kicad-cli as the original is (12 of 12 QA boards, 29 of 34 more) | Mostly done | `b145f0e` (10-08), `a46fd29` (10-09), `task-reexport` (10-19, P23) |
 | 3 | Board Setup and the rules edit through an overlay | Mostly done | `b145f0e` (10-08) |
 | 4 | Module sheets: editing on every sheet, nets traced across sheets | Partly (the rest in flight) | `08c70c8` (10-08) |
 | 5 | Symbol Chooser and Footprint Chooser over the installed libraries; library tables, Manage Libraries, New and Add Library, Configure Paths | Mostly done (saving into a table library is left) | `80e972d` (10-08), `task-lib-tables` (10-10) |
@@ -160,8 +160,8 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
 ### 2. The KiCad files we write drop design data
-**Mostly done (2026-10-08, 10-09, 10-10).** Hit: any board with a pour, keepout or dimension; every export; every imported board. Blocks: no longer for keepouts. The footprint's own graphics (P1) were the biggest of what was left and are done.
-- Done 2026-10-13 (`crates/kicad/src/fp_transform.rs`): boards in KiCad 10's format (file version 20260616 on, `FIRST_FP_AFFINE_TRANSFORM`) are read. A footprint's `(transform (translate x y) (rotate a) (scale sx sy))` stands for the `(at x y a)` older files have, and a footprint's own zones, stored in its library frame, are put back in the board frame (`TRANSFORM_TRS::Apply`). Pads and texts kept their meaning. Proof: four QA boards upgraded by kicad-cli 10.99.0-5334 read the same as the files they came from (`crates/kicad/tests/kicad10_transform.rs`, slow). A footprint scale other than 1:1 has no place in the model: it is read at 1:1 and named in `ImportNotes::footprints_scaled`. Not read yet from the same format: bold text as a stroke-width multiplier (20260826), line ending shapes (20260818), grid items (20260728), via stitching and guarding (20260816), microvia stack generators (20260830), custom user properties (20260831), drill charts and maps (20260901).
+**Mostly done (2026-10-08, 10-09, 10-10, 10-19).** Hit: any board with a pour, keepout or dimension; every export; every imported board. Blocks: no longer for keepouts. The footprint's own graphics (P1) were the biggest of what was left and are done. P23 (2026-10-19) closed the measured gap: the re-export of the 12 QA boards is judged by kicad-cli as the originals are (below); what the files still drop changes no DRC count of them.
+- Done 2026-10-13 (`crates/kicad/src/fp_transform.rs`): boards in KiCad 10's format (file version 20260616 on, `FIRST_FP_AFFINE_TRANSFORM`) are read. A footprint's `(transform (translate x y) (rotate a) (scale sx sy))` stands for the `(at x y a)` older files have, and a footprint's own zones, stored in its library frame, are put back in the board frame (`TRANSFORM_TRS::Apply`). Pads and texts kept their meaning. Proof: four QA boards upgraded by kicad-cli 10.99.0-5334 read the same as the files they came from (`crates/kicad/tests/kicad10_transform.rs`, slow). A footprint scale other than 1:1 has no place in the model: it is read at 1:1 and named in `ImportNotes::footprints_scaled`. Bold text as a stroke-width multiplier (20260826) is read since P23 (below). Not read yet from the same format: line ending shapes (20260818), grid items (20260728), via stitching and guarding (20260816), microvia stack generators (20260830), custom user properties (20260831), drill charts and maps (20260901): no board in KiCad's QA corpus or in the installed KiCad's templates has one, so there is no file to read them from, and the generators leave the vias they made, which are read.
 - Done (`b145f0e`; `crates/kicad/src/{pcb,pcb_items,import_items,import}.rs`): a rule area is written as a keepout zone (before, it failed the whole export with
   `kicad.unknown_net`); every zone writes its own clearance, minimum width, priority, pad connection, thermal gap and spoke, hatch, island and fill settings;
   arc tracks are arcs; locks, dimensions, groups, zone names and teardrop flags are written and read back (round-trip tests in `pcb.rs`). **The board outline
@@ -169,12 +169,27 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   malformed in the export, a footprint's own Edge.Cuts become board-level shapes, KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))` is read.
 - Done (`task-fp-graphics`, 10-10; item 25): **a footprint's graphics and texts** (`fp_line`, `fp_circle`, `fp_text` ...: 512 `fp_line`s on `complex_hierarchy`) are the footprint's own and come back out, and so does a pad's
   silkscreen layer: `silk_over_copper` 104 -> 104 (was 2), `silk_overlap` 199 -> 199 (was 5), `silk_edge_clearance` 14 -> 14 (was 2).
-- Measured (`REPORT.md`, `scores.json`, the re-export part on 2026-10-11, kicad-cli 10.99 on `qa/data` of the KiCad sources): the re-export of a real board gives kicad-cli the same
-  violation counts as the original on **7 of 12** boards (58.3%), up from 6 (10-08) and 4; all 12 re-exports load.
-- Missing: a footprint that had no library is written as `eda:<name>`, so a project that turns `lib_footprint_issues` on gets a violation for a library that does not exist (72 on `complex_hierarchy`); barcodes,
-  component classes and tuning profiles are not read (the `api_kitchen_sink`, `component_classes_drc` and `drc_missing_tuning_profile` differences); 189 non-rectangular pad shapes of the QA corpus are
-  approximated as rectangles (item 31); `complex_hierarchy` still differs in `clearance` (112 -> 117), `copper_edge_clearance` (14 -> 15), `solder_mask_bridge` (112 -> 115) and `shorting_items` (0 -> 2), not analysed.
-  `scores.json` was last measured before the outline and footprint work (10-08) except for the re-export part.
+- Done (P23, `task-reexport`, 2026-10-19; `PARITY-pcb.md` section 37): **the re-export of a real board is judged by kicad-cli as the original is, on 12 of 12 boards** (100%, was 7 of 12; `scores.json`'s floor is raised to it) --
+  the same violations type by type and the same findings one by one (type, severity, items and places to a few micrometres: `REPORT.md` section 2), both for the boards as the corpus ships them and for the same boards as kicad-cli 10.99.0-5334
+  writes them in its newest format (`pcb upgrade --force`). Found by diffing the two reports and the two files (`kicad-cli pcb diff` needs the same uuids, ours are not, so a small structural diff of both files after kicad-cli's own rewrite did the
+  work), fixed one at a time in the reader or the writer: a text of several lines came back as one line full of backslashes (the reader did not take `DSNLEXER`'s escapes, the writer did not write `OUTPUTFORMATTER::Quotes`'): 5 `clearance`,
+  2 `shorting_items`, 3 `solder_mask_bridge`, a `copper_edge_clearance` and an unconnected item on `complex_hierarchy`; a text's glyph width, vertical justification, bold, italic, knockout, line spacing, face and automatic stroke width were not kept
+  (`DrawingsSection::text_extras`; `connection_width_rules`' labels sat half a line off their anchors); pads on one point with one number shared a uuid (8 `clearance`); a footprint with no library link was written as `eda:<name>` (72 + 2
+  `lib_footprint_issues`: `FootprintExtra::unlinked_name`) and one with no courtyard got a made-up one (`courtyards_overlap`: `no_courtyard`); the outline's lines lost their width (`outline_width_um`); a pad's pin type was dropped (free pads);
+  component classes were not in the IR (`BoardRules::component_classes`, `FootprintExtra::component_classes`, with the footprint's sheet) and neither were barcodes (`DrawingsSection::barcodes`); and the harness did not read the project's Board
+  Setup pages as `eda import-kicad` does (the tuning profiles). KiCad 10's format: a bold text's thickness is the width before the bold factor 1.6 (read), and a net only copper names is a net of the board (it failed the export).
+  **34 more boards** (17 of the templates KiCad installs, with its libraries in reach, and 17 more QA boards) were measured the same way to find what the 12 do not show: **29 of them are identical** too, and the work they asked for is in: a pad's paste,
+  mask and edge connector type, pin function and other tokens, a via's type, tenting and padstack (`PadMaskInfo`, `ViaExtra`: the file had a tenting token on 10370 vias of the QA corpus and `api_kitchen_sink`'s untented vias came back tented), a hidden footprint text
+  (a MountingHole's `${REFERENCE}`), a footprint's description, tags, paste margins, uuid and courtyard graphics as the file had them (a circle or four lines are not one polygon to `FOOTPRINT::FootprintNeedsUpdate`: every mounting hole was
+  `lib_footprint_mismatch`), the nets a schematic's net class labels assign (`netclass_assignments`: `time_calculations`' skew rule judged nothing), the board's text boxes, images and tables as text (`DrawingsSection::raw_items`, named by
+  `ImportNotes::unread_items`), a through-hole pad with no drill (the export panicked on 155 of them on one board). Every board of the QA corpus (223 that import) exports a file that imports again and that kicad-cli loads
+  (`corpus_reexport_parses.rs`, slow tier). The five that still differ have a cause each (`REPORT.md` section 2): integer micrometres on two inch boards (`issue5830`, `issue9870`), the order of a net's tracks in the file (`time_calculations`: another
+  segment of the same net is named), and two boards with no project file, whose original kicad-cli judges by its default severities (`issue4257`, `net_tie_drc`).
+- Missing: what no DRC count of these boards shows but a plot or a diff of the files does: a footprint's jumper pad groups and its Datasheet, Description and `ki_*` fields are text and not fields, the link to its symbol (`path`: not written on purpose, the derived
+  schematic has symbols of its own), a pad's teardrop settings, a property's `unlocked`, a shape's line style (dashes, dots: 3 of the corpus's 224 boards), a zone outline's hatch pitch, dimension details, reference images and text boxes (carried as text, drawn by
+  kicad-cli's plots, not by the canvas, no editor: item 24, P16); the coordinates are held in micrometres, so an inch board's tenths of a micrometre are rounded (the findings agree to 5 micrometres, the descriptions differ in the fourth decimal, and a
+  clearance a tenth of a micrometre short turns into a violation: `issue5830`); barcodes and component classes are carried but have no editor, no verb and no drawing (P16, P9). `scores.json` was last measured before the outline and footprint work (10-08)
+  except for the re-export part.
 - Port from: `pcbnew/pcb_io/kicad_sexpr/pcb_io_kicad_sexpr.cpp` and `pcb_io_kicad_sexpr_parser.cpp`.
 
 ### 3. Board Setup and the rules
@@ -940,7 +955,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - Conflicts: P4 (the sheet drop), P3 (the library drop), P6 (`store.tsx` `placeNewItems` hands a placement to the Move tool beside `pasteClipboard`); `ops`, `runner`, `studio` hunks.
 
 ### P9. Board Setup completion and the rule editor (item 3). Size L; the rule editor XL on its own. Rank 9.
-- **Status (2026-10-12): P9a done on `task-board-setup`** except Component Classes (`component_classes_drc`) and Embedded Files; P9b open. Item 3 lists what each page does and what is left.
+- **Status (2026-10-12): P9a done on `task-board-setup`** except Component Classes (`component_classes_drc`) and Embedded Files; P9b open. Item 3 lists what each page does and what is left. (P23, 2026-10-19: the component classes of an imported project are in the IR and written to the derived project, so `component_classes_drc` is judged as the original is; the page that edits them is what is left.)
 - **P9a, L**: the missing pages: Board Editor Layers, Text Variables (project variables and `${VAR}` expansion in texts and fields), Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles (`missing_tuning_profile`),
   Component Classes (`component_classes_drc`), regular-expression net patterns and composite net classes, and drawing tools that start from the Text & Graphics defaults. Files: `crates/model/src/rules.rs`,
   `crates/ops/src/board_setup.rs`, `crates/kicad-engine/src/lib.rs` (project file), `crates/kicad/src/{pcb,import,custom_rules}.rs`, `web/studio/src/components/{BoardSetupDialog.tsx,boardSetup/*}`, `kicad-port/boardSetupRules.ts`.
