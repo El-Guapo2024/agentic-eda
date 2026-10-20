@@ -360,7 +360,7 @@ fn a_circular_array_of_a_footprint_turns_the_copies_when_asked() {
 fn a_group_is_copied_with_copies_of_its_members_and_moves_as_one() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["trk_a", "shp_seg"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: "block".into(), member_ids: ids(&["trk_a", "shp_seg"]), design_block: String::new() });
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&array(&["grp_a"], grid(2, 1, 6_000, 0))).unwrap();
     let dr = drawings(&b);
@@ -379,8 +379,8 @@ fn a_group_inside_a_group_is_copied_whole_and_everything_in_it_moves_as_one() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
     let dr = d.drawings.as_mut().unwrap();
-    dr.groups.push(Group { id: "grp_in".into(), name: "inner".into(), member_ids: ids(&["trk_a", "shp_seg"]) });
-    dr.groups.push(Group { id: "grp_out".into(), name: "outer".into(), member_ids: ids(&["grp_in", "txt_a"]) });
+    dr.groups.push(Group { id: "grp_in".into(), name: "inner".into(), member_ids: ids(&["trk_a", "shp_seg"]), design_block: String::new() });
+    dr.groups.push(Group { id: "grp_out".into(), name: "outer".into(), member_ids: ids(&["grp_in", "txt_a"]), design_block: String::new() });
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&array(&["grp_out"], grid(2, 1, 6_000, 0))).unwrap();
     let dr = drawings(&b);

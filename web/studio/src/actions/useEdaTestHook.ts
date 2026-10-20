@@ -60,7 +60,7 @@ export interface HookState {
   /** The prompt of the picker session running (the delete tool's "Delete: click an item to delete it"), or null. */
   picker: string | null;
   selection: SelectedItem[];
-  /** The group being worked in on the board (`PCB_SELECTION_TOOL::m_enteredGroup`), or null. */
+  /** The group being worked in on the board or the sheet (`PCB_SELECTION_TOOL::m_enteredGroup`, `SCH_SELECTION_TOOL::m_enteredGroup`), or null. */
   entered: string | null;
   counts: Counts;
   /** The display units of the editor (`mm`, `mil`, `in`) and the nets highlighted on the board (the first, then the rest of a multi-net highlight). */
@@ -76,7 +76,7 @@ export interface HookState {
   open: string[];
   /** The sheets the schematic is in, root first (`state.currentSheetPath`: the ids `GET /api/schematic?sheet=a/b` takes); empty at the root and on the other tabs. */
   sheetPath: string[];
-  /** The view of the canvas on screen (the schematic's or the board's): a point `(x, y)` of the sheet is at `(view.x + x * view.scale, view.y + y * view.scale)` pixels from the canvas's top-left corner; null on the other tabs. */
+  /** The view of the canvas on screen (the schematic's, the board's, the Footprint Editor's or the Symbol Editor's): a point `(x, y)` of the sheet is at `(view.x + x * view.scale, view.y + y * view.scale)` pixels from the canvas's top-left corner (in the editors' own space: um, +y down); null on the other tabs. */
   view: { x: number; y: number; scale: number } | null;
   /** The Appearance panel's settings that differ from a new project (kicad-port/edaTestHook.ts `AppearanceSummary`). */
   appearance: AppearanceSummary;
@@ -236,7 +236,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         tool,
         picker: picker.session()?.prompt ?? null,
         selection: selectionWithKinds(selection, kindIndex(lists)),
-        entered: studio.tab === "pcb" ? studio.enteredGroupId : null,
+        entered: studio.tab === "pcb" ? studio.enteredGroupId : studio.tab === "schematic" ? studio.schEnteredGroupId : null,
         counts: countsOf(studio.board, studio.schematic),
         units: studio.units,
         highlight: highlightedNets(studio.netHighlight, studio.bcx.netHighlightMore),
@@ -246,7 +246,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         dialogs: dialogTitles(),
         open: openNames(L),
         sheetPath: studio.tab === "schematic" ? [...studio.currentSheetPath] : [],
-        view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : null,
+        view: studio.tab === "schematic" ? { ...studio.schematicView } : studio.tab === "pcb" ? { ...studio.view } : studio.tab === "footprint" ? { ...L.fp.view } : studio.tab === "symbol" ? { ...L.sym.view } : null,
         appearance: appearanceSummary(studio),
         viewer3d: studio.tab === "3d" ? viewer3dProbe.snapshot() : null,
       };

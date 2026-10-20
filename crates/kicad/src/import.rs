@@ -155,7 +155,6 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // file can be turned into ids once the items have them.
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
-    let mut nets = build_nets(&net_names, &pin_nets);
     let (tracks, vias, via_tenting, via_extras) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
@@ -166,14 +165,10 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
     notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
-    // KiCad 10's files carry no table of the nets, every item names its own (`(net "GND")`): a net that only a track, a via or a zone is on is a net of the board too, and
-    // the writer refuses copper on a net the netlist does not have.
-    {
-        let used: std::collections::BTreeSet<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).filter(|n| !n.is_empty()).collect();
-        let known: std::collections::BTreeSet<String> = nets.iter().map(|n| n.name.clone()).collect();
-        nets.extend(used.into_iter().filter(|n| !known.contains(*n)).map(|n| Net { name: n.to_string(), pins: Vec::new() }));
-        nets.sort_by(|a, b| a.name.cmp(&b.name));
-    }
+    // The board's nets: those the file lists and every net an item names -- a pad, but also a track, a via or a zone (`PCB_IO_KICAD_SEXPR_PARSER::parseNet` makes a net of any
+    // `(net "name")` it meets, and a KiCad 10 file lists none: a net that only copper uses, a pour with no pad on it, is a net of the board all the same).
+    let copper_nets: Vec<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).collect();
+    let nets = build_nets(&net_names, &pin_nets, &copper_nets);
 
     add_layers_in_use(
         &mut board.layer_setup,
@@ -413,13 +408,23 @@ fn import_net_names(root: &[Sexpr]) -> BTreeMap<i64, String> {
 /// `T_net` handling.
 fn net_ref(net: Option<&[Sexpr]>, net_names: &BTreeMap<i64, String>) -> String {
     let Some(n) = net else { return String::new() };
+    net_of(n, net_names)
+}
+
+/// The net a `(net ..)` form names. The reader of s-expressions does not keep whether an argument was quoted, and `PCB_IO_KICAD_SEXPR_PARSER::parseNet` goes by that: a number
+/// is a net code, a string is a name. What tells them apart here is the file: a legacy file lists its nets at the top (`(net 0 "")` at least, always), so a number is a
+/// code; a KiCad 10 file lists none, and its one argument is a name even when it is made of digits -- `(net "0")` is the net a SPICE netlist calls ground.
+fn net_of(n: &[Sexpr], net_names: &BTreeMap<i64, String>) -> String {
+    if net_names.is_empty() && n.len() == 2 {
+        return sexpr::txt(n, 1).unwrap_or("").to_string();
+    }
     match sexpr::num(n, 1) {
         Some(code) => net_names.get(&(code as i64)).cloned().or_else(|| sexpr::txt(n, 2).map(str::to_string)).unwrap_or_default(),
         None => sexpr::txt(n, 1).unwrap_or("").to_string(),
     }
 }
 
-fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)]) -> Vec<Net> {
+fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)], copper_nets: &[&str]) -> Vec<Net> {
     let mut pins_by_name: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     for (pin, net) in pin_nets {
         pins_by_name.entry(net.as_str()).or_default().push(pin.clone());
@@ -428,6 +433,7 @@ fn build_nets(net_names: &BTreeMap<i64, String>, pin_nets: &[(String, String)]) 
     // is a net too.
     let mut names: Vec<&str> = net_names.values().map(String::as_str).collect();
     names.extend(pin_nets.iter().map(|(_, n)| n.as_str()));
+    names.extend(copper_nets.iter().copied());
     names.sort_unstable();
     names.dedup();
     names
@@ -2155,10 +2161,7 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
         let mut zone = Zone { parent_footprint: parent, ..Zone::default() };
         // `(net N)` (code) or, in newer files, `(net "name")`; `(net_name ...)` as a fallback.
         if let Some(n) = sexpr::find(z, "net") {
-            zone.net = match sexpr::num(n, 1) {
-                Some(code) => net_names.get(&(code as i64)).cloned().unwrap_or_default(),
-                None => sexpr::txt(n, 1).unwrap_or("").to_string(),
-            };
+            zone.net = net_of(n, net_names);
         }
         if zone.net.is_empty() {
             if let Some(n) = sexpr::find(z, "net_name") {
@@ -2992,5 +2995,42 @@ mod tests {
         assert_eq!(g.text, "REV v2\nline2");
         assert_eq!((g.size, g.thickness, g.halign, g.valign, g.keep_upright, g.bold), ((1500, 1200), 200, -1, 1, false, true));
         assert_eq!(g.angle_file_mdeg, 90_000);
+    }
+    /// A KiCad 10 file lists no nets at the top and names a net where it is used (`PCB_IO_KICAD_SEXPR_PARSER::parseNet`): the net of a pad, a track, a via or a zone is the
+    /// name, and a name made of digits is a name and not a net code -- a SPICE netlist calls ground "0" -- and a net only copper uses is a net of the board (the board a
+    /// kicad-cli import of an EasyEDA design makes has one: a pour on "0" and no pad on it).
+    #[test]
+    fn a_kicad_10_net_is_its_name_even_when_the_name_is_digits_and_a_net_only_copper_uses_is_a_net() {
+        let text = r#"(kicad_pcb (version 20260901) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (footprint "L:R" (layer "F.Cu") (uuid "f1") (at 10 10)
+                (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS") (uuid "p1"))
+                (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu") (net "12") (uuid "a1"))
+                (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net "GND") (uuid "a2")))
+            (segment (start 9 10) (end 9 14) (width 0.2) (layer "F.Cu") (net "12") (uuid "s1"))
+            (via (at 9 14) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "VIA_ONLY") (uuid "v1"))
+            (zone (net "0") (layer "B.Cu") (uuid "z1") (hatch edge 0.5)
+                (polygon (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))))
+        )"#;
+        let (design, model, _notes) = import_kicad_pcb(text).expect("parses");
+        let names: Vec<&str> = model.nets.iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(names, vec!["0", "12", "GND", "VIA_ONLY"], "every name, the digits too, and the ones no pad uses");
+        let pins = |net: &str| model.nets.iter().find(|n| n.name == net).unwrap().pins.clone();
+        assert_eq!(pins("12"), vec!["R1.1".to_string()], "the pad on net \"12\" is on net 12, not on net code 12 (which is none)");
+        assert_eq!(pins("GND"), vec!["R1.2".to_string()]);
+        let routing = design.routing.expect("copper");
+        assert_eq!(routing.tracks[0].net, "12");
+        assert_eq!(routing.vias[0].net, "VIA_ONLY");
+        assert_eq!(routing.zones[0].net, "0");
+
+        // A legacy file lists its nets, and there a number is a code: `(net 12)` is the twelfth net, `(net 12 "name")` says its name again.
+        let legacy = r#"(kicad_pcb (version 20221018) (generator "pcbnew")
+            (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+            (net 0 "") (net 12 "SIG")
+            (segment (start 9 10) (end 9 14) (width 0.2) (layer "F.Cu") (net 12) (tstamp "s1"))
+        )"#;
+        let (design, model, _) = import_kicad_pcb(legacy).expect("parses");
+        assert_eq!(design.routing.expect("copper").tracks[0].net, "SIG");
+        assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), vec!["SIG"]);
     }
 }

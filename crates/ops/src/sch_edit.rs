@@ -43,7 +43,8 @@ pub enum SchCmd {
     /// Delete one sheet pin (`SCH_EDIT_TOOL::DoDelete` on a pin; what `CleanupSheetPins` and the sync dialog send).
     DeleteSheetPin { id: String },
     /// Rename, reshape or move one sheet pin (`SCH_SHEET_PIN` properties and the sync dialog's "update"); a field left
-    /// out is unchanged. The new position must still be on the border.
+    /// out is unchanged. The new position must still be on the border. `size_um` (0.01 to 1000 mm), `bold` and `italic` are how the pin's text is set
+    /// (`DIALOG_SHEET_PIN_PROPERTIES`: `SCH_SHEET_PIN` is an `EDA_TEXT`).
     EditSheetPin {
         id: String,
         #[serde(default)]
@@ -52,6 +53,12 @@ pub enum SchCmd {
         shape: Option<LabelShape>,
         #[serde(default)]
         at: Option<Point>,
+        #[serde(default)]
+        size_um: Option<Um>,
+        #[serde(default)]
+        bold: Option<bool>,
+        #[serde(default)]
+        italic: Option<bool>,
     },
     /// Change Symbol (`DIALOG_CHANGE_SYMBOLS::processSymbols`, `MODE::CHANGE`): every placed unit of the reference `id`
     /// takes the library symbol `lib_id`; position, orientation, unit and fields stay (fields are the caller's to reset).
@@ -179,6 +186,27 @@ pub enum SchCmd {
     /// are placed by the manual routine (`AUTOPLACE_MANUAL`: beside the symbol, on a side that has no pins, clear of what is drawn around it) and stay
     /// autoplaced, so a later turn of the symbol places them again. Refused when every field is already where it would put them.
     AutoplaceFields { ids: Vec<String> },
+    /// Pin Helpers (`PIN_TRICKS_MENU`, `SCH_SELECTION_TOOL::Main` on `ID_POPUP_SCH_PIN_TRICKS_*`): `what` -- a wire stub, a no-connect, a local, a hierarchical or a global label --
+    /// on every pin (`pin:<reference>:<number>`) and sheet pin (`shpin_..`) of `pins`; anything else in the list is passed over, and a list with no pin in it is refused.
+    /// `grid` is the wire grid a stub is one step of (micrometres; 0 is 50 mil). One undo step.
+    PinHelper {
+        what: crate::sch_pin_helpers::PinHelper,
+        pins: Vec<String>,
+        #[serde(default)]
+        grid: Um,
+    },
+    /// Add a user-defined field to a symbol (`DIALOG_SYMBOL_PROPERTIES::OnAddField`): `id` is the symbol's reference (every placed unit has the field), `name` the
+    /// field's name (not one of the four standard fields and not one the symbol has, whatever the case) and `text` what it shows. It starts hidden, like a field
+    /// KiCad adds (`SetVisible( false )`); show it, place it and move it as any field (`fld:<reference>:<name>`).
+    AddUserField {
+        id: String,
+        name: String,
+        #[serde(default)]
+        text: String,
+    },
+    /// Remove a user-defined field from a symbol (`DIALOG_SYMBOL_PROPERTIES::OnDeleteField`: "The first %d fields are mandatory"): the field and the places it
+    /// had on every placed unit go.
+    RemoveUserField { id: String, name: String },
     /// Text Properties on a free-standing text (`DIALOG_TEXT_PROPERTIES::TransferDataFromWindow`): its text, its size (0.01 to 1000 mm, "don't
     /// allow text to disappear"), its angle (KiCad offers horizontal and vertical: any angle is made upright) and how it is justified about its anchor,
     /// `h` (left, centre, right) and `v` (top, centre, bottom) in the text's own axes.
@@ -220,6 +248,30 @@ pub enum SchCmd {
         #[serde(default)]
         diameter_um: Option<Um>,
     },
+    /// Group Items (Ctrl+G, `SCH_GROUP_TOOL::Group`): a new group over `ids` -- symbols, wires, labels, texts, shapes, sheets, ... and other groups, which nest. The
+    /// items must be on the sheet and groupable (a pin, a field and a sheet pin go along with the item that has them); at least two. Each id leaves the group it was
+    /// in; when they all shared one, the new group takes their place in it. See `sch_groups.rs`.
+    Group { ids: Vec<String> },
+    /// Ungroup (Ctrl+Shift+G, `GROUP_TOOL::Ungroup`): every listed group dissolves and its members are free of it. A listed id that is no group is skipped; refused when none is.
+    Ungroup { ids: Vec<String> },
+    /// Add Items (`GROUP_TOOL::AddToGroup`): `ids` join the group `group_id`, each leaving the group it was in. A group is refused as a member of itself or of a group below it.
+    AddToGroup { group_id: String, ids: Vec<String> },
+    /// Remove Items (`GROUP_TOOL::RemoveFromGroup`): each id leaves the group it is in. A group left with fewer than two members dissolves. Refused when none is in a group.
+    RemoveFromGroup { ids: Vec<String> },
+    /// Group Properties (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): the group `id` is renamed and its members are exactly `member_ids`, each pulled out of the group
+    /// it was in, the previous members not listed released. `design_block` is the dialog's "Library link:" box: `Some("")` clears the link, `Some("Lib:Name")` sets it (refused
+    /// as "Invalid library link" when it is not an id of that shape), `None` leaves it.
+    EditGroup {
+        id: String,
+        name: String,
+        member_ids: Vec<String>,
+        #[serde(default)]
+        design_block: Option<String>,
+    },
+    /// What a successful Save Selection as Design Block / Update Design Block from Selection does to the sheet (`SCH_EDIT_FRAME::SaveSelectionAsDesignBlock`,
+    /// `UpdateDesignBlockFromSelection`): `ids` -- the selection, a group included -- are linked to `block` (`Lib:Name`). A lone group with no link takes it ("Set Group Design
+    /// Block Link"); anything else goes in a new group named after the block and linked to it ("Group Items"; it may hold one item). See `sch_groups.rs`.
+    LinkDesignBlock { ids: Vec<String>, block: String },
 }
 
 impl SchCmd {
@@ -235,10 +287,16 @@ impl SchCmd {
             SchCmd::PlaceLabel { net, .. } => vec![net.as_str()],
             SchCmd::PlaceText { content, .. } => vec![content.as_str()],
             SchCmd::AutoplaceFields { ids } => ids.iter().map(String::as_str).collect(),
+            SchCmd::AddUserField { id, .. } | SchCmd::RemoveUserField { id, .. } => vec![id.as_str()],
+            SchCmd::PinHelper { pins, .. } => pins.iter().map(String::as_str).collect(),
             SchCmd::SetStroke { ids, .. } => ids.iter().map(String::as_str).collect(),
             SchCmd::SwapPins { pins } | SchCmd::SwapPinLabels { pins } => pins.iter().map(String::as_str).collect(),
             SchCmd::SwapUnitLabels { ids } => ids.iter().map(String::as_str).collect(),
             SchCmd::AddSheetPin { sheet, .. } => vec![sheet.as_str()],
+            SchCmd::Group { ids } | SchCmd::Ungroup { ids } | SchCmd::RemoveFromGroup { ids } => ids.iter().map(String::as_str).collect(),
+            SchCmd::AddToGroup { group_id, ids } => std::iter::once(group_id.as_str()).chain(ids.iter().map(String::as_str)).collect(),
+            SchCmd::EditGroup { id, member_ids, .. } => std::iter::once(id.as_str()).chain(member_ids.iter().map(String::as_str)).collect(),
+            SchCmd::LinkDesignBlock { ids, .. } => ids.iter().map(String::as_str).collect(),
         }
     }
 
@@ -264,12 +322,21 @@ impl SchCmd {
             SchCmd::EditLabel { id, .. } => format!("schematic edit-label {id}"),
             SchCmd::EditField { id, .. } => format!("schematic edit-field {id}"),
             SchCmd::AutoplaceFields { ids } => format!("schematic autoplace-fields {}", ids.join(" ")),
+            SchCmd::PinHelper { what, pins, .. } => format!("schematic pin-helper {} {}", serde_json::to_value(what).ok().and_then(|v| v.as_str().map(String::from)).unwrap_or_default(), pins.join(" ")),
+            SchCmd::AddUserField { id, name, .. } => format!("schematic field-add {id} {name:?}"),
+            SchCmd::RemoveUserField { id, name } => format!("schematic field-remove {id} {name:?}"),
             SchCmd::EditText { id, .. } => format!("schematic edit-text {id}"),
             SchCmd::EditSheet { id, .. } => format!("schematic edit-sheet {id}"),
             SchCmd::SetStroke { ids, .. } => format!("schematic stroke {}", ids.join(" ")),
             SchCmd::SwapPins { pins } => format!("schematic swap-pins {}", pins.join(" ")),
             SchCmd::SwapPinLabels { pins } => format!("schematic swap-pin-labels {}", pins.join(" ")),
             SchCmd::SwapUnitLabels { ids } => format!("schematic swap-unit-labels {}", ids.join(" ")),
+            SchCmd::Group { ids } => format!("schematic group {}", ids.join(" ")),
+            SchCmd::Ungroup { ids } => format!("schematic ungroup {}", ids.join(" ")),
+            SchCmd::AddToGroup { group_id, ids } => format!("schematic group-add {group_id} {}", ids.join(" ")),
+            SchCmd::RemoveFromGroup { ids } => format!("schematic group-remove {}", ids.join(" ")),
+            SchCmd::EditGroup { id, name, .. } => format!("schematic group-properties {id} {name:?}"),
+            SchCmd::LinkDesignBlock { ids, block } => format!("schematic link-design-block {block} {}", ids.join(" ")),
         }
     }
 
@@ -282,10 +349,11 @@ impl SchCmd {
             SchCmd::ChangeSymbol { .. } | SchCmd::UpdateLibrarySymbols { .. } | SchCmd::SetBodyStyle { .. } => "schematic-symbol",
             SchCmd::EditLabel { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } => "schematic-text",
             SchCmd::PlaceLabel { .. } => "schematic-label",
-            SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } => "schematic-fields",
+            SchCmd::EditField { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => "schematic-fields",
             SchCmd::EditSheet { .. } => "schematic-sheet",
             SchCmd::SetStroke { .. } => "schematic-stroke",
-            SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } => "schematic-pins",
+            SchCmd::SwapPins { .. } | SchCmd::SwapPinLabels { .. } | SchCmd::SwapUnitLabels { .. } | SchCmd::PinHelper { .. } => "schematic-pins",
+            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => "schematic-group",
         }
     }
 
@@ -293,7 +361,9 @@ impl SchCmd {
     /// of the names of the nets drawn inside it, so those are read from the drawing like any other edit (`Cmd::edits_connectivity`).
     pub fn edits_connectivity(&self) -> bool {
         match self {
-            SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } => false,
+            SchCmd::SetStroke { .. } | SchCmd::EditText { .. } | SchCmd::PlaceText { .. } | SchCmd::AutoplaceFields { .. } | SchCmd::AddUserField { .. } | SchCmd::RemoveUserField { .. } => false,
+            // a group is a set of names; it moves, joins and leaves nothing
+            SchCmd::Group { .. } | SchCmd::Ungroup { .. } | SchCmd::AddToGroup { .. } | SchCmd::RemoveFromGroup { .. } | SchCmd::EditGroup { .. } | SchCmd::LinkDesignBlock { .. } => false,
             // a field's text is a reference, a net or a sheet's name; its place and look are layout
             SchCmd::EditField { text, .. } => text.is_some(),
             _ => true,
@@ -312,7 +382,7 @@ impl<'a> Board<'a> {
             SchCmd::DeleteSheet { id } => delete_sheet(self.schematic_mut()?, id),
             SchCmd::AddSheetPin { sheet, name, shape, at } => add_sheet_pin(self.schematic_mut()?, sheet, name, *shape, *at),
             SchCmd::DeleteSheetPin { id } => delete_sheet_pin(self.schematic_mut()?, id),
-            SchCmd::EditSheetPin { id, name, shape, at } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at),
+            SchCmd::EditSheetPin { id, name, shape, at, size_um, bold, italic } => edit_sheet_pin(self.schematic_mut()?, id, name.as_deref(), *shape, *at, SheetPinLookEdit { size_um: *size_um, bold: *bold, italic: *italic }),
             SchCmd::ChangeSymbol { id, lib_id } => self.change_symbol(id, lib_id),
             SchCmd::UpdateLibrarySymbols { lib_ids } => self.update_library_symbols(lib_ids),
             SchCmd::SetBodyStyle { ids, style } => self.set_body_style(ids, *style),
@@ -340,12 +410,21 @@ impl<'a> Board<'a> {
                 },
             ),
             SchCmd::AutoplaceFields { ids } => self.autoplace_sch_fields(ids),
+            SchCmd::PinHelper { what, pins, grid } => self.pin_helper(*what, pins, *grid),
+            SchCmd::AddUserField { id, name, text } => self.add_user_field(id, name, text),
+            SchCmd::RemoveUserField { id, name } => self.remove_user_field(id, name),
             SchCmd::EditText { id, text, size_um, angle, h, v } => self.edit_sch_text(id, text.as_deref(), *size_um, *angle, *h, *v),
             SchCmd::EditSheet { id, name, file } => self.edit_sch_sheet(id, name.as_deref(), file.as_deref()),
             SchCmd::SetStroke { ids, width_um, style, color, diameter_um } => self.set_sch_stroke(ids, *width_um, *style, *color, *diameter_um),
             SchCmd::SwapPins { pins } => self.swap_pins(pins),
             SchCmd::SwapPinLabels { pins } => self.swap_pin_labels(pins),
             SchCmd::SwapUnitLabels { ids } => self.swap_unit_labels(ids),
+            SchCmd::Group { ids } => self.sch_group_items(ids),
+            SchCmd::Ungroup { ids } => self.sch_ungroup_items(ids),
+            SchCmd::AddToGroup { group_id, ids } => self.sch_add_to_group(group_id, ids),
+            SchCmd::RemoveFromGroup { ids } => self.sch_remove_from_group(ids),
+            SchCmd::EditGroup { id, name, member_ids, design_block } => self.sch_edit_group(id, name, member_ids, design_block.as_deref()),
+            SchCmd::LinkDesignBlock { ids, block } => self.sch_link_design_block(ids, block),
         }
     }
 
@@ -549,11 +628,15 @@ fn edit_graphic(sch: &mut SchematicSection, id: &str, mut graphic: SchGraphic) -
 
 fn delete_sheet(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckResult>> {
     let before = sch.sheets.len();
+    let pins: Vec<String> = sch.sheets.iter().filter(|s| s.id == id).flat_map(|s| s.pins.iter().map(|p| p.id.clone())).collect();
     sch.sheets.retain(|s| s.id != id);
     if sch.sheets.len() == before {
         return Err(vec![CheckResult::fail("ops_unknown_sheet", id, "no sheet with this id")]);
     }
     sch.extras.set_locked(id, false);
+    for pin in pins {
+        sch.extras.sheet_pin_looks.remove(&pin);
+    }
     Ok(())
 }
 
@@ -593,12 +676,25 @@ fn find_sheet_pin<'a>(sch: &'a mut SchematicSection, id: &str) -> Result<(&'a mu
 fn delete_sheet_pin(sch: &mut SchematicSection, id: &str) -> Result<(), Vec<CheckResult>> {
     let (s, i) = find_sheet_pin(sch, id)?;
     s.pins.remove(i);
+    sch.extras.sheet_pin_looks.remove(id);
     Ok(())
 }
 
-fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shape: Option<LabelShape>, at: Option<Point>) -> Result<(), Vec<CheckResult>> {
+/// What Sheet Pin Properties sets of a pin's text (`EDA_TEXT`); a member left out is unchanged.
+#[derive(Debug, Clone, Copy, Default)]
+struct SheetPinLookEdit {
+    size_um: Option<Um>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+}
+
+fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shape: Option<LabelShape>, at: Option<Point>, look: SheetPinLookEdit) -> Result<(), Vec<CheckResult>> {
     if name.is_some_and(|n| n.trim().is_empty()) {
         return Err(vec![CheckResult::fail("ops_bad_sheet_pin", id, "a sheet pin needs a name")]);
+    }
+    // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear" (the limits of a label's)
+    if look.size_um.is_some_and(|size| !(10..=1_000_000).contains(&size)) {
+        return Err(vec![CheckResult::fail("ops_bad_text_size", id, "The text size must be between 0.01 and 1000 mm.")]);
     }
     let (s, i) = find_sheet_pin(sch, id)?;
     if let Some(p) = at {
@@ -617,7 +713,25 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
     if let Some(p) = at {
         pin.at = p;
     }
-    if pin.name == before.name && pin.shape == before.shape && pin.at == before.at {
+    let renamed_or_moved = pin.name != before.name || pin.shape != before.shape || pin.at != before.at;
+    // the look: the default one (50 mil, regular, upright) is no entry
+    let was = sch.extras.sheet_pin_looks.get(id).copied().unwrap_or_default();
+    let mut now = was;
+    if let Some(size) = look.size_um {
+        now.size_um = if size == eda_model::ir::DEFAULT_FIELD_SIZE_UM { 0 } else { size };
+    }
+    if let Some(b) = look.bold {
+        now.bold = b;
+    }
+    if let Some(i) = look.italic {
+        now.italic = i;
+    }
+    if now.is_default() {
+        sch.extras.sheet_pin_looks.remove(id);
+    } else {
+        sch.extras.sheet_pin_looks.insert(id.to_string(), now);
+    }
+    if !renamed_or_moved && now == was {
         return Err(vec![CheckResult::fail("ops_sheet_pin_unchanged", id, "the pin already has these properties")]);
     }
     // The pin keeps its id: it is the same item after its Properties (KiCad keeps the item and its selection), and a pin moved by `sch_move` keeps it too.
@@ -626,8 +740,10 @@ fn edit_sheet_pin(sch: &mut SchematicSection, id: &str, name: Option<&str>, shap
 
 /// Every item id of this sheet that Lock can act on (everything but pins and fields; sheet pins are listed
 /// separately because they are accepted-and-ignored).
-fn lockable_ids(sch: &SchematicSection) -> BTreeSet<&str> {
+pub(crate) fn lockable_ids(sch: &SchematicSection) -> BTreeSet<&str> {
     let mut out: BTreeSet<&str> = BTreeSet::new();
+    // a group is locked as an item is (`SCH_ITEM::SetLocked` on the `SCH_GROUP`): what is below it is locked with it
+    out.extend(sch.extras.groups.iter().map(|g| g.id.as_str()));
     out.extend(sch.symbols.iter().map(|s| s.id.as_str()));
     out.extend(sch.power_symbols.iter().map(|p| p.id.as_str()));
     out.extend(sch.wires.iter().map(|w| w.id.as_str()));
@@ -816,15 +932,15 @@ mod tests {
         assert_eq!(add(&mut b, "nope", "X", p(10_000, 12_000)), "ops_unknown_sheet");
 
         // Renaming and reshaping, then a move along the edge; a no-op is refused.
-        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: vin.id.clone(), name: Some("VBUS".into()), shape: Some(LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None })).unwrap();
         let renamed = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(renamed.shape, LabelShape::Bidirectional);
         assert_eq!(renamed.id, vin.id, "the pin keeps its id, so it is still the selected item after its Properties");
-        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)) })).unwrap();
+        b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: renamed.id.clone(), name: None, shape: None, at: Some(p(10_000, 18_000)), size_um: None, bold: None, italic: None })).unwrap();
         let moved = b.design().schematic.as_ref().unwrap().sheets[0].pins.iter().find(|pin| pin.name == "VBUS").unwrap().clone();
         assert_eq!(moved.at, p(10_000, 18_000));
-        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: Some("VBUS".into()), shape: None, at: None })).unwrap_err()[0].check, "ops_sheet_pin_unchanged");
-        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: None, shape: None, at: Some(p(12_000, 12_000)) })).unwrap_err()[0].check, "ops_sheet_pin_off_border");
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: Some("VBUS".into()), shape: None, at: None, size_um: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_unchanged");
+        assert_eq!(b.apply(&Cmd::sch(SchCmd::EditSheetPin { id: moved.id.clone(), name: None, shape: None, at: Some(p(12_000, 12_000)), size_um: None, bold: None, italic: None })).unwrap_err()[0].check, "ops_sheet_pin_off_border");
 
         b.apply(&Cmd::sch(SchCmd::DeleteSheetPin { id: moved.id.clone() })).unwrap();
         assert_eq!(b.design().schematic.as_ref().unwrap().sheets[0].pins.len(), 1);

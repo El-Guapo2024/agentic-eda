@@ -264,6 +264,36 @@ pub fn resolve_library_footprints_with(model: &mut ConstraintModel, mut find: im
     warnings
 }
 
+/// The Reference, the Value and the user fields of a library footprint as `(property ..)` forms (`PCB_IO_KICAD_SEXPR::format( FOOTPRINT )` for a footprint of the library: its fields
+/// are the root's own, so they are indented one tab less than on a board). The Reference and the Value are written when the footprint has a layout for them or hides one of them
+/// -- a footprint that says nothing about them is left for KiCad to give its defaults, as the file always was; the user fields are always written, each with its layout (a field
+/// with none is hidden at the origin on the fabrication layer, `OnAddField`).
+fn write_library_fields(out: &mut String, fp: &eda_model::ir::LibraryFootprint) {
+    use eda_model::fp_edit::{default_library_reference_layout, default_library_value_layout, new_library_field_layout, LIBRARY_REFERENCE_TEXT};
+    let one = |out: &mut String, name: &str, text: &str, l: &eda_model::fp_edit::FieldLayout| {
+        let uuid = crate::duid(&format!("fpfield:{}:{name}", fp.name));
+        let mut tmp = String::new();
+        crate::fp_fields::write_property(&mut tmp, name, text, l, eda_model::ir::Side::Top, 0, &uuid);
+        for line in tmp.lines() {
+            out.push_str(line.strip_prefix('\t').unwrap_or(line));
+            out.push('\n');
+        }
+    };
+    if let Some(mut l) = fp.reference.clone().or_else(|| (!fp.reference_visible).then(default_library_reference_layout)) {
+        l.visible = fp.reference_visible;
+        one(out, "Reference", l.shown(LIBRARY_REFERENCE_TEXT), &l);
+    }
+    if let Some(mut l) = fp.value.clone().or_else(|| (!fp.value_visible).then(default_library_value_layout)) {
+        l.visible = fp.value_visible;
+        one(out, "Value", l.shown(&fp.name), &l);
+    }
+    for f in &fp.fields {
+        let mut l = f.layout.clone().unwrap_or_else(new_library_field_layout);
+        l.visible = f.visible;
+        one(out, &f.name, &f.value, &l);
+    }
+}
+
 /// Derive a standalone `.kicad_mod` library file from a project footprint-
 /// library entry (GAPS.md #8 step 6) -- the write-side counterpart of
 /// `parse_footprint_file` above, reusing this crate's own format helpers
@@ -302,6 +332,7 @@ pub fn export_kicad_mod(fp: &eda_model::ir::LibraryFootprint) -> String {
     if !fp.keywords.is_empty() {
         writeln!(out, "\t(tags {})", crate::sexpr_str(&fp.keywords)).unwrap();
     }
+    write_library_fields(&mut out, fp);
     if let Some(c) = fp.zone_connection {
         writeln!(out, "\t(zone_connect {})", crate::zone_connection_to_file(c)).unwrap();
     }
@@ -652,6 +683,8 @@ mod tests {
             fields: vec![],
             reference_visible: true,
             value_visible: true,
+            reference: None,
+            value: None,
             courtyard: None,
             model: Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step".into()),
             models3d: vec![],
@@ -673,6 +706,62 @@ mod tests {
         assert_eq!(by_num("3").drill, Some(600));
         assert!(parsed.courtyard.is_some(), "the exported F.CrtYd rect must be picked back up as the courtyard");
         assert_eq!(parsed.model.as_deref(), Some("${KICAD10_3DMODEL_DIR}/Test.3dshapes/RoundTrip.step"));
+    }
+
+    /// The fields grid of Footprint Properties: the Reference and the Value with their places, the user fields with theirs -- written as KiCad 8 writes a footprint's
+    /// properties, and read back as the same fields. A footprint that says nothing about its Reference and Value is written without them, as before.
+    #[test]
+    fn export_kicad_mod_writes_the_fields_with_their_layouts_and_reads_them_back() {
+        use eda_model::fp_edit::{new_library_field_layout, FieldLayout};
+        use eda_model::ir::{FootprintField, Point};
+        let plain = export_kicad_mod(&eda_model::ir::LibraryFootprint::new_empty("Test:Plain"));
+        assert!(!plain.contains("(property"), "a footprint with no fields writes none: {plain}");
+
+        let mut reference = FieldLayout::new(Point { x: 500, y: -2500 }, "F.SilkS");
+        reference.size = (1200, 1000);
+        reference.thickness = 180;
+        reference.text = Some("J**".into());
+        let mut value = FieldLayout::new(Point { x: -300, y: 2200 }, "F.Fab");
+        value.italic = true;
+        value.angle = 90_000;
+        let mut mpn = new_library_field_layout();
+        mpn.at = Point { x: 1500, y: 3000 };
+        mpn.layer = "F.Fab".into();
+        mpn.bold = true;
+        mpn.halign = -1;
+        let fp = eda_model::ir::LibraryFootprint {
+            reference: Some(reference.clone()),
+            value: Some(value.clone()),
+            value_visible: false,
+            fields: vec![
+                FootprintField { name: "MPN".into(), value: "ABC-1".into(), visible: true, layout: Some(FieldLayout { visible: true, ..mpn.clone() }) },
+                FootprintField { name: "Vendor".into(), value: "ACME \"Inc\"".into(), visible: false, layout: None },
+            ],
+            ..eda_model::ir::LibraryFootprint::new_empty("Test:Fields")
+        };
+        let text = export_kicad_mod(&fp);
+        assert!(text.contains("(property \"Reference\" \"J**\" (at 0.5 -2.5 0) (layer \"F.SilkS\")"), "{text}");
+        assert!(text.contains("(property \"Value\" \"Test:Fields\" (at -0.3 2.2 90) (layer \"F.Fab\") (hide yes)"), "{text}");
+        assert!(text.contains("(property \"MPN\" \"ABC-1\" (at 1.5 3 0) (unlocked yes) (layer \"F.Fab\")") || text.contains("(property \"MPN\" \"ABC-1\" (at 1.5 3 0) (layer \"F.Fab\")"), "{text}");
+        assert!(text.contains("(property \"Vendor\" \"ACME \\\"Inc\\\"\" (at 0 0 0)") && text.contains("(hide yes)"), "a field with no layout is hidden at the origin: {text}");
+        assert!(text.contains("(justify left)") && text.contains("bold"), "{text}");
+
+        let back = crate::parse_library_footprint(&text).expect("the editor's reader").footprint;
+        assert_eq!(back.reference.as_ref().map(|l| (l.at, l.size, l.thickness, l.layer.as_str(), l.text.as_deref())), Some((reference.at, reference.size, reference.thickness, "F.SilkS", Some("J**"))));
+        assert!(back.reference_visible && !back.value_visible, "the Value is hidden");
+        let v = back.value.as_ref().expect("the Value's layout");
+        assert_eq!((v.at, v.italic, v.angle, v.text.as_deref(), v.visible), (value.at, true, 90_000, None, false));
+        assert_eq!(back.fields.len(), 2);
+        let m = &back.fields[0];
+        assert_eq!((m.name.as_str(), m.value.as_str(), m.visible), ("MPN", "ABC-1", true));
+        let ml = m.layout.as_ref().expect("a layout");
+        assert_eq!((ml.at, ml.layer.as_str(), ml.bold, ml.halign, ml.visible), (Point { x: 1500, y: 3000 }, "F.Fab", true, -1, true));
+        assert_eq!((back.fields[1].name.as_str(), back.fields[1].value.as_str(), back.fields[1].visible), ("Vendor", "ACME \"Inc\"", false));
+        // and a file read and written again says the same
+        assert_eq!(export_kicad_mod(&back), text, "the fields survive a read and a write");
+        // KiCad's own reader takes it too
+        let engine = parse_footprint_file(&text, "Test:Fields");
+        assert!(engine.is_ok() || engine.unwrap_err().contains("no pad"), "the engine's reader does not trip on the properties");
     }
 
     #[test]

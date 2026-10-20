@@ -1,4 +1,5 @@
-// The clicks of the Import Sheet tool (`SCH_DRAWING_TOOLS::ImportSheet` once a file is chosen, then `DrawSheet` with `drawSheetFromFile`, and `placeSheetContents`):
+// The clicks of the Import Sheet tool (`SCH_DRAWING_TOOLS::ImportSheet` once a file is chosen -- or a design block: `placingDesignBlock` -- then `DrawSheet` with `drawSheetFromFile`
+// / `drawSheetFromDesignBlock`, and `placeSheetContents`):
 //   as a sheet   the first click is the sheet's top-left corner, the second sizes it (`sizeSheet`) and opens SheetDialog with the file (name and file from the file's name);
 //   as contents  one click: the file's items come in on the sheet in view, carried to the click, numbered anew unless "Keep annotations".
 import type { Dispatch } from "react";
@@ -33,7 +34,10 @@ export function importSheetClick(state: Pick<StudioState, "schSheetImport" | "dr
   if (!plan.asSheet) {
     // `placeSheetContents`: the items follow the cursor until the click puts them down; one command, so one undo step. Without repeated copies the tool ends.
     void sendAndSelectNew(api, dispatch, importContentsCmd(plan, at, importNumbering(rememberedAnnotateSettings()))).then((ok) => {
-      if (ok && !plan.repeated) dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: null });
+      if (!ok) return;
+      if (!plan.repeated) dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: null });
+      // the next repeated copy's group ends with the next number (`suffix++`)
+      else dispatch({ type: "SET_SCH_SHEET_IMPORT", plan: { ...plan, suffix: (plan.suffix ?? 1) + 1 } });
     });
     return;
   }

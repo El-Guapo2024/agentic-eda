@@ -9,6 +9,7 @@ import type { CmdShape, LibraryPad, LibrarySymbol, LibrarySymbolGraphic, Library
 import { distToSegment, shapeHitDistance } from "../components/canvas/itemHitTest";
 import { libPointToInternalUm, resolvePin, symbolTransformMatrix } from "../components/schematic/transform";
 import { cmdShapeToShape } from "./itemBoxes";
+import { textBoxDistanceUm } from "./symTextBox";
 
 /** The two editors' tolerance: `Math.max( 80, 6 px )` in um. */
 export function pickTolerance(scale: number): number {
@@ -83,6 +84,8 @@ export function symbolGraphicDistance(g: LibrarySymbolGraphic, x: number, y: num
     const [tx, ty] = um(g.at);
     return Math.hypot(x - tx, y - ty);
   }
+  // `SCH_TEXTBOX::HitTest`: anywhere in the box, not on its border alone
+  if (g.kind === "text_box") return textBoxDistanceUm(g, x, y);
   let pts: [number, number][];
   if (g.kind === "rectangle") {
     const [x0, y0] = um(g.start);

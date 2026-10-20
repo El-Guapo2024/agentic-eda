@@ -23,6 +23,8 @@ export function sheetItemIds(sch: Schematic): Set<string> {
   add(sch.texts);
   add(sch.power_symbols);
   add(sch.symbols);
+  // the groups of the sheet (`SCH_GROUP`)
+  add(sch.groups);
   // the pins of sheets and of symbols (`SCH_SHEET_PIN_T`, `SCH_PIN_T`)
   for (const s of sch.sheets ?? []) add(s.pins);
   for (const p of pinItems(sch)) ids.add(p.id);

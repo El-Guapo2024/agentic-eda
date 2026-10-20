@@ -56,13 +56,18 @@
 //!   fails. This port pushes it along the pusher's normal instead (the
 //!   stitching-via case the old tests cover).
 //! - `SHP_IGNORE`, joint locks (`LockJoint`: nothing here shoves a line of the
-//!   head's own net), arcs and holes are not modelled. `SHP_REVERSED` (a head
+//!   head's own net) and holes are not modelled. `SHP_REVERSED` (a head
 //!   dragged by its first vertex, so its last point is the pusher) is:
-//!   [`shove_dragged_line`].
+//!   [`shove_dragged_line`]. Arcs are (`ARC_T` items: `onCollidingArc` is
+//!   `ShoveObstacleLine` on the arc's line, the arcs of a shoved line it does not
+//!   reach are kept) and so are locked tracks, arcs and vias (a solid for the shove:
+//!   `SH_TRY_WALK`, `pushOrShoveVia`); one difference: KiCad's main loop looks
+//!   for `SEGMENT_T` obstacles only, so its `onCollidingArc` is never reached from
+//!   there, and here arcs are searched with the segments.
 
 use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
 use crate::line::Line;
-use crate::node::{kind_bit, AssembleOpts, NearestHit, Node, QueryOpts};
+use crate::node::{kind_mask, AssembleOpts, NearestHit, Node, QueryOpts};
 use crate::settings::{OptEffort, RoutingSettings};
 use crate::time_limit::TimeLimit;
 use crate::walkaround::{self, WalkPolicy, WalkStatus, Walker};
@@ -178,7 +183,7 @@ fn merge_area(a: Option<Area>, b: Area) -> Option<Area> {
 
 /// `LINE::ChangedArea` (`pns_line.cpp:1260`): the box around the vertices
 /// where two versions of a line differ, inflated by the wider width.
-fn changed_area(a: &Line, b: &Line) -> Option<Area> {
+pub(crate) fn changed_area(a: &Line, b: &Line) -> Option<Area> {
     let (mut a, mut b) = (a.clone(), b.clone());
     a.simplify();
     b.simplify();
@@ -332,6 +337,8 @@ pub(crate) fn item_circle_mtv(other: &Item, pos: Point, r: Um, clearance: Um) ->
     match other {
         Item::Solid(s) => solid_via_mtv(&s.shape, pos, r, clearance),
         Item::Segment(sg) => circle_chain_mtv(pos, r, &[sg.a, sg.b], clearance + sg.width / 2),
+        // `Collide( SHAPE_CIRCLE, SHAPE_ARC, .. )`: the circle pushed off the arc's stroke, here the polyline of it
+        Item::Arc(a) => circle_chain_mtv(pos, r, a.polyline(), clearance + a.width / 2),
         Item::Via(o) => circle_circle_mtv(o.pos, o.diameter / 2, pos, r, clearance),
     }
 }
@@ -566,7 +573,7 @@ impl<'a> Shove<'a> {
     }
 
     fn has_locked_segments(&self, l: &SLine) -> bool {
-        l.line.segment_ids.iter().any(|&id| matches!(self.node.get(id), Some(Item::Segment(s)) if s.locked))
+        l.line.segment_ids.iter().any(|&id| self.node.get(id).is_some_and(|it| it.is_track() && it.is_locked()))
     }
 
     // ------------------------------------------------------------ assembling
@@ -631,10 +638,7 @@ impl<'a> Shove<'a> {
         };
         // The new line descends from the IR track the old one stood on (the first, by name, if it stood on several), so a shove run later
         // in the world this one leaves -- a route that fixed a leg and goes on -- still maps what it moves to the IR.
-        let lineage = old.line.segment_ids.iter().filter_map(|id| match self.node.get(*id) {
-            Some(Item::Segment(s)) => s.source_track.as_ref().map(|(t, _)| t.clone()),
-            _ => None,
-        }).min();
+        let lineage = old.line.segment_ids.iter().filter_map(|id| self.node.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).min();
         self.node.remove_line_segments(&old.line);
         let ids = match lineage {
             Some(track) => self.node.add_line_tagged(&new.line, &track),
@@ -706,7 +710,7 @@ impl<'a> Shove<'a> {
 
     /// `unwindLineStack( const ITEM* )` (what a plain `ITEM*` gets): only tracks count.
     fn unwind_item(&mut self, id: ItemId) {
-        if matches!(self.node.get(id), Some(Item::Segment(_))) {
+        if self.node.get(id).is_some_and(Item::is_track) {
             self.unwind_link(id, false);
         }
     }
@@ -889,7 +893,9 @@ impl<'a> Shove<'a> {
             for &i in &order {
                 match walkaround::walk_around_hull(&path, &hulls[i], clockwise) {
                     Some(p) => {
-                        let mut l = Line::from_points(obstacle.line.net.clone(), obstacle.line.layer, obstacle.line.width, p);
+                        // the arcs of the line stay arcs where the walk left them alone: `Simplify` never drops a vertex an arc starts or ends at (a fillet's first chord is
+                        // collinear with the run before it, and its start is that run's end)
+                        let mut l = Line { arcs: obstacle.line.arcs.clone(), ..Line::from_points(obstacle.line.net.clone(), obstacle.line.layer, obstacle.line.width, p) };
                         l.simplify();
                         path = l.pts;
                     }
@@ -946,7 +952,20 @@ impl<'a> Shove<'a> {
         for attempt in 0..3 {
             // the hulls grow by `cHullFailureExpansionFactor` after each failed attempt
             let extra = attempt * HULL_FAILURE_EXPANSION;
-            let mut hulls: Vec<Vec<Point>> = cur.line.segs().map(|(a, b)| crate::hull::segment_hull(a, b, cur.line.width, clearance + extra + crate::hull::HULL_ROUNDING_GUARD, obstacle_width)).filter(|h| h.len() >= 3).collect();
+            // "Arcs need additional clearance to ensure the hulls are always bigger than the arc" (`SHAPE_ARC::DefaultAccuracyForPCB()`, 5 um); in KiCad the
+            // addition is made to the variable the loop carries, so it piles up segment after segment, and attempt after attempt
+            let arc_runs = cur.line.arc_runs();
+            let arc_pad = crate::arcs::ARC_HIGH_DEF_NM / 1000;
+            let mut hulls: Vec<Vec<Point>> = cur
+                .line
+                .segs()
+                .enumerate()
+                .map(|(i, (a, b))| {
+                    let pad = if arc_runs.iter().any(|r| i >= r.first && i < r.last) { arc_pad } else { 0 };
+                    crate::hull::segment_hull(a, b, cur.line.width, clearance + extra + pad + crate::hull::HULL_ROUNDING_GUARD, obstacle_width)
+                })
+                .filter(|h| h.len() >= 3)
+                .collect();
             if let Some(lv) = &cur.via {
                 let via_clearance = self.get_clearance(&lv.data.net, &obstacle_line.line.net);
                 hulls.push(Item::Via(lv.data.clone()).hull(via_clearance, obstacle_width, obstacle_line.line.layer));
@@ -974,6 +993,34 @@ impl<'a> Shove<'a> {
             shoved.rank = rank - 1;
             shoved.line.simplify();
             self.unwind_line(&obstacle_line);
+            self.replace_line(&obstacle_line, &mut shoved, true);
+            if !self.push_line_stack(shoved, false) {
+                return Status::Incomplete;
+            }
+            return Status::Ok;
+        }
+        Status::Incomplete
+    }
+
+    /// `SHOVE::onCollidingArc`: the line the arc is part of (assembled with its arcs) is shoved away from `cur`, as a segment's is. A shove
+    /// that would make the line more than twice as long -- `extensionWalkThreshold` 1.0 -- is not taken: the current line walks instead. (KiCad
+    /// returns `SH_OK` whether or not the shove worked; a shove that did not is incomplete here, as it is for a segment.)
+    fn on_colliding_arc(&mut self, cur: &SLine, arc: ItemId) -> Status {
+        let Some(obstacle_line) = self.assemble(arc) else { return Status::Incomplete };
+        let mut shoved = obstacle_line.clone();
+        if self.has_locked_segments(&obstacle_line) {
+            return Status::TryWalk;
+        }
+        let shove_ok = self.shove_obstacle_line(cur, &obstacle_line, &mut shoved);
+        const EXTENSION_WALK_THRESHOLD: f64 = 1.0;
+        let (obs_len, shoved_len) = (obstacle_line.line.length(), shoved.line.length());
+        let extension = if obs_len != 0.0 { shoved_len / obs_len - 1.0 } else { 0.0 };
+        if extension > EXTENSION_WALK_THRESHOLD {
+            return Status::TryWalk;
+        }
+        if shove_ok {
+            let rank = self.line_rank(cur);
+            shoved.rank = rank - 1;
             self.replace_line(&obstacle_line, &mut shoved, true);
             if !self.push_line_stack(shoved, false) {
                 return Status::Incomplete;
@@ -1020,6 +1067,7 @@ impl<'a> Shove<'a> {
         let walked: Option<(SLine, i32)> = {
             let cluster = self.node.assemble_cluster(obstacle, cur.line.layer, 10.0, None, &|id| skip.contains(&id));
             let mut walker = Walker::new(&self.node, self.rules);
+            walker.arcs = cur.line.arcs.clone();
             walker.restrict_to_cluster(&cluster);
             walker.skip_items(skip.iter().copied());
             walker.exclude_items(cur.links());
@@ -1145,7 +1193,7 @@ impl<'a> Shove<'a> {
 
         let mut dragged: Vec<(SLine, SLine)> = Vec::new();
         for id in fan_ids {
-            if !matches!(self.node.get(id), Some(Item::Segment(_))) {
+            if !self.node.get(id).is_some_and(Item::is_track) {
                 continue;
             }
             let Some(mut first) = self.assemble(id) else { continue };
@@ -1226,7 +1274,7 @@ impl<'a> Shove<'a> {
         let fan_ids: Vec<ItemId> = self.node.joint_at(obstacle_via.pos, &obstacle_via.net).map(|j| j.links.clone()).unwrap_or_default();
         let mut n = 0;
         for id in fan_ids {
-            if !matches!(self.node.get(id), Some(Item::Segment(s)) if s.layer == cur.line.layer) {
+            if !self.node.get(id).is_some_and(|it| it.is_track() && it.layers().overlaps_layer(cur.line.layer)) {
                 continue;
             }
             let Some(mut head) = self.assemble(id) else { continue };
@@ -1288,8 +1336,9 @@ impl<'a> Shove<'a> {
                 let mut maxw = 0;
                 if let Some(j) = self.node.joint_at(v.pos, &v.net) {
                     for &lid in &j.links {
-                        if let Some(Item::Segment(s)) = self.node.get(lid) {
-                            maxw = maxw.max(s.width);
+                        // "consider segments ... or arcs"
+                        if let Some(it) = self.node.get(lid).filter(|it| it.is_track()) {
+                            maxw = maxw.max(it.width());
                         }
                     }
                 }
@@ -1300,19 +1349,20 @@ impl<'a> Shove<'a> {
                 }
                 false
             }
-            Some(Item::Segment(s)) => {
-                for end in [s.a, s.b] {
-                    let Some(via_id) = self.joint_via(end, &s.net) else { continue };
+            Some(item @ (Item::Segment(_) | Item::Arc(_))) => {
+                let (ends, width, net) = (item.track_ends().unwrap_or_default(), item.width(), item.net().clone());
+                for end in [ends.0, ends.1] {
+                    let Some(via_id) = self.joint_via(end, &net) else { continue };
                     let Some(Item::Via(v)) = self.node.get(via_id) else { continue };
-                    if v.diameter > s.width {
+                    if v.diameter > width {
                         continue;
                     }
                     let mut vtest = v.clone();
-                    vtest.diameter = s.width;
+                    vtest.diameter = width;
                     if self.via_vs_line(&vtest, cur) {
                         obs.id = via_id;
                         obs.kind = Kind::Via;
-                        obs.max_fanout_width = s.width + 1;
+                        obs.max_fanout_width = width + 1;
                         return true;
                     }
                 }
@@ -1324,9 +1374,9 @@ impl<'a> Shove<'a> {
 
     // ------------------------------------------------------------ the loop
 
-    fn nearest_for(&self, cur: &SLine, kind: Kind) -> Option<NearestHit> {
+    fn nearest_for(&self, cur: &SLine, mask: u8) -> Option<NearestHit> {
         let exclude = cur.links();
-        let opts = QueryOpts { kind_mask: kind_bit(kind), filter: None, use_epsilon: true };
+        let opts = QueryOpts { kind_mask: mask, filter: None, use_epsilon: true };
         self.node.nearest_obstacle(&cur.line, cur.via.as_ref().map(|v| &v.data), self.rules, &exclude, opts)
     }
 
@@ -1334,8 +1384,10 @@ impl<'a> Shove<'a> {
     fn shove_iteration(&mut self) -> Status {
         let Some(mut current) = self.line_stack.last().cloned() else { return Status::Ok };
         let mut nearest = None;
-        for kind in [Kind::Solid, Kind::Via, Kind::Segment] {
-            nearest = self.nearest_for(&current, kind);
+        // `{ SOLID_T, VIA_T, SEGMENT_T, HOLE_T }` in KiCad, whose kind mask for the tracks leaves `ARC_T` out, so that an arc is never found
+        // and `onCollidingArc` is never reached: an arc is an obstacle here, found with the segments.
+        for mask in [kind_mask::SOLID, kind_mask::VIA, kind_mask::TRACK] {
+            nearest = self.nearest_for(&current, mask);
             if nearest.is_some() {
                 break;
             }
@@ -1393,6 +1445,17 @@ impl<'a> Shove<'a> {
                     }
                     st
                 }
+                Kind::Arc => {
+                    // `//TODO(snh): Handle Arc shove separate from track`: KiCad shoves the current line away from the arc's line, one rank down
+                    let Some(rev_line) = self.assemble(ni) else { return Status::Incomplete };
+                    self.pop_line_stack();
+                    let next = self.line_rank(&rev_line) - 1;
+                    let st = self.on_colliding_line(&rev_line, &current, next);
+                    if !self.push_line_stack(rev_line, false) {
+                        return Status::Incomplete;
+                    }
+                    st
+                }
                 Kind::Solid => Status::Null,
             }
         } else {
@@ -1400,6 +1463,13 @@ impl<'a> Shove<'a> {
             match info.kind {
                 Kind::Segment => {
                     let mut st = self.on_colliding_segment(&current, ni);
+                    if st == Status::TryWalk {
+                        st = self.on_colliding_solid(&current, ni, &info);
+                    }
+                    st
+                }
+                Kind::Arc => {
+                    let mut st = self.on_colliding_arc(&current, ni);
                     if st == Status::TryWalk {
                         st = self.on_colliding_solid(&current, ni, &info);
                     }
@@ -1599,7 +1669,9 @@ impl<'a> Shove<'a> {
             covered.extend(root_line.line.segment_ids.iter().copied());
             let mut it = tracks.iter();
             if let Some(first) = it.next() {
-                by_track.entry(first.clone()).or_default().push(Line::from_points(new_line.line.net.clone(), new_line.line.layer, new_line.line.width, new_line.line.pts.clone()));
+                // the arcs of the shoved line the shove did not cut into stay arcs (`Line::arcs` finds them again by their points): the commit writes them as arc tracks
+                let shoved = Line { arcs: new_line.line.arcs.clone(), ..Line::from_points(new_line.line.net.clone(), new_line.line.layer, new_line.line.width, new_line.line.pts.clone()) };
+                by_track.entry(first.clone()).or_default().push(shoved);
                 template.entry(first.clone()).or_insert_with(|| Line::new(new_line.line.net.clone(), new_line.line.layer, new_line.line.width));
             }
             for other in it {
@@ -1636,13 +1708,7 @@ impl<'a> Shove<'a> {
 
     /// The IR tracks a set of the original world's segments belong to.
     fn source_tracks(&self, ids: &[ItemId]) -> Vec<String> {
-        let mut out: Vec<String> = ids
-            .iter()
-            .filter_map(|id| match self.world.get(*id) {
-                Some(Item::Segment(s)) => s.source_track.as_ref().map(|(t, _)| t.clone()),
-                _ => None,
-            })
-            .collect();
+        let mut out: Vec<String> = ids.iter().filter_map(|id| self.world.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).collect();
         out.sort_unstable();
         out.dedup();
         out
@@ -1663,7 +1729,7 @@ impl<'a> Shove<'a> {
 /// not push, or the limit) -- the caller should fall back to walkaround,
 /// same as upstream's `rhShoveOnly`.
 pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings) -> Option<ShoveOutcome> {
-    shove_head(node, &[], raw, net, layer, width, rules, settings, false)
+    shove_head(node, &[], raw, &[], net, layer, width, rules, settings, false)
 }
 
 /// `DRAGGER::dragShove` for a track: [`shove_line`] with a dragged head. `dragged` are the segments of the line being dragged, which
@@ -1671,16 +1737,17 @@ pub fn shove_line(node: &Node, raw: &[Point], net: &Net, layer: i32, width: Um, 
 /// of its own. `reversed` is `SHP_REVERSED`, set when the head is dragged by its first vertex: the *last* point of the head is then
 /// the pusher `checkShoveDirection` tests the shoved lines against.
 #[allow(clippy::too_many_arguments)] // `shove_line`'s query context plus the dragged line and the one flag
-pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
-    shove_head(node, dragged, raw, net, layer, width, rules, settings, reversed)
+pub fn shove_dragged_line(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+    shove_head(node, dragged, raw, arcs, net, layer, width, rules, settings, reversed)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
+fn shove_head(node: &Node, dragged: &[ItemId], raw: &[Point], arcs: &[crate::arcs::ArcPts], net: &Net, layer: i32, width: Um, rules: &BoardRules, settings: &RoutingSettings, reversed: bool) -> Option<ShoveOutcome> {
     if raw.len() < 2 {
         return Some(ShoveOutcome { head: raw.to_vec(), heads: vec![raw.to_vec()], displaced_lines: Vec::new(), displaced_vias: Vec::new(), world: node.clone() });
     }
-    let head = Line::from_points(net.clone(), layer, width, raw.to_vec());
+    let mut head = Line::from_points(net.clone(), layer, width, raw.to_vec());
+    head.arcs = arcs.to_vec();
     let mut shove = Shove::new(node, rules, settings);
     shove.reversed_head = reversed;
     for &id in dragged {

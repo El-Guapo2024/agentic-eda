@@ -150,6 +150,7 @@ fn folder_table(kind: TableKind, root: &Path) -> LoadedTable {
                     let wanted = match kind {
                         TableKind::Symbol => ext == "kicad_sym" && path.is_file(),
                         TableKind::Footprint => ext == "pretty" && path.is_dir(),
+                        TableKind::DesignBlock => ext == eda_kicad::design_block::LIBRARY_EXT && path.is_dir(),
                     };
                     wanted.then(|| lt::Row { nickname: name, uri: path.display().to_string(), lib_type: lt::KICAD_TYPE.into(), ..Default::default() })
                 })
@@ -195,6 +196,7 @@ pub(crate) fn load_with(env: Env, dir: &Path, kind: TableKind) -> Loaded {
         let root = match kind {
             TableKind::Symbol => env.stock.symbols.clone(),
             TableKind::Footprint => env.stock.footprints.clone(),
+            TableKind::DesignBlock => env.stock.design_blocks.clone(),
         };
         if root.is_dir() {
             global = Some(folder_table(kind, &root));
@@ -335,7 +337,7 @@ fn parse_body(body: &[u8]) -> Result<Value, Value> {
 }
 
 fn kind_in(req: &Value) -> Result<TableKind, Value> {
-    req.get("kind").and_then(Value::as_str).and_then(TableKind::parse).ok_or_else(|| bad("kind is symbol or footprint"))
+    req.get("kind").and_then(Value::as_str).and_then(TableKind::parse).ok_or_else(|| bad("kind is symbol, footprint or design_block"))
 }
 
 fn text(v: &Value, key: &str) -> String {
@@ -372,6 +374,9 @@ fn guess_type(kind: TableKind, path: &Path) -> Option<&'static str> {
     match kind {
         TableKind::Symbol => (ext == "kicad_sym").then_some(lt::KICAD_TYPE),
         TableKind::Footprint => (ext == "pretty").then_some(lt::KICAD_TYPE),
+        // `DESIGN_BLOCK_IO_MGR::GuessPluginTypeFromLibPath` asks `CanReadLibrary`, which looks for a file with the extension *inside* the folder and so never finds
+        // one in a real library (a library holds only block folders); the folder's own extension is what tells it here.
+        TableKind::DesignBlock => (ext == eda_kicad::design_block::LIBRARY_EXT && path.is_dir()).then_some(lt::KICAD_TYPE),
     }
 }
 
@@ -431,7 +436,7 @@ fn kind_json(l: &Loaded) -> Value {
     json!({
         "kind": kind.name(),
         "file": kind.file_name(),
-        "supports_visibility": kind == TableKind::Symbol,
+        "supports_visibility": kind.supports_visibility(),
         "types": lt::known_types(kind),
         "new_library_name": unique_name(&taken),
         "global": { "scope": "global", "path": global_path.display().to_string(), "exists": l.global.is_some(), "writable": false, "origin": origin,
@@ -576,7 +581,7 @@ pub(crate) fn set_table_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     if let Some((row, column, message)) = unwritable(&rows) {
         return json!({ "error": message, "row": row, "column": column });
     }
-    let kept = match lt::verify_rows(&rows, kind == TableKind::Symbol) {
+    let kept = match lt::verify_rows(&rows, kind.supports_visibility()) {
         Ok(k) => k,
         Err(p) => return json!({ "error": p.message, "row": p.row, "column": p.column }),
     };
@@ -699,6 +704,7 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     let ext = match kind {
         TableKind::Symbol => "kicad_sym",
         TableKind::Footprint => "pretty",
+        TableKind::DesignBlock => eda_kicad::design_block::LIBRARY_EXT,
     };
     let mut path = vars.expand_uri(typed.trim(), dir);
     if create && path.extension().and_then(|e| e.to_str()) != Some(ext) {
@@ -708,9 +714,10 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
     let stem = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let has_ext = path.extension().and_then(|e| e.to_str()) == Some(ext);
     let lib_type = if nested { lt::NESTED_TYPE } else { lt::KICAD_TYPE };
-    // a footprint library that is not a `.pretty` folder has its whole name for a nickname (`PCB_BASE_EDIT_FRAME::AddLibrary`)
+    // a footprint library that is not a `.pretty` folder has its whole name for a nickname (`PCB_BASE_EDIT_FRAME::AddLibrary`), and a design block library that is not
+    // a `.kicad_blocks` folder likewise (`PANEL_DESIGN_BLOCK_LIB_TABLE::browseLibrariesHandler`, `DESIGN_BLOCK_PANE::AddDesignBlockLibrary`)
     let nickname = match text(&req, "nickname").trim() {
-        "" => lt::fix_nickname(if kind == TableKind::Footprint && !has_ext && !nested { &file_name } else { &stem }),
+        "" => lt::fix_nickname(if kind != TableKind::Symbol && !has_ext && !nested { &file_name } else { &stem }),
         given => given.to_string(),
     };
     if nickname.is_empty() {
@@ -751,6 +758,7 @@ pub(crate) fn add_library_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
         let made = match kind {
             TableKind::Symbol => std::fs::write(&path, eda_kicad::export_kicad_sym_library(&[])),
             TableKind::Footprint => std::fs::create_dir(&path),
+            TableKind::DesignBlock => eda_kicad::design_block::create_library(&path).map_err(std::io::Error::other),
         };
         if let Err(e) = made {
             return bad(format!("Could not create the library '{}'.\nMake sure you have write permissions and try again. ({e})", path.display()));
@@ -837,7 +845,8 @@ pub(crate) fn set_variables_with(env: &Env, dir: &Path, body: &[u8]) -> Value {
 
 /// `GET /api/fs/list?path=&what=`: the stand-in for the native file dialog the browse buttons open in KiCad -- a page cannot see the machine's folders, the
 /// server can. The folders of `path` (variables allowed, relative to the board's folder; a file stands for its folder), and the files `what` asks for:
-/// `symbol` (.kicad_sym), `table` (a library table), nothing but folders for `footprint` (a `.pretty` folder is flagged: it is the library) and `folder`.
+/// `symbol` (.kicad_sym), `table` (a library table), nothing but folders for `footprint` and `design_block` (a `.pretty` or `.kicad_blocks` folder is flagged: it is the
+/// library) and `folder`.
 pub(crate) fn browse(dir: &Path, typed: &str, what: &str) -> Value {
     browse_with(&Env::discover(), dir, typed, what)
 }
@@ -869,12 +878,12 @@ pub(crate) fn browse_with(env: &Env, dir: &Path, typed: &str, what: &str) -> Val
         } else {
             match what {
                 "symbol" => name.ends_with(".kicad_sym"),
-                "table" => name == "sym-lib-table" || name == "fp-lib-table",
+                "table" => lt::TableKind::ALL.iter().any(|k| name == k.file_name()),
                 _ => false,
             }
         };
         if wanted {
-            entries.push((name.clone(), is_dir, is_dir && name.ends_with(".pretty")));
+            entries.push((name.clone(), is_dir, is_dir && (name.ends_with(".pretty") || name.ends_with(".kicad_blocks"))));
         }
     }
     entries.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
@@ -1260,6 +1269,56 @@ pub(crate) mod tests {
         assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "symbol", "create": true, "path": "  " })))["error"].is_string());
         assert!(!m.root.join("config").join("10.99").join("fp-lib-table").to_string_lossy().contains("Chips"));
         assert!(!std::fs::read_to_string(m.config.join("fp-lib-table")).unwrap().contains("Chips"), "the global table is never written");
+        let _ = std::fs::remove_dir_all(&m.root);
+    }
+
+    #[test]
+    fn the_design_block_table_is_the_third_kind_a_new_library_is_a_kicad_blocks_folder_and_the_global_table_is_kicads() {
+        let m = machine("dblib", true);
+        let env = m.env();
+        // the view lists three tables; the design block one has no Show column and chains KiCad's (here a table KiCad's install does not ship)
+        let v = view_with(&env, &m.board);
+        let t = &v["tables"]["design_block"];
+        assert_eq!((t["file"].clone(), t["supports_visibility"].clone(), t["types"].clone()), (json!("design-block-lib-table"), json!(false), json!(["KiCad", "Table"])));
+        assert!(v["tables"]["symbol"]["supports_visibility"].as_bool().unwrap() && !v["tables"]["footprint"]["supports_visibility"].as_bool().unwrap());
+        assert_eq!(t["global"]["rows"][0]["status"], "error", "the stock table of this machine's KiCad is not there: {}", t["global"]["rows"][0]);
+        assert!(t["global"]["rows"][0]["error"].as_str().unwrap().contains("does not exist"));
+        // New Library: the folder, the row, the path written with ${KIPRJMOD}, the nickname from the folder's name
+        let r = add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "create": true, "path": "blocks/Power", "descr": "Regulators" })));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!((r["added"]["nickname"].clone(), r["added"]["uri"].clone()), (json!("Power"), json!("${KIPRJMOD}/blocks/Power.kicad_blocks")));
+        assert!(m.board.join("blocks").join("Power.kicad_blocks").is_dir());
+        assert!(std::fs::read_to_string(m.board.join("design-block-lib-table")).unwrap().starts_with("(design_block_lib_table\n\t(version 7)\n\t(lib (name \"Power\") (type \"KiCad\") (uri \"${KIPRJMOD}/blocks/Power.kicad_blocks\")"));
+        let libs = load_with(env.clone(), &m.board, TableKind::DesignBlock).libs();
+        let power = libs.iter().find(|l| l.nickname == "Power").expect("the new library is in the board's set at once");
+        assert_eq!((power.path.clone(), power.is_listed(), power.description.as_str()), (m.board.join("blocks").join("Power.kicad_blocks"), true, "Regulators"));
+        assert_eq!(eda_kicad::design_block::enumerate(&power.path).unwrap(), Vec::<String>::new());
+        // the same name again, and a library that is a folder already, are refused; so is a symbol file offered as a block library
+        let again = add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "create": true, "path": "blocks/Power" })));
+        assert!(again["error"].as_str().unwrap().contains("already exists"), "{again}");
+        std::fs::write(m.root.join("shared.kicad_sym"), "(kicad_symbol_lib)").unwrap();
+        assert!(add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "path": m.root.join("shared.kicad_sym").display().to_string() })))["error"].as_str().unwrap().contains("does not exist"));
+        // Add Existing: a folder, nicknamed by its name less the extension; a folder with another name keeps the whole name
+        let shared = m.root.join("shared");
+        std::fs::create_dir_all(shared.join("Team.kicad_blocks")).unwrap();
+        std::fs::create_dir_all(shared.join("loose")).unwrap();
+        assert_eq!(add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "path": shared.join("Team.kicad_blocks").display().to_string() })))["added"]["nickname"], "Team");
+        assert_eq!(add_library_with(&env, &m.board, &req(json!({ "kind": "design_block", "path": shared.join("loose").display().to_string() })))["added"]["nickname"], "loose");
+        // the dialog's OK: rows with no Show flag, a blank format taking the one the path says
+        let rows = vec![json!({ "nickname": "Power", "uri": "${KIPRJMOD}/blocks/Power.kicad_blocks", "type": "", "options": "", "descr": "", "enabled": true, "visible": false })];
+        let r = set_table_with(&env, &m.board, &req(json!({ "kind": "design_block", "rows": rows })));
+        assert_eq!(r["ok"], true, "{r}");
+        let saved = Table::parse(&std::fs::read_to_string(m.board.join("design-block-lib-table")).unwrap()).unwrap();
+        assert_eq!((saved.kind, saved.rows.len(), saved.rows[0].lib_type.as_str(), saved.rows[0].hidden), (TableKind::DesignBlock, 1, "KiCad", false), "a design block table keeps no hidden flag");
+        // the browse listing offers a library folder as the library, and the table files of all three kinds
+        std::fs::write(shared.join("design-block-lib-table"), "(design_block_lib_table (version 7))").unwrap();
+        let listing = browse_with(&env, &m.board, &shared.display().to_string(), "design_block");
+        let team = listing["entries"].as_array().unwrap().iter().find(|e| e["name"] == "Team.kicad_blocks").unwrap().clone();
+        assert_eq!((team["dir"].clone(), team["library"].clone()), (json!(true), json!(true)));
+        let tables = browse_with(&env, &m.board, &shared.display().to_string(), "table");
+        assert!(tables["entries"].as_array().unwrap().iter().any(|e| e["name"] == "design-block-lib-table"));
+        // the global tables are never written
+        assert!(std::fs::read_to_string(m.config.join("design-block-lib-table")).unwrap().contains("KiCad Default Libraries"));
         let _ = std::fs::remove_dir_all(&m.root);
     }
 

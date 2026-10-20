@@ -254,7 +254,7 @@ pub(crate) fn parse_footprint_edit(fp: &[Sexpr], id: &str, value: Option<&str>, 
 
 /// The first file version whose properties are fields with a place and a layer of their own (`PCB_FIELD`s: KiCad 8). Before it a `(property "name" "value")`
 /// held a value and nothing more.
-const FIELD_PROPERTIES_VERSION: i64 = 20230620;
+pub(crate) const FIELD_PROPERTIES_VERSION: i64 = 20230620;
 
 /// [`parse_footprint_edit`] for a file of `file_version`. A property of an older file is not drawn (`parseFOOTPRINT_unchecked`: "Hide the field by default if
 /// it is a legacy field that did not have text effects applied"), and the ones that held the sheet, the symbol's keywords and its description are not

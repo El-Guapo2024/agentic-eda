@@ -84,6 +84,8 @@ impl FootprintCopy {
 pub(crate) struct GroupCopy {
     pub(crate) name: String,
     pub(crate) members: Vec<Member>,
+    /// The design block the original group was linked to (`m_designBlockLibId` is copied with the group), empty for none.
+    pub(crate) design_block: String,
 }
 
 /// Everything a Duplicate or a Paste adds.
@@ -117,7 +119,7 @@ impl Copies {
                 Member::Group(i) => Member::Group(i + this.groups.len()),
             }
         };
-        let groups: Vec<GroupCopy> = other.groups.iter().map(|g| GroupCopy { name: g.name.clone(), members: g.members.iter().map(|m| shift(*m, self)).collect() }).collect();
+        let groups: Vec<GroupCopy> = other.groups.iter().map(|g| GroupCopy { name: g.name.clone(), members: g.members.iter().map(|m| shift(*m, self)).collect(), design_block: g.design_block.clone() }).collect();
         let join: Vec<(Member, String)> = other.join.iter().map(|(m, g)| (shift(*m, self), g.clone())).collect();
         self.tracks.extend(other.tracks);
         self.vias.extend(other.vias);
@@ -231,7 +233,7 @@ impl Board<'_> {
     /// with copies of its members. See the module doc.
     pub(crate) fn duplicate_all(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
         let copies = self.collect_copies(ids)?;
-        self.insert_copies_all(copies)
+        self.insert_copies_all(copies).map(|_| ())
     }
 
     /// The copies `Cmd::Duplicate` would make of `ids`, not yet on the board: exact copies at the same place, a group with copies of
@@ -296,7 +298,7 @@ impl Board<'_> {
             members.extend(copy);
         }
         visiting.pop();
-        copies.groups.push(GroupCopy { name: g.name.clone(), members });
+        copies.groups.push(GroupCopy { name: g.name.clone(), members, design_block: g.design_block.clone() });
         Some(Member::Group(copies.groups.len() - 1))
     }
 
@@ -491,7 +493,7 @@ impl Board<'_> {
                     ClipRef::Group(i) => (i < copies.groups.len()).then_some(Member::Group(i)),
                 })
                 .collect();
-            copies.groups.push(GroupCopy { name: g.name.clone(), members });
+            copies.groups.push(GroupCopy { name: g.name.clone(), members, design_block: g.design_block.clone() });
         }
         copies
     }
@@ -500,7 +502,10 @@ impl Board<'_> {
 
     /// Inserts `copies`: ids for everything (`next_item_id`, so they read like every other id), footprints placed or made
     /// into parts of their own, groups made over the new ids.
-    pub(crate) fn insert_copies_all(&mut self, mut copies: Copies) -> Result<(), Vec<CheckResult>> {
+    ///
+    /// Returns what the copies put at the top of the board: the ids of the new items that are in no new group, and of the new groups that are in no other (what the
+    /// selection holds after a paste, and what Place Design Block groups).
+    pub(crate) fn insert_copies_all(&mut self, mut copies: Copies) -> Result<Vec<String>, Vec<CheckResult>> {
         let mut taken = self.all_item_ids();
         let mut mint = |prefix: &str, seed: String| -> String {
             let id = next_item_id(prefix, &seed, &taken);
@@ -613,15 +618,18 @@ impl Board<'_> {
         let mut new_groups: Vec<Group> = Vec::new();
         for g in &copies.groups {
             let member_ids: Vec<String> = g.members.iter().filter_map(|m| id_of(m, &group_ids)).collect();
-            // A group of fewer than two members is not a group (`prune_groups`).
-            if member_ids.len() < 2 {
+            // A group of fewer than two members is not a group (`prune_groups`), unless it is linked to a design block.
+            if member_ids.len() < 2 && !(member_ids.len() == 1 && !g.design_block.is_empty()) {
                 group_ids.push(None);
                 continue;
             }
             let id = next_item_id("grp", &format!("copy|{}|{}", g.name, member_ids.join(",")), &taken_with(&taken, &new_groups));
             group_ids.push(Some(id.clone()));
-            new_groups.push(Group { id, name: g.name.clone(), member_ids });
+            new_groups.push(Group { id, name: g.name.clone(), member_ids, design_block: g.design_block.clone() });
         }
+        // the top of what is coming in: no new group holds it
+        let held: BTreeSet<&str> = new_groups.iter().flat_map(|g| g.member_ids.iter().map(String::as_str)).collect();
+        let top: Vec<String> = track_ids.iter().chain(&via_ids).chain(&zone_ids).chain(&shape_ids).chain(&text_ids).chain(&dim_ids).chain(&fp_refs).chain(new_groups.iter().map(|g| &g.id)).filter(|id| !held.contains(id.as_str())).cloned().collect();
         let joins: Vec<(String, String)> = copies.join.iter().filter_map(|(m, g)| id_of(m, &group_ids).map(|id| (id, g.clone()))).collect();
 
         // Land them.
@@ -669,7 +677,7 @@ impl Board<'_> {
             fps.extend(new_parts.into_iter().map(|(_, f)| f));
             self.sort_footprints();
         }
-        Ok(())
+        Ok(top)
     }
 }
 

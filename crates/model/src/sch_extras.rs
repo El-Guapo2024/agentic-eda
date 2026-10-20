@@ -15,12 +15,14 @@
 //! - `label_spins`: which way a label's text runs from its anchor (`SCH_LABEL_BASE::GetSpinStyle`), once Rotate or Mirror has set it.
 //! - `strokes`, `junction_looks`: the width, line style and colour of a wire, bus, bus entry or graphic line and the diameter and colour
 //!   of an explicit junction (`STROKE_PARAMS`, `SCH_JUNCTION::m_diameter`), once Wire/Bus Properties has set them.
+//! - `sheet_pin_looks`: the size, bold and italic of a hierarchical sheet pin's text (`SCH_SHEET_PIN` is an `EDA_TEXT`), once Sheet Pin Properties has set them.
 //! - `label_looks`: the size, bold and italic of a label's text (`EDA_TEXT`) and whether it rotates itself when placed (`AutoRotateOnPlacement`), once Label Properties has set them.
 //! - `fields_autoplaced`: which symbols, power symbols and sheets have their fields where Autoplace Fields put them
 //!   (`SCH_ITEM::GetFieldsAutoplaced`), so a turn, a text edit or a Properties OK places them again.
 //! - `body_styles`: the body style a placed symbol is drawn in (`SCH_SYMBOL::GetBodyStyle`; 1 is the normal one, 2 KiCad's alternate "De Morgan" one).
 //! - `pin_swaps`: which pin of a placed symbol sits where another one of its pins is in the library symbol (`SwapPinGeometry`, Swap Pins).
 //! - `text_justify`: how a free-standing text is justified about its anchor (`EDA_TEXT::GetHorizJustify` / `GetVertJustify`), once Text Properties, a turn or a mirror set it.
+//! - `groups`: the sheet's groups (`SCH_GROUP`, `(group ...)` in the file), the same [`crate::ir::Group`] the board's drawings keep; see `crate::groups`.
 
 use crate::ir::{Millideg, Point, TextJustify, TextVAlign, Um};
 use serde::{Deserialize, Serialize};
@@ -76,6 +78,10 @@ pub struct SchExtras {
     /// default text (50 mil, regular, upright), which is what the writer and the painter use for every label that was never edited.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub label_looks: BTreeMap<String, LabelLook>,
+    /// How a hierarchical sheet pin's text is set (`SCH_SHEET_PIN` is an `EDA_TEXT`: `DIALOG_SHEET_PIN_PROPERTIES`' size, bold and italic), by sheet pin id, once Sheet Pin
+    /// Properties set it, as `label_looks` does for labels (`auto_rotate` is for labels and stays off). A pin with no entry has the default text, 50 mil, regular, upright.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sheet_pin_looks: BTreeMap<String, LabelLook>,
     /// The items whose fields are where Autoplace Fields put them (`SCH_ITEM::m_fieldsAutoplaced`, `(fields_autoplaced yes)` in the file), by
     /// `field_key` (a symbol's reference, `#<unit>` after it for a unit but the first), a power symbol's or a sheet's id. Moving, turning, re-justifying or
     /// editing the place of one of the fields takes the item out of it (`SetFieldsAutoplaced( AUTOPLACE_NONE )`); turning the symbol, editing a field's
@@ -99,6 +105,12 @@ pub struct SchExtras {
     /// stored. The writer says it in `(effects ... (justify ...))` and the importer reads it back, so KiCad draws the text where the studio does.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub text_justify: BTreeMap<String, SchTextJustify>,
+    /// The groups of this sheet (`SCH_GROUP`, written as `(group "name" (uuid ..) (members ..))`): a named set of the ids of items of the sheet -- a symbol's reference (every
+    /// placed unit), the id of a wire, label, text, power symbol, no-connect, bus entry, junction, graphic line, drawn shape or sheet -- and of other groups, so groups nest.
+    /// A group has no geometry of its own: its box is its members'. A pin, a field and a sheet pin go along with the item that has them and are never members. The tree is
+    /// read and edited by `crate::groups` (`GroupTree`, `GroupHost`), the same code as the board's groups.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<crate::ir::Group>,
 }
 
 /// How a free-standing text sits on its anchor: the horizontal and the vertical justification of its `EDA_TEXT`, in the text's own axes (a text turned
@@ -386,10 +398,12 @@ impl SchExtras {
             && self.strokes.is_empty()
             && self.junction_looks.is_empty()
             && self.label_looks.is_empty()
+            && self.sheet_pin_looks.is_empty()
             && self.fields_autoplaced.is_empty()
             && self.body_styles.is_empty()
             && self.pin_swaps.is_empty()
             && self.text_justify.is_empty()
+            && self.groups.is_empty()
     }
 
     /// True when `id` is locked.

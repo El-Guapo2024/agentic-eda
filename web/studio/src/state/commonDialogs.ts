@@ -9,6 +9,8 @@ export interface GroupDialog {
   id: string;
   name: string;
   members: string[];
+  /** The "Library link:" box (`m_libraryLink`): the design block (`Lib:Name`) the group is linked to, empty for none. */
+  designBlock: string;
   /** `m_propertiesDialog->Show( false )` while the user picks a new member on the canvas (`PickNewMember`). */
   hidden: boolean;
 }
@@ -49,8 +51,8 @@ export function useCommonDialogs(): CommonDialogsState {
   return useSyncExternalStore(subscribe, getCommonDialogs, getCommonDialogs);
 }
 
-export function openGroupDialog(group: Omit<GroupDialog, "hidden">): void {
-  set({ ...current, group: { ...group, hidden: false } });
+export function openGroupDialog(group: Omit<GroupDialog, "hidden" | "designBlock"> & { designBlock?: string }): void {
+  set({ ...current, group: { ...group, designBlock: group.designBlock ?? "", hidden: false } });
 }
 
 export function updateGroupDialog(patch: Partial<GroupDialog>): void {

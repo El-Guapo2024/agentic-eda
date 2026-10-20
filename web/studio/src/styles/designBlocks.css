@@ -1,0 +1,93 @@
+/* The Design Blocks pane (components/designBlocks/DesignBlocksPane.tsx): the search box, the library tree, the preview and the details of the selected block, the check boxes. */
+.dock.db-dock {
+  width: 300px;
+}
+.db-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 0;
+  font-size: 12px;
+  color: var(--chrome-text);
+}
+.db-search {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+}
+.db-search input {
+  flex: 1;
+  min-width: 0;
+}
+.db-tree {
+  flex: 1 1 40%;
+  min-height: 120px;
+}
+.db-empty {
+  padding: 10px 12px;
+  color: var(--chrome-text-dim);
+}
+.db-details {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--chrome-border);
+  display: flex;
+  flex-direction: column;
+  max-height: 46%;
+  overflow: auto;
+}
+.db-preview {
+  height: 150px;
+  background: #f4f3ee;
+  border-bottom: 1px solid var(--chrome-border);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  overflow: hidden;
+}
+.db-preview-svg {
+  flex: 1;
+  min-width: 0;
+}
+.db-preview-svg svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.db-preview-status {
+  margin: auto;
+  padding: 8px;
+  color: #666;
+  text-align: center;
+}
+.db-info {
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  user-select: text;
+}
+.db-info table {
+  border-collapse: collapse;
+  margin-top: 2px;
+}
+.db-info td {
+  padding: 1px 8px 1px 0;
+  vertical-align: top;
+}
+.db-info .dim,
+.db-pane .dim {
+  color: var(--chrome-text-dim);
+}
+.db-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--chrome-border);
+}
+.db-problems {
+  padding: 4px 8px;
+  border-top: 1px solid var(--chrome-border);
+  color: var(--chrome-text-dim);
+  font-size: 11px;
+}

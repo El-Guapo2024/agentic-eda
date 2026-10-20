@@ -1268,7 +1268,7 @@ fn edit_group_renames_it_and_replaces_its_members() {
     let first = b.design().drawings.as_ref().unwrap().groups.iter().find(|g| g.member_ids.contains(&"U1".to_string())).unwrap().id.clone();
 
     // rename it and take C2 from the other group: that group is left with C3 alone, so it dissolves
-    b.apply(&Cmd::EditGroup { id: first.clone(), name: "power".into(), member_ids: vec!["U1".into(), "C1".into(), "C2".into(), "C2".into()] }).unwrap();
+    b.apply(&Cmd::EditGroup { id: first.clone(), name: "power".into(), member_ids: vec!["U1".into(), "C1".into(), "C2".into(), "C2".into()], design_block: None }).unwrap();
     let groups = b.design().drawings.as_ref().unwrap().groups.clone();
     assert_eq!(groups.len(), 1, "{groups:?}");
     assert_eq!(groups[0].name, "power");
@@ -1278,7 +1278,7 @@ fn edit_group_renames_it_and_replaces_its_members() {
     assert_eq!(members, vec!["C1".to_string(), "C2".to_string(), "U1".to_string()], "a member listed twice is one member");
 
     // a group left with fewer than two members dissolves, as everywhere else
-    b.apply(&Cmd::EditGroup { id: first, name: "x".into(), member_ids: vec!["U1".into()] }).unwrap();
+    b.apply(&Cmd::EditGroup { id: first, name: "x".into(), member_ids: vec!["U1".into()], design_block: None }).unwrap();
     assert!(b.design().drawings.as_ref().unwrap().groups.is_empty());
 }
 
@@ -1289,15 +1289,15 @@ fn edit_group_refuses_an_unknown_group_and_a_group_that_would_hold_itself() {
     b.apply(&Cmd::Group { ids: vec!["U1".into(), "C1".into()] }).unwrap();
     b.apply(&Cmd::Group { ids: vec!["C2".into(), "C3".into()] }).unwrap();
     let groups = b.design().drawings.as_ref().unwrap().groups.clone();
-    let e = b.apply(&Cmd::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: vec!["U1".into(), "C1".into()] }).unwrap_err();
+    let e = b.apply(&Cmd::EditGroup { id: "grp_nope".into(), name: String::new(), member_ids: vec!["U1".into(), "C1".into()], design_block: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_unknown_group");
-    let e = b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "U1".into()] }).unwrap_err();
+    let e = b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "U1".into()], design_block: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_group", "a group cannot hold itself");
     assert_eq!(b.design().drawings.as_ref().unwrap().groups.len(), 2, "a refused edit changes nothing");
 
     // another group is a fine member; its holder can then not be put into it
-    b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[1].id.clone(), "U1".into(), "C1".into()] }).unwrap();
-    let e = b.apply(&Cmd::EditGroup { id: groups[1].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "C2".into()] }).unwrap_err();
+    b.apply(&Cmd::EditGroup { id: groups[0].id.clone(), name: String::new(), member_ids: vec![groups[1].id.clone(), "U1".into(), "C1".into()], design_block: None }).unwrap();
+    let e = b.apply(&Cmd::EditGroup { id: groups[1].id.clone(), name: String::new(), member_ids: vec![groups[0].id.clone(), "C2".into()], design_block: None }).unwrap_err();
     assert_eq!(e[0].check, "ops_bad_group", "a group cannot hold a group that holds it");
 }
 
@@ -1475,6 +1475,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
             Track { id: "ignored2".into(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 2500, y: -2000 }, Point { x: 2200, y: 0 }, Point { x: 2500, y: 2000 }], arc_mid_offset: None },
         ],
         vias: vec![],
+        lock_tracks: vec![],
     })
     .unwrap();
 
@@ -1490,7 +1491,7 @@ fn commit_route_replaces_a_shoved_track_and_adds_the_new_route_in_one_step() {
 fn commit_route_tolerates_an_already_gone_id() {
     let m = net_model();
     let mut b = board(&m);
-    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![] }).unwrap();
+    b.apply(&Cmd::CommitRoute { remove_track_ids: vec!["trk_doesnotexist".into()], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "GND".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![] }).unwrap();
     assert_eq!(b.design().routing.as_ref().unwrap().tracks.len(), 1);
 }
 
@@ -1498,7 +1499,7 @@ fn commit_route_tolerates_an_already_gone_id() {
 fn commit_route_rejects_an_unknown_net() {
     let m = net_model();
     let mut b = board(&m);
-    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![] }).unwrap_err();
+    let e = b.apply(&Cmd::CommitRoute { remove_track_ids: vec![], remove_via_ids: vec![], tracks: vec![Track { id: String::new(), net: "NOPE".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![Point { x: 0, y: 0 }, Point { x: 1000, y: 0 }], arc_mid_offset: None }], vias: vec![], lock_tracks: vec![] }).unwrap_err();
     assert!(!e.is_empty());
     assert!(b.design().routing.is_none(), "a refused commit must not partially apply");
 }
@@ -1867,6 +1868,9 @@ fn edit_footprint_properties_replaces_the_whole_panel() {
         model: Some("${KICAD10_3DMODEL_DIR}/x.step".into()),
         models3d: None,
         zone_connection: Some(PadConnection::Full),
+        reference: None,
+        value: None,
+        fields: None,
     })
     .unwrap();
     let fp = b.design().footprint_library.as_ref().unwrap().by_name("Test:FP").unwrap();
@@ -1895,6 +1899,9 @@ fn edit_footprint_properties_takes_the_whole_list_of_3d_models() {
         model: model.map(str::to_string),
         models3d,
         zone_connection: None,
+        reference: None,
+        value: None,
+        fields: None,
     };
     let two = vec![Model3d { offset: [1.0, 2.0, 0.5], rotate: [90.0, 0.0, 0.0], opacity: 0.5, ..Model3d::identity("a.step") }, Model3d { show: false, scale: [2.0, 2.0, 2.0], ..Model3d::identity("b.step") }];
     b.apply(&props(None, Some(two.clone()))).unwrap();
@@ -2454,6 +2461,7 @@ fn sym_pin(number: &str, x: f64, y: f64) -> LibrarySymbolPin {
         hidden: false,
         name_size_mm: Some(1.27),
         number_size_mm: Some(1.27),
+        alternates: Vec::new(),
     }
 }
 
@@ -2587,7 +2595,7 @@ fn add_edit_and_delete_symbol_graphic_round_trip() {
     assert_ne!(id, "ignored");
 
     b.apply(&Cmd::MoveSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), dx_mm: 1.0, dy_mm: 1.0 }).unwrap();
-    b.apply(&Cmd::EditSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), stroke_mm: 0.5, fill: LibraryFill::Background }).unwrap();
+    b.apply(&Cmd::EditSymbolGraphic { lib_id: "Test:Sym".into(), id: id.clone(), stroke_mm: 0.5, fill: LibraryFill::Background, unit: None, body_style: None }).unwrap();
     let sym = b.design().symbol_library.as_ref().unwrap().by_lib_id("Test:Sym").unwrap();
     match &sym.graphics[0] {
         LibrarySymbolGraphic::Rectangle { start, stroke_mm, fill, .. } => {

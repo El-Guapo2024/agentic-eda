@@ -50,6 +50,6 @@ impl Board<'_> {
         if copies.is_empty() {
             return Err(vec![CheckResult::fail("ops_bad_clipboard", "paste", "nothing on the clipboard fits this board: its copper is on layers the board does not have")]);
         }
-        self.insert_copies_all(copies)
+        self.insert_copies_all(copies).map(|_| ())
     }
 }

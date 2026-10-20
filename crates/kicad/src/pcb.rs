@@ -2179,11 +2179,15 @@ mod tests {
             override_custom_rules: false,
             target_length: TargetRange { min: 99_900, opt: 100_000, max: 100_100 },
             target_skew: TargetRange { min: -100, opt: 0, max: 100 },
+            is_time_domain: false,
+            target_delay: TargetRange::delay_unconstrained(),
+            target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
             base_line: vec![Point { x: 10_000, y: 5_000 }, Point { x: 11_000, y: 6_000 }],
             base_line_coupled: vec![],
             last_track_width: 200,
             last_diff_pair_gap: 0,
             last_tuning_length: 1_414_213,
+            last_tuning_delay: 0,
             last_netname: "VIN".into(),
             last_status: "too_short".into(),
             member_ids: vec![ids[1].clone()],
@@ -2386,7 +2390,7 @@ mod tests {
         let rt = design.routing.as_ref().unwrap();
         let (via_id, long_track) = (rt.vias[0].id.clone(), rt.tracks.iter().find(|t| t.net == "GND").unwrap().id.clone());
         let mut dr = eda_model::ir::DrawingsSection::default();
-        dr.groups = vec![Group { id: String::new(), name: "decoupling".into(), member_ids: vec!["U1".into(), "C1".into(), via_id.clone(), long_track.clone(), "no such item".into()] }];
+        dr.groups = vec![Group { id: String::new(), name: "decoupling".into(), member_ids: vec!["U1".into(), "C1".into(), via_id.clone(), long_track.clone(), "no such item".into()], design_block: String::new() }];
         dr.assign_missing_ids();
         design.drawings = Some(dr);
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
@@ -2419,7 +2423,7 @@ mod tests {
         design.assign_missing_ids();
         let rt = design.routing.as_ref().unwrap();
         let (track_id, via_a, via_b) = (rt.tracks[0].id.clone(), rt.vias[0].id.clone(), rt.vias[1].id.clone());
-        let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|m| m.to_string()).collect() };
+        let group = |id: &str, name: &str, members: &[&str]| Group { id: id.into(), name: name.into(), member_ids: members.iter().map(|m| m.to_string()).collect(), design_block: String::new() };
         design.drawings = Some(DrawingsSection {
             groups: vec![
                 group("grp_a_outer", "outer", &["U1", "grp_b_middle"]),

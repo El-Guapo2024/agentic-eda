@@ -19,7 +19,7 @@ pub mod fp_edit;
 pub mod fp_exchange;
 pub mod fp_models;
 pub mod gensym;
-mod groups;
+pub mod groups;
 pub mod tuning;
 pub mod ir;
 pub mod kicad_font;
@@ -39,6 +39,7 @@ pub mod setup_pages;
 pub mod sheet_file;
 pub mod sheet_list;
 pub mod symbol;
+pub mod sym_fields;
 pub mod text_vars;
 pub mod via_extra;
 
@@ -777,6 +778,14 @@ impl BoardRules {
         }
         let name = constituents.join(",");
         EffectiveClass { name, constituents }
+    }
+
+    /// `NETCLASS::GetTuningProfile` of the effective net class of `net` (`NET_SETTINGS::makeEffectiveNetclass`: the first of the classes in precedence order,
+    /// the Default class last, that names one), and the profile of that name if the project has it (`TUNING_PROFILE_PARAMETERS_USER_DEFINED::GetTuningProfile`).
+    pub fn tuning_profile_of(&self, net: &str) -> Option<&setup_pages::TuningProfile> {
+        let effective = self.effective_class(net);
+        let name = effective.constituents.iter().find_map(|c| self.tuning_profiles.class_profiles.get(c).filter(|n| !n.is_empty()))?;
+        self.tuning_profiles.profiles.iter().find(|p| &p.name == name)
     }
 
     /// The value of a class setting for `net`: the first class in precedence order that sets it, else the Default class's.

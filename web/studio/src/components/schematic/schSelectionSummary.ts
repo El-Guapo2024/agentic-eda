@@ -5,6 +5,7 @@ import { canAddCorner, canRemoveCorner, type P, type PolyKind } from "../../kica
 import { isFieldId } from "../../kicad-port/schFieldEdit";
 import { isPinItemId } from "../../kicad-port/schPins";
 import { singleMultiBodyStyleSymbol } from "../../kicad-port/schBodyStyle";
+import { groupMenuFlags, groupsOf } from "../../kicad-port/schGroups";
 
 /** The outline of a drawn polygon or rule area, or null for anything else. */
 export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pts: P[] } | null {
@@ -15,9 +16,13 @@ export function polygonOutline(sch: Schematic, id: string): { kind: PolyKind; pt
 }
 
 /** `cursor` (um) and `tolUm` (the point editor's handle size at this zoom) decide the corner entries, which depend on where the pointer is. */
-export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolUm = 0, opts: { allowPinSwaps?: boolean } = {}): SchSelectionSummary {
+export function summarizeSelection(sch: Schematic, ids: readonly string[], cursor?: readonly [number, number], tolUm = 0, opts: { allowPinSwaps?: boolean; inGroup?: boolean } = {}): SchSelectionSummary {
   const s = emptySummary();
   s.allowPinSwaps = opts.allowPinSwaps ?? false;
+  s.inGroup = opts.inGroup ?? false;
+  s.group = groupMenuFlags(sch, ids);
+  s.linkedGroup = ids.length === 1 && groupsOf(sch).some((g) => g.id === ids[0] && (g.design_block ?? "") !== "");
+  const groupIds = new Set(groupsOf(sch).map((g) => g.id));
   const locked = new Set(sch.locked ?? []);
   const wire = new Map(sch.wires.map((w) => [w.id, w]));
   const label = new Map(sch.labels.map((l) => [l.id, l]));
@@ -39,7 +44,8 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
     const w = wire.get(id);
     const l = label.get(id);
     const g = graphic.get(id);
-    if (symbolUnits.has(id)) {
+    if (groupIds.has(id)) s.groups++;
+    else if (symbolUnits.has(id)) {
       s.symbols++;
       symbolIds.push(id);
     } else if (power.has(id)) s.powerSymbols++;

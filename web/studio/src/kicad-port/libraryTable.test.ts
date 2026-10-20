@@ -19,6 +19,8 @@ import {
   setCell,
   setFlag,
   statusTitle,
+  tableFileName,
+  tableTitle,
   uniqueLibraryName,
   unwritable,
   validateVariables,
@@ -185,4 +187,35 @@ test("Configure Paths skips an empty row and refuses a name without a path, a pa
   assert.equal(problem([{ name: "A", value: 'a"b' }])?.column, "value");
   assert.ok(sameVariables([{ name: "A", value: "1" }], [{ name: "A", value: "1" }]));
   assert.ok(!sameVariables([{ name: "A", value: "1" }], [{ name: "A", value: "2" }]));
+});
+
+test("a design block library is a .kicad_blocks folder: its nickname, its table and its format (PANEL_DESIGN_BLOCK_LIB_TABLE, AddDesignBlockLibrary)", () => {
+  assert.equal(libraryExtension("design_block"), ".kicad_blocks");
+  assert.equal(tableFileName("design_block"), "design-block-lib-table");
+  assert.equal(tableTitle("design_block"), "Manage Design Block Libraries");
+  assert.equal(nicknameForFile("design_block", "Power.kicad_blocks"), "Power");
+  assert.equal(nicknameForFile("design_block", "plain_folder"), "plain_folder", "not a .kicad_blocks folder: the whole name");
+  assert.equal(nicknameForFile("design_block", "team.v2"), "team.v2");
+  assert.equal(nicknameForFile("design_block", "a:b.kicad_blocks"), "a_b");
+  assert.equal(guessType("design_block", "${KIPRJMOD}/blocks/Power.kicad_blocks"), "KiCad");
+  assert.equal(guessType("design_block", "/x/design-block-lib-table"), "Table");
+  assert.equal(guessType("design_block", "/x/Mine.pretty"), null);
+  assert.equal(guessType("footprint", "/x/Mine.kicad_blocks"), null);
+  const set = setCell({ ...row("A", "/old") }, "uri", "/new/Team.kicad_blocks", "design_block");
+  assert.equal(set.type, "KiCad", "a new path gives the row the format it says");
+});
+
+test("the design block table has no Show column: OK keeps no hidden flag, and the path substitutions name KICAD<n>_DESIGN_BLOCK_DIR", () => {
+  const rows = [row("Power", "${KIPRJMOD}/blocks/Power.kicad_blocks", { visible: false })];
+  const verified = verifyRows(rows, false);
+  assert.ok("rows" in verified);
+  if ("rows" in verified) assert.equal(verified.rows[0]?.visible, true);
+  const values = [
+    { name: "KICAD10_DESIGN_BLOCK_DIR", value: "/K/blocks" },
+    { name: "KIPRJMOD", value: "/work/board" },
+  ];
+  assert.deepEqual(pathSubstitutions(["${KIPRJMOD}/blocks/Power.kicad_blocks"], "design_block", 10, values), [
+    { name: "KICAD10_DESIGN_BLOCK_DIR", value: "/K/blocks" },
+    { name: "KIPRJMOD", value: "/work/board" },
+  ]);
 });

@@ -247,6 +247,19 @@ pub fn default_text_box_margin(size_um: Um, stroke_width_um: Um) -> Um {
 pub(crate) struct ReadGraphic {
     pub graphic: SchGraphic,
     pub locked: bool,
+    /// The item's `(uuid ..)`, which a `(group ..)` names it by.
+    pub uuid: Option<String>,
+}
+
+impl ReadGraphic {
+    fn new(graphic: SchGraphic, locked: bool) -> ReadGraphic {
+        ReadGraphic { graphic, locked, uuid: None }
+    }
+}
+
+/// The `(uuid ..)` of an item.
+pub(crate) fn uuid_of(item: &[Sexpr]) -> Option<String> {
+    sexpr::find(item, "uuid").and_then(|u| sexpr::txt(u, 1)).map(String::from)
 }
 
 pub(crate) fn parse_bool(node: &[Sexpr], tag: &str) -> Option<bool> {
@@ -320,31 +333,32 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
     let mut out: Vec<ReadGraphic> = Vec::new();
     let locked_of = |n: &[Sexpr]| parse_bool(n, "locked").unwrap_or(false);
     for item in root.iter().filter_map(|n| n.as_list()) {
+        let first = out.len();
         match sexpr::tag(item) {
             Some("rectangle") => {
                 let (Some(start), Some(end)) = (sexpr::find(item, "start").and_then(pt), sexpr::find(item, "end").and_then(pt)) else { continue };
                 let corner_radius_um = sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1)).map(crate::import::mm_to_um).unwrap_or(0);
-                out.push(ReadGraphic { graphic: styled(SchGraphicKind::Rectangle { start, end, corner_radius_um }, item), locked: locked_of(item) });
+                out.push(ReadGraphic::new(styled(SchGraphicKind::Rectangle { start, end, corner_radius_um }, item), locked_of(item)));
             }
             Some("circle") => {
                 let (Some(center), Some(r)) = (sexpr::find(item, "center").and_then(pt), sexpr::find(item, "radius").and_then(|r| sexpr::num(r, 1))) else { continue };
-                out.push(ReadGraphic { graphic: styled(SchGraphicKind::Circle { center, radius_um: crate::import::mm_to_um(r) }, item), locked: locked_of(item) });
+                out.push(ReadGraphic::new(styled(SchGraphicKind::Circle { center, radius_um: crate::import::mm_to_um(r) }, item), locked_of(item)));
             }
             Some("arc") => {
                 let (Some(start), Some(mid), Some(end)) = (sexpr::find(item, "start").and_then(pt), sexpr::find(item, "mid").and_then(pt), sexpr::find(item, "end").and_then(pt)) else { continue };
-                out.push(ReadGraphic { graphic: styled(SchGraphicKind::Arc { start, mid, end }, item), locked: locked_of(item) });
+                out.push(ReadGraphic::new(styled(SchGraphicKind::Arc { start, mid, end }, item), locked_of(item)));
             }
             Some("bezier") => {
                 let p = pts_of(item);
                 if let [start, c1, c2, end] = p[..] {
-                    out.push(ReadGraphic { graphic: styled(SchGraphicKind::Bezier { start, c1, c2, end }, item), locked: locked_of(item) });
+                    out.push(ReadGraphic::new(styled(SchGraphicKind::Bezier { start, c1, c2, end }, item), locked_of(item)));
                 }
             }
             Some("polyline") => {
                 let (fill, _) = parse_fill(item);
                 let pts = pts_of(item);
                 if fill != SchFill::None && pts.len() >= 3 {
-                    out.push(ReadGraphic { graphic: styled(SchGraphicKind::Polygon { pts }, item), locked: locked_of(item) });
+                    out.push(ReadGraphic::new(styled(SchGraphicKind::Polygon { pts }, item), locked_of(item)));
                 }
             }
             Some("rule_area") => {
@@ -360,7 +374,7 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                     exclude_from_board: !parse_bool(item, "on_board").unwrap_or(true),
                     dnp: parse_bool(item, "dnp").unwrap_or(false),
                 };
-                out.push(ReadGraphic { graphic: styled(shape, poly), locked: locked_of(item) });
+                out.push(ReadGraphic::new(styled(shape, poly), locked_of(item)));
             }
             Some("text_box") => {
                 let Some(text) = sexpr::txt(item, 1).map(String::from) else { continue };
@@ -391,7 +405,7 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                     SchVAlign::Center
                 };
                 let shape = SchGraphicKind::TextBox { start, end, text, angle, size_um, bold: flag("bold"), italic: flag("italic"), h_align, v_align, margin_um };
-                out.push(ReadGraphic { graphic: styled(shape, item), locked: locked_of(item) });
+                out.push(ReadGraphic::new(styled(shape, item), locked_of(item)));
             }
             Some("netclass_flag") => {
                 let Some(at) = sexpr::find(item, "at") else { continue };
@@ -401,9 +415,13 @@ pub(crate) fn read_graphics(root: &[Sexpr]) -> Vec<ReadGraphic> {
                 let shape = sexpr::find(item, "shape").and_then(|s| sexpr::txt(s, 1)).map(DirectiveShape::from_token).unwrap_or_default();
                 let field = |name: &str| sexpr::find_all(item, "property").find(|p| sexpr::txt(p, 1) == Some(name)).and_then(|p| sexpr::txt(p, 2)).unwrap_or("").to_string();
                 let kind = SchGraphicKind::Directive { at: Point { x: crate::import::mm_to_um(x), y: crate::import::mm_to_um(y) }, orientation, shape, pin_length_um, netclass: field("Netclass"), component_class: field("Component Class") };
-                out.push(ReadGraphic { graphic: SchGraphic::new(kind), locked: locked_of(item) });
+                out.push(ReadGraphic::new(SchGraphic::new(kind), locked_of(item)));
             }
             _ => {}
+        }
+        // a rule area keeps its uuid in its polyline (`saveRuleArea`), the other kinds on the item
+        if let Some(read) = out.get_mut(first) {
+            read.uuid = uuid_of(item).or_else(|| sexpr::find(item, "polyline").and_then(uuid_of));
         }
     }
     out
@@ -469,6 +487,19 @@ mod tests {
             assert_eq!(w, g, "{:?}", want.shape);
             assert!(!got.locked);
         }
+    }
+
+    /// A text box's line break is written as `\n` inside the quotes, as `OUTPUTFORMATTER::Quotes` writes it: a raw line feed in a string is a schematic kicad-cli
+    /// refuses ("Failed to load schematic").
+    #[test]
+    fn a_text_boxs_line_break_is_written_escaped_so_kicad_can_load_the_sheet() {
+        let mut sch = SchematicSection::default();
+        sch.extras.graphics = sample_graphics();
+        sch.assign_missing_ids();
+        let mut text = String::new();
+        write_graphics(&mut text, &sch);
+        assert!(text.contains("(text_box \"Hello\\nworld\""), "{text}");
+        assert!(!text.contains("Hello\nworld"), "no raw line feed inside the string");
     }
 
     #[test]

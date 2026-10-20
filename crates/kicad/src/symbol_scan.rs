@@ -294,7 +294,9 @@ pub fn parse_symbol(text: &str, summaries: &[SymbolSummary], name: &str) -> Opti
     }
     wrapped.push(')');
     let parsed = crate::symbol_import::parse_library_symbols(&wrapped).ok()?;
-    parsed.symbols.into_iter().find(|s| s.lib_id == name)
+    // opened on its own, a derived symbol is the flat symbol it stands for (`LIB_SYMBOL::Flatten`): the parents come with the file text but not with the answer
+    let section = eda_model::ir::SymbolLibrarySection { symbols: parsed.symbols };
+    section.flatten(name).ok()
 }
 
 #[cfg(test)]

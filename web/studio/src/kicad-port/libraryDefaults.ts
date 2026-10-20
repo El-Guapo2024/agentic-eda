@@ -4,6 +4,7 @@
 // style 1 -- nearly every pin there is -- arrives with neither field, so `p.unit === state.activeUnit` would never be true, and a symbol with no keywords
 // has no `keywords` to send back in a properties edit ("missing field `keywords`"). Read a symbol with this, and it has every field its type says.
 import type { LibrarySymbol } from "../api/types";
+import { fieldRow } from "./symFields";
 
 /** A pin's default is unit 1 and body style 1 (`d_unit_one`, `d_body_style_one`); a graphic's is unit 0 ("every unit") and body style 1. */
 export function withDefaults(sym: LibrarySymbol): LibrarySymbol {
@@ -17,5 +18,7 @@ export function withDefaults(sym: LibrarySymbol): LibrarySymbol {
     footprint_filters: sym.footprint_filters ?? [],
     pins: (sym.pins ?? []).map((p) => ({ ...p, unit: p.unit ?? 1, body_style: p.body_style ?? 1 })),
     graphics: (sym.graphics ?? []).map((g) => ({ ...g, unit: g.unit ?? 0, body_style: g.body_style ?? 1 })),
+    extends: sym.extends ?? null,
+    fields: (sym.fields ?? []).map(fieldRow),
   };
 }

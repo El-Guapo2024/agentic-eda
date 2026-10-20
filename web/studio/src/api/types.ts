@@ -319,6 +319,27 @@ export type ArrayGeometry =
   | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean; reverse_alternate?: boolean }
   | { kind: "circular"; center: PointXY; count: number; angle_millideg: number; angle_offset_millideg?: number; clockwise?: boolean; rotate_items?: boolean };
 
+/** `crates/ops/src/array_numbering.rs` `NumberingType` (`ARRAY_AXIS::NUMBERING_TYPE`), snake_case on the wire. */
+export type NumberingType = "numeric" | "hex" | "alpha_no_iosqxz" | "alpha_full";
+
+/** One numbering axis of the Footprint Editor's Create Array: the alphabet, the "Pad numbering start" entry as typed and the "Pad numbering increment". */
+export interface AxisSpec {
+  kind: NumberingType;
+  start: string;
+  step: number;
+}
+
+/**
+ * `crates/ops/src/array_numbering.rs` `PadNumbering` -- how `create_footprint_array` renumbers the pads of the copies. `start_specified: false` is "Use first free
+ * number" (numerals from 1 that skip the numbers of the pads outside the array); `two_d` is a grid's "Coordinate (A1, A2, ... B1, ...)" scheme.
+ */
+export interface PadNumbering {
+  start_specified: boolean;
+  two_d: boolean;
+  primary: AxisSpec;
+  secondary: AxisSpec;
+}
+
 /**
  * `crates/model/src/ir.rs` `Zone`'s `ZONE_SETTINGS` fill-engine fields
  * (dialog_copper_zones.cpp's panel) -- everything but id/net/layer/
@@ -486,11 +507,13 @@ export interface Drawings {
   tuning_patterns?: TuningPattern[];
 }
 
-/** `crates/model/src/ir.rs` `Group` (task item 5) -- `PCB_GROUP`: a named set of member item ids (a part reference, or a track/via/zone/shape/text id), no geometry of its own. No nested groups in this model. */
+/** `crates/model/src/ir.rs` `Group` -- `PCB_GROUP` (on the board) and `SCH_GROUP` (on a sheet): a named set of member item ids (a part reference, a track/via/zone/shape/text id, a wire, a label ...) and of other groups' ids, no geometry of its own. */
 export interface Group {
   id: string;
   name: string;
   member_ids: string[];
+  /** `EDA_GROUP::m_designBlockLibId` (`Lib:Name`): the design block the group was placed from or saved to; empty or missing for none. */
+  design_block?: string;
   /** A `PCB_GENERATOR` (which is a `PCB_GROUP`): what makes the group -- a tuning pattern (`Drawings.tuning_patterns`). It is selected as a group but edited through its properties and edit points, and deleting it puts the track back. */
   generator?: "tuning_pattern";
 }
@@ -682,6 +705,8 @@ export interface FootprintField {
   name: string;
   value: string;
   visible: boolean;
+  /** Where and how its text is drawn (`FieldLayout`; its `visible` is this field's). Absent for a field that was never placed: hidden at the origin on the fabrication layer. */
+  layout?: FieldLayoutCmd;
 }
 
 /** The fields `edit_footprint_properties` commits all at once (dialog_footprint_properties_fp_editor.cpp's General tab) -- factored out so the `Cmd` variant and `FootprintPropertiesDialog`'s own form state share one field list. */
@@ -697,6 +722,13 @@ export interface FootprintPropertiesFields {
   models3d?: Model3dCmd[];
   /** The Clearances tab's "Zone connection" (`FOOTPRINT::GetLocalZoneConnection`); absent/`null` is "inherited". */
   zone_connection?: PadConnection | null;
+  /**
+   * The General tab's fields grid (`PCB_FIELDS_GRID_TABLE`): the Reference's and the Value's layout (the text they show, when it is not `REF**` / the footprint's name, in `text`) and the
+   * user fields, in order, each with its layout. A key left out of a command keeps what the footprint has; the Show check boxes are `reference_visible`, `value_visible` and each field's `visible`.
+   */
+  reference?: FieldLayoutCmd | null;
+  value?: FieldLayoutCmd | null;
+  fields?: FootprintField[];
 }
 
 /**
@@ -1306,7 +1338,11 @@ export type Cmd =
   /** Remove `ids` from whatever group each belongs to; a group left with fewer than 2 members dissolves. */
   | { op: "remove_from_group"; ids: string[] }
   /** Group Properties' OK (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): rename the group and make its members exactly `member_ids` (each pulled out of any other group; under 2 members dissolves it). */
-  | { op: "edit_group"; id: string; name: string; member_ids: string[] }
+  | { op: "edit_group"; id: string; name: string; member_ids: string[]; design_block?: string }
+  /** Save Selection as Design Block / Update Design Block from Selection: the items (a group included) are linked to the block (`Lib:Name`) -- a lone unlinked group takes the link, anything else goes in a new group named after the block. The server's save route sends it. */
+  | { op: "link_design_block"; ids: string[]; block: string }
+  /** Place Design Block on the board (`PCB_CONTROL::AppendDesignBlock`): the block's board file `text` with its origin at `at`; `as_group` puts what came in in a group named `group_name` and linked to `block`. */
+  | { op: "place_design_block"; text: string; at: PointXY; block: string; as_group?: boolean; group_name?: string }
   /**
    * Ctrl+T: `pcbnew.Array.createArray` (crates/ops/src/array.rs). `arrange: false` (the dialog's "Duplicate selection") makes a copy of the whole
    * selection for every point of the array but one -- footprints as new parts, tracks, vias, zones, graphics, text, dimensions, groups -- and
@@ -1424,6 +1460,10 @@ export type Cmd =
   | ImportGraphicsCmd
   | ImportSchGraphicsCmd
   | ImportSymbolGraphicsCmd
+  /** File > Import > Non-KiCad Board File... (`BOARD_EDITOR_CONTROL::OpenNonKicadBoard`): the open board replaced by `text`, the `.kicad_pcb` kicad-cli made of another EDA format's file (`POST /api/import_foreign`). One undo step; see crates/ops/src/import_foreign.rs. `keep_kicad_layer_names` is the dialog's "Keep KiCad layer names"; `project` is the `.kicad_pro` kicad-cli made with the board, which holds the design rules and net classes the importer set. */
+  | { op: "replace_board"; text: string; name?: string; keep_kicad_layer_names?: boolean; project?: string }
+  /** File > Import > Non-KiCad Schematic File... (`SCH_EDIT_FRAME::OnImportProject`): the schematic replaced by `content`, the sheet file `POST /api/import_foreign` answered. One undo step. */
+  | { op: "replace_schematic"; content: unknown; name?: string }
   /** Paste Special... (`DIALOG_PASTE_SPECIAL`, crates/ops/src/pcb_paste_special.rs): a paste with the dialog's two answers -- what happens to the reference designators of the pasted footprints (`PASTE_MODE`; "keep" is what a plain paste does) and "Clear net assignments". */
   | { op: "paste_special"; text: string; at: PointXY; mode?: PcbPasteMode; clear_nets?: boolean }
   /** Run `cmd` with the board editor in the group `group` (the entered one): what it adds joins the group (`BOARD_COMMIT::Push`; crates/ops/src/pcb_groups.rs `Cmd::InGroup`). */
@@ -1531,6 +1571,11 @@ export type Cmd =
       keep_annotations?: boolean;
       order?: "y_then_x" | "x_then_y";
       options?: AnnotateOptions;
+      /** Place as group: what comes in goes in a group named `group_name` (the file's name when empty); with `block` the group is linked to the design block. */
+      as_group?: boolean;
+      group_name?: string;
+      /** The design block (`Lib:Name`) the file is the schematic of (Place Design Block). */
+      block?: string;
     }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }
@@ -1618,6 +1663,8 @@ export type Cmd =
   | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_footprint_text"; footprint: string; id: string }
   | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um }
+  /** `pcbnew.Array.createArray` in the Footprint Editor (`ARRAY_TOOL::CreateArray`, `m_isFootprintEditor`): `numbering` renumbers the pads of the array; left out, the copies keep their source's number. */
+  | { op: "create_footprint_array"; footprint: string; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; numbering?: PadNumbering | null }
 
   // ----------------------------------------------------------- symbol editor
   //
@@ -1643,8 +1690,22 @@ export type Cmd =
   | { op: "add_symbol_graphic"; lib_id: string; graphic: LibrarySymbolGraphic }
   | { op: "delete_symbol_graphic"; lib_id: string; id: string }
   | { op: "move_symbol_graphic"; lib_id: string; id: string; dx_mm: Mm; dy_mm: Mm }
-  | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill }
-  | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm };
+  /** Shape Properties: the width (negative: no border), the fill and -- when given -- the unit and the body style the shape is on (0: common to all). */
+  | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill; unit?: number; body_style?: number }
+  | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm }
+  /** A text box's properties dialog: the whole graphic, of the same kind, as the dialog left it. */
+  | { op: "replace_symbol_graphic"; lib_id: string; id: string; graphic: LibrarySymbolGraphic }
+  // ---------------------------------------------------------------- derived symbols
+  /** `deriveFromExistingSymbol` (`DIALOG_LIB_NEW_SYMBOL` with a parent): `lib_id`, a new symbol in the parent's library, derived from `parent`. */
+  | { op: "derive_symbol"; parent: string; lib_id: string; keep_footprint?: boolean; keep_datasheet?: boolean; transfer_user_fields?: boolean; keep_content_user_fields?: boolean; overwrite?: boolean }
+  /** `flattenSymbol`: the derived symbol becomes the flat symbol it stands for. */
+  | { op: "flatten_symbol"; lib_id: string }
+  /** `updateSymbolFields` (`DIALOG_UPDATE_SYMBOL_FIELDS`): the named fields of a derived symbol follow its parent's. `reset_*` default to true, `remove_extras` and `reset_empty` to false. */
+  | { op: "update_symbol_fields"; lib_id: string; fields: string[]; remove_extras?: boolean; reset_empty?: boolean; reset_text?: boolean; reset_visibility?: boolean; reset_effects?: boolean; reset_positions?: boolean }
+  /** Symbol Properties' "Derive from" choice. */
+  | { op: "set_symbol_parent"; lib_id: string; parent: string }
+  /** Symbol Properties' fields grid, all at once. */
+  | { op: "edit_library_symbol_fields"; lib_id: string; fields: LibrarySymbolField[] };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
@@ -1770,11 +1831,13 @@ export interface RouteFixReply {
 export interface DragPreview {
   ok: boolean;
   message?: string;
+  /** `drag_start` refused because the item taken hold of is locked (`ROUTER_TOOL::performDragging`: "The selected item is locked."): ask "Drag Anyway" and start again with `drag_locked`. */
+  locked?: boolean;
   /** `drag_start` only: the board ids of the tracks of the line being dragged, which the cursor must not snap onto (`TOOL_BASE::checkSnap`). */
   line_tracks?: string[];
   /** What `DRAGGER::Start` grabbed: the whole segment (`DM_SEGMENT`, it slides sideways, its neighbours following at 45 degrees), one
-   * vertex (`DM_CORNER`) or a via (`DM_VIA`). */
-  drag?: "segment" | "corner" | "via";
+   * vertex (`DM_CORNER`), a via (`DM_VIA`) or an arc track (`DM_ARC`: its curvature follows the cursor, tangent to the tracks next to it). */
+  drag?: "segment" | "corner" | "via" | "arc";
   colliding: boolean;
   /** The cursor is somewhere the drag cannot be resolved: `pts` is the last position that could (`DRAGGER::Drag`, "Restore last
    * solution"), and letting go commits that one. */
@@ -1850,6 +1913,10 @@ export interface DiffPairPreview {
   /** `shove` mode: the tracks and vias the head would push aside. */
   displaced?: RouteDisplacedLine[];
   displaced_vias?: RouteDisplacedVia[];
+  /** `POST /api/route/dp_continue_from_end` only (Route From Other End): the pair fixed so far was committed, so the board changed. */
+  committed?: boolean;
+  /** `POST /api/route/dp_continue_from_end` only: the far end of the connection, where the new pair starts. */
+  from?: [Um, Um];
 }
 
 export interface DpFixReply {
@@ -2104,7 +2171,7 @@ export type LibSymbols = Record<string, LibSymbol>;
 
 /** One field of a symbol, power symbol or sheet as `GET /api/schematic` sends it: the text and where KiCad draws it on the sheet (`eda_engine::fields::PageField`). */
 export interface SchField {
-  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown); a sheet's `Sheetname`, `Sheetfile`. */
+  /** `Reference`, `Value`, `Footprint`, `Datasheet` (the last two hidden unless shown) and, after them, the symbol's user-defined fields (hidden until shown); a sheet's `Sheetname`, `Sheetfile`. */
   name: string;
   text: string;
   /** What `${NAME}` in `text` stands for (`SCH_FIELD::GetShownText`); absent when it is `text` itself. A Reference never has one: the painter writes it with its unit letter. */
@@ -2317,6 +2384,10 @@ export interface SheetPin {
   name: string;
   shape: LabelShape;
   at: [Um, Um];
+  /** How the pin's text is set (Sheet Pin Properties; `SCH_SHEET_PIN` is an `EDA_TEXT`): absent is 50 mil, regular, upright. */
+  size_um?: Um;
+  bold?: boolean;
+  italic?: boolean;
 }
 
 /** One child sheet placed directly on the schematic view currently being shown -- `GET /api/schematic`'s own `sheets` field, not the whole project's tree (see `sheet_path` for how deep the current view already is). */
@@ -2369,6 +2440,8 @@ export interface Schematic {
   graphics?: SchGraphic[];
   /** Ids of locked items (Lock / Unlock). Absent from a backend built before locks existed. */
   locked?: string[];
+  /** The groups of this sheet (`SCH_GROUP`): a named set of item ids and of other groups' ids. Absent from a backend built before schematic groups. */
+  groups?: Group[];
   /** Child sheets placed directly on *this* view (GAPS.md #6) -- empty for a single-sheet design, or for a sheet with no children of its own. */
   sheets: Sheet[];
   /** The root-to-here breadcrumb for whichever sheet this response is actually showing (see `fetchSchematic`'s own `sheetPath` param) -- empty when showing the root. */
@@ -2442,7 +2515,37 @@ export type LibrarySymbolGraphic =
   | { kind: "polyline"; id?: string; unit: number; body_style: number; pts: MmPoint[]; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "circle"; id?: string; unit: number; body_style: number; center: MmPoint; radius_mm: Mm; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "arc"; id?: string; unit: number; body_style: number; start: MmPoint; mid: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
-  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm };
+  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm }
+  /**
+   * `SCH_TEXTBOX` of a library symbol (`(text_box ...)`): `start` and `end` are two opposite corners (Y up, mm), the text runs along the box (`angle_deg` 0) or up it (90) and is
+   * wrapped to it. `margin_mm` 0 is the default margin (`kicad-port/symTextBox.ts`), a negative `stroke_mm` is no border, 0 the default line width. The server leaves out what is
+   * false or zero (`bold`, `italic`, `margin_mm`).
+   */
+  | {
+      kind: "text_box";
+      id?: string;
+      unit: number;
+      body_style: number;
+      text: string;
+      start: MmPoint;
+      end: MmPoint;
+      angle_deg: Degrees;
+      size_mm: Mm;
+      bold?: boolean;
+      italic?: boolean;
+      h_align: FieldHAlign;
+      v_align: FieldVAlign;
+      margin_mm?: Mm;
+      stroke_mm: Mm;
+      fill: LibraryFill;
+    };
+
+/** `crates/model/src/ir.rs` `PinAlternate` -- one alternate function of a pin (`SCH_PIN::ALT`, `(alternate "name" type shape)`): a name, an electrical type and a graphic style. A pin keeps each name once, in the order of the names. */
+export interface PinAlternate {
+  name: string;
+  electrical_type: PinElectricalType;
+  shape: PinShape;
+}
 
 /** `crates/model/src/ir.rs` `LibrarySymbolPin` -- one pin on a [`LibrarySymbol`], addressable (unlike the read-only `LibPin` above) for move/edit/delete. */
 export interface LibrarySymbolPin {
@@ -2460,6 +2563,32 @@ export interface LibrarySymbolPin {
   hidden: boolean;
   name_size_mm: Mm | null;
   number_size_mm: Mm | null;
+  /** The pin's alternate functions (`DIALOG_PIN_PROPERTIES`' "Alternate pin function definitions"); the server leaves the list out when it is empty. */
+  alternates?: PinAlternate[];
+}
+
+/** `crates/model/src/sym_fields.rs` `FieldHAlign` / `FieldVAlign`: a field's `(justify ...)`. */
+export type FieldHAlign = "left" | "center" | "right";
+export type FieldVAlign = "top" | "center" | "bottom";
+
+/**
+ * `crates/model/src/sym_fields.rs` `LibrarySymbolField` -- one property of a library symbol (`SCH_FIELD` of a `LIB_SYMBOL`): `Reference`, `Value`, `Footprint`, `Datasheet`,
+ * `Description` or a user field, with the place and look `(property "Name" "text" (at x y angle) ... (effects ...))` keeps. The server leaves out what has its default (an angle
+ * of 0, a size of 1.27, nothing hidden, centred); `kicad-port/symFields.ts` puts it back.
+ */
+export interface LibrarySymbolField {
+  name: string;
+  text?: string;
+  at?: MmPoint;
+  angle_deg?: Degrees;
+  size_mm?: Mm;
+  hidden?: boolean;
+  show_name?: boolean;
+  do_not_autoplace?: boolean;
+  bold?: boolean;
+  italic?: boolean;
+  h_align?: FieldHAlign;
+  v_align?: FieldVAlign;
 }
 
 /** The fields `edit_symbol_properties` commits all at once (`dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles tabs) -- factored out so the `Cmd` variant and the Symbol Properties dialog's own form state share one field list, same pattern `FootprintPropertiesFields` already sets. */
@@ -2490,6 +2619,10 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
   graphics: LibrarySymbolGraphic[];
   pins: LibrarySymbolPin[];
   published: boolean;
+  /** `(extends "Parent")`: the `lib_id` of the symbol this one is derived from (`LIB_SYMBOL::SetParent`). A derived symbol keeps no graphics or pins of its own; `GET /api/symbol?flatten=1` gives it with everything it inherits. */
+  extends?: string | null;
+  /** The symbol's fields beyond the text members above (`crates/model/src/sym_fields.rs`): the layout of each field, `Value`, `Footprint` and the user fields. Empty for a symbol that never had one. */
+  fields?: LibrarySymbolField[];
 }
 
 /** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */
@@ -2497,6 +2630,8 @@ export interface SymbolEditorNames {
   names: string[];
   /** The `lib_id`s that are entries of the project library itself (editable in place). Absent from an older backend. */
   project?: string[];
+  /** The derived symbols of the project library, by `lib_id`, each with the `lib_id` of its parent (`(extends ...)`). */
+  derived?: Record<string, string>;
 }
 
 /** `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items, folded into one Cmd with a field selector -- see `Cmd`'s own `push_pin_property` doc. */

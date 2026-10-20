@@ -8,6 +8,7 @@
 //! came from, so a caller can remove exactly those before re-adding the
 //! edited geometry).
 
+use crate::arcs::ArcPts;
 use crate::direction45::{AngleType, Direction45};
 use crate::item::{ItemId, Net};
 use crate::seg_ops::{self, Seg2};
@@ -32,15 +33,132 @@ pub struct Line {
     /// spec's drag requirement means.
     pub via_at_start: Option<ItemId>,
     pub via_at_end: Option<ItemId>,
+    /// The arcs the line was made with (`SHAPE_LINE_CHAIN::m_arcs`): by the points of the track arc, in the orientation it has in the node. A
+    /// line holds an arc as the points of its polyline ([`ArcPts::polyline`], what `SHAPE_LINE_CHAIN::Append( SHAPE_ARC )` appends), so
+    /// every piece of code that works on `pts` works on an arc as the chords it is; this list says which runs of `pts` are an arc. An arc
+    /// is **found again by its points** ([`Self::arc_runs`]): whatever edits `pts` and leaves the points of an arc as they are leaves it an
+    /// arc, and whatever cuts into them -- a vertex inserted, a point moved or dropped -- turns it into plain segments, as KiCad's
+    /// `SHAPE_LINE_CHAIN::Replace`, `Insert` and `Split` do with an arc they cut. So a copy of a line (`..line.clone()`, `Line { pts, ..line }`)
+    /// keeps the arcs that survive, and a line built from bare points ([`Self::from_points`]) has none.
+    pub arcs: Vec<ArcPts>,
+}
+
+/// Where one of a line's arcs is: the points `first..=last` of the line are the polyline of `arcs[arc]`, walked forward or (`reversed`) backward.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArcRun {
+    pub arc: usize,
+    pub first: usize,
+    pub last: usize,
+    pub reversed: bool,
+}
+
+/// [`Line::arc_runs`] over any list of points: the runs of `pts` that are the polyline of one of `arcs`.
+pub fn arc_runs_in(arcs: &[ArcPts], pts: &[Point]) -> Vec<ArcRun> {
+    let mut runs: Vec<ArcRun> = Vec::new();
+    for (k, arc) in arcs.iter().enumerate() {
+        let poly = arc.polyline();
+        let n = poly.len();
+        if n < 2 || n > pts.len() {
+            continue;
+        }
+        for first in 0..=(pts.len() - n) {
+            let window = &pts[first..first + n];
+            let forward = window == poly.as_slice();
+            let backward = !forward && window.iter().zip(poly.iter().rev()).all(|(a, b)| a == b);
+            if forward || backward {
+                runs.push(ArcRun { arc: k, first, last: first + n - 1, reversed: backward });
+                break;
+            }
+        }
+    }
+    runs.sort_by_key(|r| r.first);
+    // two arcs share an end at most: an overlap is a stale one
+    let mut kept: Vec<ArcRun> = Vec::new();
+    for r in runs {
+        if kept.last().is_none_or(|l| r.first >= l.last) {
+            kept.push(r);
+        }
+    }
+    kept
+}
+
+/// A line cut into the pieces the IR holds: a polyline for a run of straight segments, an arc track for an arc.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LinePiece {
+    Poly(Vec<Point>),
+    Arc(ArcPts),
 }
 
 impl Line {
     pub fn new(net: Net, layer: i32, width: Um) -> Self {
-        Line { net, layer, width, pts: Vec::new(), segment_ids: Vec::new(), via_at_start: None, via_at_end: None }
+        Line { net, layer, width, pts: Vec::new(), segment_ids: Vec::new(), via_at_start: None, via_at_end: None, arcs: Vec::new() }
     }
 
     pub fn from_points(net: Net, layer: i32, width: Um, pts: Vec<Point>) -> Self {
-        Line { net, layer, width, pts, segment_ids: Vec::new(), via_at_start: None, via_at_end: None }
+        Line { net, layer, width, pts, segment_ids: Vec::new(), via_at_start: None, via_at_end: None, arcs: Vec::new() }
+    }
+
+    /// `LINE::ArcCount`: how many of the line's arcs are still arcs.
+    pub fn arc_count(&self) -> usize {
+        self.arc_runs().len()
+    }
+
+    /// Where the line's arcs are in its points: for each arc in [`Self::arcs`], the run of points that is its polyline, if the line still has
+    /// them as they were made. The runs are in point order and never overlap.
+    pub fn arc_runs(&self) -> Vec<ArcRun> {
+        arc_runs_in(&self.arcs, &self.pts)
+    }
+
+    /// `SHAPE_LINE_CHAIN::IsArcSegment`: is segment `i` (from point `i` to point `i + 1`) a chord of one of the line's arcs?
+    pub fn is_arc_segment(&self, i: usize) -> bool {
+        self.arcs.is_empty() == false && self.arc_runs().iter().any(|r| i >= r.first && i < r.last)
+    }
+
+    /// `SHAPE_LINE_CHAIN::IsPtOnArc`: is point `i` one of an arc's points (its ends included)?
+    pub fn is_pt_on_arc(&self, i: usize) -> bool {
+        self.arcs.is_empty() == false && self.arc_runs().iter().any(|r| i >= r.first && i <= r.last)
+    }
+
+    /// `IsPtOnArc( i )` of the line the points `pts` would make with this line's arcs -- what the drag code asks of the path it has been editing.
+    fn pt_on_arc_of(&self, pts: &[Point], i: usize) -> bool {
+        !self.arcs.is_empty() && arc_runs_in(&self.arcs, pts).iter().any(|r| i >= r.first && i <= r.last)
+    }
+
+    /// Append `arc` to the line (`SHAPE_LINE_CHAIN::Append( SHAPE_ARC )`): its points, from the line's end if it starts there (else from
+    /// its other end, if that is where the line ends), and the arc is listed. The points are what [`ArcPts::polyline`] gives.
+    pub fn append_arc(&mut self, arc: ArcPts) {
+        let poly = arc.polyline();
+        let from_end = self.pts.last().is_some_and(|&l| l == arc.end && l != arc.start);
+        let it: Box<dyn Iterator<Item = Point>> = if from_end { Box::new(poly.iter().rev().copied()) } else { Box::new(poly.iter().copied()) };
+        for p in it {
+            if self.pts.last() != Some(&p) {
+                self.pts.push(p);
+            }
+        }
+        self.arcs.push(arc);
+    }
+
+    /// The line as the pieces the IR keeps it in: the runs of straight segments between its arcs as polylines, and each arc as an arc
+    /// (oriented as the line goes). A line with no arc is the one polyline. Degenerate pieces (a single point) are left out.
+    pub fn pieces(&self) -> Vec<LinePiece> {
+        let runs = self.arc_runs();
+        if runs.is_empty() {
+            return if self.pts.len() >= 2 { vec![LinePiece::Poly(self.pts.clone())] } else { Vec::new() };
+        }
+        let mut out = Vec::new();
+        let mut from = 0usize;
+        for r in &runs {
+            if r.first > from {
+                out.push(LinePiece::Poly(self.pts[from..=r.first].to_vec()));
+            }
+            let a = self.arcs[r.arc];
+            out.push(LinePiece::Arc(if r.reversed { a.reversed() } else { a }));
+            from = r.last;
+        }
+        if from + 1 < self.pts.len() {
+            out.push(LinePiece::Poly(self.pts[from..].to_vec()));
+        }
+        out
     }
 
     pub fn point_count(&self) -> usize {
@@ -120,7 +238,19 @@ impl Line {
 
     /// `LINE::dragCornerFree`: move the vertex, then drop what became collinear or double.
     pub fn drag_corner_free(&mut self, p: Point, index: usize) {
-        if let Some(v) = self.pts.get_mut(index) {
+        let mut idx = index;
+        // "If we're asked to drag the end of an arc, insert a new vertex to drag instead": the arc keeps its end, the new vertex next to it goes
+        // to the cursor (KiCad's `Insert( idx, GetPoint( idx ) )` for the arc's end copies the point after `idx++`; the vertex meant is the arc's own)
+        if self.is_pt_on_arc(idx) {
+            let numpts = self.pts.len();
+            if idx == 0 || (idx > 0 && !self.is_pt_on_arc(idx - 1)) {
+                self.pts.insert(idx, self.pts[idx]);
+            } else if idx == numpts - 1 || (idx < numpts - 1 && !self.is_arc_segment(idx)) {
+                self.pts.insert(idx + 1, self.pts[idx]);
+                idx += 1;
+            }
+        }
+        if let Some(v) = self.pts.get_mut(idx) {
             *v = p;
         }
         self.simplify();
@@ -141,8 +271,13 @@ impl Line {
         } else if index >= n_segs {
             drag_corner_internal(&self.pts, p)
         } else {
-            let mut path = drag_corner_internal(&self.pts[..=index], p);
-            let mut tail: Vec<Point> = self.pts[index..].to_vec();
+            // "Are we next to an arc? Insert a new point so we slice correctly"
+            let mut pts = self.pts.clone();
+            if self.pt_on_arc_of(&pts, index + 1) {
+                pts.insert(index + 1, pts[index + 1]);
+            }
+            let mut path = drag_corner_internal(&pts[..=index], p);
+            let mut tail: Vec<Point> = pts[index..].to_vec();
             tail.reverse();
             let mut tail = drag_corner_internal(&tail, p);
             tail.reverse();
@@ -243,14 +378,17 @@ impl Line {
         // "We require a valid s_prev and s_next. If we are at the start or end of the line, we insert a new point at the start
         // or end so there is a zero-length segment for prev or next."
         let mut idx = index;
-        if idx == 0 {
-            path.insert(0, path[0]);
+        // ... "If we are next to an arc, we do this also, as we cannot drag away one of the arc's points."
+        if idx == 0 || self.pt_on_arc_of(&path, idx) {
+            path.insert(if idx > 0 { idx + 1 } else { 0 }, path[idx]);
             idx += 1;
         }
         if idx == path.len() - 2 {
             let last = *path.last().unwrap();
             let at = path.len() - 1;
             path.insert(at, last);
+        } else if self.pt_on_arc_of(&path, idx + 1) {
+            path.insert(idx + 1, path[idx + 1]);
         }
 
         let seg = |path: &[Point], i: usize| -> Seg2 { (path[i], path[i + 1]) };
@@ -354,20 +492,22 @@ impl Line {
     }
 
     /// Drop consecutive duplicate/collinear points -- `SHAPE_LINE_CHAIN::
-    /// Simplify()`'s collinear-removal half (arc simplification doesn't
-    /// apply; this port has no arc geometry). Exact collinearity only
+    /// Simplify()`'s collinear-removal half. Exact collinearity only
     /// (integer cross product == 0); near-collinear merging is the
     /// optimizer's job (`crate::optimizer`), not this basic cleanup.
+    /// A point of an arc is never dropped (`Simplify` "never one on an arc").
     pub fn simplify(&mut self) {
         if self.pts.len() < 3 {
             return;
         }
+        let runs = self.arc_runs();
+        let protected = |i: usize| runs.iter().any(|r| i >= r.first && i <= r.last);
         let mut out = Vec::with_capacity(self.pts.len());
         out.push(self.pts[0]);
         for i in 1..self.pts.len() - 1 {
             let (a, b, c) = (*out.last().unwrap(), self.pts[i], self.pts[i + 1]);
             let cross = (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128;
-            if cross == 0 && on_segment(a, c, b) {
+            if cross == 0 && on_segment(a, c, b) && !protected(i) {
                 continue; // b is collinear with and between a,c -- drop it.
             }
             out.push(b);

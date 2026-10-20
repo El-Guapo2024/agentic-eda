@@ -37,6 +37,8 @@ export const BOARD_AND_FOOTPRINT: ReadonlySet<string> = new Set([
   "pcbnew.InteractiveDrawing.arcPosture",
   "pcbnew.InteractiveDrawing.bezier",
   "pcbnew.InteractiveEdit.duplicateIncrementPads",
+  // Create Array (Ctrl+T): `ARRAY_TOOL` is registered by both frames; the footprint editor's has the pad numbering panels.
+  "pcbnew.Array.createArray",
   // the drawing tools of the footprint editor's Place menu
   "pcbnew.InteractiveDrawing.line",
   "pcbnew.InteractiveDrawing.arc",
@@ -61,6 +63,8 @@ export const SYMBOL_EDITOR_ONLY: ReadonlySet<string> = new Set([
   // `SYMBOL_EDITOR_EDIT_TOOL`'s stacked-pin tools.
   "eeschema.InteractiveEdit.convertStackedPins",
   "eeschema.InteractiveEdit.explodeStackedPin",
+  // View > Show Pin Alternate Icons (`SYMBOL_EDITOR_CONTROL::TogglePinAltIcons`): a pin of a library symbol has alternates, a pin of a placed symbol is read from the engine's table, which has none.
+  "eeschema.EditorControl.togglePinAltIcons",
 ]);
 
 /**

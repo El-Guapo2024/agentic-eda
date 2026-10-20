@@ -3,7 +3,7 @@
 // same split: thin client-side glue (turn a click/move into the right
 // `/api/route/dp_*` call and `DrawState` update), not a second copy of
 // `eda_pns::diff_pair`'s own geometry.
-import { dpFinish, dpFix, dpMove, dpStart, dpToggleVia } from "../../api/client";
+import { dpContinueFromEnd, dpFinish, dpFix, dpMove, dpStart, dpToggleVia } from "../../api/client";
 import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import { dpStateFromPreview, dpViaRequest, type DpDrawState } from "../../kicad-port/dpTool";
@@ -65,4 +65,23 @@ export async function finishDiffPairRoute(x: number, y: number, dispatch: Dispat
   if (!reply.ok) dispatch({ type: "TOAST", message: reply.message || "Could not finish the diff pair.", kind: "error" });
   dispatch({ type: "SET_DRAW_STATE", draw: null });
   await api.refresh();
+}
+
+/**
+ * Ctrl+E while routing a pair, Route From Other End (`ROUTER_TOOL::routerContinueFromEnd` -> `ROUTER::ContinueFromEnd`, which restarts the placer of the
+ * same mode): what the pair has fixed is committed (one undo step, nothing at all if nothing was fixed), and a new pair starts at the far end of the P net's
+ * connection and heads for where this one's head ended. `at` is that end. A refusal ("nothing is left to connect to") toasts and leaves the pair as it was; a
+ * far end a pair cannot start on ends the routing with KiCad's own message, after the commit.
+ */
+export async function continueDiffPairFromEnd(at: [number, number], draw: DpDrawState, dispatch: Dispatch<Action>, api: Pick<StudioApi, "refresh">): Promise<void> {
+  const reply = await dpContinueFromEnd(at[0], at[1]);
+  if (reply.committed) await api.refresh();
+  if (!reply.ok) {
+    dispatch({ type: "TOAST", message: reply.message ?? "Route From Other End failed.", kind: "error" });
+    // the session is gone when the commit happened and the far end would not start a pair
+    if (reply.committed !== undefined) dispatch({ type: "SET_DRAW_STATE", draw: null });
+    return;
+  }
+  // the new pair starts at the far end: whatever the old one started on is no longer what it must not end on
+  dispatch({ type: "SET_DRAW_STATE", draw: { ...dpStateFromPreview({ ...draw, runsA: [], runsB: [], fixedVias: [] }, reply), pendingViaLayer: undefined } });
 }

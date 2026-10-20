@@ -14,6 +14,7 @@
 //! eda check     <intent> --design design.json          # run every gate, print scorecard
 //! eda import-pl <intent> --design design.json --pl x.gp.pl [-o out]  # Bookshelf placement (Cypress) -> design.json
 //! eda import-kicad <board.kicad_pcb> -o <dir>           # KiCad board -> an `eda board` directory
+//! eda import-kicad <file of another EDA> -o <dir>     # Eagle, Altium, CADSTAR, PADS, ... through kicad-cli; a board brings its schematic of the same name
 //! ```
 
 mod board;
@@ -32,6 +33,7 @@ mod fp_art_json;
 mod fp_assign_api;
 mod fp_json;
 mod append_api;
+mod design_block_api;
 mod graphics_api;
 mod library_api;
 mod library_index;
@@ -50,6 +52,8 @@ mod sch_move_api;
 mod fab_cmd;
 #[cfg(test)]
 mod gate_vs_kicad;
+mod foreign_api;
+mod import_foreign;
 mod import_kicad;
 mod route_api;
 mod sch_output_api;

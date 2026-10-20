@@ -231,7 +231,7 @@ fn the_command_reads_from_and_writes_to_the_json_the_studio_sends() {
 /// A two-unit symbol the way a library has it: pins 1 and 2 on unit 1, pins 3 and 4 on unit 2.
 fn dual() -> LibrarySymbol {
     use eda_model::ir::LibrarySymbolPin;
-    let pin = |number: &str, unit: u32, y: f64| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint { x: 0.0, y }, angle_deg: 270.0, length_mm: 2.54, unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None };
+    let pin = |number: &str, unit: u32, y: f64| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint { x: 0.0, y }, angle_deg: 270.0, length_mm: 2.54, unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() };
     let mut s = LibrarySymbol { lib_id: "Test:Dual".into(), reference_prefix: "U".into(), unit_count: 2, pins: vec![pin("1", 1, 2.54), pin("2", 1, -2.54), pin("3", 2, 2.54), pin("4", 2, -2.54)], ..LibrarySymbol::default() };
     s.assign_missing_ids();
     s
@@ -277,4 +277,25 @@ fn two_generated_boxes_that_draw_the_same_share_one_library_symbol() {
     assert_eq!(lib.symbols.len(), 1, "{:?}", lib.symbols.iter().map(|s| &s.lib_id).collect::<Vec<_>>());
     let sch = b.design().schematic.as_ref().unwrap();
     assert!(sch.symbols.iter().all(|s| s.lib_id == lib.symbols[0].lib_id));
+}
+
+#[test]
+fn a_pasted_symbol_keeps_the_places_swap_pins_gave_its_pins_under_its_new_reference() {
+    // R1 was copied with pins 1 and 2 traded; it is pasted beside an R1 that is there, so it is numbered anew (R2), and its swap goes with it
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut f = fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(100_000, 50_000))));
+    f.section.extras.swap_pin_places("R1", "1", "2");
+    b.apply(&paste(&f, 0, 0, PasteMode::Unique)).unwrap();
+    b.apply(&paste(&f, 20_000, 0, PasteMode::Unique)).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(refs(sch), vec!["R1", "R2"]);
+    for key in ["R1", "R2"] {
+        let swaps = sch.extras.pin_swaps_of(key).unwrap_or_else(|| panic!("{key} lost its swap: {:?}", sch.extras.pin_swaps));
+        assert_eq!(swaps.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>(), [("1", "2"), ("2", "1")], "{key}");
+    }
+    // a symbol with its library pins pastes with none
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    b.apply(&paste(&fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(100_000, 50_000)))), 0, 0, PasteMode::Unique)).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().extras.pin_swaps.is_empty());
 }

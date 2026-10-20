@@ -18,6 +18,10 @@ export interface TargetRange {
 /** `LENGTH_UNCONSTRAINED`, micrometres: a million millimetres. */
 export const LENGTH_UNCONSTRAINED_UM = 1_000_000_000;
 
+/** `DELAY_UNCONSTRAINED`, attoseconds: a million picoseconds (a pattern's delay targets are attoseconds, KiCad's internal unit of time; a picosecond is 1e6). */
+export const DELAY_UNCONSTRAINED_AS = 1_000_000_000_000;
+export const ATTOSECONDS_PER_PS = 1_000_000;
+
 export interface Pt {
   x: Um;
   y: Um;
@@ -40,12 +44,20 @@ export interface TuningPattern {
   override_custom_rules: boolean;
   target_length: TargetRange;
   target_skew: TargetRange;
+  /** The time domain (`m_isTimeDomain`): the pattern is tuned to a delay through the tuning profile of the net's class. Left out of a pattern that is in length. */
+  is_time_domain?: boolean;
+  /** `m_targetLengthDelay`, attoseconds. Left out when there is none. */
+  target_delay?: TargetRange;
+  /** `m_targetSkewDelay`, attoseconds. */
+  target_skew_delay?: TargetRange;
   base_line: Pt[];
   base_line_coupled?: Pt[];
   last_track_width: Um;
   last_diff_pair_gap: Um;
   /** Nanometres. */
   last_tuning_length: number;
+  /** Attoseconds: the delay of a time domain pattern the tuner reported last. */
+  last_tuning_delay?: number;
   last_netname: string;
   last_status: "tuned" | "too_short" | "too_long" | string;
   member_ids: string[];
@@ -67,6 +79,10 @@ export interface TuneSettings {
   override_custom_rules?: boolean;
   target_length?: number | Partial<TargetRange> | null;
   target_skew?: number | Partial<TargetRange> | null;
+  /** The time domain: the delay targets are in picoseconds. `time_domain` is the dialog's Delay radio button. */
+  time_domain?: boolean;
+  target_delay?: number | Partial<TargetRange> | null;
+  target_skew_delay?: number | Partial<TargetRange> | null;
 }
 
 export type TuneStatus = "tuned" | "too_short" | "too_long";
@@ -85,6 +101,19 @@ export interface TuneReadout {
   partner: string | null;
   /** The length of each net of a pair (P, N). */
   nets: [number, number] | null;
+  /** A time domain pattern: the box reads the delay (`delay`), in picoseconds; the status is still the length's. */
+  time_domain?: boolean;
+  delay?: TuneDelayReadout | null;
+}
+
+/** The delay half of the status box of a time domain pattern, picoseconds. `min`/`max` are null for a pattern with no delay target. */
+export interface TuneDelayReadout {
+  label: "current delay" | "current skew";
+  current: number;
+  min: number | null;
+  opt: number | null;
+  max: number | null;
+  delta: number | null;
 }
 
 /** One track of the new line: the line before the pattern, the meander, the line after it. */

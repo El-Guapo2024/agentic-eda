@@ -182,7 +182,7 @@ fn move_items_moves_every_kind_by_the_same_delta_and_keeps_their_ids() {
 fn move_items_moves_a_groups_members_and_a_member_named_twice_only_once() {
     let m = model(&["F.Cu", "B.Cu"]);
     let mut d = design();
-    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "via_a", "U1"]) });
+    d.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "via_a", "U1"]), design_block: String::new() });
     let mut b = Board::new(d, &m, 100, 300);
     b.apply(&Cmd::MoveItems { ids: ids(&["grp_a", "via_a"]), dx: 500, dy: 0 }).unwrap();
     assert_eq!(routing(&b).vias[0].at, p(20_500, 50_000), "named by the group and by itself: moved once");
@@ -484,7 +484,7 @@ fn the_edit_tools_never_clear_the_routing_even_of_a_footprint_with_copper_on_its
     assert!(!Cmd::InGroup { group: id("grp_a"), cmd: Box::new(move_u1) }.clears_routing_in(&b));
     // A group moves its footprint members the same way.
     let mut with_group = routed;
-    with_group.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "U1"]) });
+    with_group.drawings.as_mut().unwrap().groups.push(Group { id: "grp_a".into(), name: String::new(), member_ids: ids(&["trk_a", "U1"]), design_block: String::new() });
     assert!(!Cmd::MoveItems { ids: ids(&["grp_a"]), dx: 1, dy: 1 }.clears_routing_in(&Board::new(with_group, &m, 100, 300)));
     // The old verbs keep their old answer: a placement made there is followed by a new routing.
     assert!(Cmd::MoveTo { part: id("U2"), x: 0, y: 0 }.clears_routing_in(&b));

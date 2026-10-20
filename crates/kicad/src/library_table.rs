@@ -1,4 +1,4 @@
-//! KiCad's library tables: `sym-lib-table` and `fp-lib-table`, and the path variables their library paths are written with.
+//! KiCad's library tables: `sym-lib-table`, `fp-lib-table` and `design-block-lib-table`, and the path variables their library paths are written with.
 //!
 //! A KiCad library is found through a table, never by its place on disk: a row says "this nickname is the file or folder at this URI", and a
 //! `Lib:Name` id means "the item `Name` of the row nicknamed `Lib`". KiCad keeps two tables per kind -- the global one in its configuration
@@ -28,30 +28,33 @@ use std::path::{Component, Path, PathBuf};
 
 // ------------------------------------------------------------------------------------------------ the format
 
-/// The two kinds of library the studio reads. (KiCad has a third table, for design blocks.)
+/// The three kinds of library table KiCad keeps: symbols, footprints and design blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TableKind {
     Symbol,
     Footprint,
+    DesignBlock,
 }
 
 impl TableKind {
-    /// Both kinds, symbols first.
-    pub const ALL: [TableKind; 2] = [TableKind::Symbol, TableKind::Footprint];
+    /// Every kind, symbols first.
+    pub const ALL: [TableKind; 3] = [TableKind::Symbol, TableKind::Footprint, TableKind::DesignBlock];
 
     /// The table's own keyword, the head of the file (`LIBRARY_TABLE_GRAMMAR::KEYWORDS`).
     pub fn keyword(self) -> &'static str {
         match self {
             TableKind::Symbol => "sym_lib_table",
             TableKind::Footprint => "fp_lib_table",
+            TableKind::DesignBlock => "design_block_lib_table",
         }
     }
 
-    /// The file's name in a configuration or project folder (`FILEEXT::SymbolLibraryTableFileName`, `FootprintLibraryTableFileName`).
+    /// The file's name in a configuration or project folder (`FILEEXT::SymbolLibraryTableFileName`, `FootprintLibraryTableFileName`, `DesignBlockLibraryTableFileName`).
     pub fn file_name(self) -> &'static str {
         match self {
             TableKind::Symbol => "sym-lib-table",
             TableKind::Footprint => "fp-lib-table",
+            TableKind::DesignBlock => "design-block-lib-table",
         }
     }
 
@@ -59,6 +62,7 @@ impl TableKind {
         match s {
             "symbol" => Some(TableKind::Symbol),
             "footprint" => Some(TableKind::Footprint),
+            "design_block" => Some(TableKind::DesignBlock),
             _ => None,
         }
     }
@@ -67,7 +71,13 @@ impl TableKind {
         match self {
             TableKind::Symbol => "symbol",
             TableKind::Footprint => "footprint",
+            TableKind::DesignBlock => "design_block",
         }
+    }
+
+    /// Whether the dialog has a "Show" column: only the symbol table does (`GRID_TRICKS::SupportsVisibilityColumn`; the design block panel's returns false).
+    pub fn supports_visibility(self) -> bool {
+        self == TableKind::Symbol
     }
 }
 
@@ -78,12 +88,14 @@ pub const NESTED_TYPE: &str = "Table";
 /// The version `LIBRARY_TABLE::Format` writes.
 pub const TABLE_VERSION: i64 = 7;
 
-/// The library formats KiCad names in a row's type, symbol side (`SCH_IO_MGR::ShowType`) and footprint side (the `PCB_IO_MGR` plugin names). The studio reads
-/// [`KICAD_TYPE`] and chains [`NESTED_TYPE`]; the others are listed, kept in the file and flagged as unread.
+/// The library formats KiCad names in a row's type, symbol side (`SCH_IO_MGR::ShowType`), footprint side (the `PCB_IO_MGR` plugin names) and design block side
+/// (`DESIGN_BLOCK_IO_MGR::ShowType`: KiCad's folders and a chained table). The studio reads [`KICAD_TYPE`] and chains [`NESTED_TYPE`]; the others are listed, kept in
+/// the file and flagged as unread.
 pub fn known_types(kind: TableKind) -> &'static [&'static str] {
     match kind {
         TableKind::Symbol => &["KiCad", "Legacy", "Altium", "CADSTAR Schematic Archive", "Database", "EAGLE", "EasyEDA (JLCEDA) Std", "EasyEDA (JLCEDA) Pro", "gEDA / Lepton EDA", "LTspice", "HTTP", "PADS Logic", "Table"],
         TableKind::Footprint => &["KiCad", "Legacy", "Allegro", "Altium Circuit Maker", "Altium Circuit Studio", "Altium Designer", "CADSTAR PCB Archive", "Eagle", "EasyEDA / JLCEDA Std", "EasyEDA / JLCEDA Pro", "Fabmaster", "GPCB", "P-Cad", "SolidWorks PCB", "IPC-2581", "ODB++", "PADS", "Sprint Layout", "Table"],
+        TableKind::DesignBlock => &["KiCad", "Table"],
     }
 }
 
@@ -214,8 +226,8 @@ impl Table {
         let kind = match head {
             "sym_lib_table" => TableKind::Symbol,
             "fp_lib_table" => TableKind::Footprint,
-            "design_block_lib_table" => return Err(r.err(head_at, "a design block library table is not read here")),
-            _ => return Err(r.err(head_at, "expected sym_lib_table or fp_lib_table")),
+            "design_block_lib_table" => TableKind::DesignBlock,
+            _ => return Err(r.err(head_at, "expected sym_lib_table, fp_lib_table or design_block_lib_table")),
         };
         let mut table = Table { kind, version: None, rows: Vec::new() };
         loop {
@@ -863,6 +875,8 @@ pub fn check_row(kind: TableKind, row: &Row, path: &Path) -> Option<String> {
             }
         }
         TableKind::Footprint => (!path.is_dir()).then(|| format!("Footprint library '{}' not found.", path.display())),
+        // `DESIGN_BLOCK_IO::DesignBlockEnumerate` is what `CheckTableRow` runs, and a folder it cannot open is "Design block '<path>' does not exist."
+        TableKind::DesignBlock => (!path.is_dir()).then(|| format!("Design block '{}' does not exist.", path.display())),
     }
 }
 
@@ -1250,12 +1264,56 @@ mod tests {
 
     #[test]
     fn a_table_that_is_not_one_is_a_syntax_error_with_its_place() {
-        for bad in ["", "(kicad_pcb)", "(sym_lib_table (lib))", "(sym_lib_table (lib (name \"A\") (foo \"x\")))", "(sym_lib_table (lib (name \"A\")", "(sym_lib_table (lib (name \"A)))", "(sym_lib_table) trailing", "(sym_lib_table (nope))", "(design_block_lib_table (version 7))"] {
+        for bad in ["", "(kicad_pcb)", "(sym_lib_table (lib))", "(sym_lib_table (lib (name \"A\") (foo \"x\")))", "(sym_lib_table (lib (name \"A\")", "(sym_lib_table (lib (name \"A)))", "(sym_lib_table) trailing", "(sym_lib_table (nope))", "(design_block_lib_table (nope))", "(block_lib_table (version 7))"] {
             let e = Table::parse(bad).unwrap_err();
             assert!(e.message.starts_with("Syntax error at line 1, column "), "{bad:?}: {e:?}");
         }
         let e = Table::parse("(sym_lib_table\n\t(version 7)\n\t(lib (name \"A\") (bogus \"B\"))\n)").unwrap_err();
         assert_eq!((e.line, e.column), (3, 19), "the unknown keyword: {e:?}");
+    }
+
+    /// KiCad's design block library table: its own keyword and file name, no Show column, and a row's library is a folder.
+    const KICAD_DESIGN_BLOCK_GLOBAL: &str = "(design_block_lib_table\n\t(version 7)\n\t(lib (name \"KiCad\") (type \"Table\") (uri \"/Applications/KiCad/KiCad.app/Contents/SharedSupport/template/design-block-lib-table\") (options \"\") (descr \"KiCad Default Libraries\"))\n)\n";
+
+    #[test]
+    fn the_design_block_table_is_the_third_table_with_its_own_keyword_file_and_checks() {
+        assert_eq!(TableKind::ALL.len(), 3);
+        assert_eq!((TableKind::DesignBlock.keyword(), TableKind::DesignBlock.file_name(), TableKind::DesignBlock.name()), ("design_block_lib_table", "design-block-lib-table", "design_block"));
+        assert_eq!(TableKind::parse("design_block"), Some(TableKind::DesignBlock));
+        assert!(TableKind::Symbol.supports_visibility() && !TableKind::Footprint.supports_visibility() && !TableKind::DesignBlock.supports_visibility());
+        assert_eq!(known_types(TableKind::DesignBlock), &["KiCad", "Table"]);
+        // the global table of this machine's KiCad parses and writes back byte for byte
+        let t = Table::parse(KICAD_DESIGN_BLOCK_GLOBAL).unwrap();
+        assert_eq!((t.kind, t.version, t.rows.len()), (TableKind::DesignBlock, Some(7), 1));
+        assert!(t.rows[0].is_table());
+        assert_eq!(t.format(), KICAD_DESIGN_BLOCK_GLOBAL);
+        // an empty one is KiCad's first-run table
+        let empty = Table::new(TableKind::DesignBlock);
+        assert_eq!(empty.format(), "(design_block_lib_table\n\t(version 7)\n)\n");
+        assert_eq!(Table::parse(&empty.format()).unwrap(), empty);
+        // a row is checked by the folder it names
+        let root = temp("dbcheck");
+        std::fs::create_dir_all(root.join("Mine.kicad_blocks")).unwrap();
+        std::fs::write(root.join("a_file.kicad_blocks"), "x").unwrap();
+        let row = |ty: &str| Row { nickname: "Mine".into(), uri: "u".into(), lib_type: ty.into(), ..Default::default() };
+        assert_eq!(check_row(TableKind::DesignBlock, &row("KiCad"), &root.join("Mine.kicad_blocks")), None);
+        let gone = root.join("Gone.kicad_blocks");
+        assert_eq!(check_row(TableKind::DesignBlock, &row("KiCad"), &gone).unwrap(), format!("Design block '{}' does not exist.", gone.display()));
+        assert!(check_row(TableKind::DesignBlock, &row("KiCad"), &root.join("a_file.kicad_blocks")).unwrap().ends_with("a_file.kicad_blocks' does not exist."), "a file is not a library");
+        assert_eq!(check_row(TableKind::DesignBlock, &row("Legacy"), &root).unwrap(), "Unknown library type Legacy ");
+        assert!(check_row(TableKind::DesignBlock, &row("Table"), &root.join("none")).unwrap().starts_with("Nested table 'u' not found"));
+        // a table of the wrong kind is refused by name
+        let own = root.join("design-block-lib-table");
+        std::fs::write(&own, KICAD_GLOBAL).unwrap();
+        let v = Vars::default();
+        let e = LoadedTable::load(&own, TableKind::DesignBlock, Scope::Global, &v).unwrap_err();
+        assert!(e.contains("has type sym_lib_table but expected design_block_lib_table"), "{e}");
+        // chained, the global table of a machine whose KiCad ships no design block table: the row is there, unreadable, and contributes nothing
+        std::fs::write(&own, KICAD_DESIGN_BLOCK_GLOBAL).unwrap();
+        let loaded = LoadedTable::load(&own, TableKind::DesignBlock, Scope::Global, &v).unwrap();
+        assert!(!loaded.rows[0].ok && loaded.rows[0].error.contains("does not exist"), "{:?}", loaded.rows[0]);
+        assert!(effective_libs(TableKind::DesignBlock, &[&loaded], &v).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -45,6 +45,7 @@ fn settings(mode: Mode) -> RoutingSettings {
 fn violations(node: &Node, rules: &eda_model::BoardRules) -> HashSet<(String, String)> {
     let name = |id: ItemId| match node.get(id) {
         Some(Item::Segment(s)) => format!("seg {:?}-{:?} {:?}", s.a, s.b, s.net),
+        Some(Item::Arc(a)) => format!("arc {:?}-{:?} {:?}", a.start(), a.end(), a.net),
         Some(Item::Via(v)) => format!("via {:?} {:?}", v.pos, v.net),
         Some(Item::Solid(s)) => format!("pad {}", s.source),
         None => String::new(),
@@ -154,6 +155,67 @@ fn a_pair_continues_from_a_pair_of_tracks_and_meets_the_two_stubs_in_every_mode(
         let straight = |t: &Track| t.pts.windows(2).filter(|w| w[0].y == w[1].y).map(|w| (w[0].x - w[1].x).abs()).max().unwrap_or(0);
         assert!(straight(d_plus) > 300 && straight(d_minus) > 300, "{mode:?}: a run side by side: {commit:?}");
     }
+}
+
+/// `ROUTER::ContinueFromEnd` restarts the placer of the same mode: Route From Other End for a pair commits what the pair has fixed, and a new pair
+/// starts at the far end of the connection and heads for where the old head ended. The far end here is the U1 side's two stubs, a neck-down where KiCad
+/// refuses to start a pair at the configured gap unless violations are allowed (`isStartingPointRoutable`): Highlight collisions with "Allow DRC
+/// violations" starts there; Walk around and Shove refuse, and say so, after the fixed legs were committed.
+#[test]
+fn route_from_other_end_restarts_the_pair_at_the_far_end_and_commits_what_was_fixed() {
+    let Some((design, model)) = dp_test() else {
+        eprintln!("KiCad QA corpus not found: skipping");
+        return;
+    };
+    let (node, _) = build_node(&design, &model);
+    let before = violations(&node, &model.board);
+    for mode in [Mode::MarkObstacles, Mode::Walkaround] {
+        let settings = RoutingSettings { mode, can_violate_drc: true, ..RoutingSettings::default() };
+        for fix_first in [false, true] {
+            let mut router = Router::new(&design, &model);
+            router.settings = settings.clone();
+            router.start_diff_pair(J1_SIDE.0, "F.Cu").unwrap_or_else(|e| panic!("{mode:?}: {e}"));
+            // a head drawn from the J1 side's tracks towards the stubs, short of them
+            let mid = p(118_700, 95_000);
+            let pv = router.diff_pair_preview(mid).expect("preview");
+            assert!(!pv.colliding && !pv.head_a.pts.is_empty(), "{mode:?}: {pv:?}");
+            let mut to = mid;
+            if fix_first {
+                assert!(matches!(router.fix_diff_pair(mid), Some(FixOutcome::Fixed { real_end: false })), "{mode:?}");
+                to = p(118_500, 95_000);
+                let next_leg = router.diff_pair_preview(to).expect("the next leg");
+                assert!(!next_leg.head_a.pts.is_empty(), "{mode:?}: {next_leg:?}");
+            }
+            let c = router.continue_diff_pair_from_end(to).unwrap_or_else(|e| panic!("{mode:?} fix_first={fix_first}: {e}"));
+            assert_eq!(c.net, "/D+", "the P net");
+            assert_eq!(c.from, U1_STUBS.0, "{mode:?}: the far end of D+ is the U1 side's stub");
+            assert_eq!(c.layer, "F.Cu");
+            assert_eq!((c.width, c.gap), (200, 250), "the pair's own sizes go on");
+            assert_eq!(c.commit.tracks.is_empty(), !fix_first, "{mode:?}: what was fixed is committed, nothing if nothing was");
+            if fix_first {
+                assert!(c.commit.tracks.iter().any(|t| t.net == "/D+") && c.commit.tracks.iter().any(|t| t.net == "/D-"), "{:?}", c.commit);
+            }
+            // the caller commits and starts a new pair there, on the board as it stands now
+            let committed = apply_commit(&design, &c.commit);
+            let mut next = Router::new(&committed, &model);
+            next.settings = settings.clone();
+            if mode != Mode::MarkObstacles {
+                let refused = next.start_diff_pair(c.from, &c.layer).unwrap_err();
+                assert!(refused.contains("gap at the start point does not match"), "{mode:?}: {refused}");
+                continue;
+            }
+            next.start_diff_pair(c.from, &c.layer).unwrap_or_else(|e| panic!("{mode:?}: the new pair starts on the stubs: {e}"));
+            let pv = next.diff_pair_preview(c.to).expect("the new pair's preview");
+            assert_eq!((pv.head_a.first(), pv.head_b.first()), (Some(U1_STUBS.0), Some(U1_STUBS.1)), "{mode:?}: it leaves the two stubs");
+            assert!(!pv.head_a.pts.is_empty(), "{mode:?}: {pv:?}");
+            let after_node = build_node(&committed, &model).0;
+            let new_ones: Vec<_> = violations(&after_node, &model.board).difference(&before).cloned().collect();
+            assert!(new_ones.is_empty(), "{mode:?}: new violations {new_ones:#?}");
+        }
+    }
+    // a pair that is not routing has no other end
+    let mut idle = Router::new(&design, &model);
+    assert!(idle.continue_diff_pair_from_end(p(0, 0)).is_err());
 }
 
 /// From the pair of pads of J1 (a square pad and a round one on a 1.27 mm pitch, one above the other) to open board on its right: the
@@ -294,3 +356,4 @@ fn whatever_the_cursor_does_an_accepted_pair_leaves_the_board_clean_and_keeps_it
     assert!(totals.1 > 20, "the test is not testing much: {} accepted", totals.1);
     assert!(totals.2 > 0, "no shove happened: the test is not testing the shove");
 }
+

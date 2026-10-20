@@ -228,6 +228,9 @@ pub struct Walker<'a> {
     /// The via the walking line ends in, if it does (`LINE::EndsWithVia`): it is an obstacle for the nearest-obstacle search and the
     /// collision checks, as it is in KiCad -- the walk itself goes around the cluster it finds, with the line's chain.
     end_via: Option<crate::item::Via>,
+    /// The arcs of the line being walked (`Line::arcs`): the walk works on bare points, and the clean-up of a path that has an arc in it must not drop the vertex an
+    /// arc starts or ends at when it is collinear with its neighbours (a fillet's first chord is: it is tangent to the run before it).
+    pub arcs: Vec<crate::arcs::ArcPts>,
     // per-route state
     iteration: u32,
     initial_length: f64,
@@ -236,7 +239,7 @@ pub struct Walker<'a> {
 
 impl<'a> Walker<'a> {
     pub fn new(node: &'a Node, rules: &'a BoardRules) -> Self {
-        Walker { node, rules, item_mask: kind_mask::ANY, iteration_limit: 40, length_limit_on: true, length_expansion_factor: 10.0, policies: [false; 3], restricted: HashSet::new(), skip: HashSet::new(), exclude: Vec::new(), end_via: None, iteration: 0, initial_length: 0.0, processed: HashSet::new() }
+        Walker { node, rules, item_mask: kind_mask::ANY, iteration_limit: 40, length_limit_on: true, length_expansion_factor: 10.0, policies: [false; 3], restricted: HashSet::new(), skip: HashSet::new(), exclude: Vec::new(), end_via: None, arcs: Vec::new(), iteration: 0, initial_length: 0.0, processed: HashSet::new() }
     }
 
     /// `SetAllowedPolicies`.
@@ -307,7 +310,7 @@ impl<'a> Walker<'a> {
             let Some(item) = self.node.get(id) else { continue };
             let clearance = Node::clearance_to(self.rules, net, item);
             let hull = item.hull(clearance, width, layer);
-            let mut simplified = Line::from_points(net.clone(), layer, width, std::mem::take(pts));
+            let mut simplified = Line { arcs: self.arcs.clone(), ..Line::from_points(net.clone(), layer, width, std::mem::take(pts)) };
             simplified.simplify();
             match walk_around_hull(&simplified.pts, &hull, cw) {
                 Some(p) => *pts = p,

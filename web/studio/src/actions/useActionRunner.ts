@@ -37,7 +37,7 @@ import { tuneRegenerate } from "../api/tuneClient";
 import { steppedDrawStroke } from "../kicad-port/layerDefaults";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
+import { continueDiffPairFromEnd, finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
 import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
@@ -92,6 +92,8 @@ import { openSchProperties } from "../components/schematic/schPropertiesOpen";
 import { nextLargerPreset, nextSmallerPreset, selectAllIds, wrapStep } from "../kicad-port/editTargets";
 import { registerBoardControlActions } from "./boardControlActions";
 import { registerImportActions } from "./importActions";
+import { registerDesignBlockActions } from "./designBlockActions";
+import { designBlockChecked, useDesignBlocksUi } from "../state/designBlocks";
 import { flipLocalX } from "../kicad-port/boardControl";
 import { registerPcbEditSweep } from "./pcbEditSweep";
 import { registerPcbMenuActions } from "./pcbMenuActions";
@@ -202,6 +204,8 @@ export function useActionRunner() {
     registerBoardControlActions(m, { state, api, dispatch, pcbOnly, requestSelection });
     registerAppearanceActions(m, { state, dispatch });
     registerImportActions(m, { tab: state.tab, dispatch, api });
+    // The Design Blocks panes of the schematic and the board editor: show, place, save, update, properties, delete (actions/designBlockActions.ts).
+    registerDesignBlockActions(m, { tab: state.tab, dispatch, api });
     /** Delete exactly these refs as ONE undo step (one BOARD_COMMIT::Push in source); locked PCB items are filtered out like `FilterCollectorForLockedItems`. */
     const deleteRefs = (refs: string[]) => {
       const cmds: Cmd[] = [];
@@ -397,6 +401,14 @@ export function useActionRunner() {
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
         pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
+      );
+      // Ctrl+E: `ROUTER::ContinueFromEnd` restarts the placer of the same mode, so a pair goes on from the other end as a pair
+      m.set(
+        "pcbnew.InteractiveRouter.ContinueFromEnd",
+        pcbOnly(() => {
+          const end = draw.ptsA[draw.ptsA.length - 1] ?? ([cursor.x, cursor.y] as [number, number]);
+          void continueDiffPairFromEnd(end, draw, dispatch, api);
+        })
       );
       // `V` (`layerToggle`): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts)
       m.set(
@@ -814,6 +826,8 @@ export function useActionRunner() {
       if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       // `EDIT_TOOL::Duplicate` / `PCB_CONTROL::Paste`: cancelling the move that carries the new items takes them away again.
       if ((state.tab === "pcb" || state.tab === "schematic") && state.activeTool === "move") void api.revertCarriedPlacement();
+      // Pin Helpers > Wire: the stubs were handed to the Drag tool, and cancelling it reverts the commit (`commit.Revert()`)
+      if (state.tab === "schematic" && state.activeTool === "drag") void api.revertCarriedPlacement();
       dispatch({ type: "ESCAPE" });
     });
 
@@ -2292,12 +2306,16 @@ export function useActionRunner() {
    * The check a menu entry or toolbar button shows for a toggle action (View > Show Hidden Pins, the Net Navigator panel, Edit > Attributes > Do not
    * Populate ...): `true`/`false` for a toggle, `undefined` for an action that has none.
    */
+  const designBlocksShown = useDesignBlocksUi().shown;
   const isChecked = useCallback(
     (name: string): boolean | undefined => {
       // The shared tools' toggles (Always Show Crosshairs, the crosshair mode, Draw Bounding Boxes, the selection mode, Library Tree), in every editor.
       if (registry.has(name)) {
         const shared = commonChecked(name, commonOptions);
         if (shared !== undefined) return shared;
+        // View > Design Blocks (`designBlockCond`: the pane is shown)
+        const blocks = designBlockChecked(name);
+        if (blocks !== undefined) return blocks;
       }
       if (state.tab !== "schematic" || !registry.has(name)) return undefined;
       const selection = state.selection;
@@ -2308,7 +2326,8 @@ export function useActionRunner() {
         requestSelection: () => (selection.size > 0 ? [...selection].filter((id) => !isPinItemId(id)) : sch && state.cursorUm ? [hitField(sch, state.cursorUm.x, state.cursorUm.y, 3 / (state.schematicView.scale || 1), measureStrokeText) ?? hitSymbol(sch, state.cursorUm.x, state.cursorUm.y)].filter((id): id is string => !!id) : []),
       });
     },
-    [registry, schControl, state, commonOptions]
+    // `designBlocksShown` is read through `designBlockChecked`: it is listed so the check marks follow the pane being shown or hidden
+    [registry, schControl, state, commonOptions, designBlocksShown]
   );
   /** Every action id the registry has a handler for on this tab (the scripted test hook, `window.__eda`, lists them). */
   const actionNames = useMemo(() => [...registry.keys()], [registry]);

@@ -5,12 +5,54 @@
 // Ported from pcbnew/dialogs/dialog_create_array.cpp (`CREATE_ARRAY_DIALOG_ENTRIES`, `TransferDataFromWindow`, `validateLongEntry`,
 // `calculateCircularArrayProperties`) and pcbnew/tools/array_tool.cpp at KiCad 8303b2ad; the backend half is crates/ops/src/array.rs.
 //
+// The footprint editor's half of the dialog -- the "Pad numbering" panels, shown there only (`enableArrayNumbering = m_isFootprintEditor`) -- is `PadNumberingOptions`
+// below, `padNumberingOf` (the dialog's check of the axis entries) and `fpArrayCmd` (the one command, `create_footprint_array`); the numbers themselves are
+// kicad-port/arrayAxis.ts (`ARRAY_AXIS`) and crates/ops/src/array_numbering.rs, `fp_array.rs`.
+//
 // Pure: no React, no DOM (compiled by `npm run test:unit`).
-import type { ArrayGeometry, Cmd, Um } from "../api/types";
+import type { ArrayGeometry, Cmd, LibraryPad, PadNumbering, Um } from "../api/types";
 import { umTo, type LengthUnit } from "../state/units";
+import { axisOf, providedNumbers, resolveNumbering, type AxisSpec, type NumberedArray, type NumberingType } from "./arrayAxis";
 import { parseValue } from "./propertyGrid";
 
 export type ArrayTab = "grid" | "circular";
+
+/** One numbering axis as the dialog's controls hold it: the choice of alphabet and the two text entries ("Pad numbering start", "Pad numbering increment"). */
+export interface AxisEntry {
+  kind: NumberingType;
+  start: string;
+  step: string;
+}
+
+/** The footprint editor's "Pad numbering" panels (`m_gridPadNumberingPanel`, `m_circularPadNumberingPanel`). */
+export interface PadNumberingOptions {
+  /** `m_cbRenumberPads`: a grid renumbers its pads or leaves the copies the number of their source. (A circle always renumbers: `SetShouldNumber( m_isFootprintEditor )`.) */
+  renumber: boolean;
+  /** `m_rbGridStartNumberingOpt`: false is "Use first free number", true "From start value". */
+  gridFromStart: boolean;
+  /** `m_radioBoxGridNumberingScheme`: false is "Continuous (1, 2, 3...)", true "Coordinate (A1, A2, ... B1, ...)". */
+  gridCoordinates: boolean;
+  /** "Primary axis numbering" with its start and increment, and the "Secondary axis numbering" of a coordinate scheme. */
+  primary: AxisEntry;
+  secondary: AxisEntry;
+  /** `m_rbCircStartNumberingOpt`, and the circle's one axis (`m_choiceCircNumbering`, `m_entryCircNumberingStart`, `m_entryCircNumberingStep`). */
+  circFromStart: boolean;
+  circular: AxisEntry;
+}
+
+const AXIS_FROM_ONE: AxisEntry = { kind: "numeric", start: "1", step: "1" };
+const AXIS_FROM_ONE_SPEC: AxisSpec = { kind: "numeric", start: "1", step: 1 };
+
+/** `CREATE_ARRAY_DIALOG_ENTRIES`: renumber, from the start value 1, one continuous run of numerals, step 1, on both tabs. */
+export const DEFAULT_PAD_NUMBERING: PadNumberingOptions = {
+  renumber: true,
+  gridFromStart: true,
+  gridCoordinates: false,
+  primary: AXIS_FROM_ONE,
+  secondary: AXIS_FROM_ONE,
+  circFromStart: true,
+  circular: AXIS_FROM_ONE,
+};
 
 /** What the dialog holds. Lengths are um, angles degrees. */
 export interface ArrayOptions {
@@ -43,6 +85,8 @@ export interface ArrayOptions {
   arrange: boolean;
   /** `m_radioBtnUniqueRefs` ("Assign unique reference designators"); false is "Keep existing reference designators". */
   reannotate: boolean;
+  /** The footprint editor's pad numbering; the board's dialog never shows it. */
+  pads: PadNumberingOptions;
 }
 
 /**
@@ -72,6 +116,7 @@ export const DEFAULT_ARRAY_OPTIONS: ArrayOptions = {
   rotateItems: false,
   arrange: false,
   reannotate: true,
+  pads: DEFAULT_PAD_NUMBERING,
 };
 
 /** The angle between two points of the circle: `360 / count` when "Full circle" is on (`calculateCircularArrayProperties`), else the typed one. */
@@ -315,4 +360,72 @@ export function previewPoints(o: ArrayOptions, origin: readonly [number, number]
     out.push([o.centerX + rx * Math.cos(a) - ry * Math.sin(a), o.centerY + rx * Math.sin(a) + ry * Math.cos(a)]);
   }
   return out;
+}
+
+// ------------------------------------------------------------------------------------------------------------------- the footprint editor's pad numbering
+
+/**
+ * `TransferDataFromWindow`'s numbering half, for the tab being used: the `PadNumbering` the entries make -- null when the grid's "Renumber pads" is off, so the copies
+ * keep their source's number -- or the dialog's complaints, every one on a line of its own. A start is judged against its alphabet (`validateAxisOptions`), and a step
+ * must be a whole number (`validateLongEntry`: "Bad numeric value for step value: x"); the entries of "Use first free number" and of the axes a scheme does not use are
+ * not looked at.
+ */
+export function padNumberingOf(o: ArrayOptions): { ok: true; numbering: PadNumbering | null } | { ok: false; error: string } {
+  const circular = o.tab === "circular";
+  const p = o.pads;
+  if (!circular && !p.renumber) return { ok: true, numbering: null };
+  const fromStart = circular ? p.circFromStart : p.gridFromStart;
+  // "Use first free number" is an artificial linear scheme (`newGrid->m_2dArrayNumbering = false`), whatever the scheme radio says
+  const twoD = !circular && fromStart && p.gridCoordinates;
+  const errors: string[] = [];
+  /** `validateAxisOptions`: the start is judged first, and only a start that decodes gets its step looked at. */
+  const axisSpec = (entry: AxisEntry): AxisSpec => {
+    const start = axisOf({ kind: entry.kind, start: entry.start, step: 1 });
+    if (!start.ok) {
+      errors.push(start.error);
+      return { kind: entry.kind, start: entry.start, step: 1 };
+    }
+    if (!/^\s*[-+]?\d+\s*$/.test(entry.step)) {
+      errors.push(`Bad numeric value for step value: ${entry.step}`);
+      return { kind: entry.kind, start: entry.start, step: 1 };
+    }
+    return { kind: entry.kind, start: entry.start, step: parseInt(entry.step, 10) | 0 };
+  };
+  const numbering: PadNumbering = { start_specified: fromStart, two_d: twoD, primary: { ...AXIS_FROM_ONE_SPEC }, secondary: { ...AXIS_FROM_ONE_SPEC } };
+  if (fromStart) {
+    numbering.primary = axisSpec(circular ? p.circular : p.primary);
+    if (twoD) numbering.secondary = axisSpec(p.secondary);
+  }
+  return errors.length > 0 ? { ok: false, error: errors.join("\n") } : { ok: true, numbering };
+}
+
+/** The one command a Create Array makes in the Footprint Editor: `ids` are the selected pads, graphics and texts of `footprint`. */
+export function fpArrayCmd(o: ArrayOptions, footprint: string, ids: readonly string[]): { ok: true; cmd: Cmd } | { ok: false; error: string } {
+  const numbering = padNumberingOf(o);
+  if (!numbering.ok) return numbering;
+  // "Arrange selection" returns before the numbering: nothing is renumbered
+  return { ok: true, cmd: { op: "create_footprint_array", footprint, ids: [...ids], geometry: arrayGeometry(o), arrange: o.arrange, numbering: o.arrange ? null : numbering.numbering } };
+}
+
+/** The shape of the array as the numbering reads it. */
+export function numberedArrayOf(o: ArrayOptions): NumberedArray {
+  return { circular: o.tab === "circular", nx: o.nx, ny: o.ny, horizontalThenVertical: !o.verticalFirst, reverseAlternate: o.reverseAlternate };
+}
+
+/**
+ * The numbers the pads of the array will take, as far as they can be told: the first `limit` of `padsPerPoint * points`, with the numbers of the pads that stay
+ * (`unchangingPadNumbers`: every pad that is not selected) reserved. Empty when the numbering is off, the entries do not make one, or the array makes nothing.
+ */
+export function previewPadNumbers(o: ArrayOptions, pads: readonly LibraryPad[], selected: ReadonlySet<string>, limit: number): string[] {
+  if (o.arrange || checkArrayOptions(o) !== null) return [];
+  const numbering = padNumberingOf(o);
+  if (!numbering.ok || !numbering.numbering) return [];
+  const resolved = resolveNumbering(numbering.numbering, o.tab === "circular");
+  if (!resolved.ok) return [];
+  const numberable = pads.filter((p) => p.id && selected.has(p.id) && p.kind !== "non_plated_hole").length;
+  const points = o.tab === "grid" ? o.nx * o.ny : o.count;
+  const total = numberable * points;
+  if (total === 0) return [];
+  const reserved = new Set(pads.filter((p) => !p.id || !selected.has(p.id)).map((p) => p.number));
+  return providedNumbers(numberedArrayOf(o), resolved.axes, reserved, Math.min(limit, total));
 }

@@ -706,7 +706,13 @@ fn handle(
         ("GET", "/api/symbol") => {
             // A lib_id is `Library:Name`; the client sends it `encodeURIComponent`-escaped (`Device%3AR`).
             let lib_id = query_value(target, "lib_id");
-            let v = symbol_edit_json(dir, &lib_id).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            // `flatten=1`: the symbol with everything it inherits from its parents -- what the editor draws of a derived symbol
+            let v = if query_value(target, "flatten") == "1" {
+                crate::library_api::symbol_flattened(dir, &lib_id).map_err(|e| e).and_then(|s| serde_json::to_value(s).map_err(|e| vec![CheckResult::fail("board_bad_design", &lib_id, e.to_string())]))
+            } else {
+                symbol_edit_json(dir, &lib_id)
+            }
+            .unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
         ("GET", "/api/symbol_editor/names") => {
@@ -789,8 +795,23 @@ fn handle(
         ("POST", "/api/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::clipboard_api::copy(dir, &body).to_string().as_bytes()),
         // Import Graphics (DXF, SVG): what a file holds, for the dialog (a read; the import is `Cmd::ImportGraphics`).
         ("POST", "/api/import_graphics/read") => respond(stream, "200 OK", "application/json", crate::graphics_api::read(&body).to_string().as_bytes()),
+        // File > Import > Non-KiCad Board / Schematic: the file the page posts converted by kicad-cli (so through `offload`) and read; the import itself is
+        // `Cmd::ReplaceBoard` / `Cmd::ReplaceSchematic` with what this answers.
+        ("POST", "/api/import_foreign") => offload(stream, lane, dir, job, path, &body, crate::foreign_api::convert),
         // Append Board: what a `.kicad_pcb` brings and the point it is held by (a read; the append is `Cmd::PasteClipboard` with the file's text).
         ("POST", "/api/append_board/read") => respond(stream, "200 OK", "application/json", crate::append_api::read(dir, &body).to_string().as_bytes()),
+        // The Design Blocks panels (`crate::design_block_api`): the libraries and their blocks, a block's board file, its preview (kicad-cli, off the loop), and the dialogs'
+        // reads and writes. Placing a block is `Cmd::ImportSheet` / `Cmd::PlaceDesignBlock`; the save also applies the link of a selection to the block (`LinkDesignBlock`).
+        ("GET", "/api/design_blocks") => respond(stream, "200 OK", "application/json", crate::design_block_api::list(dir).to_string().as_bytes()),
+        ("GET", "/api/design_blocks/file") => respond(stream, "200 OK", "application/json", crate::design_block_api::file(dir, &query_value(target, "lib"), &query_value(target, "name"), &query_value(target, "what")).to_string().as_bytes()),
+        ("GET", "/api/design_blocks/preview") => {
+            let (lib, name, what) = (query_value(target, "lib"), query_value(target, "name"), query_value(target, "what"));
+            offload(stream, lane, dir, job, &format!("{path} {lib} {name} {what}"), &[], move |dir, _| crate::design_block_api::preview(dir, &lib, &name, &what))
+        }
+        ("POST", "/api/design_blocks/prepare") => respond(stream, "200 OK", "application/json", crate::design_block_api::prepare(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/design_blocks/save") => respond(stream, "200 OK", "application/json", crate::design_block_api::save(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/design_blocks/properties") => respond(stream, "200 OK", "application/json", crate::design_block_api::properties(dir, &body).to_string().as_bytes()),
+        ("POST", "/api/design_blocks/delete") => respond(stream, "200 OK", "application/json", crate::design_block_api::delete(dir, &body).to_string().as_bytes()),
         ("POST", "/api/cmd") => {
             let req: Value = serde_json::from_slice(&body).map_err(|e| e.to_string())?;
             let strict = req.get("strict").and_then(Value::as_bool).unwrap_or(true);
@@ -890,6 +911,7 @@ fn handle(
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/dp_continue_from_end") => respond(stream, "200 OK", "application/json", route_api::dp_continue_from_end(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
         // 7 / 8 / 9 (P5c): length tuning -- KiCad's tuning pattern tool and its generator items; the session lives in tune_api's own thread-local, not in a cell passed here.
         ("POST", "/api/tune/hover") => respond(stream, "200 OK", "application/json", tune_api::hover(dir, &body).to_string().as_bytes()),
@@ -1209,7 +1231,7 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             }))).collect::<Vec<_>>(),
             // Task item 5 -- see `eda_model::ir::Group`'s own doc. A tuning pattern (a `PCB_GENERATOR`, which is a `PCB_GROUP`) is listed with the groups so that it selects as one
             // (`generator` names what it is); `tuning_patterns` has the pattern itself.
-            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
+            "groups": d.groups.iter().map(|g| json!({ "id": g.id, "name": g.name, "member_ids": g.member_ids, "design_block": g.design_block })).chain(d.tuning_patterns.iter().map(|p| json!({ "id": p.id, "name": "Tuning Pattern", "member_ids": p.member_ids, "generator": "tuning_pattern" }))).collect::<Vec<_>>(),
             "tuning_patterns": d.tuning_patterns.iter().map(|p| {
                 let mut v = serde_json::to_value(p).unwrap_or(Value::Null);
                 v["handles"] = tune_api::handles_json(p);
@@ -1488,7 +1510,7 @@ fn schematic_svg(dir: &Path, cache: &Mutex<Option<(std::time::SystemTime, String
     if design.schematic.is_some() {
         return eda::render_schematic(&design, &model);
     }
-    let when = std::fs::metadata(&meta.intent).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
+    let when = std::fs::metadata(board::intent_path(dir, &meta, &design)).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
     if let Ok(c) = cache.lock() {
         if let Some((t, svg)) = c.as_ref() {
             if *t == when {
@@ -1676,6 +1698,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
     let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
+    // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
+    let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
@@ -1768,7 +1792,22 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
-                "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
+                // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
+                "pins": s.pins.iter().map(|p| {
+                    let mut pin = json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] });
+                    if let Some(look) = sch.extras.sheet_pin_looks.get(&p.id) {
+                        if look.size_um > 0 {
+                            pin["size_um"] = json!(look.size_um);
+                        }
+                        if look.bold {
+                            pin["bold"] = json!(true);
+                        }
+                        if look.italic {
+                            pin["italic"] = json!(true);
+                        }
+                    }
+                    pin
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -1793,6 +1832,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "lines": lines,
         "graphics": graphics,
         "locked": locked,
+        "groups": groups,
         "title_block": title_block,
         "page": crate::page_json::page_json(&page),
         "lib_symbols": lib_symbols,
@@ -2210,18 +2250,23 @@ fn symbol_edit_json(dir: &Path, lib_id: &str) -> Result<Value, Vec<CheckResult>>
 /// enumeration function) -- so "New Symbol" always has at least
 /// `Device:R`/`C`/`L`/`D`/`LED` to start editing from, even with no real
 /// KiCad install and nothing on the sheet yet.
-fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
+pub(crate) fn symbol_editor_names_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
     let mut names: std::collections::BTreeSet<String> = model.symbols.iter().map(|s| s.lib_id.clone()).collect();
     names.extend(eda_model::symbol::builtin_catalog().into_iter().map(|s| s.lib_id));
     // `project`: the entries of the project library itself -- see `footprint_library_json`.
     let mut project: Vec<String> = Vec::new();
+    // `derived`: each derived symbol of the project library with its parent -- the library tree offers Flatten and the related fields table for them
+    let mut derived = serde_json::Map::new();
     if let Some(lib) = &design.symbol_library {
         names.extend(lib.symbols.iter().map(|s| s.lib_id.clone()));
         project = lib.symbols.iter().map(|s| s.lib_id.clone()).collect();
         project.sort();
+        for s in lib.symbols.iter().filter(|s| s.extends.is_some()) {
+            derived.insert(s.lib_id.clone(), json!(s.extends));
+        }
     }
-    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project }))
+    Ok(json!({ "names": names.into_iter().collect::<Vec<_>>(), "project": project, "derived": derived }))
 }
 
 /// `GET /api/symbol/export?lib_id=<id>` -- the derived, standalone

@@ -52,6 +52,9 @@ pub(crate) mod carry;
 #[path = "pcb_edit_details_tests.rs"]
 mod edit_details_tests;
 #[cfg(test)]
+#[path = "design_block_tests.rs"]
+mod design_block_tests;
+#[cfg(test)]
 #[path = "fp_assign_tests.rs"]
 mod fp_assign_tests;
 #[cfg(test)]
@@ -60,6 +63,9 @@ mod fp_library_tests;
 #[cfg(test)]
 #[path = "fp_models_tests.rs"]
 mod fp_models_tests;
+#[cfg(test)]
+#[path = "lib_editors_tests.rs"]
+mod lib_editors_tests;
 #[cfg(test)]
 #[path = "review_tests.rs"]
 mod review_tests;
@@ -108,14 +114,24 @@ pub(crate) fn load(dir: &Path) -> Result<(Meta, eda_model::ir::Design, Constrain
     Ok((meta, design, model))
 }
 
+/// The file the design's model starts from: the intent `board.json` names, or the one a board imported from another EDA format brought (`DrawingsSection::intent_file`, a
+/// file under the board's folder that File > Import > Non-KiCad Board File wrote: `Cmd::ReplaceBoard`).
+pub(crate) fn intent_path(dir: &Path, meta: &Meta, design: &eda_model::ir::Design) -> String {
+    match design.drawings.as_ref().and_then(|d| d.intent_file.as_deref()).filter(|f| !f.is_empty()) {
+        Some(file) => dir.join(file).display().to_string(),
+        None => meta.intent.clone(),
+    }
+}
+
 /// The model a design is judged against: the intent the board came from, with the design's overlays laid over it ("design.json wins over the frozen
 /// intent"). [`load`] builds it; a command that changes what the overlays say (a rename, a footprint exchange) builds it again for the design that results.
 pub(crate) fn build_model(dir: &Path, meta: &Meta, design: &eda_model::ir::Design) -> Result<ConstraintModel, Vec<CheckResult>> {
+    let intent = intent_path(dir, meta, design);
     let mut model: ConstraintModel = serde_yaml::from_str(
-        &std::fs::read_to_string(&meta.intent)
-            .map_err(|e| fail("board_no_intent", &meta.intent, format!("the intent this board came from is gone: {e}")))?,
+        &std::fs::read_to_string(&intent)
+            .map_err(|e| fail("board_no_intent", &intent, format!("the intent this board came from is gone: {e}")))?,
     )
-    .map_err(|e| fail("board_bad_intent", &meta.intent, format!("the intent does not parse: {e}")))?;
+    .map_err(|e| fail("board_bad_intent", &intent, format!("the intent does not parse: {e}")))?;
     // The intent's parts that were renamed here (Edit Reference, Annotate, Reannotate) have their new reference before anything is keyed by one: the
     // nets below, the libraries, the instance footprints and the art.
     eda_model::fp_assign::apply_part_renames(design, &mut model);
@@ -213,8 +229,10 @@ pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut C
 fn publish_overlay(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     if let Some(lib) = &design.symbol_library {
         for lib_sym in lib.symbols.iter().filter(|s| s.published) {
+            // a derived symbol is placed as the flat symbol it stands for (`LIB_SYMBOL::Flatten`: what the schematic caches); one whose parent is gone is not
+            let Ok(flat) = lib.flatten(&lib_sym.lib_id) else { continue };
             model.symbols.retain(|s| s.lib_id != lib_sym.lib_id);
-            model.symbols.push(lib_sym.to_engine_symbol());
+            model.symbols.push(flat.to_engine_symbol());
         }
     }
 }
@@ -996,6 +1014,8 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // A schematic file imported as a sheet is read here, into the command (`crate::sheet_import`).
     let with_file = crate::sheet_import::with_loaded_file(cmd, dir)?;
     let cmd = with_file.as_ref().unwrap_or(cmd);
+    // A board imported from another EDA format brings a model of its own: the file the command names is written before it runs (`crate::import_foreign`).
+    crate::import_foreign::prepare_board(cmd, dir)?;
     // The studio shows a board with no stored schematic as the one derived
     // from its intent; the first schematic edit stores that derived one, so
     // editing what is on screen works (an undo goes back to "none stored").
@@ -1007,7 +1027,15 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
         design.sheet_contents = derived.sheet_contents;
     }
     // What the nets were drawn as before the command, for a command that can change what is connected (`reconcile_schematic`).
-    let drawn_before = (cmd.domain() == Domain::Schematic && cmd.edits_connectivity()).then(|| design.clone());
+    let drawn_before = (cmd.domain() == Domain::Schematic && cmd.edits_connectivity()).then(|| {
+        let mut before = design.clone();
+        // A schematic that replaces the drawing is traced against nothing: every net of the new drawing is a net the command made.
+        if cmd.replaces_schematic() {
+            before.schematic = None;
+            before.sheet_contents = None;
+        }
+        before
+    });
     let mut board = Board::new(design, &model, meta.snap_um, meta.spacing_um);
     // Reorganizing into sheets draws the design's nets anew: let it give a net back the name the intent declared for it.
     if matches!(cmd, Cmd::ReorganizeSheets) {
@@ -1035,7 +1063,8 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     // A rename moves the intent's part under a new reference and an exchange puts a part on another footprint: the model is built again for the design that
     // results, as the next load will build it.
     let renames = |d: &eda_model::ir::Design| d.drawings.as_ref().map(|dr| (dr.renamed_parts.clone(), dr.footprint_assignments.clone())).unwrap_or_default();
-    let refolded: Option<ConstraintModel> = if renames(board.design()) != renames(was.design()) {
+    let intent_file = |d: &eda_model::ir::Design| d.drawings.as_ref().and_then(|dr| dr.intent_file.clone());
+    let refolded: Option<ConstraintModel> = if renames(board.design()) != renames(was.design()) || intent_file(board.design()) != intent_file(was.design()) {
         build_model(dir, &meta, board.design()).ok()
     } else {
         (board_parts(board.design()) != board_parts(was.design()) || pad_edits(board.design()) != pad_edits(was.design())).then(|| {
@@ -1051,7 +1080,8 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
     let after = all_failures(&board, judged);
     eda_ops::episode::record(&was, &model, cmd, before, after, 0);
 
-    if strictness != Strictness::Off && after > before {
+    // An import (File > Import > Non-KiCad ...) is not a move: the file is what it is, and the gates do not refuse it.
+    if strictness != Strictness::Off && after > before && !cmd.replaces_board() && !cmd.replaces_schematic() {
         let new: Vec<String> = all_checks(&board, judged)
             .iter()
             .filter(|c| matches!(c.status, eda_model::CheckStatus::Fail))
@@ -1064,7 +1094,7 @@ fn step_quiet(dir: &Path, cmd: &Cmd, strictness: Strictness) -> Result<(String, 
             format!("that move takes the board from {before} failure(s) to {after} ({}); refused because --strict", new.join("; ")),
         ));
     }
-    if strictness == Strictness::Judged {
+    if strictness == Strictness::Judged && !cmd.replaces_board() && !cmd.replaces_schematic() {
         // `--strict` from the CLI also judges with KiCad's own gates: one
         // kicad-cli run on each side of the move.
         if eda_kicad_engine::find_cli().is_none() {
@@ -1219,7 +1249,9 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::Ungroup { ids } => format!("ungroup {}", ids.join(" ")),
         Cmd::AddToGroup { group_id, ids } => format!("group add-to {group_id} {}", ids.join(" ")),
         Cmd::RemoveFromGroup { ids } => format!("group remove-from {}", ids.join(" ")),
-        Cmd::EditGroup { id, name, member_ids } => format!("group edit {id} --name {name:?} --members {}", member_ids.join(" ")),
+        Cmd::EditGroup { id, name, member_ids, design_block } => format!("group edit {id} --name {name:?} --members {}{}", member_ids.join(" "), design_block.as_ref().map_or(String::new(), |b| format!(" --design-block {b:?}"))),
+        Cmd::LinkDesignBlock { ids, block } => format!("design-block link {block} {}", ids.join(" ")),
+        Cmd::PlaceDesignBlock { block, at, as_group, group_name, text } => format!("design-block place {block} --at {},{}{}{} ({} bytes of KiCad text)", mm(at.x), mm(at.y), if *as_group { " --group" } else { "" }, if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") }, text.len()),
         Cmd::CreateArray { ids, arrange, .. } => format!("array{} {}", if *arrange { " --arrange" } else { "" }, ids.join(" ")),
         Cmd::AddDimension { .. } => "dimension add".to_string(),
         Cmd::DeleteDimension { id } => format!("dimension delete {id}"),
@@ -1333,7 +1365,18 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::AddSchLine { pts, .. } => format!("schematic line --points {}", pts.len()),
         Cmd::DeleteSchLine { id } => format!("schematic delete-line {id}"),
         Cmd::AddSheet { name, file, at, .. } => format!("schematic sheet {name:?} --file {file:?} --at {},{}", mm(at.x), mm(at.y)),
-        Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, .. } => format!("schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}", if *as_sheet { "--as-sheet" } else { "--contents" }, mm(at.x), mm(at.y), if *keep_annotations { " --keep-annotations" } else { "" }),
+        Cmd::ReplaceBoard { name, text, .. } => format!("import-board {name:?} ({} bytes of .kicad_pcb)", text.len()),
+        Cmd::ReplaceSchematic { name, content } => format!("import-schematic {name:?} ({} sheet(s))", 1 + content.screens.len()),
+        Cmd::ImportSheet { source, as_sheet, name, file, at, keep_annotations, as_group, group_name, block, .. } => format!(
+            "schematic import-sheet {source:?} {} --name {name:?} --file {file:?} --at {},{}{}{}{}{}",
+            if *as_sheet { "--as-sheet" } else { "--contents" },
+            mm(at.x),
+            mm(at.y),
+            if *keep_annotations { " --keep-annotations" } else { "" },
+            if *as_group { " --group" } else { "" },
+            if group_name.is_empty() { String::new() } else { format!(" --group-name {group_name:?}") },
+            if block.is_empty() { String::new() } else { format!(" --design-block {block:?}") },
+        ),
         Cmd::SwapSchItems { a, b } => format!("schematic swap {a} {b}"),
         Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
@@ -1387,7 +1430,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetSchItemText { id, text } => format!("schematic item-text {id} {text:?}"),
         Cmd::SetSymbolLibIds { changes, .. } => format!("schematic lib-ids {}", changes.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(",")),
         Cmd::IncrementAnnotations { start, increment } => format!("schematic increment-annotations {start} {increment}"),
-        Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids } => {
+        Cmd::CommitRoute { tracks, vias, remove_track_ids, remove_via_ids, .. } => {
             format!("route: +{} track(s) +{} via(s), -{} track(s) -{} via(s)", tracks.len(), vias.len(), remove_track_ids.len(), remove_via_ids.len())
         }
         Cmd::CommitTuning { pattern, remove_pattern, tracks, remove_track_ids, .. } => {
@@ -1428,6 +1471,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditFootprintText { footprint, id, content, layer, .. } => format!("footprint-text edit {footprint:?} {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteFootprintText { footprint, id } => format!("footprint-text delete {footprint:?} {id}"),
         Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::CreateFootprintArray { footprint, ids, arrange, .. } => format!("footprint-array {footprint:?} --items {}{}", ids.len(), if *arrange { " --arrange" } else { "" }),
 
         // The Symbol Editor tab. No real `eda board` CLI subcommand parses
         // these either, same reasoning as the footprint-editor verbs just
@@ -1449,6 +1493,12 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => format!("symbol-shape move {lib_id:?} {id} --dx {dx_mm:.2} --dy {dy_mm:.2}"),
         Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, .. } => format!("symbol-shape edit {lib_id:?} {id} --width {stroke_mm:.2}"),
         Cmd::EditSymbolText { lib_id, id, text, .. } => format!("symbol-text edit {lib_id:?} {id} --content {text:?}"),
+        Cmd::ReplaceSymbolGraphic { lib_id, id, .. } => format!("symbol-shape replace {lib_id:?} {id}"),
+        Cmd::DeriveSymbol { parent, lib_id, .. } => format!("symbol derive {lib_id:?} --from {parent:?}"),
+        Cmd::FlattenSymbol { lib_id } => format!("symbol flatten {lib_id:?}"),
+        Cmd::UpdateSymbolFields { lib_id, fields, .. } => format!("symbol update-fields {lib_id:?} --fields {}", fields.join(",")),
+        Cmd::SetSymbolParent { lib_id, parent } => format!("symbol set-parent {lib_id:?} {parent:?}"),
+        Cmd::EditLibrarySymbolFields { lib_id, fields } => format!("symbol fields {lib_id:?} --count {}", fields.len()),
     }
 }
 
@@ -1525,6 +1575,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddToGroup { .. } => "group-add-to",
         Cmd::RemoveFromGroup { .. } => "group-remove-from",
         Cmd::EditGroup { .. } => "group-edit",
+        Cmd::LinkDesignBlock { .. } => "group-edit",
+        Cmd::PlaceDesignBlock { .. } => "duplicate",
         Cmd::CreateArray { .. } => "create-array",
         Cmd::AddDimension { .. } => "dimension-add",
         Cmd::DeleteDimension { .. } => "dimension-delete",
@@ -1587,6 +1639,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddSchLine { .. } | Cmd::DeleteSchLine { .. } => "schematic-line",
         Cmd::AddSheet { .. } => "schematic-sheet",
         Cmd::ImportSheet { .. } => "schematic-import-sheet",
+        Cmd::ReplaceBoard { .. } => "import-board",
+        Cmd::ReplaceSchematic { .. } => "import-schematic",
         Cmd::SwapSchItems { .. } => "schematic-swap",
         Cmd::PasteSch { .. } => "schematic-paste",
         Cmd::SchEdit(c) => c.kind(),
@@ -1619,10 +1673,12 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::SetPadNumbers { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
+        Cmd::CreateFootprintArray { .. } => "footprint-array",
 
         Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
+        Cmd::DeriveSymbol { .. } | Cmd::FlattenSymbol { .. } | Cmd::UpdateSymbolFields { .. } | Cmd::SetSymbolParent { .. } | Cmd::EditLibrarySymbolFields { .. } => "symbol-derive",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
-        Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } => "symbol-shape",
+        Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } | Cmd::ReplaceSymbolGraphic { .. } => "symbol-shape",
         Cmd::EditSymbolText { .. } => "symbol-text",
     }
 }
@@ -5081,7 +5137,7 @@ mod tests {
         setup_mcu30_users_board(&dir);
         let (_, mut design, _) = load(&dir).unwrap();
         // a published library symbol with the pins of the resistor R1 is, a rectangle in its normal body and a wider one in the alternate body
-        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None };
+        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() };
         let rect = |half: f64, style: u32| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: SPoint::new(-half, 2.54), end: SPoint::new(half, -2.54), stroke_mm: 0.254, fill: LibraryFill::None };
         let mut lib = LibrarySymbol::new_empty("Test:Gate2");
         lib.reference_prefix = "R".into();
@@ -5384,6 +5440,7 @@ mod tests {
             hidden: false,
             name_size_mm: None,
             number_size_mm: None,
+            alternates: Vec::new(),
         };
         step(&dir, Cmd::AddSymbolPin { lib_id: "TEST:R".into(), pin }, false, "test").unwrap();
 
@@ -5749,7 +5806,7 @@ mod tests {
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000, dy: 2_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
-            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None }),
+            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None }),
             Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
             Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
         ];
@@ -5759,6 +5816,165 @@ mod tests {
             undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
             assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The five group verbs, and a move, a turn, a mirror and a delete of a group, each make exactly one undo step on the sheet, and one Undo puts the sheet back exactly
+    /// -- the groups with it (`SCH_COMMIT` keeps the group in the same commit as its members).
+    #[test]
+    fn every_schematic_group_verb_is_one_undo_step_and_the_tree_survives_the_edits() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_group_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let pt = |x: Um, y: Um| Point { x, y };
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "a".into(), at: pt(15_000, 30_000), angle: 0, size_um: 1_270 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_b".into(), content: "b".into(), at: pt(25_000, 30_000), angle: 0, size_um: 1_270 });
+            sch.assign_missing_ids();
+            // inner = {R1, R2}, outer = {inner, txt_a}
+            sch.extras.groups = vec![
+                eda_model::ir::Group { id: "grp_inner".into(), name: "pair".into(), member_ids: vec!["R1".into(), "R2".into()], design_block: String::new() },
+                eda_model::ir::Group { id: "grp_outer".into(), name: "all".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()], design_block: String::new() },
+            ];
+        }
+        save(&dir, &design).unwrap();
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let sheet_of = |d: &Design| serde_json::to_value(d.schematic.as_ref().unwrap()).unwrap();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let start = sheet_of(&load(&dir).unwrap().1);
+        let commands = vec![
+            Cmd::SchEdit(V::Group { ids: ids(&["grp_outer", "txt_b"]) }),
+            Cmd::SchEdit(V::Ungroup { ids: ids(&["grp_outer"]) }),
+            Cmd::SchEdit(V::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["txt_b"]) }),
+            Cmd::SchEdit(V::RemoveFromGroup { ids: ids(&["txt_a"]) }),
+            Cmd::SchEdit(V::EditGroup { id: "grp_outer".into(), name: "renamed".into(), member_ids: ids(&["grp_inner", "txt_b"]), design_block: None }),
+            Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Rotate { ids: ids(&["grp_outer"]), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(M::Mirror { ids: ids(&["grp_outer"]), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+            Cmd::DeleteSchText { id: "txt_a".into() },
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet and its groups back exactly after {cmd:?}");
+        }
+        // the move really took the whole tree: R1, R2 and txt_a are 2.54 mm further right; txt_b, in no group, is where it was
+        step(&dir, on_sheet(Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None })), false, "test").unwrap();
+        let d = load(&dir).unwrap().1;
+        let sch = d.schematic.as_ref().unwrap();
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R1").unwrap().at.x, 12_540);
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R2").unwrap().at.x, 22_540);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_a").unwrap().at.x, 17_540);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_b").unwrap().at.x, 25_000);
+        assert_eq!(sch.extras.groups.len(), 2, "the tree is still the tree");
+        // the studio's sheet carries the groups
+        let json = crate::studio::schematic_json_of(&d, &load(&dir).unwrap().2, "");
+        assert_eq!(json["groups"].as_array().map(Vec::len), Some(2));
+        assert_eq!(json["groups"][0]["name"], "pair");
+        // a refused one is no step at all
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::Group { ids: ids(&["R1"]) })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("at least two"), "{}", reasons(&e));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each Pin Helper (a wire stub, a no-connect, a local, a hierarchical and a global label on a pin) makes exactly one undo step on the sheet, and one Undo puts it back exactly; a
+    /// helper that would change nothing is refused and is no step at all.
+    #[test]
+    fn every_pin_helper_is_one_undo_step() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_pin_helpers::PinHelper as H;
+        let dir = scratch("sch_pin_helper_undo");
+        setup_schematic(&dir);
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        for what in [H::Wire, H::NoConnect, H::NetLabel, H::HierLabel, H::GlobalLabel] {
+            let cmd = Cmd::SchEdit(V::PinHelper { what, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 });
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        // two labels on two pins, the text each pin's: the pins have no name, so `<reference>_<number>`
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NetLabel, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 })), false, "test").unwrap();
+        let d = load(&dir).unwrap().1;
+        let mut texts: Vec<String> = d.schematic.as_ref().unwrap().labels.iter().map(|l| l.net.clone()).collect();
+        texts.sort();
+        assert_eq!(texts, ["R1_1", "R2_1"]);
+        // a no-connect where there is one already changes nothing: refused, and no step
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("have it already"), "{}", reasons(&e));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The verbs of a user-defined field (show it, edit its text, move, turn and mirror it, autoplace the fields, add and remove one) each make exactly one undo step on the
+    /// sheet and one Undo puts it back exactly; the studio's sheet lists the field, hidden until it is shown, with the id every verb takes it by.
+    #[test]
+    fn every_user_field_verb_is_one_undo_step_and_the_studios_sheet_lists_the_field() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_user_field_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        // a sheet this project drew, not one read from a file: only such a sheet has places for its fields
+        design.schematic.as_mut().unwrap().imported_from_kicad = false;
+        design.schematic.as_mut().unwrap().user_fields.entry("R1".into()).or_default().insert("MPN".into(), "ERJ-3EKF".into());
+        save(&dir, &design).unwrap();
+        let field = "fld:R1:MPN".to_string();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let edit = |f: &dyn Fn(&mut Option<String>, &mut Option<bool>)| {
+            let (mut text, mut visible) = (None, None);
+            f(&mut text, &mut visible);
+            Cmd::SchEdit(V::EditField { id: "fld:R1:MPN".into(), text, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None })
+        };
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+
+        // the studio's sheet lists it with the four standard fields, hidden
+        let (_, d0, m0) = load(&dir).unwrap();
+        let json = crate::studio::schematic_json_of(&d0, &m0, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").expect("R1");
+        let names: Vec<&str> = r1["fields"].as_array().unwrap().iter().filter_map(|f| f["name"].as_str()).collect();
+        assert_eq!(names, ["Reference", "Value", "Footprint", "Datasheet", "MPN"]);
+        let mpn = r1["fields"].as_array().unwrap().iter().find(|f| f["name"] == "MPN").unwrap();
+        assert_eq!((mpn["id"].as_str(), mpn["text"].as_str(), mpn["visible"].as_bool()), (Some("fld:R1:MPN"), Some("ERJ-3EKF"), Some(false)));
+
+        let commands = vec![
+            edit(&|_, v| *v = Some(true)),
+            edit(&|t, _| *t = Some("RC0603".into())),
+            Cmd::SchMove(M::Move { ids: vec![field.clone()], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Rotate { ids: vec![field.clone()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(M::Mirror { ids: vec![field.clone()], vertical: false, vertices: Default::default(), about: None, grid: 0 }),
+            Cmd::SchEdit(V::AutoplaceFields { ids: vec!["R1".into()] }),
+            Cmd::SchEdit(V::AddUserField { id: "R1".into(), name: "Maker".into(), text: "Panasonic".into() }),
+            Cmd::SchEdit(V::RemoveUserField { id: "R1".into(), name: "MPN".into() }),
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+
+        // shown, it is listed as visible, and its place is the studio's to draw
+        step(&dir, on_sheet(edit(&|_, v| *v = Some(true))), false, "test").unwrap();
+        let (_, d1, m1) = load(&dir).unwrap();
+        let json = crate::studio::schematic_json_of(&d1, &m1, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap();
+        let mpn = r1["fields"].as_array().unwrap().iter().find(|f| f["name"] == "MPN").unwrap();
+        assert_eq!(mpn["visible"], true);
+        assert!(mpn["at"][0].is_number() && mpn["at"][1].is_number());
+        // a refused one is no step at all
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::RemoveUserField { id: "R1".into(), name: "Value".into() })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("cannot be removed"), "{}", reasons(&e));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

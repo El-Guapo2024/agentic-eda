@@ -5,9 +5,8 @@
 // menus and hotkeys in step).
 //
 // Not registered, with the reason recorded in `tools/ui-parity-missing.json`: `pcbnew.ModuleEditor.createFootprint` (the footprint wizard), the five
-// `pcbnew.MicrowaveTool.*` (board-only footprints and custom pads), `eeschema.SymbolLibraryControl.{deriveFromExistingSymbol, flattenSymbol,
-// updateSymbolFields, showRelatedLibraryFieldsTable}` (derived symbols), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol
-// Viewer), `showHiddenFields` and `eeschema.SymbolDrawing.drawSymbolTextBox`. The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
+// `pcbnew.MicrowaveTool.*` (board-only footprints and custom pads), `exportSymbolAsSVG` (kicad-cli), `nextSymbol` / `previousSymbol` (the Symbol
+// Viewer). The Footprint Checker (`checkFootprint`) is kicad-cli's DRC on a scratch
 // board (actions/footprintCheckerActions.ts).
 import type { Dispatch } from "react";
 import type { Action as StudioAction } from "../state/store";
@@ -15,6 +14,7 @@ import type { FootprintEditorApi, FpAction, FpToolId } from "../state/footprintE
 import type { SymAction, SymbolEditorApi } from "../state/symbolEditorStore";
 import * as fpLib from "./footprintLibraryOps";
 import { showFootprintChecker } from "./footprintCheckerActions";
+import { fpArrayIds } from "../kicad-port/fpArray";
 import { asPickedFile } from "./importActions";
 import * as symLib from "./symbolLibraryOps";
 
@@ -89,6 +89,15 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
       void ctx.fpApi.setTool(st.activeTool === tool ? "select" : tool);
     });
   };
+  // Create Array... (Ctrl+T) -- ARRAY_TOOL::CreateArray: `if( selection.Empty() ) return 0;`, then the dialog with the pad numbering panels (`enableArrayNumbering`).
+  const boardCreateArray = m.get("pcbnew.Array.createArray");
+  m.set("pcbnew.Array.createArray", () => {
+    if (ctx.tab !== "footprint") return boardCreateArray?.();
+    const st = ctx.fpApi.getState();
+    if (!st.footprint) return fpToast("Open a footprint first.");
+    if (fpArrayIds(st.footprint, st.selection).length === 0) return;
+    ctx.fpDispatch({ type: "SET_CREATE_ARRAY_OPEN", open: true });
+  });
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.line", "draw_segment");
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.arc", "draw_arc");
   armShapeOnFootprintTab("pcbnew.InteractiveDrawing.rectangle", "draw_rect");
@@ -183,6 +192,9 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   m.set("eeschema.SymbolLibraryControl.showElectricalTypes", symTab(() => ctx.symDispatch({ type: "TOGGLE_ELECTRICAL_TYPES" })));
   m.set("eeschema.SymbolLibraryControl.showPinNumbers", symTab(() => ctx.symDispatch({ type: "TOGGLE_PIN_NUMBERS" })));
   m.set("eeschema.SymbolLibraryControl.showHiddenPins", symTab(() => ctx.symDispatch({ type: "TOGGLE_HIDDEN_PINS" })));
+  // Show Hidden Fields / Show Pin Alternate Icons -- SYMBOL_EDITOR_CONTROL::ToggleHiddenFields, TogglePinAltIcons: render-setting toggles.
+  m.set("eeschema.SymbolLibraryControl.showHiddenFields", symTab(() => ctx.symDispatch({ type: "TOGGLE_HIDDEN_FIELDS" })));
+  m.set("eeschema.EditorControl.togglePinAltIcons", symTab(() => ctx.symDispatch({ type: "TOGGLE_PIN_ALT_ICONS" })));
   // Synchronized Pins Mode -- ToggleSyncedPinsMode: `m_SyncPinEdit = !m_SyncPinEdit`; enabled for a multi-unit symbol only (`multiUnitModeCond`).
   m.set(
     "eeschema.SymbolLibraryControl.toggleSyncedPinsMode",
@@ -193,8 +205,14 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
       symToast(`Synchronized Pins Mode ${st.syncPins ? "off" : "on"}`);
     })
   );
-  // Bulk Edit Symbol Fields... -- SYMBOL_EDITOR_CONTROL::ShowLibraryTable (DIALOG_LIB_FIELDS_TABLE, scope library).
-  m.set("eeschema.SymbolLibraryControl.showLibraryFieldsTable", symTab(() => ctx.symDispatch({ type: "SET_FIELDS_TABLE_OPEN", open: true })));
+  // Bulk Edit Symbol Fields... / Bulk Edit Related Symbol Fields... -- SYMBOL_EDITOR_CONTROL::ShowLibraryTable (DIALOG_LIB_FIELDS_TABLE, scope library / related symbols).
+  m.set("eeschema.SymbolLibraryControl.showLibraryFieldsTable", symTab(() => symLib.showFieldsTable(sc, "library")));
+  m.set("eeschema.SymbolLibraryControl.showRelatedLibraryFieldsTable", symTab(() => symLib.showFieldsTable(sc, "related")));
+  // Derive from Existing Symbol... / Flatten Symbol / Update Symbol Fields... -- SYMBOL_EDITOR_CONTROL::AddSymbol (CreateNewSymbol( parent )), FlattenSymbol, and
+  // SYMBOL_EDITOR_EDIT_TOOL::UpdateSymbolFields (DIALOG_UPDATE_SYMBOL_FIELDS, "Symbol is not derived from another symbol." for any other symbol).
+  m.set("eeschema.SymbolLibraryControl.deriveFromExistingSymbol", symTab(() => symLib.deriveFromExisting(sc)));
+  m.set("eeschema.SymbolLibraryControl.flattenSymbol", symTab(() => symLib.flattenSymbol(sc)));
+  m.set("eeschema.SymbolLibraryControl.updateSymbolFields", symTab(() => symLib.updateSymbolFields(sc)));
   // Symbol Properties... (File menu and tree context menu of the symbol editor) -- `symbolProperties`: the schematic tab's own handler (a placed
   // symbol's dialog) stays what it is there; on the Symbol tab it is the open symbol's library properties.
   const placedSymbolProperties = m.get("eeschema.InteractiveEdit.symbolProperties");
@@ -232,7 +250,7 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
   m.set("eeschema.PinEditing.pushPinNumSize", pushPin("number_size"));
 
   // Draw Lines / Draw Polygons / Move Symbol Anchor / Draw Text -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawShape (SEGMENT / POLY), PlaceAnchor, TwoClickPlace: arm the tool.
-  const armSymTool = (tool: "draw_lines" | "draw_polygon" | "anchor" | "text") =>
+  const armSymTool = (tool: "draw_lines" | "draw_polygon" | "draw_textbox" | "anchor" | "text") =>
     symTab(() => {
       const st = ctx.symApi.getState();
       if (!st.symbol) return symToast("Open a symbol first.");
@@ -240,6 +258,8 @@ export function registerLibraryEditorActions(m: Map<string, () => void>, ctx: Li
     });
   m.set("eeschema.SymbolDrawing.drawSymbolLines", armSymTool("draw_lines"));
   m.set("eeschema.SymbolDrawing.drawSymbolPolygon", armSymTool("draw_polygon"));
+  // Draw Text Box -- SYMBOL_EDITOR_DRAWING_TOOLS::DrawSymbolTextBox (`doDrawShape` without a shape): two clicks, then Text Box Properties.
+  m.set("eeschema.SymbolDrawing.drawSymbolTextBox", armSymTool("draw_textbox"));
   m.set("eeschema.SymbolDrawing.placeSymbolAnchor", armSymTool("anchor"));
   m.set("eeschema.SymbolDrawing.placeSymbolText", armSymTool("text"));
 }

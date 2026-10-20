@@ -72,6 +72,8 @@ export interface SheetPinItem {
   shape: LabelShape;
   at: [number, number];
   side: SheetSide;
+  /** The size the pin's text is set in (`EDA_TEXT::GetTextWidth`), micrometres: Sheet Pin Properties' own, else 50 mil. */
+  sizeUm: number;
 }
 
 const cache = new WeakMap<Schematic, SheetPinItem[]>();
@@ -81,7 +83,7 @@ export function sheetPinItems(sch: Schematic): SheetPinItem[] {
   let items = cache.get(sch);
   if (!items) {
     items = [];
-    for (const s of sch.sheets ?? []) for (const p of s.pins ?? []) if (p.id) items.push({ id: p.id, sheetId: s.id, name: p.name, shape: p.shape, at: p.at, side: sheetPinSide(s, p.at) });
+    for (const s of sch.sheets ?? []) for (const p of s.pins ?? []) if (p.id) items.push({ id: p.id, sheetId: s.id, name: p.name, shape: p.shape, at: p.at, side: sheetPinSide(s, p.at), sizeUm: p.size_um && p.size_um > 0 ? p.size_um : SHEET_PIN_TEXT_SIZE_UM });
     cache.set(sch, items);
   }
   return items;
@@ -101,7 +103,7 @@ export type Measure = (text: string, sizeUm: number) => number;
 
 /** The box of a sheet pin (`SCH_SHEET_PIN::GetBoundingBox`). */
 export function sheetPinBox(pin: SheetPinItem, measure: Measure): Box {
-  return sheetPinBodyBox(pin.at, pin.side, measure(pin.name, SHEET_PIN_TEXT_SIZE_UM));
+  return sheetPinBodyBox(pin.at, pin.side, measure(pin.name, pin.sizeUm), pin.sizeUm);
 }
 
 /** `SCH_SHEET_PIN::HitTest( aPoint, aAccuracy )`: the box, grown by the accuracy. */

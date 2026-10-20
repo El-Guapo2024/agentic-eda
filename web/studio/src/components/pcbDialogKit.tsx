@@ -6,9 +6,11 @@ import { useStudioState } from "../state/store";
 import { umFrom, umTo } from "../state/units";
 import { closeSweepDialog } from "../actions/pcbSweepDialogs";
 
-/** Escape closes the dialog (`closeSweepDialog` unless a dialog handles its own stack). The key is the dialog's: it must not go on to the canvas' own Escape (cancel the tool, then clear the selection). */
-export function useEscape(onClose: () => void = closeSweepDialog) {
+/** Escape closes the dialog (`closeSweepDialog` unless a dialog handles its own stack). The key is the dialog's: it must not go on to the canvas' own Escape (cancel the tool, then clear the selection).
+ *  `null` while the dialog is closed: a dialog that stays mounted (the Generators Manager) listens only while it is open, or it would take every Escape in the studio. */
+export function useEscape(onClose: (() => void) | null = closeSweepDialog) {
   useEffect(() => {
+    if (!onClose) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.stopPropagation();

@@ -4,6 +4,7 @@
 // evaluated here over a summary of the selection. The studio shows an action KiCad would offer but that is not wired
 // as a disabled entry ("not ported yet"), the way its menus already do.
 import type { MenuNode } from "../kicad/types";
+import { allPinsOrSheetPins, PIN_HELPERS } from "./schPinHelpers";
 
 /** How many selected items there are of each kind the menu's conditions distinguish. */
 export interface SchSelectionSummary {
@@ -44,6 +45,14 @@ export interface SchSelectionSummary {
   pins: number;
   /** Preferences > Editing Options > "Allow unconstrained pin swaps" (`m_Input.allow_unconstrained_pin_swaps`): Swap Pins is in the menu only with it on. */
   allowPinSwaps: boolean;
+  /** Selected groups (`SCH_GROUP_T`). */
+  groups: number;
+  /** `m_enteredGroup != nullptr`: a group is being worked in. */
+  inGroup: boolean;
+  /** `GROUP_CONTEXT_MENU::update`: what the selection holds (see kicad-port/schGroups.ts `groupMenuFlags`). */
+  group: { count: number; hasGroup: boolean; onlyOneGroup: boolean; hasUngroupedItems: boolean; hasMember: boolean };
+  /** `groupWithDesignBlockLink` (sch_edit_frame.cpp): the one selected item is a group linked to a design block. */
+  linkedGroup: boolean;
   /** The one selected polygon or rule area has its outline under the cursor (`SCH_POINT_EDITOR::addCornerCondition`). */
   canAddCorner: boolean;
   /** ... and a corner of it is under the cursor, leaving enough corners (`removeCornerCondition`). */
@@ -79,6 +88,10 @@ export function emptySummary(): SchSelectionSummary {
     multiBodyStyle: false,
     pins: 0,
     allowPinSwaps: false,
+    groups: 0,
+    inGroup: false,
+    group: { count: 0, hasGroup: false, onlyOneGroup: false, hasUngroupedItems: false, hasMember: false },
+    linkedGroup: false,
     canAddCorner: false,
     canRemoveCorner: false,
   };
@@ -118,9 +131,31 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const linesSelection = s.total > 0 && s.wires + s.buses + s.lines === s.total;
   const sheetSelection = single && s.sheets === 1;
   // `RotatableItems` holds the fields too (`SCH_FIELD_T`): a field turns its text, and a mirror flips its justification
-  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.fields > 0;
+  const orientable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.fields + s.groups > 0;
 
+  // `SCH_SELECTION_TOOL::Init` (priority 1): Enter Group for one selected group, Leave Group while one is entered
+  add(single && s.groups === 1 && item("common.Interactive.groupEnter"), s.inGroup && item("common.Interactive.groupLeave"));
+  // ... then Place Linked Design Block and Save to Linked Design Block with `groupEnterCondition`; `ENABLE( groupWithDesignBlockLink )` greys them for a group with no link
+  add(
+    single && s.groups === 1 && { type: "item", action: "eeschema.InteractiveDrawing.placeLinkedDesignBlock", disabled: !s.linkedGroup },
+    single && s.groups === 1 && { type: "item", action: "eeschema.InteractiveDrawing.saveToLinkedDesignBlock", disabled: !s.linkedGroup }
+  );
+  // `selToolMenu.AddMenu( makePinTricksMenu( m_selectionTool ), S_C::AllPinsOrSheetPins, 1 )`: Pin Helpers (`PIN_TRICKS_MENU`) for a selection of pins and sheet pins
+  add(allPinsOrSheetPins(s) && { type: "submenu", label: "Pin Helpers", items: PIN_HELPERS.map((h) => ({ type: "item", action: h.action, label: h.label }) as MenuNode) });
   if (sheetSelection) add(item("eeschema.NavigateTool.enterSheet"), sep);
+  // `GROUP_TOOL::Init`: the Grouping submenu for any selection (`GROUP_CONTEXT_MENU::update` says which of its four entries are on)
+  if (s.total > 0) {
+    add({
+      type: "submenu",
+      label: "Grouping",
+      items: [
+        { type: "item", action: "common.Interactive.group", disabled: s.group.count < 2 },
+        { type: "item", action: "common.Interactive.ungroup", disabled: !s.group.hasGroup },
+        { type: "item", action: "common.Interactive.addToGroup", disabled: !(s.group.onlyOneGroup && s.group.hasUngroupedItems) },
+        { type: "item", action: "common.Interactive.removeFromGroup", disabled: !s.group.hasMember },
+      ],
+    });
+  }
   // `makeBodyStyleMenu` at `SingleMultiBodyStyleSymbol` (KiCad lists each body style; the studio has the one command that cycles through them)
   add(single && s.symbols === 1 && s.multiBodyStyle && item("eeschema.InteractiveEdit.toggleDeMorgan"));
   if (orientable) {
@@ -134,7 +169,7 @@ export function schContextMenu(s: SchSelectionSummary): MenuNode[] {
   const swappable = s.symbols + s.powerSymbols + labels + s.directiveLabels + s.texts + s.textBoxes + s.shapes + s.ruleAreas + s.sheets + s.sheetPins + s.junctions + s.noConnects;
   add(s.total > 1 && swappable === s.total && item("eeschema.InteractiveEdit.swap"));
   // `propertiesCondition`: one item of a type that has a properties dialog.
-  add(single && s.symbols + s.powerSymbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields === 1 && item("eeschema.InteractiveEdit.properties"));
+  add(single && s.symbols + s.powerSymbols + s.sheets + s.sheetPins + s.texts + s.textBoxes + labels + s.directiveLabels + s.shapes + s.ruleAreas + s.fields + s.groups === 1 && item("eeschema.InteractiveEdit.properties"));
   // `autoplaceCondition`: any selected item is one that has fields (a symbol, a sheet); the command also takes the item of a selected field
   add(s.symbols + s.powerSymbols + s.sheets + s.fields > 0 && item("eeschema.InteractiveEdit.autoplaceFields"));
   if (single && s.symbols === 1) {

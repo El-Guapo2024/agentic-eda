@@ -209,14 +209,23 @@ export const SHEET_PIN_SHAPES: ReadonlyArray<{ value: LabelShape; label: string 
   { value: "passive", label: "Passive" },
 ];
 
+/** The size a sheet pin's text is set in until Sheet Pin Properties sets another: 50 mil. */
+export const SHEET_PIN_DEFAULT_SIZE_UM = 1270;
+
 /**
- * What OK sends in `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow`: the pin's name and shape as they were typed and picked. Only what changed goes, as one `edit_sheet_pin`
- * (a verb that would change nothing is refused and the undo stack never records a step that did nothing); null when nothing did.
+ * What OK sends in `DIALOG_SHEET_PIN_PROPERTIES::TransferDataFromWindow`: the pin's name, shape and the text's size, bold and italic as they were typed and picked. Only what
+ * changed goes, as one `edit_sheet_pin` (a verb that would change nothing is refused and the undo stack never records a step that did nothing); null when nothing did.
  */
-export function sheetPinEditCmd(pin: { id: string; name: string; shape: LabelShape }, next: { name: string; shape: LabelShape }): Cmd | null {
+export function sheetPinEditCmd(
+  pin: { id: string; name: string; shape: LabelShape; size_um?: number; bold?: boolean; italic?: boolean },
+  next: { name: string; shape: LabelShape; sizeUm?: number; bold?: boolean; italic?: boolean },
+): Cmd | null {
   const name = next.name.trim();
-  const edit: { name?: string; shape?: LabelShape } = {};
+  const edit: { name?: string; shape?: LabelShape; size_um?: number; bold?: boolean; italic?: boolean } = {};
   if (name !== pin.name) edit.name = name;
   if (next.shape !== pin.shape) edit.shape = next.shape;
+  if (next.sizeUm !== undefined && next.sizeUm !== (pin.size_um && pin.size_um > 0 ? pin.size_um : SHEET_PIN_DEFAULT_SIZE_UM)) edit.size_um = next.sizeUm;
+  if (next.bold !== undefined && next.bold !== !!pin.bold) edit.bold = next.bold;
+  if (next.italic !== undefined && next.italic !== !!pin.italic) edit.italic = next.italic;
   return Object.keys(edit).length > 0 ? { op: "sch_edit", verb: "edit_sheet_pin", id: pin.id, ...edit } : null;
 }

@@ -8,8 +8,10 @@
 //! read back as a design.
 //!
 //! There is one answer per question: DRC, ERC, plots, Gerbers, drill,
-//! position files, STEP, netlist and BOM all come from kicad-cli. Nothing
-//! in this workspace re-implements any of them.
+//! position files, STEP, netlist and BOM all come from kicad-cli, and so does
+//! reading a board or a schematic of another EDA format ([`foreign`]:
+//! `kicad-cli pcb import` and `sch import`). Nothing in this workspace
+//! re-implements any of them.
 //!
 //! The scratch directory is the caller's choice. The studio and the CLI
 //! pass `<board dir>/.kicad` (kept for inspection); the gates, which work
@@ -17,6 +19,9 @@
 //! removed afterwards).
 
 pub mod footprint_check;
+// Other EDA formats in: `kicad-cli pcb import` and `kicad-cli sch import` (docs/ARCHITECTURE.md, "Engines").
+pub mod foreign;
+pub use foreign::{import_foreign_pcb, import_foreign_sch, ForeignImport, ForeignOptions};
 
 use eda_kicad::zone_fills::KicadFills;
 use eda_kicad::{export_kicad_pcb_mapped_with, export_kicad_pro_for, export_kicad_sch_tree_mapped, ExportMeta};
@@ -1621,6 +1626,33 @@ pub fn export_symbol_svg(work: &Path, root: &Path, name: &str, kicad_sym: &str, 
     write_file(&input, kicad_sym)?;
     let out_dir = root.join("export").join("kicad").join("sym-svg");
     run_export(&cli, "sym", "svg", args, &input, &out_dir, true, "svg", &stem, root)
+}
+
+/// `kicad-cli sch export svg` or `pcb export svg` on a file as it is -- a design block's schematic or board, which is not the design's -- into `out_dir`, and the
+/// SVG's text. `scope` is `sch` or `pcb`. The schematic is drawn without the drawing sheet or a background; the board is its area only (`--page-size-mode 2`), one file
+/// (`--mode-single`) of the copper, silkscreen, courtyard and outline layers. This is what the Design Blocks panel's preview shows (`SCH_DESIGN_BLOCK_PREVIEW_WIDGET`,
+/// `PCB_DESIGN_BLOCK_PREVIEW_WIDGET`); a run takes about a second.
+pub fn export_file_svg(scope: &str, input: &Path, out_dir: &Path) -> Result<String, Vec<CheckResult>> {
+    let cli = need_cli()?;
+    if scope != "sch" && scope != "pcb" {
+        return Err(fail("kicad_cli_export", scope, "an svg preview is of a schematic (sch) or a board (pcb)"));
+    }
+    let stem = file_stem(&input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "block".into()));
+    let args: Vec<String> = if scope == "sch" {
+        ["--no-background-color", "--exclude-drawing-sheet"].iter().map(|a| a.to_string()).collect()
+    } else {
+        ["--mode-single", "--layers", "F.Cu,B.Cu,F.SilkS,B.SilkS,F.Courtyard,B.Courtyard,Edge.Cuts", "--page-size-mode", "2", "--exclude-drawing-sheet"].iter().map(|a| a.to_string()).collect()
+    };
+    run_export(&cli, scope, "svg", &args, input, out_dir, scope == "sch", "svg", &stem, out_dir)?;
+    let produced = out_dir.join(format!("{stem}.svg"));
+    // kicad-cli names a schematic's svg after the file it was given (`<name>.svg`); look for the one it wrote when the name differs
+    let found = if produced.is_file() {
+        Some(produced)
+    } else {
+        std::fs::read_dir(out_dir).ok().and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|x| x == "svg")))
+    };
+    let path = found.ok_or_else(|| fail("kicad_cli_export", "svg", "kicad-cli wrote no svg"))?;
+    std::fs::read_to_string(&path).map_err(|e| fail("kicad_cli_export", "svg", format!("could not read {}: {e}", path.display())))
 }
 
 /// KiCad's stock plugin scripts (the legacy BOM generators): `EDA_KICAD_PLUGINS`, else the folder of the installed KiCad that kicad-cli belongs to

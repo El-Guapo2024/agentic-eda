@@ -40,6 +40,8 @@ export interface LibraryTreeProps {
   selected: readonly string[];
   /** The item open in the editor (drawn bold). */
   current: string | null;
+  /** A line to add to the tooltip of an item (a derived symbol says what it derives from). */
+  hints?: Readonly<Record<string, string>>;
   multi?: boolean;
   onSelect: (names: string[]) => void;
   /** Double click / Enter: `EditSymbol` / `EditFootprint`. */
@@ -52,7 +54,7 @@ const NO_LIBS: readonly InstalledLib[] = [];
 const NOTHING_LOADED: ReadonlyMap<string, readonly string[]> = new Map();
 const NOT_LOADING: ReadonlySet<string> = new Set();
 
-export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = NOTHING_LOADED, loading = NOT_LOADING, onLoadLibrary, onSearch, searchIndex = "idle", selected, current, multi, onSelect, onOpen, menu }: LibraryTreeProps) {
+export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = NOTHING_LOADED, loading = NOT_LOADING, onLoadLibrary, onSearch, searchIndex = "idle", selected, current, hints, multi, onSelect, onOpen, menu }: LibraryTreeProps) {
   const ui = useLibraryTree(kind);
   const [filter, setFilter] = useState("");
   const [ctx, setCtx] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
@@ -219,7 +221,8 @@ export function LibraryTree({ kind, title, items, installed = NO_LIBS, loaded = 
                       role="treeitem"
                       aria-selected={isSel}
                       data-name={it.name}
-                      title={project ? it.name : `${it.name} -- from an installed library or the built-in table; opening it makes an editable copy in the project`}
+                      title={(project ? it.name : `${it.name} -- from an installed library or the built-in table; opening it makes an editable copy in the project`) + (hints?.[it.name] ? ` -- ${hints[it.name]}` : "")}
+                      data-derived={hints?.[it.name] ? "true" : undefined}
                       onClick={(e) => click(it.name, e)}
                       onDoubleClick={() => onOpen(it.name)}
                       onContextMenu={(e) => onContextMenu(e, it.name)}

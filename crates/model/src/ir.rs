@@ -1013,6 +1013,9 @@ impl SchematicSection {
                 }
             }
         }
+
+        // Groups last: a group is named after its members, so every item has its id by now.
+        self.extras.assign_missing_group_ids();
     }
 }
 
@@ -2101,7 +2104,7 @@ impl Text {
 /// group can reference a footprint/track/via/zone/shape/text id, not
 /// just a drawing, so this is a storage-convenience choice, not a claim
 /// that a group *is* a drawing.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Group {
     /// Stable id (`grp_xxxxxxxxxxxx`). Deterministic from the member id
@@ -2118,6 +2121,10 @@ pub struct Group {
     /// most and the nesting never loops; `DrawingsSection::group_leaves`
     /// and friends (`groups.rs`) read the tree.
     pub member_ids: Vec<String>,
+    /// `EDA_GROUP::m_designBlockLibId`: the `Lib:Name` of the design block this group was placed from or saved to (`(lib_id "Lib:Name")` in the group's form), empty for a
+    /// group with no such link. The link is what Place Linked Design Block, Save to Linked Design Block and Apply Design Block Layout read.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub design_block: String,
 }
 
 impl Group {
@@ -2483,6 +2490,12 @@ pub struct DrawingsSection {
     /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via_extras: Vec<crate::via_extra::ViaExtra>,
+    /// The intent (a `ConstraintModel` as YAML) the board's parts, nets, footprints and rules come from when it is not the one `board.json` names: a path relative to the
+    /// board's folder. File > Import > Non-KiCad Board File replaces the open board with another one, whose parts are not the intent's (`Cmd::ReplaceBoard`); the other
+    /// board's model is a file of its own under `imports/`, named here, so the step is a change of this design and an undo takes the old board back whole. `board::build_model`
+    /// starts from it instead of `board.json`'s intent. Additive: absent in an older `design.json` reads as "the intent of `board.json`". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub intent_file: Option<String>,
 }
 
 /// A footprint that lives on the board and nowhere else: what Duplicate and Paste make when they copy a footprint, since the part
@@ -3012,9 +3025,10 @@ fn d_true() -> bool {
 
 /// One named field on a footprint (KiCad's `PCB_FIELD`, e.g. a custom
 /// "Vendor" or "Datasheet" field beyond the built-in Reference/Value) --
-/// `dialog_footprint_properties_fp_editor.cpp`'s Fields tab. Position/
-/// orientation/layer are deferred (see PARITY-fpedit.md): only name/value/
-/// visibility are modeled, enough to author one and read it back.
+/// `dialog_footprint_properties_fp_editor.cpp`'s Fields grid: its name, its
+/// text, whether it is shown and, once it has been placed or read from a
+/// file, the layout of its text ([`crate::fp_edit::FieldLayout`]: where, on
+/// which layer, how big, how turned) in the footprint's own frame.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FootprintField {
@@ -3022,6 +3036,10 @@ pub struct FootprintField {
     pub value: String,
     #[serde(default = "d_true")]
     pub visible: bool,
+    /// Where the text is and how it is drawn (the layout's own `visible` is this field's `visible`); `None` is what a new field starts from
+    /// ([`crate::fp_edit::new_library_field_layout`]: hidden at the origin on the fabrication layer).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<crate::fp_edit::FieldLayout>,
 }
 
 /// One pad on a [`LibraryFootprint`], in the footprint's own local frame
@@ -3319,6 +3337,13 @@ pub struct LibraryFootprint {
     pub reference_visible: bool,
     #[serde(default = "d_true")]
     pub value_visible: bool,
+    /// The Reference field's layout, when it was set or read from a file (`(property "Reference" "REF**" (at ..) (layer ..) ..)`); its `text` is the text it shows when that
+    /// is not `REF**`. `None` is KiCad's default ([`crate::fp_edit::default_library_reference_layout`]). Its `visible` follows `reference_visible`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<crate::fp_edit::FieldLayout>,
+    /// The Value field's layout, likewise; its `text` is the text it shows when that is not the footprint's name. Its `visible` follows `value_visible`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<crate::fp_edit::FieldLayout>,
     /// Courtyard half-extents -- same field/meaning as `crate::footprint::
     /// Footprint::courtyard` (`None` derives one from the pad bbox).
     #[serde(default)]
@@ -3373,6 +3398,8 @@ impl Default for LibraryFootprint {
             fields: Vec::new(),
             reference_visible: true,
             value_visible: true,
+            reference: None,
+            value: None,
             courtyard: None,
             model: None,
             models3d: Vec::new(),
@@ -3579,7 +3606,7 @@ impl SymbolLibrarySection {
 /// caller, just with one more usable state (a filled-with-background-color
 /// shape, e.g. a DeMorgan box, is common enough in real libraries to be
 /// worth the real three-way choice here even though the engine's own type
-/// only ever reads it as "filled or not" -- see `to_engine_graphic`).
+/// only ever reads it as "filled or not" -- see `to_engine_graphics`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LibraryFill {
@@ -3681,6 +3708,48 @@ pub enum LibrarySymbolGraphic {
         angle_deg: f64,
         size_mm: f64,
     },
+    /// `SCH_TEXTBOX` of a library symbol, `(text_box "text" (at x y angle) (size w h) (margins m m m m) (stroke ...) (fill ...) (effects ...))`: a box with text in it, wrapped to the
+    /// box's width. `start` and `end` are two opposite corners of the box (`GetStart()` is where the box was begun), in the symbol's own mm with Y up; `angle_deg` is 0 or 90, the way
+    /// the text runs. `margin_mm` is the margin on all four sides (the four margins of the file are read as the greatest of them); 0 says "the default one" -- half the stroke width
+    /// and three quarters of the text size, `SCH_TEXTBOX::GetLegacyTextMargin`. A negative `stroke_mm` is no border (`STROKE_PARAMS` width -1); 0 is the default line width.
+    TextBox {
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        id: String,
+        #[serde(default)]
+        unit: u32,
+        #[serde(default = "d_body_style_one", skip_serializing_if = "is_body_style_one")]
+        body_style: u32,
+        text: String,
+        start: crate::symbol::SPoint,
+        end: crate::symbol::SPoint,
+        #[serde(default)]
+        angle_deg: f64,
+        size_mm: f64,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        bold: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        italic: bool,
+        h_align: crate::sym_fields::FieldHAlign,
+        v_align: crate::sym_fields::FieldVAlign,
+        #[serde(default, skip_serializing_if = "is_zero_f64")]
+        margin_mm: f64,
+        stroke_mm: f64,
+        #[serde(default)]
+        fill: LibraryFill,
+    },
+}
+
+fn is_zero_f64(v: &f64) -> bool {
+    *v == 0.0
+}
+
+/// The margin of a library text box, in mm: its own when it has one, else the default, `SCH_TEXTBOX::GetLegacyTextMargin` of a box on `LAYER_DEVICE` -- four fifths of the text height,
+/// rounded to the schematic's internal unit (0.1 um).
+pub fn text_box_margin_mm(size_mm: f64, margin_mm: f64) -> f64 {
+    if margin_mm > 0.0 {
+        return margin_mm;
+    }
+    (size_mm * 0.8 * 10_000.0).round() / 10_000.0
 }
 
 /// The flat shape `LibrarySymbolGraphic` is read from: the `kind` tag, the fields every kind has, and one optional field for every field some kind
@@ -3723,6 +3792,16 @@ struct LibrarySymbolGraphicWire {
     angle_deg: Option<f64>,
     #[serde(default)]
     size_mm: Option<f64>,
+    #[serde(default)]
+    bold: Option<bool>,
+    #[serde(default)]
+    italic: Option<bool>,
+    #[serde(default)]
+    h_align: Option<crate::sym_fields::FieldHAlign>,
+    #[serde(default)]
+    v_align: Option<crate::sym_fields::FieldVAlign>,
+    #[serde(default)]
+    margin_mm: Option<f64>,
 }
 
 impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
@@ -3735,7 +3814,8 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
             "circle" => &["stroke_mm", "fill", "center", "radius_mm"],
             "arc" => &["stroke_mm", "fill", "start", "mid", "end"],
             "text" => &["text", "at", "angle_deg", "size_mm"],
-            other => return Err(D::Error::unknown_variant(other, &["rectangle", "polyline", "circle", "arc", "text"])),
+            "text_box" => &["text", "start", "end", "angle_deg", "size_mm", "bold", "italic", "h_align", "v_align", "margin_mm", "stroke_mm", "fill"],
+            other => return Err(D::Error::unknown_variant(other, &["rectangle", "polyline", "circle", "arc", "text", "text_box"])),
         };
         let present = [
             ("stroke_mm", w.stroke_mm.is_some()),
@@ -3750,13 +3830,18 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
             ("at", w.at.is_some()),
             ("angle_deg", w.angle_deg.is_some()),
             ("size_mm", w.size_mm.is_some()),
+            ("bold", w.bold.is_some()),
+            ("italic", w.italic.is_some()),
+            ("h_align", w.h_align.is_some()),
+            ("v_align", w.v_align.is_some()),
+            ("margin_mm", w.margin_mm.is_some()),
         ];
         for (name, there) in present {
             if there && !allowed.contains(&name) {
                 return Err(D::Error::unknown_field(name, allowed));
             }
         }
-        let LibrarySymbolGraphicWire { kind, id, unit, body_style, fill, stroke_mm, start, mid, end, center, radius_mm, pts, text, at, angle_deg, size_mm } = w;
+        let LibrarySymbolGraphicWire { kind, id, unit, body_style, fill, stroke_mm, start, mid, end, center, radius_mm, pts, text, at, angle_deg, size_mm, bold, italic, h_align, v_align, margin_mm } = w;
         let need = |name: &'static str| D::Error::missing_field(name);
         let fill = fill.unwrap_or_default();
         Ok(match kind.as_str() {
@@ -3773,6 +3858,24 @@ impl<'de> Deserialize<'de> for LibrarySymbolGraphic {
                 stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?,
                 fill,
             },
+            "text_box" => LibrarySymbolGraphic::TextBox {
+                id,
+                unit,
+                body_style,
+                text: text.ok_or_else(|| need("text"))?,
+                start: start.ok_or_else(|| need("start"))?,
+                end: end.ok_or_else(|| need("end"))?,
+                angle_deg: angle_deg.unwrap_or_default(),
+                size_mm: size_mm.ok_or_else(|| need("size_mm"))?,
+                bold: bold.unwrap_or_default(),
+                italic: italic.unwrap_or_default(),
+                // a text box starts left and top (`SCH_TEXTBOX::SCH_TEXTBOX`), unlike a field, which is centred
+                h_align: h_align.unwrap_or(crate::sym_fields::FieldHAlign::Left),
+                v_align: v_align.unwrap_or(crate::sym_fields::FieldVAlign::Top),
+                margin_mm: margin_mm.unwrap_or_default(),
+                stroke_mm: stroke_mm.ok_or_else(|| need("stroke_mm"))?,
+                fill,
+            },
             _ => LibrarySymbolGraphic::Text { id, unit, body_style, text: text.ok_or_else(|| need("text"))?, at: at.ok_or_else(|| need("at"))?, angle_deg: angle_deg.unwrap_or_default(), size_mm: size_mm.ok_or_else(|| need("size_mm"))? },
         })
     }
@@ -3782,31 +3885,37 @@ impl LibrarySymbolGraphic {
     pub fn id(&self) -> &str {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } => id,
+            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } | TextBox { id, .. } => id,
         }
     }
     pub fn set_id(&mut self, new_id: String) {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } => *id = new_id,
+            Rectangle { id, .. } | Polyline { id, .. } | Circle { id, .. } | Arc { id, .. } | Text { id, .. } | TextBox { id, .. } => *id = new_id,
         }
     }
     pub fn unit(&self) -> u32 {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } => *unit,
+            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } | TextBox { unit, .. } => *unit,
+        }
+    }
+    pub fn set_unit(&mut self, new_unit: u32) {
+        use LibrarySymbolGraphic::*;
+        match self {
+            Rectangle { unit, .. } | Polyline { unit, .. } | Circle { unit, .. } | Arc { unit, .. } | Text { unit, .. } | TextBox { unit, .. } => *unit = new_unit,
         }
     }
     pub fn body_style(&self) -> u32 {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } => *body_style,
+            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } | TextBox { body_style, .. } => *body_style,
         }
     }
     pub fn set_body_style(&mut self, style: u32) {
         use LibrarySymbolGraphic::*;
         match self {
-            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } => *body_style = style,
+            Rectangle { body_style, .. } | Polyline { body_style, .. } | Circle { body_style, .. } | Arc { body_style, .. } | Text { body_style, .. } | TextBox { body_style, .. } => *body_style = style,
         }
     }
     /// Every point this graphic touches, local mm -- for `assign_missing_ids`'s seed and a move/translate.
@@ -3818,6 +3927,7 @@ impl LibrarySymbolGraphic {
             Circle { center, .. } => vec![*center],
             Arc { start, mid, end, .. } => vec![*start, *mid, *end],
             Text { at, .. } => vec![*at],
+            TextBox { start, end, .. } => vec![*start, *end],
         }
     }
     pub fn translate(&mut self, dx_mm: f64, dy_mm: f64) {
@@ -3839,6 +3949,10 @@ impl LibrarySymbolGraphic {
                 t(end);
             }
             Text { at, .. } => t(at),
+            TextBox { start, end, .. } => {
+                t(start);
+                t(end);
+            }
         }
     }
     /// The same graphic as `crate::symbol::SymbolGraphic` -- drops `id`
@@ -3849,18 +3963,26 @@ impl LibrarySymbolGraphic {
     /// `true` -- a real difference in real KiCad rendering this port's
     /// engine-side type has never modeled, same approximation
     /// `LibraryPad::to_engine_pad`'s shape collapse already documents).
-    pub fn to_engine_graphic(&self) -> crate::symbol::SymbolGraphic {
+    /// A text box has no engine counterpart: it comes out as what it is made of, its border (a rectangle) and its text (see `crate::sym_textbox`).
+    pub fn to_engine_graphics(&self) -> Vec<crate::symbol::SymbolGraphic> {
         use crate::symbol::SymbolGraphic as EG;
         let filled = |f: LibraryFill| f != LibraryFill::None;
-        match self {
+        vec![match self {
             LibrarySymbolGraphic::Rectangle { unit, start, end, stroke_mm, fill, .. } => EG::Rectangle { unit: *unit, start: *start, end: *end, stroke_mm: *stroke_mm, filled: filled(*fill) },
             LibrarySymbolGraphic::Polyline { unit, pts, stroke_mm, fill, .. } => EG::Polyline { unit: *unit, pts: pts.clone(), stroke_mm: *stroke_mm, filled: filled(*fill) },
             LibrarySymbolGraphic::Circle { unit, center, radius_mm, stroke_mm, fill, .. } => EG::Circle { unit: *unit, center: *center, radius_mm: *radius_mm, stroke_mm: *stroke_mm, filled: filled(*fill) },
             LibrarySymbolGraphic::Arc { unit, start, mid, end, stroke_mm, fill, .. } => EG::Arc { unit: *unit, start: *start, mid: *mid, end: *end, stroke_mm: *stroke_mm, filled: filled(*fill) },
             LibrarySymbolGraphic::Text { unit, text, at, angle_deg, size_mm, .. } => EG::Text { unit: *unit, text: text.clone(), at: *at, angle_deg: *angle_deg, size_mm: *size_mm },
-        }
+            LibrarySymbolGraphic::TextBox { unit, start, end, stroke_mm, fill, .. } => {
+                // the border and the fill are the box; no border (a negative width) leaves a filled box its fill alone
+                if *stroke_mm < 0.0 && *fill == LibraryFill::None {
+                    return Vec::new();
+                }
+                EG::Rectangle { unit: *unit, start: *start, end: *end, stroke_mm: *stroke_mm, filled: filled(*fill) }
+            }
+        }]
     }
-    /// The reverse of `to_engine_graphic`, for materializing an editable
+    /// The reverse of `to_engine_graphics`, for materializing an editable
     /// copy of an already-resolved `crate::symbol::LibSymbol` -- `id`
     /// starts empty (backfilled by `assign_missing_ids`), `body_style`
     /// always 1 (the engine type has no alternate-style concept to read
@@ -3880,6 +4002,17 @@ impl LibrarySymbolGraphic {
             EG::Text { unit, text, at, angle_deg, size_mm } => LibrarySymbolGraphic::Text { id: String::new(), unit: *unit, body_style: 1, text: text.clone(), at: *at, angle_deg: *angle_deg, size_mm: *size_mm },
         }
     }
+}
+
+/// One alternate function of a library symbol's pin (`SCH_PIN::ALT`, `(alternate "name" type shape)`): the name it goes by, the electrical type and the graphic style it
+/// takes when a schematic selects it. Same raw-token convention as the pin's own `electrical_type` and `shape`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PinAlternate {
+    pub name: String,
+    pub electrical_type: String,
+    #[serde(default = "d_pin_shape")]
+    pub shape: String,
 }
 
 /// One pin of a [`LibrarySymbol`] -- same fields as `crate::symbol::
@@ -3917,6 +4050,10 @@ pub struct LibrarySymbolPin {
     pub name_size_mm: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub number_size_mm: Option<f64>,
+    /// `SCH_PIN::GetAlternates()`: the pin's alternate functions -- the Pin Properties dialog's "Alternate Assignments". Sorted by name, a name once and not empty
+    /// (the file keeps them in a `std::map`, and the dialog says "Alternate pin definitions must have a name."). Not available for a symbol with several body styles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternates: Vec<PinAlternate>,
 }
 
 impl LibrarySymbolPin {
@@ -3932,7 +4069,7 @@ impl LibrarySymbolPin {
     /// 1, `hidden`/text sizes at their defaults (the engine type never had
     /// them to read back).
     pub fn from_engine_pin(p: &crate::symbol::LibPin) -> Self {
-        LibrarySymbolPin { id: String::new(), number: p.number.clone(), name: p.name.clone(), electrical_type: p.electrical_type.clone(), shape: p.shape.clone(), at: p.at, angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None }
+        LibrarySymbolPin { id: String::new(), number: p.number.clone(), name: p.name.clone(), electrical_type: p.electrical_type.clone(), shape: p.shape.clone(), at: p.at, angle_deg: p.angle_deg, length_mm: p.length_mm, unit: p.unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() }
     }
 }
 
@@ -4001,6 +4138,14 @@ pub struct LibrarySymbol {
     /// published`'s own doc describes. Starts `false`.
     #[serde(default)]
     pub published: bool,
+    /// `(extends "Parent")`: the `lib_id` of the symbol this one is derived from (`LIB_SYMBOL::SetParent`), in the same library. A derived symbol keeps no graphics or pins
+    /// of its own: [`SymbolLibrarySection::flatten`] gives the symbol with everything it inherits. See [`crate::sym_fields`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<String>,
+    /// The symbol's properties beyond the text members above: the layout of each field, `Value` and `Footprint`, and the user fields -- see [`crate::sym_fields`]. Empty for
+    /// a symbol that was never given one: it has the five mandatory fields at their default places.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<crate::sym_fields::LibrarySymbolField>,
 }
 
 impl Default for LibrarySymbol {
@@ -4023,6 +4168,8 @@ impl Default for LibrarySymbol {
             graphics: Vec::new(),
             pins: Vec::new(),
             published: false,
+            extends: None,
+            fields: Vec::new(),
         }
     }
 }
@@ -4105,13 +4252,13 @@ impl LibrarySymbol {
     pub fn to_engine_symbol(&self) -> crate::symbol::LibSymbol {
         let alternate = self.has_alternate_body_style.then(|| {
             Box::new(crate::symbol::AlternateBody::new(
-                self.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == 2).map(|g| g.to_engine_graphic()).collect(),
+                self.graphics.iter().filter(|g| g.body_style() == 0 || g.body_style() == 2).flat_map(|g| g.to_engine_graphics()).collect(),
                 self.pins.iter().filter(|p| p.body_style == 0 || p.body_style == 2).map(|p| p.to_engine_pin()).collect(),
             ))
         });
         crate::symbol::LibSymbol {
             lib_id: self.lib_id.clone(),
-            graphics: self.graphics.iter().filter(|g| g.body_style() <= 1).map(|g| g.to_engine_graphic()).collect(),
+            graphics: self.graphics.iter().filter(|g| g.body_style() <= 1).flat_map(|g| g.to_engine_graphics()).collect(),
             pins: self.pins.iter().filter(|p| p.body_style <= 1).map(|p| p.to_engine_pin()).collect(),
             power: self.power,
             in_bom: self.in_bom,
@@ -4612,6 +4759,7 @@ mod tests {
             hidden: false,
             name_size_mm: None,
             number_size_mm: None,
+            alternates: Vec::new(),
         }
     }
 

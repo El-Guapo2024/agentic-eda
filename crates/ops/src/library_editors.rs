@@ -149,7 +149,11 @@ fn check_footprint_name(name: &str) -> Result<(), Vec<CheckResult>> {
     Ok(())
 }
 
-fn check_symbol_lib_id(lib_id: &str) -> Result<(), Vec<CheckResult>> {
+/// The electrical types and graphic styles a pin takes, as the tokens a `.kicad_sym` writes them (`getPinElectricalTypeToken`, `getPinShapeToken`): what an alternate function of a pin may name.
+pub(crate) const PIN_TYPE_TOKENS: [&str; 12] = ["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified", "power_in", "power_out", "open_collector", "open_emitter", "no_connect"];
+pub(crate) const PIN_SHAPE_TOKENS: [&str; 9] = ["line", "inverted", "clock", "inverted_clock", "input_low", "clock_low", "output_low", "edge_clock_high", "non_logic"];
+
+pub(crate) fn check_symbol_lib_id(lib_id: &str) -> Result<(), Vec<CheckResult>> {
     let (lib, item) = split_lib_name(lib_id);
     if item.is_empty() {
         return Err(vec![CheckResult::fail("ops_bad_symbol", lib_id, "a symbol must have a name")]);
@@ -274,6 +278,23 @@ impl<'a> Board<'a> {
             return Err(vec![CheckResult::fail("ops_symbol_exists", &sym.lib_id, "a symbol with this name already exists; pick another name")]);
         }
         let mut entry = sym.clone();
+        // A derived symbol names its parent by `lib_id`, in its own library (a `.kicad_sym` names it by its bare name: the library the symbol lands in is the caller's choice). The
+        // parent has to be there, and the chain must not run back into the symbol ("would create circular inheritance"): a library is filled parents first.
+        if let Some(parent) = entry.extends.clone() {
+            let nick = eda_model::sym_fields::library_of(&entry.lib_id);
+            let qualified = if parent.contains(':') || nick.is_empty() { parent } else { format!("{nick}:{parent}") };
+            if qualified == entry.lib_id {
+                return Err(vec![CheckResult::fail("ops_symbol_cycle", &entry.lib_id, "a symbol cannot be derived from itself")]);
+            }
+            let section = self.design.symbol_library.as_ref();
+            if section.and_then(|l| l.by_lib_id(&qualified)).is_none() {
+                return Err(vec![CheckResult::fail("ops_symbol_parent_missing", &entry.lib_id, format!("its parent {qualified} is not in the project symbol library: add the parent first"))]);
+            }
+            if section.is_some_and(|l| l.parent_chain(&qualified).parents.iter().any(|p| p == &entry.lib_id)) {
+                return Err(vec![CheckResult::fail("ops_symbol_cycle", &entry.lib_id, "a symbol cannot be derived from one derived from it")]);
+            }
+            entry.extends = Some(qualified);
+        }
         entry.published = self.design.symbol_library.as_ref().and_then(|l| l.by_lib_id(&sym.lib_id)).map(|old| old.published).unwrap_or(false);
         for p in &mut entry.pins {
             p.id.clear();
@@ -305,12 +326,14 @@ impl<'a> Board<'a> {
         let lib = self.symbol_library_mut();
         lib.symbols.retain(|s| s.lib_id != new_lib_id);
         lib.by_lib_id_mut(lib_id).expect("checked above").lib_id = new_lib_id.to_string();
+        // the symbols derived from it follow (KiCad links by pointer, this project by name), and a Value that was its name
+        self.follow_symbol_rename(lib_id, new_lib_id);
         Ok(())
     }
 
     /// See [`Cmd::SetSymbolAnchor`](crate::Cmd::SetSymbolAnchor).
     pub(crate) fn set_symbol_anchor(&mut self, lib_id: &str, at: SPoint) -> Result<(), Vec<CheckResult>> {
-        let sym = self.library_symbol_mut(lib_id)?;
+        let sym = self.drawing_symbol_mut(lib_id)?;
         // `symbol->Move( -cursorPos )`: every item of every unit and body style moves, so the clicked
         // point becomes the symbol's origin.
         let (dx, dy) = (-at.x, -at.y);
@@ -416,6 +439,7 @@ mod verb_tests {
                 hidden: false,
                 name_size_mm: None,
                 number_size_mm: None,
+                alternates: Vec::new(),
             });
         }
         sym.graphics.push(LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 0, body_style: 1, start: SPoint { x: -2.54, y: -3.81 }, end: SPoint { x: 2.54, y: 3.81 }, stroke_mm: 0.254, fill: eda_model::ir::LibraryFill::None });

@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { SheetFileCheck } from "../api/hierarchyTypes";
 import { defaultAnnotateSettings } from "./schAnnotate";
-import { defaultImportOptions, describeCheck, fileOfPath, importContentsCmd, importNumbering, importSheetCmd, importToolHint, looksLikeSchematic, sheetFileOfFile, sheetNameOfFile, stemOfFile } from "./schImportSheet";
+import { defaultImportOptions, describeCheck, fileOfPath, groupFields, importContentsCmd, importNumbering, importSheetCmd, importToolHint, looksLikeSchematic, sheetFileOfFile, sheetNameOfFile, stemOfFile } from "./schImportSheet";
 
 const check = (patch: Partial<SheetFileCheck> = {}): SheetFileCheck => ({ ok: true, path: "ldo.kicad_sch", stem: "ldo", sheets: [], symbols: 3, references: ["U1", "C1", "C2"], libraries: ["Device"], findings: [], blocked: false, dest_file: "ldo.kicad_sch", ...patch });
 
@@ -23,7 +23,8 @@ test("a path names a schematic when it ends in .kicad_sch", () => {
 });
 
 test("the chooser starts with the sheet, annotating, one copy", () => {
-  assert.deepEqual(defaultImportOptions(), { asSheet: true, keepAnnotations: false, repeated: false });
+  // ... and "Place as group" on, as `place_as_group` is to begin with
+  assert.deepEqual(defaultImportOptions(), { asSheet: true, keepAnnotations: false, repeated: false, asGroup: true });
 });
 
 test("the numbering is the one the Annotate dialog last held (m_AnnotateSortOrder / m_AnnotateMethod / m_AnnotateStartNum)", () => {
@@ -67,4 +68,40 @@ test("the chooser says what a file brings and keeps the errors apart from the wa
 test("the status line names the file and what a click does", () => {
   assert.match(importToolHint({ path: "a/ldo.kicad_sch", asSheet: true }), /ldo\.kicad_sch.*corner/);
   assert.match(importToolHint({ path: "a/ldo.kicad_sch", asSheet: false }), /where the items go/);
+});
+
+test("Place as group: a file's contents go in a group named after the file, a design block's in one named after and linked to the block", () => {
+  // a plain file: the group has the file's name; the sheet of a plain file is not grouped (`DrawSheet` groups only a design block's)
+  assert.deepEqual(groupFields({ path: "/x/ldo.kicad_sch", asGroup: true }, false), { as_group: true, group_name: "ldo" });
+  assert.deepEqual(groupFields({ path: "/x/ldo.kicad_sch", asGroup: true }, true), {});
+  assert.deepEqual(groupFields({ path: "/x/ldo.kicad_sch", asGroup: false }, false), {});
+  // a block: linked, named after the block (the part of `Lib:Name` after the library)
+  assert.deepEqual(groupFields({ path: "/lib/LDO.kicad_block/LDO.kicad_sch", asGroup: true, block: "Power:LDO" }, false), { as_group: true, group_name: "LDO", block: "Power:LDO" });
+  assert.deepEqual(groupFields({ path: "/lib/LDO.kicad_block/LDO.kicad_sch", asGroup: true, block: "Power:LDO" }, true), { as_group: true, group_name: "LDO", block: "Power:LDO" });
+  // without Place as group a block is still linked to nothing: only `block` is sent (the power symbols are numbered anew)
+  assert.deepEqual(groupFields({ path: "/lib/LDO.kicad_block/LDO.kicad_sch", asGroup: false, block: "Power:LDO" }, false), { block: "Power:LDO" });
+});
+
+test("repeated copies number the group names from 1 for the contents (`suffix++`), but a sheet drawn from a block is named after the block alone", () => {
+  const plan = { path: "/lib/LDO.kicad_block/LDO.kicad_sch", asGroup: true, block: "Power:LDO", repeated: true };
+  assert.equal(groupFields({ ...plan }, false).group_name, "LDO1");
+  assert.equal(groupFields({ ...plan, suffix: 3 }, false).group_name, "LDO3");
+  assert.equal(groupFields({ ...plan, suffix: 3 }, true).group_name, "LDO");
+  assert.equal(groupFields({ path: "/x/ldo.kicad_sch", asGroup: true, repeated: true, suffix: 2 }, false).group_name, "ldo2");
+});
+
+test("the import verbs carry the group and the block", () => {
+  const plan = { path: "/lib/LDO.kicad_block/LDO.kicad_sch", keepAnnotations: false, asGroup: true, block: "Power:LDO" };
+  const contents = importContentsCmd(plan, [0, 0], importNumbering(defaultAnnotateSettings())) as unknown as Record<string, unknown>;
+  assert.equal(contents.as_group, true);
+  assert.equal(contents.group_name, "LDO");
+  assert.equal(contents.block, "Power:LDO");
+  const sheet = importSheetCmd(plan, { name: "LDO", file: "LDO.kicad_sch", at: [0, 0], size: [1, 1] }, importNumbering(defaultAnnotateSettings())) as unknown as Record<string, unknown>;
+  assert.equal(sheet.as_group, true);
+  assert.equal(sheet.block, "Power:LDO");
+});
+
+test("the tool's hint says a design block is being placed", () => {
+  assert.match(importToolHint({ path: "/lib/LDO.kicad_block/LDO.kicad_sch", asSheet: false, block: "Power:LDO" }), /^Place Design Block \(Power:LDO\): click where the items go/);
+  assert.match(importToolHint({ path: "/lib/LDO.kicad_block/LDO.kicad_sch", asSheet: true, block: "Power:LDO" }), /click one corner of the sheet/);
 });

@@ -35,6 +35,6 @@ export function openPropertiesFor(id: string, api: StudioApi, dispatch: Dispatch
   // `PCB_GROUP` properties are the group tool's (`ACTIONS::groupProperties`, common.Groups.groupProperties): the name and the member list.
   else {
     const group = api.groupById(id);
-    if (group) openGroupDialog({ id, name: group.name, members: [...group.member_ids] });
+    if (group) openGroupDialog({ id, name: group.name, members: [...group.member_ids], designBlock: group.design_block ?? "" });
   }
 }

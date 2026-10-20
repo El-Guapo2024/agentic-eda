@@ -36,7 +36,7 @@ fn max_pen(size: (Um, Um)) -> Um {
 impl Board<'_> {
     /// The checks `DIALOG_FOOTPRINT_PROPERTIES::Validate` makes of each row of the field grid: a size between 1 µm and 250 mm either way,
     /// a thickness no thicker than the size allows, a layer the board has.
-    fn check_layout(&self, what: &str, l: &FieldLayout) -> Result<(), Vec<CheckResult>> {
+    pub(crate) fn check_layout(&self, what: &str, l: &FieldLayout) -> Result<(), Vec<CheckResult>> {
         let (w, h) = l.size;
         for (axis, v) in [("width", w), ("height", h)] {
             if v < TEXT_MIN_UM {

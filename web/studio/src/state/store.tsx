@@ -30,6 +30,7 @@ import { rememberedImperial } from "../kicad-port/unitToggle";
 import { readClipboardText, writeClipboardText } from "../api/libraryClient";
 import { DEFAULT_PCB_PARITY, type PcbParityState } from "../kicad-port/pcbParityState";
 import { substituteSelection } from "../kicad-port/groupTree";
+import { substituteSchSelection } from "../kicad-port/schGroups";
 import { inEnteredGroup } from "../kicad-port/groupEdit";
 import { DEFAULT_BOARD_CONTROL, toggledHighlight, withHighlight, type BoardControlState } from "../kicad-port/boardControlState";
 import { DEFAULT_APPEARANCE, withObjectKeys, type AppearanceState } from "../kicad-port/appearance";
@@ -265,7 +266,7 @@ export type DrawState =
    * manually kept in sync, same convention as the "route" variant above). */
   | {
       kind: "drag";
-      dragKind: "corner" | "segment" | "via";
+      dragKind: "corner" | "segment" | "via" | "arc";
       net: string | null;
       layer: string;
       width: Um;
@@ -552,6 +553,8 @@ export interface StudioState {
    * its own members selects that member alone instead of the whole group
    * (see `withGroupSubstitution` in this file). `null` outside any group. */
   enteredGroupId: string | null;
+  /** The group of the sheet in view that is being worked in (`SCH_SELECTION_TOOL::m_enteredGroup`): its own members, and the groups directly in it, are picked one by one. `null` outside any group. */
+  schEnteredGroupId: string | null;
   /** Refs to flash/outline because a problem in the panel references them. */
   hot: Set<string>;
   netHighlight: string | null;
@@ -737,6 +740,11 @@ export interface StudioState {
    */
   schWirePick: { id: string; vertices: number[] } | null;
   /**
+   * The ends of several wires picked at once: what the Drag tool takes when the wire stubs of Pin Helpers > Wire are handed to it (`SetFlags( ENDPOINT )` on each new wire). Read by
+   * `pickedVertices` while the selection is those wires; cleared when the drag is dropped or cancelled.
+   */
+  schPickedEnds: Record<string, number[]> | null;
+  /**
    * base_screen.cpp's `m_LocalOrigin` (default (0,0), same as source) --
    * the status bar's dx/dy/dist is always relative to THIS point, set by
    * Space (common.Control.resetLocalCoords, pcb_base_frame.cpp's
@@ -886,6 +894,7 @@ const initialState: StudioState = {
   glbError: null,
   selection: new Set(),
   enteredGroupId: null,
+  schEnteredGroupId: null,
   hot: new Set(),
   netHighlight: null,
   schLineMode: 1,
@@ -966,6 +975,7 @@ const initialState: StudioState = {
   cursorUm: null,
   moveOriginUm: null,
   schWirePick: null,
+  schPickedEnds: null,
   localOriginUm: { x: 0, y: 0 },
   prefs: loadPreferences(browserStorage()),
   preferencesDialogOpen: false,
@@ -1024,6 +1034,9 @@ export type Action =
   | { type: "SET_ENTERED_GROUP"; id: string | null }
   /** `PCB_SELECTION_TOOL::EnterGroup`: the group becomes the one worked in, and its members are selected. */
   | { type: "ENTER_GROUP"; id: string }
+  | { type: "SET_SCH_ENTERED_GROUP"; id: string | null }
+  /** `SCH_SELECTION_TOOL::EnterGroup`: the group of the sheet becomes the one worked in, and its members are selected. */
+  | { type: "ENTER_SCH_GROUP"; id: string }
   | { type: "TOGGLE_SELECTION"; ref: string }
   | { type: "CLEAR_SELECTION" }
   | { type: "ESCAPE" }
@@ -1067,6 +1080,7 @@ export type Action =
   | { type: "SET_CURSOR"; at: { x: number; y: number } | null }
   | { type: "SET_MOVE_ORIGIN"; at: { x: number; y: number } | null }
   | { type: "SET_SCH_WIRE_PICK"; pick: { id: string; vertices: number[] } | null }
+  | { type: "SET_SCH_PICKED_ENDS"; ends: Record<string, number[]> | null }
   | { type: "SET_LOCAL_ORIGIN"; at: { x: number; y: number } }
   | { type: "TOGGLE_AUTO_PAN" }
   | { type: "SET_PREFERENCES"; prefs: Preferences }
@@ -1237,7 +1251,8 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_TAB":
       return { ...state, tab: action.tab };
     case "SET_SHEET_PATH":
-      return { ...state, currentSheetPath: action.path, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
+      // `SCH_SELECTION_TOOL::Reset`: a new sheet leaves the group that was entered
+      return { ...state, currentSheetPath: action.path, schEnteredGroupId: null, schNav: action.record === false ? state.schNav : pushToHistory(state.schNav, action.path) };
     case "SET_SCH_NAV":
       return { ...state, schNav: action.nav };
     case "SET_SCH_LINE_MODE":
@@ -1251,6 +1266,12 @@ function reducer(state: StudioState, action: Action): StudioState {
     case "SET_GLB_STATUS":
       return { ...state, glbStatus: action.status, glbError: action.error ?? null };
     case "SET_SELECTION": {
+      // On the schematic the groups are the sheet's: a pin, a field or a sheet pin takes the group of its symbol or sheet (`getClosestGroup`).
+      if (state.tab === "schematic" && state.schematic) {
+        if (action.raw || (state.schematic.groups ?? []).length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
+        const { ids, exits } = substituteSchSelection(state.schematic, action.refs, state.schEnteredGroupId);
+        return { ...state, selection: new Set(ids), armed: null, armedFootprint: null, schEnteredGroupId: exits ? null : state.schEnteredGroupId };
+      }
       const groups = state.board?.drawings?.groups;
       if (action.raw || !groups || groups.length === 0) return { ...state, selection: new Set(action.refs), armed: null, armedFootprint: null };
       // Selecting something outside the entered group leaves it (`PCB_SELECTION_TOOL::select`: `ExitGroup()`).
@@ -1259,6 +1280,14 @@ function reducer(state: StudioState, action: Action): StudioState {
     }
     case "SET_ENTERED_GROUP":
       return { ...state, enteredGroupId: action.id };
+    case "SET_SCH_ENTERED_GROUP":
+      return { ...state, schEnteredGroupId: action.id };
+    case "ENTER_SCH_GROUP": {
+      // `SCH_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its direct members -- each as it is, a group inside it too.
+      const group = (state.schematic?.groups ?? []).find((g) => g.id === action.id);
+      if (!group) return state;
+      return { ...state, schEnteredGroupId: group.id, selection: new Set(group.member_ids), armed: null };
+    }
     case "ENTER_GROUP": {
       // `PCB_SELECTION_TOOL::EnterGroup`: only a group can be entered; the selection becomes its members -- each as it is, a group inside it too.
       const group = state.board?.drawings?.groups.find((g) => g.id === action.id);
@@ -1319,6 +1348,7 @@ function reducer(state: StudioState, action: Action): StudioState {
           armed: null,
           armedFootprint: null,
           movePreview: null,
+          schPickedEnds: null,
           activeTool: "select",
           drawState: null,
           zonePending: null,
@@ -1344,6 +1374,9 @@ function reducer(state: StudioState, action: Action): StudioState {
       }
       // Nothing selected but still inside a group: the selection tool's next `else if` tier, `ExitGroup()` -- which leaves the group and does not select
       // it (`ExitGroup( bool aSelectGroup = false )`; only the Leave Group action, `ExitGroup( true )`, does).
+      if (state.tab === "schematic" && state.schEnteredGroupId != null) {
+        return { ...state, schEnteredGroupId: null };
+      }
       if (state.enteredGroupId != null) {
         return { ...state, enteredGroupId: null };
       }
@@ -1373,7 +1406,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, movePreview: board ? { ...p, rotateStepDeg: state.prefs.rotationStepDeg, flipDirection: state.prefs.flipDirection } : p };
     }
     case "SET_ACTIVE_TOOL":
-      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null };
+      // (the ends of the wires Pin Helpers handed to the Drag tool are the Drag tool's: they go when it does)
+      return { ...state, activeTool: action.tool, schSheetImport: action.tool === "sch_import_sheet" ? state.schSheetImport : null, schPickedEnds: action.tool === "drag" ? state.schPickedEnds : null };
     case "SET_VIEW":
       return { ...state, view: action.view };
     case "SET_SCHEMATIC_VIEW":
@@ -1445,6 +1479,8 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, moveOriginUm: action.at };
     case "SET_SCH_WIRE_PICK":
       return { ...state, schWirePick: action.pick };
+    case "SET_SCH_PICKED_ENDS":
+      return { ...state, schPickedEnds: action.ends };
     case "SET_LOCAL_ORIGIN":
       return { ...state, localOriginUm: action.at };
     case "TOGGLE_AUTO_PAN":
@@ -1453,8 +1489,11 @@ function reducer(state: StudioState, action: Action): StudioState {
       return { ...state, prefs: action.prefs };
     case "SET_PREFERENCES_DIALOG_OPEN":
       return { ...state, preferencesDialogOpen: action.open };
-    case "SCHEMATIC_OK":
-      return { ...state, schematic: action.schematic, schematicError: null, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
+    case "SCHEMATIC_OK": {
+      // A group that was dissolved or emptied is no longer the one worked in (`EDIT_TOOL::DeleteItems`: "If the entered group has been emptied then leave it").
+      const schEntered = state.schEnteredGroupId != null && (action.schematic.groups ?? []).some((g) => g.id === state.schEnteredGroupId) ? state.schEnteredGroupId : null;
+      return { ...state, schematic: action.schematic, schematicError: null, schEnteredGroupId: schEntered, selection: state.tab === "schematic" ? keepOnSheet(state.selection, action.schematic) : state.selection };
+    }
     case "SCHEMATIC_ERR":
       return { ...state, schematicError: action.message };
     case "RATSNEST_OK":
@@ -1711,14 +1750,21 @@ export interface StudioApi {
    * A command that puts NEW items on the board (Import Graphics, Append Board, a dropped file), carried the way a Paste is: `build` makes the command for where the cursor is (the grid point, else the
    * middle of the board), the items it added are selected, and with `carry` the step is held open (`carry: "begin"`, crates/cli/src/carry.rs) and the Move tool is armed on them -- the drop joins the step
    * (one undo step for the new items and where they were dropped), Escape leaves nothing behind (`revertCarriedPlacement`), as for a Paste. `carry` off only selects them (a "Place at" import is where it
-   * was told). False when the command was refused or added nothing.
+   * was told). False when the command was refused or added nothing. `afterDrop` runs once the carried items are dropped (not when Escape takes them back): Place Design Block's
+   * "Place repeated copies" starts the next copy from it.
    */
-  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
+  placeNewItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean, afterDrop?: () => void) => Promise<boolean>;
   /**
    * The same for the sheet in view of the Schematic tab (Import Graphics): `build` makes the command for where the cursor is (its 1.27 mm grid point); with `carry` the step is held open the same way
    * (`carry.rs` keeps whole-design snapshots, so it holds a schematic step as well as a board one) and the drop of the held selection (`commitSchHeld`) joins it.
    */
   placeNewSchItems: (build: (at: { x: number; y: number }) => Cmd, carry: boolean) => Promise<boolean>;
+  /**
+   * A schematic command that puts new items on the sheet and hands them to the Drag tool at once, as Pin Helpers > Wire does (`RunSynchronousAction( SCH_ACTIONS::drag, &commit )`): the step is held
+   * open (`carry: "begin"`), `plan` reads the sheet before and after and says what to select, which ends of which wires are picked and where the hold is, the drop joins the step and Escape takes
+   * the new items away again (`revertCarriedPlacement`). False when the command was refused; a command that made nothing to drag stands as a step of its own.
+   */
+  dragNewSchItems: (cmd: Cmd, plan: (before: Schematic, after: Schematic) => { ids: string[]; ends: Record<string, number[]>; at: { x: number; y: number } } | null) => Promise<boolean>;
   /** Shift+M "Move Exactly..." dialog's OK action. */
   moveExact: (parts: string[], dx: number, dy: number, rotateMillideg: number, pivot: { x: number; y: number } | null) => Promise<boolean>;
   /**
@@ -1763,10 +1809,13 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
    * `cancel`. This notes that a step is being held while the new items are carried.
    */
   const carriedPlacementRef = useRef(false);
+  /** What to do once the carried items are dropped (`placeNewItems`' `afterDrop`). */
+  const afterDropRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     // The Move tool was left some other way than by a drop or Escape: the held step stands as a step of its own (any other command would settle it too).
-    if (state.activeTool !== "move" && carriedPlacementRef.current) {
+    if (state.activeTool !== "move" && state.activeTool !== "drag" && carriedPlacementRef.current) {
       carriedPlacementRef.current = false;
+      afterDropRef.current = null;
       void postCarry("commit");
     }
   }, [state.activeTool]);
@@ -2019,7 +2068,8 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       // On a nested sheet every schematic edit is addressed to that sheet (`Cmd::OnSheet`), as KiCad edits whichever sheet is open.
       // With a group entered on the board, what a command adds joins it (`BOARD_COMMIT::Push`: `Cmd::InGroup`).
       const st = stateRef.current;
-      const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : cmd;
+      // (On the schematic the same holds for the group of the sheet: `SCH_COMMIT::Push` adds what a command made to `enteredGroup`.)
+      const sent = st.tab === "pcb" ? inEnteredGroup(cmd, st.enteredGroupId, st.board?.drawings?.groups) : st.tab === "schematic" ? inEnteredGroup(cmd, st.schEnteredGroupId, st.schematic?.groups) : cmd;
       const reply = await postCmd(onCurrentSheet(sent, st.tab === "schematic" ? st.currentSheetPath : []), st.strict, carry);
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "error" });
       // `SCH_EDIT_FRAME::SaveCopyForRepeatItem`: a placement on the schematic becomes what "Repeat Last Item" repeats.
@@ -2222,6 +2272,10 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         const ok = plan ? await runPlan(plan, carry) : false;
         await settle(plan !== null && plan.cmds.length > 0, ok);
         advanceMoveQueue();
+        // a placement that asked to go on after its drop (Place Design Block with repeated copies) goes on
+        const next = afterDropRef.current;
+        afterDropRef.current = null;
+        if (carrying && next) next();
         return;
       }
       const cmds: Cmd[] = [];
@@ -2304,6 +2358,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     revertCarriedPlacement: async () => {
       if (!carriedPlacementRef.current) return false;
       carriedPlacementRef.current = false;
+      afterDropRef.current = null;
       // `commit.Revert()`: the carried items are gone and the history is as it was (crates/cli/src/carry.rs).
       const reply = await postCarry("cancel");
       if (!reply.ok) dispatch({ type: "TOAST", message: reply.message, kind: "info" });
@@ -2452,7 +2507,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
     },
     // Import Graphics (interactive placement), Append Board and the drops: the same hand-off as `pasteClipboard` above for any command that adds items -- the step is held open
     // (`carry: "begin"`) while the new items are carried, so they and their drop are one undo step and Escape leaves nothing behind.
-    placeNewItems: async (build, carry) => {
+    placeNewItems: async (build, carry, afterDrop) => {
       const board = stateRef.current.board;
       if (!board) return false;
       const at = pasteAt();
@@ -2468,6 +2523,7 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SET_SELECTION", refs: newIds });
       if (carry) {
         carriedPlacementRef.current = true;
+        afterDropRef.current = afterDrop ?? null;
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }
@@ -2494,6 +2550,26 @@ export function StudioProvider({ children }: { children: React.ReactNode }) {
         dispatch({ type: "SET_ACTIVE_TOOL", tool: "move" });
         dispatch({ type: "SET_MOVE_ORIGIN", at });
       }
+      return true;
+    },
+    dragNewSchItems: async (cmd, plan) => {
+      const st = stateRef.current;
+      const sheet = st.currentSheetPath;
+      const before = st.schematic;
+      if (!before) return false;
+      const ok = await runCmd(cmd, "begin");
+      if (!ok) return false;
+      const after = await fetchSchematic(sheet).catch(() => null);
+      const dragging = after ? plan(before, after) : null;
+      if (!dragging || dragging.ids.length === 0) {
+        await postCarry("commit"); // nothing to drag: what the command did stands
+        return true;
+      }
+      carriedPlacementRef.current = true;
+      dispatch({ type: "SET_SELECTION", refs: dragging.ids, raw: true });
+      dispatch({ type: "SET_SCH_PICKED_ENDS", ends: dragging.ends });
+      dispatch({ type: "SET_ACTIVE_TOOL", tool: "drag" });
+      dispatch({ type: "SET_MOVE_ORIGIN", at: dragging.at });
       return true;
     },
     moveExact: async (parts, dx, dy, rotateMillideg, pivot) => {

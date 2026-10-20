@@ -55,7 +55,7 @@ never edited as masters.
 
 - **kicad-cli is the only engine** for batch work it already does exactly:
   DRC, ERC, plots, Gerber/drill/position/STEP exports, netlist, BOM, board
-  statistics. `crates/kicad-engine` exports the current `design.json` revision
+  statistics, and reading other EDA formats (below). `crates/kicad-engine` exports the current `design.json` revision
   to derived KiCad files (`.kicad/` beside `design.json`, scratch, rewritten on
   every run), runs kicad-cli, and maps the report back to our item ids through
   the exporter's uuid map; `crates/cli/src/kicad_engine.rs` is the board
@@ -107,8 +107,35 @@ never edited as masters.
     export WITHOUT `--refill-zones` (kicad-cli 10.99 skips its courtyard checks
     on a run that refills). A zone keeps the uuid it had in the imported file
     (`Zone::uuid`): KiCad breaks ties between zones of equal priority by uuid.
+  - **Other EDA formats come in through kicad-cli, and nobody else's importer**
+    (P22, 2026-10-15: `kicad-cli pcb import` and `sch import`, new in the 10.99
+    nightlies, run KiCad's own `PCB_IO` / `SCH_IO` plugins for Eagle, Altium,
+    CADSTAR, PADS, P-CAD, Fabmaster, EasyEDA and the rest). `eda_kicad_engine::foreign`
+    (`import_foreign_pcb`, `import_foreign_sch`) runs it through `cli_command` in a
+    folder of the caller's (a run needs one of its own: kicad-cli writes the
+    footprint library it made beside the output and trips over a second run's) and
+    hands back the KiCad file's text, the other files it wrote (the `.pretty`
+    folder, the `.kicad_sym`, the library tables), its JSON import report (format,
+    counts, errors, warnings, where every source layer went) and the importers'
+    own error and warning lines, which are the findings shown to the person. Our
+    readers (`import_kicad_pcb`, `load_sheet_file`) turn the KiCad file into the
+    design; nothing is converted in Rust. `--layer-map` takes the answers of
+    `DIALOG_MAP_LAYERS` (a layer it does not name keeps the importer's guess).
+    A board's design rules and net classes are in no board file: the importer
+    sets them in memory and KiCad saves them with the project, which is what the
+    project-level `kicad-cli import -o <stem> FILE` writes (a `.kicad_pro`; it
+    pairs nothing and has no report), so the engine runs it a second time for a
+    board (`ForeignOptions::project`) and the model is made with the same
+    functions that read a project's own `.kicad_pro`.
+    Entry points: `eda import-kicad <file> -o <dir>` (Eagle and CADSTAR pair a
+    board and a schematic by name, an Altium `.PrjPcb` brings the documents it
+    lists) and `POST /api/import_foreign`, then `Cmd::ReplaceBoard` /
+    `Cmd::ReplaceSchematic` (File > Import > Non-KiCad Board / Schematic: one
+    undo step that brings the old board back, the other's model a file under
+    `imports/` that `DrawingsSection::intent_file` names). The file is an
+    upload, never a path on the server.
   - **The studio stays live while kicad-cli runs.** `/api/drc`, `/api/erc`,
-    `/api/board_stats`, `/api/fab/*` and `/api/sch/plot|netlist` run on threads
+    `/api/board_stats`, `/api/fab/*`, `/api/sch/plot|netlist` and `/api/import_foreign` run on threads
     of their own (`crates/cli/src/kicad_lane.rs`), so edits, the `/api/version`
     poll and the 3D view never wait for one: an edit answers in milliseconds
     during a DRC. One kicad-cli at a time (they share `.kicad/`, and a DRC, an

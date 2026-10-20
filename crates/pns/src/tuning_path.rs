@@ -126,7 +126,7 @@ fn optimise_trace_in(chain: &mut ShapeLineChain, item: &Item, layer: i32, via: b
     let (center_um, shape, layers) = match item {
         Item::Solid(s) => (s.pos, s.shape.clone(), s.layers),
         Item::Via(v) => (v.pos, Shape::Circle { c: v.pos, r: v.diameter / 2 }, v.layers),
-        Item::Segment(_) => return,
+        Item::Segment(_) | Item::Arc(_) => return,
     };
     if !layers.overlaps_layer(layer) || chain.point_count() < 2 {
         return;
@@ -149,11 +149,20 @@ fn optimise_trace_in(chain: &mut ShapeLineChain, item: &Item, layer: i32, via: b
     *chain = ShapeLineChain::from_points(&clipped);
 }
 
-fn line_chain_nm(line: &Line) -> ShapeLineChain {
-    let pts: Vec<Point> = line.pts.iter().map(|&p| to_nm(p)).collect();
+/// The line as the nanometre chain KiCad measures and cuts: its arcs are the arcs they are (`SHAPE_LINE_CHAIN::Append( SHAPE_ARC )`), the rest points.
+pub(crate) fn line_chain_nm(line: &Line) -> ShapeLineChain {
+    let runs = line.arc_runs();
     let mut c = ShapeLineChain::new();
-    for p in pts {
-        c.append_point(p);
+    let mut i = 0;
+    while i < line.pts.len() {
+        if let Some(r) = runs.iter().find(|r| r.first == i) {
+            let a = if r.reversed { line.arcs[r.arc].reversed() } else { line.arcs[r.arc] };
+            c.append_arc(&crate::kigeom::ShapeArc::new(to_nm(a.start), to_nm(a.mid), to_nm(a.end), 0));
+            i = r.last + 1;
+            continue;
+        }
+        c.append_point(to_nm(line.pts[i]));
+        i += 1;
     }
     c
 }
@@ -165,12 +174,13 @@ fn lines_from_via(world: &Node, via_id: ItemId, visited: &HashSet<ItemId>) -> Ve
     let mut assembled: HashSet<ItemId> = HashSet::new();
     let mut out = Vec::new();
     for id in world.overlapping(&shape, via.layers, &[via_id]) {
-        let Some(Item::Segment(s)) = world.get(id) else { continue };
-        if !same_net(&s.net, &via.net) || visited.contains(&id) || assembled.contains(&id) {
+        let Some(item) = world.get(id) else { continue };
+        let Some((a, b)) = item.track_ends() else { continue };
+        if !same_net(item.net(), &via.net) || visited.contains(&id) || assembled.contains(&id) {
             continue;
         }
         // "Make sure at least one anchor is inside the via pad"
-        if !contains(&shape, s.a) && !contains(&shape, s.b) {
+        if !contains(&shape, a) && !contains(&shape, b) {
             continue;
         }
         let Some(line) = world.assemble_line_with(id, assemble_opts()) else { continue };
@@ -405,9 +415,15 @@ pub fn stackup_distance_nm(stackup: &Stackup, copper: &[String], first: &str, se
 /// The segment of `world` the point `p` is on the track of: `PCB_TRACK`s nearest to `p` of `net` on `layer` (a segment id), within `within`.
 pub fn nearest_segment(world: &Node, p: Point, layer: i32, net: Option<&Net>, within: i64) -> Option<(ItemId, Point)> {
     let id = world.segment_at(p, layer, net, Some(within), &[])?;
-    let Some(Item::Segment(s)) = world.get(id) else { return None };
-    let nearest = Seg::new(to_nm(s.a), to_nm(s.b)).nearest_point(to_nm(p));
-    Some((id, Point { x: ki_round(nearest.x as f64 / 1000.0), y: ki_round(nearest.y as f64 / 1000.0) }))
+    match world.get(id)? {
+        Item::Segment(s) => {
+            let nearest = Seg::new(to_nm(s.a), to_nm(s.b)).nearest_point(to_nm(p));
+            Some((id, Point { x: ki_round(nearest.x as f64 / 1000.0), y: ki_round(nearest.y as f64 / 1000.0) }))
+        }
+        // `getSnappedStartPoint` for an arc: its nearer end
+        Item::Arc(a) => Some((id, if crate::seg_ops::length(p, a.start()) <= crate::seg_ops::length(p, a.end()) { a.start() } else { a.end() })),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

@@ -94,6 +94,7 @@ export async function fetchSchematic(sheetPath?: readonly string[]): Promise<Sch
     lines: s.lines ?? [],
     graphics: s.graphics ?? [],
     locked: s.locked ?? [],
+    groups: s.groups ?? [],
     // `bus` is new (GAPS.md #20) -- a wire from a backend built before it
     // existed has no such field at all, not even `false`.
     wires: (s.wires ?? []).map((w) => ({ ...w, bus: w.bus ?? false })),
@@ -427,6 +428,28 @@ export async function fetchLibrarySymbol(libId: string): Promise<LibrarySymbol> 
   return withDefaults(s); // the server leaves out every field that has its default value (a unit or body style of 1, empty text fields)
 }
 
+/** `GET /api/symbol?flatten=1`: the symbol with everything it inherits from its parents (`LIB_SYMBOL::Flatten`) -- what the editor draws of a derived symbol. */
+export async function fetchLibrarySymbolFlat(libId: string): Promise<LibrarySymbol> {
+  const s = await getJson<LibrarySymbol & { error?: string }>(`/api/symbol?lib_id=${encodeURIComponent(libId)}&flatten=1`);
+  if (s.error) throw new ApiError(s.error);
+  return withDefaults(s);
+}
+
+/**
+ * The symbol open in the Symbol Editor: `symbol` is what is drawn (a derived symbol with everything it inherits), `own` the symbol's own entry when it is derived (its parent,
+ * its own fields), else null.
+ */
+export async function fetchSymbolForEditor(libId: string): Promise<{ symbol: LibrarySymbol; own: LibrarySymbol | null }> {
+  const own = await fetchLibrarySymbol(libId);
+  if (!own.extends) return { symbol: own, own: null };
+  try {
+    return { symbol: await fetchLibrarySymbolFlat(libId), own };
+  } catch {
+    // the parent is gone (a hand-edited design): show the symbol as it is, with nothing drawn
+    return { symbol: own, own };
+  }
+}
+
 export async function fetchSymbolEditorNames(): Promise<SymbolEditorNames> {
   const r = await getJson<SymbolEditorNames & { error?: string }>("/api/symbol_editor/names");
   if (r.error) throw new ApiError(r.error);
@@ -575,10 +598,11 @@ export function routeSetMode(mode: RouteMode): Promise<{ ok: boolean }> {
 /** `settings` (`components/RouterSettingsDialog.tsx`): `eda_pns::dragger::Dragger` reuses the exact same `ROUTING_SETTINGS` a
  * route session does (the walkaround/shove/mark-obstacles mode, Shove vias, the optimizer effort, ...). Omit to keep the
  * backend's own defaults. `freeAngle` is `PNS::DM_FREE_ANGLE` (`G`, `pcbnew.InteractiveRouter.DragFreeAngle`):
- * the drag then only marks obstacles whatever the mode is (`DRAGGER::Drag`). */
-export function routeDragStart(x: Um, y: Um, layer: string, settings?: RouterSettings, freeAngle?: boolean): Promise<DragPreview> {
+ * the drag then only marks obstacles whatever the mode is (`DRAGGER::Drag`). `dragLocked` is "Drag Anyway" to a locked item
+ * (`ROUTER_TOOL::performDragging`'s dialog): without it the backend refuses one, with `locked: true` in the reply. */
+export function routeDragStart(x: Um, y: Um, layer: string, settings?: RouterSettings, freeAngle?: boolean, dragLocked?: boolean): Promise<DragPreview> {
   // The backend reads whole micrometres (`as_i64`): a fractional cursor position would silently become (0, 0) there -- "nothing to drag there".
-  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined });
+  return postJson("/api/route/drag_start", { x: Math.round(x), y: Math.round(y), layer, settings: settings ? routerSettingsToWire(settings) : undefined, free_angle: freeAngle ? true : undefined, drag_locked: dragLocked ? true : undefined });
 }
 
 export function routeDragMove(x: Um, y: Um): Promise<DragPreview> {
@@ -623,6 +647,11 @@ export function dpFix(x: Um, y: Um): Promise<DpFixReply> {
 /** `V` for a pair (`ROUTER::ToggleViaPlacement`): the head ends in a pair of vias, and the next fix places them and goes on from them on `toLayer`. */
 export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Um, drill?: Um): Promise<{ ok: boolean }> {
   return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill });
+}
+
+/** Route From Other End for a pair (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, Ctrl+E): what the pair has fixed is committed and a new pair starts at the far end of the connection, heading for where this one's head ended. The reply is the new pair's preview, with `committed` and `from`. */
+export function dpContinueFromEnd(x: Um, y: Um): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_continue_from_end", { x: Math.round(x), y: Math.round(y) });
 }
 
 export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {

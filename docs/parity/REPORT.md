@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-20T07:33:23.689533+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-20T16:52:54.280188+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -112,7 +112,7 @@ Every re-export parses, and kicad-cli's DRC of it says what it says of the origi
 description are left out, because the importer keeps micrometres and an inch board's tenths of one are rounded). The slow test `a_real_boards_reexport_is_judged_by_kicad_cli_as_the_original_is` (`crates/kicad/tests/parity_roundtrip.rs`,
 `EDA_SLOW_TESTS=1`) holds this for the 12 boards as the corpus ships them and as kicad-cli 10.99.0-5334 writes them in its newest file format (`EDA_PARITY_REEXPORT_UPGRADE=1` in the harness).
 
-What the round trip changed before, read from the two kicad-cli reports and the two files of each board (`web/studio/PARITY-pcb.md` section 34 has the ports and the tests):
+What the round trip changed before, read from the two kicad-cli reports and the two files of each board (`web/studio/PARITY-pcb.md` section 37 has the ports and the tests):
 
 - `clearance`, `shorting_items`, `solder_mask_bridge`, `copper_edge_clearance` (`complex_hierarchy`): a board text of several lines (`Actionneur\nPiezo New Amp\nV02`) came back as one line full of backslashes -- the reader did not take the lexer's `\n` and the
   writer did not write it -- and its glyph width (`(size 2.032 1.524)`) was made square. `connection_width_rules`' extra `clearance`: its labels lost their `justify left bottom` and their bold.
@@ -155,9 +155,9 @@ Every KiCad action in `web/studio/src/kicad/actions.json` is classified against 
 
 | editor | actions | handled | referenced | missing | missing with a reason | hotkeyed & not handled |
 |---|---:|---:|---:|---:|---:|---:|
-| pcbnew | 350 | 289 | 0 | 0 | 61 | 4 |
-| eeschema | 233 | 174 | 0 | 0 | 59 | 8 |
-| common | 183 | 150 | 0 | 0 | 33 | 2 |
+| pcbnew | 350 | 300 | 0 | 0 | 50 | 3 |
+| eeschema | 233 | 193 | 0 | 0 | 40 | 7 |
+| common | 183 | 151 | 0 | 0 | 32 | 2 |
 
 Behavior (not just the presence of an action) is tracked per feature in `web/studio/PARITY-pcb.md` and the ranked, actionable gaps in `docs/parity/GAPS.md`.
 
