@@ -408,6 +408,30 @@ fn a_route_that_shoves_a_line_with_an_arc_puts_the_arc_it_did_not_reach_back_as_
     assert_eq!(collisions_after(&design, &model, &commit), 0, "and the board is clean");
 }
 
+/// A fillet is tangent to the run before it: the first chord of its polyline lies on the run's line (KiCad's polygonisation starts with a short one), so the vertex
+/// the run ends and the arc starts at is collinear with its neighbours -- and a clean-up of the shoved path that does not know the arc drops it, and the arc with it.
+#[test]
+fn a_route_that_pushes_the_run_before_a_tangent_arc_leaves_the_arc_an_arc() {
+    let (s, m, e) = (p(12_000, 10_000), p(15_536, 11_464), p(17_000, 15_000)); // a quarter arc about (12000, 15000), radius 5 mm
+    let arc = ArcPts::new(s, m, e);
+    let poly = arc.polyline();
+    assert_eq!((poly[0].y, poly[1].y), (10_000, 10_000), "the arc's first chord is along the run: {:?}", &poly[..3]);
+    let tracks = vec![straight("t_a", "GND", &[p(6000, 10_000), s]), arc_track("t_arc", "GND", arc), straight("t_b", "GND", &[e, p(17_000, 21_000)]), straight("t_sig", "SIG", &[p(8000, 15_000), p(8000, 14_000)])];
+    let (design, model) = board_with_pads_at(tracks, 40_000);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Shove;
+    router.start(p(8000, 14_000), "F.Cu", 200).expect("starts on the end of the SIG stub");
+    // the head ends on the run, 4 mm before the arc: the run is pushed round the head's end
+    let target = p(8000, 10_000);
+    let preview = router.preview(target).expect("in progress");
+    assert!(!preview.colliding && !preview.displaced_lines.is_empty(), "the run is pushed: {:?}", preview.colliding);
+    assert!(preview.displaced_lines.iter().any(|d| d.line.arc_count() == 1), "and the line it is pushed as still has its arc: {:?}", preview.displaced_lines.iter().map(|d| (d.source_track.clone(), d.line.pts.len(), d.line.arc_count())).collect::<Vec<_>>());
+    let commit = router.finish(target).expect("the shoved route commits");
+    let (arcs, others) = tracks_of(&commit);
+    assert_eq!(arcs.iter().map(|t| t.arc().unwrap()).collect::<Vec<_>>(), vec![(s, m, e)], "the arc comes back as the arc it was: {:?}", others.iter().map(|t| t.pts.clone()).collect::<Vec<_>>());
+    assert_eq!(collisions_after(&design, &model, &commit), 0, "and the board is clean");
+}
+
 #[test]
 fn a_line_that_is_cut_across_an_arc_is_written_back_as_segments_and_one_that_is_not_has_its_arc_as_an_arc_track() {
     let mut node = Node::new();

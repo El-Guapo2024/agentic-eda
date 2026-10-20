@@ -893,7 +893,9 @@ impl<'a> Shove<'a> {
             for &i in &order {
                 match walkaround::walk_around_hull(&path, &hulls[i], clockwise) {
                     Some(p) => {
-                        let mut l = Line::from_points(obstacle.line.net.clone(), obstacle.line.layer, obstacle.line.width, p);
+                        // the arcs of the line stay arcs where the walk left them alone: `Simplify` never drops a vertex an arc starts or ends at (a fillet's first chord is
+                        // collinear with the run before it, and its start is that run's end)
+                        let mut l = Line { arcs: obstacle.line.arcs.clone(), ..Line::from_points(obstacle.line.net.clone(), obstacle.line.layer, obstacle.line.width, p) };
                         l.simplify();
                         path = l.pts;
                     }
@@ -1065,6 +1067,7 @@ impl<'a> Shove<'a> {
         let walked: Option<(SLine, i32)> = {
             let cluster = self.node.assemble_cluster(obstacle, cur.line.layer, 10.0, None, &|id| skip.contains(&id));
             let mut walker = Walker::new(&self.node, self.rules);
+            walker.arcs = cur.line.arcs.clone();
             walker.restrict_to_cluster(&cluster);
             walker.skip_items(skip.iter().copied());
             walker.exclude_items(cur.links());
