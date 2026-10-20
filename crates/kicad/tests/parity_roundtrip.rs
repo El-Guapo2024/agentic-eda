@@ -41,6 +41,8 @@
 //! - `EDA_PARITY_REEXPORT_CAP`: how many boards part 3 takes (default 12).
 //! - `EDA_PARITY_REEXPORT_ONLY`: part 3 on these boards only (a comma list of file names without `.kicad_pcb`), for working on one
 //!   difference; such a run does not write `roundtrip.json`. The files it makes are in `<temp dir>/eda_parity_reexport/`.
+//! - `EDA_PARITY_REEXPORT_UPGRADE`: part 3 on the boards as kicad-cli writes them in the newest file format (`pcb upgrade --force` on the staged copy), original and re-export
+//!   judged alike (files in `<temp dir>/eda_parity_reexport_upgraded/`); it does not write `roundtrip.json` either (the measurement is the older formats').
 //! - `EDA_PARITY_DRC_TIMEOUT_SECS`: how long one kicad-cli DRC may run (default 600).
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -376,7 +378,8 @@ fn drc_timeout() -> std::time::Duration {
     std::time::Duration::from_secs(std::env::var("EDA_PARITY_DRC_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(600))
 }
 
-fn kicad_type_counts(cli: &Path, pcb: &Path, tag: &str) -> (BTreeMap<String, usize>, bool) {
+/// kicad-cli's DRC report of `pcb` (`--refill-zones --severity-all`, as JSON), `None` when it did not load the board or did not finish.
+fn kicad_drc_report(cli: &Path, pcb: &Path, tag: &str) -> Option<serde_json::Value> {
     let report_path = pcb.with_file_name(format!("{}.{tag}.drc.json", pcb.file_stem().and_then(|s| s.to_str()).unwrap_or("b")));
     let _ = std::fs::remove_file(&report_path);
     let mut cmd = Command::new(cli);
@@ -387,17 +390,105 @@ fn kicad_type_counts(cli: &Path, pcb: &Path, tag: &str) -> (BTreeMap<String, usi
             Some(out) => eprintln!("kicad-cli failed to load {} ({}): stdout={} stderr={}", pcb.display(), tag, String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)),
             None => eprintln!("kicad-cli DRC on {} ({}) did not finish in time", pcb.display(), tag),
         }
-        return (BTreeMap::new(), false);
+        return None;
     }
-    let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap_or_default()).unwrap_or_default();
+    Some(serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap_or_default()).unwrap_or_default())
+}
+
+/// The violations of a report by type.
+fn type_counts(report: &serde_json::Value) -> BTreeMap<String, usize> {
     let mut m = BTreeMap::new();
-    if let Some(vs) = report.get("violations").and_then(|v| v.as_array()) {
-        for v in vs {
-            let ty = v.get("type").and_then(|t| t.as_str()).unwrap_or("unknown").to_string();
-            *m.entry(ty).or_insert(0) += 1;
+    for v in report.get("violations").and_then(|v| v.as_array()).into_iter().flatten() {
+        *m.entry(v.get("type").and_then(|t| t.as_str()).unwrap_or("unknown").to_string()).or_insert(0) += 1;
+    }
+    m
+}
+
+/// A description with its lengths taken out (`3.6322 mm` and `3.632 mm` are one finding of two boards whose coordinates differ in the fourth decimal: the importer keeps
+/// micrometres, an inch board's grid has tenths of one).
+fn without_lengths(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            let mut j = i;
+            while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == '.') {
+                j += 1;
+            }
+            let rest: String = chars[j..].iter().take(3).collect();
+            if rest.starts_with(" mm") || rest.starts_with("mm") {
+                out.push('#');
+            } else {
+                out.extend(&chars[i..j]);
+            }
+            i = j;
+        } else {
+            out.push(chars[i]);
+            i += 1;
         }
     }
-    (m, true)
+    out
+}
+
+/// One finding of a report: its kind, severity, description (lengths out) and, per item, the description (lengths out) and the position in mm.
+type Finding = (String, String, Vec<(String, f64, f64)>);
+
+fn findings(report: &serde_json::Value, key: &str) -> Vec<Finding> {
+    report
+        .get(key)
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .map(|v| {
+            let text = |k: &str| v.get(k).and_then(|t| t.as_str()).unwrap_or("").to_string();
+            let mut items: Vec<(String, f64, f64)> = v
+                .get("items")
+                .and_then(|i| i.as_array())
+                .into_iter()
+                .flatten()
+                .map(|i| (without_lengths(i.get("description").and_then(|d| d.as_str()).unwrap_or("")), i.pointer("/pos/x").and_then(|x| x.as_f64()).unwrap_or(0.0), i.pointer("/pos/y").and_then(|y| y.as_f64()).unwrap_or(0.0)))
+                .collect();
+            items.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)).then(a.2.total_cmp(&b.2)));
+            (format!("{}|{}|{}", text("type"), text("severity"), without_lengths(&text("description"))), key.to_string(), items)
+        })
+        .collect()
+}
+
+/// How many findings (violations and unconnected items) one report has that the other does not: a finding is matched by its type, severity, description and the descriptions
+/// of its items, with every item's position within `tolerance_mm`. 0 is the same findings; the counts of each type being equal does not say so.
+fn finding_differences(a: &serde_json::Value, b: &serde_json::Value, tolerance_mm: f64) -> usize {
+    let mut differing = 0;
+    for key in ["violations", "unconnected_items"] {
+        let (fa, mut fb) = (findings(a, key), findings(b, key));
+        for x in &fa {
+            let hit = fb.iter().position(|y| x.0 == y.0 && x.2.len() == y.2.len() && x.2.iter().zip(&y.2).all(|(p, q)| p.0 == q.0 && (p.1 - q.1).abs() <= tolerance_mm && (p.2 - q.2).abs() <= tolerance_mm));
+            match hit {
+                Some(i) => {
+                    fb.swap_remove(i);
+                }
+                None => differing += 1,
+            }
+        }
+        differing += fb.len();
+    }
+    differing
+}
+
+#[test]
+fn findings_are_compared_by_type_items_and_place_and_not_by_lengths() {
+    let report = |violations: serde_json::Value| serde_json::json!({ "violations": violations, "unconnected_items": [] });
+    let finding = |ty: &str, description: &str, item: &str, x: f64| serde_json::json!({ "type": ty, "severity": "error", "description": description, "items": [{ "description": item, "pos": { "x": x, "y": 2.0 } }] });
+    let a = report(serde_json::json!([finding("connection_width", "Copper connection too narrow (actual 0.1014 mm)", "Track [net_3] on F.Cu, length 3.6322 mm", 112.7756)]));
+    let b = report(serde_json::json!([finding("connection_width", "Copper connection too narrow (actual 0.1004 mm)", "Track [net_3] on F.Cu, length 3.6320 mm", 112.776)]));
+    assert_eq!(finding_differences(&a, &b, 0.005), 0, "the lengths and a place a few micrometres off are the same finding");
+    let moved = report(serde_json::json!([finding("connection_width", "Copper connection too narrow (actual 0.1004 mm)", "Track [net_3] on F.Cu, length 3.6320 mm", 112.9)]));
+    assert_eq!(finding_differences(&a, &moved, 0.005), 2, "a finding elsewhere is one missing and one extra");
+    let other = report(serde_json::json!([finding("clearance", "Clearance violation", "Track [net_3] on F.Cu, length 3.6320 mm", 112.776)]));
+    assert_eq!(finding_differences(&a, &other, 0.005), 2);
+    let none = report(serde_json::json!([]));
+    assert_eq!((finding_differences(&a, &none, 0.005), finding_differences(&none, &none, 0.005)), (1, 0));
+    assert_eq!(without_lengths("Pad 1 [GND] of U1, 0.25 mm; actual 12 mm"), "Pad 1 [GND] of U1, # mm; actual # mm");
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -409,12 +500,31 @@ struct ReexportFidelity {
     original_types: BTreeMap<String, usize>,
     reexport_types: BTreeMap<String, usize>,
     identical_type_counts: bool,
+    /// The two reports list the same findings, not only as many of each type (`finding_differences` is 0); the number that differ.
+    #[serde(default)]
+    finding_differences: Option<usize>,
 }
 
-/// The original board with its project and custom rules, copied to `<temp dir>/eda_parity_reexport/orig/`: kicad-cli writes the report (and a
+/// The file format of the board both sides of the measurement start from: as the QA corpus ships it (the KiCad 6 to 9 formats), or as the installed kicad-cli writes it
+/// today (`pcb upgrade --force`: the KiCad 10 nightly's format, which the importer reads differently in places).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Format {
+    Shipped,
+    Upgraded,
+}
+
+/// Where a format's files go: `<temp dir>/eda_parity_reexport/` (`orig/` has the staged originals), and `eda_parity_reexport_upgraded/` for the upgraded ones.
+fn work_dir(format: Format) -> PathBuf {
+    std::env::temp_dir().join(match format {
+        Format::Shipped => "eda_parity_reexport",
+        Format::Upgraded => "eda_parity_reexport_upgraded",
+    })
+}
+
+/// The original board with its project and custom rules, copied to `<work dir>/orig/`: kicad-cli writes the report (and a
 /// `.kicad_prl`) beside the board it loads, and the KiCad sources' `qa/data` is read-only.
-fn stage_original(pcb: &Path) -> PathBuf {
-    let dir = std::env::temp_dir().join("eda_parity_reexport").join("orig");
+fn stage_original(cli: &Path, pcb: &Path, format: Format) -> PathBuf {
+    let dir = work_dir(format).join("orig");
     std::fs::create_dir_all(&dir).expect("temp dir for the original board");
     for ext in ["kicad_pcb", "kicad_pro", "kicad_dru"] {
         let from = pcb.with_extension(ext);
@@ -422,14 +532,22 @@ fn stage_original(pcb: &Path) -> PathBuf {
             let _ = std::fs::copy(&from, dir.join(from.file_name().expect("file name")));
         }
     }
-    dir.join(pcb.file_name().expect("file name"))
+    let staged = dir.join(pcb.file_name().expect("file name"));
+    // The same measurement on the board in the newest file format: the original and our re-export of it are both judged by what kicad-cli makes of them, and the importer
+    // reads KiCad 10's format instead of the QA corpus's older ones.
+    if format == Format::Upgraded {
+        let ok = Command::new(cli).args(["pcb", "upgrade", "--force"]).arg(&staged).output().map(|o| o.status.success()).unwrap_or(false);
+        assert!(ok, "kicad-cli pcb upgrade failed on {}", staged.display());
+    }
+    staged
 }
 
-fn reexport_fidelity(cli: &Path, pcb: &Path) -> ReexportFidelity {
+fn reexport_fidelity(cli: &Path, pcb: &Path, format: Format) -> ReexportFidelity {
     let name = pcb.file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
     let result = catch(AssertUnwindSafe(|| {
-        let (original_types, original_parses) = kicad_type_counts(cli, &stage_original(pcb), "orig");
-        let text = std::fs::read_to_string(pcb).unwrap_or_else(|e| panic!("read: {e}"));
+        let staged = stage_original(cli, pcb, format);
+        let original_report = kicad_drc_report(cli, &staged, "orig");
+        let text = std::fs::read_to_string(&staged).unwrap_or_else(|e| panic!("read: {e}"));
         let (design, mut model, _notes) = import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import_kicad_pcb: {e:?}"));
         // The project the board came from, as `eda import-kicad` reads it: net classes, severities and the
         // design-rule minimums from the sidecar `.kicad_pro`, custom rules from the `.kicad_dru`.
@@ -445,7 +563,7 @@ fn reexport_fidelity(cli: &Path, pcb: &Path) -> ReexportFidelity {
         }
         let meta = ExportMeta { date: "2026-01-01", title: &name };
         let reexported = export_kicad_pcb(&design, &model, &meta).unwrap_or_else(|e| panic!("export_kicad_pcb: {e:?}"));
-        let dir = std::env::temp_dir().join("eda_parity_reexport");
+        let dir = work_dir(format);
         std::fs::create_dir_all(&dir).unwrap();
         let out_path = dir.join(format!("{name}.kicad_pcb"));
         std::fs::write(&out_path, &reexported).unwrap();
@@ -459,16 +577,50 @@ fn reexport_fidelity(cli: &Path, pcb: &Path) -> ReexportFidelity {
                 let _ = std::fs::remove_file(&dru);
             }
         }
-        let (reexport_types, reexport_parses) = kicad_type_counts(cli, &out_path, "reexport");
-        (original_types, original_parses, reexport_types, reexport_parses)
+        let reexport_report = kicad_drc_report(cli, &out_path, "reexport");
+        (original_report, reexport_report)
     }));
     match result {
-        Ok((original_types, original_parses, reexport_types, reexport_parses)) => {
+        Ok((original, reexport)) => {
+            let (original_parses, reexport_parses) = (original.is_some(), reexport.is_some());
+            let (original_types, reexport_types) = (original.as_ref().map(type_counts).unwrap_or_default(), reexport.as_ref().map(type_counts).unwrap_or_default());
+            let finding_differences = match (&original, &reexport) {
+                (Some(a), Some(b)) => Some(finding_differences(a, b, 0.005)),
+                _ => None,
+            };
             let identical = original_types == reexport_types;
-            ReexportFidelity { board: name, error: None, original_parses, reexport_parses, original_types, reexport_types, identical_type_counts: identical }
+            ReexportFidelity { board: name, error: None, original_parses, reexport_parses, original_types, reexport_types, identical_type_counts: identical, finding_differences }
         }
-        Err(e) => ReexportFidelity { board: name, error: Some(e), original_parses: false, reexport_parses: false, original_types: BTreeMap::new(), reexport_types: BTreeMap::new(), identical_type_counts: false },
+        Err(e) => ReexportFidelity { board: name, error: Some(e), original_parses: false, reexport_parses: false, original_types: BTreeMap::new(), reexport_types: BTreeMap::new(), identical_type_counts: false, finding_differences: None },
     }
+}
+
+/// The slow-tier proof of the re-export: every one of the 12 boards, as the corpus ships it and as the installed kicad-cli writes it in the newest format, is judged by
+/// kicad-cli's DRC after the round trip as it is before it -- the same number of violations of each type, and the same findings (type, items, places to a few
+/// micrometres). Needs kicad-cli and KiCad's QA boards; `EDA_SLOW_TESTS=1` runs it (`EDA_PARITY_DRC_TIMEOUT_SECS` bounds a run). A board that fails here has lost design data
+/// in `import_kicad_pcb` or `export_kicad_pcb`: read the two reports with `EDA_PARITY_REEXPORT_ONLY=<board> EDA_PARITY_PARTS=reexport` and diff them.
+#[test]
+fn a_real_boards_reexport_is_judged_by_kicad_cli_as_the_original_is() {
+    if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+        eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+        return;
+    }
+    let (Some(cli), Some(root)) = (find_kicad_cli(), qa_root()) else {
+        eprintln!("skipped: needs kicad-cli (9 or later) and KiCad's QA boards");
+        return;
+    };
+    let mut failures = Vec::new();
+    for format in [Format::Shipped, Format::Upgraded] {
+        for pcb in select_subset(&root, 12) {
+            let r = reexport_fidelity(&cli, &pcb, format);
+            let ok = r.error.is_none() && r.original_parses && r.reexport_parses && r.identical_type_counts && r.finding_differences == Some(0);
+            eprintln!("{format:?} {}: {}", r.board, if ok { "same".to_string() } else { format!("{:?} {:?} {:?}", r.error, r.finding_differences, r.original_types.iter().filter(|(k, v)| r.reexport_types.get(*k) != Some(v)).collect::<Vec<_>>()) });
+            if !ok {
+                failures.push(format!("{format:?} {}: error {:?}, finding differences {:?}, original {:?}, re-export {:?}", r.board, r.error, r.finding_differences, r.original_types, r.reexport_types));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "the re-export is judged differently from the original on:\n{}", failures.join("\n"));
 }
 
 #[test]
@@ -514,6 +666,7 @@ fn parity_roundtrip_harness() {
     let mut reexport: Vec<ReexportFidelity> = Vec::new();
     if let (Some(cli), Some(root)) = (find_kicad_cli().filter(|_| wants("reexport")), qa_root()) {
         let cap = std::env::var("EDA_PARITY_REEXPORT_CAP").ok().and_then(|s| s.parse().ok()).unwrap_or(12);
+        let format = if std::env::var_os("EDA_PARITY_REEXPORT_UPGRADE").is_some() { Format::Upgraded } else { Format::Shipped };
         let mut subset = select_subset(&root, cap);
         // A run on some of the boards only (a comma list of file names without `.kicad_pcb`): for working on one difference; it leaves `roundtrip.json` alone.
         let only: Vec<String> = std::env::var("EDA_PARITY_REEXPORT_ONLY").ok().map(|s| s.split(',').map(|b| b.trim().to_string()).filter(|b| !b.is_empty()).collect()).unwrap_or_default();
@@ -522,8 +675,8 @@ fn parity_roundtrip_harness() {
         }
         println!("\n=== Part 3: re-export fidelity on {} boards ===", subset.len());
         for pcb in &subset {
-            let r = reexport_fidelity(&cli, pcb);
-            println!("  {}: orig_parses={} reexport_parses={} identical_type_counts={}", r.board, r.original_parses, r.reexport_parses, r.identical_type_counts);
+            let r = reexport_fidelity(&cli, pcb, format);
+            println!("  {}: orig_parses={} reexport_parses={} identical_type_counts={} finding_differences={:?}", r.board, r.original_parses, r.reexport_parses, r.identical_type_counts, r.finding_differences);
             reexport.push(r);
         }
     } else if wants("reexport") {
@@ -537,8 +690,8 @@ fn parity_roundtrip_harness() {
         qa_corpus_sch_import_notes: Option<SchCorpusStats>,
         reexport_fidelity_subset: Vec<ReexportFidelity>,
     }
-    if std::env::var("EDA_PARITY_REEXPORT_ONLY").is_ok_and(|s| !s.trim().is_empty()) {
-        println!("\nEDA_PARITY_REEXPORT_ONLY is set: a partial run, {} left alone", repo.join("docs/parity/raw/roundtrip.json").display());
+    if std::env::var("EDA_PARITY_REEXPORT_ONLY").is_ok_and(|s| !s.trim().is_empty()) || std::env::var_os("EDA_PARITY_REEXPORT_UPGRADE").is_some() {
+        println!("\nEDA_PARITY_REEXPORT_ONLY or EDA_PARITY_REEXPORT_UPGRADE is set: a partial run, {} left alone", repo.join("docs/parity/raw/roundtrip.json").display());
         return;
     }
     let report = Report { own_pipeline_roundtrip: own, qa_corpus_pcb_import_notes: pcb_stats, qa_corpus_sch_import_notes: sch_stats, reexport_fidelity_subset: reexport };
