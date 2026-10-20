@@ -19,11 +19,13 @@
 //                nothing;
 //   via head     `V` while routing in Shove mode: the track under the head's via, on the other layer, is pushed aside with the via in the preview, and the committed route (tracks on both layers,
 //                the via) leaves the gates no clearance failure and is one undo step;
+//   posture      the head's elbow follows the path the cursor took (a path up the diagonal first leaves the pad diagonally, one along the row first leaves straight) -- and not with the row off;
+//   tuner on arc  a track that is an arc is picked by the tuner (the line's length along the arc), a pattern is started on it and tuned to 24 mm through the arc, which stays an arc;
 //   delay        a net whose class names a tuning profile with the time domain on is tuned in picoseconds: the status box reads "current delay", the Tuning Pattern dialog has the Delay
 //                radio button and a target delay, the pattern is tuned to it within 0.2 ps and stored as a time domain one.
 //
 // It answers through `window.__routerLeftoversCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __routerLeftoversCheck.wait(60000)` until
-// `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes a minute or two (a debug build of the server), longer than the Browser pane's javascript
+// `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes four or five minutes (a debug build of the server), longer than the Browser pane's javascript
 // tool gives one call: start it (`(0, eval)( src )` returns at once) and poll with `wait(30000)`.
 (async () => {
   const results = [];
@@ -229,6 +231,50 @@
     await sleep(400);
     t(again("Use mouse path to set track posture")?.checked === true && again("Optimize entire track being dragged")?.checked === false, "and the defaults are back");
     await press("Cancel");
+  });
+
+  await scenario("the mouse path sets the posture of the head, and with \"Use mouse path to set track posture\" off it does not", async (t) => {
+    await commit([line("PA2", "F.Cu", [[8000, 15000], [8000, 14000]])]);
+    await E.run("pcbnew.InteractiveRouter.SingleTrack");
+    await E.run("pcbnew.InteractiveRouter.WalkaroundMode");
+    await sleep(300);
+    /** One route from the stub's end along `trail` (every point a cursor move the router sees); the head it ends with. */
+    const session = async (trail) => {
+      if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); } // Escape leaves the tool
+      const n = replies.length;
+      await clickAt(8000, 14000);
+      const s = await waitReply("start", n);
+      if (!(s && s.body.ok === true)) return null;
+      let last = null;
+      for (const [x, y] of trail) last = await moveTo(x, y);
+      await E.run("common.Interactive.cancel"); // Escape ends the route
+      await sleep(400);
+      return last && last.body.head;
+    };
+    const diagonalFirst = [[9000, 13000], [10000, 12000], [11000, 11000], [13000, 11000]];
+    const straightFirst = [[10000, 14000], [12000, 14000], [13000, 13000], [13000, 11000]];
+    const [diag, straight] = [JSON.stringify([[8000, 14000], [11000, 11000], [13000, 11000]]), JSON.stringify([[8000, 14000], [10000, 14000], [13000, 11000]])];
+    const a = await session(diagonalFirst);
+    t(JSON.stringify(a) === diag, `a cursor that went up the diagonal first leaves the pad diagonally: ${JSON.stringify(a)}`);
+    const b = await session(straightFirst);
+    t(JSON.stringify(b) === straight, `one that went along the row first leaves straight: ${JSON.stringify(b)}`);
+    // the row off: the posture is the one the geometry gives, whatever the path was
+    await E.run("pcbnew.InteractiveRouter.SettingsDialog");
+    await sleep(400);
+    const box = () => [...(dialog()?.querySelectorAll("label") ?? [])].find((l) => l.textContent.trim() === "Use mouse path to set track posture")?.querySelector("input");
+    box()?.click();
+    await sleep(150);
+    await press("OK");
+    const c = await session(diagonalFirst);
+    t(JSON.stringify(c) === straight, `with the row off the same diagonal path gives the head the geometry gives: ${JSON.stringify(c)}`);
+    // and back on
+    await E.run("pcbnew.InteractiveRouter.SettingsDialog");
+    await sleep(400);
+    box()?.click();
+    await sleep(150);
+    await press("OK");
+    const d = await session(diagonalFirst);
+    t(JSON.stringify(d) === diag, `with it on again the path counts again: ${JSON.stringify(d)}`);
   });
 
   await scenario("D on an arc track drags an arc: it goes through the cursor, the runs next to it follow, it stays an arc, and one Undo puts it back", async (t) => {
@@ -493,6 +539,51 @@
     const pat = (st.drawings?.tuning_patterns ?? []).find((p) => p.id === (f && f.body.pattern_id));
     t(!!pat && pat.is_time_domain === true && pat.target_delay && pat.target_delay.opt === 150_000_000, `the pattern is a time domain one: ${pat && JSON.stringify([pat.is_time_domain, pat.target_delay && pat.target_delay.opt])}`);
     t(!!pat && /^150(\.\d+)? ps \(tuned\)$/.test(pat.info), `its row reads ${pat && pat.info}`);
+  });
+
+  await scenario("a track that is an arc is picked by the length tuner, and a pattern is tuned along the arc", async (t) => {
+    await commit(fillet());
+    const lineMm = (6000 + (Math.PI / 2) * R + 6000) / 1000; // the run, the quarter arc, the run
+    key("7");
+    await sleep(300);
+    // the tool carries what the last pattern had (the time domain scenario before this one): the dialog says Length and a target of 24 mm
+    await E.run("pcbnew.LengthTuner.Settings");
+    await sleep(400);
+    const radios = [...(dialog()?.querySelectorAll("input[type=radio]") ?? [])];
+    if (radios[0]) radios[0].click();
+    await sleep(200);
+    const field = [...(dialog()?.querySelectorAll("input[type=text]") ?? [])].find((q) => q.placeholder === "none" && !q.disabled);
+    if (field) setVal(field, "24");
+    await sleep(100);
+    await press("OK");
+    let n = replies.length;
+    await pointerTo(...ON_ARC);
+    await waitReply("hover", n, 8000);
+    await quiet();
+    const hv = lastReply("hover", n);
+    t(hv && hv.body.hit === true && hv.body.pick.net === "PA0", `the arc track under the cursor is picked: ${hv && JSON.stringify([hv.body.hit, hv.body.pick && hv.body.pick.net])}`);
+    t(hv && hv.body.readout && near(hv.body.readout.current, lineMm, 0.05), `it reads the length of the line along the arc, ${lineMm.toFixed(3)} mm: ${hv && hv.body.readout && hv.body.readout.current}`);
+    // from the middle of the arc to the run after it
+    n = replies.length;
+    await clickAt(...ON_ARC2);
+    const s = await waitReply("start", n);
+    t(s && s.body.ok === true, `a click on the arc starts a pattern: ${s && JSON.stringify([s.body.ok, s.body.message])}`);
+    const m = await moveTo(17000, 19000);
+    const ro = m && m.body.readout;
+    t(!!ro && ro.status === "tuned" && near(ro.current, 24, 0.1), `the cursor fits a meander through the arc: ${ro && JSON.stringify([ro.status, ro.current])}`);
+    t(!!m && m.body.preview && m.body.preview.pieces.length > 8, `of ${m && m.body.preview && m.body.preview.pieces.length} pieces`);
+    n = replies.length;
+    await clickAt(17000, 19000);
+    const f = await waitReply("fix", n, 20000);
+    await quiet();
+    t(f && f.body.ok === true && !!f.body.pattern_id, `the second click puts it on the board: ${f && JSON.stringify(f.body.ok)}`);
+    const st = await state();
+    const len = tracksOf(st).filter((q) => q.net === "PA0").reduce((sum, q) => sum + q.pts.reduce((a, p, i) => (i ? a + Math.hypot(p[0] - q.pts[i - 1][0], p[1] - q.pts[i - 1][1]) : 0), 0), 0) / 1000;
+    t(near(len, 24, 0.15), `PA0 is ${len.toFixed(3)} mm long on the board`);
+    t(arcsOf(st).some((q) => nearPt(q.pts[0], S, 1) && distToPoly(q.pts, ON_ARC2) <= 150), `and the arc the pattern was started on is still the arc (a meander is made on the straight parts of a line, the arc goes through as it is): ${JSON.stringify(arcsOf(st).slice(0, 1).map((q) => [q.pts[0], q.pts[q.pts.length - 1]]))}`);
+    await E.run("common.Interactive.undo");
+    await sleep(600);
+    t(arcsOf(await state()).length === 1 && tracksOf(await state()).length === 3, "one Undo takes the pattern away and the fillet is as it was");
   });
 
   await scenario("the board is as it was, and the studio reported no error", async (t) => {
