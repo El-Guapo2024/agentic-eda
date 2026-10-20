@@ -15,6 +15,7 @@
 //
 // Not here: `pcbnew.InteractiveDrawing.applyDesignBlockLayout`, which repeats the block's layout on a group's footprints with the multichannel tool (`RepeatLayout`).
 import type { Dispatch } from "react";
+import { fetchSchematic, fetchState } from "../api/client";
 import { deleteBlock, fetchBlockFile, prepareSave, saveBlock, saveBlockProperties, type Block, type BlockLibrary, type Refused, type SaveSource } from "../api/designBlockClient";
 import { groupsOf } from "../kicad-port/schGroups";
 import { findBlock, parseBlockId, placeProblem, schematicPlacement } from "../kicad-port/designBlocks";
@@ -131,14 +132,28 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
 
   // ------------------------------------------------------------------------------------------------------------------------------------- saving
 
-  const afterSaved = async (r: { lib: string; name: string; lib_id: string; linked?: boolean; link_error?: string | null }) => {
+  /** The ids of the groups of the sheet in view or of the board. */
+  const groupIds = (): Set<string> => {
+    const st = ctx.api.getState();
+    return new Set((ctx.tab === "schematic" ? groupsOf(st.schematic) : (st.board?.drawings?.groups ?? [])).map((g) => g.id));
+  };
+
+  const afterSaved = async (r: { lib: string; name: string; lib_id: string; linked?: boolean; link_error?: string | null }, groupsBefore: ReadonlySet<string>) => {
     await refreshDesignBlocks();
     // `m_designBlocksPane->RefreshLibs(); SelectLibId( blk.GetLibId() )`
     selectDesignBlock(r.lib_id);
     toast(`Design block '${r.name}' saved to library '${r.lib}'.`);
     if (r.link_error) toast(r.link_error, "error");
-    // the group the save made (or linked) is a change of the design: read it now rather than at the next poll
-    if (r.linked) await ctx.api.refresh();
+    if (!r.linked) return;
+    // the group the save made (or linked) is a change of the design: read it now rather than at the next poll, and select the new group (`selectItem( newGroup )` after "Group Items")
+    try {
+      const groups = ctx.tab === "schematic" ? groupsOf(await fetchSchematic(ctx.api.getState().currentSheetPath)) : ((await fetchState()).drawings?.groups ?? []);
+      await ctx.api.refresh();
+      const made = groups.find((g) => !groupsBefore.has(g.id) && g.design_block === r.lib_id);
+      if (made) ctx.dispatch({ type: "SET_SELECTION", refs: [made.id] });
+    } catch {
+      // the poll shows the group; only its selection is lost
+    }
   };
 
   /**
@@ -187,6 +202,7 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
     }
 
     const name = update ? here.name : values!.name;
+    const groupsBefore = groupIds();
     const body = { ...source, lib: here.lib, name, ...(values ? { description: values.description, keywords: values.keywords, fields: values.fields } : {}), ...(update ? { update: true } : {}) };
     let saved;
     try {
@@ -200,7 +216,7 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
       return toast(messageOf(e), "error");
     }
     if (!saved.ok) return say(saved);
-    await afterSaved(saved);
+    await afterSaved(saved, groupsBefore);
   };
 
   const sheetPath = () => ctx.api.getState().currentSheetPath.join("/");
