@@ -149,7 +149,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     // file can be turned into ids once the items have them.
     let mut refs = Refs::default();
     let (footprints_ir, parts, explicit_footprints, pin_nets, footprint_extras, footprint_edits) = import_footprints(root, &net_names, &layers, &mut notes, &mut refs)?;
-    let nets = build_nets(&net_names, &pin_nets);
+    let mut nets = build_nets(&net_names, &pin_nets);
     let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
@@ -159,6 +159,14 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let copper_texts = import_board_copper_texts(root);
     let zones = import_zones(root, &net_names, &layers, &mut notes, &mut refs);
     notes.zone_fills = crate::zone_fills::scan_zone_fills(text);
+    // KiCad 10's files carry no table of the nets, every item names its own (`(net "GND")`): a net that only a track, a via or a zone is on is a net of the board too, and
+    // the writer refuses copper on a net the netlist does not have.
+    {
+        let used: std::collections::BTreeSet<&str> = tracks.iter().map(|t| t.net.as_str()).chain(vias.iter().map(|v| v.net.as_str())).chain(zones.iter().map(|z| z.net.as_str())).filter(|n| !n.is_empty()).collect();
+        let known: std::collections::BTreeSet<String> = nets.iter().map(|n| n.name.clone()).collect();
+        nets.extend(used.into_iter().filter(|n| !known.contains(*n)).map(|n| Net { name: n.to_string(), pins: Vec::new() }));
+        nets.sort_by(|a, b| a.name.cmp(&b.name));
+    }
 
     add_layers_in_use(
         &mut board.layer_setup,

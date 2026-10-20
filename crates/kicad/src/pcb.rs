@@ -2901,4 +2901,23 @@ mod tests {
         let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
         assert_eq!(out.matches("(stroke (width 0.2)").count(), 2, "{out}");
     }
+
+    /// KiCad 10's files carry no table of the nets and name a net on every item that is on one (`(net "net_1")`): a net that only a track, a via or a zone is on is one of the
+    /// board's nets, and the board exports (it failed with `kicad.unknown_net`; `connection_width_rules` has copper on four nets and no pad on any).
+    #[test]
+    fn a_net_only_copper_names_is_a_net_of_the_board() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (segment (start 0 0) (end 5 0) (width 0.25) (layer "F.Cu") (net "net_1") (uuid "00000000-0000-0000-0000-000000000001"))
+  (segment (start 0 1) (end 5 1) (width 0.25) (layer "F.Cu") (net "net_HC") (uuid "00000000-0000-0000-0000-000000000002"))
+  (via (at 5 0) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net "net_via") (uuid "00000000-0000-0000-0000-000000000003"))
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        assert_eq!(model.nets.iter().map(|n| n.name.as_str()).collect::<Vec<_>>(), ["net_1", "net_HC", "net_via"]);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(net 1 \"net_1\")") && out.contains("(net 2 \"net_HC\")") && out.contains("(net 3 \"net_via\")"), "{out}");
+    }
 }
