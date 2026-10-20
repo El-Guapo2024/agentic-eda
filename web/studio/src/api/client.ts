@@ -649,6 +649,11 @@ export function dpToggleVia(enabled: boolean, toLayer?: string, diameter?: Um, d
   return postJson("/api/route/dp_via", { enabled, to_layer: toLayer, diameter, drill });
 }
 
+/** Route From Other End for a pair (`ROUTER::ContinueFromEnd` restarts the placer of the same mode, Ctrl+E): what the pair has fixed is committed and a new pair starts at the far end of the connection, heading for where this one's head ended. The reply is the new pair's preview, with `committed` and `from`. */
+export function dpContinueFromEnd(x: Um, y: Um): Promise<DiffPairPreview> {
+  return postJson("/api/route/dp_continue_from_end", { x: Math.round(x), y: Math.round(y) });
+}
+
 export function dpUndoSegment(): Promise<{ ok: boolean; popped: boolean }> {
   return postJson("/api/route/dp_undo_segment", {});
 }

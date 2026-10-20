@@ -1902,6 +1902,10 @@ export interface DiffPairPreview {
   /** `shove` mode: the tracks and vias the head would push aside. */
   displaced?: RouteDisplacedLine[];
   displaced_vias?: RouteDisplacedVia[];
+  /** `POST /api/route/dp_continue_from_end` only (Route From Other End): the pair fixed so far was committed, so the board changed. */
+  committed?: boolean;
+  /** `POST /api/route/dp_continue_from_end` only: the far end of the connection, where the new pair starts. */
+  from?: [Um, Um];
 }
 
 export interface DpFixReply {

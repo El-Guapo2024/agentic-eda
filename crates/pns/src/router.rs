@@ -94,6 +94,9 @@ pub struct Continuation {
     pub from: Point,
     /// Where the head of the old route ended: the new route heads there.
     pub to: Point,
+    /// A pair's gap and via gap (`UpdateSizes`: the sizes the router keeps survive the restart); 0 for a single track.
+    pub gap: Um,
+    pub via_gap: Um,
 }
 
 pub struct Router {
@@ -350,7 +353,48 @@ impl Router {
             self.apply_splits(&splits, &mut commit);
         }
         self.drop_redundant(&mut commit);
-        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end })
+        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width: placer.width, from, to: current_end, gap: 0, via_gap: 0 })
+    }
+
+    /// `ROUTER::ContinueFromEnd` for a pair (Ctrl+E while routing one): KiCad restarts "the placer of the same mode" at the other end, so a pair continues from the
+    /// other end as a pair. As [`Self::continue_from_end`], with the P line as the trace (`Traces()[0]`) and the P net as the net
+    /// (`GetNearestRatnestAnchor`: `NearestUnconnectedAnchorPoint( trace )`, the fixed legs counting as connected); the caller commits
+    /// [`Continuation::commit`] and starts a new pair with [`Self::start_diff_pair`] at [`Continuation::from`], which then heads for [`Continuation::to`].
+    /// Nothing is changed, but for the pair's own last `Move` at `at`.
+    pub fn continue_diff_pair_from_end(&mut self, at: Point) -> Result<Continuation, String> {
+        let d = self.diff.as_mut().ok_or("not routing a diff pair")?;
+        d.move_to(&self.rules, &self.settings, at);
+        let preview = d.preview();
+        let net = d.net_p.clone();
+        let head = &preview.head_a;
+        // what the pair has fixed is in the placer's world (`CurrentNode( true )`)
+        let mut node = d.world().branch();
+        let start = d.current_start_p();
+        let current_end = head.last().unwrap_or(start);
+        let (from, layers) = if head.segment_count() > 0 {
+            node.add_line(head, None, false);
+            let ends_with_via = !preview.vias.is_empty();
+            let links = node.joint_at(current_end, &net).map_or(0, |j| j.links.len());
+            if (!ends_with_via && links >= 2) || (ends_with_via && links >= 3) {
+                // "we got something connected"
+                (current_end, node.joint_at(current_end, &net).map_or(LayerRange::single(preview.layer), |j| j.layers))
+            } else {
+                let (id, anchor) = node.nearest_unconnected_item(current_end, &net).ok_or("Route From Other End: nothing is left to connect to.")?;
+                (anchor, node.get(id).map_or(LayerRange::single(preview.layer), |i| i.layers()))
+            }
+        } else {
+            if node.joint_at(start, &net).is_none() {
+                return Err("Route From Other End: this route does not start on a connection.".into());
+            }
+            let (id, anchor) = node.nearest_unconnected_item(start, &net).ok_or("Route From Other End: nothing is left to connect to.")?;
+            (anchor, node.get(id).map_or(LayerRange::single(preview.layer), |i| i.layers()))
+        };
+        let layer = if layers.overlaps_layer(preview.layer) { preview.layer } else { layers.start() };
+        let (width, gap, via_gap) = (d.sizes.width, d.sizes.gap, d.sizes.via_gap);
+        let dp_commit = d.commit();
+        let mut commit = self.build_dp_commit(&dp_commit);
+        self.drop_redundant(&mut commit);
+        Ok(Continuation { commit, net: net.as_deref().unwrap_or("").to_string(), layer: self.layer_name(layer).to_string(), width, from, to: current_end, gap, via_gap })
     }
 
     /// `ROUTER::UndoLastSegment` (Backspace).

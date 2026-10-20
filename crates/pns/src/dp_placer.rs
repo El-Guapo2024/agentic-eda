@@ -728,7 +728,10 @@ impl DiffPairPlacer {
     }
 
     /// `DIFF_PAIR_PLACER::tryWalkDp`: the better of the walks starting with P and with N -- the longest coupled length, the least skew --
-    /// then optimized ([`crate::optimizer::optimize_pair`]). `false` leaves `pair` as it was.
+    /// then optimized ([`crate::optimizer::optimize_pair`]). When neither walk works, KiCad's `if( bestScore > 0.0 )` is true all the same (the score
+    /// starts at 1e14 and nothing lowers it): `aPair.SetShape( best )` takes the default `DIFF_PAIR` -- two empty lines -- and the function says `true`, so
+    /// a pair that cannot be walked disappears and has no head to show. (Walk around then calls that a fit, and fixing it places nothing; Shove runs
+    /// a shove with two empty heads, which fails.) The function never returns `false`; the result is kept for the callers' shape.
     fn try_walk_dp(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, pair: &mut DiffPair, solids_only: bool) -> bool {
         let mut best: Option<DiffPair> = None;
         let mut best_score = 100_000_000_000_000.0f64;
@@ -744,7 +747,8 @@ impl DiffPairPlacer {
                 }
             }
         }
-        let Some(best) = best else { return false };
+        // "DIFF_PAIR best;" -- empty, unless an attempt beat the score
+        let best = best.unwrap_or_default();
         pair.set_shape_from(&best);
         crate::optimizer::optimize_pair(node, rules, pair);
         true
@@ -955,6 +959,12 @@ impl DiffPairPlacer {
         true
     }
 
+    /// `DIFF_PAIR_PLACER::CurrentStart`: where the next leg starts on the P line -- the anchor of the pair the last fix ended on, or the pair the route
+    /// started on.
+    pub fn current_start_p(&self) -> Point {
+        self.prev_pair.as_ref().unwrap_or(&self.start).anchor_p
+    }
+
     /// The legs fixed so far.
     pub fn legs(&self) -> &[DpLeg] {
         &self.legs
@@ -1146,6 +1156,35 @@ mod tests {
         // the pair as a whole moved, not one line: both bump away from the pad (down, y grows)
         let y_max = |l: &Line| l.pts.iter().map(|q| q.y).max().unwrap();
         assert!(y_max(&pv.head_a) >= 500 && y_max(&pv.head_b) >= 900, "P {:?} N {:?}", pv.head_a.pts, pv.head_b.pts);
+    }
+
+    /// `tryWalkDp`: when neither walk works, KiCad's `if( bestScore > 0.0 )` is true all the same and the pair takes the default `DIFF_PAIR`, two
+    /// empty lines: a pair that cannot be walked has no head to show. Walk around calls it a fit and fixing it places nothing; Shove runs a shove with
+    /// two empty heads, which fails.
+    #[test]
+    fn a_pair_that_cannot_be_walked_loses_its_head_as_kicads_trywalkdp_empties_it() {
+        let (mut node, start) = two_pad_pairs();
+        pad(&mut node, "GND", p(5000, -100), 400);
+        let rules = rules();
+        // one step of walking is not enough to get round the pad
+        let impatient = |m: Mode| RoutingSettings { walkaround_iteration_limit: 1, ..mode(m) };
+        let mut dp = placer(&node, start);
+        let walk = impatient(Mode::Walkaround);
+        assert!(dp.move_to(&rules, &walk, p(10_000, 0)), "KiCad's tryWalkDp says true, and `m_fitOk` follows it");
+        let pv = dp.preview();
+        assert!(pv.head_a.pts.is_empty() && pv.head_b.pts.is_empty(), "the pair is emptied: {pv:?}");
+        assert!(!pv.colliding, "and not flagged");
+        assert!(dp.fix_route(&rules, &walk, p(10_000, 0), false).is_none(), "an empty head is not a leg");
+        assert!(dp.legs().is_empty());
+        // the same cursor with patience: the pair is back
+        assert!(dp.move_to(&rules, &mode(Mode::Walkaround), p(10_000, 0)));
+        assert!(dp.preview().head_a.pts.len() > 2);
+        // Shove: two empty heads fail the shove, so the pair does not fit
+        let mut dp = placer(&node, start);
+        let shove = impatient(Mode::Shove);
+        assert!(!dp.move_to(&rules, &shove, p(10_000, 0)));
+        let pv = dp.preview();
+        assert!(pv.head_a.pts.is_empty() && pv.colliding, "{pv:?}");
     }
 
     #[test]

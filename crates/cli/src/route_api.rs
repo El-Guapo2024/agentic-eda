@@ -595,9 +595,64 @@ pub fn dp_finish(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
     };
     let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: commit.remove_track_ids, remove_via_ids: commit.remove_via_ids, tracks: commit.tracks, vias: commit.vias, lock_tracks: commit.lock_tracks };
     match board::step(dir, cmd, true, "ui") {
-        Ok(summary) => json!({ "ok": true, "message": summary }),
+        Ok(summary) => {
+            // a pair restarted from the other end is one undo with the part that was committed when it restarted
+            if router.append_undo {
+                board::append_to_previous_undo(dir);
+            }
+            json!({ "ok": true, "message": summary })
+        }
         Err(e) => json!({ "ok": false, "message": board::reasons(&e) }),
     }
+}
+
+/// `POST /api/route/dp_continue_from_end`: `{x, y}` -- Route From Other End (Ctrl+E) for a pair. `ROUTER::ContinueFromEnd` restarts the placer of the same
+/// mode, so the pair continues as a pair: what it has fixed is committed (`CommitRouting()`; one `Cmd::CommitRoute`, nothing at all if nothing was fixed),
+/// and a new pair starts at the far end of the P net's connection and heads for where the old head ended. The reply is the new pair's preview (as
+/// `dp_start`'s), plus `committed` and `from`. A far end the pair cannot start on (no coupled partner, a neck-down) ends the routing, after the commit, with
+/// KiCad's own message; "nothing is left to connect to" leaves the session as it was.
+pub fn dp_continue_from_end(dir: &Path, cell: &RouteCell, body: &[u8]) -> Value {
+    let req = body_json(body);
+    let at = point_of(&req);
+    let (continuation, settings, append_undo) = {
+        let mut guard = cell.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(router) = guard.as_mut() else { return err("not routing a diff pair") };
+        match router.continue_diff_pair_from_end(at) {
+            Ok(c) => (c, router.settings.clone(), router.append_undo),
+            Err(message) => return err(message),
+        }
+    };
+    let committed = !continuation.commit.tracks.is_empty() || !continuation.commit.vias.is_empty() || !continuation.commit.remove_track_ids.is_empty();
+    if committed {
+        let c = continuation.commit;
+        let cmd = eda_ops::Cmd::CommitRoute { remove_track_ids: c.remove_track_ids, remove_via_ids: c.remove_via_ids, tracks: c.tracks, vias: c.vias, lock_tracks: c.lock_tracks };
+        if let Err(e) = board::step(dir, cmd, true, "ui") {
+            return err(board::reasons(&e));
+        }
+        if append_undo {
+            board::append_to_previous_undo(dir);
+        }
+    }
+    let (_, design, model) = match board::load(dir) {
+        Ok(v) => v,
+        Err(e) => return err(board::reasons(&e)),
+    };
+    let mut router = Router::new(&design, &model);
+    router.settings = settings;
+    router.append_undo = append_undo || committed;
+    if let Err(message) = router.start_diff_pair(continuation.from, &continuation.layer) {
+        *cell.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return json!({ "ok": false, "committed": committed, "message": message });
+    }
+    // the sizes the pair was routed at go on (`UpdateSizes`)
+    router.set_diff_pair_sizes(Some(continuation.width), Some(continuation.gap), Some(continuation.via_gap));
+    let mut reply = router.diff_pair_preview(continuation.to).map(|p| dp_preview_json(&router, &p)).unwrap_or_else(|| err("internal: restarted but no preview"));
+    *cell.lock().unwrap_or_else(|e| e.into_inner()) = Some(router);
+    if let Some(obj) = reply.as_object_mut() {
+        obj.insert("committed".into(), json!(committed));
+        obj.insert("from".into(), json!([continuation.from.x, continuation.from.y]));
+    }
+    reply
 }
 
 #[cfg(test)]
@@ -953,6 +1008,40 @@ mod tests {
         let on_layer = |layer: &str| routing.tracks.iter().filter(|t| t.layer == layer).count();
         assert_eq!((on_layer("F.Cu"), on_layer("B.Cu")), (2, 2), "two lines on each layer: {:?}", routing.tracks);
         assert_eq!(vias_of(&dir).len(), 4, "the two it started from and the two it placed: {:?}", vias_of(&dir));
+    }
+
+    /// `ROUTER::ContinueFromEnd` restarts the placer of the same mode: Route From Other End on a pair commits the fixed leg of both nets and starts a
+    /// pair at the far end -- the two vias of the other pair -- heading for where the old head ended; the commits are one undo step.
+    #[test]
+    fn route_from_other_end_continues_a_pair_as_a_pair_and_the_two_commits_are_one_undo_step() {
+        let dir = scratch("dp_continue");
+        setup_board(&dir, vec![], vec![via_at("dp", "USB_DP", 3_000, 5_000), via_at("dn", "USB_DN", 3_000, 6_000), via_at("dp2", "USB_DP", 15_000, 5_000), via_at("dn2", "USB_DN", 15_000, 6_000)]);
+        let cell: RouteCell = Mutex::new(None);
+        let started = dp_start(&dir, &cell, &body(json!({ "x": 3_000, "y": 6_000, "layer": "F.Cu", "settings": { "mode": "walkaround" } })));
+        assert_eq!(started["ok"], json!(true), "{started}");
+        let at = body(json!({ "x": 8_000, "y": 5_500 }));
+        let moved = dp_move(&cell, &at);
+        assert_eq!(moved["colliding"], json!(false), "{moved}");
+        let fixed = dp_fix(&cell, &at);
+        assert_eq!((fixed["ok"].clone(), fixed["blocked"].clone()), (json!(true), json!(false)), "{fixed}");
+        // from the other end: the fixed leg of both nets is on the board, a pair starts on the far vias
+        let on = dp_continue_from_end(&dir, &cell, &body(json!({ "x": 9_000, "y": 5_500 })));
+        assert_eq!(on["ok"], json!(true), "{on}");
+        assert_eq!((on["committed"].clone(), on["from"].clone()), (json!(true), json!([15_000, 5_000])), "{on}");
+        assert_eq!(tracks_of(&dir).len(), 2, "one leg per net: {:?}", tracks_of(&dir));
+        assert_eq!((pts_of(&on, "head_a").first().copied(), pts_of(&on, "head_b").first().copied()), (Some(p(15_000, 5_000)), Some(p(15_000, 6_000))), "the pair leaves the far vias: {on}");
+        assert_eq!((on["net_a"].clone(), on["net_b"].clone()), (json!("USB_DP"), json!("USB_DN")));
+        assert_eq!(pts_of(&on, "head_a").last().map(|q| q.x), Some(9_000), "and heads for where the old head ended");
+        // a pair is running again; finish it, and one undo takes both commits back
+        let done = dp_finish(&dir, &cell, &body(json!({ "x": 9_000, "y": 5_500 })));
+        assert_eq!(done["ok"], json!(true), "{done}");
+        assert_eq!(tracks_of(&dir).len(), 4, "{:?}", tracks_of(&dir));
+        let undone = board::undo(&dir, "test", Some(eda_ops::Domain::Pcb));
+        assert!(undone.is_ok(), "{undone:?}");
+        assert!(tracks_of(&dir).is_empty(), "the leg committed when the pair restarted and the pair from the far end are one undo step: {:?}", tracks_of(&dir));
+        // nothing routing: refused
+        let nothing = dp_continue_from_end(&dir, &Mutex::new(None), &body(json!({ "x": 0, "y": 0 })));
+        assert_eq!(nothing["ok"], json!(false));
     }
 
     /// `FindDpPrimitivePair`'s refusals reach the studio in KiCad's words.
