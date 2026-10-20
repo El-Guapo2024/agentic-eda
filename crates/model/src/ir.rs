@@ -2476,6 +2476,10 @@ pub struct DrawingsSection {
     /// for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub barcodes: Vec<crate::barcode::Barcode>,
+    /// The tables of the board (`(table ..)`, KiCad's `PCB_TABLE` with its `PCB_TABLECELL`s) -- see [`crate::table`]. Additive: absent in an older `design.json` reads as
+    /// "none". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<crate::table::Table>,
     /// The board setup's tokens the writer does not make from `BoardRules`, as the file wrote them: KiCad 10's defaults for the vias that say nothing of their own,
     /// `(covering (front no) (back no))`, `(plugging ..)`, `(capping no)` and `(filling no)`. Additive: absent reads as "none".
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2963,6 +2967,7 @@ impl DrawingsSection {
                 self.barcodes[i].id = id;
             }
         }
+        self.assign_table_ids();
     }
 }
 

@@ -57,6 +57,7 @@ pub(crate) struct Refs {
     pub texts: Vec<ItemRef>,
     pub dimensions: Vec<ItemRef>,
     pub barcodes: Vec<ItemRef>,
+    pub tables: Vec<ItemRef>,
 }
 
 impl Refs {
@@ -91,6 +92,7 @@ impl Refs {
             note(&self.texts, dr.texts.iter().map(|t| t.id.as_str()).collect());
             note(&self.dimensions, dr.dimensions.iter().map(|d| d.id.as_str()).collect());
             note(&self.barcodes, dr.barcodes.iter().map(|b| b.id.as_str()).collect());
+            note(&self.tables, dr.tables.iter().map(|t| t.id.as_str()).collect());
         }
 
         let names = design.drawings.iter().flat_map(|d| d.groups.iter().map(|g| g.id.clone())).collect();

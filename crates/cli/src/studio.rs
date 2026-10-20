@@ -1241,6 +1241,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             // Task item 7 -- see `eda_model::ir::Dimension`'s own doc.
             "dimensions": d.dimensions.iter().map(dimension_json).collect::<Vec<_>>(),
             "dimension_settings": dimension_settings_json(&d.dimension_settings),
+            // `PCB_TABLE`: the grid, the corners of every cell, the border lines and the placed lines of the text -- see `crate::table_json`.
+            "tables": d.tables.iter().map(|t| crate::table_json::table_json(t, tv.board())).collect::<Vec<_>>(),
         })
     });
     Ok(json!({

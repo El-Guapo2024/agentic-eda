@@ -94,6 +94,11 @@ impl PcbShown {
         PcbShown { board, by_part }
     }
 
+    /// The board the resolvers read: what a table cell's `${..}` is resolved against.
+    pub(crate) fn board(&self) -> &PcbBoard {
+        &self.board
+    }
+
     /// `PCB_TEXT::GetShownText` of a free text on `layer`.
     pub(crate) fn text_shown(&self, raw: &str, layer: &str) -> String {
         if !eda_model::text_vars::has_text_vars(raw) && !raw.contains('{') {
