@@ -2455,6 +2455,11 @@ pub struct DrawingsSection {
     /// an older `design.json` reads as `false`. Lives here for the reason `rules` does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outline_is_shapes: bool,
+    /// The stroke width of the lines of `placement.outline` when they are written as `gr_line`s on `Edge.Cuts` (an imported board whose outline is one closed loop of lines
+    /// of one width keeps the width: kicad-cli measures edge clearances from the drawn line, and plots it at that width). `None` is the width KiCad gives a line that
+    /// says none. Additive: absent in an older `design.json` reads as `None`. Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline_width_um: Option<Um>,
     /// What a board text has beyond [`Text`]'s fields (a glyph width that is not the height, a vertical justification, bold, italic, a knockout, the line spacing,
     /// a font face, an automatic stroke width), one entry per text that has any, keyed by the text's id -- see [`crate::board_text`]. Additive: absent in an older
     /// `design.json` reads as "every text is a square-sized, vertically centred, regular line". Lives here for the reason `rules` does.

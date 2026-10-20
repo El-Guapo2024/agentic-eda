@@ -423,6 +423,8 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     // with arcs, circles, cutouts, ...), `placement.outline` is only their summary and is not written: they were, above.
     if pl.outline.len() >= 2 && !eda_model::outline::outline_is_shapes(design) {
         let n = pl.outline.len();
+        // The width the lines were drawn at, when the board says (an imported outline of lines of one width).
+        let stroke = design.drawings.as_ref().and_then(|d| d.outline_width_um).map(|w| format!(" (stroke (width {}) (type default))", mm(w))).unwrap_or_default();
         for i in 0..n {
             let a = pl.outline[i];
             let b = pl.outline[(i + 1) % n];
@@ -431,7 +433,7 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
             let x2 = mm(b.x);
             let y2 = mm(b.y);
             let uuid = crate::duid_for(&format!("edge:{i}:{}:{}:{}:{}", a.x, a.y, b.x, b.y), "outline");
-            writeln!(out, "\t(gr_line (start {x1} {y1}) (end {x2} {y2}) (layer \"Edge.Cuts\") (uuid \"{uuid}\"))").unwrap();
+            writeln!(out, "\t(gr_line (start {x1} {y1}) (end {x2} {y2}){stroke} (layer \"Edge.Cuts\") (uuid \"{uuid}\"))").unwrap();
         }
     }
 
@@ -2858,5 +2860,45 @@ mod tests {
         // The footprints built here keep the box the placer keeps clear.
         let (made, made_model) = fixture();
         assert!(export_kicad_pcb(&made, &made_model, &meta()).unwrap().contains("CrtYd"));
+    }
+
+    /// The width of the lines of an imported outline is kept (`complex_hierarchy`'s Edge.Cuts are 0.2032 mm wide, written at the 0.1 KiCad gives a line that says none, and
+    /// kicad-cli measures edge clearance from the drawn line and plots it at its width). Lines of different widths are not one loop of lines here: they stay shapes, each
+    /// at its own width.
+    #[test]
+    fn the_width_of_an_imported_outline_is_written_back() {
+        let outline = |widths: [&str; 4]| -> String {
+            format!(
+                r#"(kicad_pcb (version 20240108) (generator "pcbnew") (general (thickness 1.6)) (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user)) (setup (pad_to_mask_clearance 0)) (net 0 "")
+  (gr_line (start 0 0) (end 20 0) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+  (gr_line (start 20 0) (end 20 10) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+  (gr_line (start 20 10) (end 0 10) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+  (gr_line (start 0 10) (end 0 0) (stroke (width {}) (type solid)) (layer "Edge.Cuts"))
+)"#,
+                widths[0], widths[1], widths[2], widths[3]
+            )
+        };
+        let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.2032"; 4])).unwrap();
+        assert_eq!(notes.outline_source, "lines");
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_um), Some(203));
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let lines: Vec<&str> = out.lines().filter(|l| l.contains("\"Edge.Cuts\")") && l.contains("(gr_line")).collect();
+        assert_eq!(lines.len(), 4, "{out}");
+        assert!(lines.iter().all(|l| l.contains("(stroke (width 0.203) (type default))")), "{lines:?}");
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back.drawings.as_ref().and_then(|d| d.outline_width_um), Some(203));
+
+        // An outline made here says no width, and is written as it always was.
+        let (made, made_model) = fixture();
+        let plain = export_kicad_pcb(&made, &made_model, &meta()).unwrap();
+        assert!(plain.lines().filter(|l| l.contains("\"Edge.Cuts\")")).all(|l| !l.contains("stroke")), "{plain}");
+
+        // Four widths: shapes, each as it was.
+        let (design, model, notes) = crate::import_kicad_pcb(&outline(["0.1", "0.2", "0.1", "0.2"])).unwrap();
+        assert_eq!(notes.outline_source, "shapes");
+        assert_eq!(design.drawings.as_ref().and_then(|d| d.outline_width_um), None);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert_eq!(out.matches("(stroke (width 0.2)").count(), 2, "{out}");
     }
 }

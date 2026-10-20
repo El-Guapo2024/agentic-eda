@@ -151,7 +151,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
     let (tracks, vias, via_tenting) = import_routing(root, &net_names, &mut notes, &mut refs);
     let (mut shapes, texts, text_extras) = import_drawings(root, &mut refs);
     // The Edge.Cuts shapes just read are the outline's items, or, when they are a plain closed loop of lines, that loop.
-    let (outline, outline_is_shapes) = import_outline(root, &mut shapes, &mut refs, &mut notes);
+    let (outline, outline_is_shapes, outline_width_um) = import_outline(root, &mut shapes, &mut refs, &mut notes);
     let dimensions = import_items::import_dimensions(root, &mut refs);
     let silk_texts = import_board_silk_texts(root);
     let copper_texts = import_board_copper_texts(root);
@@ -188,7 +188,7 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         nets: None,
         placement: Some(PlacementSection { outline, footprints: footprints_ir, modules: vec![] }),
         routing: if tracks.is_empty() && vias.is_empty() && zones.is_empty() { None } else { Some(RoutingSection { tracks, vias, zones, track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }) },
-        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, ..Default::default() }) },
+        drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_um.is_none() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_um, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
@@ -1941,18 +1941,20 @@ fn footprint_edge_cuts(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs)
 /// what they make. An outline that does not chain is kept as it is, too, and reported ([`ImportNotes::outline_errors`]): the exported file then
 /// has the same gap, and kicad-cli says so, instead of a loop closed behind the user's back.
 ///
-/// Returns the polygon for `placement.outline` and whether the shapes are the outline.
-fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool) {
+/// Returns the polygon for `placement.outline`, whether the shapes are the outline, and, when the outline is the loop of lines, the one width they are drawn at
+/// (`DrawingsSection::outline_width_um`; lines of different widths are not one loop of lines here, they stay shapes).
+fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, notes: &mut ImportNotes) -> (Vec<Point>, bool, Option<i64>) {
     footprint_edge_cuts(root, shapes, refs);
     let items: Vec<Shape> = shapes.iter().filter(|s| edge::is_edge_cuts(s)).cloned().collect();
     if items.is_empty() {
         notes.outline_source = "none";
-        return (Vec::new(), false);
+        return (Vec::new(), false, None);
     }
 
     let (polys, chained, _) = eda_drc::outline::convert_outline_to_polygon(&items, edge::MAX_ERROR_UM as f64, edge::CHAINING_EPSILON_UM, true);
     let one_loop = chained && polys.outline_count() == 1 && !polys.has_holes();
-    if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) {
+    let line_widths: std::collections::BTreeSet<i64> = items.iter().filter_map(|s| if let Shape::Segment { stroke_width, .. } = s { Some(*stroke_width) } else { None }).collect();
+    if one_loop && items.iter().all(|s| matches!(s, Shape::Segment { .. })) && line_widths.len() == 1 {
         // The loop, in the order its sides chain; the sides themselves are not kept.
         let ring: Vec<Point> = polys.outline(0).iter().map(|p| Point { x: p.x, y: p.y }).collect();
         let keep: Vec<bool> = shapes.iter().map(|s| !edge::is_edge_cuts(s)).collect();
@@ -1961,7 +1963,7 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
         let mut k = keep.iter();
         refs.shapes.retain(|_| *k.next().expect("one flag per shape"));
         notes.outline_source = "lines";
-        return (ring, false);
+        return (ring, false, line_widths.into_iter().next().filter(|w| *w > 0));
     }
 
     let built = eda_drc::outline::board_outline_of(&items, true);
@@ -1969,7 +1971,7 @@ fn import_outline(root: &[Sexpr], shapes: &mut Vec<Shape>, refs: &mut Refs, note
     notes.outline_open = !built.valid;
     notes.outline_shapes = items.len();
     notes.outline_errors = eda_drc::outline::check_edge_cuts(&items).iter().map(|e| format!("{} at ({:.3}, {:.3}) mm", e.describe(), e.at.x as f64 / 1000.0, e.at.y as f64 / 1000.0)).collect();
-    (built.main_ring(), true)
+    (built.main_ring(), true, None)
 }
 
 // ---------------------------------------------------------------- zones
