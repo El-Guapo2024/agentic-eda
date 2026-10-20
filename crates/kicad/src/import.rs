@@ -2183,25 +2183,39 @@ fn import_zones(root: &[Sexpr], net_names: &BTreeMap<i64, String>, copper_layers
     out
 }
 
-/// Points of a `gr_poly`'s `(pts ...)` list: `xy` entries verbatim, `arc`
-/// sub-entries by their start/end (curvature dropped, as elsewhere).
+/// Points of a `gr_poly`'s (or a zone's) `(pts ...)` list: `xy` entries verbatim, and an `(arc (start ..) (mid ..) (end ..))` of KiCad 9's polygons as the polyline
+/// `SHAPE_ARC::ConvertToPolyline` makes of it at the 5 micrometres KiCad flattens arcs to everywhere else (`eda_model::outline::Arc::polyline`): a polygon with rounded
+/// corners keeps them, where the chord between an arc's ends made chamfers of them. (A line joins the end of one arc to the start of the next, as in the file.)
 fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
     let pts = sexpr::find(p, "pts")?;
-    let mut out = Vec::new();
+    let mut out: Vec<Point> = Vec::new();
+    fn push(pt: Point, out: &mut Vec<Point>) {
+        if out.last() != Some(&pt) {
+            out.push(pt);
+        }
+    }
     for item in &pts[1..] {
         let Some(l) = item.as_list() else { continue };
         match sexpr::tag(l) {
             Some("xy") => {
                 if let Some(pt) = xy_point(l) {
-                    out.push(pt);
+                    push(pt, &mut out);
                 }
             }
             Some("arc") => {
-                if let Some(s) = sexpr::find(l, "start").and_then(xy_point) {
-                    out.push(s);
-                }
-                if let Some(e) = sexpr::find(l, "end").and_then(xy_point) {
-                    out.push(e);
+                let (start, mid, end) = (sexpr::find(l, "start").and_then(xy_point), sexpr::find(l, "mid").and_then(xy_point), sexpr::find(l, "end").and_then(xy_point));
+                match (start, mid, end) {
+                    (Some(s), Some(m), Some(e)) => {
+                        for pt in edge::Arc::through(s, m, e).polyline(edge::MAX_ERROR_UM as f64) {
+                            push(pt, &mut out);
+                        }
+                    }
+                    // An arc with no middle: its ends, as the chord.
+                    (s, _, e) => {
+                        for pt in s.into_iter().chain(e) {
+                            push(pt, &mut out);
+                        }
+                    }
                 }
             }
             _ => {}
@@ -2214,6 +2228,40 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
 mod tests {
     use super::*;
     use eda_model::ir::TextJustify;
+
+    /// A polygon's `(arc (start ..) (mid ..) (end ..))` is the arc, flattened as KiCad flattens it (5 micrometres from the curve), and no longer the chord between its
+    /// ends: `api_kitchen_sink`'s silkscreen polygon with four rounded corners came back with four chamfers.
+    #[test]
+    fn the_arcs_of_a_polygon_keep_their_curvature() {
+        // A 6 x 4 mm rectangle whose four corners are quarter circles of radius 1 (a gr_poly of arcs and lines, as KiCad 9 writes a rounded polygon).
+        let s2 = std::f64::consts::FRAC_1_SQRT_2;
+        let corner = |cx: f64, cy: f64, sx: f64, sy: f64, ex: f64, ey: f64, sign: (f64, f64)| format!("(arc (start {sx} {sy}) (mid {} {}) (end {ex} {ey}))", cx + sign.0 * s2, cy + sign.1 * s2);
+        let poly = format!(
+            "(gr_poly (pts {} {} {} {}) (stroke (width 0.1) (type solid)) (fill none) (layer \"F.SilkS\"))",
+            corner(5.0, 1.0, 5.0, 0.0, 6.0, 1.0, (1.0, -1.0)),
+            corner(5.0, 3.0, 6.0, 3.0, 5.0, 4.0, (1.0, 1.0)),
+            corner(1.0, 3.0, 1.0, 4.0, 0.0, 3.0, (-1.0, 1.0)),
+            corner(1.0, 1.0, 0.0, 1.0, 1.0, 0.0, (-1.0, -1.0)),
+        );
+        let tree = crate::sexpr::parse(&poly).unwrap();
+        let item = tree.as_list().unwrap();
+        let pts = poly_points(item).expect("a polygon");
+        // Chords would leave 8 points; the arcs are polylines.
+        assert!(pts.len() > 16, "{} points", pts.len());
+        // Every point sits on one of the four circles, within the 5 micrometres the flattening is held to, and the ends of the arcs are exact.
+        let centres = [(5000.0, 1000.0), (5000.0, 3000.0), (1000.0, 3000.0), (1000.0, 1000.0)];
+        let on_arc = |p: &Point| centres.iter().any(|c| ((p.x as f64 - c.0).hypot(p.y as f64 - c.1) - 1000.0).abs() <= 5.0);
+        assert!(pts.iter().all(on_arc), "{pts:?}");
+        for exact in [Point { x: 5000, y: 0 }, Point { x: 6000, y: 1000 }, Point { x: 6000, y: 3000 }, Point { x: 5000, y: 4000 }, Point { x: 1000, y: 4000 }, Point { x: 0, y: 3000 }, Point { x: 0, y: 1000 }, Point { x: 1000, y: 0 }] {
+            assert!(pts.contains(&exact), "{exact:?} in {pts:?}");
+        }
+        // The area is the rounded rectangle's, 24 - (4 - pi) = 23.14 mm^2; the chords of the four arcs would leave 22.
+        let area: f64 = (0..pts.len()).map(|i| { let (a, b) = (pts[i], pts[(i + 1) % pts.len()]); a.x as f64 * b.y as f64 - b.x as f64 * a.y as f64 }).sum::<f64>().abs() / 2.0 / 1.0e6;
+        assert!((area - (24.0 - (4.0 - std::f64::consts::PI))).abs() < 0.01, "area {area}");
+        // An arc with no middle is its chord, as before.
+        let broken = crate::sexpr::parse("(gr_poly (pts (xy 0 0) (arc (start 1 0) (end 1 1)) (xy 0 1)))").unwrap();
+        assert_eq!(poly_points(broken.as_list().unwrap()).unwrap().len(), 4);
+    }
 
     /// KiCad 6's `(gr_arc (start CENTRE) (end START) (angle A))`: the end is the start turned by A about the centre (`SetArcAngleAndEnd`), the
     /// middle by A/2, in the file's own axes, whichever way A goes.
