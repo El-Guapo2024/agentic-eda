@@ -7,12 +7,14 @@
 //   Place as contents      one click: the file's items come in on the sheet in view, carried to the click, and are annotated the same way.
 //   Keep annotations       no annotation: the symbols keep their references (only the ones the design already has are numbered anew).
 //
-// The studio keeps all four options except Place as group (the schematic has no groups). The numbering is the one the Annotate dialog last held
+// Place as group puts what comes in -- the file's items -- in a group named after the file; a design block's items (or its sheet) go in a group named after the block and
+// linked to it (`SetDesignBlockLibId`, `Group.design_block`), and with repeated copies the name ends with 1, 2, ... (`suffix++`). The numbering is the one the Annotate dialog last held
 // (`schSettings.m_AnnotateSortOrder` / `m_AnnotateMethod` / `m_AnnotateStartNum`, which `ImportSheet` reads). The file is read, and its sheets, library
 // symbols and checks are the server's (crates/cli/src/sheet_import.rs, crates/ops/src/sch_sheets.rs).
 import type { Cmd } from "../api/types";
 import type { AnnotateOptions, SheetFileCheck } from "../api/hierarchyTypes";
 import { startNumber, type AnnotateSettings } from "./schAnnotate";
+import { groupNameFor, parseBlockId } from "./designBlocks";
 
 /** What the chooser holds, and what the placement tool then does with the file. */
 export interface SheetImportPlan {
@@ -24,12 +26,19 @@ export interface SheetImportPlan {
   keepAnnotations: boolean;
   /** "Place repeated copies": the tool stays armed after a placement. */
   repeated: boolean;
+  /** "Place as group": the items (a design block's sheet too) go in a group of their own. A sheet from a plain file is never grouped (`DrawSheet` groups only a design block's). */
+  asGroup?: boolean;
+  /** The design block (`Lib:Name`) the file is the schematic of, when a block is being placed rather than a file. */
+  block?: string;
+  /** The number the next group's name ends with while "Place repeated copies" is on (KiCad's `suffix`, from 1). */
+  suffix?: number;
 }
 
 /** The chooser's checkboxes as they start. KiCad stores `place_as_sheet` off; the studio starts with the sheet, which is what a file added to a project is for (the brief of
  * "Draw Sheet from File" is the sheet), and the choice is remembered between openings like KiCad's. */
 export function defaultImportOptions(): Omit<SheetImportPlan, "path"> {
-  return { asSheet: true, keepAnnotations: false, repeated: false };
+  // `place_as_group` is on to begin with (`APP_SETTINGS_BASE`)
+  return { asSheet: true, keepAnnotations: false, repeated: false, asGroup: true };
 }
 
 /** The last component of a path, either separator. */
@@ -66,9 +75,26 @@ export function importNumbering(s: Pick<AnnotateSettings, "sort" | "algo" | "sta
   return { order: s.sort === "x" ? "x_then_y" : "y_then_x", options: { algo: s.algo, start_number: startNumber(s.start) } };
 }
 
+/**
+ * What `import_sheet` is told about Place as group and the design block (`Cmd::ImportSheet`'s `as_group`, `group_name`, `block`): a block's sheet or contents go in a group
+ * named after the block (the name of a repeated copy of the contents ends with its number) and linked to it; a plain file's contents go in a group named after the file; a
+ * sheet drawn from a plain file is not grouped.
+ */
+export function groupFields(plan: Pick<SheetImportPlan, "path"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix">>, asSheet: boolean): { as_group?: boolean; group_name?: string; block?: string } {
+  const out: { as_group?: boolean; group_name?: string; block?: string } = {};
+  if (plan.block) out.block = plan.block;
+  if (plan.asGroup && (!asSheet || plan.block)) {
+    out.as_group = true;
+    const name = plan.block ? parseBlockId(plan.block).name : stemOfFile(plan.path);
+    // the group of a sheet drawn from a block is named after the block alone (`DrawSheet`); the suffix is the contents' (`placeSheetContents`)
+    out.group_name = asSheet ? name : groupNameFor(name, plan.repeated === true, plan.suffix ?? 1);
+  }
+  return out;
+}
+
 /** `import_sheet` as a sheet: a sheet symbol `name` of `size` at `at` showing a copy of the file under `file`. */
 export function importSheetCmd(
-  plan: Pick<SheetImportPlan, "path" | "keepAnnotations">,
+  plan: Pick<SheetImportPlan, "path" | "keepAnnotations"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix">>,
   sheet: { name: string; file: string; at: [number, number]; size: [number, number] },
   numbering: ReturnType<typeof importNumbering>
 ): Cmd {
@@ -83,11 +109,12 @@ export function importSheetCmd(
     keep_annotations: plan.keepAnnotations,
     order: numbering.order,
     options: numbering.options,
+    ...groupFields(plan, true),
   };
 }
 
 /** `import_sheet` as contents (`placeSheetContents`): the file's items on the sheet in view, carried to `at`. */
-export function importContentsCmd(plan: Pick<SheetImportPlan, "path" | "keepAnnotations">, at: [number, number], numbering: ReturnType<typeof importNumbering>): Cmd {
+export function importContentsCmd(plan: Pick<SheetImportPlan, "path" | "keepAnnotations"> & Partial<Pick<SheetImportPlan, "asGroup" | "block" | "repeated" | "suffix">>, at: [number, number], numbering: ReturnType<typeof importNumbering>): Cmd {
   return {
     op: "import_sheet",
     source: plan.path.trim(),
@@ -96,6 +123,7 @@ export function importContentsCmd(plan: Pick<SheetImportPlan, "path" | "keepAnno
     keep_annotations: plan.keepAnnotations,
     order: numbering.order,
     options: numbering.options,
+    ...groupFields(plan, false),
   };
 }
 
@@ -114,8 +142,13 @@ export function describeCheck(check: SheetFileCheck): { summary: string; errors:
 }
 
 /** The line the status bar shows while the tool waits for its click (the hint of the tool). */
-export function importToolHint(plan: Pick<SheetImportPlan, "path" | "asSheet">): string {
-  const file = fileOfPath(plan.path);
+export function importToolHint(plan: Pick<SheetImportPlan, "path" | "asSheet" | "block">): string {
+  const file = plan.block ? plan.block : fileOfPath(plan.path);
+  if (plan.block) {
+    return plan.asSheet
+      ? `Place Design Block (${file}): click one corner of the sheet, then the opposite one, then name it. Esc to cancel`
+      : `Place Design Block (${file}): click where the items go. Esc to cancel`;
+  }
   return plan.asSheet
     ? `Import Sheet (${file}): click one corner of the sheet, then the opposite one, then name it. Esc to cancel`
     : `Import Sheet Contents (${file}): click where the items go. Esc to cancel`;

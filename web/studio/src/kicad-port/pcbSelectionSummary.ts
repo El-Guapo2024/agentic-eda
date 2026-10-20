@@ -107,6 +107,7 @@ export function summarizePcbSelection(board: BoardState, ids: readonly string[])
     if (parentGroup(groups, id)) hasMember = true;
   }
   s.group = { hasGroup, onlyOneGroup, hasUngroupedItems, hasMember };
+  s.linkedGroup = s.total === 1 && s.groups === 1 && groups.some((g) => ids.includes(g.id) && (g.design_block ?? "") !== "");
 
   // The point editor's and the zone menu's facts are about the one selected item.
   if (s.total === 1 && onlyItem !== null) {

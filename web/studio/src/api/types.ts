@@ -512,6 +512,8 @@ export interface Group {
   id: string;
   name: string;
   member_ids: string[];
+  /** `EDA_GROUP::m_designBlockLibId` (`Lib:Name`): the design block the group was placed from or saved to; empty or missing for none. */
+  design_block?: string;
   /** A `PCB_GENERATOR` (which is a `PCB_GROUP`): what makes the group -- a tuning pattern (`Drawings.tuning_patterns`). It is selected as a group but edited through its properties and edit points, and deleting it puts the track back. */
   generator?: "tuning_pattern";
 }
@@ -1336,7 +1338,11 @@ export type Cmd =
   /** Remove `ids` from whatever group each belongs to; a group left with fewer than 2 members dissolves. */
   | { op: "remove_from_group"; ids: string[] }
   /** Group Properties' OK (`DIALOG_GROUP_PROPERTIES::TransferDataFromWindow`): rename the group and make its members exactly `member_ids` (each pulled out of any other group; under 2 members dissolves it). */
-  | { op: "edit_group"; id: string; name: string; member_ids: string[] }
+  | { op: "edit_group"; id: string; name: string; member_ids: string[]; design_block?: string }
+  /** Save Selection as Design Block / Update Design Block from Selection: the items (a group included) are linked to the block (`Lib:Name`) -- a lone unlinked group takes the link, anything else goes in a new group named after the block. The server's save route sends it. */
+  | { op: "link_design_block"; ids: string[]; block: string }
+  /** Place Design Block on the board (`PCB_CONTROL::AppendDesignBlock`): the block's board file `text` with its origin at `at`; `as_group` puts what came in in a group named `group_name` and linked to `block`. */
+  | { op: "place_design_block"; text: string; at: PointXY; block: string; as_group?: boolean; group_name?: string }
   /**
    * Ctrl+T: `pcbnew.Array.createArray` (crates/ops/src/array.rs). `arrange: false` (the dialog's "Duplicate selection") makes a copy of the whole
    * selection for every point of the array but one -- footprints as new parts, tracks, vias, zones, graphics, text, dimensions, groups -- and
@@ -1561,6 +1567,11 @@ export type Cmd =
       keep_annotations?: boolean;
       order?: "y_then_x" | "x_then_y";
       options?: AnnotateOptions;
+      /** Place as group: what comes in goes in a group named `group_name` (the file's name when empty); with `block` the group is linked to the design block. */
+      as_group?: boolean;
+      group_name?: string;
+      /** The design block (`Lib:Name`) the file is the schematic of (Place Design Block). */
+      block?: string;
     }
   /** Alt+S (eeschema.InteractiveEdit.swap): exchange the positions of two symbols/power symbols/labels/texts (and the orientation of two instances of one library symbol). */
   | { op: "swap_sch_items"; a: string; b: string }

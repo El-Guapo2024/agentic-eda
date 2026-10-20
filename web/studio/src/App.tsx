@@ -28,6 +28,9 @@ import { ZoomAreaOverlay } from "./components/ZoomAreaOverlay";
 import { CommonOverlay } from "./components/CommonOverlay";
 import { CommonToolHost } from "./components/CommonToolHost";
 import { CommonDialogs } from "./components/CommonDialogs";
+import { DesignBlockDialogs } from "./components/designBlocks/DesignBlockDialogs";
+import { DesignBlocksDock } from "./components/designBlocks/DesignBlocksDock";
+import { useDesignBlocksUi } from "./state/designBlocks";
 import { LibraryTableDialogs } from "./components/libraryTables/LibraryTableDialogs";
 import { ImportGraphicsDialog } from "./components/ImportGraphicsDialog";
 import { FileDropHost } from "./components/FileDropHost";
@@ -125,6 +128,7 @@ function StudioFrame() {
   useSnapOrigin(); // the point the grid snapping is anchored at (the grid origin of the PCB / Footprint editor on screen)
   useFootprintEditHotkey();
   useOpenDockWithNetNavigator();
+  const blocksShown = useDesignBlocksUi().shown;
   // Ctrl+Shift+E / Ctrl+E on the Schematic tab are now the registered actions
   // eeschema.EditorControl.editLibSymbolWithSymbolEditor / editWithSymbolEditor
   // (useActionRunner.ts); useSymbolEditHotkey.ts is superseded and no longer called.
@@ -211,7 +215,17 @@ function StudioFrame() {
         {showRightDock && (
           <div className="right-dock-col">
             <DockColumn side="right" label="Appearance">
+              {/* the board editor's Design Blocks pane is the outermost pane on the right (pcb_edit_frame.cpp: `.Right().Layer( 5 )`) */}
+              {blocksShown.pcb && <DesignBlocksDock editor="pcb" />}
               <RightDock />
+            </DockColumn>
+          </div>
+        )}
+        {/* The schematic's Design Blocks pane (`defaultDesignBlocksPaneInfo`: `Right().Layer( 3 )`, hidden to begin with) is the one pane on the right of the sheet. */}
+        {state.tab === "schematic" && blocksShown.schematic && (
+          <div className="right-dock-col">
+            <DockColumn side="right" label="Design Blocks">
+              <DesignBlocksDock editor="schematic" />
             </DockColumn>
           </div>
         )}
@@ -286,6 +300,7 @@ function StudioFrame() {
       <SchControlHost />
       <BoardControlDialogs />
       <CommonDialogs />
+      <DesignBlockDialogs />
       <LibraryTableDialogs />
       <ImportGraphicsDialog />
       <FileDropHost />

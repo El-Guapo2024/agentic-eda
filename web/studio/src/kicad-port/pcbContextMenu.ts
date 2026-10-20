@@ -67,6 +67,8 @@ export interface PcbSelectionSummary {
   zoneCanLower: boolean;
   /** `GROUP_CONTEXT_MENU::update`: `selectionCount`, a group selected, one group selected, an ungrouped item selected, a member of a group selected. */
   group: { hasGroup: boolean; onlyOneGroup: boolean; hasUngroupedItems: boolean; hasMember: boolean };
+  /** `groupWithDesignBlockLink` (pcb_edit_frame.cpp): the one selected item is a group linked to a design block -- Place Linked Design Block and Save to Linked Design Block are on only for it. */
+  linkedGroup: boolean;
   /** Something selected carries a net (`haveNetCond`: `BOARD_CONNECTED_ITEM` with a net code above 0). */
   hasNet: boolean;
   /** The selection is what `Convert` could make something of (`kicad-port/pcbConvert.ts` `convertAvailability`). */
@@ -100,6 +102,7 @@ export function emptyPcbSummary(): PcbSelectionSummary {
     zoneCanRaise: false,
     zoneCanLower: false,
     group: { hasGroup: false, onlyOneGroup: false, hasUngroupedItems: false, hasMember: false },
+    linkedGroup: false,
     hasNet: false,
     convert: { poly: false, zone: false, keepout: false, lines: false, outset: false, tracks: false, arc: false },
   };
@@ -645,8 +648,9 @@ export function buildSelectionMenu(): ConditionalMenu {
   menu.addItem(A.groupEnter, groupEnterCondition, 1);
   menu.addItem(A.groupLeave, (_s, c) => c.inGroup, 1);
   menu.addItem(A.applyDesignBlockLayout, groupEnterCondition, 1);
-  menu.addItem(A.placeLinkedDesignBlock, groupEnterCondition, 1);
-  menu.addItem(A.saveToLinkedDesignBlock, groupEnterCondition, 1);
+  // `mgr->SetConditions( PCB_ACTIONS::placeLinkedDesignBlock, ENABLE( groupWithDesignBlockLink ) )`: shown for a group, on for one that has a design block
+  menu.addItem(A.placeLinkedDesignBlock, groupEnterCondition, 1, { disabled: (s) => !s.linkedGroup });
+  menu.addItem(A.saveToLinkedDesignBlock, groupEnterCondition, 1, { disabled: (s) => !s.linkedGroup });
   menu.addItem(A.clearHighlight, (_s, c) => c.haveHighlight, 1);
   menu.addSeparator((_s, c) => c.haveHighlight, 1);
   menu.addItem(A.selectColumns, tableCellSelection, 2);

@@ -21,6 +21,7 @@ export function summarizeSelection(sch: Schematic, ids: readonly string[], curso
   s.allowPinSwaps = opts.allowPinSwaps ?? false;
   s.inGroup = opts.inGroup ?? false;
   s.group = groupMenuFlags(sch, ids);
+  s.linkedGroup = ids.length === 1 && groupsOf(sch).some((g) => g.id === ids[0] && (g.design_block ?? "") !== "");
   const groupIds = new Set(groupsOf(sch).map((g) => g.id));
   const locked = new Set(sch.locked ?? []);
   const wire = new Map(sch.wires.map((w) => [w.id, w]));

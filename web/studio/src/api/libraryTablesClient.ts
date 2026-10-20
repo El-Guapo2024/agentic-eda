@@ -5,6 +5,7 @@ import type { TableKind, TableRow, TableScope, VariableValue } from "../kicad-po
 import { ApiError } from "./client";
 import { resetChooserCaches } from "./libraryChooserClient";
 import { resetInstalledLibraries } from "./libraryIndexClient";
+import { getDesignBlocksUi, refreshDesignBlocks } from "../state/designBlocks";
 
 /** One table as the server read it: the file, whether it is there, whether the studio may write it, and its rows (a chained table's own rows below its row). */
 export interface TableScopeView {
@@ -87,6 +88,8 @@ export async function fetchLibraryTables(): Promise<LibraryTablesView> {
 export function librariesChanged(): void {
   resetChooserCaches();
   resetInstalledLibraries();
+  // the Design Blocks panes list the design block table's libraries: they read them again (only once they have been read)
+  if (getDesignBlocksUi().reply) void refreshDesignBlocks();
 }
 
 function settle(a: Answer): Answer {

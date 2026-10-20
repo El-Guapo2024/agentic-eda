@@ -191,7 +191,9 @@ export type SchEditCmd =
   /** Remove Items (`GROUP_TOOL::RemoveFromGroup`): each id leaves its group; a group left with fewer than two dissolves. */
   | { verb: "remove_from_group"; ids: string[] }
   /** Group Properties (`DIALOG_GROUP_PROPERTIES`): the group is renamed and its members are exactly `member_ids`. */
-  | { verb: "edit_group"; id: string; name: string; member_ids: string[] };
+  | { verb: "edit_group"; id: string; name: string; member_ids: string[]; design_block?: string }
+  /** Save Selection as Design Block / Update Design Block from Selection: the items (a group included) are linked to the block (`Lib:Name`). */
+  | { verb: "link_design_block"; ids: string[]; block: string };
 
 /** One turn made while the items are held (`R`, Shift+`R`, `X`, `Y`). */
 export type SchTurn = "rot_ccw" | "rot_cw" | "mirror_h" | "mirror_v";

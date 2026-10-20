@@ -1,5 +1,6 @@
 // Import Sheet... (`eeschema.InteractiveDrawing.importSheet`, `SCH_DRAWING_TOOLS::ImportSheet`): the "Choose Schematic" file chooser of KiCad with its four option
-// checkboxes (`FILEDLG_IMPORT_SHEET_CONTENTS`: Place repeated copies / Place as group / Place as sheet / Keep annotations -- all but the group, which the schematic does not have).
+// checkboxes (`FILEDLG_IMPORT_SHEET_CONTENTS`: Place repeated copies / Place as group / Place as sheet / Keep annotations). Place as group groups the contents of the file
+// (named after the file); a sheet is never grouped.
 // The files are the project's own `.kicad_sch` files (GET /api/sch/sheet_files) or a path typed in; what a file would bring, and `LoadSheetFromFile`'s checks on it, come from
 // the server (POST /api/sch/sheet_file, nothing written). Open arms the placement tool (components/schematic/schImportTool.ts).
 import { useEffect, useRef, useState } from "react";
@@ -110,6 +111,9 @@ export function ImportSheetDialog({ forceSheet, initialPath, onClose }: { forceS
       <div style={{ display: "grid", gap: 4, marginTop: 10 }}>
         <label>
           <input type="checkbox" checked={options.repeated} onChange={(e) => update({ repeated: e.target.checked })} /> Place repeated copies
+        </label>
+        <label>
+          <input type="checkbox" checked={options.asGroup !== false} onChange={(e) => update({ asGroup: e.target.checked })} /> Place as group
         </label>
         <label>
           <input type="checkbox" checked={options.asSheet} disabled={forceSheet} onChange={(e) => update({ asSheet: e.target.checked })} /> Place as sheet
