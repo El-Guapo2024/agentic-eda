@@ -345,7 +345,7 @@ pub fn via_hull(pos: Point, diameter: Um, clearance: Um, walk: Um) -> Vec<Point>
 }
 
 /// Line-line intersection (`SEG::IntersectLines`).
-fn intersect_lines(a: (Point, Point), b: (Point, Point)) -> Option<Point> {
+pub(crate) fn intersect_lines(a: (Point, Point), b: (Point, Point)) -> Option<Point> {
     let (x1, y1, x2, y2) = (a.0.x as f64, a.0.y as f64, a.1.x as f64, a.1.y as f64);
     let (x3, y3, x4, y4) = (b.0.x as f64, b.0.y as f64, b.1.x as f64, b.1.y as f64);
     let den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);

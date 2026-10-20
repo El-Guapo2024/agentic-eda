@@ -899,6 +899,7 @@ fn handle(
         ("POST", "/api/route/dp_fix") => respond(stream, "200 OK", "application/json", route_api::dp_fix(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_via") => respond(stream, "200 OK", "application/json", route_api::dp_via(route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_undo_segment") => respond(stream, "200 OK", "application/json", route_api::dp_undo_segment(route_session).to_string().as_bytes()),
+        ("POST", "/api/route/dp_continue_from_end") => respond(stream, "200 OK", "application/json", route_api::dp_continue_from_end(dir, route_session, &body).to_string().as_bytes()),
         ("POST", "/api/route/dp_finish") => respond(stream, "200 OK", "application/json", route_api::dp_finish(dir, route_session, &body).to_string().as_bytes()),
         // 7 / 8 / 9 (P5c): length tuning -- KiCad's tuning pattern tool and its generator items; the session lives in tune_api's own thread-local, not in a cell passed here.
         ("POST", "/api/tune/hover") => respond(stream, "200 OK", "application/json", tune_api::hover(dir, &body).to_string().as_bytes()),

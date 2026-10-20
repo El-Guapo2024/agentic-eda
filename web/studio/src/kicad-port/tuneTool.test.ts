@@ -54,6 +54,24 @@ test("the status box prints the length red outside the range, the minimum red be
   assert.equal(readoutSummary(readout({ label: "current skew", current: 0.02, min: -0.1, max: 0.1, opt: 0, delta: 0.02, status: "tuned" }), fmt), "current skew 0.02 mm, target skew 0.00 mm (+0.02 mm), tuned");
 });
 
+test("a time domain pattern's box reads the delay in picoseconds, red outside its range, and its pattern settings carry the target delay in picoseconds", () => {
+  const fmt = (um: number) => `${(um / 1000).toFixed(2)} mm`;
+  const timeDomain = (over: Partial<TuneReadout> = {}) => readout({ time_domain: true, delay: { label: "current delay", current: 122, min: 149.9, opt: 150, max: 150.1, delta: -28 }, ...over });
+  assert.deepEqual(readoutBox(timeDomain(), fmt), { header: ["current delay", "min", "max"], values: ["122 ps", "149.9 ps", "150.1 ps"], bad: [true, true, false] });
+  assert.deepEqual(readoutBox(timeDomain({ delay: { label: "current delay", current: 150.05, min: 149.9, opt: 150, max: 150.1, delta: 0.05 } }), fmt).bad, [false, false, false]);
+  assert.deepEqual(readoutBox(timeDomain({ delay: { label: "current delay", current: 151, min: null, opt: null, max: null, delta: null } }), fmt), { header: ["current delay", "min", "max"], values: ["151 ps", "---", "---"], bad: [false, false, false] });
+  assert.equal(readoutSummary(timeDomain({ status: "too_short" }), fmt), "current delay 122 ps, target 150 ps (-28 ps), too short");
+  // a pattern in the time domain sends its delay targets in picoseconds (the model keeps attoseconds), and none for an unconstrained one
+  const td = pattern({ is_time_domain: true, target_delay: { min: 149_900_000, opt: 150_000_000, max: 150_100_000 }, target_skew_delay: { min: -100_000, opt: 0, max: 100_000 } });
+  const sent = settingsOfPattern(td);
+  assert.equal(sent.time_domain, true);
+  assert.deepEqual(sent.target_delay, { min: 149.9, opt: 150, max: 150.1 });
+  assert.deepEqual(sent.target_skew_delay, { min: -0.1, opt: 0, max: 0.1 });
+  const length = settingsOfPattern(pattern());
+  assert.equal(length.time_domain, false);
+  assert.equal(length.target_delay, null);
+});
+
 test("a straight baseline has a capsule for an outline: the track's length and its width round, with round ends", () => {
   const poly = offsetOutline([[0, 0], [10_000, 0]], 1_000);
   const xs = poly.map((p) => p[0]);

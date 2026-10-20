@@ -845,6 +845,10 @@ pub enum Cmd {
         tracks: Vec<Track>,
         #[serde(default)]
         vias: Vec<Via>,
+        /// The indices into `tracks` of the new tracks that are locked: a locked track a route started or ended in the middle of is cut in two, and both halves are as
+        /// locked as it was (`PNS_KICAD_IFACE::AddItem`: "`if( aItem->IsLocked() ) newBoardItem->SetLocked( true )`").
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        lock_tracks: Vec<usize>,
     },
 
     /// What the length tuner (`crates/pns`'s `MeanderPlacer`, `GENERATOR_TOOL::GenEditAction`) makes, as one undo step: remove the tracks of
@@ -2653,7 +2657,7 @@ impl<'a> Board<'a> {
             Cmd::ExchangeFootprints { references, footprint, options, library } => self.exchange_footprints(references, footprint.as_deref(), options, library),
             Cmd::ReannotateBoard { options, selection } => self.reannotate_board(options, selection),
             Cmd::PasteItems { tracks, vias, zones, shapes, texts } => self.insert_copies(tracks.clone(), vias.clone(), zones.clone(), shapes.clone(), texts.clone()),
-            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone()),
+            Cmd::CommitRoute { remove_track_ids, remove_via_ids, tracks, vias, lock_tracks } => self.commit_route(remove_track_ids, remove_via_ids, tracks.clone(), vias.clone(), lock_tracks),
             Cmd::CommitTuning { pattern, remove_pattern, remove_track_ids, tracks, member_indices } => self.commit_tuning(pattern.as_ref(), remove_pattern.as_deref(), remove_track_ids, tracks.clone(), member_indices),
             Cmd::MoveExact { parts, dx, dy, rotate_millideg, pivot } => self.move_exact(parts, *dx, *dy, *rotate_millideg, *pivot),
             Cmd::MoveItems { ids, dx, dy } => self.move_items(ids, *dx, *dy),
@@ -4073,7 +4077,7 @@ impl<'a> Board<'a> {
     /// (unlike `insert_copies`, whose items are always copies of something
     /// already on the board and so already known-good) -- this router's
     /// output is new geometry, not a copy, so the same guard applies.
-    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>) -> Result<(), Vec<CheckResult>> {
+    fn commit_route(&mut self, remove_track_ids: &[String], remove_via_ids: &[String], mut tracks: Vec<Track>, mut vias: Vec<Via>, lock_tracks: &[usize]) -> Result<(), Vec<CheckResult>> {
         for t in &tracks {
             self.known_net(&t.net)?;
             self.known_layer(&t.layer)?;
@@ -4103,10 +4107,19 @@ impl<'a> Board<'a> {
         }
         if !tracks.is_empty() || !vias.is_empty() {
             let rt = self.routing_mut();
+            let first_new = rt.tracks.len();
             rt.tracks.append(&mut tracks);
             rt.vias.append(&mut vias);
             rt.assign_missing_ids();
+            // the new tracks that are locked (the ids are the ones just assigned: the new tracks are the last ones, before the routing is sorted)
+            let locked_now: Vec<String> = lock_tracks.iter().filter_map(|&i| rt.tracks.get(first_new + i).map(|t| t.id.clone())).collect();
             self.sort_routing();
+            if !locked_now.is_empty() {
+                let dr = self.drawings_mut();
+                let mut set: BTreeSet<String> = dr.locked_ids.iter().cloned().collect();
+                set.extend(locked_now);
+                dr.locked_ids = set.into_iter().collect();
+            }
         }
         Ok(())
     }

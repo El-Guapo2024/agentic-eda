@@ -22,7 +22,7 @@ use eda_model::{BoardRules, ConstraintModel};
 use eda_ops::{Board, Cmd};
 use eda_pns::chain::ShapeLineChain;
 use eda_pns::dp_meander_placer::{assemble_diff_pair, skew_setup, DpMeanderPlacer, NO_PAIR, NO_PAIR_FOR_SKEW};
-use eda_pns::from_ir::build_node;
+use eda_pns::from_ir::build_node_for_tuning as build_node;
 use eda_pns::item::{Item, ItemId};
 use eda_pns::kigeom::{to_nm, to_um, Seg};
 use eda_pns::layer::LayerMap;
@@ -71,30 +71,40 @@ pub struct Pick {
     pub at: Point,
 }
 
-/// The straight track segment at `(x, y)` within `tolerance` of its edge, preferring `layer`. An arc track is not picked (the world has its chords, not the arc).
+/// The track segment or arc at `(x, y)` within `tolerance` of its edge, preferring `layer`. On an arc the pattern starts at the end of it the cursor is
+/// nearer to (`getSnappedStartPoint`).
 pub fn pick(scene: &Scene, x: Um, y: Um, tolerance: Um, layer: Option<&str>) -> Option<Pick> {
     let cursor = Point { x, y };
-    let arc_tracks: std::collections::HashSet<&str> = scene.design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| t.arc().is_some()).map(|t| t.id.as_str()).collect();
     let mut best: Option<(bool, i128, Pick)> = None;
     for (id, item) in scene.world.iter() {
-        let Item::Segment(s) = item else { continue };
-        let Some((track, _)) = &s.source_track else { continue };
-        if arc_tracks.contains(track.as_str()) || s.net.is_none() {
+        // (the IR track, net, layer, width, distance from the centre line to the cursor, the middle of the item, the pattern's start)
+        let (track, s_net, s_layer, width, dist, centre, at) = match item {
+            Item::Segment(s) => {
+                let Some((track, _)) = &s.source_track else { continue };
+                let seg = Seg::new(s.a, s.b);
+                (track.clone(), &s.net, s.layer, s.width, (seg.squared_distance(cursor) as f64).sqrt(), Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 }, seg.nearest_point(cursor))
+            }
+            Item::Arc(a) => {
+                let Some(track) = &a.source_track else { continue };
+                let at = if eda_pns::seg_ops::length(cursor, a.start()) <= eda_pns::seg_ops::length(cursor, a.end()) { a.start() } else { a.end() };
+                (track.clone(), &a.net, a.layer, a.width, a.arc.distance_to(cursor), a.arc.mid, at)
+            }
+            _ => continue,
+        };
+        if s_net.is_none() {
             continue;
         }
-        let seg = Seg::new(s.a, s.b);
-        let reach = (s.width / 2 + tolerance).max(1) as i128;
-        if seg.squared_distance(cursor) > reach * reach {
+        let reach = (width / 2 + tolerance).max(1) as f64;
+        if dist > reach {
             continue;
         }
-        let layer_name = scene.layers.name_of(s.layer).to_string();
+        let layer_name = scene.layers.name_of(s_layer).to_string();
         let on_layer = layer.is_some_and(|l| l == layer_name);
         // "the track whose centre is nearest the cursor", the active layer first
-        let centre = Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
         let d = ((centre.x - cursor.x) as i128).pow(2) + ((centre.y - cursor.y) as i128).pow(2);
         let key = (!on_layer, d);
         if best.as_ref().is_none_or(|(o, bd, _)| key < (*o, *bd)) {
-            best = Some((key.0, key.1, Pick { item: id, track_id: track.clone(), net: Scene::net_name(&s.net), layer: layer_name, width: s.width, at: seg.nearest_point(cursor) }));
+            best = Some((key.0, key.1, Pick { item: id, track_id: track, net: Scene::net_name(s_net), layer: layer_name, width, at }));
         }
     }
     best.map(|(_, _, p)| p)
@@ -131,11 +141,15 @@ pub fn default_pattern(model: &ConstraintModel, kind: TuningMode, layer: &str) -
         override_custom_rules: false,
         target_length: TargetRange::unconstrained(),
         target_skew: TargetRange { min: -100, opt: 0, max: 100 },
+        is_time_domain: false,
+        target_delay: TargetRange::delay_unconstrained(),
+        target_skew_delay: TargetRange { min: -100_000, opt: 0, max: 100_000 },
         base_line: Vec::new(),
         base_line_coupled: Vec::new(),
         last_track_width: 0,
         last_diff_pair_gap: 0,
         last_tuning_length: 0,
+        last_tuning_delay: 0,
         last_netname: String::new(),
         last_status: "tuned".into(),
         member_ids: Vec::new(),
@@ -164,7 +178,28 @@ fn range_of(v: &Value, skew: bool) -> Option<TargetRange> {
     Some(TargetRange { min: get("min").unwrap_or(base.min), opt, max: get("max").unwrap_or(base.max) })
 }
 
-/// The settings of a request over a pattern: whatever the object carries (micrometres) replaces what the pattern had.
+/// A delay target as the dialog sends it, in picoseconds: a number (the target, with the default tolerance of 0.1 ps round it), an object `{min?, opt?, max?}`, or null
+/// (no target). Attoseconds.
+fn delay_range_of(v: &Value, skew: bool) -> Option<TargetRange> {
+    let atto = |ps: f64| (ps * 1_000_000.0).round() as i64;
+    if v.is_null() {
+        return Some(if skew { TargetRange::delay_around(0) } else { TargetRange::delay_unconstrained() });
+    }
+    if let Some(n) = v.as_f64().filter(|f| f.is_finite()) {
+        return Some(TargetRange::delay_around(atto(n)));
+    }
+    let obj = v.as_object()?;
+    let get = |k: &str| obj.get(k).and_then(Value::as_f64).filter(|f| f.is_finite()).map(atto);
+    let opt = get("opt").or_else(|| get("min")).unwrap_or(0);
+    if !skew && opt >= eda_model::tuning::DELAY_UNCONSTRAINED_AS {
+        return Some(TargetRange::delay_unconstrained());
+    }
+    let base = TargetRange::delay_around(opt);
+    Some(TargetRange { min: get("min").unwrap_or(base.min), opt, max: get("max").unwrap_or(base.max) })
+}
+
+/// The settings of a request over a pattern: whatever the object carries (micrometres) replaces what the pattern had. The time domain's are in picoseconds:
+/// `time_domain` and `target_delay`, `target_skew_delay`.
 pub fn apply_settings(p: &mut TuningPattern, v: &Value) {
     if let Some(n) = int(v, "min_amplitude") {
         p.min_amplitude = n;
@@ -195,6 +230,15 @@ pub fn apply_settings(p: &mut TuningPattern, v: &Value) {
     }
     if let Some(t) = v.get("target_skew").and_then(|t| range_of(t, true)) {
         p.target_skew = t;
+    }
+    if let Some(b) = v.get("time_domain").and_then(Value::as_bool) {
+        p.is_time_domain = b;
+    }
+    if let Some(t) = v.get("target_delay").and_then(|t| delay_range_of(t, false)) {
+        p.target_delay = t;
+    }
+    if let Some(t) = v.get("target_skew_delay").and_then(|t| delay_range_of(t, true)) {
+        p.target_skew_delay = t;
     }
 }
 
@@ -230,6 +274,17 @@ pub fn meander_settings(p: &TuningPattern) -> MeanderSettings {
     };
     s.target_length = range(&p.target_length, p.target_length.is_unconstrained());
     s.target_skew = range(&p.target_skew, false);
+    // the time domain: the targets are delays, attoseconds as they are
+    s.is_time_domain = p.is_time_domain;
+    let delay = |r: &TargetRange| {
+        let mut m = MinOptMax::default();
+        m.set_opt(r.opt);
+        m.set_min(r.min);
+        m.set_max(r.max);
+        m
+    };
+    s.target_length_delay = delay(&p.target_delay);
+    s.target_skew_delay = delay(&p.target_skew_delay);
     s
 }
 
@@ -322,12 +377,35 @@ pub struct Readout {
     pub partner: Option<String>,
     /// The length of each net of a pair (P, N), nanometres.
     pub nets: Option<(i64, i64)>,
+    /// A time domain pattern's delay and its target (`current delay`), attoseconds; the status is still the length's, as KiCad judges it.
+    pub delay: Option<DelayReadout>,
+}
+
+/// What the status box shows of a time domain pattern: the delay (or the skew as a delay) now and the range it should be in.
+#[derive(Debug, Clone)]
+pub struct DelayReadout {
+    /// Attoseconds.
+    pub current: i64,
+    /// `current delay` or `current skew`.
+    pub label: &'static str,
+    /// The range (`min`, `opt`, `max`) of the target delay, attoseconds; `None` when the pattern has none.
+    pub target: Option<(i64, i64, i64)>,
 }
 
 impl Readout {
     pub fn json(&self) -> Value {
         let mm = |nm: i64| nm as f64 / 1e6;
+        let ps = |a: i64| a as f64 / 1e6;
         json!({
+            "time_domain": self.delay.is_some(),
+            "delay": self.delay.as_ref().map(|d| json!({
+                "label": d.label,
+                "current": ps(d.current),
+                "min": d.target.map(|t| ps(t.0)),
+                "opt": d.target.map(|t| ps(t.1)),
+                "max": d.target.map(|t| ps(t.2)),
+                "delta": d.target.map(|t| ps(d.current - t.1)),
+            })),
             "label": self.label,
             "current": mm(self.current),
             "min": self.target.map(|t| mm(t.0)),
@@ -373,23 +451,30 @@ pub struct Hover {
 
 pub fn hover(scene: &Scene, kind: TuningMode, pk: &Pick, settings: &Value) -> Result<Hover, String> {
     let mut pattern = default_pattern(&scene.model, kind, &pk.layer);
+    pattern.is_time_domain = profile_time_domain(scene, kind, &pk.net);
     apply_settings(&mut pattern, settings);
     let (partner, constraint) = constrain(scene, &mut pattern, pk);
+    let params = scene.env.delay_params(&pk.net);
+    let path_delay = |id: ItemId| match (&params, assemble_tuning_path(&scene.world, id)) {
+        (Some(p), Some(path)) => path.delay(&scene.world, &scene.env, p),
+        _ => 0,
+    };
     let line = scene.world.assemble_line_with(pk.item, eda_pns::tuning_path::assemble_opts()).ok_or("Please select a track whose length you want to tune.")?;
-    let (current, nets, label) = match kind {
+    let (current, nets, label, delay) = match kind {
         TuningMode::Single => {
             let path = assemble_tuning_path(&scene.world, pk.item).ok_or("Please select a track whose length you want to tune.")?;
-            (path.length(&scene.world, &scene.env), None, "current length")
+            (path.length(&scene.world, &scene.env), None, "current length", path_delay(pk.item))
         }
         TuningMode::DiffPair => {
             let pair = assemble_diff_pair(&scene.world, pk.item).ok_or(NO_PAIR)?;
             let len = |l: &Line| l.segment_ids.first().and_then(|id| assemble_tuning_path(&scene.world, *id)).map(|p| p.length(&scene.world, &scene.env)).unwrap_or(0);
             let (p, n) = (len(&pair.p), len(&pair.n));
-            (p.max(n), Some((p, n)), "current length")
+            let delay = pair.p.segment_ids.first().map_or(0, |id| path_delay(*id)).max(pair.n.segment_ids.first().map_or(0, |id| path_delay(*id)));
+            (p.max(n), Some((p, n)), "current length", delay)
         }
         TuningMode::DiffPairSkew => {
             let setup = skew_setup(&scene.world, &scene.env, pk.item).map_err(|e| if e.is_empty() { NO_PAIR_FOR_SKEW.to_string() } else { e })?;
-            (setup.own_length - setup.coupled_length, Some((setup.own_length, setup.coupled_length)), "current skew")
+            (setup.own_length - setup.coupled_length, Some((setup.own_length, setup.coupled_length)), "current skew", setup.own_delay - setup.coupled_delay)
         }
     };
     let ms = meander_settings(&pattern);
@@ -397,8 +482,24 @@ pub fn hover(scene: &Scene, kind: TuningMode, pk: &Pick, settings: &Value) -> Re
         TuningMode::DiffPairSkew => Some((ms.target_skew.min(), ms.target_skew.opt(), ms.target_skew.max())),
         _ => target_of(&pattern).map(|_| (ms.target_length.min(), ms.target_length.opt(), ms.target_length.max())),
     };
-    let readout = Readout { current, label, target, status: judge(current, target), constraint: constraint.map(|c| c.name), partner, nets };
+    let delay = pattern.is_time_domain.then(|| DelayReadout {
+        current: delay,
+        label: if kind == TuningMode::DiffPairSkew { "current skew" } else { "current delay" },
+        target: match kind {
+            TuningMode::DiffPairSkew => Some((ms.target_skew_delay.min(), ms.target_skew_delay.opt(), ms.target_skew_delay.max())),
+            _ => (!pattern.target_delay.is_delay_unconstrained()).then(|| (ms.target_length_delay.min(), ms.target_length_delay.opt(), ms.target_length_delay.max())),
+        },
+    });
+    // in the time domain the judge is the length the delay target comes to, as KiCad's (the placer makes it from the path's delay)
+    let target = if pattern.is_time_domain { None } else { target };
+    let readout = Readout { current, label, target, status: judge(current, target), constraint: constraint.map(|c| c.name), partner, nets, delay };
     Ok(Hover { pattern, readout, path: line.pts.clone() })
+}
+
+/// `PCB_TUNING_PATTERN::CreateNew`: a new length or pair pattern on a net whose class names a tuning profile that has the time domain on is a time domain pattern
+/// (when a design rule has a length for the net, it is the rule's units that decide, and [`constrain`] sets them afterwards). A skew pattern starts in length.
+fn profile_time_domain(scene: &Scene, kind: TuningMode, net: &str) -> bool {
+    kind != TuningMode::DiffPairSkew && scene.model.board.tuning_profile_of(net).is_some_and(|p| p.enable_time_domain_tuning)
 }
 
 /// `PCB_TUNING_PATTERN::EditStart`'s rule lookup: unless the pattern overrides the custom rules, a length (skew) rule that applies to the net sets its target.
@@ -454,6 +555,7 @@ impl Tuner {
     /// `settings` are the dialog's, over the board's meander defaults for the kind of tuning.
     pub fn start(scene: Rc<Scene>, kind: TuningMode, pk: &Pick, at: Point, settings: &Value) -> Result<Tuner, String> {
         let mut pattern = default_pattern(&scene.model, kind, &pk.layer);
+        pattern.is_time_domain = profile_time_domain(&scene, kind, &pk.net);
         apply_settings(&mut pattern, settings);
         let (partner, constraint) = constrain(&scene, &mut pattern, pk);
         let ms = meander_settings(&pattern);
@@ -470,7 +572,7 @@ impl Tuner {
                 let setup = skew_setup(&scene.world, &scene.env, pk.item)?;
                 skew_coupled = Some(setup.coupled_length);
                 own_is_p = setup.own_is_p;
-                Placer::Single(MeanderPlacer::start_skew(&scene.world, &scene.env, pk.item, at, ms, setup.coupled_length)?)
+                Placer::Single(MeanderPlacer::start_skew(&scene.world, &scene.env, pk.item, at, ms, setup.coupled_length, setup.coupled_delay)?)
             }
         };
         let origin = match &placer {
@@ -595,13 +697,13 @@ impl Tuner {
         let ms = meander_settings(&self.pattern);
         self.update_settings(ms);
         let scene = self.scene.clone();
-        let (moved, edits, length, status, target, nets, cut) = match &mut self.placer {
+        let (moved, edits, length, status, target, nets, cut, delay_now) = match &mut self.placer {
             Placer::Single(p) => {
                 let moved = p.do_move(to);
                 let edits = if moved { line_edit(&scene.world, p.origin_line(), &p.tuned(), true).map(|e| vec![(p.origin_line().clone(), e)]).unwrap_or_default() } else { Vec::new() };
                 let t = p.target();
                 let cut = p.tuned().raw;
-                (moved, edits, p.tuning_length_result(), p.tuning_status(), Some(t), None, Some((cut, None)))
+                (moved, edits, p.tuning_length_result(), p.tuning_status(), Some(t), None, Some((cut, None)), p.tuning_delay_result())
             }
             Placer::Pair(p) => {
                 let moved = p.do_move(to);
@@ -620,21 +722,32 @@ impl Tuner {
                 let s = p.settings();
                 let (a, b) = p.net_lengths();
                 let cut = if self.own_is_p { (t.raw_p.clone(), Some(t.raw_n.clone())) } else { (t.raw_n.clone(), Some(t.raw_p.clone())) };
-                (moved, edits, p.tuning_length_result(), p.tuning_status(), Some((s.target_length.min(), s.target_length.opt(), s.target_length.max())), Some((a, b)), Some(cut))
+                (moved, edits, p.tuning_length_result(), p.tuning_status(), Some((s.target_length.min(), s.target_length.opt(), s.target_length.max())), Some((a, b)), Some(cut), p.tuning_delay_result())
             }
         };
         let s = self.settings().clone();
         sync_back(&mut self.pattern, &s);
+        let time_domain = self.pattern.is_time_domain;
         let unconstrained = match self.pattern.mode {
             TuningMode::DiffPairSkew => false,
+            _ if time_domain => self.pattern.target_delay.is_delay_unconstrained(),
             _ => self.pattern.target_length.is_unconstrained(),
         };
         let target = if unconstrained { None } else { target };
         let label = if self.skew_coupled.is_some() { "current skew" } else { "current length" };
-        let readout = Readout { current: length, label, target, status: if moved { status } else { judge(length, target) }, constraint: self.constraint.as_ref().map(|c| c.name.clone()), partner: self.partner.clone(), nets };
+        let delay = time_domain.then(|| DelayReadout {
+            current: delay_now,
+            label: if self.skew_coupled.is_some() { "current skew" } else { "current delay" },
+            target: match self.pattern.mode {
+                TuningMode::DiffPairSkew => Some((s.target_skew_delay.min(), s.target_skew_delay.opt(), s.target_skew_delay.max())),
+                _ => (!self.pattern.target_delay.is_delay_unconstrained()).then(|| (s.target_length_delay.min(), s.target_length_delay.opt(), s.target_length_delay.max())),
+            },
+        });
+        let readout = Readout { current: length, label, target, status: if moved { status } else { judge(length, target) }, constraint: self.constraint.as_ref().map(|c| c.name.clone()), partner: self.partner.clone(), nets, delay };
         if moved && !edits.is_empty() {
             if let Some((primary, coupled)) = cut {
                 self.record_cut(&primary, coupled.as_ref(), length, status);
+                self.pattern.last_tuning_delay = if time_domain { delay_now } else { 0 };
             }
         }
         self.last = Some((to, Moved { edits, readout, moved }));

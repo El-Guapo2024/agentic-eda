@@ -29,20 +29,16 @@
 //!   interactive route's default effort level, not redundant with each
 //!   other).
 //!
-//! Deliberately not ported (see `crates/pns/PARITY.md`): `SMART_PADS`
-//! (pad-exit angle tuning), `FANOUT_CLEANUP` (short-stub canonicalization),
-//! and the `KEEP_TOPOLOGY`/`PRESERVE_VERTEX`/`RESTRICT_AREA` constraint
-//! system (the research spec confirms `RESTRICT_VERTEX_RANGE` is itself a
-//! dead stub upstream, and the other three are call-site refinements
-//! rather than correctness requirements -- every candidate this port
-//! accepts is still collision-checked, which is the one constraint that
-//! must never be skipped).
+//! The constraint system (`OPT_CONSTRAINT`) is here too: `RESTRICT_AREA` (the shove's changed area and the dragger's), `PRESERVE_VERTEX` (the
+//! vertex under the cursor of a drag stays on the line) and `KEEP_TOPOLOGY` (a shortcut may not leave a pad of another net on the other side of
+//! the line from where it was), see [`Constraints`]. `RESTRICT_VERTEX_RANGE` is a stub upstream (`Check` returns true) and is not here.
 
 use crate::direction45::{AngleType, CornerMode, Direction45};
 use crate::item::ItemId;
 use crate::line::Line;
 use crate::node::Node;
-use eda_drc::kimath::Shape;
+use eda_drc::kimath::{Seg, Shape};
+use eda_model::ir::Point;
 use eda_model::BoardRules;
 
 /// `COST_ESTIMATOR::CornerCost` table (`pns_optimizer.cpp`).
@@ -79,7 +75,7 @@ use eda_model::ir::Um;
 /// (segments `n` and `n+step`), accept the first collision-free candidate
 /// that strictly lowers corner cost. Returns the new point list on success.
 #[allow(clippy::too_many_arguments)] // mirrors the collision query's own (node, net, layer, width, rules, exclude) parameter set, threaded straight through.
-fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], area: Option<Area>) -> Option<Vec<eda_model::ir::Point>> {
+fn merge_step(pts: &[eda_model::ir::Point], origin: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> Option<Vec<eda_model::ir::Point>> {
     if pts.len() < step + 3 {
         return None;
     }
@@ -99,11 +95,9 @@ fn merge_step(pts: &[eda_model::ir::Point], step: usize, node: &Node, layer: i32
             if collides(node, &bypass, layer, width, net, rules, exclude) {
                 continue;
             }
-            // `checkConstraints( n, n + step + 1, .. )`
-            if let Some(a) = area {
-                if !area_allows(a, n, n + step + 1, pts, &bypass) {
-                    continue;
-                }
+            // `checkConstraints( n, n + step + 1, aLine, aCurrentPath, bypass )`
+            if !constraints.allow(node, origin, n, n + step + 1, pts, &bypass, layer, net) {
+                continue;
             }
             let mut candidate = pts[..n].to_vec();
             candidate.extend(bypass);
@@ -211,7 +205,7 @@ fn merge_obtuse(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: 
 
 /// `mergeFull`: the outer shrinking-span loop around [`merge_step`].
 #[allow(clippy::too_many_arguments)] // same query-context parameter set every other pass in this module threads through unchanged.
-fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], area: Option<Area>) -> Vec<eda_model::ir::Point> {
+fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um, net: &crate::item::Net, rules: &BoardRules, exclude: &[ItemId], constraints: &Constraints) -> Vec<eda_model::ir::Point> {
     if pts.len() < 3 {
         return pts;
     }
@@ -222,6 +216,8 @@ fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um
     if pts.len() < 3 {
         return pts;
     }
+    // `aLine` keeps this shape while `current_path` is rewritten: it is what `KEEP_TOPOLOGY_CONSTRAINT` slices (`aOriginLine->CLine()`)
+    let origin = pts.clone();
     let mut step = pts.len().saturating_sub(2); // segCount - 1
     loop {
         let max_step = pts.len().saturating_sub(3); // segCount - 2, as a span index
@@ -229,7 +225,7 @@ fn merge_full(pts: Vec<eda_model::ir::Point>, node: &Node, layer: i32, width: Um
         if step < 1 || pts.len() < 3 {
             break;
         }
-        match merge_step(&pts, step, node, layer, width, net, rules, exclude, area) {
+        match merge_step(&pts, &origin, step, node, layer, width, net, rules, exclude, constraints) {
             Some(new_pts) => pts = new_pts, // success: retry at the same (large) span
             None => step -= 1,              // failure: shrink the search radius
         }
@@ -252,7 +248,13 @@ pub mod effort {
     pub const SMART_PADS: u32 = 0x02;
     pub const MERGE_OBTUSE: u32 = 0x04;
     pub const FANOUT_CLEANUP: u32 = 0x08;
+    /// `KEEP_TOPOLOGY`: a shortcut may not change which side of the line a pad of another net is on.
+    pub const KEEP_TOPOLOGY: u32 = 0x10;
+    /// `PRESERVE_VERTEX`: the vertex given in [`super::Constraints::preserve_vertex`] stays on the line.
+    pub const PRESERVE_VERTEX: u32 = 0x20;
     pub const MERGE_COLINEAR: u32 = 0x80;
+    /// `RESTRICT_AREA`: shortcuts are taken inside [`super::Constraints::area`] only.
+    pub const RESTRICT_AREA: u32 = 0x100;
 }
 
 /// `OPTIMIZER::Optimize( const LINE*, LINE*, LINE* )`'s pass order, for
@@ -264,6 +266,122 @@ pub fn optimize_with(line: &Line, node: &Node, rules: &BoardRules, exclude: &[It
 
 /// `OPTIMIZER::SetRestrictArea( area, false )` + `RESTRICT_AREA`: `x0, y0, x1, y1`.
 pub type Area = (Um, Um, Um, Um);
+
+/// What the callers of the optimizer ask of its shortcuts (`OPT_CONSTRAINT`, checked by `checkConstraints` in the order `OPTIMIZER::Optimize` adds
+/// them: preserve vertex, restrict area, keep topology).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Constraints {
+    /// `AREA_CONSTRAINT` (`SetRestrictArea( area, false )`): shortcuts are taken where both ends are in the area.
+    pub area: Option<Area>,
+    /// `PRESERVE_VERTEX_CONSTRAINT` (`SetPreserveVertex`): a shortcut that takes the segments this point is on away must still pass through it.
+    pub preserve_vertex: Option<Point>,
+    /// `KEEP_TOPOLOGY_CONSTRAINT`: no pad of another net may be inside the polygon the shortcut and the stretch it replaces enclose.
+    pub keep_topology: bool,
+}
+
+impl Constraints {
+    /// `OPT_CONSTRAINT::Check` for each constraint set: vertices `v1..=v2` of `path` are to be replaced with `replacement`; `origin` is the line as
+    /// `mergeFull` found it.
+    #[allow(clippy::too_many_arguments)] // the check's own parameters (`Check( aVertex1, aVertex2, aOriginLine, aCurrentPath, aReplacement )`) and the world it asks
+    fn allow(&self, node: &Node, origin: &[Point], v1: usize, v2: usize, path: &[Point], replacement: &[Point], layer: i32, net: &crate::item::Net) -> bool {
+        if let Some(v) = self.preserve_vertex {
+            if !preserve_vertex_allows(v, v1, v2, path, replacement) {
+                return false;
+            }
+        }
+        if let Some(a) = self.area {
+            if !area_allows(a, v1, v2, path, replacement) {
+                return false;
+            }
+        }
+        if self.keep_topology && !keep_topology_allows(node, origin, v1, v2, replacement, layer, net) {
+            return false;
+        }
+        true
+    }
+}
+
+/// `PRESERVE_VERTEX_CONSTRAINT::Check` (`pns_optimizer.cpp:247`): when the vertex is on the stretch that is replaced, the replacement has to pass
+/// through it too.
+fn preserve_vertex_allows(v: Point, v1: usize, v2: usize, path: &[Point], replacement: &[Point]) -> bool {
+    let on = |a: Point, b: Point| Seg::new(a, b).sq_distance_to_point(v) <= 1;
+    let on_stretch = (v1..v2).any(|i| path.get(i + 1).is_some_and(|&next| on(path[i], next)));
+    if !on_stretch {
+        return true;
+    }
+    replacement.windows(2).any(|w| on(w[0], w[1]))
+}
+
+/// `pointInside2` (`pns_optimizer.cpp`): `p` is in the closed polygon `poly`, or on its boundary.
+fn point_inside2(poly: &[Point], p: Point) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    let mut result = false;
+    let mut ip = poly[0];
+    for i in 1..=poly.len() {
+        let ip_next = if i == poly.len() { poly[0] } else { poly[i] };
+        if ip_next.y == p.y && (ip_next.x == p.x || (ip.y == p.y && ((ip_next.x > p.x) == (ip.x < p.x)))) {
+            return true; // pt on polygon boundary
+        }
+        if (ip.y < p.y) != (ip_next.y < p.y) {
+            let d = (ip.x as f64 - p.x as f64) * (ip_next.y as f64 - p.y as f64) - (ip_next.x as f64 - p.x as f64) * (ip.y as f64 - p.y as f64);
+            if ip.x >= p.x {
+                if ip_next.x > p.x {
+                    result = !result;
+                } else {
+                    if d == 0.0 {
+                        return true; // pt on polygon boundary
+                    }
+                    if (d > 0.0) == (ip_next.y > ip.y) {
+                        result = !result;
+                    }
+                }
+            } else if ip_next.x > p.x {
+                if d == 0.0 {
+                    return true; // pt on polygon boundary
+                }
+                if (d > 0.0) == (ip_next.y > ip.y) {
+                    result = !result;
+                }
+            }
+        }
+        ip = ip_next;
+    }
+    result
+}
+
+/// `KEEP_TOPOLOGY_CONSTRAINT::Check` (`pns_optimizer.cpp:383`): the stretch `origin[v1..=v2]` and the reversed replacement enclose a polygon; a pad
+/// (a joint of a solid) of another net inside it that is not one of its corners means the shortcut would go to the other side of that pad.
+fn keep_topology_allows(node: &Node, origin: &[Point], v1: usize, v2: usize, replacement: &[Point], layer: i32, net: &crate::item::Net) -> bool {
+    // `SHAPE_LINE_CHAIN encPoly = aOriginLine->CLine().Slice( aVertex1, aVertex2 ); encPoly.Append( aReplacement.Reverse() ); encPoly.SetClosed( true );`
+    let mut enc: Vec<Point> = if v1 <= v2 && v2 < origin.len() { origin[v1..=v2].to_vec() } else { Vec::new() };
+    for (k, &q) in replacement.iter().rev().enumerate() {
+        if k == 0 && enc.last() == Some(&q) {
+            continue;
+        }
+        enc.push(q);
+    }
+    if enc.is_empty() {
+        return true;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (enc[0].x, enc[0].y, enc[0].x, enc[0].y);
+    for q in &enc {
+        x0 = x0.min(q.x);
+        y0 = y0.min(q.y);
+        x1 = x1.max(q.x);
+        y1 = y1.max(q.y);
+    }
+    for (pos, joint_net) in node.solid_joints_in((x0, y0, x1, y1), crate::layer::LayerRange::single(layer)) {
+        if joint_net == *net {
+            continue;
+        }
+        if point_inside2(&enc, pos) && !enc.contains(&pos) {
+            return false;
+        }
+    }
+    true
+}
 
 /// `AREA_CONSTRAINT::Check` (`pns_optimizer.cpp:~210`), non-strict: a shortcut
 /// replacing vertices `v1..=v2` of `path` with `replacement` is allowed when
@@ -289,37 +407,46 @@ fn area_allows(area: Area, v1: usize, v2: usize, path: &[eda_model::ir::Point], 
 
 /// [`optimize_with`], with `RESTRICT_AREA` when `area` is given.
 pub fn optimize_in_area(line: &Line, node: &Node, rules: &BoardRules, exclude: &[ItemId], flags: u32, area: Option<Area>) -> Line {
+    optimize_constrained(line, node, rules, exclude, flags, &Constraints { area, ..Constraints::default() })
+}
+
+/// [`optimize_with`] under the given [`Constraints`] (`OPTIMIZER::Optimize( aLine, aResult, aRoot )` after `SetRestrictArea`, `SetPreserveVertex` and the
+/// `KEEP_TOPOLOGY` effort bit): an area or a vertex that is set is applied, and so is `KEEP_TOPOLOGY` when either the field or the bit of `flags` says so.
+pub fn optimize_constrained(line: &Line, node: &Node, rules: &BoardRules, exclude: &[ItemId], flags: u32, constraints: &Constraints) -> Line {
+    let constraints = Constraints { keep_topology: constraints.keep_topology || flags & effort::KEEP_TOPOLOGY != 0, ..*constraints };
     let mut out = line.clone();
     out.clear_links();
-    if flags & effort::MERGE_SEGMENTS != 0 {
-        out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude, area);
+    // `bool hasArcs = aLine->ArcCount();` -- "TODO: Fix for arcs": a line that holds an arc is not merged, not obtuse-merged, not smart-padded
+    // and not fanout-cleaned; only its collinear points go, the ones on an arc excepted
+    let has_arcs = out.arc_count() > 0;
+    if !has_arcs && flags & effort::MERGE_SEGMENTS != 0 {
+        out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude, &constraints);
     }
-    if flags & effort::MERGE_OBTUSE != 0 {
+    if !has_arcs && flags & effort::MERGE_OBTUSE != 0 {
         out.pts = merge_obtuse(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
     }
     if flags & effort::MERGE_COLINEAR != 0 {
-        merge_colinear(&mut out.pts);
+        merge_colinear_line(&mut out);
     }
-    if flags & effort::SMART_PADS != 0 {
+    if !has_arcs && flags & effort::SMART_PADS != 0 {
         run_smart_pads(&mut out, node, rules, exclude);
     }
-    if flags & effort::FANOUT_CLEANUP != 0 {
+    if !has_arcs && flags & effort::FANOUT_CLEANUP != 0 {
         fanout_cleanup(&mut out, node, rules, exclude);
     }
     out.simplify();
     out
 }
 
-/// `OPTIMIZER::mergeColinear`: drop the shared vertex of two collinear,
-/// non-degenerate consecutive segments.
-fn merge_colinear(pts: &mut Vec<eda_model::ir::Point>) {
+/// `OPTIMIZER::mergeColinear` on a line: [`merge_colinear`], leaving alone a vertex that is a point of an arc (`!line.IsPtOnArc( segIdx + 1 )`).
+fn merge_colinear_line(line: &mut Line) {
     let mut i = 0;
-    while i + 2 < pts.len() {
-        let (a, b, c) = (pts[i], pts[i + 1], pts[i + 2]);
+    while i + 2 < line.pts.len() {
+        let (a, b, c) = (line.pts[i], line.pts[i + 1], line.pts[i + 2]);
         let degenerate = a == b || b == c;
         let cross = (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128;
-        if !degenerate && cross == 0 {
-            pts.remove(i + 1);
+        if !degenerate && cross == 0 && !line.is_pt_on_arc(i + 1) {
+            line.pts.remove(i + 1);
         } else {
             i += 1;
         }
@@ -787,8 +914,55 @@ mod tests {
     fn merge_full_simplifies_collinear_points() {
         let node = Node::new();
         let pt = |x, y| Point { x, y };
-        let out = merge_full(vec![pt(0, 0), pt(500, 0), pt(1000, 0), pt(1000, 1000)], &node, 0, 200, &net_of("SIG"), &rules(), &[], None);
+        let out = merge_full(vec![pt(0, 0), pt(500, 0), pt(1000, 0), pt(1000, 1000)], &node, 0, 200, &net_of("SIG"), &rules(), &[], &Constraints::default());
         assert_eq!(out, vec![pt(0, 0), pt(1000, 0), pt(1000, 1000)]);
+    }
+
+    /// `KEEP_TOPOLOGY_CONSTRAINT`: a hat of track goes over a pad of another net; the straight shortcut under the pad collides with nothing, but it would
+    /// put the pad on the other side of the track.
+    #[test]
+    fn keep_topology_refuses_a_shortcut_that_moves_a_pad_of_another_net_to_the_other_side_of_the_line() {
+        use crate::item::{Item, Solid};
+        use crate::layer::LayerRange;
+        let (net, other) = (net_of("SIG"), net_of("GND"));
+        let mut node = Node::new();
+        node.add(Item::Solid(Solid { net: other, layers: LayerRange::new(0, 0), pos: Point { x: 2000, y: 750 }, shape: Shape::Circle { c: Point { x: 2000, y: 750 }, r: 200 }, source: "U1.1".into(), edge: false }));
+        let hat = vec![Point { x: -1000, y: 0 }, Point { x: 0, y: 0 }, Point { x: 1000, y: 1500 }, Point { x: 3000, y: 1500 }, Point { x: 4000, y: 0 }, Point { x: 5000, y: 0 }];
+        let line = Line::from_points(net, 0, 200, hat.clone());
+        let straight = vec![Point { x: -1000, y: 0 }, Point { x: 5000, y: 0 }];
+        let free = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS);
+        assert_eq!(free.pts, straight, "nothing is in the straight path's way");
+        let kept = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
+        assert!(kept.pts.iter().any(|q| q.y >= 750), "the pad is inside the hat: the shortcut under it is refused: {:?}", kept.pts);
+        // a pad of the line's own net is no topology to keep
+        let mut same = Node::new();
+        same.add(Item::Solid(Solid { net: net_of("SIG"), layers: LayerRange::new(0, 0), pos: Point { x: 2000, y: 750 }, shape: Shape::Circle { c: Point { x: 2000, y: 750 }, r: 200 }, source: "U1.1".into(), edge: false }));
+        let own = optimize_with(&line, &same, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
+        assert_eq!(own.pts, straight);
+        // and neither is a pad on the other layer
+        let mut below = Node::new();
+        below.add(Item::Solid(Solid { net: net_of("GND"), layers: LayerRange::new(1, 1), pos: Point { x: 2000, y: 750 }, shape: Shape::Circle { c: Point { x: 2000, y: 750 }, r: 200 }, source: "U1.1".into(), edge: false }));
+        let other_layer = optimize_with(&line, &below, &rules(), &[], effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY);
+        assert_eq!(other_layer.pts, straight);
+    }
+
+    /// `PRESERVE_VERTEX_CONSTRAINT`: a shortcut that would take away the stretch of line the preserved point is on is taken only if it passes through that
+    /// point too.
+    #[test]
+    fn preserve_vertex_keeps_the_point_the_cursor_holds_on_the_line() {
+        let node = Node::new();
+        let pt = |x, y| Point { x, y };
+        let zigzag = vec![pt(0, 0), pt(1000, 0), pt(2000, 1000), pt(3000, 1000), pt(4000, 0), pt(5000, 0)];
+        let line = Line::from_points(net_of("SIG"), 0, 200, zigzag.clone());
+        let free = optimize_with(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS);
+        assert_eq!(free.pts, vec![pt(0, 0), pt(5000, 0)], "nothing holds the line: it goes straight");
+        // the point (2500, 1000) is held: any shortcut has to pass through it
+        let held = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::PRESERVE_VERTEX, &Constraints { preserve_vertex: Some(pt(2500, 1000)), ..Constraints::default() });
+        assert!(held.pts.windows(2).any(|w| eda_drc::kimath::Seg::new(w[0], w[1]).sq_distance_to_point(pt(2500, 1000)) <= 1), "{:?}", held.pts);
+        assert!(held.pts.len() < zigzag.len(), "but the corners that could go did: {:?}", held.pts);
+        // a held point that is no longer on the stretch being replaced changes nothing
+        let far = optimize_constrained(&line, &node, &rules(), &[], effort::MERGE_SEGMENTS | effort::PRESERVE_VERTEX, &Constraints { preserve_vertex: Some(pt(9000, 9000)), ..Constraints::default() });
+        assert_eq!(far.pts, free.pts);
     }
 
     #[test]
@@ -809,9 +983,9 @@ mod tests {
 
     #[test]
     fn merge_colinear_drops_a_midpoint() {
-        let mut v = vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 500 }];
-        merge_colinear(&mut v);
-        assert_eq!(v.len(), 3);
+        let mut v = Line::from_points(None, 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 500 }]);
+        merge_colinear_line(&mut v);
+        assert_eq!(v.pts.len(), 3);
     }
 
     #[test]

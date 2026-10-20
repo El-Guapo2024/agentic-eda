@@ -69,6 +69,7 @@ fn load(root: &std::path::Path, board: &str, case: &str) -> (eda_model::ir::Desi
 fn violations(node: &Node, rules: &eda_model::BoardRules) -> HashSet<(String, String)> {
     let name = |id: ItemId| match node.get(id) {
         Some(Item::Segment(s)) => format!("seg {:?}-{:?} {:?}", s.a, s.b, s.net),
+        Some(Item::Arc(a)) => format!("arc {:?}-{:?} {:?}", a.start(), a.end(), a.net),
         Some(Item::Via(v)) => format!("via {:?} {:?}", v.pos, v.net),
         Some(Item::Solid(s)) => format!("pad {}", s.source),
         None => String::new(),
@@ -296,9 +297,9 @@ fn dragged(node: &Node, d: &Dragger, pv: &DragPreview, to: Point) -> Node {
         }
     }
     match d.kind {
-        DragKind::Corner | DragKind::Segment => {
+        DragKind::Corner | DragKind::Segment | DragKind::Arc => {
             w.remove_line_segments(&d.original);
-            w.add_line(&Line::from_points(d.net.clone(), d.layer, d.width, pv.pts.clone()), None, false);
+            w.add_line(&Line { arcs: pv.arcs.clone(), ..Line::from_points(d.net.clone(), d.layer, d.width, pv.pts.clone()) }, None, false);
         }
         DragKind::Via => {
             if let Some(id) = d.via_id {
@@ -578,7 +579,7 @@ fn random_segment_and_corner_drags_never_leave_a_new_violation() {
                 match d.kind {
                     DragKind::Segment => segment_drags += 1,
                     DragKind::Corner => corner_drags += 1,
-                    DragKind::Via => continue,
+                    DragKind::Via | DragKind::Arc => continue,
                 }
                 // the priming move at the grab point, then a few cursor positions
                 let mut shown = d.drag(&node, &model.board, &settings, at);

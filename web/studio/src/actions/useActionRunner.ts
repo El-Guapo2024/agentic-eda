@@ -37,7 +37,7 @@ import { tuneRegenerate } from "../api/tuneClient";
 import { steppedDrawStroke } from "../kicad-port/layerDefaults";
 import { drawStateFromPreview } from "../kicad-port/routeTool";
 import { dpStateFromPreview } from "../kicad-port/dpTool";
-import { finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
+import { continueDiffPairFromEnd, finishDiffPairRoute, toggleDiffPairVia } from "../components/canvas/diffPairRouting";
 import { findDraggableAt, startInlineDrag } from "../components/canvas/dragging";
 import { openPropertiesFor } from "../components/canvas/properties";
 import { findNetAtCursor } from "../components/canvas/netAtCursor";
@@ -397,6 +397,14 @@ export function useActionRunner() {
       m.set(
         "pcbnew.InteractiveRouter.AttemptFinish",
         pcbOnly(() => void finishDiffPairRoute(cursor.x, cursor.y, dispatch, api))
+      );
+      // Ctrl+E: `ROUTER::ContinueFromEnd` restarts the placer of the same mode, so a pair goes on from the other end as a pair
+      m.set(
+        "pcbnew.InteractiveRouter.ContinueFromEnd",
+        pcbOnly(() => {
+          const end = draw.ptsA[draw.ptsA.length - 1] ?? ([cursor.x, cursor.y] as [number, number]);
+          void continueDiffPairFromEnd(end, draw, dispatch, api);
+        })
       );
       // `V` (`layerToggle`): the other layer of the board's layer pair ("Set Layer Pair...", actions/pcbRouterSweep.ts)
       m.set(

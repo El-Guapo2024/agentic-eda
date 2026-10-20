@@ -11,6 +11,7 @@ import type { Action, StudioApi } from "../../state/store";
 import type { Dispatch } from "react";
 import type { DragDrawState } from "../../kicad-port/dragTool";
 import { pickSelectionCandidates, type SelectionFilter } from "./selectionCandidates";
+import { askConfirm } from "../library/libraryDialogs";
 
 export interface DraggableHit {
   kind: "track" | "via";
@@ -67,7 +68,13 @@ export function findDraggableAt(
  * (`PCB_ACTIONS::dragFreeAngle` -> `DM_ANY | DM_FREE_ANGLE`): the drag only
  * marks obstacles, whatever `mode` says. */
 export async function startInlineDrag(x: number, y: number, hit: DraggableHit, board: BoardState, settings: RouterSettings, dispatch: Dispatch<Action>, freeAngle = false): Promise<void> {
-  const preview = await routeDragStart(x, y, hit.layer, settings, freeAngle);
+  let preview = await routeDragStart(x, y, hit.layer, settings, freeAngle);
+  // `ROUTER_TOOL::performDragging`: a locked item asks first, and "Drag Anyway" unlocks it for the drag
+  if (!preview.ok && preview.locked) {
+    const anyway = await askConfirm({ title: "Confirmation", message: "The selected item is locked.", okLabel: "Drag Anyway" });
+    if (!anyway) return;
+    preview = await routeDragStart(x, y, hit.layer, settings, freeAngle, true);
+  }
   if (!preview.ok) {
     dispatch({ type: "TOAST", message: preview.message ?? "Nothing to drag there.", kind: "error" });
     return;

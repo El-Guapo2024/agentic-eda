@@ -117,7 +117,7 @@ export function diffPairMenu(state: StudioState): MenuNode[] {
 function routerContext(state: StudioState, board: BoardState): RouterMenuContext {
   const draw = state.drawState;
   const routing = draw?.kind === "route" || draw?.kind === "diffpair";
-  const net = draw?.kind === "route" ? draw.net : null;
+  const net = draw?.kind === "route" ? draw.net : draw?.kind === "diffpair" ? draw.netA : null;
   return {
     routing,
     inRouteSelected: routeQueueActive(),

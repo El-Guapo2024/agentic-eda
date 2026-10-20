@@ -188,11 +188,9 @@ pub fn line_edit(world: &Node, line: &Line, t: &Tuned, members: bool) -> Option<
     let covered: HashSet<ItemId> = line.segment_ids[lo..=hi].iter().copied().collect();
     let mut remove_track_ids: Vec<String> = Vec::new();
     for id in &covered {
-        if let Some(Item::Segment(s)) = world.get(*id) {
-            if let Some((track, _)) = &s.source_track {
-                if !remove_track_ids.contains(track) {
-                    remove_track_ids.push(track.clone());
-                }
+        if let Some(track) = world.get(*id).and_then(Item::source_track_id) {
+            if !remove_track_ids.iter().any(|t| t == track) {
+                remove_track_ids.push(track.to_string());
             }
         }
     }

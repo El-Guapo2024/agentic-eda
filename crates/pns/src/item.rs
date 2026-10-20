@@ -8,13 +8,12 @@
 //! match over the three kinds. This is a representation change only -- the
 //! fields and semantics of each kind are what KiCad's headers declare.
 //!
-//! Arcs (`ARC_T`) are out of scope: this project's IR represents every
-//! track as a polyline of straight segments (`eda_model::ir::Track::pts`),
-//! so no arc items are ever constructed. `DIFF_PAIR_T`/`HOLE_T` are also
-//! out of scope (no diff-pair concept in this port; a pad/via's drilled
-//! hole is not separately collision-tested here -- see the crate's
-//! `README`/`PARITY.md` for the full fidelity-gap list).
+//! An arc track (`PCB_ARC`) is an [`Arc`] (`ARC_T`, `pns_arc.h`): one item with the three points of the arc, its hull
+//! ([`crate::arcs::arc_hull`]) and its collisions, linked at its two ends like a segment. `DIFF_PAIR_T`/`HOLE_T` are out
+//! of scope (a pair is a struct of two lines here; a pad/via's drilled hole is not separately collision-tested -- see the
+//! crate's `PARITY.md` for the full fidelity-gap list).
 
+use crate::arcs::{self, ArcPts};
 use crate::hull;
 use crate::layer::LayerRange;
 use eda_drc::kimath::Shape;
@@ -98,6 +97,50 @@ impl Segment {
     }
 }
 
+/// `PNS::ARC` -- one arc of copper, a `PCB_ARC` of the board: the track from `arc.start` through `arc.mid` to `arc.end`. It links at
+/// its two ends exactly as a [`Segment`] does (`ARC::Anchor`), a line assembled through it holds its polyline
+/// ([`crate::line::Line::arc_runs`]), and it is hulled by `ArcHull` ([`crate::arcs::arc_hull`]).
+#[derive(Debug, Clone)]
+pub struct Arc {
+    pub net: Net,
+    pub layer: i32,
+    pub width: Um,
+    pub arc: ArcPts,
+    /// The committed `Track::id` of the IR arc track this came from -- `None` for an arc that only exists in an uncommitted preview line.
+    pub source_track: Option<String>,
+    pub locked: bool,
+    poly: Rc<Vec<Point>>,
+}
+
+impl Arc {
+    pub fn new(net: Net, layer: i32, width: Um, arc: ArcPts, source_track: Option<String>, locked: bool) -> Arc {
+        let poly = Rc::new(arc.polyline());
+        Arc { net, layer, width, arc, source_track, locked, poly }
+    }
+
+    /// The arc's points as a line holds them (`SHAPE_LINE_CHAIN::Append( SHAPE_ARC )`), from `start` to `end`.
+    pub fn polyline(&self) -> &[Point] {
+        &self.poly
+    }
+
+    pub fn start(&self) -> Point {
+        self.arc.start
+    }
+
+    pub fn end(&self) -> Point {
+        self.arc.end
+    }
+
+    /// The end that is not `p`.
+    pub fn other_end(&self, p: Point) -> Point {
+        if self.arc.start == p {
+            self.arc.end
+        } else {
+            self.arc.start
+        }
+    }
+}
+
 /// `PNS::VIA`. This port only models round, single-diameter-per-layer
 /// through vias (`STACK_MODE::NORMAL`, `VIATYPE::THROUGH`) -- the only kind
 /// `eda_model::ir::Via` can express.
@@ -116,6 +159,7 @@ pub struct Via {
 pub enum Kind {
     Solid,
     Segment,
+    Arc,
     Via,
 }
 
@@ -123,6 +167,7 @@ pub enum Kind {
 pub enum Item {
     Solid(Solid),
     Segment(Segment),
+    Arc(Arc),
     Via(Via),
 }
 
@@ -131,6 +176,7 @@ impl Item {
         match self {
             Item::Solid(_) => Kind::Solid,
             Item::Segment(_) => Kind::Segment,
+            Item::Arc(_) => Kind::Arc,
             Item::Via(_) => Kind::Via,
         }
     }
@@ -139,6 +185,7 @@ impl Item {
         match self {
             Item::Solid(s) => &s.net,
             Item::Segment(s) => &s.net,
+            Item::Arc(a) => &a.net,
             Item::Via(v) => &v.net,
         }
     }
@@ -147,6 +194,7 @@ impl Item {
         match self {
             Item::Solid(s) => s.layers,
             Item::Segment(s) => LayerRange::single(s.layer),
+            Item::Arc(a) => LayerRange::single(a.layer),
             Item::Via(v) => v.layers,
         }
     }
@@ -155,7 +203,41 @@ impl Item {
         match self {
             Item::Solid(_) => false,
             Item::Segment(s) => !s.locked,
+            Item::Arc(a) => !a.locked,
             Item::Via(v) => !v.locked,
+        }
+    }
+
+    /// `ITEM::IsLocked` (`MK_LOCKED`): a locked track, arc or via is neither dragged nor shoved. A pad never moves, locked or not.
+    pub fn is_locked(&self) -> bool {
+        match self {
+            Item::Solid(_) => false,
+            Item::Segment(s) => s.locked,
+            Item::Arc(a) => a.locked,
+            Item::Via(v) => v.locked,
+        }
+    }
+
+    /// A segment or an arc: `ITEM::SEGMENT_T | ITEM::ARC_T`, the two things a track is made of (`LINKED_ITEM`s a line is assembled from).
+    pub fn is_track(&self) -> bool {
+        matches!(self, Item::Segment(_) | Item::Arc(_))
+    }
+
+    /// The IR track a segment or an arc came from.
+    pub fn source_track_id(&self) -> Option<&str> {
+        match self {
+            Item::Segment(s) => s.source_track.as_ref().map(|(t, _)| t.as_str()),
+            Item::Arc(a) => a.source_track.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The two ends a track item links at (`LINKED_ITEM::Anchor( 0 )` / `( 1 )`); `None` for a pad or a via.
+    pub fn track_ends(&self) -> Option<(Point, Point)> {
+        match self {
+            Item::Segment(s) => Some((s.a, s.b)),
+            Item::Arc(a) => Some((a.arc.start, a.arc.end)),
+            _ => None,
         }
     }
 
@@ -169,6 +251,7 @@ impl Item {
         match self {
             Item::Solid(s) => s.shape.clone(),
             Item::Segment(s) => Shape::Stadium { a: s.a, b: s.b, r: s.width / 2 },
+            Item::Arc(a) => arcs::arc_shape(&a.poly, a.width),
             Item::Via(v) => Shape::Circle { c: v.pos, r: v.diameter / 2 },
         }
     }
@@ -181,6 +264,7 @@ impl Item {
         match self {
             // `SEGMENT::Hull` -> `SegmentHull`, `VIA::Hull`, `SOLID::Hull`.
             Item::Segment(s) => hull::segment_hull(s.a, s.b, s.width, clearance, walkaround_width),
+            Item::Arc(a) => arcs::arc_hull(&a.arc, a.width, clearance, walkaround_width),
             Item::Via(v) => hull::make_clockwise(hull::via_hull(v.pos, v.diameter, clearance, walkaround_width)),
             Item::Solid(_) => hull::primitive_hull(&self.shape(layer), clearance, walkaround_width),
         }
@@ -194,6 +278,7 @@ impl Item {
             Item::Solid(s) if s.edge => Vec::new(),
             Item::Solid(s) => vec![s.pos],
             Item::Segment(s) => vec![s.a, s.b],
+            Item::Arc(a) => vec![a.arc.start, a.arc.end],
             Item::Via(v) => vec![v.pos],
         }
     }
@@ -202,6 +287,7 @@ impl Item {
         match self {
             Item::Solid(_) => 0,
             Item::Segment(s) => s.width,
+            Item::Arc(a) => a.width,
             Item::Via(v) => v.diameter,
         }
     }

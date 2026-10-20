@@ -1,11 +1,15 @@
 #!/bin/bash
-# Builds the oracle the meander tests compare against: KiCad's own pcbnew/router/pns_meander.cpp, the tuning functions of
+# Builds the oracles the meander and mouse trail tests compare against. The meander one: KiCad's own pcbnew/router/pns_meander.cpp, the tuning functions of
 # pns_meander_placer_base.cpp (findAmplitudeBinarySearch, findAmplitudeForLength, tuneLineLength: extracted verbatim) and the real
 # libs/kimath geometry they stand on (SHAPE_ARC, SHAPE_LINE_CHAIN, SEG, VECTOR2, EDA_ANGLE, trigo), into one program that answers the case
 # lines tests/meander_oracle.rs writes. No downloads: clang++ and the checkout of KiCad this repo is ported from.
 #
 #   KICAD_SRC_DIR=/path/to/kicad-src-8303b2ad crates/pns/oracle/build.sh [build-dir]       (default target/pns-oracle)
 #   EDA_PNS_ORACLE=<build-dir>/oracle cargo test -p eda-pns --test meander_oracle -- --nocapture
+#
+# The mouse trail one (<build-dir>/oracle_trail): pcbnew/router/pns_mouse_trail_tracer.cpp, verbatim, and libs/kimath's DIRECTION_45, over the same kimath
+# objects, driven by oracle_trail_main.cpp.
+#   EDA_PNS_ORACLE_TRAIL=<build-dir>/oracle_trail cargo test -p eda-pns --test mouse_trail_oracle -- --nocapture
 #
 # macOS and clang (it links with -undefined dynamic_lookup, and gives the symbols the real objects name but never run an empty body).
 # What stands in for KiCad's world is in standins/: wx and Clipper2 headers (only the names the kimath headers need), the PNS headers of
@@ -82,3 +86,27 @@ for round in 1 2 3 4 5; do
 done
 nice clang++ -std=c++20 -O1 -Wl,-undefined,dynamic_lookup -o "$out/oracle" "$out"/obj/*.o
 echo "$out/oracle"
+
+# the mouse trail oracle: the same kimath objects, without the meander's driver and objects
+mkdir -p "$out/obj_trail"
+cp "$K/pcbnew/router/pns_mouse_trail_tracer.cpp" "$out/pns_mouse_trail_tracer.cpp"
+cxx "$out/pns_mouse_trail_tracer.cpp" "$out/obj_trail/pns_mouse_trail_tracer.o"
+cxx "$G/direction_45.cpp" "$out/obj_trail/direction_45.o"
+cxx "$here/oracle_trail_main.cpp" "$out/obj_trail/oracle_trail_main.o"
+shared=$(ls "$out"/obj/*.o | grep -v -E "/(oracle_main|pns_meander|oracle_tune|oracle_dp)\.o$")
+: > "$out/stubs_trail.s"
+for round in 1 2 3 4 5; do
+  nice clang++ -std=c++20 -O1 -Wl,-undefined,dynamic_lookup -o "$out/oracle_trail" $shared "$out"/obj_trail/*.o 2>/dev/null
+  syms=$(nm -u "$out/oracle_trail" | grep -E "^__Z(NK?[0-9]+(SHAPE|CIRCLE|SEG|EDA_ANGLE)|TV[0-9]+(SHAPE|CIRCLE)|TI[0-9]+(SHAPE|CIRCLE)|N?K?[0-9]+(SHAPE_POLY_SET|SHAPE_RECT|SHAPE_CIRCLE|SHAPE_SIMPLE|SHAPE_COMPOUND|SHAPE_SEGMENT|SHAPE_ARC|SHAPE_LINE_CHAIN))|^__Z[0-9]+Transform" | sort -u || true)
+  [ -z "$syms" ] && break
+  for s in $syms; do
+    grep -q "^$s:" "$out/stubs_trail.s" && continue
+    case "$s" in
+      __ZTV*|__ZTI*) printf '.data\n.globl %s\n.p2align 4\n%s:\n.zero 512\n' "$s" "$s" >> "$out/stubs_trail.s" ;;
+      *) printf '.text\n.globl %s\n%s:\nret\n' "$s" "$s" >> "$out/stubs_trail.s" ;;
+    esac
+  done
+  clang -c "$out/stubs_trail.s" -o "$out/obj_trail/zz_stubs.o"
+done
+nice clang++ -std=c++20 -O1 -Wl,-undefined,dynamic_lookup -o "$out/oracle_trail" $shared "$out"/obj_trail/*.o
+echo "$out/oracle_trail"
