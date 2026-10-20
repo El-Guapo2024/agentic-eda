@@ -19,7 +19,7 @@
 //                nothing;
 //   via head     `V` while routing in Shove mode: the track under the head's via, on the other layer, is pushed aside with the via in the preview, and the committed route (tracks on both layers,
 //                the via) leaves the gates no clearance failure and is one undo step;
-//   posture      the head's elbow follows the path the cursor took (a path up the diagonal first leaves the pad diagonally, one along the row first leaves straight) -- and not with the row off;
+//   posture      the head's elbow follows the path the cursor took (a path up the diagonal first leaves the pad diagonally, one along the row first leaves straight) -- and not with the row off; `/` flips it and back;
 //   tuner on arc  a track that is an arc is picked by the tuner (the line's length along the arc), a pattern is started on it and tuned to 24 mm through the arc, which stays an arc;
 //   delay        a net whose class names a tuning profile with the time domain on is tuned in picoseconds: the status box reads "current delay", the Tuning Pattern dialog has the Delay
 //                radio button and a target delay, the pattern is tuned to it within 0.2 ps and stored as a time domain one.
@@ -275,6 +275,23 @@
     await press("OK");
     const d = await session(diagonalFirst);
     t(JSON.stringify(d) === diag, `with it on again the path counts again: ${JSON.stringify(d)}`);
+    // `/` flips the posture from the head's first direction, and back (the key goes to the PCB canvas's container, the element that has the handler)
+    if (E.state().tool !== "route") { await E.run("pcbnew.InteractiveRouter.SingleTrack"); await sleep(300); }
+    let n = replies.length;
+    await clickAt(8000, 14000);
+    await waitReply("start", n);
+    for (const [x, y] of straightFirst) await moveTo(x, y);
+    const flip = async () => {
+      const from = replies.length;
+      document.querySelector(".pcb-canvas-container").dispatchEvent(new KeyboardEvent("keydown", { key: "/", bubbles: true, cancelable: true }));
+      const r = await waitReply("move", from, 6000);
+      await quiet();
+      return r;
+    };
+    const f1 = await flip();
+    t(!!f1 && f1.req.flip_posture === true && JSON.stringify(f1.body.head) === diag, `/ turns the straight-first head diagonal-first: ${f1 && JSON.stringify([f1.req.flip_posture, f1.body.head])}`);
+    const f2 = await flip();
+    t(!!f2 && f2.req.flip_posture === true && JSON.stringify(f2.body.head) === straight, `and back: ${f2 && JSON.stringify(f2.body.head)}`);
   });
 
   await scenario("D on an arc track drags an arc: it goes through the cursor, the runs next to it follow, it stays an arc, and one Undo puts it back", async (t) => {
