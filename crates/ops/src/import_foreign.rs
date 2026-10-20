@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(again.design().drawings.as_ref().unwrap().intent_file.as_ref(), Some(&file));
         // Not a board: refused, nothing changes.
         let before = serde_json::to_string(b.design()).unwrap();
-        let e = b.apply(&Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false }).unwrap_err();
+        let e = b.apply(&Cmd::ReplaceBoard { text: "hello".into(), name: "y.brd".into(), keep_kicad_layer_names: false, project: None }).unwrap_err();
         assert_eq!(e[0].check, "ops_bad_board");
         assert_eq!(serde_json::to_string(b.design()).unwrap(), before);
         let _ = (Side::Top, Point { x: 0, y: 0 }, Provenance { engine_version: String::new(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] }, FootprintInstance { id: String::new(), at: Point { x: 0, y: 0 }, rot: 0, side: Side::Top, label: Default::default() }, PlacementSection { outline: vec![], footprints: vec![], modules: vec![] });

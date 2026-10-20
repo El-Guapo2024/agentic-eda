@@ -14,6 +14,7 @@
 //! eda check     <intent> --design design.json          # run every gate, print scorecard
 //! eda import-pl <intent> --design design.json --pl x.gp.pl [-o out]  # Bookshelf placement (Cypress) -> design.json
 //! eda import-kicad <board.kicad_pcb> -o <dir>           # KiCad board -> an `eda board` directory
+//! eda import-kicad <file of another EDA> -o <dir>     # Eagle, Altium, CADSTAR, PADS, ... through kicad-cli; a board brings its schematic of the same name
 //! ```
 
 mod board;

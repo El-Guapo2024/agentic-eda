@@ -23,6 +23,12 @@
 //! callback itself with the plugin's best guess (`AutoMapLayer`) and takes a JSON file of `{ "source layer": "KiCad layer" }` that overrides it for the layers it names
 //! ([`ForeignOptions::layer_map`]); a layer it does not name keeps the guess. So a first run with no map shows the guess (`ImportReport::layers`), and a second run with the
 //! person's answers makes the board.
+//!
+//! # The design rules
+//!
+//! `pcb import` writes the board alone, and a `.kicad_pcb` holds none of the design rules and net classes an importer sets (Eagle's, Altium's): they are in the board's design
+//! settings, which KiCad saves with the project. The project-level `kicad-cli import -o STEM IN` writes that project (`STEM.kicad_pro`); it pairs nothing, refuses a second
+//! schematic and prints no JSON report, so a board's text and report come from `pcb import` and only the project from there ([`ForeignOptions::project`]).
 
 use super::{cli_command, cli_version, fail, file_stem, limit, need_cli, output_within, work_dir, write_file, EXPORT_TIMEOUT};
 use eda_model::CheckResult;

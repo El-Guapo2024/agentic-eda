@@ -10,7 +10,8 @@
 //! the same name in the same folder with the other extension; **Altium** (`*.PrjPcb`) is a project file that lists its documents (`[DocumentN]` / `DocumentPath=`: the
 //! `.SchDoc` sheets and the `.PcbDoc`), and its schematic plugin (`SCH_IO_ALTIUM::LoadSchematicProject`) makes one sheet symbol of each `.SchDoc` that no other sheet places,
 //! laid out on a grid of 1000 mil (two apart, ten across), the sheets numbered from page 2, their hierarchical labels turned into global ones (a top-level sheet has no
-//! parent to take them to). kicad-cli imports one file at a time and has no project import, so that is what is done here round it.
+//! parent to take them to). `pcb import` and `sch import` take one file. The project-level `kicad-cli import` takes several but pairs nothing by name (given a `.brd` it imports the board alone), refuses a second
+//! schematic and takes no `.PrjPcb`, so the pairing is what is done here round it; the project it writes is used for the board's design rules and net classes.
 //!
 //! This checkout of KiCad's sources has the file filters, the Altium plugin's project loader and the importers; the project manager's own `import_project.cpp` is not in it, so
 //! the same-name pairing is the manager's as the filters and the QA data imply (`qa/data/pcbnew/plugins/eagle/Adafruit-AHT20-PCB/` and `qa/data/eeschema/io/eagle/` hold a
