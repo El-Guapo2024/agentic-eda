@@ -56,9 +56,14 @@
 //!   fails. This port pushes it along the pusher's normal instead (the
 //!   stitching-via case the old tests cover).
 //! - `SHP_IGNORE`, joint locks (`LockJoint`: nothing here shoves a line of the
-//!   head's own net), arcs and holes are not modelled. `SHP_REVERSED` (a head
+//!   head's own net) and holes are not modelled. `SHP_REVERSED` (a head
 //!   dragged by its first vertex, so its last point is the pusher) is:
-//!   [`shove_dragged_line`].
+//!   [`shove_dragged_line`]. Arcs are (`ARC_T` items: `onCollidingArc` is
+//!   `ShoveObstacleLine` on the arc's line, the arcs of a shoved line it does not
+//!   reach are kept) and so are locked tracks, arcs and vias (a solid for the shove:
+//!   `SH_TRY_WALK`, `pushOrShoveVia`); one difference: KiCad's main loop looks
+//!   for `SEGMENT_T` obstacles only, so its `onCollidingArc` is never reached from
+//!   there, and here arcs are searched with the segments.
 
 use crate::item::{same_net, Item, ItemId, Kind, Net, Via};
 use crate::line::Line;
@@ -1661,7 +1666,9 @@ impl<'a> Shove<'a> {
             covered.extend(root_line.line.segment_ids.iter().copied());
             let mut it = tracks.iter();
             if let Some(first) = it.next() {
-                by_track.entry(first.clone()).or_default().push(Line::from_points(new_line.line.net.clone(), new_line.line.layer, new_line.line.width, new_line.line.pts.clone()));
+                // the arcs of the shoved line the shove did not cut into stay arcs (`Line::arcs` finds them again by their points): the commit writes them as arc tracks
+                let shoved = Line { arcs: new_line.line.arcs.clone(), ..Line::from_points(new_line.line.net.clone(), new_line.line.layer, new_line.line.width, new_line.line.pts.clone()) };
+                by_track.entry(first.clone()).or_default().push(shoved);
                 template.entry(first.clone()).or_insert_with(|| Line::new(new_line.line.net.clone(), new_line.line.layer, new_line.line.width));
             }
             for other in it {

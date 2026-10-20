@@ -10,8 +10,7 @@
 //! `CheckFit` for a pair: each line collides with nothing in the world (the pair being tuned is not in it), and the shape keeps four widths from
 //! the shapes before it.
 //!
-//! Differences from KiCad as in [`crate::meander_placer`]: no arcs in the world, no time domain or pad-to-die length, the lines stop where the track width
-//! changes.
+//! Differences from KiCad as in [`crate::meander_placer`]: no pad-to-die length, the lines stop where the track width changes.
 
 use crate::chain::ShapeLineChain;
 use crate::delay::DelayParams;

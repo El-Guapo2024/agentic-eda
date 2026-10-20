@@ -18,6 +18,9 @@
 //! The fourth is the differential pair's: pairs placed by the pair router (`eda_pns::dp_placer`) on KiCad's own pair board leave
 //! kicad-cli no new `clearance` and no `diff_pair_gap_out_of_range` against a `diff_pair_gap` rule of the pair's own gap.
 //!
+//! The fifth is the arcs': on the two boards of KiCad's corpus that have arc tracks (`issue12609`, `issue8407`) a route across an arc track, a route that ends in the middle
+//! of one (which splits it) and an arc dragged (`DM_ARC`) leave kicad-cli no new copper violation, and every arc comes back out as an `(arc ..)` of the board file.
+//!
 //! The third test is the board outline's: shoves toward the top edge of `mcu30` -- committed with the strict gates off, since
 //! `routing_pass_through_pad` refuses some of them for a reason that is not the edge's -- leave kicad-cli no
 //! `copper_edge_clearance` violation. Before the outline was a router obstacle they did (a shoved track ended 300 um from it).
@@ -335,5 +338,186 @@ mod tests {
         }
         assert!(pushed > 0, "none of the routes pushed a track: the test is not testing a shove");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One of KiCad's own boards with arc tracks (`pcbnew/issue12609.kicad_pcb`: 47 of them, `issue8407.kicad_pcb`: 40), imported the way the studio imports a `.kicad_pcb`.
+    fn arc_board(name: &str) -> Option<(Design, ConstraintModel)> {
+        let root = std::env::var_os("KICAD_QA_DATA").map(PathBuf::from).filter(|p| p.exists()).unwrap_or_else(|| PathBuf::from("/Users/juanantonioluera/ws/kicad-src-8303b2ad/qa/data")).join("pcbnew");
+        let text = std::fs::read_to_string(root.join(format!("{name}.kicad_pcb"))).ok()?;
+        let (mut design, model, _) = eda_kicad::import_kicad_pcb(&text).unwrap_or_else(|e| panic!("import {name}: {e:?}"));
+        design.assign_missing_ids();
+        Some((design, model))
+    }
+
+    /// The `(arc ..)` tracks of the board file `design` is written as (a track's own line, one tab in: not a polygon's or a footprint's).
+    fn arcs_in_file(design: &Design, model: &ConstraintModel) -> usize {
+        let text = eda_kicad::export_kicad_pcb(design, model, &eda_kicad::ExportMeta { date: "2026-01-01", title: "t" }).expect("the board file");
+        text.lines().filter(|l| l.starts_with("\t(arc (start ")).count()
+    }
+
+    /// kicad-cli's copper violations of `design` with `--all-track-errors` -- by default it reports only the first violation of each track, and which one is first moves with the
+    /// geometry, so the counts of a board with violations already would wander -- as (kind, the description and the items each names, in order).
+    fn all_track_report(design: &Design, model: &ConstraintModel, work: &Path, kinds: &[&str]) -> Vec<(String, String)> {
+        // the engine's own run writes `board.kicad_pcb` and its project into `work`; the run below reads them
+        eda_kicad_engine::drc(design, model, work, false).unwrap_or_else(|e| panic!("kicad-cli: {e:?}"));
+        let report = work.join("drc_all_tracks.json");
+        let _ = std::fs::remove_file(&report);
+        let out = eda_kicad_engine::cli_command(&eda_kicad_engine::find_cli().expect("kicad-cli"), Some(&work.join("board.kicad_pro")))
+            .args(["pcb", "drc", "--format", "json", "--severity-all", "--all-track-errors", "--units", "mm", "-o"])
+            .arg(&report)
+            .arg(work.join("board.kicad_pcb"))
+            .output()
+            .expect("kicad-cli runs");
+        let text = std::fs::read_to_string(&report).unwrap_or_else(|_| panic!("no report: {}", String::from_utf8_lossy(&out.stderr)));
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        json["violations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|v| v["severity"].as_str() != Some("exclusion") && kinds.contains(&v["type"].as_str().unwrap_or("")))
+            .map(|v| {
+                let mut items: Vec<String> = v["items"].as_array().unwrap().iter().map(|i| i["description"].as_str().unwrap_or("").to_string()).collect();
+                items.sort();
+                (v["type"].as_str().unwrap().to_string(), format!("{} {}", v["description"].as_str().unwrap_or(""), items.join(" / ")))
+            })
+            .collect()
+    }
+
+    fn counts_of(report: &[(String, String)]) -> std::collections::BTreeMap<String, usize> {
+        let mut out = std::collections::BTreeMap::new();
+        for (kind, _) in report {
+            *out.entry(kind.clone()).or_insert(0) += 1;
+        }
+        out
+    }
+
+    /// Arcs against kicad-cli's DRC (slow tier), on KiCad's own boards with arc tracks. Three kinds of edit -- a route that crosses an arc track (Shove mode pushes it
+    /// away), a route that ends in the middle of a track of its net that is an arc (which splits the arc there: `SplitAdjacentArcs`), and an arc track dragged (`DM_ARC`: the
+    /// curvature follows the cursor, the tangent neighbours follow the arc) -- each add no `clearance`, `track_width` or other copper violation to kicad-cli's report of the
+    /// board, and every arc the commit leaves is an `(arc ..)` of the board file, not a polyline of chords.
+    #[test]
+    fn routes_across_and_onto_an_arc_track_and_a_dragged_arc_add_no_violation_to_kicad_clis_drc() {
+        use eda_pns::dragger::DragKind;
+        use eda_pns::item::Item;
+        use eda_pns::router::Router;
+        use eda_pns::settings::Mode;
+        if !kicad_available() {
+            return;
+        }
+        let kinds = ["clearance", "shorting_items", "tracks_crossing", "hole_clearance", "copper_edge_clearance", "track_width"];
+        let dist = |a: eda_model::ir::Point, b: eda_model::ir::Point| (((a.x - b.x) as f64).powi(2) + ((a.y - b.y) as f64).powi(2)).sqrt();
+        let mut judged = 0;
+        for name in ["issue12609", "issue8407"] {
+            let Some((design, model)) = arc_board(name) else {
+                eprintln!("{name}: KiCad's QA corpus not found; skipping");
+                continue;
+            };
+            let dir = scratch(name);
+            let before = all_track_report(&design, &model, &dir, &kinds);
+            let baseline = counts_of(&before);
+            let arcs_before = design.routing.as_ref().unwrap().tracks.iter().filter(|t| t.arc().is_some()).count();
+            let (node, layers) = eda_pns::from_ir::build_node(&design, &model);
+            let mut arcs: Vec<(String, eda_pns::item::Net, i32, eda_pns::arcs::ArcPts)> = node
+                .iter()
+                .filter_map(|(_, it)| match it {
+                    Item::Arc(a) => a.source_track.clone().map(|t| (t, a.net.clone(), a.layer, a.arc)),
+                    _ => None,
+                })
+                .collect();
+            arcs.sort_by(|a, b| a.0.cmp(&b.0));
+            assert_eq!(arcs.len(), arcs_before, "{name}: every arc track is an arc item of the world");
+            assert!(arcs.len() > 20, "{name} has arc tracks: {}", arcs.len());
+            let pads: Vec<(eda_model::ir::Point, eda_pns::item::Net, eda_pns::layer::LayerRange)> = node
+                .iter()
+                .filter_map(|(_, it)| match it {
+                    Item::Solid(s) if !s.edge && s.net.is_some() => Some((s.pos, s.net.clone(), s.layers)),
+                    _ => None,
+                })
+                .collect();
+            let judge = |label: &str, commit: &eda_pns::router::RouteCommit| {
+                let after = apply_commit(&design, commit);
+                let now = all_track_report(&after, &model, &dir, &kinds);
+                let counts = counts_of(&now);
+                let arc_tracks = after.routing.as_ref().unwrap().tracks.iter().filter(|t| t.arc().is_some()).count();
+                eprintln!("{name} {label}: {} tracks put, {} taken, {} of the new ones arcs; {arc_tracks} arc tracks now (were {arcs_before}): {counts:?} (before {baseline:?})", commit.tracks.len(), commit.remove_track_ids.len(), commit.tracks.iter().filter(|t| t.arc().is_some()).count());
+                if counts != baseline {
+                    eprintln!("    new: {:?}", now.iter().filter(|v| !before.contains(v)).collect::<Vec<_>>());
+                    eprintln!("    gone: {:?}", before.iter().filter(|v| !now.contains(v)).collect::<Vec<_>>());
+                }
+                for kind in kinds {
+                    let (was, got) = (baseline.get(kind).copied().unwrap_or(0), counts.get(kind).copied().unwrap_or(0));
+                    assert!(got <= was, "{name} {label}: kicad-cli reports {got} {kind} (the board had {was})");
+                }
+                assert_eq!(arcs_in_file(&after, &model), arc_tracks, "{name} {label}: every arc track is written as an (arc ..)");
+            };
+            // how many of each kind were judged, how many tries were spent on them
+            let (mut across, mut onto, mut dragged, mut pushed_arcs, mut split_arcs) = (0, 0, 0, 0, 0);
+            let mut tries = [0usize; 3];
+            for (track, net, layer, arc) in &arcs {
+                if across >= 2 && onto >= 2 && dragged >= 2 {
+                    break;
+                }
+                let layer_name = layers.name_of(*layer).to_string();
+                // across: from the nearest pad of another net, 2 to 9 mm from the arc's middle, straight at the arc and 0.15 mm past its middle, where the head's end sits on the
+                // arc's stroke: Shove mode has to push the arc away (a try in which it does not, the router walked or the arc was not in the way, is not judged)
+                if across < 2 && tries[0] < 30 {
+                    let from = pads.iter().filter(|(p, n, l)| n != net && l.overlaps_layer(*layer) && (2_000.0..9_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
+                    if let Some((pad, _, _)) = from {
+                        tries[0] += 1;
+                        let d = dist(*pad, arc.mid);
+                        let target = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x - pad.x) as f64 / d) * 150.0).round() as i64, y: arc.mid.y + (((arc.mid.y - pad.y) as f64 / d) * 150.0).round() as i64 };
+                        let mut router = Router::new(&design, &model);
+                        router.settings.mode = Mode::Shove;
+                        if router.start(*pad, &layer_name, model.board.track_width).is_ok() && router.preview(target).is_some_and(|pv| !pv.colliding) {
+                            if let Some(commit) = router.finish(target) {
+                                if commit.remove_track_ids.contains(track) {
+                                    pushed_arcs += 1;
+                                    judge(&format!("across {track}"), &commit);
+                                    across += 1;
+                                    judged += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                // onto: from a pad of the arc's own net to the middle of the arc, which the route ends on (and so splits there)
+                if onto < 2 && tries[1] < 16 {
+                    let from = pads.iter().filter(|(p, n, l)| n == net && l.overlaps_layer(*layer) && (1_500.0..12_000.0).contains(&dist(*p, arc.mid))).min_by(|a, b| dist(a.0, arc.mid).total_cmp(&dist(b.0, arc.mid)));
+                    if let Some((pad, _, _)) = from {
+                        tries[1] += 1;
+                        let mut router = Router::new(&design, &model);
+                        router.settings.mode = Mode::Shove;
+                        if router.start(*pad, &layer_name, model.board.track_width).is_ok() && router.preview(arc.mid).is_some_and(|pv| !pv.colliding) {
+                            if let Some(commit) = router.finish(arc.mid) {
+                                let split = commit.remove_track_ids.contains(track);
+                                split_arcs += usize::from(split && commit.tracks.iter().filter(|t| t.arc().is_some()).count() >= 2);
+                                judge(&format!("onto {track} (split: {split})"), &commit);
+                                onto += 1;
+                                judged += 1;
+                            }
+                        }
+                    }
+                }
+                // dragged: the middle of the arc taken hold of and moved 0.4 mm away from its centre
+                if dragged < 2 && tries[2] < 16 {
+                    tries[2] += 1;
+                    let (c, r) = (arc.center_f(), arc.radius());
+                    let to = eda_model::ir::Point { x: arc.mid.x + (((arc.mid.x as f64 - c.0) / r) * 400.0).round() as i64, y: arc.mid.y + (((arc.mid.y as f64 - c.1) / r) * 400.0).round() as i64 };
+                    let mut router = Router::new(&design, &model);
+                    router.settings.mode = Mode::Shove;
+                    if router.drag_start(arc.mid, &layer_name).is_ok() && matches!(router.drag_kind(), Some(DragKind::Arc)) && router.drag_preview(to).is_some_and(|pv| !pv.colliding) {
+                        if let Some(commit) = router.drag_finish(to) {
+                            judge(&format!("dragged {track}"), &commit);
+                            dragged += 1;
+                            judged += 1;
+                        }
+                    }
+                }
+            }
+            eprintln!("{name}: {across} routes across (each pushed the arc: {pushed_arcs}), {onto} onto ({split_arcs} split it into two arcs), {dragged} arcs dragged; tries {tries:?}");
+            assert!(across > 0 && onto > 0 && dragged > 0, "{name}: every kind of edit was judged at least once: {across}, {onto}, {dragged}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        assert!(judged == 0 || judged >= 6, "{judged} edits judged by kicad-cli");
     }
 }
