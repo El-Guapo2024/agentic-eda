@@ -96,8 +96,9 @@ fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
     for tag in ["(fp_line ", "(fp_arc ", "(fp_circle ", "(fp_poly ", "(fp_curve ", "(fp_text user "] {
         assert_eq!(count_in(&text, tag), 2, "{tag}\n{text}");
     }
-    // the fab rectangle of each, and the courtyard rectangle the writer makes for a footprint that has none
-    assert_eq!(count_in(&text, "(fp_rect "), 4, "{text}");
+    // the fab rectangle of each; a footprint that had no courtyard gets none made up for it (`FootprintExtra::no_courtyard`)
+    assert_eq!(count_in(&text, "(fp_rect "), 2, "{text}");
+    assert_eq!(count_in(&text, "(layer \"F.CrtYd\")") + count_in(&text, "(layer \"B.CrtYd\")"), 0, "{text}");
     // each side's footprint is written on its own layers
     assert_eq!(count_in(&text, "(layer \"F.SilkS\") (uuid"), 3 + 1, "three shapes of U1 and its Reference");
     assert_eq!(count_in(&text, "(layer \"B.SilkS\") (uuid"), 3 + 1);
@@ -106,7 +107,7 @@ fn a_boards_footprint_graphics_are_part_of_its_footprint_and_come_back_out() {
     let (again, model2, _) = import_kicad_pcb(&text).expect("re-imports");
     assert_eq!(art_of(&model2, "U1"), top);
     assert_eq!(art_of(&model2, "U2"), bottom);
-    // and written again, the art is the same text (the courtyard rectangle the first export made becomes a polygon on the way back, which is its own matter)
+    // and written again, the art is the same text
     let art_lines = |t: &str| t.lines().filter(|l| l.trim_start().starts_with("(fp_") && !l.contains("CrtYd")).map(str::to_string).collect::<Vec<_>>();
     assert_eq!(art_lines(&export(&again, &model2)), art_lines(&text));
 }
