@@ -2,7 +2,7 @@
   "measured_at": {
     "corpus": "2026-10-12",
     "own": "2026-10-04",
-    "reexport": "2026-10-11"
+    "reexport": "2026-10-20"
   },
   "own_pipeline_roundtrip": [
     {
@@ -331,7 +331,8 @@
     {
       "board": "api_kitchen_sink",
       "error": null,
-      "identical_type_counts": false,
+      "finding_differences": 0,
+      "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
         "clearance": 1,
@@ -341,8 +342,8 @@
       },
       "reexport_parses": true,
       "reexport_types": {
+        "clearance": 1,
         "isolated_copper": 1,
-        "lib_footprint_issues": 2,
         "lib_footprint_mismatch": 3,
         "silk_overlap": 2
       }
@@ -350,54 +351,53 @@
     {
       "board": "bad_triangulation_case",
       "error": null,
+      "finding_differences": 0,
       "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
         "invalid_outline": 1,
-        "isolated_copper": 59,
-        "zones_intersect": 12
+        "isolated_copper": 59
       },
       "reexport_parses": true,
       "reexport_types": {
         "invalid_outline": 1,
-        "isolated_copper": 59,
-        "zones_intersect": 12
+        "isolated_copper": 59
       }
     },
     {
       "board": "complex_hierarchy",
       "error": null,
-      "identical_type_counts": false,
+      "finding_differences": 0,
+      "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
-        "annular_width": 12,
+        "annular_width": 8,
         "clearance": 112,
         "copper_edge_clearance": 14,
         "drill_out_of_range": 4,
         "holes_co_located": 4,
-        "silk_edge_clearance": 14,
+        "silk_edge_clearance": 4,
         "silk_over_copper": 104,
         "silk_overlap": 199,
         "solder_mask_bridge": 112
       },
       "reexport_parses": true,
       "reexport_types": {
-        "annular_width": 12,
-        "clearance": 117,
-        "copper_edge_clearance": 15,
+        "annular_width": 8,
+        "clearance": 112,
+        "copper_edge_clearance": 14,
         "drill_out_of_range": 4,
         "holes_co_located": 4,
-        "lib_footprint_issues": 72,
-        "shorting_items": 2,
-        "silk_edge_clearance": 14,
+        "silk_edge_clearance": 4,
         "silk_over_copper": 104,
         "silk_overlap": 199,
-        "solder_mask_bridge": 115
+        "solder_mask_bridge": 112
       }
     },
     {
       "board": "component_classes",
       "error": null,
+      "finding_differences": 0,
       "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
@@ -415,7 +415,8 @@
     {
       "board": "component_classes_drc",
       "error": null,
-      "identical_type_counts": false,
+      "finding_differences": 0,
+      "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
         "assertion_failure": 2,
@@ -424,7 +425,7 @@
       },
       "reexport_parses": true,
       "reexport_types": {
-        "assertion_failure": 4,
+        "assertion_failure": 2,
         "lib_footprint_mismatch": 4,
         "track_dangling": 4
       }
@@ -432,20 +433,21 @@
     {
       "board": "connection_width_rules",
       "error": null,
-      "identical_type_counts": false,
+      "finding_differences": 0,
+      "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
         "connection_width": 3
       },
       "reexport_parses": true,
       "reexport_types": {
-        "clearance": 1,
         "connection_width": 3
       }
     },
     {
       "board": "custom_fields",
       "error": null,
+      "finding_differences": 0,
       "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
@@ -459,6 +461,7 @@
     {
       "board": "custom_pads",
       "error": null,
+      "finding_differences": 0,
       "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
@@ -472,7 +475,8 @@
     {
       "board": "drc_missing_tuning_profile",
       "error": null,
-      "identical_type_counts": false,
+      "finding_differences": 0,
+      "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
         "invalid_outline": 1,
@@ -480,12 +484,14 @@
       },
       "reexport_parses": true,
       "reexport_types": {
-        "invalid_outline": 1
+        "invalid_outline": 1,
+        "missing_tuning_profile": 1
       }
     },
     {
       "board": "fill_bad",
       "error": null,
+      "finding_differences": 0,
       "identical_type_counts": true,
       "original_parses": true,
       "original_types": {},
@@ -495,6 +501,7 @@
     {
       "board": "footprints_load_save",
       "error": null,
+      "finding_differences": 0,
       "identical_type_counts": true,
       "original_parses": true,
       "original_types": {
@@ -510,6 +517,7 @@
     {
       "board": "graphics_load_save_v20240108",
       "error": null,
+      "finding_differences": 0,
       "identical_type_counts": true,
       "original_parses": true,
       "original_types": {

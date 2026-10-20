@@ -1,6 +1,6 @@
 # agentic-eda vs KiCad -- Parity Report
 
-_Generated 2026-10-12T02:51:52.139006+00:00 by `tools/parity_report.py`._
+_Generated 2026-10-20T07:33:23.689533+00:00 by `tools/parity_report.py`._
 
 ## How to reproduce
 
@@ -23,7 +23,7 @@ Needs `kicad-cli` on `PATH` (measured against 10.99.0). Every test above skips c
 | `roundtrip_own_via_survival_rate` | 100.0% | 100.0% |
 | `roundtrip_qa_pcb_import_success_rate` | 99.5% | 99.5% |
 | `roundtrip_qa_sch_import_success_rate` | 100.0% | 100.0% |
-| `roundtrip_reexport_fidelity_rate` | 58.3% | 58.3% |
+| `roundtrip_reexport_fidelity_rate` | 100.0% | 100.0% |
 
 ## 1. Connectivity -- `eda_connectivity::analyze` vs KiCad's `unconnected_items`/`track_dangling`/`via_dangling`
 
@@ -91,34 +91,57 @@ Import failures (1):
 
 ### Re-export fidelity on 12 real QA boards (import -> our export -> kicad-cli DRC, vs kicad-cli DRC on the original)
 
-_Measured 2026-10-11._
+_Measured 2026-10-20._
 
-| board | original parses | re-export parses | identical violation-type counts | where kicad-cli's counts differ (type: original -> re-export) |
-|---|---|---|---|---|
-| api_kitchen_sink | True | True | False | `clearance`: 1 -> 0, `lib_footprint_issues`: 0 -> 2 |
-| bad_triangulation_case | True | True | True |  |
-| complex_hierarchy | True | True | False | `clearance`: 112 -> 117, `copper_edge_clearance`: 14 -> 15, `lib_footprint_issues`: 0 -> 72, `shorting_items`: 0 -> 2, `solder_mask_bridge`: 112 -> 115 |
-| component_classes | True | True | True |  |
-| component_classes_drc | True | True | False | `assertion_failure`: 2 -> 4 |
-| connection_width_rules | True | True | False | `clearance`: 0 -> 1 |
-| custom_fields | True | True | True |  |
-| custom_pads | True | True | True |  |
-| drc_missing_tuning_profile | True | True | False | `missing_tuning_profile`: 1 -> 0 |
-| fill_bad | True | True | True |  |
-| footprints_load_save | True | True | True |  |
-| graphics_load_save_v20240108 | True | True | True |  |
+| board | original parses | re-export parses | identical violation-type counts | findings that differ (type, items, place) | where kicad-cli's counts differ (type: original -> re-export) |
+|---|---|---|---|---:|---|
+| api_kitchen_sink | True | True | True | 0 |  |
+| bad_triangulation_case | True | True | True | 0 |  |
+| complex_hierarchy | True | True | True | 0 |  |
+| component_classes | True | True | True | 0 |  |
+| component_classes_drc | True | True | True | 0 |  |
+| connection_width_rules | True | True | True | 0 |  |
+| custom_fields | True | True | True | 0 |  |
+| custom_pads | True | True | True | 0 |  |
+| drc_missing_tuning_profile | True | True | True | 0 |  |
+| fill_bad | True | True | True | 0 |  |
+| footprints_load_save | True | True | True | 0 |  |
+| graphics_load_save_v20240108 | True | True | True | 0 |  |
 
-What the remaining differences are (read from the two kicad-cli reports of each board; every re-export parses):
+Every re-export parses, and kicad-cli's DRC of it says what it says of the original: the same number of violations of each type and, finding by finding, the same type, severity, items and places (to 5 micrometres; the lengths in a
+description are left out, because the importer keeps micrometres and an inch board's tenths of one are rounded). The slow test `a_real_boards_reexport_is_judged_by_kicad_cli_as_the_original_is` (`crates/kicad/tests/parity_roundtrip.rs`,
+`EDA_SLOW_TESTS=1`) holds this for the 12 boards as the corpus ships them and as kicad-cli 10.99.0-5334 writes them in its newest file format (`EDA_PARITY_REEXPORT_UPGRADE=1` in the harness).
 
-- `lib_footprint_issues` (`api_kitchen_sink`, `complex_hierarchy`): the writer names a footprint `eda:<name>` when the source
-  gave it no library (`D5`, `bornier2`), and the board's own project reports library links as warnings, so kicad-cli flags a library that does not
-  exist. The studio's derived project ignores both checks unless the project sets them (`effective_rule_severities`).
-- `clearance`, `copper_edge_clearance`, `solder_mask_bridge`, `shorting_items` (`complex_hierarchy`, `api_kitchen_sink`): not analysed. The silkscreen types
-  (`silk_overlap`, `silk_over_copper`, `silk_edge_clearance`) are the original's since a footprint's graphics, its texts and its pads' silkscreen layer are
-  written back (`web/studio/PARITY-pcb.md` section 28); `api_kitchen_sink` also has a barcode item, which has no IR item.
-- `assertion_failure` (`component_classes_drc`): its rules test `A.Component_Class`; component classes are project data this importer does not read.
-- `missing_tuning_profile` (`drc_missing_tuning_profile`): tuning profiles are not read either.
-- `connection_width_rules`: one extra `clearance` violation, not analysed.
+What the round trip changed before, read from the two kicad-cli reports and the two files of each board (`web/studio/PARITY-pcb.md` section 34 has the ports and the tests):
+
+- `clearance`, `shorting_items`, `solder_mask_bridge`, `copper_edge_clearance` (`complex_hierarchy`): a board text of several lines (`Actionneur\nPiezo New Amp\nV02`) came back as one line full of backslashes -- the reader did not take the lexer's `\n` and the
+  writer did not write it -- and its glyph width (`(size 2.032 1.524)`) was made square. `connection_width_rules`' extra `clearance`: its labels lost their `justify left bottom` and their bold.
+- `clearance` (`complex_hierarchy`, 8): the two pads of a registration mark that sit on one point with one number were written with one uuid.
+- `lib_footprint_issues` (`api_kitchen_sink`, `complex_hierarchy`): a footprint with no library link was written `eda:<name>`; `LIB_ID::Format` writes the bare name.
+- `courtyards_overlap` (`complex_hierarchy`): a footprint with no courtyard was given the box its pads derive.
+- `assertion_failure` (`component_classes_drc`): component classes -- the project's assignment rules and the footprints' own -- were not in the IR.
+- `clearance` (`api_kitchen_sink`): its barcodes were not in the IR.
+- `missing_tuning_profile` (`drc_missing_tuning_profile`): the reader had the tuning profiles since P9a; the harness did not read the project's Board Setup pages as `eda import-kicad` does.
+- Also written back now, though no board of these 12 counts them: the outline's line width, a pad's pin type and function (free pads), the paste and mask layers a pad had and an edge connector pad's type, a pad's and a via's other tokens (a via's type and
+  tenting, `remove_unused_layers`, `padstack`, teardrop settings), the arcs of a polygon (flattened as KiCad flattens them), a net only copper names (KiCad 10's files have no net table; the export failed), the nets a schematic's net class labels assign
+  (`netclass_assignments`), and bold text of KiCad 10 (its thickness is the width before the bold factor 1.6).
+
+34 more boards -- the 17 templates KiCad installs with its libraries in reach (so that `lib_footprint_mismatch` is judged too) and 17 more QA boards (vias of every kind, teardrops, padstacks, time-domain tuning, net ties) -- are judged the same way:
+**29 are identical**, and each of the five others has its cause:
+
+- `lib_footprint_mismatch` of a mounting hole, a test point, ... on every board that has one, before: the footprint's courtyard (a circle, four lines) was written as one polygon, and KiCad compares the shapes one by one with the library's copy
+  (`FOOTPRINT::FootprintNeedsUpdate`). A footprint's courtyard graphics, description, tags and paste margins, and its uuid, are written back as the file had them.
+- `time_calculations`: the seven net classes the schematic assigned by label (`netclass_assignments`) were not read, so its skew rule judged nothing. Now the violation is there, on another segment of the same net: the writer lists a net's tracks in a canonical
+  order (net, layer, points) and kicad-cli names one of them. `issue4257`: a text that names a footprint by its uuid (`${uuid:REFERENCE}`) read `<Unknown reference>`; the footprint keeps its uuid now.
+- `issue5830` (5 `clearance` of 0.1770 to 0.1773 mm against 0.178 mm) and `issue9870`: the coordinates are integer micrometres and these inch boards have them to a tenth of one (`100.295778`); a rounded track is half a micrometre closer to its neighbour.
+- `issue4257` and `net_tie_drc` (`lib_footprint_issues`, `lib_footprint_mismatch` of the original): the two boards have no project file, so kicad-cli judges the original by its default severities, and the studio's derived project hides the two library
+  checks unless a project says otherwise (every footprint here is embedded in the board).
+
+What still differs in the files, with no finding of these boards to show for it: the coordinates are micrometres, so an inch board's tenths of one are rounded; a footprint's jumper pad groups, Datasheet and Description fields and `ki_*` fields, a pad's
+teardrop settings and a property's `unlocked` come back as text but are not in the model, and the link to the symbol (`path`) is not written, on purpose: the derived schematic's symbols have uuids of their own; a shape's line style (dashes, dots) and a zone
+outline's hatch pitch are not kept; nor are dimension details (text position mode, extension height); reference images and text boxes are written back as text, drawn by kicad-cli's plots and not by the canvas, with no editor (P16); KiCad 10's line ending
+shapes, grid items, via stitching and guarding, microvia stack generators, custom user properties and drill charts are not read (no board of the QA corpus or of the installed KiCad's templates has one; a top-level item of a kind nobody reads is carried as text).
+The zone fills are KiCad's: the harness exports unfilled zones and `--refill-zones` fills them, the studio keeps the file's own beside `design.json`.
 
 
 ## 3. Zone fill
@@ -132,8 +155,8 @@ Every KiCad action in `web/studio/src/kicad/actions.json` is classified against 
 
 | editor | actions | handled | referenced | missing | missing with a reason | hotkeyed & not handled |
 |---|---:|---:|---:|---:|---:|---:|
-| pcbnew | 350 | 266 | 0 | 0 | 84 | 5 |
-| eeschema | 233 | 170 | 0 | 0 | 63 | 9 |
+| pcbnew | 350 | 289 | 0 | 0 | 61 | 4 |
+| eeschema | 233 | 174 | 0 | 0 | 59 | 8 |
 | common | 183 | 150 | 0 | 0 | 33 | 2 |
 
 Behavior (not just the presence of an action) is tracked per feature in `web/studio/PARITY-pcb.md` and the ranked, actionable gaps in `docs/parity/GAPS.md`.
