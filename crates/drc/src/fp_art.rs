@@ -68,7 +68,7 @@ pub(crate) fn add_footprint_art(design: &Design, part: &Part, fp: &FootprintInst
     let vars = TextVars { reference: &fp.id, value, footprint: part.footprint.as_deref().or(part.package.as_deref()).unwrap_or("") };
     for t in &footprint.art.texts {
         let placed = t.placed(fp, &vars);
-        if placed.text.is_empty() {
+        if placed.text.is_empty() || !t.layout.visible {
             continue;
         }
         let text = FootprintText { text: placed.text.clone(), layer: placed.layer.clone(), at: placed.at, angle_file_mdeg: placed.angle, size: placed.size, thickness: placed.thickness, halign: placed.halign, valign: placed.valign, mirror: placed.mirror, keep_upright: placed.keep_upright, bold: placed.bold };
@@ -247,5 +247,15 @@ mod tests {
         let b = crate::board::build(&design, &model);
         assert_eq!(b.mask.silk.iter().filter(|s| s.is_shape).count(), 1, "the art's line, not it and the extra's");
         assert_eq!(b.mask.graphics.len(), 2, "the art's mask rectangle and the mask-only pad");
+    }
+
+    /// A hidden text of the footprint (a MountingHole's `${REFERENCE}` on its fab layer, or one on the silkscreen) has no ink: the silkscreen checks do not see it.
+    #[test]
+    fn a_hidden_text_has_no_silk() {
+        let (design, mut model) = board(Side::Top, 0);
+        let texts = &mut model.footprints[0].art.texts;
+        texts[0].layout.visible = false;
+        let b = crate::board::build(&design, &model);
+        assert!(b.mask.silk.iter().all(|s| !s.desc.starts_with("Footprint text")), "{:?}", b.mask.silk.iter().map(|s| &s.desc).collect::<Vec<_>>());
     }
 }

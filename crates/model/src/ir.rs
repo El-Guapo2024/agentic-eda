@@ -2469,6 +2469,15 @@ pub struct DrawingsSection {
     /// for the reason `rules` does.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub barcodes: Vec<crate::barcode::Barcode>,
+    /// The board setup's tokens the writer does not make from `BoardRules`, as the file wrote them: KiCad 10's defaults for the vias that say nothing of their own,
+    /// `(covering (front no) (back no))`, `(plugging ..)`, `(capping no)` and `(filling no)`. Additive: absent reads as "none".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub setup_tokens: Vec<String>,
+    /// The items of the board file that nothing reads (a text box, a reference image, a target, a table, a board-level property, whatever a newer KiCad adds), each as the file
+    /// wrote it on one line: not in the design, not on the canvas, and written back where the board ends, so that the file kicad-cli judges and plots has them. Additive: absent
+    /// in an older `design.json` reads as "none". Lives here for the reason `rules` does.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub raw_items: Vec<String>,
     /// What a via says beyond `Via`'s fields (its type, the unconnected-layer mode, `free`, the zone layer connections, tenting, capping, covering, plugging, filling, its padstack
     /// and teardrop settings, ..), one entry per via that has any, keyed by the via's id -- see [`crate::via_extra`]. Additive: absent in an older `design.json` reads as
     /// "every via is a through via with KiCad's defaults". Lives here for the reason `rules` does.
@@ -2797,6 +2806,25 @@ pub struct FootprintExtra {
     /// footprints that had none overlap (`courtyards_overlap`), and `missing_courtyard` could not be reported.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub no_courtyard: bool,
+    /// The footprint's other tokens as the file wrote them, in file order: `(descr ..)`, `(tags ..)`, `(jumper_pad_groups ..)`, `(duplicate_pad_numbers_are_jumpers yes)` (the
+    /// pads that share a number are one pad to the connectivity), `autoplace_cost`, and the `Datasheet`, `Description` and `ki_*` properties. The model reads none of them;
+    /// the writer gives them back, while the part is on the footprint they were read from ([`Self::source_name`]). The footprint's `(path ..)`, the link to its symbol, is not among
+    /// them: the derived schematic's symbols have uuids of their own.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tokens: Vec<String>,
+    /// The courtyard graphics as the file wrote them (`fp_line`, `fp_arc`, `fp_circle`, `fp_rect`, `fp_poly`, `fp_curve` on `F.CrtYd` or `B.CrtYd`), in file order. The checks here
+    /// work from the outlines made of them (`Footprint::courtyard_outlines`), but a courtyard of four lines, or a circle, is not one polygon, and a footprint on the board whose
+    /// courtyard is no longer the library's does not match the library's copy (`lib_footprint_mismatch`): these are written back, in place of the polygons, while the part is
+    /// on the footprint they were read from ([`Self::source_name`]) and on the side they were read for ([`Self::courtyard_bottom`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub courtyard_items: Vec<String>,
+    /// The footprint was on the back side when [`Self::courtyard_items`] were read: they are in the file's frame for that side and mean nothing for the other.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub courtyard_bottom: bool,
+    /// The footprint's name in the file when [`Self::tokens`] and [`Self::courtyard_items`] were read: they describe that footprint and are written only for it (a part exchanged
+    /// for another footprint is not described by the old one's text). Empty for a footprint made here.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source_name: String,
     /// `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint itself (`FOOTPRINT::GetStaticComponentClass`). A DRC rule reads them as
     /// `A.Component_Class` and `A.hasComponentClass('A')`, together with the classes the project's assignment rules give (`BoardRules::component_classes`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

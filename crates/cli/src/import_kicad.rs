@@ -111,6 +111,10 @@ pub fn run(rest: &[String]) -> Result<(), Vec<CheckResult>> {
     for e in &notes.outline_errors {
         eprintln!("  board outline is malformed: {e}");
     }
+    if !notes.unread_items.is_empty() {
+        let kinds: Vec<String> = notes.unread_items.iter().map(|(kind, n)| format!("{kind} x{n}")).collect();
+        eprintln!("  not read (no reader for these kinds of board item yet; they are not in the design nor in what is exported from it): {}", kinds.join(", "));
+    }
     if notes.zones_skipped > 0 {
         eprintln!("  {} zone(s)/pour(s) skipped -- not imported (see report for a proposed model shape)", notes.zones_skipped);
     }

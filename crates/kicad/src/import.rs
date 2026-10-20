@@ -118,6 +118,10 @@ pub struct ImportNotes {
     /// place it is at, mm (`eda_drc::outline::check_edge_cuts`).
     #[serde(default)]
     pub outline_errors: Vec<String>,
+    /// The kinds of board item the file has and this importer has no reader for (`gr_text_box`, `image`, `table`, a board-level `property`, `target`, ..), and how many of
+    /// each: they are not in the design and not in what is exported from it. Nothing is listed for a kind that is read.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unread_items: BTreeMap<String, usize>,
     /// The `(filled_polygon ..)` the file stored for its zones (KiCad's own fill, as saved): not part of the design. The caller that keeps the board files
     /// (`eda_kicad::zone_fills::entries_of_imported_file`) files them beside `design.json`, so an imported board shows the fills it was saved with.
     #[serde(skip)]
@@ -139,7 +143,9 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         .filter(|l| sexpr::tag(l) == Some("kicad_pcb"))
         .ok_or_else(|| vec![CheckResult::fail("kicad_import.not_a_board", "file", "top-level form is not (kicad_pcb ...); not a KiCad PCB file")])?;
 
-    let mut notes = ImportNotes { footprints_scaled, ..ImportNotes::default() };
+    let mut notes = ImportNotes { footprints_scaled, unread_items: unread_items(root), ..ImportNotes::default() };
+    // The items nothing here reads are kept as text and written back (`DrawingsSection::raw_items`), except the embedded files, whose data a re-quoting would break.
+    let raw_items: Vec<String> = root.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| sexpr::tag(l).is_some_and(|t| !READ_ITEMS.contains(&t) && t != "embedded_files")).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect();
 
     let layers = import_layers(root);
     let net_names = import_net_names(root);
@@ -202,6 +208,14 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         drawings: if shapes.is_empty() && texts.is_empty() && dimensions.is_empty() && footprint_extras.is_empty() && via_tenting.is_empty() && copper_texts.is_empty() && footprint_edits.is_empty() && outline_width_um.is_none() && barcodes.is_empty() { None } else { Some(DrawingsSection { shapes, texts, dimensions, footprint_extras, via_tenting, silk_texts, copper_texts, footprint_edits, outline_is_shapes, outline_width_um, barcodes, ..Default::default() }) },
         footprint_library: None, sheet_contents: None, bus_aliases: vec![], symbol_library: None,
     };
+    if !raw_items.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).raw_items = raw_items;
+    }
+    // The vias' protection defaults of KiCad 10's `(setup ..)`.
+    let setup_tokens: Vec<String> = sexpr::find(root, "setup").map(|s| s.iter().skip(1).filter_map(Sexpr::as_list).filter(|l| matches!(sexpr::tag(l), Some("covering") | Some("plugging") | Some("capping") | Some("filling"))).map(|l| sexpr::to_text(&Sexpr::List(l.to_vec()))).collect()).unwrap_or_default();
+    if !setup_tokens.is_empty() {
+        design.drawings.get_or_insert_with(Default::default).setup_tokens = setup_tokens;
+    }
     // `(setup (aux_axis_origin x y))`: the drill/place file origin the board was saved with.
     if let Some(aux) = sexpr::find(root, "setup").and_then(|s| sexpr::find(s, "aux_axis_origin")) {
         if let (Some(x), Some(y)) = (sexpr::num(aux, 1), sexpr::num(aux, 2)) {
@@ -270,6 +284,24 @@ pub fn import_kicad_pcb(text: &str) -> Result<(Design, ConstraintModel, ImportNo
         solver: Default::default(),
     };
     Ok((design, model, notes))
+}
+
+/// The kinds of top-level item a reader here takes: everything `import_kicad_pcb` reads below, the header (`version`, `generator`, `general`, `paper`, `title_block`, `layers`,
+/// `setup`, nets and net classes) and `embedded_fonts`, which is a flag. The other kinds are counted ([`unread_items`]) and kept as text (`DrawingsSection::raw_items`).
+const READ_ITEMS: &[&str] = &[
+    "version", "generator", "generator_version", "general", "paper", "page", "title_block", "layers", "setup", "host", "net", "net_class", "footprint", "module", "segment", "arc", "via", "zone", "gr_line", "gr_arc",
+    "gr_rect", "gr_circle", "gr_poly", "gr_curve", "gr_text", "dimension", "group", "generated", "barcode", "embedded_fonts",
+];
+
+/// The top-level items of the board whose kind no reader here takes ([`READ_ITEMS`]), counted by kind.
+fn unread_items(root: &[Sexpr]) -> BTreeMap<String, usize> {
+    let mut out = BTreeMap::new();
+    for item in root.iter().skip(1).filter_map(Sexpr::as_list) {
+        if let Some(tag) = sexpr::tag(item).filter(|t| !READ_ITEMS.contains(t)) {
+            *out.entry(tag.to_string()).or_insert(0) += 1;
+        }
+    }
+    out
 }
 
 pub fn mm_to_um(mm: f64) -> i64 {
@@ -1534,6 +1566,26 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     if !name.contains(':') {
         e.unlinked_name = Some(name.to_string());
     }
+    // The tokens nothing else reads or regenerates, as the file had them (see `FootprintExtra::tokens`).
+    // (`solder_mask_margin` is `FootprintExtra::solder_mask_margin`, which the writer makes it from; `thermal_width` and `thermal_gap` are read and dropped by KiCad itself.)
+    const OWN: &[&str] = &[
+        "layer", "uuid", "tstamp", "tedit", "at", "transform", "locked", "attr", "clearance", "zone_connect", "solder_mask_margin", "thermal_width", "thermal_gap", "net_tie_pad_groups", "fp_line", "fp_arc",
+        "fp_circle", "fp_rect", "fp_poly", "fp_curve", "fp_text", "pad", "model", "zone", "group", "component_classes", "sheetname", "sheetfile", "path", "embedded_fonts", "embedded_files",
+    ];
+    for item in fp.iter().skip(2).filter_map(Sexpr::as_list) {
+        let tag = sexpr::tag(item);
+        let kept = match tag {
+            Some("property") => matches!(sexpr::txt(item, 1), Some("Datasheet") | Some("Description") | Some("ki_fp_filters") | Some("ki_keywords") | Some("ki_locked") | Some("ki_description")),
+            // In pre-9.0 files a paste margin of 0 meant "inherit" (the parser reads it so, `parseFOOTPRINT_unchecked`); written to a new file it would be a margin of its own.
+            Some("solder_paste_margin") | Some("solder_paste_ratio") | Some("solder_paste_margin_ratio") => !(file_version <= 20240201 && sexpr::num(item, 1) == Some(0.0)),
+            Some(t) => !OWN.contains(&t),
+            None => false,
+        };
+        if kept {
+            e.tokens.push(sexpr::to_text(&Sexpr::List(item.to_vec())));
+        }
+    }
+    e.source_name = name.to_string();
     // `(component_classes (class "A") (class "B"))`: the classes the file gives the footprint (`parseFOOTPRINT_unchecked`'s `T_component_classes`), without repeats.
     if let Some(classes) = sexpr::find(fp, "component_classes") {
         for name in sexpr::find_all(classes, "class").filter_map(|c| sexpr::txt(c, 1)) {
@@ -1547,6 +1599,16 @@ fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> F
     e.sheetfile = sexpr::find(fp, "sheetfile").and_then(|s| sexpr::txt(s, 1)).map(str::to_string);
     // A footprint with nothing on its courtyard layers has no courtyard (`BuildCourtyardCaches` finds none, and kicad-cli says `missing_courtyard` or nothing).
     e.no_courtyard = !["fp_line", "fp_arc", "fp_rect", "fp_circle", "fp_poly", "fp_curve"].iter().any(|tag| sexpr::find_all(fp, tag).any(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd"))));
+    // The courtyard graphics as the file wrote them, in file order (see `FootprintExtra::courtyard_items`).
+    e.courtyard_items = fp
+        .iter()
+        .skip(2)
+        .filter_map(Sexpr::as_list)
+        .filter(|it| matches!(sexpr::tag(it), Some("fp_line") | Some("fp_arc") | Some("fp_circle") | Some("fp_rect") | Some("fp_poly") | Some("fp_curve")))
+        .filter(|it| matches!(sexpr::find(it, "layer").and_then(|l| sexpr::txt(l, 1)), Some("F.CrtYd") | Some("B.CrtYd")))
+        .map(|it| sexpr::to_text(&Sexpr::List(it.to_vec())))
+        .collect();
+    e.courtyard_bottom = sexpr::find(fp, "layer").and_then(|l| sexpr::txt(l, 1)) == Some("B.Cu");
     if let Some(m) = sexpr::find(fp, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_um(m);
         e.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
@@ -2284,6 +2346,52 @@ fn poly_points(p: &[Sexpr]) -> Option<Vec<Point>> {
 mod tests {
     use super::*;
     use eda_model::ir::TextJustify;
+
+    /// The import says which kinds of board item it has no reader for, and how many of each: a text box, a reference image, a target or a board-level property is in the file and
+    /// not in the design (nor in what is exported from it), where a silent import left the user to find out at the first plot.
+    #[test]
+    fn the_import_counts_the_kinds_of_item_it_has_no_reader_for() {
+        let board = r#"(kicad_pcb (version 20260901) (generator "pcbnew") (generator_version "10.99")
+  (general (thickness 1.6)) (paper "A4") (embedded_fonts no)
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (25 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (property "Owner" "me")
+  (gr_text_box "one" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1))))
+  (gr_text_box "two" (start 0 0) (end 5 5) (layer "F.SilkS") (effects (font (size 1 1))))
+  (image (at 79 138.5) (layer "B.Cu") (scale 2) (data "AAAA"))
+  (gr_text "kept" (at 1 1 0) (layer "F.SilkS") (effects (font (size 1 1))))
+  (barcode (at 1 2) (layer "F.SilkS") (type qr) (text "123"))
+  (gr_line (start 0 0) (end 5 0) (stroke (width 0.1) (type default)) (layer "Edge.Cuts"))
+)"#;
+        let (_, _, notes) = import_kicad_pcb(board).unwrap();
+        assert_eq!(notes.unread_items.iter().map(|(k, n)| (k.as_str(), *n)).collect::<Vec<_>>(), [("gr_text_box", 2), ("image", 1), ("property", 1)]);
+        let (_, _, plain) = import_kicad_pcb(r#"(kicad_pcb (version 20240108) (general (thickness 1.6)) (layers (0 "F.Cu" signal)) (net 0 ""))"#).unwrap();
+        assert!(plain.unread_items.is_empty());
+    }
+
+    /// In a pre-9.0 file a footprint margin of 0 means "inherit" (`parseFOOTPRINT_unchecked`): neither the mask margin nor a paste margin token of 0 comes through as a margin
+    /// of its own, which in the file the writer makes (a new version) it would be. A margin that is not 0 comes through in any version.
+    #[test]
+    fn a_footprint_margin_of_zero_in_an_old_file_is_no_margin() {
+        let board = |version: &str, fp_tokens: &str| {
+            format!(
+                r#"(kicad_pcb (version {version}) (generator "pcbnew") (general (thickness 1.6)) (paper "A4") (layers (0 "F.Cu" signal) (31 "B.Cu" signal)) (net 0 "")
+  (footprint "L:F" (layer "F.Cu") (at 1 1) (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab")) {fp_tokens}
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))))"#
+            )
+        };
+        let extra = |text: &str| {
+            let (design, _, _) = import_kicad_pcb(text).unwrap();
+            design.drawings.and_then(|d| d.footprint_extras.into_iter().find(|e| e.id == "U1")).unwrap_or_default()
+        };
+        let old = extra(&board("20240108", "(solder_mask_margin 0) (solder_paste_margin 0) (solder_paste_ratio 0) (solder_paste_margin_ratio 0)"));
+        assert_eq!((old.solder_mask_margin, old.tokens.is_empty()), (None, true), "{old:?}");
+        let new = extra(&board("20241229", "(solder_mask_margin 0) (solder_paste_margin 0) (solder_paste_margin_ratio 0)"));
+        assert_eq!(new.solder_mask_margin, Some(0), "{new:?}");
+        assert_eq!(new.tokens, ["(solder_paste_margin 0)", "(solder_paste_margin_ratio 0)"]);
+        let nonzero = extra(&board("20240108", "(solder_mask_margin 0.02) (solder_paste_margin -0.01)"));
+        assert_eq!((nonzero.solder_mask_margin, nonzero.tokens), (Some(20), vec!["(solder_paste_margin -0.01)".to_string()]));
+    }
 
     /// A polygon's `(arc (start ..) (mid ..) (end ..))` is the arc, flattened as KiCad flattens it (5 micrometres from the curve), and no longer the chord between its
     /// ends: `api_kitchen_sink`'s silkscreen polygon with four rounded corners came back with four chamfers.

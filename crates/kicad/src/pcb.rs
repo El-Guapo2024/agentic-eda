@@ -107,6 +107,10 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
     }
     writeln!(out, "\t\t(allow_soldermask_bridges_in_footprints {})", if sm.allow_bridges_in_footprints { "yes" } else { "no" }).unwrap();
     writeln!(out, "\t\t(tenting (front {}) (back {}))", if sm.tent_vias_front { "yes" } else { "no" }, if sm.tent_vias_back { "yes" } else { "no" }).unwrap();
+    // KiCad 10's defaults for the vias that say nothing of their own: covering, plugging, capping, filling.
+    for token in design.drawings.iter().flat_map(|d| d.setup_tokens.iter()) {
+        writeln!(out, "\t\t{token}").unwrap();
+    }
     // Zone Hatch Offsets (`formatSetup`'s `(zone_defaults (property (layer ..) (hatch_position (xy x y))))`), in `PCB_LAYER_ID` order, for the copper layers the board has.
     {
         let mut offsets: Vec<(&String, &eda_model::setup_pages::HatchOffset)> = model.board.hatch_offsets.iter().filter(|(l, o)| !o.is_zero() && model.board.layers.contains(l)).collect();
@@ -452,6 +456,11 @@ pub fn export_kicad_pcb_with(design: &Design, model: &ConstraintModel, _meta: &s
         write_groups(&mut out, &groups, &written, &|g| crate::duid_for(&format!("group:{}", g.id), &g.id), &is_locked);
         // ... and the generators after them (`PCB_IO_KICAD_SEXPR::format( BOARD )` writes them last): the tuning patterns.
         crate::pcb_generated::write_generated(&mut out, &drawings.tuning_patterns, &written, &|p| crate::duid_for(&format!("generated:{}", p.id), &p.id), &is_locked);
+    }
+
+    // The items nothing reads (a text box, a reference image, a target ..), as the file had them.
+    for item in design.drawings.iter().flat_map(|d| d.raw_items.iter()) {
+        writeln!(out, "\t{item}").unwrap();
     }
 
     writeln!(out, ")").unwrap();
@@ -924,6 +933,7 @@ pub(crate) fn write_footprint(
     // A footprint the file wrote with no library link is written with none (`LIB_ID::Format`: the bare item name); the others, built here and named for no library,
     // are in the `eda` library, which the board file stands for.
     let own_extra = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id));
+    let lib_name_written = lib_name.clone();
     let lib_id = if lib_name.contains(':') || own_extra.is_some_and(|e| e.unlinked_name.as_deref() == Some(lib_name.as_str())) { lib_name } else { format!("eda:{lib_name}") };
 
     writeln!(out, "\t(footprint {}", sexpr_str(&lib_id)).unwrap();
@@ -939,6 +949,12 @@ pub(crate) fn write_footprint(
     write_fields(out, fp, part, footprint, extra);
     // The classes the file gave the footprint, and the sheet its symbol is on (`format( FOOTPRINT )` writes them after the properties).
     if let Some(e) = own_extra {
+        // Its description, tags, jumper pad groups, Datasheet and Description fields ..., as the file had them, while the part is on the footprint they describe.
+        if e.source_name == lib_name_written {
+            for token in &e.tokens {
+                writeln!(out, "\t\t{token}").unwrap();
+            }
+        }
         if !e.component_classes.is_empty() {
             write!(out, "\t\t(component_classes").unwrap();
             for class in &e.component_classes {
@@ -961,6 +977,10 @@ pub(crate) fn write_footprint(
 
     // The footprint's own clearance and zone connection (`FOOTPRINT::SetLocalClearance`, `SetLocalZoneConnection`): the
     // facts a pad inherits. Resolved as `DRC_ENGINE::EvalZoneConnection` does, so kicad-cli's fill and DRC see what the studio shows.
+    // The footprint's own solder mask margin (`FOOTPRINT::SetLocalSolderMaskMargin`), which the pads that have none of their own take (`PAD::GetSolderMaskExpansion`).
+    if let Some(m) = own_extra.and_then(|e| e.solder_mask_margin) {
+        writeln!(out, "\t\t(solder_mask_margin {})", mm(m)).unwrap();
+    }
     if let Some(&(first, first_pad)) = pads.first() {
         let facts = design.pad_zone_facts(&fp.id, &footprint.name, first, footprint.pads.len(), &first_pad.number);
         if let Some(c) = facts.footprint_clearance {
@@ -1173,7 +1193,14 @@ pub(crate) fn write_footprint(
     // `Footprint::courtyard_half` derives -- the same one the placer keeps
     // clear.
     let crtyd_layer = if fp.side == Side::Bottom { "B.CrtYd" } else { "F.CrtYd" };
-    if footprint.courtyard_outlines.is_empty() && own_extra.is_some_and(|e| e.no_courtyard) {
+    // The courtyard graphics the file had, as it had them, while the part is on that footprint and that side: a courtyard of lines, arcs or a circle is not a polygon to
+    // KiCad's comparison with the library's copy (`FOOTPRINT::FootprintNeedsUpdate`).
+    let own_courtyard = own_extra.filter(|e| !e.courtyard_items.is_empty() && e.source_name == lib_name_written && e.courtyard_bottom == (fp.side == Side::Bottom));
+    if let Some(e) = own_courtyard {
+        for item in &e.courtyard_items {
+            writeln!(out, "\t\t{item}").unwrap();
+        }
+    } else if footprint.courtyard_outlines.is_empty() && own_extra.is_some_and(|e| e.no_courtyard) {
         // The footprint the file had has no courtyard: none is made up for it.
     } else if footprint.courtyard_outlines.is_empty() {
         let (hw, hh) = footprint.courtyard_half();
@@ -3275,6 +3302,125 @@ mod tests {
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let again: Vec<Vec<String>> = back.drawings.as_ref().unwrap().footprint_extras[0].pads.iter().map(|p| p.tokens.clone()).collect();
         assert_eq!(again.iter().map(|t| t.len()).collect::<Vec<_>>(), tokens.iter().map(|t| t.len()).collect::<Vec<_>>());
+    }
+
+    /// A footprint keeps its description, tags, jumper pad groups and its Datasheet and Description fields -- `duplicate_pad_numbers_are_jumpers` makes the pads that share a number
+    /// one pad to the connectivity -- and the board keeps the items nothing reads (a text box, a reference image, a target), as the file had them. The footprint's link to its symbol
+    /// is not written, and the footprint's text goes when the part is exchanged for another footprint.
+    #[test]
+    fn a_footprints_other_tokens_and_the_boards_unread_items_are_written_back_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (36 "B.SilkS" user) (37 "F.SilkS" user) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0) (covering (front yes) (back no)) (capping yes))
+  (net 0 "")
+  (footprint "Jumper:Jumper_2" (layer "F.Cu") (at 10 10)
+    (descr "Jumper, 2 pads \"closed\"")
+    (tags "jumper solder")
+    (property "Reference" "JP1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "J" (at 0 0 0) (layer "F.Fab"))
+    (property "Datasheet" "~" (at 0 0 0) (unlocked yes) (layer "F.Fab") (hide yes) (effects (font (size 1.27 1.27))))
+    (property "Description" "Jumper" (at 0 0 0) (unlocked yes) (layer "F.Fab") (hide yes) (effects (font (size 1.27 1.27))))
+    (path "/00000000-0000-0000-0000-000000000042")
+    (attr smd)
+    (duplicate_pad_numbers_are_jumpers yes)
+    (jumper_pad_groups ("1" "2"))
+    (solder_mask_margin 0.02)
+    (solder_paste_margin -0.01)
+    (fp_rect (start -2 -1) (end 2 1) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd rect (at -1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (gr_text_box "Box\nof text" (start 20 20) (end 30 25) (margins 1 1 1 1) (layer "F.SilkS") (border yes) (stroke (width 0.12) (type dot)) (effects (font (size 1 1)) (justify top)))
+  (target x (at 40 40) (size 5) (width 0.15) (layer "Edge.Cuts") (tstamp 1234))
+)"#;
+        let (design, mut model, notes) = crate::import_kicad_pcb(board).unwrap();
+        assert_eq!(notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["gr_text_box", "target"]);
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in [
+            "(descr \"Jumper, 2 pads \\\"closed\\\"\")",
+            "(tags \"jumper solder\")",
+            "(covering (front yes) (back no))",
+            "(capping yes)",
+            "(duplicate_pad_numbers_are_jumpers yes)",
+            "(jumper_pad_groups (\"1\" \"2\"))",
+            // The footprint's own margins reach the pads that have none of their own (`PAD::GetSolderMaskExpansion`): the mask margin is written from `FootprintExtra`, the paste
+            // margin as the file had it, and the mask and paste checks of kicad-cli judge the pads by them.
+            "(solder_mask_margin 0.02)",
+            "(solder_paste_margin -0.01)",
+            "(property \"Datasheet\" \"~\" (at 0 0 0) (unlocked yes) (layer \"F.Fab\") (hide yes) (effects (font (size 1.27 1.27))))",
+            "(property \"Description\" \"Jumper\"",
+            "(gr_text_box \"Box\\nof text\" (start 20 20) (end 30 25) (margins 1 1 1 1) (layer \"F.SilkS\") (border yes) (stroke (width 0.12) (type dot)) (effects (font (size 1 1)) (justify top)))",
+            "(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))",
+        ] {
+            assert!(out.contains(want), "{want} in {out}");
+        }
+        assert!(!out.contains("(path "), "{out}");
+        assert!(out.trim_end().ends_with("(target x (at 40 40) (size 5) (width 0.15) (layer \"Edge.Cuts\") (tstamp 1234))\n)"), "the unread items close the board: {}", &out[out.len().saturating_sub(300)..]);
+        // Read again, the same.
+        let (back, _, back_notes) = crate::import_kicad_pcb(&out).unwrap();
+        assert_eq!(back_notes.unread_items.keys().map(String::as_str).collect::<Vec<_>>(), ["gr_text_box", "target"]);
+        let tokens = |d: &Design| d.drawings.as_ref().unwrap().footprint_extras[0].tokens.clone();
+        assert_eq!(tokens(&design), tokens(&back));
+        // The part exchanged for another footprint is not described by the old one's text.
+        model.parts.iter_mut().find(|p| p.reference == "JP1").unwrap().footprint = Some("SOT-23".into());
+        let swapped = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(!swapped.contains("(tags \"jumper solder\")") && !swapped.contains("duplicate_pad_numbers_are_jumpers"), "{swapped}");
+        assert!(swapped.contains("(gr_text_box"), "the board's items stay");
+    }
+
+    /// A footprint's courtyard is written as the file had it, so a courtyard of four lines or a circle is still that and the footprint matches the library's copy (a courtyard
+    /// polygon made of the lines made `TestPoint_Pad_1.0x1.0mm` and a mounting hole's circle `lib_footprint_mismatch` on every board that has one). On the other side, or on
+    /// another footprint, it is the polygon outlines as before.
+    #[test]
+    fn a_footprints_courtyard_graphics_are_written_as_the_file_had_them() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal) (46 "B.CrtYd" user "B.Courtyard") (47 "F.CrtYd" user "F.Courtyard") (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "L:Lines" (layer "F.Cu") (uuid "a0000000-0000-0000-0000-000000000001") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (fp_line (start -1 -1) (end -1 1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000001"))
+    (fp_line (start -1 -1) (end 1 -1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000002"))
+    (fp_line (start 1 1) (end -1 1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000003"))
+    (fp_line (start 1 1) (end 1 -1) (stroke (width 0.05) (type solid)) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000004"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:Round" (layer "F.Cu") (uuid "a0000000-0000-0000-0000-000000000002") (at 20 10)
+    (property "Reference" "U2" (at 0 0 0) (layer "F.SilkS")) (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (fp_circle (center 0 0) (end 2.6 0) (stroke (width 0.05) (type solid)) (fill no) (layer "F.CrtYd") (uuid "b0000000-0000-0000-0000-000000000005"))
+    (pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))
+  (footprint "L:Back" (layer "B.Cu") (uuid "a0000000-0000-0000-0000-000000000003") (at 30 10)
+    (property "Reference" "U3" (at 0 0 0) (layer "B.SilkS")) (property "Value" "U" (at 0 0 0) (layer "B.Fab"))
+    (fp_arc (start 1 0) (mid 0 1) (end -1 0) (stroke (width 0.05) (type solid)) (layer "B.CrtYd") (uuid "b0000000-0000-0000-0000-000000000006"))
+    (fp_line (start -1 0) (end 1 0) (stroke (width 0.05) (type solid)) (layer "B.CrtYd") (uuid "b0000000-0000-0000-0000-000000000007"))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "B.Cu" "B.Paste" "B.Mask")))
+)"#;
+        let (design, mut model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        for want in [
+            "(fp_line (start -1 -1) (end -1 1) (stroke (width 0.05) (type solid)) (layer \"F.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000001\"))",
+            "(fp_line (start 1 1) (end 1 -1) (stroke (width 0.05) (type solid)) (layer \"F.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000004\"))",
+            "(fp_circle (center 0 0) (end 2.6 0) (stroke (width 0.05) (type solid)) (fill no) (layer \"F.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000005\"))",
+            "(fp_arc (start 1 0) (mid 0 1) (end -1 0) (stroke (width 0.05) (type solid)) (layer \"B.CrtYd\") (uuid \"b0000000-0000-0000-0000-000000000006\"))",
+        ] {
+            assert!(out.contains(want), "{want} in {out}");
+        }
+        assert!(!out.contains("(fp_poly") && !out.contains("(fp_rect"), "no courtyard polygon beside the graphics: {out}");
+        // Read again, the same.
+        let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
+        let items = |d: &Design| -> Vec<Vec<String>> { d.drawings.as_ref().unwrap().footprint_extras.iter().map(|e| e.courtyard_items.clone()).collect() };
+        assert_eq!(items(&design), items(&back));
+        // A part moved to the other side is not described by the courtyard of this one.
+        let mut flipped = design.clone();
+        flipped.placement.as_mut().unwrap().footprints.iter_mut().find(|f| f.id == "U2").unwrap().side = Side::Bottom;
+        let on_back = export_kicad_pcb(&flipped, &model, &meta()).unwrap();
+        assert!(!on_back.contains("b0000000-0000-0000-0000-000000000005") && on_back.contains("(layer \"B.CrtYd\")"), "{on_back}");
+        // And so is a part exchanged for another footprint.
+        model.parts.iter_mut().find(|p| p.reference == "U1").unwrap().footprint = Some("SOT-23".into());
+        let swapped = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(!swapped.contains("b0000000-0000-0000-0000-000000000001"), "{swapped}");
     }
 
     /// A through-hole pad the board's file gave no drill (KiCad's Allegro importer makes them: 155 on one of the QA boards) is written with none, as `format( PAD )` does for a

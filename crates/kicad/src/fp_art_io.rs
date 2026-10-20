@@ -14,7 +14,8 @@
 //!
 //! What is read: `fp_line`, `fp_arc` (also the pre-KiCad-7 `(start CENTRE) (end START) (angle A)` form), `fp_circle`, `fp_rect`, `fp_poly`
 //! (an `(arc ..)` among its points is flattened at 5 micrometres), `fp_curve` and `fp_text user`, on every layer but the courtyard and
-//! the board edge (see [`eda_model::fp_art`]). A hidden text is left out: KiCad turns it into a hidden field.
+//! the board edge (see [`eda_model::fp_art`]). A hidden text is kept, hidden, and written `(hide yes)`: KiCad 10 turns it into a hidden field on load, as it does the
+//! original, and a footprint without it does not match its library's (a MountingHole has one).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::Write as _;
@@ -188,15 +189,13 @@ fn read_shape(item: &[Sexpr], tag: &str, side: Side) -> Option<FpShape> {
 
 /// One `(fp_text user "text" (at x y [angle]) (layer "L") (effects ..))` (`parsePCB_TEXT`). The layout is read by the fields' reader (it is the
 /// same `EDA_TEXT`), then turned from the file's frame to the definition's: layer and mirror flag as `PCB_TEXT::Flip` leaves them on a bottom-side
-/// footprint. `None` for a hidden text.
+/// footprint. A hidden text is kept, hidden (`FieldLayout::visible`): every MountingHole of KiCad's libraries has a `${REFERENCE}` on its fab layer that nothing shows, and a
+/// footprint without it does not match its library's (`lib_footprint_mismatch`).
 fn read_text(item: &[Sexpr], side: Side, fp_rot: Millideg) -> Option<FpText> {
     // `(fp_text user locked "text" ..)`: the bare `locked` of KiCad 5.99 sits before the text.
     let at = if sexpr::txt(item, 2) == Some("locked") { 3 } else { 2 };
     let raw = sexpr::txt(item, at)?;
     let mut l = parse_layout(item, side, fp_rot);
-    if !l.visible {
-        return None;
-    }
     let file_layer = l.layer.clone();
     l.layer = layer_on_side(&file_layer, side);
     if side == Side::Bottom && is_side_specific(&file_layer) {
@@ -402,9 +401,10 @@ fn write_text(out: &mut String, t: &FpText, fp: &FootprintInstance, uuid: &str) 
     let angle = fmt_mm_f(l.file_angle_deg(fp.side, fp.rot));
     let unlocked = if l.keep_upright { "" } else { " (unlocked yes)" };
     let knockout = if l.knockout { " knockout" } else { "" };
+    let hide = if l.visible { "" } else { " (hide yes)" };
     writeln!(
         out,
-        "\t\t(fp_text user {} (at {} {} {angle}){unlocked} (layer {}{knockout}) (uuid \"{uuid}\") {})",
+        "\t\t(fp_text user {} (at {} {} {angle}){unlocked} (layer {}{knockout}){hide} (uuid \"{uuid}\") {})",
         quote(&t.text),
         mm(x),
         mm(y),
@@ -452,9 +452,10 @@ mod tests {
     #[test]
     fn every_shape_kind_is_read_with_its_layer_width_style_and_fill() {
         let art = read_art(&parse(FIXTURE), Side::Top, 0);
-        // The courtyard rectangle and the Edge.Cuts line have homes of their own; the hidden text is a field in KiCad's eyes.
+        // The courtyard rectangle and the Edge.Cuts line have homes of their own; the hidden text is kept, hidden.
         assert_eq!(art.shapes.len(), 8, "{:#?}", art.shapes);
-        assert_eq!(art.texts.len(), 2);
+        assert_eq!(art.texts.len(), 3);
+        assert_eq!(art.texts.iter().map(|t| t.layout.visible).collect::<Vec<_>>(), [true, true, false]);
 
         let by = |i: usize| &art.shapes[i];
         assert!(matches!(&by(0).shape, Shape::Segment { start, end, stroke_width: 120, layer, .. } if *start == p(-2_000, -1_500) && *end == p(2_000, -1_500) && layer == "F.SilkS"));
