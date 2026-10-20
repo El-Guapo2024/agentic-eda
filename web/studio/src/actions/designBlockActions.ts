@@ -164,7 +164,9 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
   const save = async (source: SaveSource, update: boolean) => {
     await listing();
     const ui = getDesignBlocksUi();
-    const here = parseBlockId(ui.selected);
+    const picked = parseBlockId(ui.selected);
+    // the "Recently Used" group is no library to save into
+    const here = (ui.reply?.libraries ?? []).some((l) => l.name === picked.lib) ? picked : { lib: "", name: "" };
     const selection = source.what === "selection" || source.what === "board_selection";
     // the frames check these in this order: some items selected, then a library (or a block, for an update)
     if (selection && source.ids.length === 0) return toast("Please select some items to save as a design block.", "error");
@@ -284,7 +286,7 @@ export function registerDesignBlockActions(m: Map<string, ActionHandler>, ctx: D
   // the node the pane has selected is pinned or let go, "New Library..." makes a design block library (`CreateNewDesignBlockLibrary`), and the pane is hidden.
   const pin = (pinned: boolean) => {
     const { lib } = parseBlockId(getDesignBlocksUi().selected);
-    if (lib) setDesignBlockLibraryPinned(lib, pinned);
+    if (lib && (getDesignBlocksUi().reply?.libraries ?? []).some((l) => l.name === lib)) setDesignBlockLibraryPinned(lib, pinned);
   };
   m.set("common.Control.pinLibrary", () => pin(true));
   m.set("common.Control.unpinLibrary", () => pin(false));
