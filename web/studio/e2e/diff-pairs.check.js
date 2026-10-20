@@ -24,6 +24,8 @@
 //   vias          `V` shows a pair of vias a via gap apart, a fix places them and the route goes on on the other layer from them, to the pads; the commit has both vias and tracks
 //                 on both layers and one Undo takes them all away;
 //   keys          Backspace takes the last fixed leg back; `/` flips the posture (the heads change, a second flip brings them back); Escape ends the session.
+//   other end     Ctrl+E (Route From Other End, `ROUTER::ContinueFromEnd`) after a fixed leg commits the legs and starts a pair of the same nets, at the pad pair of the far end of the P net's
+//                  connection and heading for where the head ended; the click on the end of the committed legs finishes both connections, and one Undo takes both commits away.
 //
 // It answers through `window.__diffPairsCheck`: { results: [{ name, ok, notes: ["ok: ...", "FAIL: ..."] }], done, ok, wait(ms) }. Read it with `await __diffPairsCheck.wait(60000)` until
 // `.done`. In a hidden pane the browser stops timers; the script waits with a fetch loop. A run takes one to three minutes (a debug build of the server, and a machine that is busy answers
@@ -378,6 +380,43 @@
     t(E.state().tool === "select", "Escape leaves the tool");
     const gone = await json("/api/route/dp_move", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ x: 1, y: 1 }) });
     t(gone.ok === false && /not routing a diff pair/.test(gone.message || ""), `and ends the session: ${JSON.stringify(gone)}`);
+  });
+
+  await scenario("Route From Other End (Ctrl+E) goes on as a pair: what is fixed is committed, a pair starts at the far end of the connection heading for where the head ended, and one Undo takes both commits away", async (t) => {
+    await arm();
+    await startAt(...p1);
+    await inMode("pcbnew.InteractiveRouter.ShoveMode");
+    let n = replies.length;
+    await clickAt(...target);
+    const fix = await waitReply("dp_fix", n);
+    t(fix && fix.body.ok === true && fix.body.blocked === false && fix.body.preview.runs_a.length === 1, `a leg is fixed on each line: ${fix && JSON.stringify([fix.body.ok, fix.body.blocked])}`);
+    t(snapshot(await state()) === original, "and nothing is on the board yet");
+    await moveTo(...target);
+    n = replies.length;
+    await E.run("pcbnew.InteractiveRouter.ContinueFromEnd");
+    const c = await waitReply("dp_continue_from_end", n, 20000);
+    await quiet();
+    t(c && c.body.ok === true && c.body.committed === true, `Ctrl+E commits what is fixed and restarts: ${c && JSON.stringify([c.body.ok, c.body.committed, c.body.message])}`);
+    t(c && c.body.net_a === "USB_DP" && c.body.net_b === "USB_DN", `as a pair of the same two nets: ${c && JSON.stringify([c.body.net_a, c.body.net_b])}`);
+    const far = c && c.body.from;
+    t(!!far && Math.hypot(far[0] - padOf["J2.3"][0], far[1] - padOf["J2.3"][1]) <= 5, `at the far end of the P net's connection, the pad on the other header: ${JSON.stringify(far)} (J2.3 is at ${JSON.stringify(padOf["J2.3"])})`);
+    let st = await state();
+    t(tracksOf(st).some((x) => x.net === "USB_DP") && tracksOf(st).some((x) => x.net === "USB_DN"), "the legs that were fixed are on the board");
+    t(!!c && c.body.width === minWidth && c.body.gap >= clearance, `the new pair has the width and the gap of the one it goes on from: ${c && JSON.stringify([c.body.width, c.body.gap])}`);
+    t(!!c && Array.isArray(c.body.head_a) && c.body.head_a.length >= 2 && Math.hypot(c.body.head_a[c.body.head_a.length - 1][0] - target[0], c.body.head_a[c.body.head_a.length - 1][1] - target[1]) <= pitch * 2, `its head makes for where the old one ended: ${c && JSON.stringify(c.body.head_a.slice(-2))}`);
+    // and it is a session of its own: the click on the end of the committed legs finishes it
+    n = replies.length;
+    await moveTo(...target);
+    await clickAt(...target);
+    const fix2 = await waitReply("dp_fix", n);
+    const fin = await waitReply("dp_finish", n, 20000);
+    await sleep(700);
+    t(!!fix2 && fix2.body.ok === true, `a click goes on: ${fix2 && JSON.stringify([fix2.body.ok, fix2.body.blocked, fix2.body.real_end, fix2.body.message])}`);
+    st = await state();
+    if (!fin) { await abandon(); }
+    const open = (st.checks ?? []).filter((x) => x.check === "routing_connectivity" && x.fail && (x.at === "USB_DP" || x.at === "USB_DN"));
+    t(!!fin && fin.body.ok === true && open.length === 0, `the click on the end of the committed legs finishes the connection of both nets: finish ${fin && fin.body.ok}, ${open.length} open`);
+    await undoOurs(t, "the pair continued from the other end");
   });
 
   await scenario("the board is as it was, and the studio reported no error but the refusal", async (t) => {

@@ -18,6 +18,7 @@ import { SchematicDock, useOpenDockWithNetNavigator } from "./components/panels/
 import { MessagePanel } from "./components/MessagePanel";
 import { StatusBar } from "./components/StatusBar";
 import { Canvas } from "./components/canvas/Canvas";
+import { LibraryDialogHost } from "./components/library/libraryDialogs";
 import { SchematicView } from "./components/SchematicView";
 import { DrcDialog } from "./components/DrcDialog";
 import { ErcDialog } from "./components/ErcDialog";
@@ -196,6 +197,8 @@ function StudioFrame() {
         )}
         <div className="canvas-col">
           {state.tab === "pcb" && <Canvas />}
+          {/* the questions a board tool asks (Drag Anyway to a locked item) go through the same yes/no bus the library editors use: it needs a host on this tab too */}
+          {state.tab === "pcb" && <LibraryDialogHost />}
           {state.tab === "schematic" && <SchematicView />}
           {isFootprint && <FootprintEditorView />}
           {isSymbolEditor && <SymbolEditorView />}
