@@ -15,6 +15,7 @@
 //   the issues: a CADSTAR file (no layer dialog asked for here) comes with kicad-cli's warnings, which open "Import Issues"; "Show import issues" off keeps the next import from opening it;
 //   the design rules and the net classes an importer set (an Eagle board's highpower, 12 mil) are the board's -- they are in the project kicad-cli makes with the board, and the same
 //     one step of history takes them away again (a class that no net uses, Eagle's lowpower, matches nothing and is not carried);
+//   Cancel in the layer dialog abandons the import and leaves the board as it was;
 //   a file no importer recognises is refused in kicad-cli's words and the board is untouched;
 //   the schematic, an Altium sheet: the schematic is replaced in one step of the schematic's history with its errors reported, and an Undo brings the old drawing back.
 //
@@ -190,6 +191,13 @@
     applied--;
     await waitFor(async () => (await refs()).length === 30);
     check("one Undo takes the board and its net classes away together", (await netClasses()).map((c) => c.name).sort().join() === classesBefore.join(), JSON.stringify((await netClasses()).map((c) => c.name)));
+
+    // ---- Cancel in the layer dialog: KiCad's dialog has no way out but OK; here the import is abandoned and the board stays as it was
+    await E.run("pcbnew.EditorControl.openNonKicadBoard", { name: eagle.name, data: eagle.data });
+    await waitFor(() => byId("map-layers"));
+    await click(button("Cancel"));
+    await sleep(500);
+    check("Cancel in the layer dialog abandons the import: the dialog closes, the board is untouched and the toast says so", !byId("map-layers") && dialogs().length === 0 && (await refs()).join() === original.join() && /cancelled\./.test(toastText()), `${toastText()} / ${(await refs()).length} parts`);
 
     // ---- a file no importer recognises
     const junk = await E.run("pcbnew.EditorControl.openNonKicadBoard", { name: "notes.xyz", data: btoa("hello") });
