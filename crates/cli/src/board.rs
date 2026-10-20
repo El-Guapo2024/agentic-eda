@@ -61,6 +61,9 @@ mod fp_library_tests;
 #[path = "fp_models_tests.rs"]
 mod fp_models_tests;
 #[cfg(test)]
+#[path = "lib_editors_tests.rs"]
+mod lib_editors_tests;
+#[cfg(test)]
 #[path = "review_tests.rs"]
 mod review_tests;
 
@@ -213,8 +216,10 @@ pub(crate) fn fold_footprint_edits(design: &eda_model::ir::Design, model: &mut C
 fn publish_overlay(design: &eda_model::ir::Design, model: &mut ConstraintModel) {
     if let Some(lib) = &design.symbol_library {
         for lib_sym in lib.symbols.iter().filter(|s| s.published) {
+            // a derived symbol is placed as the flat symbol it stands for (`LIB_SYMBOL::Flatten`: what the schematic caches); one whose parent is gone is not
+            let Ok(flat) = lib.flatten(&lib_sym.lib_id) else { continue };
             model.symbols.retain(|s| s.lib_id != lib_sym.lib_id);
-            model.symbols.push(lib_sym.to_engine_symbol());
+            model.symbols.push(flat.to_engine_symbol());
         }
     }
 }
@@ -1428,6 +1433,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::EditFootprintText { footprint, id, content, layer, .. } => format!("footprint-text edit {footprint:?} {id} --content {content:?} --layer {layer}"),
         Cmd::DeleteFootprintText { footprint, id } => format!("footprint-text delete {footprint:?} {id}"),
         Cmd::MoveFootprintText { footprint, id, x, y } => format!("footprint-text move {footprint:?} {id} --to {},{}", mm(*x), mm(*y)),
+        Cmd::CreateFootprintArray { footprint, ids, arrange, .. } => format!("footprint-array {footprint:?} --items {}{}", ids.len(), if *arrange { " --arrange" } else { "" }),
 
         // The Symbol Editor tab. No real `eda board` CLI subcommand parses
         // these either, same reasoning as the footprint-editor verbs just
@@ -1449,6 +1455,12 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::MoveSymbolGraphic { lib_id, id, dx_mm, dy_mm } => format!("symbol-shape move {lib_id:?} {id} --dx {dx_mm:.2} --dy {dy_mm:.2}"),
         Cmd::EditSymbolGraphic { lib_id, id, stroke_mm, .. } => format!("symbol-shape edit {lib_id:?} {id} --width {stroke_mm:.2}"),
         Cmd::EditSymbolText { lib_id, id, text, .. } => format!("symbol-text edit {lib_id:?} {id} --content {text:?}"),
+        Cmd::ReplaceSymbolGraphic { lib_id, id, .. } => format!("symbol-shape replace {lib_id:?} {id}"),
+        Cmd::DeriveSymbol { parent, lib_id, .. } => format!("symbol derive {lib_id:?} --from {parent:?}"),
+        Cmd::FlattenSymbol { lib_id } => format!("symbol flatten {lib_id:?}"),
+        Cmd::UpdateSymbolFields { lib_id, fields, .. } => format!("symbol update-fields {lib_id:?} --fields {}", fields.join(",")),
+        Cmd::SetSymbolParent { lib_id, parent } => format!("symbol set-parent {lib_id:?} {parent:?}"),
+        Cmd::EditLibrarySymbolFields { lib_id, fields } => format!("symbol fields {lib_id:?} --count {}", fields.len()),
     }
 }
 
@@ -1619,10 +1631,12 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::AddPad { .. } | Cmd::MovePad { .. } | Cmd::RotatePad { .. } | Cmd::DeletePad { .. } | Cmd::EditPad { .. } | Cmd::PushPadProperties { .. } | Cmd::SetPadNumbers { .. } | Cmd::RenumberPads { .. } => "pad",
         Cmd::AddFootprintGraphic { .. } | Cmd::DeleteFootprintGraphic { .. } | Cmd::MoveFootprintGraphic { .. } | Cmd::EditFootprintGraphic { .. } => "footprint-shape",
         Cmd::AddFootprintText { .. } | Cmd::EditFootprintText { .. } | Cmd::DeleteFootprintText { .. } | Cmd::MoveFootprintText { .. } => "footprint-text",
+        Cmd::CreateFootprintArray { .. } => "footprint-array",
 
         Cmd::OpenSymbolForEdit { .. } | Cmd::NewSymbol { .. } | Cmd::DeleteLibrarySymbol { .. } | Cmd::PutLibrarySymbol { .. } | Cmd::RenameLibrarySymbol { .. } | Cmd::SetSymbolAnchor { .. } | Cmd::EditSymbolProperties { .. } | Cmd::UpdateSymbolOnBoard { .. } => "symbol",
+        Cmd::DeriveSymbol { .. } | Cmd::FlattenSymbol { .. } | Cmd::UpdateSymbolFields { .. } | Cmd::SetSymbolParent { .. } | Cmd::EditLibrarySymbolFields { .. } => "symbol-derive",
         Cmd::AddSymbolPin { .. } | Cmd::MoveSymbolPin { .. } | Cmd::DeleteSymbolPin { .. } | Cmd::EditSymbolPin { .. } | Cmd::PushPinProperty { .. } => "symbol-pin",
-        Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } => "symbol-shape",
+        Cmd::AddSymbolGraphic { .. } | Cmd::DeleteSymbolGraphic { .. } | Cmd::MoveSymbolGraphic { .. } | Cmd::EditSymbolGraphic { .. } | Cmd::ReplaceSymbolGraphic { .. } => "symbol-shape",
         Cmd::EditSymbolText { .. } => "symbol-text",
     }
 }
@@ -5081,7 +5095,7 @@ mod tests {
         setup_mcu30_users_board(&dir);
         let (_, mut design, _) = load(&dir).unwrap();
         // a published library symbol with the pins of the resistor R1 is, a rectangle in its normal body and a wider one in the alternate body
-        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None };
+        let pin = |number: &str, y: f64, angle: f64, style: u32| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: SPoint::new(0.0, y), angle_deg: angle, length_mm: 1.27, unit: 1, body_style: style, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() };
         let rect = |half: f64, style: u32| LibrarySymbolGraphic::Rectangle { id: String::new(), unit: 1, body_style: style, start: SPoint::new(-half, 2.54), end: SPoint::new(half, -2.54), stroke_mm: 0.254, fill: LibraryFill::None };
         let mut lib = LibrarySymbol::new_empty("Test:Gate2");
         lib.reference_prefix = "R".into();
@@ -5384,6 +5398,7 @@ mod tests {
             hidden: false,
             name_size_mm: None,
             number_size_mm: None,
+            alternates: Vec::new(),
         };
         step(&dir, Cmd::AddSymbolPin { lib_id: "TEST:R".into(), pin }, false, "test").unwrap();
 

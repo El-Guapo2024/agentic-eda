@@ -489,6 +489,19 @@ mod tests {
         }
     }
 
+    /// A text box's line break is written as `\n` inside the quotes, as `OUTPUTFORMATTER::Quotes` writes it: a raw line feed in a string is a schematic kicad-cli
+    /// refuses ("Failed to load schematic").
+    #[test]
+    fn a_text_boxs_line_break_is_written_escaped_so_kicad_can_load_the_sheet() {
+        let mut sch = SchematicSection::default();
+        sch.extras.graphics = sample_graphics();
+        sch.assign_missing_ids();
+        let mut text = String::new();
+        write_graphics(&mut text, &sch);
+        assert!(text.contains("(text_box \"Hello\\nworld\""), "{text}");
+        assert!(!text.contains("Hello\nworld"), "no raw line feed inside the string");
+    }
+
     #[test]
     fn locked_graphics_carry_the_flag_both_ways() {
         let mut sch = SchematicSection::default();

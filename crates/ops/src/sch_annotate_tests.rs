@@ -21,7 +21,7 @@ pub(crate) fn section(symbols: Vec<SymbolInstance>, sheets: Vec<SheetInstance>) 
 /// A two-unit symbol the way a library has it: pins 1 and 2 on unit 1, pins 3 and 4 on unit 2.
 fn dual() -> LibrarySymbol {
     use eda_model::ir::LibrarySymbolPin;
-    let pin = |number: &str, unit: u32, y: f64| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint { x: 0.0, y }, angle_deg: 270.0, length_mm: 2.54, unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None };
+    let pin = |number: &str, unit: u32, y: f64| LibrarySymbolPin { id: String::new(), number: number.into(), name: String::new(), electrical_type: "passive".into(), shape: "line".into(), at: eda_model::symbol::SPoint { x: 0.0, y }, angle_deg: 270.0, length_mm: 2.54, unit, body_style: 1, hidden: false, name_size_mm: None, number_size_mm: None, alternates: Vec::new() };
     let mut s = LibrarySymbol { lib_id: "Test:Dual".into(), reference_prefix: "U".into(), unit_count: 2, published: true, pins: vec![pin("1", 1, 2.54), pin("2", 1, -2.54), pin("3", 2, 2.54), pin("4", 2, -2.54)], ..LibrarySymbol::default() };
     s.assign_missing_ids();
     s

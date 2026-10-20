@@ -23,13 +23,16 @@
 // take plain mm numbers, matching the wire format directly).
 import React, { createContext, useCallback, useContext, useEffect, useReducer, useRef } from "react";
 import type { Cmd, LibraryFill, LibrarySymbol, LibrarySymbolGraphic, LibrarySymbolPin, PushPinField, SymbolPropertiesFields } from "../api/types";
-import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchLibrarySymbol, fetchSymbolEditorNames, postCmd, postRedo, postUndo } from "../api/client";
+import { downloadSymbolKicadSym, downloadSymbolLibraryKicadSym, fetchSymbolEditorNames, fetchSymbolForEditor, postCmd, postRedo, postUndo } from "../api/client";
 import { ensureSymbolInProject } from "../api/libraryClient";
 import { uniqueSymbolLibId } from "../kicad-port/symEditActions";
+import { allFields, wireField } from "../kicad-port/symFields";
+import { movedRows } from "../kicad-port/symFieldLayout";
 import { defaultSyncMode, imagePinsFor, linkedPinsToMove, planSyncedEdit, synchronizePins } from "../kicad-port/symPinSync";
+import { INITIAL_LAST_TEXT_BOX, type LastTextBox, type LibTextBox } from "../kicad-port/symTextBox";
 import type { ViewTransform } from "./store";
 
-export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "text" | "anchor";
+export type SymToolId = "select" | "move" | "pin" | "draw_segment" | "draw_lines" | "draw_arc" | "draw_rect" | "draw_circle" | "draw_polygon" | "draw_textbox" | "text" | "anchor";
 
 export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   select: "Select item(s)",
@@ -41,12 +44,13 @@ export const SYM_TOOL_MESSAGES: Record<SymToolId, string> = {
   draw_rect: "Rectangle: click one corner, then the opposite one",
   draw_circle: "Circle: click center, then a point on the edge",
   draw_polygon: "Polygon: click points, Enter/double-click to finish (the shape closes), Esc to cancel",
+  draw_textbox: "Text box: click one corner, then the opposite one, then enter the text",
   text: "Text: click where it goes, then type it",
   anchor: "Move the symbol anchor: click the point that becomes the symbol's origin",
 };
 
 /** Same "click to add point(s), commit on the last one" shape the Footprint Editor's own `FpDrawState` uses. Points are internal-space µm (see this file's own unit-convention doc). `lines` is the open multi-point polyline (`drawSymbolLines`), `polygon` the closed one. */
-export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon"; pts: [number, number][] };
+export type SymDrawState = { kind: "shape"; shapeKind: "segment" | "lines" | "arc" | "rect" | "circle" | "polygon" | "textbox"; pts: [number, number][] };
 
 /** `DIALOG_SAVE_SYMBOL_AS` (Save As / Save Copy As): which of the two it is. */
 export interface SaveAsRequest {
@@ -67,7 +71,7 @@ export interface ImportRequest {
 
 export interface SymMovePreview {
   refs: string[];
-  kind: "pin" | "graphic";
+  kind: "pin" | "graphic" | "field";
   dxUm: number;
   dyUm: number;
 }
@@ -75,8 +79,10 @@ export interface SymMovePreview {
 export interface SymbolEditorState {
   /** The symbol currently open, or `null` before anything has been opened this session. */
   libId: string | null;
-  /** The last successful GET /api/symbol?lib_id=... for `libId` -- raw mm/Y-up wire shape, untouched. */
+  /** The last successful GET /api/symbol?lib_id=... for `libId` -- raw mm/Y-up wire shape, untouched. For a derived symbol it is the flat symbol (everything it inherits): what is drawn. */
   symbol: LibrarySymbol | null;
+  /** A derived symbol's own entry (`extends`, its own fields); `null` for a symbol that is not derived (`symbol` is then the entry itself). */
+  derivedOwn: LibrarySymbol | null;
   error: string | null;
   view: ViewTransform;
   viewInitialized: boolean;
@@ -98,6 +104,8 @@ export interface SymbolEditorState {
   pinPropertiesId: string | null;
   pinTableOpen: boolean;
   propertiesOpen: boolean;
+  /** The field the Symbol Properties dialog opens on (a double click on a field of the canvas): its row is the grid's selected one. */
+  propertiesField: string | null;
   /** The symbols the library tree has selected (`GetSelectedLibIds()`); empty = none (the open symbol is the target, `GetTargetLibId`). */
   treeSelection: string[];
   /** `m_ShowPinsElectricalType`: draw each pin's electrical type beside it. On to begin with, as `show_pin_electrical_type` is in `SYMBOL_EDITOR_SETTINGS`. */
@@ -106,6 +114,10 @@ export interface SymbolEditorState {
   showPinNumbers: boolean;
   /** `m_ShowHiddenPins`: draw the pins marked hidden. On to begin with (`show_hidden_lib_pins`). */
   showHiddenPins: boolean;
+  /** `m_ShowHiddenFields`: draw the fields that are not shown, in the hidden-items colour. On to begin with (`SYMBOL_EDITOR_SETTINGS::m_ShowHiddenFields`). */
+  showHiddenFields: boolean;
+  /** `m_ShowPinAltIcons`: the icon beside the name of a pin that has alternate functions. On to begin with (`SYMBOL_EDITOR_SETTINGS::m_ShowPinAltIcons`). */
+  showPinAltIcons: boolean;
   /** `SYMBOL_EDIT_FRAME::m_SyncPinEdit`: Synchronized Pins Mode. On by default for a multi-unit symbol. */
   syncPins: boolean;
   /** The symbols Copy / Cut put on the clipboard: kept beside the clipboard text so Paste of our own copy loses nothing (and works where the browser denies clipboard access). */
@@ -113,10 +125,22 @@ export interface SymbolEditorState {
   saveAs: SaveAsRequest | null;
   importRequest: ImportRequest | null;
   fieldsTableOpen: boolean;
+  /** Which symbols the fields table lists (`DIALOG_LIB_FIELDS_TABLE::SCOPE`): the library's, or the ones related to the target (its root and everything derived from it). */
+  fieldsTableScope: "library" | "related";
+  /** `deriveFromExistingSymbol`: the Derive from Existing Symbol dialog (`DIALOG_LIB_NEW_SYMBOL` with a parent) is open on this symbol. */
+  deriveRequest: { parent: string } | null;
+  /** `updateSymbolFields`: the Update Symbol Fields dialog (`DIALOG_UPDATE_SYMBOL_FIELDS`) is open on the symbol being edited. */
+  updateFieldsOpen: boolean;
   /** `placeSymbolText` / the Text tool: where the click landed, in internal µm; the Text Properties dialog asks for the text. */
   textDialog: { atUm: [number, number] } | null;
   /** The text the dialog was OK'd with, following the cursor until the click that places it (`TwoClickPlace`'s `item` while `IS_MOVING`). */
   pendingText: { text: string; sizeMm: number; angleDeg: number } | null;
+  /** Text Box Properties (`DIALOG_TEXT_PROPERTIES` of a `SCH_TEXTBOX`): `id` is the box being edited, `null` for the one the Text Box tool has just drawn and the dialog is about to add. */
+  textBoxDialog: { id: string | null; box: LibTextBox } | null;
+  /** Shape Properties (`DIALOG_SHAPE_PROPERTIES`): the shape it is open on (double click, `E`, the context menu). */
+  shapeDialogId: string | null;
+  /** What the Text Box tool carries from one box to the next (`m_lastTextBold`, `m_lastTextJust`, `m_lastFillStyle`, `m_lastStroke`...). */
+  lastTextBox: LastTextBox;
   /** `m_lastTextAngle`: the text angle the next Text dialog starts with. */
   lastTextAngle: number;
   toast: { message: string; kind: "error" | "info" } | null;
@@ -125,6 +149,7 @@ export interface SymbolEditorState {
 const initialState: SymbolEditorState = {
   libId: null,
   symbol: null,
+  derivedOwn: null,
   error: null,
   view: { scale: 0, x: 0, y: 0 },
   viewInitialized: false,
@@ -142,24 +167,33 @@ const initialState: SymbolEditorState = {
   pinPropertiesId: null,
   pinTableOpen: false,
   propertiesOpen: false,
+  propertiesField: null,
   treeSelection: [],
   showElectricalTypes: true,
   showPinNumbers: false,
   showHiddenPins: true,
+  showHiddenFields: true,
+  showPinAltIcons: true,
   syncPins: false,
   copied: null,
   saveAs: null,
   importRequest: null,
   fieldsTableOpen: false,
+  fieldsTableScope: "library",
+  deriveRequest: null,
+  updateFieldsOpen: false,
   textDialog: null,
   pendingText: null,
+  textBoxDialog: null,
+  shapeDialogId: null,
+  lastTextBox: INITIAL_LAST_TEXT_BOX,
   lastTextAngle: 0,
   toast: null,
 };
 
 export type SymAction =
   | { type: "SET_LIB_ID"; libId: string | null }
-  | { type: "SYMBOL_OK"; symbol: LibrarySymbol }
+  | { type: "SYMBOL_OK"; symbol: LibrarySymbol; own?: LibrarySymbol | null }
   | { type: "SYMBOL_ERR"; message: string }
   | { type: "SET_VIEW"; view: ViewTransform }
   | { type: "MARK_VIEW_INITIALIZED" }
@@ -178,18 +212,27 @@ export type SymAction =
   | { type: "SET_ACTIVE_BODY_STYLE"; style: number }
   | { type: "SET_PIN_PROPERTIES_ID"; id: string | null }
   | { type: "SET_PIN_TABLE_OPEN"; open: boolean }
-  | { type: "SET_PROPERTIES_OPEN"; open: boolean }
+  | { type: "SET_PROPERTIES_OPEN"; open: boolean; field?: string }
   | { type: "SET_TREE_SELECTION"; names: string[] }
   | { type: "TOGGLE_ELECTRICAL_TYPES" }
   | { type: "TOGGLE_PIN_NUMBERS" }
   | { type: "TOGGLE_HIDDEN_PINS" }
+  | { type: "TOGGLE_HIDDEN_FIELDS" }
+  | { type: "TOGGLE_PIN_ALT_ICONS" }
   | { type: "SET_SYNC_PINS"; on: boolean }
   | { type: "SET_COPIED"; copied: { text: string; symbols: LibrarySymbol[] } | null }
   | { type: "SET_SAVE_AS"; request: SaveAsRequest | null }
   | { type: "SET_IMPORT_REQUEST"; request: ImportRequest | null }
-  | { type: "SET_FIELDS_TABLE_OPEN"; open: boolean }
+  | { type: "SET_FIELDS_TABLE_OPEN"; open: boolean; scope?: "library" | "related" }
+  | { type: "SET_DERIVE_REQUEST"; parent: string | null }
+  | { type: "SET_UPDATE_FIELDS_OPEN"; open: boolean }
   | { type: "SET_TEXT_DIALOG"; at: [number, number] | null }
   | { type: "SET_PENDING_TEXT"; pending: { text: string; sizeMm: number; angleDeg: number } | null }
+  /** Opens Text Box Properties on a box (`id` set: an existing one), or closes it. A box the tool drew (`id` null) is added by the dialog's OK, which also makes its looks the next box's. */
+  | { type: "SET_TEXT_BOX_DIALOG"; dialog: { id: string | null; box: LibTextBox } | null }
+  /** `m_lastTextBold`, `m_lastTextItalic`, `m_lastTextAngle`, `m_lastTextJust`, `m_lastFillStyle`, `m_lastStroke`: the looks of the box the tool has just added, for the next. */
+  | { type: "SET_LAST_TEXT_BOX"; last: LastTextBox }
+  | { type: "SET_SHAPE_DIALOG_ID"; id: string | null }
   | { type: "TOAST"; message: string; kind: "error" | "info" }
   | { type: "TOAST_CLEAR" };
 
@@ -207,12 +250,15 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
         showElectricalTypes: state.showElectricalTypes,
         showPinNumbers: state.showPinNumbers,
         showHiddenPins: state.showHiddenPins,
+        showHiddenFields: state.showHiddenFields,
+        showPinAltIcons: state.showPinAltIcons,
         copied: state.copied,
         lastTextAngle: state.lastTextAngle,
+        lastTextBox: state.lastTextBox,
       };
     case "SYMBOL_OK":
       // `m_SyncPinEdit = IsMultiUnit() && !UnitsLocked()` each time a symbol is loaded: on for a multi-unit symbol.
-      return { ...state, symbol: action.symbol, error: null, syncPins: state.symbol ? state.syncPins : defaultSyncMode(action.symbol.unit_count) };
+      return { ...state, symbol: action.symbol, derivedOwn: action.own ?? null, error: null, syncPins: state.symbol ? state.syncPins : defaultSyncMode(action.symbol.unit_count) };
     case "SYMBOL_ERR":
       return { ...state, error: action.message };
     case "SET_VIEW":
@@ -256,7 +302,7 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_PIN_TABLE_OPEN":
       return { ...state, pinTableOpen: action.open };
     case "SET_PROPERTIES_OPEN":
-      return { ...state, propertiesOpen: action.open };
+      return { ...state, propertiesOpen: action.open, propertiesField: action.open ? (action.field ?? null) : null };
     case "SET_TREE_SELECTION":
       return { ...state, treeSelection: action.names };
     case "TOGGLE_ELECTRICAL_TYPES":
@@ -265,6 +311,10 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
       return { ...state, showPinNumbers: !state.showPinNumbers };
     case "TOGGLE_HIDDEN_PINS":
       return { ...state, showHiddenPins: !state.showHiddenPins };
+    case "TOGGLE_HIDDEN_FIELDS":
+      return { ...state, showHiddenFields: !state.showHiddenFields };
+    case "TOGGLE_PIN_ALT_ICONS":
+      return { ...state, showPinAltIcons: !state.showPinAltIcons };
     case "SET_SYNC_PINS":
       return { ...state, syncPins: action.on };
     case "SET_COPIED":
@@ -274,9 +324,19 @@ function reducer(state: SymbolEditorState, action: SymAction): SymbolEditorState
     case "SET_IMPORT_REQUEST":
       return { ...state, importRequest: action.request };
     case "SET_FIELDS_TABLE_OPEN":
-      return { ...state, fieldsTableOpen: action.open };
+      return { ...state, fieldsTableOpen: action.open, fieldsTableScope: action.scope ?? state.fieldsTableScope };
+    case "SET_DERIVE_REQUEST":
+      return { ...state, deriveRequest: action.parent ? { parent: action.parent } : null };
+    case "SET_UPDATE_FIELDS_OPEN":
+      return { ...state, updateFieldsOpen: action.open };
     case "SET_TEXT_DIALOG":
       return { ...state, textDialog: action.at ? { atUm: action.at } : null };
+    case "SET_TEXT_BOX_DIALOG":
+      return { ...state, textBoxDialog: action.dialog, drawState: null };
+    case "SET_LAST_TEXT_BOX":
+      return { ...state, lastTextBox: action.last };
+    case "SET_SHAPE_DIALOG_ID":
+      return { ...state, shapeDialogId: action.id };
     case "SET_PENDING_TEXT":
       return { ...state, pendingText: action.pending, textDialog: null, lastTextAngle: action.pending ? action.pending.angleDeg : state.lastTextAngle };
     case "TOAST":
@@ -313,7 +373,11 @@ export interface SymbolEditorApi {
   pushPinProperty: (sourcePinId: string, field: PushPinField) => Promise<void>;
   addGraphic: (graphic: LibrarySymbolGraphic) => Promise<void>;
   moveGraphic: (id: string, dxMm: number, dyMm: number) => Promise<void>;
-  editGraphic: (id: string, strokeMm: number, fill: LibraryFill) => Promise<void>;
+  /** A drag of fields on the canvas (`SCH_FIELD`s moved by the move tool): the named fields of the symbol move by the offset, one undo step. A field the symbol inherits becomes its own. */
+  moveFields: (names: string[], dxMm: number, dyMm: number) => Promise<void>;
+  editGraphic: (id: string, strokeMm: number, fill: LibraryFill, scope?: { unit?: number; bodyStyle?: number }) => Promise<boolean>;
+  /** A text box's dialog: the whole graphic as it was left (`replace_symbol_graphic`). */
+  replaceGraphic: (id: string, graphic: LibrarySymbolGraphic) => Promise<boolean>;
   deleteGraphic: (id: string) => Promise<void>;
   editText: (id: string, text: string, angleDeg: number, sizeMm: number) => Promise<void>;
   editProperties: (fields: SymbolPropertiesFields) => Promise<boolean>;
@@ -337,8 +401,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
     const libId = stateRef.current.libId;
     if (!libId) return;
     try {
-      const symbol = await fetchLibrarySymbol(libId);
-      dispatch({ type: "SYMBOL_OK", symbol });
+      const { symbol, own } = await fetchSymbolForEditor(libId);
+      dispatch({ type: "SYMBOL_OK", symbol, own });
     } catch (e) {
       dispatch({ type: "SYMBOL_ERR", message: e instanceof Error ? e.message : String(e) });
     }
@@ -376,8 +440,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       dispatch({ type: "SET_LIB_ID", libId });
       await ensureSymbolInProject(libId); // an installed KiCad symbol is copied into the project library first, or the verb below would open a blank one
       await postCmd({ op: "open_symbol_for_edit", lib_id: libId }, false);
-      const symbol = await fetchLibrarySymbol(libId);
-      dispatch({ type: "SYMBOL_OK", symbol });
+      const { symbol, own } = await fetchSymbolForEditor(libId);
+      dispatch({ type: "SYMBOL_OK", symbol, own });
     },
     newSymbol: async () => {
       let existing: string[] = [];
@@ -393,7 +457,8 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
         return;
       }
       dispatch({ type: "SET_LIB_ID", libId });
-      dispatch({ type: "SYMBOL_OK", symbol: await fetchLibrarySymbol(libId) });
+      const { symbol, own } = await fetchSymbolForEditor(libId);
+      dispatch({ type: "SYMBOL_OK", symbol, own });
     },
     closeSymbol: () => dispatch({ type: "SET_LIB_ID", libId: null }),
     refresh,
@@ -482,10 +547,33 @@ export function SymbolEditorProvider({ children }: { children: React.ReactNode }
       if (!libId) return;
       await runCmd({ op: "move_symbol_graphic", lib_id: libId, id, dx_mm: dxMm, dy_mm: dyMm });
     },
-    editGraphic: async (id, strokeMm, fill) => {
+    moveFields: async (names, dxMm, dyMm) => {
+      const st = stateRef.current;
+      const libId = st.libId;
+      const flat = st.symbol;
+      if (!libId || !flat || names.length === 0) return;
+      // the symbol's own fields (a derived symbol keeps its own list), with an inherited user field that is moved joining them as the symbol's own copy
+      const own = allFields(st.derivedOwn ?? flat);
+      const moving = new Set(names);
+      for (const f of allFields(flat)) {
+        if (!moving.has(f.name)) continue;
+        const i = own.findIndex((o) => o.name === f.name);
+        // a field the symbol inherits (a parent's user field, or a mandatory one it leaves empty) is what is drawn, so it is what moves: it becomes the symbol's own
+        if (i < 0) own.push(f);
+        else if (own[i]!.text === "" && f.text !== "") own[i] = f;
+      }
+      const fields = movedRows(own, moving, dxMm, dyMm).map(wireField);
+      await runCmd({ op: "edit_library_symbol_fields", lib_id: libId, fields });
+    },
+    editGraphic: async (id, strokeMm, fill, scope) => {
       const libId = stateRef.current.libId;
-      if (!libId) return;
-      await runCmd({ op: "edit_symbol_graphic", lib_id: libId, id, stroke_mm: strokeMm, fill });
+      if (!libId) return false;
+      return runCmd({ op: "edit_symbol_graphic", lib_id: libId, id, stroke_mm: strokeMm, fill, ...(scope?.unit !== undefined ? { unit: scope.unit } : {}), ...(scope?.bodyStyle !== undefined ? { body_style: scope.bodyStyle } : {}) });
+    },
+    replaceGraphic: async (id, graphic) => {
+      const libId = stateRef.current.libId;
+      if (!libId) return false;
+      return runCmd({ op: "replace_symbol_graphic", lib_id: libId, id, graphic });
     },
     deleteGraphic: async (id) => {
       const libId = stateRef.current.libId;

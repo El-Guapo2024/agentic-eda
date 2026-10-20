@@ -22,7 +22,17 @@ export interface ConfirmOptions {
   cancelLabel?: string;
 }
 
-type Request = { id: number } & ({ kind: "prompt"; options: PromptOptions; resolve: (v: string | null) => void } | { kind: "confirm"; options: ConfirmOptions; resolve: (v: boolean) => void });
+/** A question with two ways to go on and a way out (`KIDIALOG` with `wxYES_NO | wxCANCEL`): "Overwrite All" / "Rename All" / "Cancel". */
+export interface ChoiceOptions extends ConfirmOptions {
+  /** The second way to go on; `okLabel` is the first. */
+  altLabel: string;
+}
+
+type Request = { id: number } & (
+  | { kind: "prompt"; options: PromptOptions; resolve: (v: string | null) => void }
+  | { kind: "confirm"; options: ConfirmOptions; resolve: (v: boolean) => void }
+  | { kind: "choice"; options: ChoiceOptions; resolve: (v: "ok" | "alt" | null) => void }
+);
 
 let nextId = 1;
 let sink: ((r: Request) => void) | null = null;
@@ -43,6 +53,14 @@ export function askConfirm(options: ConfirmOptions): Promise<boolean> {
   });
 }
 
+/** Ask which of two ways to go on; `null` when cancelled. */
+export function askChoice(options: ChoiceOptions): Promise<"ok" | "alt" | null> {
+  return new Promise((resolve) => {
+    if (!sink) return resolve(null);
+    sink({ id: nextId++, kind: "choice", options, resolve });
+  });
+}
+
 export function LibraryDialogHost() {
   const [queue, setQueue] = useState<Request[]>([]);
   const queueRef = useRef<Request[]>([]);
@@ -56,7 +74,7 @@ export function LibraryDialogHost() {
       sink = null;
       // A host that goes away answers its unanswered questions "no" (an action must never wait forever on a dialog nobody can see).
       for (const r of queueRef.current) {
-        if (r.kind === "prompt") r.resolve(null);
+        if (r.kind === "prompt" || r.kind === "choice") r.resolve(null);
         else r.resolve(false);
       }
       queueRef.current = [];
@@ -68,16 +86,31 @@ export function LibraryDialogHost() {
     queueRef.current = queueRef.current.slice(1);
     setQueue(queueRef.current);
   };
-  return top.kind === "prompt" ? (
-    <PromptDialog
-      key={top.id}
-      options={top.options}
-      onDone={(v) => {
-        top.resolve(v);
-        finish();
-      }}
-    />
-  ) : (
+  if (top.kind === "prompt") {
+    return (
+      <PromptDialog
+        key={top.id}
+        options={top.options}
+        onDone={(v) => {
+          top.resolve(v);
+          finish();
+        }}
+      />
+    );
+  }
+  if (top.kind === "choice") {
+    return (
+      <ChoiceDialog
+        key={top.id}
+        options={top.options}
+        onDone={(v) => {
+          top.resolve(v);
+          finish();
+        }}
+      />
+    );
+  }
+  return (
     <ConfirmDialog
       key={top.id}
       options={top.options}
@@ -157,6 +190,37 @@ function ConfirmDialog({ options, onDone }: { options: ConfirmOptions; onDone: (
         <div className="dialog-footer">
           <button onClick={() => onDone(false)}>{options.cancelLabel ?? "Cancel"}</button>
           <button className="primary" autoFocus onClick={() => onDone(true)}>
+            {options.okLabel ?? "OK"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChoiceDialog({ options, onDone }: { options: ChoiceOptions; onDone: (v: "ok" | "alt" | null) => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onDone(null);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [onDone]);
+  return (
+    <div className="dialog-backdrop" onClick={() => onDone(null)}>
+      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()} role="dialog" aria-label={options.title}>
+        <div className="dialog-header">
+          <span>{options.title}</span>
+        </div>
+        <div className="dialog-body" style={{ whiteSpace: "pre-wrap" }}>
+          {options.message}
+        </div>
+        <div className="dialog-footer">
+          <button onClick={() => onDone(null)}>{options.cancelLabel ?? "Cancel"}</button>
+          <button onClick={() => onDone("alt")} data-testid="choice-alt">
+            {options.altLabel}
+          </button>
+          <button className="primary" autoFocus onClick={() => onDone("ok")} data-testid="choice-ok">
             {options.okLabel ?? "OK"}
           </button>
         </div>

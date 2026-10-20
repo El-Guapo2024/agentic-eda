@@ -319,6 +319,27 @@ export type ArrayGeometry =
   | { kind: "grid"; nx: number; ny: number; dx: Um; dy: Um; offset_x?: Um; offset_y?: Um; centred?: boolean; stagger?: number; stagger_rows?: boolean; horizontal_then_vertical?: boolean; reverse_alternate?: boolean }
   | { kind: "circular"; center: PointXY; count: number; angle_millideg: number; angle_offset_millideg?: number; clockwise?: boolean; rotate_items?: boolean };
 
+/** `crates/ops/src/array_numbering.rs` `NumberingType` (`ARRAY_AXIS::NUMBERING_TYPE`), snake_case on the wire. */
+export type NumberingType = "numeric" | "hex" | "alpha_no_iosqxz" | "alpha_full";
+
+/** One numbering axis of the Footprint Editor's Create Array: the alphabet, the "Pad numbering start" entry as typed and the "Pad numbering increment". */
+export interface AxisSpec {
+  kind: NumberingType;
+  start: string;
+  step: number;
+}
+
+/**
+ * `crates/ops/src/array_numbering.rs` `PadNumbering` -- how `create_footprint_array` renumbers the pads of the copies. `start_specified: false` is "Use first free
+ * number" (numerals from 1 that skip the numbers of the pads outside the array); `two_d` is a grid's "Coordinate (A1, A2, ... B1, ...)" scheme.
+ */
+export interface PadNumbering {
+  start_specified: boolean;
+  two_d: boolean;
+  primary: AxisSpec;
+  secondary: AxisSpec;
+}
+
 /**
  * `crates/model/src/ir.rs` `Zone`'s `ZONE_SETTINGS` fill-engine fields
  * (dialog_copper_zones.cpp's panel) -- everything but id/net/layer/
@@ -682,6 +703,8 @@ export interface FootprintField {
   name: string;
   value: string;
   visible: boolean;
+  /** Where and how its text is drawn (`FieldLayout`; its `visible` is this field's). Absent for a field that was never placed: hidden at the origin on the fabrication layer. */
+  layout?: FieldLayoutCmd;
 }
 
 /** The fields `edit_footprint_properties` commits all at once (dialog_footprint_properties_fp_editor.cpp's General tab) -- factored out so the `Cmd` variant and `FootprintPropertiesDialog`'s own form state share one field list. */
@@ -697,6 +720,13 @@ export interface FootprintPropertiesFields {
   models3d?: Model3dCmd[];
   /** The Clearances tab's "Zone connection" (`FOOTPRINT::GetLocalZoneConnection`); absent/`null` is "inherited". */
   zone_connection?: PadConnection | null;
+  /**
+   * The General tab's fields grid (`PCB_FIELDS_GRID_TABLE`): the Reference's and the Value's layout (the text they show, when it is not `REF**` / the footprint's name, in `text`) and the
+   * user fields, in order, each with its layout. A key left out of a command keeps what the footprint has; the Show check boxes are `reference_visible`, `value_visible` and each field's `visible`.
+   */
+  reference?: FieldLayoutCmd | null;
+  value?: FieldLayoutCmd | null;
+  fields?: FootprintField[];
 }
 
 /**
@@ -1618,6 +1648,8 @@ export type Cmd =
   | { op: "edit_footprint_text"; footprint: string; id: string; content: string; angle: number; layer: string; size_um: Um; stroke_width: Um; justify: TextJustify; mirror: boolean }
   | { op: "delete_footprint_text"; footprint: string; id: string }
   | { op: "move_footprint_text"; footprint: string; id: string; x: Um; y: Um }
+  /** `pcbnew.Array.createArray` in the Footprint Editor (`ARRAY_TOOL::CreateArray`, `m_isFootprintEditor`): `numbering` renumbers the pads of the array; left out, the copies keep their source's number. */
+  | { op: "create_footprint_array"; footprint: string; ids: string[]; geometry: ArrayGeometry; arrange?: boolean; numbering?: PadNumbering | null }
 
   // ----------------------------------------------------------- symbol editor
   //
@@ -1643,8 +1675,22 @@ export type Cmd =
   | { op: "add_symbol_graphic"; lib_id: string; graphic: LibrarySymbolGraphic }
   | { op: "delete_symbol_graphic"; lib_id: string; id: string }
   | { op: "move_symbol_graphic"; lib_id: string; id: string; dx_mm: Mm; dy_mm: Mm }
-  | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill }
-  | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm };
+  /** Shape Properties: the width (negative: no border), the fill and -- when given -- the unit and the body style the shape is on (0: common to all). */
+  | { op: "edit_symbol_graphic"; lib_id: string; id: string; stroke_mm: Mm; fill: LibraryFill; unit?: number; body_style?: number }
+  | { op: "edit_symbol_text"; lib_id: string; id: string; text: string; angle_deg: Degrees; size_mm: Mm }
+  /** A text box's properties dialog: the whole graphic, of the same kind, as the dialog left it. */
+  | { op: "replace_symbol_graphic"; lib_id: string; id: string; graphic: LibrarySymbolGraphic }
+  // ---------------------------------------------------------------- derived symbols
+  /** `deriveFromExistingSymbol` (`DIALOG_LIB_NEW_SYMBOL` with a parent): `lib_id`, a new symbol in the parent's library, derived from `parent`. */
+  | { op: "derive_symbol"; parent: string; lib_id: string; keep_footprint?: boolean; keep_datasheet?: boolean; transfer_user_fields?: boolean; keep_content_user_fields?: boolean; overwrite?: boolean }
+  /** `flattenSymbol`: the derived symbol becomes the flat symbol it stands for. */
+  | { op: "flatten_symbol"; lib_id: string }
+  /** `updateSymbolFields` (`DIALOG_UPDATE_SYMBOL_FIELDS`): the named fields of a derived symbol follow its parent's. `reset_*` default to true, `remove_extras` and `reset_empty` to false. */
+  | { op: "update_symbol_fields"; lib_id: string; fields: string[]; remove_extras?: boolean; reset_empty?: boolean; reset_text?: boolean; reset_visibility?: boolean; reset_effects?: boolean; reset_positions?: boolean }
+  /** Symbol Properties' "Derive from" choice. */
+  | { op: "set_symbol_parent"; lib_id: string; parent: string }
+  /** Symbol Properties' fields grid, all at once. */
+  | { op: "edit_library_symbol_fields"; lib_id: string; fields: LibrarySymbolField[] };
 
 /** crates/model/src/ir.rs `LabelKind`, `#[serde(tag = "scope")]` -- for `add_label` only (`SchematicLabel`'s own `scope`/`shape` pair is the read-side mirror of this). */
 export type CmdLabelKind = { scope: "local" } | { scope: "global"; shape: LabelShape } | { scope: "hierarchical"; shape: LabelShape };
@@ -2448,7 +2494,37 @@ export type LibrarySymbolGraphic =
   | { kind: "polyline"; id?: string; unit: number; body_style: number; pts: MmPoint[]; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "circle"; id?: string; unit: number; body_style: number; center: MmPoint; radius_mm: Mm; stroke_mm: Mm; fill: LibraryFill }
   | { kind: "arc"; id?: string; unit: number; body_style: number; start: MmPoint; mid: MmPoint; end: MmPoint; stroke_mm: Mm; fill: LibraryFill }
-  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm };
+  | { kind: "text"; id?: string; unit: number; body_style: number; text: string; at: MmPoint; angle_deg: Degrees; size_mm: Mm }
+  /**
+   * `SCH_TEXTBOX` of a library symbol (`(text_box ...)`): `start` and `end` are two opposite corners (Y up, mm), the text runs along the box (`angle_deg` 0) or up it (90) and is
+   * wrapped to it. `margin_mm` 0 is the default margin (`kicad-port/symTextBox.ts`), a negative `stroke_mm` is no border, 0 the default line width. The server leaves out what is
+   * false or zero (`bold`, `italic`, `margin_mm`).
+   */
+  | {
+      kind: "text_box";
+      id?: string;
+      unit: number;
+      body_style: number;
+      text: string;
+      start: MmPoint;
+      end: MmPoint;
+      angle_deg: Degrees;
+      size_mm: Mm;
+      bold?: boolean;
+      italic?: boolean;
+      h_align: FieldHAlign;
+      v_align: FieldVAlign;
+      margin_mm?: Mm;
+      stroke_mm: Mm;
+      fill: LibraryFill;
+    };
+
+/** `crates/model/src/ir.rs` `PinAlternate` -- one alternate function of a pin (`SCH_PIN::ALT`, `(alternate "name" type shape)`): a name, an electrical type and a graphic style. A pin keeps each name once, in the order of the names. */
+export interface PinAlternate {
+  name: string;
+  electrical_type: PinElectricalType;
+  shape: PinShape;
+}
 
 /** `crates/model/src/ir.rs` `LibrarySymbolPin` -- one pin on a [`LibrarySymbol`], addressable (unlike the read-only `LibPin` above) for move/edit/delete. */
 export interface LibrarySymbolPin {
@@ -2466,6 +2542,32 @@ export interface LibrarySymbolPin {
   hidden: boolean;
   name_size_mm: Mm | null;
   number_size_mm: Mm | null;
+  /** The pin's alternate functions (`DIALOG_PIN_PROPERTIES`' "Alternate pin function definitions"); the server leaves the list out when it is empty. */
+  alternates?: PinAlternate[];
+}
+
+/** `crates/model/src/sym_fields.rs` `FieldHAlign` / `FieldVAlign`: a field's `(justify ...)`. */
+export type FieldHAlign = "left" | "center" | "right";
+export type FieldVAlign = "top" | "center" | "bottom";
+
+/**
+ * `crates/model/src/sym_fields.rs` `LibrarySymbolField` -- one property of a library symbol (`SCH_FIELD` of a `LIB_SYMBOL`): `Reference`, `Value`, `Footprint`, `Datasheet`,
+ * `Description` or a user field, with the place and look `(property "Name" "text" (at x y angle) ... (effects ...))` keeps. The server leaves out what has its default (an angle
+ * of 0, a size of 1.27, nothing hidden, centred); `kicad-port/symFields.ts` puts it back.
+ */
+export interface LibrarySymbolField {
+  name: string;
+  text?: string;
+  at?: MmPoint;
+  angle_deg?: Degrees;
+  size_mm?: Mm;
+  hidden?: boolean;
+  show_name?: boolean;
+  do_not_autoplace?: boolean;
+  bold?: boolean;
+  italic?: boolean;
+  h_align?: FieldHAlign;
+  v_align?: FieldVAlign;
 }
 
 /** The fields `edit_symbol_properties` commits all at once (`dialog_lib_symbol_properties.cpp`'s General + Units&&Body Styles tabs) -- factored out so the `Cmd` variant and the Symbol Properties dialog's own form state share one field list, same pattern `FootprintPropertiesFields` already sets. */
@@ -2496,6 +2598,10 @@ export interface LibrarySymbol extends SymbolPropertiesFields {
   graphics: LibrarySymbolGraphic[];
   pins: LibrarySymbolPin[];
   published: boolean;
+  /** `(extends "Parent")`: the `lib_id` of the symbol this one is derived from (`LIB_SYMBOL::SetParent`). A derived symbol keeps no graphics or pins of its own; `GET /api/symbol?flatten=1` gives it with everything it inherits. */
+  extends?: string | null;
+  /** The symbol's fields beyond the text members above (`crates/model/src/sym_fields.rs`): the layout of each field, `Value`, `Footprint` and the user fields. Empty for a symbol that never had one. */
+  fields?: LibrarySymbolField[];
 }
 
 /** `GET /api/symbol_editor/names`'s one field: every `lib_id` available to open (already-opened library entries, every lib_id the project's intent already resolved, and the small builtin catalog), sorted. */
@@ -2503,6 +2609,8 @@ export interface SymbolEditorNames {
   names: string[];
   /** The `lib_id`s that are entries of the project library itself (editable in place). Absent from an older backend. */
   project?: string[];
+  /** The derived symbols of the project library, by `lib_id`, each with the `lib_id` of its parent (`(extends ...)`). */
+  derived?: Record<string, string>;
 }
 
 /** `symbol_editor_pin_tool.cpp`'s three "Push Pin ..." context-menu items, folded into one Cmd with a field selector -- see `Cmd`'s own `push_pin_property` doc. */

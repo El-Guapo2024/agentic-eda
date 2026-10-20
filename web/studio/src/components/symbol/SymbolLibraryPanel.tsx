@@ -13,11 +13,15 @@ import { LibraryTree } from "../library/LibraryTree";
 import { hideTreeEntry, pinEntries } from "../library/libraryTreeMenu";
 import { notifyLibraryChanged, useLibraryNames } from "../library/useLibraryNames";
 import { useLibraryTree } from "../../state/libraryTree";
+import { bareName, treeConditions } from "../../kicad-port/symFields";
 
 const labelOf = new Map((actionsData as ActionsFile).actions.map((a) => [a.name, a.label]));
 
-/** `SYMBOL_EDITOR_CONTROL::Init`'s entries, in its order (the `ctxMenu.AddItem` calls); `needs` is the condition: a library context or a selected symbol. */
-const MENU: { name: string; needs: "library" | "symbol" }[] = [
+/**
+ * `SYMBOL_EDITOR_CONTROL::Init`'s entries, in its order (the `ctxMenu.AddItem` calls); `needs` is the condition: a library context, a selected symbol, a derived symbol
+ * (`derivedSymbolSelectedCondition`: Flatten) or a related one (`relatedSymbolSelectedCondition`: it is derived or something is derived from it).
+ */
+const MENU: { name: string; needs: "library" | "symbol" | "derived" | "related" }[] = [
   { name: "eeschema.SymbolLibraryControl.newSymbol", needs: "library" },
   { name: "eeschema.SymbolLibraryControl.deriveFromExistingSymbol", needs: "symbol" },
   { name: "eeschema.SymbolLibraryControl.saveLibraryAs", needs: "library" },
@@ -32,9 +36,9 @@ const MENU: { name: string; needs: "library" | "symbol" }[] = [
   { name: "eeschema.SymbolLibraryControl.deleteSymbol", needs: "symbol" },
   { name: "eeschema.SymbolLibraryControl.renameFootprint", needs: "symbol" }, // `SCH_ACTIONS::renameSymbol` (named "...renameFootprint" in KiCad's table)
   { name: "eeschema.InteractiveEdit.symbolProperties", needs: "symbol" },
-  { name: "eeschema.SymbolLibraryControl.flattenSymbol", needs: "symbol" },
+  { name: "eeschema.SymbolLibraryControl.flattenSymbol", needs: "derived" },
   { name: "eeschema.SymbolLibraryControl.showLibraryFieldsTable", needs: "library" },
-  { name: "eeschema.SymbolLibraryControl.showRelatedLibraryFieldsTable", needs: "symbol" },
+  { name: "eeschema.SymbolLibraryControl.showRelatedLibraryFieldsTable", needs: "related" },
 ];
 
 export function SymbolLibraryPanel() {
@@ -46,13 +50,18 @@ export function SymbolLibraryPanel() {
 
   const selected = useMemo(() => state.treeSelection, [state.treeSelection]);
   const { pinned } = useLibraryTree("symbol");
+  /** A derived symbol's row says what it derives from (KiCad draws a derived symbol in italics). */
+  const derivedHints = useMemo(() => Object.fromEntries(Object.entries(names.derived).map(([id, parent]) => [id, `derived from ${bareName(parent)}`])), [names.derived]);
 
   // `LIBRARY_EDITOR_CONTROL::AddContextMenuItems` adds Pin / Unpin Library before `Init`'s entries and Hide Library Tree after them.
   const menu = (sel: string[], libs: string[]): MenuEntry[] => {
     const hasSymbol = sel.length > 0;
+    const cond = treeConditions(names.derived, sel[0]);
     const entries: MenuEntry[] = pinEntries(libs, pinned, run, isEnabled);
     for (const { name, needs } of MENU) {
       if (needs === "symbol" && !hasSymbol) continue;
+      if (needs === "derived" && !cond.isDerived) continue;
+      if (needs === "related" && !cond.related) continue;
       const enabled = isEnabled(name);
       const label = labelOf.get(name) ?? name;
       entries.push({ label: enabled ? label : `${label} (not ported yet)`, disabled: !enabled, onSelect: () => run(name) });
@@ -74,6 +83,7 @@ export function SymbolLibraryPanel() {
       searchIndex={names.searchIndex}
       selected={selected}
       current={state.libId}
+      hints={derivedHints}
       multi
       onSelect={(names) => dispatch({ type: "SET_TREE_SELECTION", names })}
       onOpen={(name) => {

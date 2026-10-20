@@ -1,48 +1,19 @@
 // Port of eeschema/dialogs/dialog_pin_properties.cpp -- number, name,
 // electrical type, graphic shape, orientation, length, name/number text
 // size, position, visible, "common to all units"/"common to all body
-// styles". Not ported: the "Alternate pin function definitions" grid
-// (a real but rarely-used sub-feature -- defining extra name/type/shape
-// combinations the same physical pin can switch between, e.g. a
-// microcontroller pin with both a GPIO and a UART alternate function;
-// this app's own `LibrarySymbolPin` has no field for it, a documented
-// gap, see PARITY-symedit.md) and the live preview pane (the main canvas
-// already shows the pin as drawn, one dialog-width away).
+// styles", and the "Alternate pin function definitions" pane (the name,
+// electrical type and graphic style a microcontroller pin switches to as
+// a GPIO or a UART pin, `PinAlternatesGrid.tsx`). Not ported: the live
+// preview pane (the main canvas already shows the pin as drawn, one
+// dialog-width away).
 import { useEffect, useState } from "react";
 import type { LibrarySymbolPin, PinElectricalType, PinShape } from "../../api/types";
 import { useSymApi, useSymDispatch, useSymState } from "../../state/symbolEditorStore";
 import { useStudioState } from "../../state/store";
 import { umFrom, umTo } from "../../state/units";
 import { angleDegToOrientation, orientationToAngleDeg, PIN_ORIENTATIONS, type PinOrientation } from "../../kicad-port/pinOrientation";
-
-/** `pin_type.cpp::InitTables`'s own combo order, confirmed directly from source this session. */
-const ELECTRICAL_TYPE_OPTIONS: { value: PinElectricalType; label: string }[] = [
-  { value: "input", label: "Input" },
-  { value: "output", label: "Output" },
-  { value: "bidirectional", label: "Bidirectional" },
-  { value: "tri_state", label: "Tri-state" },
-  { value: "passive", label: "Passive" },
-  { value: "free", label: "Free" },
-  { value: "unspecified", label: "Unspecified" },
-  { value: "power_in", label: "Power input" },
-  { value: "power_out", label: "Power output" },
-  { value: "open_collector", label: "Open collector" },
-  { value: "open_emitter", label: "Open emitter" },
-  { value: "no_connect", label: "Unconnected" },
-];
-
-/** Same source, the Graphic Style combo's own order. */
-const SHAPE_OPTIONS: { value: PinShape; label: string }[] = [
-  { value: "line", label: "Line" },
-  { value: "inverted", label: "Inverted" },
-  { value: "clock", label: "Clock" },
-  { value: "inverted_clock", label: "Inverted clock" },
-  { value: "input_low", label: "Input low" },
-  { value: "clock_low", label: "Clock low" },
-  { value: "output_low", label: "Output low" },
-  { value: "edge_clock_high", label: "Falling edge clock" },
-  { value: "non_logic", label: "NonLogic" },
-];
+import { alternatesError, PIN_SHAPE_OPTIONS as SHAPE_OPTIONS, PIN_TYPE_OPTIONS as ELECTRICAL_TYPE_OPTIONS } from "../../kicad-port/symPinAlternates";
+import { PinAlternatesGrid } from "./PinAlternatesGrid";
 
 const ORIENTATION_LABELS: Record<PinOrientation, string> = { right: "Right", left: "Left", up: "Up", down: "Down" };
 
@@ -64,12 +35,14 @@ export function PinPropertiesDialog() {
   const close = () => dispatch({ type: "SET_PIN_PROPERTIES_ID", id: null });
 
   const [form, setForm] = useState<LibrarySymbolPin | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   // Populate the editable copy only when the dialog opens on a (possibly
   // different) pin -- same convention every other dialog in this app
   // uses, so a mid-edit keystroke survives the next ~700ms poll.
   useEffect(() => {
     if (pin) setForm(pin);
+    setError(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -83,12 +56,15 @@ export function PinPropertiesDialog() {
   );
 
   const submit = async () => {
+    // `TransferDataFromWindow`: a row of the alternates grid needs a name
+    const problem = alternatesError(form.alternates ?? []);
+    if (problem) return setError(problem);
     if (await api.editPin(id, form)) close();
   };
 
   return (
     <div className="dialog-backdrop" onClick={close}>
-      <div className="dialog" style={{ width: 460 }} onClick={(e) => e.stopPropagation()}>
+      <div className="dialog" style={{ width: 520 }} onClick={(e) => e.stopPropagation()}>
         <div className="dialog-header">
           <span>Pin Properties</span>
           <span>{pin.number || "(no number)"}</span>
@@ -151,6 +127,12 @@ export function PinPropertiesDialog() {
               <input type="checkbox" checked={form.body_style === 0} onChange={(e) => set("body_style", e.target.checked ? 0 : state.activeBodyStyle)} />
             </label>
           </div>
+          <PinAlternatesGrid rows={form.alternates ?? []} onChange={(rows) => set("alternates", rows)} pin={pin} available={!state.symbol?.has_alternate_body_style} onError={setError} />
+          {error && (
+            <p style={{ color: "var(--chrome-danger)", margin: "8px 0 0" }} data-testid="pin-props-error">
+              {error}
+            </p>
+          )}
         </div>
         <div className="dialog-footer">
           <button
@@ -161,8 +143,10 @@ export function PinPropertiesDialog() {
           >
             Delete Pin
           </button>
-          <button onClick={close}>Cancel</button>
-          <button className="primary" onClick={submit}>
+          <button onClick={close} data-testid="pin-props-cancel">
+            Cancel
+          </button>
+          <button className="primary" onClick={submit} data-testid="pin-props-ok">
             OK
           </button>
         </div>
