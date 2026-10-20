@@ -30,6 +30,7 @@ pub mod arc_drag;
 pub mod arcs;
 pub mod chain;
 pub mod diff_pair;
+pub mod delay;
 pub mod dp_meander_placer;
 pub mod dp_placer;
 pub mod direction45;

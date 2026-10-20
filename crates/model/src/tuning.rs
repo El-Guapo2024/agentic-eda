@@ -85,7 +85,28 @@ pub struct TargetRange {
 /// `MEANDER_SETTINGS::LENGTH_UNCONSTRAINED`, micrometres: a million millimetres, what a pattern with no length target holds.
 pub const LENGTH_UNCONSTRAINED_UM: Um = 1_000_000_000;
 
+/// `MEANDER_SETTINGS::DELAY_UNCONSTRAINED`, attoseconds: a million picoseconds, what a pattern with no delay target holds.
+pub const DELAY_UNCONSTRAINED_AS: i64 = 1_000_000 * 1_000_000;
+
+/// `MEANDER_SETTINGS::DEFAULT_DELAY_TOLERANCE`, attoseconds: 0.1 ps.
+pub const DEFAULT_DELAY_TOLERANCE_AS: i64 = 100_000;
+
 impl TargetRange {
+    /// The delay target of a pattern with none (`SetTargetLengthDelay( DELAY_UNCONSTRAINED )`), attoseconds.
+    pub fn delay_unconstrained() -> TargetRange {
+        TargetRange { min: 0, opt: DELAY_UNCONSTRAINED_AS, max: DELAY_UNCONSTRAINED_AS }
+    }
+
+    /// No delay target: any delay is tuned.
+    pub fn is_delay_unconstrained(&self) -> bool {
+        self.opt == DELAY_UNCONSTRAINED_AS
+    }
+
+    /// `SetTargetLengthDelay( aOpt )`: the delay with the default tolerance (0.1 ps) either side of it, attoseconds.
+    pub fn delay_around(opt: i64) -> TargetRange {
+        TargetRange { min: opt - DEFAULT_DELAY_TOLERANCE_AS, opt, max: opt + DEFAULT_DELAY_TOLERANCE_AS }
+    }
+
     /// No target: any length is tuned.
     pub fn unconstrained() -> TargetRange {
         TargetRange { min: 0, opt: LENGTH_UNCONSTRAINED_UM, max: LENGTH_UNCONSTRAINED_UM }
@@ -117,6 +138,31 @@ fn d_true() -> bool {
 
 fn d_skew() -> TargetRange {
     TargetRange { min: -100, opt: 0, max: 100 }
+}
+
+fn d_delay() -> TargetRange {
+    TargetRange::delay_unconstrained()
+}
+
+/// `SetTargetSkewDelay( 0 )`: a skew of no time, 0.1 ps either side (attoseconds).
+fn d_skew_delay() -> TargetRange {
+    TargetRange { min: -DEFAULT_DELAY_TOLERANCE_AS, opt: 0, max: DEFAULT_DELAY_TOLERANCE_AS }
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+fn is_zero(v: &i64) -> bool {
+    *v == 0
+}
+
+fn is_default_delay(r: &TargetRange) -> bool {
+    r.is_delay_unconstrained()
+}
+
+fn is_default_skew_delay(r: &TargetRange) -> bool {
+    *r == d_skew_delay()
 }
 
 /// A length-tuning pattern.
@@ -153,6 +199,16 @@ pub struct TuningPattern {
     pub target_length: TargetRange,
     #[serde(default = "d_skew")]
     pub target_skew: TargetRange,
+    /// `m_isTimeDomain` ("Delay" in the Tuning Pattern dialog): the pattern is tuned to a delay -- `target_delay`, or `target_skew_delay` for a skew pattern
+    /// -- through the tuning profile of the net's class, instead of to a length.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_time_domain: bool,
+    /// `m_targetLengthDelay`: the delay a time domain pattern is tuned to, attoseconds (KiCad's internal unit of time: a picosecond is 1 000 000).
+    #[serde(default = "d_delay", skip_serializing_if = "is_default_delay")]
+    pub target_delay: TargetRange,
+    /// `m_targetSkewDelay`: the skew of a skew pattern as a delay, attoseconds. (KiCad's board file does not keep it.)
+    #[serde(default = "d_skew_delay", skip_serializing_if = "is_default_skew_delay")]
+    pub target_skew_delay: TargetRange,
     /// `m_baseLine`: the line the pattern was made on, straight, from `origin` to `end` (the clicked net's).
     #[serde(default)]
     pub base_line: Vec<Point>,
@@ -167,6 +223,10 @@ pub struct TuningPattern {
     /// `m_tuningLength`, nanometres: the length (or skew) the tuner reported last.
     #[serde(default)]
     pub last_tuning_length: i64,
+    /// The delay (or skew as a delay) the tuner reported last, attoseconds, of a time domain pattern. (KiCad keeps only the length, and formats it as a time in the
+    /// pattern's row of the Generators Manager; the board file does not have this.)
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub last_tuning_delay: i64,
     /// `m_lastNetName`: the net of the tuned track.
     #[serde(default)]
     pub last_netname: String,
@@ -192,8 +252,18 @@ impl TuningPattern {
             "tuned" => "tuned",
             _ => "unknown",
         };
+        if self.is_time_domain {
+            return format!("{} ({status})", fmt_ps(self.last_tuning_delay as f64 / 1_000_000.0));
+        }
         format!("{} ({status})", fmt_mm(self.last_tuning_length as f64 / 1_000_000.0))
     }
+}
+
+/// A time in picoseconds the way the unit formatter writes it: up to four decimals, no trailing zeros, with the unit.
+fn fmt_ps(ps: f64) -> String {
+    let s = format!("{ps:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("{} ps", if s.is_empty() || s == "-" { "0" } else { s })
 }
 
 /// A length in millimetres the way the unit formatter writes it: up to four decimals, no trailing zeros, with the unit.
@@ -224,11 +294,15 @@ mod tests {
             override_custom_rules: true,
             target_length: TargetRange::around(50_000),
             target_skew: TargetRange { min: -50, opt: 0, max: 50 },
+            is_time_domain: true,
+            target_delay: TargetRange::delay_around(120_000_000),
+            target_skew_delay: TargetRange { min: -1_000_000, opt: 0, max: 1_000_000 },
             base_line: vec![Point { x: 1_000, y: 2_000 }, Point { x: 9_000, y: 2_000 }],
             base_line_coupled: vec![Point { x: 1_000, y: 2_400 }, Point { x: 9_000, y: 2_400 }],
             last_track_width: 200,
             last_diff_pair_gap: 200,
             last_tuning_length: 49_999_999,
+            last_tuning_delay: 300_050_000,
             last_netname: "D+".into(),
             last_status: "tuned".into(),
             member_ids: vec!["trk_a".into(), "trk_b".into()],
@@ -251,6 +325,10 @@ mod tests {
         assert_eq!((p.corner_radius_percent, p.rounded, p.single_sided, p.initial_side), (80, true, false, PatternSide::Left));
         assert!(p.target_length.is_unconstrained());
         assert_eq!(p.target_skew, TargetRange { min: -100, opt: 0, max: 100 });
+        assert!(!p.is_time_domain && p.target_delay.is_delay_unconstrained() && p.target_skew_delay == TargetRange { min: -100_000, opt: 0, max: 100_000 });
+        // a pattern that has none of the time domain is written without it
+        let text = serde_json::to_string(&p).unwrap();
+        assert!(!text.contains("is_time_domain") && !text.contains("target_delay") && !text.contains("target_skew_delay"), "{text}");
         assert!(p.member_ids.is_empty() && p.id.is_empty());
         assert_eq!(p.tuning_info(), "0 mm (unknown)");
     }
@@ -260,8 +338,13 @@ mod tests {
         assert_eq!(TargetRange::around(100_000), TargetRange { min: 99_900, opt: 100_000, max: 100_100 });
         assert!(TargetRange::unconstrained().is_unconstrained());
         let mut p = pattern();
+        p.is_time_domain = false;
         p.last_tuning_length = 75_980_000;
         p.last_status = "too_short".into();
         assert_eq!(p.tuning_info(), "75.98 mm (too short)");
+        // a time domain pattern's row is its delay, in picoseconds
+        p.is_time_domain = true;
+        p.last_tuning_delay = 280_250_000;
+        assert_eq!(p.tuning_info(), "280.25 ps (too short)");
     }
 }

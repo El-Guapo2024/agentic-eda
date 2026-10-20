@@ -772,6 +772,14 @@ impl BoardRules {
         EffectiveClass { name, constituents }
     }
 
+    /// `NETCLASS::GetTuningProfile` of the effective net class of `net` (`NET_SETTINGS::makeEffectiveNetclass`: the first of the classes in precedence order,
+    /// the Default class last, that names one), and the profile of that name if the project has it (`TUNING_PROFILE_PARAMETERS_USER_DEFINED::GetTuningProfile`).
+    pub fn tuning_profile_of(&self, net: &str) -> Option<&setup_pages::TuningProfile> {
+        let effective = self.effective_class(net);
+        let name = effective.constituents.iter().find_map(|c| self.tuning_profiles.class_profiles.get(c).filter(|n| !n.is_empty()))?;
+        self.tuning_profiles.profiles.iter().find(|p| &p.name == name)
+    }
+
     /// The value of a class setting for `net`: the first class in precedence order that sets it, else the Default class's.
     fn class_setting<T>(&self, net: &str, get: impl Fn(&NetClass) -> Option<T>) -> Option<T> {
         self.net_classes.iter().filter(|c| c.matches(net)).find_map(&get).or_else(|| self.default_class.as_ref().and_then(&get))

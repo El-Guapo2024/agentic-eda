@@ -7,8 +7,8 @@
 //   PCB_TUNING_PATTERN::MakeEditPoints  the four handles (the server sends their places; this decides which one a click is on)
 
 import type { TuningPatterns, Um } from "../api/types";
-import type { PatternSide, TuneKind, TunePiece, TuneReadout, TuneSessionReply, TuneSettings, TuningPattern } from "../api/tuneTypes";
-import { LENGTH_UNCONSTRAINED_UM } from "../api/tuneTypes";
+import type { PatternSide, TargetRange, TuneKind, TunePiece, TuneReadout, TuneSessionReply, TuneSettings, TuningPattern } from "../api/tuneTypes";
+import { ATTOSECONDS_PER_PS, DELAY_UNCONSTRAINED_AS, LENGTH_UNCONSTRAINED_UM } from "../api/tuneTypes";
 import { tuningPatternsOf } from "./setupPages";
 
 /** `DrawState`'s `tune` variant: a tuning pattern on its way to the board. */
@@ -76,6 +76,14 @@ export interface ReadoutBox {
 /** `TUNING_STATUS_VIEW_ITEM::ViewDraw`: the length is red when it is outside `[min, max]`, the minimum when the length is below it, the maximum when it is above. `fmt` prints a length in micrometres. */
 export function readoutBox(r: TuneReadout, fmt: (um: number) => string): ReadoutBox {
   const um = (mm: number) => mm * 1000;
+  // a time domain pattern: the box reads the delay and the range of the delay, in picoseconds (`SetIsTimeDomain`)
+  if (r.time_domain && r.delay) {
+    const d = r.delay;
+    const has = d.min != null && d.max != null;
+    const below = has && d.current < (d.min as number);
+    const above = has && d.current > (d.max as number);
+    return { header: [d.label, "min", "max"], values: [fmtPs(d.current), d.min == null ? "---" : fmtPs(d.min), d.max == null ? "---" : fmtPs(d.max)], bad: [below || above, below, above] };
+  }
   const min = r.min, max = r.max;
   const has = min != null && max != null;
   const below = has && r.current < min;
@@ -87,9 +95,23 @@ export function readoutBox(r: TuneReadout, fmt: (um: number) => string): Readout
   };
 }
 
+/** A time in picoseconds the way the unit formatter writes it: up to four decimals, no trailing zeros, with the unit. */
+export function fmtPs(ps: number): string {
+  const s = ps.toFixed(4).replace(/\.?0+$/, "");
+  return `${s === "" || s === "-" ? "0" : s} ps`;
+}
+
 /** One line for the message panel / status bar while a pattern is placed: `current length 21.99 mm, target 22 mm (-0.01 mm), tuned`. */
 export function readoutSummary(r: TuneReadout, fmt: (um: number) => string): string {
   const um = (mm: number) => mm * 1000;
+  if (r.time_domain && r.delay) {
+    const d = r.delay;
+    const parts = [`${d.label} ${fmtPs(d.current)}`];
+    if (d.opt != null) parts.push(`${d.label === "current skew" ? "target skew" : "target"} ${fmtPs(d.opt)}${d.delta != null ? ` (${d.delta >= 0 ? "+" : "-"}${fmtPs(Math.abs(d.delta))})` : ""}`);
+    parts.push(r.status === "tuned" ? "tuned" : r.status === "too_short" ? "too short" : "too long");
+    if (r.constraint) parts.push(`from ${r.constraint}`);
+    return parts.join(", ");
+  }
   const parts = [`${r.label} ${fmt(um(r.current))}`];
   if (r.opt != null) parts.push(`${r.label === "current skew" ? "target skew" : "target"} ${fmt(um(r.opt))}${r.delta != null ? ` (${r.delta >= 0 ? "+" : "-"}${fmt(um(Math.abs(r.delta)))})` : ""}`);
   parts.push(r.status === "tuned" ? "tuned" : r.status === "too_short" ? "too short" : "too long");
@@ -119,7 +141,15 @@ export function settingsOfPattern(p: TuningPattern): Required<TuneSettings> {
     override_custom_rules: p.override_custom_rules,
     target_length: p.target_length.opt >= LENGTH_UNCONSTRAINED_UM ? null : p.target_length,
     target_skew: p.target_skew,
+    time_domain: p.is_time_domain ?? false,
+    target_delay: !p.target_delay || p.target_delay.opt >= DELAY_UNCONSTRAINED_AS ? null : psRange(p.target_delay),
+    target_skew_delay: psRange(p.target_skew_delay ?? { min: -100_000, opt: 0, max: 100_000 }),
   };
+}
+
+/** A delay target (attoseconds) in picoseconds, the unit the server's settings take. */
+export function psRange(r: TargetRange): TargetRange {
+  return { min: r.min / ATTOSECONDS_PER_PS, opt: r.opt / ATTOSECONDS_PER_PS, max: r.max / ATTOSECONDS_PER_PS };
 }
 
 /** What the tool carries to its next session (`meanderSettings.m_spacing = placer->MeanderSettings().m_spacing` ...): the pattern's settings, but not its target length -- that is a pattern's own. */

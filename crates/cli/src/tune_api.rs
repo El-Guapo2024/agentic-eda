@@ -690,6 +690,86 @@ mod tests {
         assert_eq!(tracks_of(&back), tracks_of(&before), "the board is as it was");
     }
 
+    /// The board's Design Rules > Tuning Profiles: the Default class names a profile of 6.1 ps/mm on F.Cu, with the time domain on or off.
+    fn with_profile(dir: &Path, time_domain: bool) {
+        use eda_model::setup_pages::{ProfileLayerEntry, ProfileType, TuningProfile, TuningProfiles};
+        let intent = dir.join("intent.yaml");
+        let mut model: ConstraintModel = serde_yaml::from_str(&std::fs::read_to_string(&intent).unwrap()).unwrap();
+        let entry = ProfileLayerEntry { signal_layer: "F.Cu".into(), top_reference_layer: None, bottom_reference_layer: None, width_um: 200, diff_pair_gap_um: 0, delay_as_per_mm: 6_100_000 };
+        let profile = TuningProfile { name: "FR4".into(), profile_type: ProfileType::Single, target_impedance: 50.0, enable_time_domain_tuning: time_domain, layer_entries: vec![entry], via_propagation_delay_as: 0, via_overrides: vec![] };
+        model.board.tuning_profiles = TuningProfiles { profiles: vec![profile], class_profiles: [("Default".to_string(), "FR4".to_string())].into() };
+        std::fs::write(&intent, serde_yaml::to_string(&model).unwrap()).unwrap();
+    }
+
+    fn net_ps(dir: &Path, net: &str) -> f64 {
+        let (_, design, model) = board::load(dir).unwrap();
+        let scene = Scene::of(design, model);
+        let id = scene.world.iter().find_map(|(id, it)| match it {
+            eda_pns::item::Item::Segment(s) if s.net.as_deref() == Some(net) => Some(id),
+            _ => None,
+        });
+        let path = eda_pns::tuning_path::assemble_tuning_path(&scene.world, id.expect("a segment of the net")).unwrap();
+        path.delay(&scene.world, &scene.env, &scene.env.delay_params(net).expect("a profile")) as f64 / 1e6
+    }
+
+    /// The time domain: a net whose class names a tuning profile with the time domain on starts a pattern in picoseconds; the target is a delay, the status box reads
+    /// the delay, the pattern is stored as a time domain one, and the net is as slow as asked.
+    #[test]
+    fn a_track_is_tuned_to_a_delay_in_picoseconds_through_the_tuning_profile_of_its_class() {
+        let dir = scratch("delay");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        with_profile(&dir, true);
+        // 20 mm at 6.1 ps/mm is 122 ps
+        assert!((net_ps(&dir, "SIG") - 122.0).abs() < 0.01);
+        let h = hover(&dir, &body(json!({ "x": 15_000, "y": 9_550, "tolerance": 100, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(h["ok"], json!(true), "{h}");
+        assert_eq!(h["readout"]["time_domain"], json!(true), "the class names a profile with the time domain on: {h}");
+        assert!((h["readout"]["delay"]["current"].as_f64().unwrap() - 122.0).abs() < 0.01, "{h}");
+        assert_eq!(h["readout"]["delay"]["label"], "current delay");
+        assert_eq!(h["pattern"]["is_time_domain"], json!(true));
+
+        // 150 ps is 24.59 mm of F.Cu track
+        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_delay": 150 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        assert_eq!(m["moved"], json!(true), "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let d = &m["readout"]["delay"];
+        assert!((d["current"].as_f64().unwrap() - 150.0).abs() < 0.2, "{m}");
+        assert_eq!((d["min"].as_f64().map(|v| (v * 10.0).round()), d["max"].as_f64().map(|v| (v * 10.0).round())), (Some(1499.0), Some(1501.0)), "0.1 ps either side of the target: {m}");
+        let f = fix(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        assert_eq!(f["ok"], json!(true), "{f}");
+        let after = design_of(&dir);
+        let patterns = tune_edit::patterns_of(&after);
+        assert_eq!(patterns.len(), 1);
+        let pat = &patterns[0];
+        assert!(pat.is_time_domain && pat.target_delay.opt == 150_000_000, "{pat:?}");
+        assert!((pat.last_tuning_delay as f64 / 1e6 - 150.0).abs() < 0.2, "{}", pat.last_tuning_delay);
+        assert_eq!(pat.tuning_info().split(' ').next_back(), Some("(tuned)"));
+        assert!(pat.tuning_info().contains(" ps "), "{}", pat.tuning_info());
+        assert!((net_ps(&dir, "SIG") - 150.0).abs() < 0.2, "{}", net_ps(&dir, "SIG"));
+        // the other net has the same profile, and is untouched
+        assert!((net_ps(&dir, "OTHER") - 122.0).abs() < 0.01);
+
+        board::undo(&dir, "test", None).expect("one undo takes the whole pattern back");
+        assert!((net_ps(&dir, "SIG") - 122.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn a_profile_without_the_time_domain_leaves_a_pattern_in_length_and_the_dialog_can_ask_for_the_other() {
+        let dir = scratch("delay_off");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        with_profile(&dir, false);
+        let h = hover(&dir, &body(json!({ "x": 15_000, "y": 9_550, "tolerance": 100, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(h["readout"]["time_domain"], json!(false), "{h}");
+        // the dialog's Delay radio makes it a time domain pattern all the same (every delay is zero without the profile's time domain: the target length is the net's own)
+        let s = start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "time_domain": true, "target_delay": 150 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        assert_eq!(m["readout"]["time_domain"], json!(true));
+        assert!(m["readout"]["current"].as_f64().unwrap() - 20.0 < 0.01, "the net was not lengthened: {m}");
+    }
+
     #[test]
     fn a_pattern_is_tuned_again_and_removed_and_each_is_one_undo_step() {
         let dir = scratch("retune");
@@ -1025,5 +1105,39 @@ mod tests {
         assert_eq!(fix(&sk, &body(json!({})))["ok"], json!(true));
         let after = judge(&sk, &rule_skew, "skew_out_of_range");
         assert!(after.is_empty(), "after the skew tuner kicad-cli finds the pair within 0.15 mm: {after:?}");
+    }
+
+    /// The time domain against kicad-cli: the Default class names a tuning profile (6.1 ps/mm on F.Cu, time domain on), a `length` rule asks for 150 ps, and the
+    /// DRC measures the delay of the nets itself -- the 20 mm track (122 ps) is out of range, the track tuned to 150 ps in picoseconds is within it.
+    #[test]
+    fn kicad_cli_measures_the_delay_of_a_track_tuned_in_picoseconds_through_its_tuning_profile() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped (set EDA_SLOW_TESTS=1): runs kicad-cli");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found: skipping");
+            return;
+        }
+        let judge = |dir: &Path, rules: &str| -> Vec<String> {
+            let (_, design, mut model) = board::load(dir).unwrap();
+            model.board.custom_rules_text = Some(format!("(version 1)\n{rules}\n"));
+            let report = eda_kicad_engine::drc_scratch(&design, &model).expect("kicad-cli runs the DRC");
+            report.violations.iter().filter(|v| v.kind == "length_out_of_range").map(|v| v.description.clone()).collect()
+        };
+        let dir = scratch("kicad_delay");
+        setup(&dir, ["SIG", "OTHER"], vec![]);
+        with_profile(&dir, true);
+        let rule = |range: &str| format!("(rule \"sig\" (condition \"A.NetName == 'SIG'\") (constraint length {range}))");
+        let untuned = judge(&dir, &rule("(min 149.5ps) (max 150.5ps)"));
+        assert_eq!(untuned.len(), 1, "the control: the straight 20 mm track takes 122 ps, out of 149.5..150.5: {untuned:?}");
+        assert!(untuned[0].contains("ps"), "kicad-cli reports a time: {untuned:?}");
+        start(&dir, &body(json!({ "x": 8_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_delay": 150 } })));
+        mv(&dir, &body(json!({ "x": 22_000, "y": 9_000 })));
+        assert_eq!(fix(&dir, &body(json!({})))["ok"], json!(true));
+        let tuned = judge(&dir, &rule("(min 149.5ps) (max 150.5ps)"));
+        assert!(tuned.is_empty(), "kicad-cli measures the tuned track within 149.5..150.5 ps: {tuned:?}");
+        let tighter = judge(&dir, &rule("(min 149.9ps) (max 150.1ps)"));
+        assert!(tighter.is_empty(), "and within 0.1 ps of the target: {tighter:?}");
     }
 }
