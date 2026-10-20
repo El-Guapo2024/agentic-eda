@@ -9,7 +9,7 @@
 // kicad-port/designBlocks.ts's.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { blockContextMenu, blockInfo, composeBlockGroups, findBlock, parseBlockId, type BlockMenuId } from "../../kicad-port/designBlocks";
-import { initialSelection, itemKey, moveSelection, visibleRows, groupKey, type ChooserRow } from "../../kicad-port/libChooser";
+import { initialSelection, moveSelection, visibleRows, type ChooserRow } from "../../kicad-port/libChooser";
 import { PIN_GLYPH } from "../../kicad-port/libraryTreeState";
 import { addToHistory, ensureDesignBlocks, refreshDesignBlocks, selectDesignBlock, setDesignBlockSearch, setPlaceOptions, useDesignBlocksUi, type BlockEditor } from "../../state/designBlocks";
 import { useActionRunner } from "../../actions/useActionRunner";
@@ -290,6 +290,3 @@ export function DesignBlocksPane({ editor, hasSelection }: { editor: BlockEditor
     </div>
   );
 }
-
-// the group row's key and an item's key, for the tests that look rows up
-export { groupKey, itemKey };

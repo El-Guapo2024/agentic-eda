@@ -89,11 +89,6 @@ export function schematicPlacement(path: string, block: string, options: PlaceOp
   return { path, block, asSheet: options.asSheet, keepAnnotations: options.keepAnnotations, repeated: options.repeated, asGroup: options.asGroup };
 }
 
-/** The sheet's own fields a block carries, as the sheet `drawSheetFromDesignBlock` makes gets them: hidden user fields, one per default field. */
-export function sheetFieldsOf(block: Block): { name: string; value: string; hidden: true }[] {
-  return block.fields.map((f) => ({ name: f.name, value: f.value, hidden: true as const }));
-}
-
 /** The first block with this id in the libraries, or undefined. */
 export function findBlock(libraries: readonly BlockLibrary[], id: string | null): Block | undefined {
   const { lib, name } = parseBlockId(id);

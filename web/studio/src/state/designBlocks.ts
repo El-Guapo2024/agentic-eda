@@ -18,7 +18,6 @@ export type BlockId = string;
 /** The two editors that have a Design Blocks pane. */
 export type BlockEditor = "schematic" | "pcb";
 
-
 export interface DesignBlocksUi {
   selected: BlockId | null;
   options: PlaceOptions;
@@ -162,10 +161,6 @@ export function setDesignBlockPaneShown(editor: BlockEditor, shown: boolean): vo
   set({ shown: { ...current.shown, [editor]: shown } }, true);
 }
 
-export function toggleDesignBlockPane(editor: BlockEditor): void {
-  setDesignBlockPaneShown(editor, !current.shown[editor]);
-}
-
 /** The check mark of View > Design Blocks (`designBlockCond`: `m_auimgr.GetPane( DesignBlocksPaneName() ).IsShown()`); undefined for any other action. */
 export function designBlockChecked(name: string): boolean | undefined {
   if (name === "eeschema.SchDesignBlockControl.showDesignBlockPanel") return current.shown.schematic;
@@ -190,10 +185,4 @@ export function setDesignBlockLibraryPinned(lib: string, pin: boolean): void {
   if (pin) pinned.add(lib);
   else pinned.delete(lib);
   set({ pinned }, true);
-}
-
-/** Test hook: back to the first-run state. */
-export function resetDesignBlocksUi(): void {
-  current = { selected: null, options: { ...DEFAULT_OPTIONS }, history: [], pinned: new Set(), search: "", version: 0, shown: { schematic: false, pcb: false }, reply: null, loading: false, error: null };
-  for (const l of [...listeners]) l();
 }
