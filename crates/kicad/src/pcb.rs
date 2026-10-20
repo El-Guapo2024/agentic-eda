@@ -1035,15 +1035,16 @@ pub(crate) fn write_footprint(
         match pad.kind {
             PadKind::ThroughHole | PadKind::NonPlatedHole => {
                 // Footprint::validate guarantees a through-hole/non-plated
-                // pad declares a drill, round or slot; inventing one here
-                // shipped a different hole than the circuit-json writer
-                // invented.
+                // pad of a footprint built here declares a drill, round or slot;
+                // inventing one here shipped a different hole than the
+                // circuit-json writer invented.
                 // `(drill D)` / `(drill oval W H)`, with the copper shape's offset inside it (`format( PAD )`).
                 let offset = shape_text.offset.map(|(ox, oy)| format!(" (offset {} {})", mm(ox), mm(oy))).unwrap_or_default();
                 match (pad.drill, pad.drill_slot) {
                     (Some(d), _) => write!(out, " (drill {}{offset})", mm(d)).unwrap(),
                     (None, Some((w, h))) => write!(out, " (drill oval {} {}{offset})", mm(w), mm(h)).unwrap(),
-                    (None, None) => unreachable!("Footprint::validate requires a drill on a through-hole/non-plated pad"),
+                    // A pad of a board's file that says no drill (the Allegro importer makes them): `format( PAD )` writes the token for a hole of some size only.
+                    (None, None) => {}
                 }
                 if art_layers.is_empty() {
                     write!(out, " (layers \"*.Cu\" \"*.Mask\")").unwrap();
@@ -3083,5 +3084,31 @@ mod tests {
         let (back, _, _) = crate::import_kicad_pcb(&out).unwrap();
         let types: Vec<String> = back.drawings.as_ref().unwrap().footprint_extras.iter().find(|e| e.id == "R1").unwrap().pads.iter().map(|p| p.pin_type.clone()).collect();
         assert_eq!(types, ["passive", "free", ""]);
+    }
+
+    /// A through-hole pad the board's file gave no drill (KiCad's Allegro importer makes them: 155 on one of the QA boards) is written with none, as `format( PAD )` does for a
+    /// hole of no size; the export used to panic on it ("Footprint::validate requires a drill").
+    #[test]
+    fn a_through_hole_pad_with_no_drill_is_written_with_none() {
+        let board = r#"(kicad_pcb (version 20241229) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "Test:NoDrill" (layer "F.Cu") (at 10 10)
+    (property "Reference" "U1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "U" (at 0 0 0) (layer "F.Fab"))
+    (fp_rect (start -2 -2) (end 2 2) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" thru_hole rect (at -1 0) (size 1.5 1.5) (layers "*.Cu" "*.Mask"))
+    (pad "2" thru_hole circle (at 1 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask"))
+  )
+)"#;
+        let (design, model, _) = crate::import_kicad_pcb(board).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        let pad = |number: &str| out.lines().find(|l| l.contains(&format!("(pad \"{number}\" "))).unwrap_or_else(|| panic!("pad {number} in {out}")).to_string();
+        assert!(pad("1").contains("thru_hole") && !pad("1").contains("(drill"), "{}", pad("1"));
+        assert!(pad("2").contains("(drill 0.8)"), "{}", pad("2"));
+        assert!(crate::import_kicad_pcb(&out).is_ok());
     }
 }
