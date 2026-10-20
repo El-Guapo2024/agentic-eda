@@ -894,7 +894,10 @@ pub(crate) fn write_footprint(
         Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) && model.footprints.iter().any(|f| f.name == base) => base.to_string(),
         _ => lib_name,
     };
-    let lib_id = if lib_name.contains(':') { lib_name } else { format!("eda:{lib_name}") };
+    // A footprint the file wrote with no library link is written with none (`LIB_ID::Format`: the bare item name); the others, built here and named for no library,
+    // are in the `eda` library, which the board file stands for.
+    let own_extra = design.drawings.as_ref().and_then(|d| d.footprint_extras.iter().find(|e| e.id == fp.id));
+    let lib_id = if lib_name.contains(':') || own_extra.is_some_and(|e| e.unlinked_name.as_deref() == Some(lib_name.as_str())) { lib_name } else { format!("eda:{lib_name}") };
 
     writeln!(out, "\t(footprint {}", sexpr_str(&lib_id)).unwrap();
     if locked {
@@ -2783,5 +2786,54 @@ mod tests {
             assert_eq!((t.size_um, t.stroke_width, t.justify, t.mirror, t.angle, &t.layer), (u.size_um, u.stroke_width, u.justify, u.mirror, u.angle, &u.layer));
             assert_eq!(a.text_extra(&t.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)), b.text_extra(&u.id).map(|x| (x.width_um, x.valign, x.bold, x.italic, x.knockout, x.auto_thickness)));
         }
+    }
+
+    /// A board with a few footprints, for the tests of what a footprint of a KiCad file keeps: `D5` has no library link and no courtyard, `R1` has both, and the
+    /// courtyard of `Q1` is a pair of `fp_line`s that close nothing.
+    const FOOTPRINT_BOARD: &str = r#"(kicad_pcb (version 20240108) (generator "pcbnew")
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (footprint "D5" (layer "F.Cu") (at 10 10)
+    (property "Reference" "D1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "D" (at 0 0 0) (layer "F.Fab"))
+    (attr through_hole)
+    (pad "1" thru_hole rect (at -2.54 0) (size 1.8 1.8) (drill 0.9) (layers "*.Cu" "*.Mask"))
+    (pad "2" thru_hole circle (at 2.54 0) (size 1.8 1.8) (drill 0.9) (layers "*.Cu" "*.Mask"))
+  )
+  (footprint "Resistor_SMD:R_0603_1608Metric" (layer "F.Cu") (at 20 10)
+    (property "Reference" "R1" (at 0 0 0) (layer "F.SilkS"))
+    (property "Value" "R" (at 0 0 0) (layer "F.Fab"))
+    (attr smd)
+    (fp_rect (start -1.5 -0.7) (end 1.5 0.7) (stroke (width 0.05) (type solid)) (fill none) (layer "F.CrtYd"))
+    (pad "1" smd roundrect (at -0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+    (pad "2" smd roundrect (at 0.8 0) (size 0.8 0.95) (layers "F.Cu" "F.Paste" "F.Mask") (roundrect_rratio 0.25))
+  )
+)"#;
+
+    /// A footprint the file gave no library link (`(footprint "D5" ..)`, `LIB_ID::GetLibNickname()` empty) is written with none, as `LIB_ID::Format` writes it: the bare name.
+    /// Written as `eda:D5` it linked the footprint to a library that does not exist, and a project that checks library links reported it (72 times on `complex_hierarchy`,
+    /// `lib_footprint_issues`). A footprint built here, named for no library, is in the `eda` library as it always was.
+    #[test]
+    fn a_footprint_with_no_library_link_is_written_with_none() {
+        let (design, model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
+        let out = export_kicad_pcb(&design, &model, &meta()).unwrap();
+        assert!(out.contains("(footprint \"D5\"\n"), "{out}");
+        assert!(out.contains("(footprint \"Resistor_SMD:R_0603_1608Metric\"\n"), "{out}");
+        assert!(!out.contains("\"eda:"), "{out}");
+        // Read again: the same, and the board is stable.
+        let (back, back_model, _) = crate::import_kicad_pcb(&out).unwrap();
+        let again = export_kicad_pcb(&back, &back_model, &meta()).unwrap();
+        assert!(again.contains("(footprint \"D5\"\n") && !again.contains("\"eda:"), "{again}");
+        // A part built here is still in the `eda` library.
+        let (made, made_model) = fixture();
+        assert!(export_kicad_pcb(&made, &made_model, &meta()).unwrap().contains("(footprint \"eda:SOT-23\""));
+        // The footprint exchanged for another one is not the unlinked one any more.
+        let (swapped, mut swapped_model, _) = crate::import_kicad_pcb(FOOTPRINT_BOARD).unwrap();
+        swapped_model.parts.iter_mut().find(|p| p.reference == "D1").unwrap().footprint = Some("SOT-23".into());
+        let out = export_kicad_pcb(&swapped, &swapped_model, &meta()).unwrap();
+        assert!(out.contains("(footprint \"eda:SOT-23\""), "{out}");
     }
 }

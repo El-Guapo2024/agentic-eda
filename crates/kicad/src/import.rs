@@ -1476,6 +1476,11 @@ fn import_footprints(
 /// `(net_tie_pad_groups ..)`.
 fn footprint_extra_header(fp: &[Sexpr], reference: &str, file_version: i64) -> FootprintExtra {
     let mut e = FootprintExtra { id: reference.to_string(), ..Default::default() };
+    // `(footprint "D5" ..)`: a name with no `Library:` in front of it is a footprint with no library link (`LIB_ID::GetLibNickname()` is empty).
+    let name = sexpr::txt(fp, 1).unwrap_or_default();
+    if !name.contains(':') {
+        e.unlinked_name = Some(name.to_string());
+    }
     if let Some(m) = sexpr::find(fp, "solder_mask_margin").and_then(|f| sexpr::num(f, 1)) {
         let m = mm_to_um(m);
         e.solder_mask_margin = if file_version <= 20240201 && m == 0 { None } else { Some(m) };
