@@ -505,6 +505,76 @@ export interface Drawings {
   dimension_settings: DimensionSettings;
   /** The length-tuning patterns of the board (`PCB_TUNING_PATTERN`, crates/model/src/tuning.rs); each is also listed in `groups` with the tracks of its meander as members. */
   tuning_patterns?: TuningPattern[];
+  /** The tables of the board (`PCB_TABLE`, crates/model/src/table.rs), with the geometry `crates/cli/src/table_json.rs` works out. Absent when the board has none. */
+  tables?: BoardTable[];
+}
+
+/** `STROKE_PARAMS` of a table's border or separators: a width of -1 is "not drawn", `default` is drawn solid. */
+export interface TableStrokeInfo {
+  width: Um;
+  style: "default" | "solid" | "dash" | "dot" | "dash_dot" | "dash_dot_dot";
+  color: [number, number, number, number] | null;
+}
+
+/** One line of a cell's text, placed: the point its first glyph's origin is at, board um (fractions kept). */
+export interface TablePlacedLine {
+  text: string;
+  x: number;
+  y: number;
+}
+
+/** `PCB_TABLECELL` (`crates/cli/src/table_json.rs`). `corners` are top-left, top-right, bottom-right, bottom-left as the table reads them. */
+export interface BoardTableCell {
+  /** `<table id>:<row>:<col>`, the id a click on the cell selects. */
+  id: string;
+  row: number;
+  col: number;
+  /** The text as typed (`${VAR}` and all). */
+  text: string;
+  /** The variables resolved and the lines broken to the column; absent when it is `text`. */
+  shown?: string;
+  col_span: number;
+  row_span: number;
+  corners: [[Um, Um], [Um, Um], [Um, Um], [Um, Um]];
+  /** left, top, right, bottom. */
+  margins: [Um, Um, Um, Um];
+  h_align: "left" | "center" | "right";
+  v_align: "top" | "center" | "bottom";
+  size_w: Um;
+  size_h: Um;
+  /** 0 is KiCad's automatic stroke width. */
+  thickness: Um;
+  /** The stroke width the glyphs are drawn with. */
+  pen: number;
+  bold: boolean;
+  italic: boolean;
+  mirror: boolean;
+  face: string | null;
+  line_spacing: number;
+  color: [number, number, number, number] | null;
+  lines: TablePlacedLine[];
+}
+
+/** `PCB_TABLE` (`crates/cli/src/table_json.rs`). */
+export interface BoardTable {
+  id: string;
+  layer: string;
+  /** The top-left corner of the first cell. */
+  x: Um;
+  y: Um;
+  /** Millidegrees. */
+  angle: number;
+  rows: number;
+  cols: number;
+  col_widths: Um[];
+  row_heights: Um[];
+  border: { external: boolean; header: boolean; stroke: TableStrokeInfo };
+  separators: { rows: boolean; cols: boolean; stroke: TableStrokeInfo };
+  /** x0, y0, x1, y1 of the box round the first and the last cell. */
+  bbox: [Um, Um, Um, Um];
+  /** The lines `DrawBorders` draws. */
+  borders: { a: [Um, Um]; b: [Um, Um]; width: Um; style: TableStrokeInfo["style"]; color: [number, number, number, number] | null }[];
+  cells: BoardTableCell[];
 }
 
 /** `crates/model/src/ir.rs` `Group` -- `PCB_GROUP` (on the board) and `SCH_GROUP` (on a sheet): a named set of member item ids (a part reference, a track/via/zone/shape/text id, a wire, a label ...) and of other groups' ids, no geometry of its own. */

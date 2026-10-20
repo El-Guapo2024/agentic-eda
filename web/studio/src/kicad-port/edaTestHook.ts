@@ -134,7 +134,7 @@ type IdItems = readonly { id?: string }[] | undefined;
 export interface BoardLike {
   parts?: readonly { ref: string; pads?: readonly { num: string }[]; fields?: readonly { id: string }[] }[];
   routing?: { tracks?: IdItems; vias?: IdItems; zones?: IdItems } | null;
-  drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems } | null;
+  drawings?: { shapes?: IdItems; texts?: IdItems; dimensions?: IdItems; groups?: IdItems; tables?: readonly { id: string; cells?: IdItems }[] } | null;
 }
 
 /** The schematic's state JSON as far as the hook reads it. */
@@ -168,6 +168,9 @@ export function boardLists(board: BoardLike | null | undefined): ItemLists {
     text: ids(board?.drawings?.texts),
     dimension: ids(board?.drawings?.dimensions),
     group: ids(board?.drawings?.groups),
+    // `PCB_TABLE` and its cells (`<table id>:<row>:<col>`): a click selects a cell, a window a table.
+    table: ids(board?.drawings?.tables),
+    tablecell: (board?.drawings?.tables ?? []).flatMap((t) => ids(t.cells)),
   };
 }
 

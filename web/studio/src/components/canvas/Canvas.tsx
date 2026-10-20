@@ -70,6 +70,7 @@ import type { MenuNode } from "../../kicad/types";
 import { findNearestCorner, findNearestEdgeInsertionIndex, insertCorner, moveCorner } from "../../kicad-port/zonePointEditor";
 import { zoneLayers } from "../../kicad-port/zoneLayers";
 import { defaultDimensionPayload } from "../../kicad-port/dimensionConvert";
+import { cellAddress, cellById, tableById } from "../../kicad-port/tables";
 import { arcClick, arcMotion } from "../../kicad-port/arcGeom";
 import { bezierClick, bezierFinishDouble, bezierMotion } from "../../kicad-port/bezierGeom";
 import { arcAngleSnap, arcClickPoints, bezierShape, ptXY } from "./curveTools";
@@ -538,9 +539,18 @@ export function Canvas() {
           const hit = board ? fieldById(board, c.id) : null;
           return hit ? `${hit.field.name} field of ${hit.part.ref}${hit.field.name === "Reference" ? "" : ` (${hit.field.text})`}` : `Field ${c.id}`;
         }
+        // `PCB_TABLE::GetItemDescription`, `PCB_TABLECELL::GetItemDescription`.
+        case "table": {
+          const t = board ? tableById(board, c.id) : undefined;
+          return t ? `${t.cols} column table` : `Table ${c.id}`;
+        }
+        case "tablecell": {
+          const hit = board ? cellById(board, c.id) : undefined;
+          return hit ? `Table cell ${cellAddress(hit.cell.row, hit.cell.col)}` : `Table cell ${c.id}`;
+        }
       }
     },
-    [api]
+    [api, board]
   );
 
   /**
