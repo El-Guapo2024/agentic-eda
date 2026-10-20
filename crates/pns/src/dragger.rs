@@ -351,9 +351,36 @@ impl Dragger {
             try_walkaround(node, rules, settings, &self.net, self.layer, self.width.max(1), &pts)
         };
         let walked = walked.filter(|w| w.len() >= 2)?;
-        // `optimizeAndUpdateDraggedLine`: with "Optimize entire track being dragged" off -- KiCad's default, and all this port has --
-        // the walked line is kept as it is
-        Some(DragPreview { pts: walked, arcs: dragged.arcs, ..DragPreview::default() })
+        // `optimizeAndUpdateDraggedLine( draggedWalk, origLine, aP )` (the lines of an arc drag are left as they are: DM_ARC is not a PNS drag)
+        let walked_line = Line { pts: walked, arcs: dragged.arcs.clone(), ..dragged };
+        let walked_line = if self.kind == DragKind::Arc { walked_line } else { self.optimize_and_update_dragged_line(node, rules, settings, &walked_line, &self.original, to) };
+        Some(DragPreview { pts: walked_line.pts, arcs: walked_line.arcs, ..DragPreview::default() })
+    }
+
+    /// `DRAGGER::optimizeAndUpdateDraggedLine( aDragged, aOrig, aP )`: with "Optimize entire track being dragged" on, the dragged line is run through the
+    /// optimizer -- `MERGE_SEGMENTS | KEEP_TOPOLOGY | RESTRICT_AREA`, and `MERGE_COLINEAR` with "Smooth dragged segments" -- restricted to the area the drag
+    /// changed (`ChangedArea( aOrig )`, or the cursor's own point when nothing changed, which disables the optimization), with the vertex under the cursor (or
+    /// the nearest point of the line to it, which is made a vertex: `Split( anchor )`) preserved. With it off, KiCad's default, the line is kept as it is.
+    /// `world` is the world the optimizer checks against, without the line's old place.
+    fn optimize_and_update_dragged_line(&self, world: &Node, rules: &BoardRules, settings: &RoutingSettings, dragged: &Line, orig: &Line, cursor: Point) -> Line {
+        use crate::optimizer::{effort, optimize_constrained, Constraints};
+        if !settings.optimize_entire_dragged_track {
+            return dragged.clone();
+        }
+        let mut flags = effort::MERGE_SEGMENTS | effort::KEEP_TOPOLOGY | effort::RESTRICT_AREA;
+        if settings.smooth_dragged_segments {
+            flags |= effort::MERGE_COLINEAR;
+        }
+        let affected = shove::changed_area(dragged, orig).unwrap_or((cursor.x, cursor.y, cursor.x, cursor.y));
+        let mut anchor = cursor;
+        if dragged.find(cursor).is_none() {
+            anchor = nearest_point_of(&dragged.pts, cursor);
+        }
+        let mut line = dragged.clone();
+        line.clear_links();
+        split_chain_at(&mut line.pts, anchor);
+        let constraints = Constraints { area: Some(affected), preserve_vertex: Some(anchor), keep_topology: true };
+        optimize_constrained(&line, world, rules, &self.exclude(), flags | effort::PRESERVE_VERTEX, &constraints)
     }
 
     /// `DRAGGER::dragShove`: whatever the dragged shape runs into is pushed aside, a pad walked around. `None` when it cannot be
@@ -367,7 +394,10 @@ impl Dragger {
         // `m_mode == DM_CORNER && m_draggedSegmentIndex == 0`: the head is dragged by its first vertex, so its last point is the pusher
         let reversed = self.kind == DragKind::Corner && self.grabbed_index == 0;
         let outcome = shove::shove_dragged_line(node, &self.original.segment_ids, &dragged.pts, &dragged.arcs, &self.net, self.layer, self.width.max(1), rules, settings, reversed)?;
-        Some(DragPreview { pts: outcome.head, arcs: dragged.arcs, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, ..DragPreview::default() })
+        // `optimizeAndUpdateDraggedLine( draggedPostShove, m_draggedLine, aP )`, against the world the shove left (`m_lastNode = m_shove->CurrentNode()->Branch()`)
+        let shoved = Line { pts: outcome.head.clone(), arcs: dragged.arcs.clone(), ..dragged };
+        let shoved = if self.kind == DragKind::Arc { shoved } else { self.optimize_and_update_dragged_line(&outcome.world, rules, settings, &shoved, &self.original, to) };
+        Some(DragPreview { pts: shoved.pts, arcs: shoved.arcs, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, ..DragPreview::default() })
     }
 
     /// One cursor position: what `dragMarkObstacles` / `dragWalkaround` / `dragShove` make of it, and whether it `ok`s -- their return
@@ -515,7 +545,11 @@ impl Dragger {
             }
             if dragged.point_count() >= 2 && path_collides(node, rules, &dragged.net, dragged.layer, dragged.width.max(1), &dragged.pts, &exclude) {
                 match try_walkaround(node, rules, settings, &dragged.net, dragged.layer, dragged.width.max(1), &dragged.pts) {
-                    Some(walked) => dragged.pts = walked,
+                    Some(walked) => {
+                        dragged.pts = walked;
+                        // `optimizeAndUpdateDraggedLine( walkLine, origLine, aP )`
+                        dragged = self.optimize_and_update_dragged_line(node, rules, settings, &dragged, &original, to);
+                    }
                     None => colliding = true,
                 }
             }
@@ -600,6 +634,30 @@ impl Dragger {
 
 /// `DRAGGER::tryWalkaround`: walk `pts` around what it runs into (`WP_SHORTEST`, the walkaround iteration limit, a detour of up
 /// to 30 times the line's length), or `None` if it cannot be done.
+/// `SHAPE_LINE_CHAIN::NearestPoint( aP )`: the point of the polyline nearest `p` (a vertex or the foot of the perpendicular on a segment).
+fn nearest_point_of(pts: &[Point], p: Point) -> Point {
+    let mut best: Option<(i128, Point)> = None;
+    for w in pts.windows(2) {
+        let seg = eda_drc::kimath::Seg::new(w[0], w[1]);
+        let q = seg.nearest_point(p);
+        let d = ((q.x - p.x) as i128).pow(2) + ((q.y - p.y) as i128).pow(2);
+        if best.is_none_or(|(bd, _)| d < bd) {
+            best = Some((d, q));
+        }
+    }
+    best.map(|(_, q)| q).or_else(|| pts.first().copied()).unwrap_or(p)
+}
+
+/// `SHAPE_LINE_CHAIN::Split( aP )`: `p`, which lies on the chain, becomes a vertex of it (when it is not one already).
+fn split_chain_at(pts: &mut Vec<Point>, p: Point) {
+    if pts.contains(&p) {
+        return;
+    }
+    if let Some(i) = (0..pts.len().saturating_sub(1)).find(|&i| eda_drc::kimath::Seg::new(pts[i], pts[i + 1]).sq_distance_to_point(p) <= 1) {
+        pts.insert(i + 1, p);
+    }
+}
+
 fn try_walkaround(node: &Node, rules: &BoardRules, settings: &RoutingSettings, net: &Net, layer: i32, width: Um, pts: &[Point]) -> Option<Vec<Point>> {
     let mut walker = Walker::new(node, rules);
     walker.iteration_limit = settings.walkaround_iteration_limit.max(0) as u32;
@@ -714,6 +772,37 @@ mod tests {
         assert_eq!(slid(&walk), vec![p(0, 0), p(1900, 0), p(2900, 1000), p(3000, 1000), p(4000, 2000)], "62 um is not enough");
         let rough = RoutingSettings { smooth_dragged_segments: false, ..shove };
         assert_eq!(slid(&rough), vec![p(0, 0), p(1900, 0), p(2900, 1000), p(3000, 1000), p(4000, 2000)], "with smoothing off nothing snaps");
+    }
+
+    /// `optimizeAndUpdateDraggedLine`: with "Optimize entire track being dragged" on, the dragged line is optimized -- shortcuts where the drag changed
+    /// the line, the point of the line nearest the cursor kept. Off (KiCad's default), the line is the drag's own. Here the middle segment of two jogs is
+    /// dragged to a place where it makes a bump; the bump and the jogs next to it are merged into the diagonal the line had.
+    #[test]
+    fn optimize_entire_track_being_dragged_merges_what_the_drag_left_next_to_the_dragged_segment() {
+        let mut node = Node::new();
+        let pts = [p(0, 0), p(1000, 0), p(1500, 500), p(2500, 500), p(3000, 1000), p(4000, 1000)];
+        let ids: Vec<ItemId> = pts.windows(2).enumerate().map(|(i, w)| node.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: w[0], b: w[1], width: 250, source_track: Some(("t".into(), i)), locked: false }))).collect();
+        let rules = rules();
+        let dragged = |settings: &RoutingSettings| {
+            let mut d = Dragger::start(&node, p(2000, 500), ids[2]).unwrap();
+            assert_eq!((d.kind, d.grabbed_index), (DragKind::Segment, 2));
+            let pv = d.drag(&node, &rules, settings, p(1400, 800));
+            assert!(!pv.colliding && !pv.restored);
+            (pv.pts.clone(), d.finish(&node, &rules, settings, p(1400, 800), false).expect("a clear drag commits").tracks[0].pts.clone())
+        };
+        let off = RoutingSettings { mode: Mode::Walkaround, smooth_dragged_segments: false, ..RoutingSettings::default() };
+        let on = RoutingSettings { optimize_entire_dragged_track: true, ..off.clone() };
+        let (plain, plain_commit) = dragged(&off);
+        assert_eq!(plain, vec![p(0, 0), p(1000, 0), p(1800, 800), p(2800, 800), p(3000, 1000), p(4000, 1000)]);
+        assert_eq!(plain_commit, plain);
+        let (optimized, optimized_commit) = dragged(&on);
+        assert_eq!(optimized, vec![p(0, 0), p(1000, 0), p(2000, 1000), p(4000, 1000)], "the bump is gone: it is the shortcut with the fewest corners that still passes the cursor's point of the line");
+        assert_eq!(optimized_commit, optimized, "what is committed is what is shown");
+        assert!(on_45(&optimized));
+        // Shove mode runs the same hook against the world the shove left
+        let on_shove = RoutingSettings { mode: Mode::Shove, ..on };
+        let (shoved, _) = dragged(&on_shove);
+        assert!(shoved.len() < plain.len() && on_45(&shoved), "{shoved:?}");
     }
 
     /// A 30-degree segment (imported geometry, not on KiCad's 45-degree grid) between a horizontal and a vertical leg is dragged at the

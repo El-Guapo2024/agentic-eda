@@ -31,11 +31,15 @@ export interface RouterSettings {
   fixAllSegments: boolean;
   /** `SmoothDraggedSegments()` -- "Smooth dragged segments": a dragged segment or corner snaps to line up with the segments around it. */
   smoothDragged: boolean;
+  /** `GetOptimizeEntireDraggedTrack()` -- "Optimize entire track being dragged": a dragged track is run through the optimizer where the drag changed it (`DRAGGER::optimizeAndUpdateDraggedLine`). */
+  optimizeEntireDragged: boolean;
+  /** `GetAutoPosture()` -- "Use mouse path to set track posture": the elbow of the head follows how the mouse has moved (`MOUSE_TRAIL_TRACER`). */
+  autoPosture: boolean;
   /** `GetSnapToTracks()`: not a row of the dialog but the magnetic setting for tracks (`TOOL_BASE::checkSnap`) -- a route ends on the same-net track under the cursor. Set by the canvas ([`withTrackSnapping`]); left out, the router's own default (on). */
   snapToTracks?: boolean;
 }
 
-/** `ROUTING_SETTINGS`' constructor (pns_routing_settings.cpp): Walk around, medium effort, shove vias, remove loops, smart pads, fix all segments. */
+/** `ROUTING_SETTINGS`' constructor (pns_routing_settings.cpp): Walk around, medium effort, shove vias, remove loops, smart pads, fix all segments, smooth dragged segments, auto posture; no optimizing of the entire dragged track. */
 export const DEFAULT_ROUTER_SETTINGS: RouterSettings = {
   mode: "walkaround",
   optimizerEffort: "medium",
@@ -47,6 +51,8 @@ export const DEFAULT_ROUTER_SETTINGS: RouterSettings = {
   freeAngleMode: false,
   fixAllSegments: true,
   smoothDragged: true,
+  optimizeEntireDragged: false,
+  autoPosture: true,
 };
 
 /** The `settings` object of the router's start requests (`settings_of` in crates/cli/src/route_api.rs). */
@@ -63,6 +69,8 @@ export function routerSettingsToWire(s: RouterSettings): Record<string, string |
     free_angle_mode: s.freeAngleMode,
     fix_all_segments: s.fixAllSegments,
     smooth_dragged_segments: s.smoothDragged,
+    optimize_entire_dragged_track: s.optimizeEntireDragged,
+    auto_posture: s.autoPosture,
   };
 }
 
@@ -78,12 +86,3 @@ export type ModeOption = "freeAngleMode" | "allowDrcViolations" | "shoveVias" | 
 export function modeOptionEnabled(option: ModeOption, mode: RouteMode): boolean {
   return option === "freeAngleMode" || option === "allowDrcViolations" ? mode === "mark_obstacles" : mode === "shove";
 }
-
-/**
- * The rows of the dialog that KiCad has and this router cannot honour, with the reason each is shown disabled
- * (the same convention the Board Setup and zone dialogs use for a field with nothing behind it).
- */
-export const UNSUPPORTED_ROUTER_OPTIONS = {
-  optimizeEntireDraggedTrack: "Not implemented: a drag is not optimized afterwards (DRAGGER::optimizeAndUpdateDraggedLine needs the optimizer's KEEP_TOPOLOGY and PRESERVE_VERTEX, which are not ported).",
-  autoPosture: "Not implemented: the posture follows the last segment and the / key. The router is asked one cursor position at a time, with no mouse trail to read it from (MOUSE_TRAIL_TRACER is not ported).",
-} as const;

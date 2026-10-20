@@ -52,12 +52,10 @@ pub enum OptEffort {
 /// from the `settings` object of a start request
 /// (`crates/cli/src/route_api.rs`), and Interactive Router Settings sets them.
 ///
-/// KiCad's other settings are not here because nothing here could read them:
-/// `m_autoPosture` (no mouse trail: the posture is the last segment's, or the
-/// `/` key's), `m_suggestFinish` (KiCad hides it: "not implemented"),
+/// `auto_posture` is read by the line placer's mouse trail (`MOUSE_TRAIL_TRACER`), `optimize_entire_dragged_track` by the dragger. KiCad's other
+/// settings are not here because nothing here could read them: `m_suggestFinish` (KiCad hides it: "not implemented"),
 /// `m_followMouse`, `m_snapToPads`, `m_cornerMode` (only the mitered 45-degree
-/// corner is built), `m_optimizeEntireDraggedTrack` (`DRAGGER::optimizeAndUpdateDraggedLine`
-/// needs the optimizer's `KEEP_TOPOLOGY` and `PRESERVE_VERTEX`, which are not ported) and the walkaround's time limit
+/// corner is built) and the walkaround's time limit
 /// (`m_walkaroundTimeLimit`: KiCad declares it and nothing reads it).
 #[derive(Debug, Clone)]
 pub struct RoutingSettings {
@@ -109,6 +107,13 @@ pub struct RoutingSettings {
     /// same-net track under the cursor -- in the middle of a segment too, which is split there -- instead of in empty space beside
     /// it. The default is the magnetic settings' own, "Capture cursor in track tool". Default `true`.
     pub snap_to_tracks: bool,
+    /// `GetOptimizeEntireDraggedTrack()` ("Optimize entire track being dragged", `optimize_entire_dragged_track`): after a drag is walked or shoved the
+    /// dragged line is run through the optimizer, restricted to the area the drag changed (`DRAGGER::optimizeAndUpdateDraggedLine`). Default `false`.
+    pub optimize_entire_dragged_track: bool,
+    /// `GetAutoPosture()` ("Use mouse path to set track posture", `auto_posture`): the posture of the head -- whether the 45-degree elbow is a straight
+    /// leg first or a diagonal one -- is read from how the cursor has moved since the route (or the last fixed leg) started (`MOUSE_TRAIL_TRACER`);
+    /// off, it is the posture the route started with, or the one `/` flipped it to. Default `true`.
+    pub auto_posture: bool,
 }
 
 impl RoutingSettings {
@@ -142,6 +147,8 @@ impl Default for RoutingSettings {
             free_angle_mode: false,
             smooth_dragged_segments: true,
             snap_to_tracks: true,
+            optimize_entire_dragged_track: false,
+            auto_posture: true,
         }
     }
 }

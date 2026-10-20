@@ -264,6 +264,24 @@ impl Node {
         self.joints.get(&JointKey::new(pos, net))
     }
 
+    /// `NODE::QueryJoints( bbox, joints, layers, ITEM::SOLID_T )` for what the optimizer's `KEEP_TOPOLOGY_CONSTRAINT` asks: the position and net of the joint of
+    /// every pad (`Solid`) that is inside `bbox` (`x0, y0, x1, y1`) and on one of `layers`.
+    pub fn solid_joints_in(&self, bbox: (Um, Um, Um, Um), layers: LayerRange) -> Vec<(Point, Net)> {
+        let mut out: Vec<(Point, Net)> = Vec::new();
+        for id in self.index.query(bbox) {
+            let Some(Item::Solid(s)) = self.items.get(&id) else { continue };
+            let p = s.pos;
+            if p.x < bbox.0 || p.x > bbox.2 || p.y < bbox.1 || p.y > bbox.3 || !s.layers.overlaps(&layers) {
+                continue;
+            }
+            if !out.iter().any(|(q, n)| *q == p && *n == s.net) {
+                out.push((p, s.net.clone()));
+            }
+        }
+        out.sort_by_key(|(p, _)| (p.x, p.y));
+        out
+    }
+
     /// `JOINT::NextSegment`: the item linked at `joint` other than
     /// `current`, if the joint is "trivial" for walk-through purposes --
     /// exactly one same-net, overlapping-layer `Segment` candidate, and no

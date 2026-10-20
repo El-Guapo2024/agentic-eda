@@ -65,7 +65,8 @@ fn mode_of(req: &Value) -> Mode {
 ///
 /// - `mode` (`"mark_obstacles" | "walkaround" | "shove"`), `optimizer_effort` (`"low" | "medium" | "full"`),
 /// - the Interactive Router Settings dialog's switches `shove_vias`, `jump_over_obstacles`, `remove_loops`, `smart_pads`,
-///   `allow_drc_violations` (`CanViolateDRC`), `free_angle_mode`, `fix_all_segments`, `smooth_dragged_segments`, and
+///   `allow_drc_violations` (`CanViolateDRC`), `free_angle_mode`, `fix_all_segments`, `smooth_dragged_segments`,
+///   `optimize_entire_dragged_track` ("Optimize entire track being dragged"), `auto_posture` ("Use mouse path to set track posture"), and
 ///   `snap_to_tracks` (the magnetic setting `checkSnap` hands the router, not a row of the dialog),
 /// - the limits `shove_iteration_limit`, `shove_time_limit` (milliseconds), `walkaround_iteration_limit`,
 ///   `via_force_prop_iteration_limit` and `walkaround_hug_length_threshold`, which KiCad keeps in the settings file only.
@@ -109,6 +110,8 @@ fn settings_over(req: &Value, base: RoutingSettings) -> RoutingSettings {
     flag("fix_all_segments", &mut s.fix_all_segments);
     flag("smooth_dragged_segments", &mut s.smooth_dragged_segments);
     flag("snap_to_tracks", &mut s.snap_to_tracks);
+    flag("optimize_entire_dragged_track", &mut s.optimize_entire_dragged_track);
+    flag("auto_posture", &mut s.auto_posture);
     limit("shove_iteration_limit", &mut s.shove_iteration_limit);
     limit("shove_time_limit", &mut s.shove_time_limit_ms);
     limit("walkaround_iteration_limit", &mut s.walkaround_iteration_limit);
@@ -969,9 +972,9 @@ mod tests {
     /// The settings the dragger and the end-of-route snapping read are in the request's `settings`.
     #[test]
     fn the_drag_and_snap_settings_reach_the_router() {
-        let s = settings_of(&json!({ "settings": { "smooth_dragged_segments": false, "snap_to_tracks": false } }));
-        assert_eq!((s.smooth_dragged_segments, s.snap_to_tracks), (false, false));
+        let s = settings_of(&json!({ "settings": { "smooth_dragged_segments": false, "snap_to_tracks": false, "optimize_entire_dragged_track": true, "auto_posture": false } }));
+        assert_eq!((s.smooth_dragged_segments, s.snap_to_tracks, s.optimize_entire_dragged_track, s.auto_posture), (false, false, true, false));
         let d = settings_of(&json!({}));
-        assert_eq!((d.smooth_dragged_segments, d.snap_to_tracks), (true, true), "KiCad's defaults");
+        assert_eq!((d.smooth_dragged_segments, d.snap_to_tracks, d.optimize_entire_dragged_track, d.auto_posture), (true, true, false, true), "KiCad's defaults");
     }
 }

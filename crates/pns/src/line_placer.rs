@@ -10,14 +10,16 @@
 //! mouse sample -- not a continuous in-process tick stream. Two
 //! consequences follow directly, both documented in `PARITY.md`:
 //!
-//! 1. **No `MOUSE_TRAIL_TRACER`.** KiCad infers posture automatically from
-//!    the *area* swept between two candidate paths and the actual recorded
-//!    mouse trail -- a heuristic that needs a dense stream of intermediate
-//!    mouse positions to mean anything. This port keeps the posture
-//!    *state* (`direction`, a [`Direction45`]) and the explicit toggle
-//!    (`flip_posture`, the `/` key), continues it from the last fixed
-//!    segment the way KiCad does too, but does not try to guess a better
-//!    posture from cursor movement alone.
+//! 1. **The mouse trail is the cursor positions the studio asks about.**
+//!    KiCad infers the posture from the *area* swept between two candidate
+//!    paths and the path the mouse took (`MOUSE_TRAIL_TRACER`, ported in
+//!    [`crate::mouse_trail`]). Here every `preview` is a `Move`: the cursor
+//!    it is asked about is a point of the trail, as the studio sends one
+//!    request per mouse sample, and the posture of the head is what the
+//!    tracer says it is (`GetPosture`), unless "Use mouse path to set
+//!    track posture" is off or `/` has flipped it (`flip_posture`). A fix
+//!    starts a new trail from the last fixed point, continuing in the
+//!    direction of the last segment, as `FixRoute` does.
 //! 2. **No live "tail" mutation between fixes (`reduceTail`/`mergeHead`/
 //!    `handlePullback`).** Those exist to stop a *continuously re-walked*
 //!    tail from accumulating zig-zags across thousands of small mouse
@@ -47,15 +49,19 @@
 /// nothing, `OE_MEDIUM`/`OE_FULL` merge segments; smart pads on top when
 /// enabled (KiCad also requires 45-degree corner mode, the only mode this
 /// router places in).
-fn head_effort(settings: &RoutingSettings) -> u32 {
+///
+/// "Smart Pads is incompatible with 90-degree mode for now" and with a posture the person forced with `/`
+/// (`!m_mouseTrailTracer.IsManuallyForced()`).
+fn head_effort(settings: &RoutingSettings, manually_forced: bool) -> u32 {
     let merge = match settings.optimizer_effort {
         crate::settings::OptEffort::Low => 0,
         crate::settings::OptEffort::Medium | crate::settings::OptEffort::Full => optimizer::effort::MERGE_SEGMENTS,
     };
-    merge | if settings.smart_pads { optimizer::effort::SMART_PADS } else { 0 }
+    merge | if settings.smart_pads && !manually_forced { optimizer::effort::SMART_PADS } else { 0 }
 }
 
 use crate::direction45::{CornerMode, Direction45};
+use crate::mouse_trail::MouseTrailTracer;
 use crate::item::{Item, ItemId, Net};
 use crate::layer::LayerRange;
 use crate::line::Line;
@@ -66,6 +72,7 @@ use crate::{optimizer, walkaround};
 use eda_drc::kimath::Shape;
 use eda_model::ir::{Point, Um};
 use eda_model::BoardRules;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 
 /// `ANCHOR_SNAP_UM`-equivalent: how close the cursor must be to a same-net
@@ -146,6 +153,13 @@ pub struct LinePlacer {
     /// Backspace goes back to once every run has been undone.
     initial_direction: Direction45,
     pub manually_forced: bool,
+    /// `m_mouseTrailTracer`: the path the cursor took since the route (or the last fixed leg) started.
+    trail: RefCell<MouseTrailTracer>,
+    /// The cursor of the last `Move` and the tracer as it was before it: asking again about the same cursor (a click at the place the cursor is) starts
+    /// from that state, so it gives the posture the person saw.
+    last_move: RefCell<Option<(Point, MouseTrailTracer)>>,
+    /// The direction of the first segment of the head last shown (`m_currentTrace.CSegment( 0 )`), which `/` flips from.
+    last_head_dir: Cell<Direction45>,
     pub placing_via: bool,
     pub via_diameter: Um,
     pub via_drill: Um,
@@ -180,7 +194,13 @@ impl LinePlacer {
             Some(Item::Segment(s)) if s.b == p => Direction45::from_seg(s.a, s.b),
             _ => Direction45::N,
         };
-        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None }
+        // `LINE_PLACER::Start`: `m_mouseTrailTracer.Clear(); AddTrailPoint( aP ); SetTolerance( m_head.Width() ); SetDefaultDirections( m_initial_direction, UNDEFINED )`
+        let mut trail = MouseTrailTracer::new();
+        trail.clear();
+        trail.add_trail_point(p);
+        trail.set_tolerance(width);
+        trail.set_default_directions(direction, Direction45::Undefined);
+        LinePlacer { net, width, origin: p, direction, initial_direction: direction, manually_forced: false, trail: RefCell::new(trail), last_move: RefCell::new(None), last_head_dir: Cell::new(Direction45::Undefined), placing_via: false, via_diameter: 0, via_drill: 0, via_to_layer: None, runs: Vec::new(), current_layer: layer, idle: false, placement_correct: false, displaced_tracks: BTreeMap::new(), displaced_vias: BTreeMap::new(), exclude_end: Vec::new(), end_split: None }
     }
 
     pub fn fixed_start(&self) -> Point {
@@ -210,7 +230,7 @@ impl LinePlacer {
         // collMask = SOLID_T, .. )`, the head then ends at `aP + force`); the other modes place theirs on the finished head (`place_via`).
         let p = if self.placing_via && settings.mode == Mode::Shove { self.place_via(node, rules, settings, p, self.via_to_layer.unwrap_or(self.current_layer)) } else { p };
         // `buildInitialLine`: `if( GetFreeAngleMode() && Mode() == RM_MarkObstacles ) l = SHAPE_LINE_CHAIN( { m_p_start, aP } )`
-        let raw = if settings.free_angle() { vec![start, p] } else { self.direction.build_initial_trace(start, p, false, CornerMode::Mitered45) };
+        let raw = if settings.free_angle() { vec![start, p] } else { self.posture(settings, p).build_initial_trace(start, p, false, CornerMode::Mitered45) };
         let exclude = self.exclude();
 
         if settings.mode == Mode::Shove {
@@ -234,7 +254,7 @@ impl LinePlacer {
                     // Like `OPTIMIZER::Optimize( &aNewHead, effort, m_currentNode )`
                     // after the shove: against the world the shove left, so a
                     // shortcut is only taken where the pushed items now allow it.
-                    let optimized = optimizer::optimize_with(&line, &outcome.world, rules, &exclude, head_effort(settings));
+                    let optimized = optimizer::optimize_with(&line, &outcome.world, rules, &exclude, head_effort(settings, self.manually_forced));
                     let via = head_via.as_ref().and_then(|_| optimized.pts.last().copied());
                     return HeadResult { pts: optimized.pts, colliding: false, displaced_lines: outcome.displaced_lines, displaced_vias: outcome.displaced_vias, via };
                 }
@@ -258,13 +278,42 @@ impl LinePlacer {
                 match walked {
                     Some(path) => {
                         let line = Line::from_points(self.net.clone(), self.current_layer, self.width, path);
-                        let optimized = optimizer::optimize_with(&line, node, rules, &exclude, head_effort(settings));
+                        let optimized = optimizer::optimize_with(&line, node, rules, &exclude, head_effort(settings, self.manually_forced));
                         HeadResult::plain(optimized.pts, false)
                     }
                     None => HeadResult::plain(raw, true), // ST_STUCK: show the direct line, flagged violating
                 }
             }
         }
+    }
+
+    /// `m_mouseTrailTracer.GetPosture( aP )` (`buildInitialLine`): the direction the head's elbow is built from. With "Use mouse path to set track
+    /// posture" off the tracer only keeps the posture the route started with or `/` flipped it to (`SetMouseDisabled`).
+    fn posture(&self, settings: &RoutingSettings, p: Point) -> Direction45 {
+        let mut trail = self.trail.borrow_mut();
+        trail.set_mouse_disabled(!settings.auto_posture);
+        trail.get_posture(p)
+    }
+
+    /// The start of a `Move` to `p`: the tracer goes back to how it was before the last `Move` when that was to the same cursor, and is remembered
+    /// otherwise.
+    fn begin_move(&self, p: Point) {
+        let mut last = self.last_move.borrow_mut();
+        match &*last {
+            Some((at, before)) if *at == p => *self.trail.borrow_mut() = before.clone(),
+            _ => *last = Some((p, self.trail.borrow().clone())),
+        }
+    }
+
+    /// `m_mouseTrailTracer.Clear(); SetTolerance( m_head.Width() ); AddTrailPoint( start ); SetDefaultDirections( direction, UNDEFINED )`: a new trail
+    /// from the point a fix (or a via) leaves the route at.
+    fn restart_trail(&self, start: Point, direction: Direction45) {
+        let mut t = self.trail.borrow_mut();
+        t.clear();
+        t.set_tolerance(self.width);
+        t.add_trail_point(start);
+        t.set_default_directions(direction, Direction45::Undefined);
+        *self.last_move.borrow_mut() = None;
     }
 
     /// `makeVia( pos )`: a via of the pending size on the layers from the current one to the one the route goes on to.
@@ -298,6 +347,7 @@ impl LinePlacer {
     /// disposable until [`Self::fix`]/[`Self::finish`] actually accepts it
     /// (see the module doc comment).
     pub fn preview(&self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point) -> Preview {
+        self.begin_move(p);
         let (mut snapped_end, snapped_segment) = self.snap_end(node, settings, p);
         let target = snapped_end.unwrap_or(p);
         let head_result = self.build_head(node, rules, settings, target);
@@ -336,6 +386,11 @@ impl LinePlacer {
         } else {
             None
         };
+        // `Move`: "m_mouseTrailTracer.AddTrailPoint( aP )" once the head is routed to it
+        self.trail.borrow_mut().add_trail_point(target);
+        if let Some(w) = head.pts.windows(2).find(|w| w[0] != w[1]) {
+            self.last_head_dir.set(Direction45::from_seg(w[0], w[1]));
+        }
         Preview { runs: self.runs.clone(), head, colliding, via, snapped_end, snapped_segment, displaced_lines: head_result.displaced_lines, displaced_vias: head_result.displaced_vias }
     }
 
@@ -439,6 +494,10 @@ impl LinePlacer {
         self.absorb_displacement(&preview);
         self.runs.push(head);
         self.placement_correct = true;
+        if !real_end {
+            // `FixRoute`: "m_mouseTrailTracer.Clear(); SetTolerance( m_head.Width() ); AddTrailPoint( m_currentStart ); SetDefaultDirections( lastSegDir, UNDEFINED )"
+            self.restart_trail(self.fixed_start(), self.direction);
+        }
         FixOutcome::Fixed { real_end }
     }
 
@@ -459,6 +518,7 @@ impl LinePlacer {
     #[allow(clippy::too_many_arguments)] // the query context (node/rules/settings/p) plus the via's own (layer, diameter, drill) -- splitting either group into its own type would just move the count, not reduce it.
     pub fn switch_layer(&mut self, node: &Node, rules: &BoardRules, settings: &RoutingSettings, p: Point, new_layer: i32, diameter: Um, drill: Um) {
         self.via_to_layer = Some(new_layer);
+        self.begin_move(p);
         let head_result = self.build_head(node, rules, settings, p);
         let shoved_via = head_result.via;
         let mut head = Line::from_points(self.net.clone(), self.current_layer, self.width, head_result.pts);
@@ -479,6 +539,8 @@ impl LinePlacer {
         self.placing_via = false;
         self.via_to_layer = None;
         self.placement_correct = true;
+        // `FixRoute` after a via: "lastSegDir = pl.EndsWithVia() ? DIRECTION_45::UNDEFINED : d_last"
+        self.restart_trail(via_pos, Direction45::Undefined);
     }
 
     /// `LINE_PLACER::UnfixRoute` (Backspace): drop the last fixed run,
@@ -495,6 +557,15 @@ impl LinePlacer {
             .map(|w| Direction45::from_seg(w[0], w[1]))
             .unwrap_or(self.initial_direction);
         let _ = popped;
+        // `UnfixRoute`: "m_mouseTrailTracer.Clear(); SetDefaultDirections( m_initial_direction, m_direction ); AddTrailPoint( m_p_start )"
+        {
+            let mut t = self.trail.borrow_mut();
+            t.clear();
+            t.set_default_directions(self.initial_direction, self.direction);
+            t.add_trail_point(self.fixed_start());
+        }
+        *self.last_move.borrow_mut() = None;
+        self.manually_forced = false;
         true
     }
 
@@ -503,8 +574,18 @@ impl LinePlacer {
     /// is no automatic posture heuristic to lock against in this port, see
     /// the module doc comment, but the flag is kept for parity/clarity).
     pub fn flip_posture(&mut self) {
-        self.direction = self.direction.right();
+        // "In order to fix issue 12369 get the current line placer first direction and copy it to the mouse trail tracer, as the current placer may have
+        // changed the route."
+        let mut t = self.trail.borrow_mut();
+        let first = self.last_head_dir.get();
+        if !t.is_manually_forced() && first != Direction45::Undefined {
+            t.set_default_directions(first, Direction45::Undefined);
+        }
+        t.flip_posture();
+        self.direction = t.direction();
         self.manually_forced = true;
+        // the next `Move` starts from the flipped tracer, not from how it was before the last one
+        *self.last_move.borrow_mut() = None;
     }
 
     pub fn toggle_via(&mut self, enabled: bool, diameter: Um, drill: Um) {
@@ -904,14 +985,69 @@ mod tests {
         assert!(gap >= 200.0 - 2.0, "the via clears the pad by the clearance: {gap} um at {at:?}");
     }
 
+    /// `MOUSE_TRAIL_TRACER` (`buildInitialLine`: `guessedDir = m_mouseTrailTracer.GetPosture( aP )`): the head's elbow follows the path the mouse took --
+    /// along a diagonal and then straight gives a head that starts diagonal -- and with "Use mouse path to set track posture" off it is the posture the route
+    /// started with.
+    #[test]
+    fn the_mouse_path_sets_the_posture_of_the_head_unless_the_setting_is_off() {
+        let (node, rules) = (Node::new(), rules());
+        let on = RoutingSettings::default();
+        assert!(on.auto_posture, "KiCad's default");
+        let off = RoutingSettings { auto_posture: false, ..on.clone() };
+        let first_direction = |settings: &RoutingSettings, up_first: bool| {
+            let placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+            let mut head = Vec::new();
+            for i in 1..=12 {
+                head = placer.preview(&node, &rules, settings, if up_first { Point { x: 500 * i, y: -500 * i } } else { Point { x: 500 * i, y: 0 } }).head.pts;
+            }
+            for i in 1..=12 {
+                head = placer.preview(&node, &rules, settings, if up_first { Point { x: 6000 + 500 * i, y: -6000 } } else { Point { x: 6000 + 500 * i, y: -500 * i } }).head.pts;
+            }
+            assert_eq!(head.len(), 3, "{head:?}");
+            Direction45::from_seg(head[0], head[1])
+        };
+        assert!(first_direction(&on, true).is_diagonal(), "the mouse went up the diagonal first, so does the head");
+        assert!(!first_direction(&on, false).is_diagonal(), "and straight first");
+        // off, the posture is the initial one (straight first, `N` is not diagonal) whatever the mouse did
+        assert!(!first_direction(&off, true).is_diagonal());
+        assert!(!first_direction(&off, false).is_diagonal());
+    }
+
+    /// `FlipPosture` (`/`): the posture flips from the direction of the head shown and stays flipped whatever the mouse does; a fix starts a new trail that
+    /// continues in the direction of the last segment (`FixRoute`).
+    #[test]
+    fn a_flip_stays_and_a_fix_continues_in_the_direction_of_the_last_segment() {
+        let (node, rules) = (Node::new(), rules());
+        let settings = RoutingSettings::default();
+        let mut placer = LinePlacer::start(&node, Point { x: 0, y: 0 }, None, net_of("SIG"), 0, 200);
+        let shown = placer.preview(&node, &rules, &settings, Point { x: 6000, y: -2000 }).head.pts;
+        assert_eq!(Direction45::from_seg(shown[0], shown[1]), Direction45::E, "straight first at the start");
+        placer.flip_posture();
+        assert!(placer.manually_forced);
+        let flipped = placer.preview(&node, &rules, &settings, Point { x: 6000, y: -2000 }).head.pts;
+        assert!(Direction45::from_seg(flipped[0], flipped[1]).is_diagonal(), "E flipped is the next octant: diagonal first, {flipped:?}");
+        // however the mouse moves, the flip holds
+        for i in 1..=10 {
+            let moved = placer.preview(&node, &rules, &settings, Point { x: 6000 + 500 * i, y: -2000 - 700 * i }).head.pts;
+            assert!(Direction45::from_seg(moved[0], moved[1]).is_diagonal(), "{moved:?}");
+        }
+        // a fix: the next leg starts in the direction the last one ended in, and the flip is forgotten (`m_mouseTrailTracer.Clear()`)
+        let at = Point { x: 6000, y: -2000 };
+        assert!(matches!(placer.fix(&node, &rules, &settings, at), FixOutcome::Fixed { real_end: false }));
+        let last = placer.runs[0].pts.windows(2).rev().find(|w| w[0] != w[1]).map(|w| Direction45::from_seg(w[0], w[1])).unwrap();
+        let next = placer.preview(&node, &rules, &settings, Point { x: 12_000, y: -5000 }).head.pts;
+        assert_eq!(Direction45::from_seg(next[0], next[1]), last, "continues in the direction of the last segment: {next:?} after {:?}", placer.runs[0].pts);
+    }
+
     /// `OE_LOW` merges nothing in the head; the default merges segments.
     #[test]
     fn head_effort_follows_the_optimizer_setting() {
         use crate::settings::OptEffort;
         let low = RoutingSettings { optimizer_effort: OptEffort::Low, smart_pads: false, ..RoutingSettings::default() };
-        assert_eq!(head_effort(&low), 0);
+        assert_eq!(head_effort(&low, false), 0);
         let medium = RoutingSettings { optimizer_effort: OptEffort::Medium, smart_pads: true, ..RoutingSettings::default() };
-        assert_eq!(head_effort(&medium), optimizer::effort::MERGE_SEGMENTS | optimizer::effort::SMART_PADS);
+        assert_eq!(head_effort(&medium, false), optimizer::effort::MERGE_SEGMENTS | optimizer::effort::SMART_PADS);
+        assert_eq!(head_effort(&medium, true), optimizer::effort::MERGE_SEGMENTS, "a posture forced with `/` leaves the pad connection alone");
     }
 
     #[test]

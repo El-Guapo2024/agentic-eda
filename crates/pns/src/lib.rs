@@ -45,6 +45,7 @@ pub mod line;
 pub mod line_placer;
 pub mod meander;
 pub mod meander_placer;
+pub mod mouse_trail;
 pub mod node;
 pub mod optimizer;
 pub mod router;

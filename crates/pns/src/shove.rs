@@ -178,7 +178,7 @@ fn merge_area(a: Option<Area>, b: Area) -> Option<Area> {
 
 /// `LINE::ChangedArea` (`pns_line.cpp:1260`): the box around the vertices
 /// where two versions of a line differ, inflated by the wider width.
-fn changed_area(a: &Line, b: &Line) -> Option<Area> {
+pub(crate) fn changed_area(a: &Line, b: &Line) -> Option<Area> {
     let (mut a, mut b) = (a.clone(), b.clone());
     a.simplify();
     b.simplify();
