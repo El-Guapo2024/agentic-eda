@@ -107,12 +107,14 @@ const NOT_AT_THE_END: &str = "Can't find a suitable starting point.  If starting
 pub fn dangling_anchor(node: &Node, item: &Item) -> Option<Point> {
     match item {
         Item::Via(_) | Item::Solid(_) => item.anchors().first().copied(),
-        Item::Segment(s) => {
-            let lonely = |p: Point| node.joint_at(p, &s.net).is_some_and(|j| j.links.len() == 1);
-            if lonely(s.a) {
-                Some(s.a)
-            } else if lonely(s.b) {
-                Some(s.b)
+        Item::Segment(_) | Item::Arc(_) => {
+            // `getDanglingAnchor`: `ARC_T` is `Arc().GetP0()` / `GetP1()` like a segment's ends
+            let (a, b) = item.track_ends()?;
+            let lonely = |p: Point| node.joint_at(p, item.net()).is_some_and(|j| j.links.len() == 1);
+            if lonely(a) {
+                Some(a)
+            } else if lonely(b) {
+                Some(b)
             } else {
                 None
             }

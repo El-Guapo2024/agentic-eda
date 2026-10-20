@@ -883,6 +883,52 @@ mod tests {
         assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&before));
     }
 
+    /// A track that is an arc, put on the board as KiCad's `PCB_ARC` (`Track::new_arc`).
+    fn add_arc_track(dir: &Path, net: &str, start: Point, mid: Point, end: Point) {
+        let (_, mut design, _) = board::load(dir).unwrap();
+        let mut t = eda_model::ir::Track::new_arc(net.into(), "F.Cu".into(), 250, start, mid, end);
+        t.id = format!("trk_arc_{net}");
+        design.routing.as_mut().expect("the board has tracks").tracks.push(t);
+        board::save(dir, &design).unwrap();
+    }
+
+    #[test]
+    fn a_track_that_is_an_arc_can_be_picked_and_a_pattern_is_tuned_along_it() {
+        let dir = scratch("arc");
+        // SIG: 7 mm straight, a quarter arc of radius 3 mm turning up, 5 mm straight on; the arc is a track of its own
+        let h = (3_000.0 * std::f64::consts::FRAC_1_SQRT_2).round() as i64;
+        let (arc_start, arc_mid, arc_end) = (p(12_000, 9_500), p(12_000 + h, 6_500 + h), p(15_000, 6_500));
+        setup_with(&dir, ["SIG", "OTHER"], vec![], vec![("SIG", vec![p(5_000, 9_500), p(12_000, 9_500)]), ("SIG", vec![p(15_000, 6_500), p(15_000, 1_500)]), ("OTHER", vec![p(5_000, 10_500), p(25_000, 10_500)])]);
+        add_arc_track(&dir, "SIG", arc_start, arc_mid, arc_end);
+        let before = design_of(&dir);
+        let original = net_mm(&dir, "SIG");
+        let arc_len = 3.0 * std::f64::consts::FRAC_PI_2;
+        assert!((original - (7.0 + arc_len + 5.0)).abs() < 0.01, "the arc is measured as an arc: {original}");
+
+        // hovering the arc picks it (its track), the pattern would start at the end of it the cursor is nearer to
+        let hov = hover(&dir, &body(json!({ "x": arc_mid.x, "y": arc_mid.y, "tolerance": 100, "layer": "F.Cu", "mode": "single" })));
+        assert_eq!(hov["hit"], json!(true), "{hov}");
+        assert_eq!(hov["pick"]["net"], "SIG");
+        assert!((hov["readout"]["current"].as_f64().unwrap() - original).abs() < 0.01, "{hov}");
+
+        // a pattern from the first straight, through the arc, along the second straight
+        let s = start(&dir, &body(json!({ "x": 6_000, "y": 9_500, "layer": "F.Cu", "mode": "single", "settings": { "target_length": (original * 1000.0).round() as i64 + 3_000 } })));
+        assert_eq!(s["ok"], json!(true), "{s}");
+        let m = mv(&dir, &body(json!({ "x": 15_000, "y": 3_500 })));
+        assert_eq!(m["ok"], json!(true), "{m}");
+        assert_eq!(m["readout"]["status"], "tuned", "{m}");
+        let f = fix(&dir, &body(json!({})));
+        assert_eq!(f["ok"], json!(true), "{f}");
+        let after = design_of(&dir);
+        let rt = after.routing.as_ref().unwrap();
+        // the arc track is replaced by the very same arc: the pattern passes through it as it is
+        let arcs: Vec<_> = rt.tracks.iter().filter(|t| t.net == "SIG").filter_map(|t| t.arc()).collect();
+        assert!(arcs.contains(&(arc_start, arc_mid, arc_end)), "the arc is written back as the arc it was: {arcs:?}");
+        assert!((net_mm(&dir, "SIG") - (original + 3.0)).abs() < 0.1, "{} vs {}", net_mm(&dir, "SIG"), original + 3.0);
+        board::undo(&dir, "test", None).unwrap();
+        assert_eq!(tracks_of(&design_of(&dir)), tracks_of(&before));
+    }
+
     #[test]
     fn a_track_that_cannot_be_tuned_is_refused_with_kicads_message() {
         let dir = scratch("refuse");

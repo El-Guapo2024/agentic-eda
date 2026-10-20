@@ -291,35 +291,37 @@ fn area_allows(area: Area, v1: usize, v2: usize, path: &[eda_model::ir::Point], 
 pub fn optimize_in_area(line: &Line, node: &Node, rules: &BoardRules, exclude: &[ItemId], flags: u32, area: Option<Area>) -> Line {
     let mut out = line.clone();
     out.clear_links();
-    if flags & effort::MERGE_SEGMENTS != 0 {
+    // `bool hasArcs = aLine->ArcCount();` -- "TODO: Fix for arcs": a line that holds an arc is not merged, not obtuse-merged, not smart-padded
+    // and not fanout-cleaned; only its collinear points go, the ones on an arc excepted
+    let has_arcs = out.arc_count() > 0;
+    if !has_arcs && flags & effort::MERGE_SEGMENTS != 0 {
         out.pts = merge_full(out.pts, node, out.layer, out.width, &out.net, rules, exclude, area);
     }
-    if flags & effort::MERGE_OBTUSE != 0 {
+    if !has_arcs && flags & effort::MERGE_OBTUSE != 0 {
         out.pts = merge_obtuse(out.pts, node, out.layer, out.width, &out.net, rules, exclude);
     }
     if flags & effort::MERGE_COLINEAR != 0 {
-        merge_colinear(&mut out.pts);
+        merge_colinear_line(&mut out);
     }
-    if flags & effort::SMART_PADS != 0 {
+    if !has_arcs && flags & effort::SMART_PADS != 0 {
         run_smart_pads(&mut out, node, rules, exclude);
     }
-    if flags & effort::FANOUT_CLEANUP != 0 {
+    if !has_arcs && flags & effort::FANOUT_CLEANUP != 0 {
         fanout_cleanup(&mut out, node, rules, exclude);
     }
     out.simplify();
     out
 }
 
-/// `OPTIMIZER::mergeColinear`: drop the shared vertex of two collinear,
-/// non-degenerate consecutive segments.
-fn merge_colinear(pts: &mut Vec<eda_model::ir::Point>) {
+/// `OPTIMIZER::mergeColinear` on a line: [`merge_colinear`], leaving alone a vertex that is a point of an arc (`!line.IsPtOnArc( segIdx + 1 )`).
+fn merge_colinear_line(line: &mut Line) {
     let mut i = 0;
-    while i + 2 < pts.len() {
-        let (a, b, c) = (pts[i], pts[i + 1], pts[i + 2]);
+    while i + 2 < line.pts.len() {
+        let (a, b, c) = (line.pts[i], line.pts[i + 1], line.pts[i + 2]);
         let degenerate = a == b || b == c;
         let cross = (b.x - a.x) as i128 * (c.y - a.y) as i128 - (b.y - a.y) as i128 * (c.x - a.x) as i128;
-        if !degenerate && cross == 0 {
-            pts.remove(i + 1);
+        if !degenerate && cross == 0 && !line.is_pt_on_arc(i + 1) {
+            line.pts.remove(i + 1);
         } else {
             i += 1;
         }
@@ -809,9 +811,9 @@ mod tests {
 
     #[test]
     fn merge_colinear_drops_a_midpoint() {
-        let mut v = vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 500 }];
-        merge_colinear(&mut v);
-        assert_eq!(v.len(), 3);
+        let mut v = Line::from_points(None, 0, 200, vec![Point { x: 0, y: 0 }, Point { x: 500, y: 0 }, Point { x: 1000, y: 0 }, Point { x: 1000, y: 500 }]);
+        merge_colinear_line(&mut v);
+        assert_eq!(v.pts.len(), 3);
     }
 
     #[test]

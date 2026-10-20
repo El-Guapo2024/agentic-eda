@@ -12,7 +12,8 @@
 //! router routes straight through/over a zone's fill area, which gets
 //! recomputed afterward, exactly like real KiCad.
 
-use crate::item::{net_of, Item, Segment, Solid, Via};
+use crate::arcs::ArcPts;
+use crate::item::{net_of, Arc, Item, Segment, Solid, Via};
 use crate::layer::LayerMap;
 use crate::node::Node;
 use eda_drc::kimath::Shape;
@@ -49,21 +50,26 @@ pub fn build_node(design: &Design, model: &ConstraintModel) -> (Node, LayerMap) 
         node.add(Item::Solid(Solid { net: pad.net.as_deref().map(net_of).unwrap_or(None), layers: layer_range, pos: pad.center, shape: pad.copper.clone(), source: pad.id.clone(), edge: false }));
     }
 
-    // An arc track (`PCB_ARC`) is the chords of its polyline here: the world has no arcs yet, and one chord from end to end is neither the obstacle it is (the arc
-    // bulges out of it) nor its length (a quarter circle is 11 % longer). The chords are the ones `Track::pts` has, 32 to the arc, so a segment's index in the track
-    // is the index the commit logic expects.
-    let arc_tracks: std::collections::HashMap<&str, &eda_model::ir::Track> = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| t.arc().is_some()).map(|t| (t.id.as_str(), t)).collect();
+    // An arc track (`PCB_ARC`) is an `ARC` (`PNS_KICAD_IFACE_BASE::syncArc`): one item with the arc's three points, linked at its two ends. (A
+    // full circle, whose ends are one point, has no arc to hold; it stays the chords of its polyline.)
+    let circle_tracks: std::collections::HashMap<&str, &eda_model::ir::Track> = design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| t.arc().is_some_and(|(s, _, e)| s == e)).map(|t| (t.id.as_str(), t)).collect();
     for t in &drc_board.tracks {
         let layer = layers.index_of(&t.layer).unwrap_or(0);
         let source_track = split_track_seg_id(&t.id);
         let net = t.net.as_deref().map(net_of).unwrap_or(None);
-        if t.arc_mid.is_some() {
-            if let Some(track) = source_track.as_ref().and_then(|(id, _)| arc_tracks.get(id.as_str())) {
-                for (i, w) in track.pts.windows(2).enumerate() {
-                    node.add(Item::Segment(Segment { net: net.clone(), layer, a: w[0], b: w[1], width: t.width, source_track: Some((track.id.clone(), i)), locked: false }));
+        if let Some(mid) = t.arc_mid {
+            match source_track.as_ref() {
+                Some((id, _)) if circle_tracks.contains_key(id.as_str()) => {
+                    let track = circle_tracks[id.as_str()];
+                    for (i, w) in track.pts.windows(2).enumerate() {
+                        node.add(Item::Segment(Segment { net: net.clone(), layer, a: w[0], b: w[1], width: t.width, source_track: Some((track.id.clone(), i)), locked: false }));
+                    }
                 }
-                continue;
+                _ => {
+                    node.add(Item::Arc(Arc::new(net, layer, t.width, ArcPts::new(t.a, mid, t.b), source_track.map(|(id, _)| id), false)));
+                }
             }
+            continue;
         }
         node.add(Item::Segment(Segment { net, layer, a: t.a, b: t.b, width: t.width, source_track, locked: false }));
     }

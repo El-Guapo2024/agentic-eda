@@ -71,30 +71,40 @@ pub struct Pick {
     pub at: Point,
 }
 
-/// The straight track segment at `(x, y)` within `tolerance` of its edge, preferring `layer`. An arc track is not picked (the world has its chords, not the arc).
+/// The track segment or arc at `(x, y)` within `tolerance` of its edge, preferring `layer`. On an arc the pattern starts at the end of it the cursor is
+/// nearer to (`getSnappedStartPoint`).
 pub fn pick(scene: &Scene, x: Um, y: Um, tolerance: Um, layer: Option<&str>) -> Option<Pick> {
     let cursor = Point { x, y };
-    let arc_tracks: std::collections::HashSet<&str> = scene.design.routing.iter().flat_map(|r| r.tracks.iter()).filter(|t| t.arc().is_some()).map(|t| t.id.as_str()).collect();
     let mut best: Option<(bool, i128, Pick)> = None;
     for (id, item) in scene.world.iter() {
-        let Item::Segment(s) = item else { continue };
-        let Some((track, _)) = &s.source_track else { continue };
-        if arc_tracks.contains(track.as_str()) || s.net.is_none() {
+        // (the IR track, net, layer, width, distance from the centre line to the cursor, the middle of the item, the pattern's start)
+        let (track, s_net, s_layer, width, dist, centre, at) = match item {
+            Item::Segment(s) => {
+                let Some((track, _)) = &s.source_track else { continue };
+                let seg = Seg::new(s.a, s.b);
+                (track.clone(), &s.net, s.layer, s.width, (seg.squared_distance(cursor) as f64).sqrt(), Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 }, seg.nearest_point(cursor))
+            }
+            Item::Arc(a) => {
+                let Some(track) = &a.source_track else { continue };
+                let at = if eda_pns::seg_ops::length(cursor, a.start()) <= eda_pns::seg_ops::length(cursor, a.end()) { a.start() } else { a.end() };
+                (track.clone(), &a.net, a.layer, a.width, a.arc.distance_to(cursor), a.arc.mid, at)
+            }
+            _ => continue,
+        };
+        if s_net.is_none() {
             continue;
         }
-        let seg = Seg::new(s.a, s.b);
-        let reach = (s.width / 2 + tolerance).max(1) as i128;
-        if seg.squared_distance(cursor) > reach * reach {
+        let reach = (width / 2 + tolerance).max(1) as f64;
+        if dist > reach {
             continue;
         }
-        let layer_name = scene.layers.name_of(s.layer).to_string();
+        let layer_name = scene.layers.name_of(s_layer).to_string();
         let on_layer = layer.is_some_and(|l| l == layer_name);
         // "the track whose centre is nearest the cursor", the active layer first
-        let centre = Point { x: (s.a.x + s.b.x) / 2, y: (s.a.y + s.b.y) / 2 };
         let d = ((centre.x - cursor.x) as i128).pow(2) + ((centre.y - cursor.y) as i128).pow(2);
         let key = (!on_layer, d);
         if best.as_ref().is_none_or(|(o, bd, _)| key < (*o, *bd)) {
-            best = Some((key.0, key.1, Pick { item: id, track_id: track.clone(), net: Scene::net_name(&s.net), layer: layer_name, width: s.width, at: seg.nearest_point(cursor) }));
+            best = Some((key.0, key.1, Pick { item: id, track_id: track, net: Scene::net_name(s_net), layer: layer_name, width, at }));
         }
     }
     best.map(|(_, _, p)| p)

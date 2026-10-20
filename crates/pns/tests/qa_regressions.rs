@@ -69,6 +69,7 @@ fn load(root: &std::path::Path, board: &str, case: &str) -> (eda_model::ir::Desi
 fn violations(node: &Node, rules: &eda_model::BoardRules) -> HashSet<(String, String)> {
     let name = |id: ItemId| match node.get(id) {
         Some(Item::Segment(s)) => format!("seg {:?}-{:?} {:?}", s.a, s.b, s.net),
+        Some(Item::Arc(a)) => format!("arc {:?}-{:?} {:?}", a.start(), a.end(), a.net),
         Some(Item::Via(v)) => format!("via {:?} {:?}", v.pos, v.net),
         Some(Item::Solid(s)) => format!("pad {}", s.source),
         None => String::new(),

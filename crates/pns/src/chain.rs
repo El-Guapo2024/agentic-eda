@@ -468,8 +468,10 @@ impl ShapeLineChain {
             self.append_point(p);
             return;
         }
-        if at > 0 && self.is_pt_on_arc(at) {
-            // an arc is cut here: it becomes plain points (this port cuts chains that have none)
+        // `splitArc( aVertex )`: "Nothing to do" for a point put in front of an arc's start
+        let before_an_arc = !self.is_shared_pt(at) && self.is_arc_start(at);
+        if at > 0 && self.is_pt_on_arc(at) && !before_an_arc {
+            // an arc is cut here: it becomes plain points (KiCad splits it in two arcs; the points a tuner cuts a chain at are never inside one)
             let idx = self.arc_index(at);
             self.convert_arc(idx);
         }

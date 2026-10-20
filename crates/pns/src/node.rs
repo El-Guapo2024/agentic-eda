@@ -40,6 +40,7 @@ const SEGMENT_AT_REACH: Um = 2_500;
 /// `NODE::AssembleLine`'s `MaxVerts` (1024 * 16): hard cap on a followed line.
 const ASSEMBLE_MAX_VERTS: usize = 1024 * 16;
 
+use crate::arcs::ArcPts;
 use crate::item::{same_net, Item, ItemId, Kind, Net};
 use crate::joint::{Joint, JointKey};
 use crate::layer::LayerRange;
@@ -57,7 +58,10 @@ pub mod kind_mask {
     pub const SOLID: u8 = 1;
     pub const SEGMENT: u8 = 2;
     pub const VIA: u8 = 4;
-    pub const ANY: u8 = SOLID | SEGMENT | VIA;
+    pub const ARC: u8 = 8;
+    /// `ITEM::SEGMENT_T | ITEM::ARC_T`: the two things a track is made of.
+    pub const TRACK: u8 = SEGMENT | ARC;
+    pub const ANY: u8 = SOLID | SEGMENT | VIA | ARC;
 }
 
 /// The `kind_mask` bit of one [`Kind`].
@@ -65,6 +69,7 @@ pub fn kind_bit(k: Kind) -> u8 {
     match k {
         Kind::Solid => kind_mask::SOLID,
         Kind::Segment => kind_mask::SEGMENT,
+        Kind::Arc => kind_mask::ARC,
         Kind::Via => kind_mask::VIA,
     }
 }
@@ -261,14 +266,14 @@ impl Node {
                 continue;
             }
             match self.items.get(&id) {
-                Some(Item::Segment(s)) => {
-                    if same_net(&s.net, current_net) && LayerRange::single(s.layer).overlaps(&current_layers) {
+                Some(item @ (Item::Segment(_) | Item::Arc(_))) => {
+                    if same_net(item.net(), current_net) && item.layers().overlaps(&current_layers) {
                         if candidate.is_some() {
                             return None; // branch point: more than one same-net candidate
                         }
                         // `JOINT::NextSegment`: a locked neighbour is skipped as the
                         // continuation (but still counted above as a branch).
-                        if !s.locked || follow_locked {
+                        if !item.is_locked() || follow_locked {
                             candidate = Some(id);
                         }
                     }
@@ -280,12 +285,34 @@ impl Node {
         candidate
     }
 
+    /// The points a walk along a track adds when it goes through item `id` entering it at `entry`: the item's polyline without the entry point
+    /// (a segment's other end; an arc's interior points and then its other end, in the order the walk meets them), and where it leaves.
+    fn walk_points(&self, id: ItemId, entry: Point) -> Option<(Vec<Point>, Point)> {
+        match self.items.get(&id)? {
+            Item::Segment(s) => {
+                let other = if s.a == entry { s.b } else { s.a };
+                Some((vec![other], other))
+            }
+            Item::Arc(a) => {
+                let poly = a.polyline();
+                if a.start() == entry {
+                    Some((poly[1..].to_vec(), a.end()))
+                } else {
+                    Some((poly.iter().rev().skip(1).copied().collect(), a.start()))
+                }
+            }
+            _ => None,
+        }
+    }
+
     /// `NODE::AssembleLine`: walk the joint graph outward from `start` (a
-    /// `Segment`) in both directions until a non-trivial joint, returning
-    /// the flattened polyline plus the ordered segment ids it came from.
-    /// `None` if `start` isn't a `Segment` (a lone `Via` has no line to
-    /// assemble -- callers that want via continuity read `Item::Via`
-    /// directly).
+    /// `Segment` or an `Arc`) in both directions until a non-trivial joint,
+    /// returning the flattened polyline plus the ordered item ids it came
+    /// from -- one id per segment of the polyline, so an arc's id repeats
+    /// for each chord of it -- and the arcs it passed through
+    /// ([`Line::arcs`]). `None` if `start` isn't a track item (a lone `Via`
+    /// has no line to assemble -- callers that want via continuity read
+    /// `Item::Via` directly).
     pub fn assemble_line(&self, start: ItemId) -> Option<Line> {
         self.assemble_line_with(start, AssembleOpts::default())
     }
@@ -295,32 +322,37 @@ impl Node {
     /// track width changes (so the line, and every segment the shove puts
     /// back, keeps one width -- see `shove.rs`'s note on `D10`).
     pub fn assemble_line_with(&self, start: ItemId, opts: AssembleOpts) -> Option<Line> {
-        let Item::Segment(seg0) = self.items.get(&start)? else { return None };
-        let (net, layer, width) = (seg0.net.clone(), seg0.layer, seg0.width);
+        let start_item = self.items.get(&start)?;
+        let (net, layer, width) = (start_item.net().clone(), start_item.layers().start(), start_item.width());
+        let (a0, b0) = start_item.track_ends()?;
         let layers = LayerRange::single(layer);
+        let mut arcs: Vec<ArcPts> = Vec::new();
+        if let Item::Arc(a) = start_item {
+            arcs.push(a.arc);
+        }
 
         // Forward walk from b, backward walk from a; each produces an
-        // ordered (point, segment-just-traversed) list we splice together.
-        let mut fwd_pts = vec![seg0.b];
-        let mut fwd_segs = vec![start];
-        let (mut cur, mut cur_end) = (start, seg0.b);
+        // ordered (point, item-just-traversed) list we splice together.
+        let (first_pts, _) = self.walk_points(start, a0)?;
+        let mut fwd_pts: Vec<Point> = first_pts;
+        let mut fwd_ids: Vec<ItemId> = vec![start; fwd_pts.len()];
+        let (mut cur, mut cur_end) = (start, b0);
         let mut via_end = None;
         // `NODE::followLine`'s `guard`: the walk returned to its start
         // anchor (a closed same-net loop) -- stop, and skip the backward
         // walk (`AssembleLine`: `if( !guardHit )`). `MaxVerts` caps the walk.
-        let guard = seg0.b;
+        let guard = b0;
         let mut guard_hit = false;
         while let Some(joint) = self.joint_at(cur_end, &net) {
             if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
-                let Item::Segment(ns) = &self.items[&next_id] else { break };
-                if !opts.allow_width_mismatch && ns.width != width {
+                if !opts.allow_width_mismatch && self.items[&next_id].width() != width {
                     break; // the line ends where the track width changes
                 }
-                let other_end = if ns.a == cur_end { ns.b } else { ns.a };
+                let Some((added, other_end)) = self.walk_points(next_id, cur_end) else { break };
                 if next_id == start || other_end == guard || fwd_pts.len() >= ASSEMBLE_MAX_VERTS {
                     if next_id == start || other_end == guard {
-                        // Close the loop at the guard point (KiCad records
-                        // the re-traversed start segment's corner here).
+                        // Close the loop at the guard point (KiCad
+                        // records the re-traversed start segment's corner here).
                         if fwd_pts.last() != Some(&guard) {
                             fwd_pts.push(guard);
                         }
@@ -328,8 +360,11 @@ impl Node {
                     }
                     break;
                 }
-                fwd_pts.push(other_end);
-                fwd_segs.push(next_id);
+                if let Item::Arc(a) = &self.items[&next_id] {
+                    arcs.push(a.arc);
+                }
+                fwd_ids.extend(std::iter::repeat_n(next_id, added.len()));
+                fwd_pts.extend(added);
                 cur = next_id;
                 cur_end = other_end;
             } else {
@@ -338,25 +373,27 @@ impl Node {
             }
         }
 
-        let mut back_pts = vec![seg0.a];
-        let mut back_segs: Vec<ItemId> = Vec::new();
-        let (mut cur, mut cur_end) = (start, seg0.a);
+        let mut back_pts = vec![a0];
+        let mut back_ids: Vec<ItemId> = Vec::new();
+        let (mut cur, mut cur_end) = (start, a0);
         let mut via_start = None;
         // `AssembleLine`: only walk backward `if( !guardHit )` -- a closed loop was already
         // walked all the way round going forward.
         if !guard_hit {
             while let Some(joint) = self.joint_at(cur_end, &net) {
                 if let Some(next_id) = self.next_segment(joint, cur, &net, layers, opts.follow_locked_segments) {
-                    let Item::Segment(ns) = &self.items[&next_id] else { break };
-                    if !opts.allow_width_mismatch && ns.width != width {
+                    if !opts.allow_width_mismatch && self.items[&next_id].width() != width {
                         break;
                     }
-                    let other_end = if ns.a == cur_end { ns.b } else { ns.a };
+                    let Some((added, other_end)) = self.walk_points(next_id, cur_end) else { break };
                     if next_id == start || back_pts.len() >= ASSEMBLE_MAX_VERTS {
                         break;
                     }
-                    back_pts.push(other_end);
-                    back_segs.push(next_id);
+                    if let Item::Arc(a) = &self.items[&next_id] {
+                        arcs.push(a.arc);
+                    }
+                    back_ids.extend(std::iter::repeat_n(next_id, added.len()));
+                    back_pts.extend(added);
                     cur = next_id;
                     cur_end = other_end;
                 } else {
@@ -368,20 +405,20 @@ impl Node {
 
         if guard_hit {
             back_pts.clear();
-            back_segs.clear();
+            back_ids.clear();
         }
         back_pts.reverse();
-        back_segs.reverse();
+        back_ids.reverse();
         let mut pts = back_pts;
         pts.extend(fwd_pts);
-        let mut segment_ids = back_segs;
-        segment_ids.push(start);
-        segment_ids.extend(fwd_segs.into_iter().skip(1));
+        let mut segment_ids = back_ids;
+        segment_ids.extend(fwd_ids);
 
         let mut line = Line::from_points(net, layer, width, pts);
         line.segment_ids = segment_ids;
         line.via_at_start = via_start;
         line.via_at_end = via_end;
+        line.arcs = arcs;
         Some(line)
     }
 
@@ -402,8 +439,7 @@ impl Node {
             if seen.contains(&id) {
                 continue;
             }
-            let Item::Segment(seg) = item else { continue };
-            if !same_net(&seg.net, net) {
+            if !item.is_track() || !same_net(item.net(), net) {
                 continue;
             }
             let Some(line) = self.assemble_line(id) else { continue };
@@ -426,20 +462,13 @@ impl Node {
         }
     }
 
-    /// Insert `line` as a fresh chain of `Segment`s (`NODE::Add(LINE&)`,
-    /// minus the redundant-segment check this port doesn't need -- callers
-    /// only ever add freshly-computed, non-redundant geometry). Returns the
-    /// new segment ids in point order.
+    /// Insert `line` as a fresh chain of `Segment`s and `Arc`s (`NODE::Add(LINE&)`: an `ARC` for each arc of the line, a `SEGMENT` for each
+    /// segment that is not one), without the redundant-segment check -- callers only ever add freshly-computed geometry, and
+    /// [`Self::add_line_unless_redundant`] is the one with it. Returns the new item ids, one per segment of the line (an arc's id repeats for
+    /// each chord of it, as in [`Line::segment_ids`]).
     pub fn add_line(&mut self, line: &Line, source_track: Option<(String, usize)>, locked: bool) -> Vec<ItemId> {
-        let mut ids = Vec::with_capacity(line.segment_count());
-        for (i, (a, b)) in line.segs().enumerate() {
-            if a == b {
-                continue; // degenerate leg, same as KiCad's A==B rejection
-            }
-            let seg = Item::Segment(crate::item::Segment { net: line.net.clone(), layer: line.layer, a, b, width: line.width, source_track: source_track.clone().map(|(t, _)| (t, i)), locked });
-            ids.push(self.add(seg));
-        }
-        ids
+        let arc_source = source_track.as_ref().map(|(t, _)| t.clone());
+        self.add_line_items(line, locked, |i, _| source_track.as_ref().map(|(t, _)| (t.clone(), i)), arc_source)
     }
 
     /// [`Self::add_line`] for a line that descends from IR track `track` -- a shove re-made it. The segments carry the track, numbered by
@@ -447,15 +476,85 @@ impl Node {
     /// line in it still knows which IR track it replaces, and [`Self::uncovered_track_runs`] still sees one run per line.
     pub fn add_line_tagged(&mut self, line: &Line, track: &str) -> Vec<ItemId> {
         const LINEAGE_INDEX_BASE: usize = 1 << 32;
+        self.add_line_items(line, false, |_, id| Some((track.to_string(), LINEAGE_INDEX_BASE + id)), Some(track.to_string()))
+    }
+
+    /// The common part of the two: `seg_source( i, id )` is the `source_track` of the segment for the line's `i`th segment that is going to
+    /// be item `id`; an arc of the line is one `Arc` item with `arc_source`.
+    fn add_line_items(&mut self, line: &Line, locked: bool, seg_source: impl Fn(usize, usize) -> Option<(String, usize)>, arc_source: Option<String>) -> Vec<ItemId> {
+        let runs = line.arc_runs();
         let mut ids = Vec::with_capacity(line.segment_count());
-        for (a, b) in line.segs() {
-            if a == b {
+        let mut i = 0usize;
+        while i < line.segment_count() {
+            if let Some(r) = runs.iter().find(|r| r.first == i) {
+                // an arc of the line: one item, its id for each chord
+                let id = self.add(Item::Arc(crate::item::Arc::new(line.net.clone(), line.layer, line.width, line.arcs[r.arc], arc_source.clone(), locked)));
+                ids.extend(std::iter::repeat_n(id, r.last - r.first));
+                i = r.last;
                 continue;
             }
-            let seg = Item::Segment(crate::item::Segment { net: line.net.clone(), layer: line.layer, a, b, width: line.width, source_track: Some((track.to_string(), LINEAGE_INDEX_BASE + self.next_id as usize)), locked: false });
-            ids.push(self.add(seg));
+            let (a, b) = (line.pts[i], line.pts[i + 1]);
+            if a != b {
+                // degenerate leg, same as KiCad's A==B rejection
+                let source_track = seg_source(i, self.next_id as usize);
+                ids.push(self.add(Item::Segment(crate::item::Segment { net: line.net.clone(), layer: line.layer, a, b, width: line.width, source_track, locked })));
+            }
+            i += 1;
         }
         ids
+    }
+
+    /// `NODE::Add( LINE&, aAllowRedundant = false )`: [`Self::add_line`], but a segment that is already in the node -- the same two ends on the same
+    /// layer and net (`findRedundantSegment`) -- is not added again: the line links the existing one instead, as does an arc already there
+    /// (`findRedundantArc`). A shoved line that retraces a track would otherwise stack a copy of it on the original.
+    pub fn add_line_unless_redundant(&mut self, line: &Line, source_track: Option<(String, usize)>, locked: bool) -> Vec<ItemId> {
+        let runs = line.arc_runs();
+        let mut ids = Vec::with_capacity(line.segment_count());
+        let mut i = 0usize;
+        while i < line.segment_count() {
+            if let Some(r) = runs.iter().find(|r| r.first == i) {
+                let arc = line.arcs[r.arc];
+                let id = match self.find_redundant_arc(arc.start, arc.end, line.layer, &line.net) {
+                    Some(existing) => existing,
+                    None => self.add(Item::Arc(crate::item::Arc::new(line.net.clone(), line.layer, line.width, arc, source_track.clone().map(|(t, _)| t), locked))),
+                };
+                ids.extend(std::iter::repeat_n(id, r.last - r.first));
+                i = r.last;
+                continue;
+            }
+            let (a, b) = (line.pts[i], line.pts[i + 1]);
+            if a != b {
+                let id = match self.find_redundant_segment(a, b, line.layer, &line.net) {
+                    Some(existing) => existing,
+                    None => self.add(Item::Segment(crate::item::Segment { net: line.net.clone(), layer: line.layer, a, b, width: line.width, source_track: source_track.clone().map(|(t, _)| (t, i)), locked })),
+                };
+                // "another line could be referencing this segment too": a segment is linked once
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            i += 1;
+        }
+        ids
+    }
+
+    /// `NODE::findRedundantSegment( A, B, lr, aNet )` (`pns_node.cpp:1707`): a segment of the node on layer `layer` and net `net` that joins `a` and
+    /// `b`, in either direction -- found at the joint at `a`.
+    pub fn find_redundant_segment(&self, a: Point, b: Point, layer: i32, net: &Net) -> Option<ItemId> {
+        let joint = self.joint_at(a, net)?;
+        joint.links.iter().copied().find(|id| match self.items.get(id) {
+            Some(Item::Segment(s)) => s.layer == layer && ((s.a == a && s.b == b) || (s.a == b && s.b == a)),
+            _ => false,
+        })
+    }
+
+    /// `NODE::findRedundantArc` (`:1742`): an arc of the node on `layer` and `net` with the ends `a` and `b`, in either direction.
+    pub fn find_redundant_arc(&self, a: Point, b: Point, layer: i32, net: &Net) -> Option<ItemId> {
+        let joint = self.joint_at(a, net)?;
+        joint.links.iter().copied().find(|id| match self.items.get(id) {
+            Some(Item::Arc(x)) => x.layer == layer && ((x.start() == a && x.end() == b) || (x.start() == b && x.end() == a)),
+            _ => false,
+        })
     }
 
     // ---------------------------------------------------------------- a track in pieces
@@ -551,23 +650,58 @@ impl Node {
         Some(old.clone())
     }
 
-    /// The segment whose copper `pos` is on, on `layer` (of `net`, when given): the one whose centre line passes nearest. `within` is how
-    /// far off the centre line `pos` may be -- the half width when `None`. The segments in `exclude` are not looked at.
+    /// The segment or arc whose copper `pos` is on, on `layer` (of `net`, when given): the one whose centre line passes nearest. `within` is how
+    /// far off the centre line `pos` may be -- the half width when `None`. The items in `exclude` are not looked at.
     pub fn segment_at(&self, pos: Point, layer: i32, net: Option<&Net>, within: Option<Um>, exclude: &[ItemId]) -> Option<ItemId> {
         let bbox = Shape::Circle { c: pos, r: 0 }.bbox(SEGMENT_AT_REACH);
         let mut best: Option<(ItemId, i128)> = None;
         for id in self.index.query(bbox) {
-            let Some(Item::Segment(s)) = self.items.get(&id) else { continue };
-            if s.layer != layer || net.is_some_and(|n| !same_net(&s.net, n)) || exclude.contains(&id) {
+            let Some(item) = self.items.get(&id) else { continue };
+            // the squared distance from the centre line, and the width it is measured against
+            let (d2, width, item_layer) = match item {
+                Item::Segment(s) => (s.seg().sq_distance_to_point(pos), s.width, s.layer),
+                Item::Arc(a) => {
+                    let d = a.arc.distance_to(pos);
+                    ((d * d).round() as i128, a.width, a.layer)
+                }
+                _ => continue,
+            };
+            if item_layer != layer || net.is_some_and(|n| !same_net(item.net(), n)) || exclude.contains(&id) {
                 continue;
             }
-            let d2 = s.seg().sq_distance_to_point(pos);
-            let reach = within.unwrap_or(s.width / 2) as i128;
+            let reach = within.unwrap_or(width / 2) as i128;
             if d2 <= reach * reach && best.is_none_or(|(bid, bd)| (d2, id) < (bd, bid)) {
                 best = Some((id, d2));
             }
         }
         best.map(|(id, _)| id)
+    }
+
+    /// `LINE_PLACER::SplitAdjacentArcs( aNode, aArc, aP )`: arc `id` is taken out and two put in its place, one from its start to `p` and one from `p`
+    /// to its end, both on its circle and with its net, layer, width and track -- so a route can start or end in the middle of an arc track. Not
+    /// done (`None`) when something already joins at `p` (`jt && jt->LinkCount() >= 1`), or `p` is not on the arc.
+    pub fn split_arc(&mut self, id: ItemId, p: Point) -> Option<(ItemId, ItemId)> {
+        let old = self.arc_to_split(id, p)?;
+        let (first, second) = old.arc.split(p)?;
+        self.remove(id);
+        let make = |arc: ArcPts| Item::Arc(crate::item::Arc::new(old.net.clone(), old.layer, old.width, arc, old.source_track.clone(), old.locked));
+        let a = self.add(make(first));
+        let b = self.add(make(second));
+        Some((a, b))
+    }
+
+    /// The arc [`Self::split_arc`] would split at `p`, if it would (the checks of `SplitAdjacentArcs`).
+    pub fn arc_to_split(&self, id: ItemId, p: Point) -> Option<crate::item::Arc> {
+        let Some(Item::Arc(old)) = self.items.get(&id) else { return None };
+        if p == old.start() || p == old.end() || old.arc.is_degenerate() || old.arc.distance_to(p) > 2.0 {
+            return None;
+        }
+        if let Some(j) = self.joint_at(p, &old.net) {
+            if j.links.iter().any(|l| self.items.get(l).is_some_and(|it| it.layers().overlaps_layer(old.layer))) {
+                return None;
+            }
+        }
+        Some(old.clone())
     }
 
     // ---------------------------------------------------------------- topology
@@ -582,8 +716,8 @@ impl Node {
         while let Some(pos) = queue.pop_front() {
             let Some(joint) = self.joint_at(pos, net) else { continue };
             for &id in &joint.links {
-                if let Some(Item::Segment(s)) = self.items.get(&id) {
-                    let next = if s.a == pos { s.b } else { s.a };
+                if let Some((a, b)) = self.items.get(&id).and_then(Item::track_ends) {
+                    let next = if a == pos { b } else { a };
                     if seen.insert((next.x, next.y)) {
                         queue.push_back(next);
                     }
@@ -810,7 +944,7 @@ impl Node {
             for obs_id in touching {
                 let Some(obs) = self.items.get(&obs_id) else { continue };
                 // different-net track-on-track contact is not a cluster
-                let track_on_track = !same_net_exact(obs.net(), top_item.net()) && matches!(obs, Item::Segment(_)) && matches!(top_item, Item::Segment(_));
+                let track_on_track = !same_net_exact(obs.net(), top_item.net()) && obs.is_track() && top_item.is_track();
                 if track_on_track {
                     continue;
                 }
@@ -819,7 +953,7 @@ impl Node {
                         continue;
                     }
                 }
-                if matches!(obs, Item::Segment(_)) && obs.layers().overlaps_layer(layer) {
+                if obs.is_track() && obs.layers().overlaps_layer(layer) {
                     if let Some(l) = self.assemble_line(obs_id) {
                         if let Some(b) = line_bbox(&l) {
                             cluster_bbox = merge(cluster_bbox, b);

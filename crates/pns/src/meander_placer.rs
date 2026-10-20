@@ -19,6 +19,7 @@
 
 use crate::chain::ShapeLineChain;
 use crate::item::{Item, ItemId, Net};
+use crate::kigeom::ShapeArc;
 use crate::kigeom::{to_nm, to_um, Seg};
 use crate::layer::LayerRange;
 use crate::line::Line;
@@ -147,8 +148,12 @@ impl MeanderPlacer {
     /// `MEANDER_PLACER::Start( aP, aStartItem )`: the tuner on the track segment `start` of `world`, starting at the point of it nearest to
     /// `at` (micrometres). The error is KiCad's message.
     pub fn start(world: &Node, env: &LengthEnv, start: ItemId, at: Point, settings: MeanderSettings) -> Result<MeanderPlacer, String> {
-        let Some(Item::Segment(seg)) = world.get(start) else { return Err("Please select a track whose length you want to tune.".into()) };
-        let current_start = Seg::new(to_nm(seg.a), to_nm(seg.b)).nearest_point(to_nm(at));
+        // `getSnappedStartPoint`: the point of a segment nearest the click, the nearer end of an arc
+        let current_start = match world.get(start) {
+            Some(Item::Segment(seg)) => Seg::new(to_nm(seg.a), to_nm(seg.b)).nearest_point(to_nm(at)),
+            Some(Item::Arc(a)) => to_nm(if crate::seg_ops::length(at, a.start()) <= crate::seg_ops::length(at, a.end()) { a.start() } else { a.end() }),
+            _ => return Err("Please select a track whose length you want to tune.".into()),
+        };
         let origin_line = world.assemble_line_with(start, assemble_opts()).ok_or("Please select a track whose length you want to tune.")?;
         let path = assemble_tuning_path(world, start).ok_or("Please select a track whose length you want to tune.")?;
         let mut w = world.clone();
@@ -290,15 +295,25 @@ impl MeanderPlacer {
         result.set_width(self.width_nm);
         result.set_baseline_offset(0);
 
-        for i in 0..tuned.segment_count() {
+        // `AddArc` for an arc of the stretch (it is passed through as it is, a meander goes on the straight segments), `NextShape` to its end
+        let empty_arc = ShapeArc::new(zero, zero, zero, 0);
+        let mut i = 0;
+        while i < tuned.segment_count() {
             if tuned.is_arc_segment(i) {
-                continue; // the world has no arcs: a track that is one is a run of chords, none of which is an arc segment here
+                let arc_index = tuned.arc_index(i);
+                result.add_arc(&env, tuned.arc(arc_index as usize), &empty_arc);
+                // `i = tuned.NextShape( i )`: the vertex where the arc ends, which is the segment that comes after it. KiCad's `for` loop then
+                // increments `i` again and so never meanders (or counts the length of) the segment that follows an arc; here that one is next.
+                let next = tuned.next_shape(i as isize);
+                i = if next < 0 { tuned.segment_count() } else { next as usize };
+                continue;
             }
             let s = tuned.c_segment(i);
             let side = if env.settings.initial_side == MeanderSide::Default { s.side(p) < 0 } else { env.settings.initial_side.value() < 0 };
             result.add_corner(&env, s.a, zero);
             result.meander_segment(&mut env, s, side, 0);
             result.add_corner(&env, s.b, zero);
+            i += 1;
         }
 
         let line_len = self.path_length;
@@ -369,11 +384,7 @@ impl MeanderPlacer {
 
 /// The chain (nanometres) of a world line.
 pub fn chain_of(line: &Line) -> ShapeLineChain {
-    let mut c = ShapeLineChain::new();
-    for &p in &line.pts {
-        c.append_point(to_nm(p));
-    }
-    c
+    crate::tuning_path::line_chain_nm(line)
 }
 
 #[cfg(test)]
@@ -430,6 +441,48 @@ mod tests {
         assert!(!t.tuned.arcs().is_empty());
         // the whole line is as long as the net
         assert_eq!(placer.final_shape().length(), len);
+    }
+
+    /// pad -- 20 mm straight -- quarter arc of radius 5 mm -- 15 mm straight -- pad, one net.
+    fn bent_board() -> (Node, ItemId, ItemId, crate::arcs::ArcPts) {
+        let arc = crate::arcs::ArcPts::new(p(20_000, 0), p(23_536, 1_464), p(25_000, 5_000));
+        let mut w = Node::new();
+        w.add(pad("SIG", p(0, 0), LayerRange::single(0)));
+        w.add(pad("SIG", p(25_000, 20_000), LayerRange::single(0)));
+        let s1 = w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: p(0, 0), b: arc.start, width: 200, source_track: Some(("t1".into(), 0)), locked: false }));
+        let a = w.add(Item::Arc(crate::item::Arc::new(net_of("SIG"), 0, 200, arc, Some("t2".into()), false)));
+        w.add(Item::Segment(Segment { net: net_of("SIG"), layer: 0, a: arc.end, b: p(25_000, 20_000), width: 200, source_track: Some(("t3".into(), 0)), locked: false }));
+        (w, s1, a, arc)
+    }
+
+    #[test]
+    fn a_track_with_an_arc_in_it_is_tuned_along_the_straight_parts_and_the_arc_passes_through_as_it_is() {
+        let (w, seg, _, arc) = bent_board();
+        let arc_len = arc.length();
+        let straight = 20_000.0 + 15_000.0;
+        let original = ((straight + arc_len) * 1000.0) as i64;
+        let mut placer = MeanderPlacer::start(&w, &env(), seg, p(3_000, 0), settings(((straight + arc_len) as i64) + 4_000)).expect("a placer on the first segment");
+        assert!((placer.orig_path_length() - original).abs() < 50_000, "the arc is measured as an arc: {} vs {original}", placer.orig_path_length());
+        assert!(placer.do_move(p(25_000, 15_000)));
+        assert_eq!(placer.tuning_status(), TuningStatus::Tuned);
+        let t = placer.tuned();
+        let arcs: Vec<_> = t.tuned.arcs().iter().filter(|a| a.start == to_nm(arc.start) && a.end == to_nm(arc.end)).collect();
+        assert_eq!(arcs.len(), 1, "the arc of the track is in the tuned stretch, as the arc it was");
+        assert!((placer.tuning_length_result() - original - 4_000_000).abs() < 100_000, "{}", placer.tuning_length_result());
+        // the meanders fill the straight before the arc (rounded corners: arcs of their own) and the stretch still goes on through the arc to where it ended,
+        // the straight after the arc counted in the length (KiCad's loop steps over that segment)
+        assert!(t.tuned.arcs().iter().filter(|a| a.start != to_nm(arc.start)).count() >= 4);
+        assert_eq!(t.tuned.c_last_point(), to_nm(p(25_000, 15_000)));
+        assert!((placer.final_shape().length() - placer.tuning_length_result()).abs() < 1_000, "the shape is as long as the status says, to a micrometre");
+    }
+
+    #[test]
+    fn a_pattern_can_start_on_the_arc_itself_at_the_end_it_is_nearer_to() {
+        let (w, _, arc_id, arc) = bent_board();
+        let placer = MeanderPlacer::start(&w, &env(), arc_id, p(24_000, 4_000), settings(60_000)).expect("a placer on the arc");
+        assert_eq!(placer.current_start(), arc.end);
+        let placer = MeanderPlacer::start(&w, &env(), arc_id, p(20_500, 100), settings(60_000)).unwrap();
+        assert_eq!(placer.current_start(), arc.start);
     }
 
     #[test]

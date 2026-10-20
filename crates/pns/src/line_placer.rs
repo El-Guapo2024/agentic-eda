@@ -313,10 +313,18 @@ impl LinePlacer {
         }
         if settings.snap_to_tracks {
             if let Some(id) = node.segment_at(p, self.current_layer, Some(&self.net), Some(EXACT_UM), &self.exclude_end) {
-                if let Some(Item::Segment(s)) = node.get(id) {
-                    let seg = eda_drc::kimath::Seg::new(s.a, s.b);
-                    let on = if seg.sq_distance_to_point(p) == 0 { p } else { seg.nearest_point(p) };
-                    return (Some(on), Some(id));
+                match node.get(id) {
+                    Some(Item::Segment(s)) => {
+                        let seg = eda_drc::kimath::Seg::new(s.a, s.b);
+                        let on = if seg.sq_distance_to_point(p) == 0 { p } else { seg.nearest_point(p) };
+                        return (Some(on), Some(id));
+                    }
+                    // `snapToItem` for `ARC_T`: the point of the arc nearest the cursor (`AlignToArc`)
+                    Some(Item::Arc(a)) => {
+                        let on = if a.arc.distance_to(p) < 0.5 { p } else { a.arc.nearest_point(p) };
+                        return (Some(on), Some(id));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -523,11 +531,11 @@ impl LinePlacer {
             return;
         }
         for line in node.find_lines_between_joints(start, end, &self.net) {
-            let has_locked_segment = line.segment_ids.iter().any(|id| matches!(node.get(*id), Some(Item::Segment(s)) if s.locked));
+            let has_locked_segment = line.segment_ids.iter().any(|id| node.get(*id).is_some_and(|it| it.is_track() && it.is_locked()));
             if has_locked_segment {
                 continue;
             }
-            let mut track_ids: Vec<String> = line.segment_ids.iter().filter_map(|id| match node.get(*id) { Some(Item::Segment(s)) => s.source_track.as_ref().map(|(t, _)| t.clone()), _ => None }).collect();
+            let mut track_ids: Vec<String> = line.segment_ids.iter().filter_map(|id| node.get(*id).and_then(|it| it.source_track_id()).map(str::to_string)).collect();
             track_ids.sort_unstable();
             track_ids.dedup();
             for track_id in track_ids {

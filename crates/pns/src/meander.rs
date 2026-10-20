@@ -362,7 +362,7 @@ impl MeanderShape {
         self.shapes[1].clear();
         self.shapes[0].append_arc(a1);
         self.shapes[1].append_arc(a2);
-        self.clipped_base_seg = Seg::new(a1.start, a1.start);
+        self.clipped_base_seg = Seg::new(a1.end, a1.end); // `m_clippedBaseSeg.A = m_clippedBaseSeg.B = aArc1.GetP1()`
     }
 
     // ----------------------------------------------------------------------------------------------- sizes
@@ -772,7 +772,7 @@ impl MeanderedLine {
     pub fn add_arc(&mut self, env: &dyn MeanderEnv, a1: &ShapeArc, a2: &ShapeArc) {
         let mut m = MeanderShape::new(env, self.width, self.dual);
         m.make_arc(a1, a2);
-        self.last = a1.start;
+        self.last = a1.end; // `m_last = aArc1.GetP1()`
         self.meanders.push(m);
     }
 
