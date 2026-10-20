@@ -6,7 +6,7 @@
 // angle it stores, which a turned symbol's own transform turns again; the position is the sheet's, as KiCad's `m_field->GetPosition()` is). No font face and no colour:
 // the drawing model has no place for either. The text of a sheet's file is edited from Sheet Properties, as KiCad's dialog disables it too.
 import { useState } from "react";
-import { fieldSizeUm, fieldEditCmd, findField, FIELD_SIZE_MAX_UM, FIELD_SIZE_MIN_UM, type FieldChanges } from "../kicad-port/schFieldEdit";
+import { fieldSizeUm, fieldEditCmd, findField, isStandardSymbolField, FIELD_SIZE_MAX_UM, FIELD_SIZE_MIN_UM, type FieldChanges } from "../kicad-port/schFieldEdit";
 import { mmToUm, umToMm } from "../kicad-port/schProperties";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { SchDialogShell } from "./SchDialogShell";
@@ -51,8 +51,8 @@ function FieldForm({ owner, field }: { owner: "symbol" | "power" | "sheet"; fiel
   // `m_textSize.Validate( 0.01, 1000.0, EDA_UNITS::MM )`: "Don't allow text to disappear"
   const sizeOk = sizeUm !== null && sizeUm >= FIELD_SIZE_MIN_UM && sizeUm <= FIELD_SIZE_MAX_UM;
   const textFixed = field.name === "Sheetfile" || (owner === "power" && field.name === "Reference");
-  // A reference, a value, a sheet's name cannot be emptied (`FIELD_VALIDATOR`)
-  const textOk = textFixed || field.name === "Footprint" || field.name === "Datasheet" || text.trim().length > 0;
+  // A reference, a value, a sheet's name cannot be emptied (`FIELD_VALIDATOR`); a footprint, a datasheet and a user-defined field of a symbol can
+  const textOk = textFixed || field.name === "Footprint" || field.name === "Datasheet" || (owner === "symbol" && !isStandardSymbolField(field.name)) || text.trim().length > 0;
   const canOk = sizeOk && xUm !== null && yUm !== null && textOk;
   const submit = () => {
     if (!canOk) return;

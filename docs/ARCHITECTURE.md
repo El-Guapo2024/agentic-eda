@@ -78,10 +78,35 @@ never edited as masters.
     A project that turns a library check back on gets a second folder with a
     fresh install's tables. `EDA_KICAD_CONFIG_HOME` moves the folders;
     `EDA_KICAD_USER_CONFIG=1` gives kicad-cli the user's settings back.
-  - Zones: kicad-cli judges the fills the exported board carries (our own
-    filler's, the ones on screen). `--refill-zones` is opt-in (`eda board drc
-    --refill-zones`, the DRC dialog's checkbox) because kicad-cli 10.99 skips
-    its courtyard checks on a run that refills.
+  - **Zone fill is KiCad's, through kicad-cli, and nobody else's** (decided
+    2026-10-13: there is no zone filler in this workspace; `crates/zone-filler`
+    is deleted). Fill All Zones (B, `POST /api/fill/kicad`, `eda board fill`)
+    runs `kicad-cli pcb drc --refill-zones --save-board` on a COPY of the
+    derived board (`.kicad/refill/`: the project's rules, none of the board's
+    library tables, every DRC check ignored, so `cli_command` gives it the empty
+    settings folder: a DRC job does not start before the global footprint
+    libraries are enumerated, 5 s of a 7 s run, and a fill needs none of them;
+    2 to 3 s on a 30-part board) and reads each zone's `(filled_polygon ..)` back
+    (`eda_kicad::zone_fills`: nanometres, `(island yes)` kept). The fills are
+    derived data beside `design.json`, never in it: `.kicad/zone_fills.json`,
+    per zone with a fingerprint of the zone filled (outline, layers, net,
+    settings) and the design revision. Between fills the board shows the last
+    fill, as KiCad does with auto-refill off: an edit elsewhere leaves it, an
+    edit to a zone empties that zone (a priority is none of them: the Zone
+    Manager's OK changes priorities and puts the fills back), and a zone never
+    filled is an outline (and no copper for live connectivity). The fills are
+    read by `GET /api/fill` (canvas, 3D stand-in), the `.kicad_pcb` writer
+    (`filled_polygon`, so the DRC, the 3D render, the plots and File > Save As
+    see them), live connectivity and Cleanup Tracks
+    (`eda_drc::zone_copper::ZoneCopper`). A board imported from a `.kicad_pcb`
+    starts with the fills it was saved with. kicad-cli fills the board's zones
+    only (`FillAllZones` walks `board()->Zones()`): a footprint's own zone is
+    no pour to wait for.
+    "Refill all zones before performing DRC" and the Plot dialog's "Check zone
+    fills before plotting" fill first, on a copy, and then run the DRC or the
+    export WITHOUT `--refill-zones` (kicad-cli 10.99 skips its courtyard checks
+    on a run that refills). A zone keeps the uuid it had in the imported file
+    (`Zone::uuid`): KiCad breaks ties between zones of equal priority by uuid.
   - **The studio stays live while kicad-cli runs.** `/api/drc`, `/api/erc`,
     `/api/board_stats`, `/api/fab/*` and `/api/sch/plot|netlist` run on threads
     of their own (`crates/cli/src/kicad_lane.rs`), so edits, the `/api/version`
@@ -105,12 +130,14 @@ never edited as masters.
   enough interactively:
   - the interactive router (`crates/pns`, a port of KiCad's PNS),
   - the editor UI, tools, dialogs and hotkeys (KiCad look and feel),
-  - live connectivity / ratsnest / zone fill while editing,
+  - live connectivity / ratsnest while editing (through pours as they were
+    last filled by KiCad),
   - our own additions: intent, placement, schematic derivation.
   - The geometry core they share stays in `crates/drc` (shapes, collision,
-    clearance and rule expressions, rtree, zone-fill driver, stroke font, and
+    clearance and rule expressions, rtree, the copper of the zones as their
+    fills hold it, stroke font, and
     the board outline built from Edge.Cuts as KiCad builds it: `outline.rs`,
-    which the filler, the router, the placement gates and the 3D body read; the
+    which the router, the placement gates and the 3D body read; the
     malformed-outline finding it makes is the live view of what kicad-cli's
     `invalid_outline` reports on the export, and kicad-cli stays the judge);
     that crate is no longer a checker and keeps its name for now.
@@ -126,9 +153,10 @@ never edited as masters.
     schematic plotter and netlist exporter in `crates/kicad`, the Board
     Statistics port, connectivity's DRC wrappers, and every DRC/ERC/fab parity
     and perf test. Kept because a live feature needs them: the geometry core
-    above (router, zone filler, renderer), connectivity (ratsnest, and the
+    above (router, renderer), connectivity (ratsnest, and the
     dangling-copper detection the Cleanup Tracks tool deletes), the zone fills
-    the exporter writes, and the schematic-to-PCB sync.
+    the exporter writes (KiCad's, kept beside the design), and the
+    schematic-to-PCB sync.
   - **Our own checks** that KiCad does not have live in a separate fast
     checker, `crates/lint` (`eda-lint`): placement quality (proximity,
     decoupling, edge connectors, board use, net compactness, crossing stubs,

@@ -18,12 +18,16 @@
 // shown as out of date (kicad-port/checkRevision.ts). KiCad's own `type`
 // names are shown directly as each violation's category.
 //
-// Exclusions: "Exclude this violation", "Exclude with comment...", "Exclude all ..."
+// Exclusions: "Exclude this violation", "Exclude with comment...", "Exclude all violations of rule '...'"
 // and Remove are undoable verbs (`add_drc_exclusions`), persisted in design.json and
 // written into the derived project for kicad-cli (crates/kicad/src/drc_exclusions.rs);
 // the list is patched in place, with no new run. Next / Previous / Exclude Marker
 // (the Inspect menu's actions) step and act on the page that is up and the rows the
-// Show boxes let through (state/checkerView.ts).
+// Show boxes let through (state/checkerView.ts). Delete Marker and Delete All Markers
+// (`OnDeleteOneClick`, `OnDeleteAllClick`) take markers off the list and the board; an excluded
+// marker that is deleted takes its exclusion with it, as the next run and the next save record
+// the markers that are left (`BOARD::RecordDRCExclusions`), and the violation is found again.
+// The marker menu has the Inspect and Fix entries of `InspectDRCErrorMenuText` / `FixDRCErrorMenuText`.
 //
 // "Schematic Parity" is `kicad-cli pcb drc --schematic-parity`: the derived schematic
 // goes beside the derived board and the report's `schematic_parity` is the list.
@@ -39,7 +43,7 @@ import { STALE_NOTICE, isStale } from "../kicad-port/checkRevision";
 import { allShown, canExclude, countKinds, listedIndexes, markerPrefix, rcKind, rcMenu, setShowAll, type RcFilter } from "../kicad-port/rcItems";
 import { askExclusionComment, setDrcView, useCheckerView, type DrcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
-import { drcListOf, drcSelectedOf, drcSettingSeverity, drcTitle, excludeDrc, excludeMarkerDrc, frameDrc, openSeveritySetup, restoreDrc, runMarkerMenu, selectDrc, setDrcSeverity, stepDrc, toMenuEntries } from "../actions/checkerOps";
+import { saveReport, deleteAllMarkersDrc, deleteMarkerDrc, drcListOf, drcMenuContext, drcSelectedOf, drcSettingSeverity, excludeDrc, excludeMarkerDrc, frameDrc, openSeveritySetup, restoreDrc, runMarkerMenu, selectDrc, setDrcSeverity, stepDrc, toMenuEntries } from "../actions/checkerOps";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { RcList, type RcRow } from "./RcList";
 
@@ -50,6 +54,8 @@ export function DrcDialog() {
   const view = useCheckerView().drc;
   const open = state.drcDialogOpen;
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  // Delete All Markers asks "Delete exclusions too?" when the report holds exclusions (`DIALOG_DRC::OnDeleteAllClick`).
+  const [askDeleteAll, setAskDeleteAll] = useState(false);
   const cctx = useMemo(() => ({ api, dispatch }), [api, dispatch]);
 
   const report = state.drc;
@@ -99,7 +105,7 @@ export function DrcDialog() {
   const openMenu = (tab: DrcTab, index: number, x: number, y: number) => {
     const v = drcListOf(report, tab)[index];
     if (!v) return;
-    const spec = rcMenu({ domain: "drc", title: drcTitle(v.type), excluded: v.excluded === true, severity: drcSettingSeverity(state, v.type) });
+    const spec = rcMenu(drcMenuContext(state, v));
     const entries = toMenuEntries(spec, (id) => void runMarkerMenu(cctx, { domain: "drc", tab, index }, id, askExclusionComment), canExclude(v));
     setMenu({ x, y, entries });
   };
@@ -142,6 +148,24 @@ export function DrcDialog() {
 
   const tab = view.tab;
   const markerPage = tab === "violations" || tab === "unconnected" || tab === "parity";
+  const hasSelection = markerPage && drcSelectedOf(state, tab) !== null;
+  /** `OnDeleteAllClick`: with no exclusions in the report the markers go at once; with some, the person says whether they go too. */
+  const deleteAll = () => {
+    if (counts.exclusions > 0) setAskDeleteAll(true);
+    else void deleteAllMarkersDrc(cctx, false);
+  };
+  /** `OnSaveReport`'s file dialog: the two file types it offers ("Report file (*.rpt)", "JSON file (*.json)"). */
+  const saveMenu = (at: DOMRect) =>
+    setMenu({
+      x: at.left,
+      y: at.top,
+      entries: [
+        { label: "Report file (*.rpt)", onSelect: () => void saveReport(cctx, "drc", "report") },
+        { label: "JSON file (*.json)", onSelect: () => void saveReport(cctx, "drc", "json") },
+      ],
+    });
+  /** What the lists say when they have nothing in them: a clean board, or markers that were deleted by hand. */
+  const emptyText = (clean: string) => (report?.markers_deleted ? "All markers were deleted. Run DRC to check the board again." : clean);
 
   const ignoredMenu = (key: string, x: number, y: number) => {
     const current = drcSettingSeverity(state, key);
@@ -198,7 +222,7 @@ export function DrcDialog() {
             </div>
           )}
           <div style={{ display: "flex", gap: 18, marginBottom: 10 }}>
-            <label className="toggle" title="KiCad's own refill. Off by default: kicad-cli 10.99 skips its courtyard checks on a run that refills, so it judges the fills shown on screen instead.">
+            <label className="toggle" title="KiCad's filler runs first, on a copy of the board (the fills are kept, like Fill All Zones), and the DRC then judges the board with that fill. Off by default: it judges the fills the board holds.">
               <input type="checkbox" checked={state.drcRefillZones} onChange={(e) => dispatch({ type: "SET_DRC_REFILL", refill: e.target.checked })} />
               Refill all zones before performing DRC
             </label>
@@ -250,7 +274,7 @@ export function DrcDialog() {
             {tab === "violations" && (
               <>
                 {!report && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to check the board."}</div>}
-                {report && violations.length === 0 && <div className="panel-empty">No violations.</div>}
+                {report && violations.length === 0 && <div className="panel-empty">{emptyText("No violations.")}</div>}
                 {report && violations.length > 0 && listedCount("violations") === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
                 <RcList rows={rowsOf("violations")} onSelect={(i) => selectDrc(cctx, "violations", i, true)} onMenu={(i, x, y) => openMenu("violations", i, x, y)} onToggle={(i) => toggle("violations", i)} />
               </>
@@ -259,7 +283,7 @@ export function DrcDialog() {
             {tab === "unconnected" && (
               <>
                 {!report && <div className="panel-empty">{running ? "Running DRC…" : "Run DRC to list unconnected items."}</div>}
-                {report && unconnected.length === 0 && <div className="panel-empty">No unconnected items.</div>}
+                {report && unconnected.length === 0 && <div className="panel-empty">{emptyText("No unconnected items.")}</div>}
                 {report && unconnected.length > 0 && listedCount("unconnected") === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
                 <RcList rows={rowsOf("unconnected")} onSelect={(i) => selectDrc(cctx, "unconnected", i, true)} onMenu={(i, x, y) => openMenu("unconnected", i, x, y)} onToggle={(i) => toggle("unconnected", i)} />
               </>
@@ -323,9 +347,44 @@ export function DrcDialog() {
           </div>
         </div>
         <div className="dialog-footer">
-          <button className="primary" onClick={close}>
-            Close
-          </button>
+          {askDeleteAll ? (
+            <>
+              <span style={{ marginRight: "auto", fontSize: 12 }}>Delete exclusions too?</span>
+              <button
+                onClick={() => {
+                  setAskDeleteAll(false);
+                  void deleteAllMarkersDrc(cctx, false);
+                }}
+              >
+                Errors and Warnings Only
+              </button>
+              <button
+                onClick={() => {
+                  setAskDeleteAll(false);
+                  void deleteAllMarkersDrc(cctx, true);
+                }}
+              >
+                Errors, Warnings and Exclusions
+              </button>
+              <button onClick={() => setAskDeleteAll(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button title="Delete the selected marker from the list and the board. A violation is found again by the next run; an excluded marker takes its exclusion with it" disabled={!hasSelection || running} onClick={() => void deleteMarkerDrc(cctx)}>
+                Delete Marker
+              </button>
+              <button title="Delete the markers of every page" disabled={!report || running} onClick={deleteAll}>
+                Delete All Markers
+              </button>
+              <button title="Save a report file: kicad-cli writes it, for the severities the Show boxes list" disabled={!report || running || !(view.filter.errors || view.filter.warnings || view.filter.exclusions)} onClick={(e) => saveMenu(e.currentTarget.getBoundingClientRect())}>
+                Save...
+              </button>
+              <span style={{ flex: 1 }} />
+              <button className="primary" onClick={close}>
+                Close
+              </button>
+            </>
+          )}
         </div>
       </div>
       {/* The menu sits inside the backdrop, whose click closes the dialog: a click on an entry must stop here. */}

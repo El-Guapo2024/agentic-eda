@@ -28,7 +28,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 - **Trapezoid, chamfered and custom pads are KiCad's (2026-10-10; `PARITY-pcb.md` section 27, `PARITY-fpedit.md` section 10).** A pad keeps its real shape in the IR (`Pad::ext`, `LibraryPad::custom`); the `.kicad_pcb` and `.kicad_mod`
   readers and writers are `pcb_io_kicad_sexpr`'s (kicad-cli's plot of the original and of our export is identical, for a board and for a library footprint); and the DRC, the routing gate, the router, connectivity and the zone filler
   measure that copper (`eda_drc::pad_shape`, `PadPiece`), so the gap to a trapezoid's slanted side, a chamfered corner or a custom pad's arm is within 2 um of kicad-cli's DRC. Pad Properties, on the board and in the footprint editor,
-  takes KiCad's nine shape choices, a trapezoid's delta, a chamfer's ratio and corners and a custom pad's list of basic shapes (add, edit, delete: one undoable verb). Zone-fill parity (`crates/zone-filler/PARITY.md`): `stonehenge`
+  takes KiCad's nine shape choices, a trapezoid's delta, a chamfer's ratio and corners and a custom pad's list of basic shapes (add, edit, delete: one undoable verb). Zone-fill parity (`crates/zone-filler/PARITY.md`, deleted 2026-10-13 with the filler; `git show 43f6c09:crates/zone-filler/PARITY.md`): `stonehenge`
   GND 11.33% to 0.15% of the area, `issue5093`'s `/right/GND` 776.56% to 1.49%; 198 of the 208 fills of the 17 QA boards are within 1% of kicad-cli's area and 189 within 0.5%. Left: Explode and Recombine, padstacks (a pad has one shape for all layers),
   a custom pad's proxy spokes, and the instant 3D scene (`eda_drc::pad_shape::pad_outline` and the state's `pads[].outline` are there for it). Measured: 40 new Rust tests (five of them slow-tier, with kicad-cli) and 25 new
   `node --test` cases; `web/studio/e2e/pad-shapes.check.js` runs 6 scenarios through `window.__eda` on a served board.
@@ -62,7 +62,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
      the schematic editors, Board Setup, the choosers, the router, the PCB edit tools, the zones and the hierarchy have none (item 33).
 - **Docs.** Action level: `UI-ACTIONS.md`, with `STALE-REASONS.md` beside it. Behaviour tables: `web/studio/PARITY-{pcb,sch,3d,fpedit,symedit,boardctl,common}.md`.
   Code level: `CODE-COMPARE-ui.md` (the first 266 handlers; about 310 added since have not been compared) and `CODE-COMPARE-router.md`,
-  `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md`. Measured round trip and connectivity: `REPORT.md` (the re-export part re-measured 2026-10-11, after P1).
+  `crates/pns/PARITY.md`, `crates/zone-filler/PARITY.md` (deleted 2026-10-13: the zone fill is KiCad's; item 13). Measured round trip and connectivity: `REPORT.md` (the re-export part re-measured 2026-10-11, after P1).
   Engines: `ARCHITECTURE.md`. The "Missing" lists below were re-read against the code where a merge touched them; a bullet no merge touched is
   carried forward from 2026-10-07 and says so.
 
@@ -85,7 +85,7 @@ not in the numbers. Items 25 to 35 are new in this revision. The package names `
 | 13 | Zone fill: spokes, hatch, smoothing, iterative refill; pad and footprint overrides | Partly | `eabaf91` (10-09) |
 | 14 | Snap, grid and click versus drag | **Closed** (board, schematic) | `358606b` (10-09) |
 | 16 | PCB context menu | Mostly done | `4c041a6` (10-09) |
-| 17 | Groups, nested | Mostly done (board) | `4c041a6` (10-09) |
+| 17 | Groups, nested | Mostly done (board and sheet) | `4c041a6` (10-09), `task-sch-groups` (10-13, not merged) |
 | 18 | Appearance panel | Mostly done | `6611ade` (10-09) |
 | 21 | Find on the PCB | Mostly done | `4c041a6` (10-09) |
 | 22 | Create Array | Mostly done | `afcb91b` (10-09) |
@@ -111,12 +111,12 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 7 | P7 Custom-shape pads | 31, 13, 19 | custom pads import as their anchor; zone fill is wrong around them; trapezoid and chamfered pads drawn as rectangles | done 2026-10-10; item 31 lists what is left | L |
 | 8 | P8 Files in: Append Board, DXF and SVG, drops | 28 | Import Netlist; a schematic or an image dropped on the sheet; the placement preview | mostly done | S |
 | 9 | P9 Board Setup completion and the rule editor | 3 | **P9a done on `task-board-setup` (2026-10-12)**: Text Variables, Board Editor Layers, Formatting, Zone Hatch Offsets, Length-tuning Patterns, Tuning Profiles, regex net patterns and composite classes, drawing tools from the Text & Graphics defaults. Left: Component Classes, Embedded Files, the rule-tree designer (P9b) | P9a done, P9b open | L left (rule editor XL) |
-| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | no schematic groups, a user-defined field has no place on the sheet, no Pin Helpers menu (done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
+| 10 | P10 Schematic details | 1, 12, 15, 17, 20 | a label's own fields (schematic groups, a user-defined field's place on the sheet and Pin Helpers done on `task-sch-groups`, 2026-10-13 to 15, not merged; done on `task-sch-details`, 2026-10-12, not merged: pins as items with Swap Pins, sheet pins, Auto-rotate, a text's justification, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text, the schematic's pan buttons and auto-pan) | mostly done (not merged) | S-M |
 | 11 | P11 Search and inspection | 21, 29 | **done 2026-10-13 on `task-search-inspect` (not merged)**: Find by Properties (the From Selection tab and the Query tab on KiCad's expression language), Find following user fields, hidden fields and zone names, Clearance Resolution and Constraints Resolution (a rule engine in `crates/drc`: the implicit rules, the `.kicad_dru`, `EvalRules` with KiCad's report text), the Footprint Checker (kicad-cli's DRC on a scratch board). Items 21 and 29 list what is left | done (not merged) | M-L |
 | 12 | P12 Board outline leftovers | 27 | placement and the DSN boundary ignore cutouts; NPTH holes missing from the 3D slab | open | M |
-| 13 | P13 Zone leftovers | 13 | non-copper zones, multi-layer zones, `connect_nearby_polys`, mask-only NPTH knockouts | open | L |
+| 13 | P13 Zone leftovers | 13 | zone fill is KiCad's now (kicad-cli, `crates/zone-filler` deleted); non-copper and multi-layer zones, Auto-Assign Priorities, the Zone Manager preview, the zone lock | done 2026-10-13 on `task-zones` (not merged); item 13 lists what is left | L |
 | 14 | P14 3D models of footprints | 30 | one model path in the editor; no model list, no preview, no Migrate 3D Models | done 2026-10-13 on `task-fp-3d` (not merged); item 30 lists what is left | M |
-| 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | open | S-M |
+| 15 | P15 Review workflow leftovers | 11 | ERC exclusions never reach kicad-cli; no Delete Marker / Save report | done 2026-10-14 on `task-review` (not merged); item 11 lists what is left | S-M |
 | 16 | P16 PCB item kinds the IR lacks | 24 | text box, tables (stackup table), barcode, point, reference image, hatch fill | deferred | L |
 | 17 | P17 Library editor leftovers | 14, 19, 22 | snap to anchors in the editors, the pad array numbering, derived symbols, a fields grid in Footprint Properties, symbol fields on the canvas, alternate pin functions, the symbol text box, a shape properties dialog | **done 2026-10-16 on `task-lib-editors` (not merged)**; items 19 and 22 list what is left | L |
 | 18 | P18 Design blocks | 32 | 23 actions; reusable blocks | after P3, P4 | L |
@@ -146,12 +146,15 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   itself when it is placed, edited in Label Properties, moved and dragged (`AutoRotateItem`); a free text has a justification (`SchExtras::text_justify`) that is written, read back and flipped by Rotate and Mirror as `SCH_TEXT` flips it;
   the net-collision overlay of a Move or Drag (`SCH_DRAG_NET_COLLISION_MONITOR`: circles at the junctions the held items would make between two nets, marks where a connection is pulled apart, the warning cursor); the Symbol Fields Table's attribute
   columns (DNP, Exclude from BOM, board, simulation), Include 'DNP' / 'Exclude from BOM' symbols and KiCad's four built-in views; a power symbol's Symbol Properties (Reference, Value as the net, Show checks); Copy as Text.
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 29): the sheet's groups (item 17): the selection tool picks the outermost group of a member, enters and leaves it, boxes take a group whole or by any member, and Move, Drag, Rotate, Mirror, Lock, Delete, Copy, Paste and Duplicate take the tree.
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 30): a symbol's user-defined fields (`SchematicSection::user_fields`) are fields of the sheet after the four standard ones: hidden until shown, placed by Autoplace Fields with the others, picked, moved, turned, mirrored, edited in Field Properties, hidden with Delete, added, shown and removed in Symbol Properties, kept or dropped with their places by the Symbol Fields Table, written as `(property ..)` where the sheet keeps them and read back by `import_kicad_sch` (text, look, place and hide, for every turn and mirror).
+- Done 2026-10-15 (`task-sch-groups`, P10b; `PARITY-sch.md` section 31): Pin Helpers (`PIN_TRICKS_MENU`): the submenu of a selection of pins and sheet pins with Wire (a stub one wire-grid step out of the pin, held by the Drag tool: a click drops it, Escape takes it away), No Connect and a Net, Hierarchical and Global Label named by the pin, reading away from it, in the shape of its type (`SchCmd::PinHelper`); and swapped pins
+  through a file and the clipboard: the reader reads a symbol's `lib_name` copy of its library symbol as the places traded, Copy writes it, Paste and Duplicate keep the swap under the new reference (kicad-cli reads the clipboard with the wires on the pins they were on).
 - Measured on `task-sch-details`: 76 new Rust tests (ops 62: pins 13, sheet pins 8, labels and text 26, net collision 9, fields table 6; kicad 5, one slow with kicad-cli; model 4; cli 5) and about 50 new `node --test` cases; the kicad-cli proof
   (`crates/kicad/tests/sch_details.rs`, `EDA_SLOW_TESTS=1`: a file with swapped pins, a sheet pin moved to the top edge and justified texts loads, its ERC reports the sheet pin at the moved place, and `kicad-cli sch upgrade` writes the justification,
   the angle, the pin and the cached copy of the symbol back as we wrote them); `web/studio/e2e/sch-details.check.js` (nine scenarios through `window.__eda`, 72 checks, every scenario undoes itself).
-- Missing: Pin Helpers (`PIN_TRICKS_MENU`: Wire, No Connect, Net Label, Hierarchical Label and Global Label on a selected pin or sheet pin); a sheet's border and fill; a user-defined field has no place on the sheet (`FieldPlacement::name` can name one in `SchematicSection::field_layout`, but the editor
-  lists, draws and autoplaces only the standard fields and `user_fields` holds values only: package P10 step 8, not reached); a sheet pin's font, size, bold, italic and colour have no place in the IR; a power symbol's Properties has no footprint, datasheet, exclusion flags or
-  pin table; Autoplace Fields does not read the swapped pin places and the reader does not turn a `lib_name` copy back into a swap (so a copy, paste or duplicate of a symbol with swapped pins has the library's pins); the Symbol Fields Table has no variants and no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
+- Missing: a sheet's border and fill; a sheet pin's font face and colour have no place in the IR (its size, bold and italic do since 2026-10-15); a power symbol's Properties has no footprint, datasheet, exclusion flags or
+  pin table; Autoplace Fields does not read the swapped pin places; the Symbol Fields Table has no variants and no scope selector; symbols this project drew (not imported) and turned or mirrored place their pins by
   `eda_engine::placed` (older note, not re-checked since the overlap fix, `f24fa31`, which made generated symbols draw their pins as KiCad's do).
 - Port from: `eeschema/tools/sch_move_tool.cpp`, `sch_edit_tool.cpp`, `sch_selection_tool.cpp`, `sch_drag_net_collision.cpp`, `sch_align_tool.cpp`.
 
@@ -333,17 +336,29 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `common/widgets/properties_panel.cpp`, `common/properties/property_mgr.cpp`, `pcbnew/widgets/pcb_properties_panel.cpp`, `eeschema/widgets/sch_properties_panel.cpp`.
 
 ### 11. The DRC and ERC dialogs
-**Mostly closed (2026-10-08, `02f383c`).** Hit: every review pass. Blocks: no. Package P15.
+**Mostly closed (2026-10-08, `02f383c`; the leftovers 2026-10-14, package P15 on `task-review`).** Hit: every review pass. Blocks: no.
 - Done: Run DRC and Run ERC through kicad-cli with a running state, out-of-date marking and lint tabs; the list is `RC_TREE_MODEL`'s; DRC exclusions as an undoable verb
   (`Cmd::AddDrcExclusions` / `DeleteDrcExclusions`, `design.drawings.drc_exclusions`) written into the derived `.kicad_pro`; Next, Previous and Exclude Marker; a marker menu in both dialogs and on both
   canvases; the Ignored Tests and Schematic Parity pages (`--schematic-parity`); a Violation Severity page in Schematic Setup. `web/studio/e2e/drc-review.check.js` drives it. Details:
   `PARITY-pcb.md` section 9a, `PARITY-sch.md` sections 4 and 9, `PARITY-common.md` section 5.
-- Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its exact text, position included, and kicad-cli's report gives
+- Done by P15 (`PARITY-pcb.md` section 33, `PARITY-sch.md` section 28): **ERC exclusions reach kicad-cli, with their comments** (`erc.erc_exclusions` of the derived project, from the marker kicad-cli reported:
+  `eda_kicad::erc_exclusions`, `ErcViolation.marker`, `Cmd::AddErcExclusion { comment, marker }`); the exclusions of both domains are written as the records kicad-cli 10.99.0-5334 keeps in a project
+  (`kiapi.board.DrcExclusion`, `kiapi.schematic.ErcExclusion`, protobuf JSON, positions in nanometres) with the section's schema said (`board.design_settings.meta.version` 3, `erc.meta.version` 1) -- not the
+  pipe-delimited texts of `SerializeToString`, which that nightly migrates only out of a section at an older schema; **Delete Marker and Delete All Markers** in both dialogs (an excluded marker that is deleted takes its
+  exclusion with it, as `RecordDRCExclusions` / `RecordERCExclusions` keep only the markers that are left: `delete_*_exclusion`, `Cmd::ClearDrcExclusions` / `ClearErcExclusions`, one undo step each); **a marker
+  selected by a left click** on the board and on the sheet, a double click bringing the dialog up on it; **Exclude with comment / Edit exclusion comment** in the ERC menu; **Exclude all violations of rule '...'**
+  (the rule is read from the violation's text); the **Inspect and Fix entries** of both menus (`InspectDRCErrorMenuText`, `FixDRCErrorMenuText`, `InspectERCErrorMenuText`, `FixERCErrorMenuText`);
+  **Save...** from both dialogs (`kicad-cli ... --format report|json`, the Show boxes as the severities); **Edit connection grid spacing...** and Schematic Setup > General > Formatting (`Cmd::SetConnectionGrid`,
+  `schematic.connection_grid_size`). `web/studio/e2e/review.check.js` drives it; the kicad-cli proofs (slow tier) are in `crates/cli/src/review_tests.rs` and `board.rs` (`drc_exclusions`).
+- Left: **a DRC exclusion reaches kicad-cli only where the report can say where the marker is.** KiCad matches an exclusion to a marker by its kind, position and items, and kicad-cli's report gives
   the items' positions and never the marker's, so the studio writes the positions worth trying (`eda_kicad::drc_exclusions`) and waives the rest in the studio's report alone (`kicad_matched: false`). A
-  KiCad patch adding the marker position to `RC_JSON::VIOLATION` would close it; that is upstream work and not planned. **ERC exclusions are the studio's alone**: the derived project has no
-  `erc.erc_exclusions`, though their serialization (`SCH_MARKER::SerializeToString`: key, position, the two item uuids, sheet paths) is within reach -- the exporter mints the uuids, so the DRC method
-  of guessing the position applies -- and they have no comment. Not ported: selecting a marker with a left click, Delete Marker / Delete All Markers and Save report, "Exclude all violations of rule
-  '...'", the Inspect / Fix menu entries, Edit connection grid spacing (Schematic Setup has no Formatting page).
+  KiCad patch adding the marker position to `RC_JSON::VIOLATION` would close it; that is upstream work and not planned. **An ERC exclusion reaches it only for the checks whose marker is known to the letter**
+  (`eda_kicad::erc_exclusions::rule`): not `endpoint_off_grid` and `unconnected_wire_endpoint` (a marker at each end of one wire, and the report names the wire once), `generic-*`, `unresolved_variable`,
+  `field_name_whitespace`, `label_multiple_wires`, `four_way_junction`, `no_connect_connected`, `hier_label_mismatch`, `similar_*`, `same_local_global_*`, `bus_definition_conflict`, `duplicate_pins`; a DRC check whose marker
+  carries a layer (`copper_sliver`, `starved_thermal`, `generic-*`, `unresolved_variable`) is waived in the studio alone too. **The records are what kicad-cli 10.99.0-5334 reads**: an older kicad-cli
+  (up to the pinned source, `8303b2ad`) reads the pipe-delimited texts only and would ignore them. Not ported: the ERC Fix entry "Edit Netclasses..." (Schematic Setup has no Net Classes page), Report all errors
+  for each track (`--all-track-errors`), the cross-probe options, the other pages of Schematic Setup > Formatting (text sizes, line widths, junction and hop-over sizes, intersheet references), and a file dialog
+  for Save... (the page downloads the report).
 - Port from: `pcbnew/dialogs/dialog_drc.cpp`, `eeschema/dialogs/dialog_erc.cpp`, `eeschema/sch_marker.cpp`, `eeschema/schematic.cpp` (`ResolveERCExclusions`), `eeschema/erc/erc_settings.cpp`,
   `common/rc_item.cpp`, `common/dialogs/panel_setup_severities.cpp`.
 
@@ -356,23 +371,48 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `SchExtras::body_styles`, Cycle Body Style). 44 Rust tests, 17 `node --test` cases.
 - Done 2026-10-12 (`PARITY-sch.md` sections 21 and 23): a free text's justification (`SchExtras::text_justify`: stored when it is not left and bottom, written as `(justify ..)`, read back, flipped by Rotate and Mirror, carried by copy and paste); a label's Auto
   (`LabelLook::auto_rotate`); a symbol's pins are items, and Swap Pins keeps each pin's place in `SchExtras::pin_swaps`.
-- Missing: a field's font face and colour, a label's own fields (netclass, intersheet references) and a user-defined field's place on the sheet have no place in the IR; the
+- Done 2026-10-13 (`task-sch-groups`, `PARITY-sch.md` section 30): a user-defined field's place on the sheet (`FieldPlacement::name` names it in `field_layout`; `symbol_specs_in`, the writer, the reader, the editor); a sheet read from a KiCad file keeps the places of its user fields and no others.
+- Missing: a field's font face and colour and a label's own fields (netclass, intersheet references) have no place in the IR; the
   fields of a symbol read from a KiCad file are not items; `m_AutoplaceFields.enable` is always on and Autoplace Fields ignores swapped pins; Reorganize into Module Sheets (2026-10-10) keeps the fields' places and looks, the labels' looks and the body styles, but not a
   label's spin; only the normal and the De Morgan body style are modelled.
 - Port from: `eeschema/sch_field.cpp`, `sch_label.cpp`, `dialogs/dialog_field_properties.cpp`, `dialog_label_properties.cpp`, `dialog_symbol_properties.cpp`.
 
-### 13. Zones: fill fidelity and settings
-**Partial; fill fidelity improved 2026-10-08/09 (`eabaf91`, `a46fd29`).** Hit: most boards. Blocks: no. Package P13 (P7, the custom pads, merged 2026-10-10). Of 208 fills on 17 KiCad QA boards, 198 are within 1% of kicad-cli's area (105 before 2026-10-08, 190 before the custom pads), 189 within 0.5%; the notch row of `issue11814` went from 23.4% to 0.2% with the outline work.
-- Exists: the filler (`crates/zone-filler`, `crates/drc/src/fill.rs`, `GET /api/fill`) follows `ZONE_FILLER::Fill`: zones fill from the highest priority down and are knocked out by each other's fills, islands go by
-  connectivity, iterative refill, thermal spokes (`buildThermalSpokes`: turn with the pad, the pad's angle, width and gap, only the ones that reach copper stay), hatch fill with thermal rings, chamfer and
-  fillet corner smoothing, the board-edge clearance from every Edge.Cuts item, and pad and footprint clearance overrides. A pad's or footprint's own connection, relief gap, spoke width, spoke angle and
-  clearance beat the zone's (Footprint Properties and Pad Properties; read from and written to `.kicad_pcb` and `.kicad_mod`). The full settings dialog (`components/ZoneDialog.tsx`), keepout knockouts,
-  Fill and Unfill Selected, Merge, Duplicate onto Layer, the Priority actions and the Zone Manager (`PARITY-boardctl.md`). Measured in `crates/zone-filler/PARITY.md`.
-- Missing: a custom pad's proxy spokes (`gr_vector`; its spokes start from the box of its copper) and padstacks whose inner and back shapes differ (item 31; custom pads themselves were done on 2026-10-10: `stonehenge` GND 11.33% to 0.15%, `issue5093` `/right/GND` 776.56% to 1.49%); the thermal
-  rings of a hatched zone (0.6 to 0.9% XOR); `connect_nearby_polys`; mask-only NPTH holes (`issue14559`'s plugs), courtyards and net ties as knockouts; one layer per zone and no non-copper zones
-  (`fillNonCopperZone`); no zone lock in Zone Properties (the name is edited in the Properties panel); no Auto-Assign Priorities; the Zone Manager has no preview; a hatched zone with a fine pitch over a whole
-  board is slow (minutes in a debug build on `issue5093`). Appendix C has the function table.
-- Port from: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `pcbnew/teardrop/`.
+### 13. Zones: the fill is KiCad's, and the zone settings
+**Done 2026-10-13 on `task-zones` (not merged).** Hit: most boards. Blocks: no. Package P13.
+- **Decided 2026-10-13: the zone fill is KiCad's, made by kicad-cli, and nobody else's.** `crates/zone-filler` (a port of `ZONE_FILLER` that was within 1% of kicad-cli's area on 198 of 208 fills of 17 QA boards, and
+  `PARITY.md`, its measurements; `git show 43f6c09:crates/zone-filler/PARITY.md`) is deleted, with `eda_drc::fill` and the data only it read (the zone, keepout, knockout, copper-graphic and spoke-box fields of
+  `DrcBoard`). P13's own plan for it (fill fidelity: courtyards and net ties as knockouts, the hatched zone's thermal rings, `connect_nearby_polys`, mask-only NPTH knockouts; the speed of a fine hatch) is
+  **superseded**: nothing fills here, so nothing is left to port, and a hatch over a whole board is as fast as kicad-cli is (a few seconds).
+- **Fill All Zones** (B, `POST /api/fill/kicad`, `eda board fill`): `kicad-cli pcb drc --refill-zones --save-board` on a COPY of the derived board (`.kicad/refill/`: the project's rules, none of the board's library
+  tables, every DRC check ignored, started through `eda_kicad_engine::cli_command` like every other kicad-cli run, so with its empty settings folder), then each zone's `(filled_polygon ..)` read back
+  (`eda_kicad::zone_fills`: nanometres, `(island yes)`; a footprint's own zones are taken out of the footprint's frame that kicad-cli 10.99.0-5334 stores them in, with the importer's `fp_transform` map). The
+  fills are derived data beside `design.json` (`.kicad/zone_fills.json`), per zone with a fingerprint of the zone filled and the design revision. **Time**: a 30-part board (`examples/mcu_board_30plus.yaml`,
+  placed and routed, a GND pour on both layers): 8.1 to 9.0 s with the user's footprint libraries (a DRC job does not start before the global libraries are enumerated), **1.9 to 3.3 s** with the empty settings
+  folder, the same fill; KiCad's QA boards 1.7 to 2.9 s (`issue6284`, four zones and 90 rings: 8.4 s). kicad-cli fills the board's zones only (`ZONE_FILLER_TOOL::FillAllZones` walks `board()->Zones()`), so a
+  footprint's own zone is no pour to wait for (`zone_fills::fillable`: not "not filled", not listed by `GET /api/fill` unless a file stored a fill for it).
+- **Between fills the board shows the last fill**, as KiCad does with auto-refill off: an edit elsewhere leaves it, an edit to a zone (outline, layers, net, a setting) empties that zone (a priority is none of
+  them: the Zone Manager's OK changes priorities and puts the fills back, `DIALOG_ZONE_MANAGER::OnOk`), and a zone never filled is an outline (no copper for live connectivity, the 3D stand-in and the status bar's "N zones not filled (B)"). Read by: the canvas and the 3D stand-in (`GET /api/fill`), the `.kicad_pcb` writer (so the DRC, the
+  render, the plots and File > Save As carry kicad-cli's rings), live connectivity and Cleanup Tracks (`eda_drc::zone_copper::ZoneCopper`). A board imported from a `.kicad_pcb` starts with the fills it was saved with.
+  "Refill all zones before performing DRC", the Plot dialog's "Check zone fills before plotting" and the Zone Manager's "Refill zones" run the filler first, on a copy; the DRC itself runs without `--refill-zones`
+  (kicad-cli 10.99 skips its courtyard checks on a run that refills). Fill Selected, Unfill Selected and Unfill All Zones go to the server.
+- **Zone kinds**: non-copper zones (silkscreen, mask, paste and user layers: `dialog_non_copper_zones_properties`; no net) and zones on several layers (`Zone::layers`, `(layers "F.Cu" "B.Cu")`, `*.Mask`, `F&B.Cu`),
+  read and written as KiCad does, edited in Zone Properties (one box per layer, the dialog chosen by the layer drawn on). A zone keeps the uuid it had in an imported file (`Zone::uuid`): KiCad breaks ties between
+  zones of one priority by uuid, and `issue5750`'s B.Cu fill came out at about half the area in kicad-cli's refill of our copy until it did (the slow proof below). A mask-only NPTH hole (`FootprintExtra::holes`) and a net
+  tie's pad groups reach the derived board, so the fill kicad-cli makes of it keeps clear of the hole and exempts the tie.
+- **Zone UI**: Auto-Assign Priorities in the Zone Manager (`AutoAssignZonePriorities` ported to `eda_ops::zone_priority`: the pads and vias of each net inside an overlap decide, the smaller zone where they do not,
+  Kahn's order, one priority per same-net group; `GET /api/zone_priorities/auto`, staged and applied on OK), the Zone Manager's preview (a tab per layer of the zone: the board's edges, the fill or the outline;
+  `components/ZonePreview.tsx`), a "Refill zones" box, and the Locked box of Zone Properties. The full settings dialog, keepouts, Merge, Duplicate onto Layer and the Priority actions are as before (`PARITY-boardctl.md`).
+- **Proof**: in the fast tier, `crates/kicad-engine` tests with a stand-in kicad-cli (the refill runs `pcb drc --refill-zones --save-board` on the copy through `cli_command`'s settings folder and reads the
+  saved board's rings; the DRC after a refill runs without `--refill-zones` on the board that carries them; a kicad-cli that cannot refill is told apart) and `eda_kicad::zone_fills` (the scanner, a footprint's
+  frame, the fingerprint, the cache file). In the slow tier, `crates/kicad-engine/tests/refill_zones.rs` (`EDA_SLOW_TESTS=1`): kicad-cli's fill of the derived board equals its fill of the original, board by board and layer by layer, to 0.00 to 0.002% of the area
+  on `issue5990` (mask-only NPTH holes), `issue14008` (a net tie), `issue6260` (a non-copper zone) and `issue5750` (the uuid tie), and on `issue6284`, `issue12609`, `issue2568`, `hatch_thermal_connectivity`,
+  `zone_filler`, `issue7086`; the DRC runs on the board written with those fills. `web/studio/e2e/zones.check.js`: 8 scenarios through `window.__eda` on a served board, kicad-cli running for real.
+- Left: `issue22826`'s inner layers differ by 0.5 to 0.8% because its through-hole pads are `(remove_unused_layers yes)` and `(zone_layer_connections)`, which the IR does not keep (item 31, padstacks); the Zone
+  Manager's "Update Displayed Zones" (a fill of the dialog's staged copies; the preview shows the fills the board holds, and the staged priorities take effect with OK and a fill); no auto-refill after an edit
+  (KiCad's own setting is off by default; `ZoneFillDirty` fills the zones that have none); a fill is derived data, not an undo step: Undo of a zone edit gives the fill back only because the cache still holds the old
+  zone's entry, and a second fill replaces it.
+- Port from: `pcbnew/zone.cpp`, `zone_utils.cpp` (`AutoAssignZonePriorities`), `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `jobs` of `pcbnew_jobs_handler.cpp`
+  (`JobExportDrc`: `--refill-zones`, `--save-board`), `pcb_io/kicad_sexpr/` (`format( const ZONE* )`: the layer set and the filled polygons), `pcbnew/teardrop/`.
 
 ### 14. Snap, grid and the click-versus-drag rule
 **Closed 2026-10-09 for the board, the schematic and the click rule (`358606b`); the footprint and symbol editors snap to other items' anchors since 2026-10-14 (P17, `task-lib-editors`, not merged).** Hit: every drag. Blocks: no.
@@ -408,12 +448,16 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Port from: `pcbnew/tools/pcb_selection_tool.cpp`, `edit_tool.cpp`, `pcb_editor_conditions.cpp`, `board_inspection_tool.cpp`, `router/router_tool.cpp`.
 
 ### 17. Groups
-**Mostly done on the board (2026-10-08/09, `4c041a6`); the schematic and the footprint editor have none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
+**Mostly done on the board (2026-10-08/09, `4c041a6`) and on the schematic sheet (2026-10-13, `task-sch-groups`, not merged); the footprint editor has none.** Hit: sometimes. Blocks: no. Package P6 (board) and P10 (schematic).
 - Done: Group, Ungroup, whole-group selection, enter and leave, Add Items, Remove Items and Group Properties (`Cmd::EditGroup`); groups nest (`EDA_GROUP`; `crates/model/src/groups.rs`,
   `crates/ops/src/pcb_groups.rs`); move, rotate, flip, Delete, Duplicate, Copy and Paste take the whole tree; the entered group is drawn with its box and name; the `.kicad_pcb` file and the clipboard hold the tree.
 - Done 2026-10-10 (`task-pcb-edit-details`): items drawn, pasted, duplicated or arrayed while a group is entered join it (`BOARD_COMMIT::Push`; `Cmd::InGroup`, `crates/ops/src/pcb_groups.rs`; `PARITY-pcb.md` section 16).
-- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the schematic (P10's last step, `sch_group_tool.cpp`: not reached on `task-sch-details`) or the footprint editor.
-- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp` (the last one is open).
+- Done 2026-10-13 (`task-sch-groups`, P10b; `PARITY-sch.md` section 29): the sheet has the same groups. `eda_model::groups::{GroupTree, GroupHost}` is the one tree and the one set of list edits the board's drawings and the sheet's `SchExtras::groups` both run; Group, Ungroup, Add Items, Remove Items and
+  Group Properties are `SchCmd` verbs (one undo step each) with the studio's whole-group selection, Enter and Leave Group, window and crossing boxes, the Grouping and Enter Group entries of the context menu, the group's box and name, Properties on a group, and Move, Drag, Rotate, Mirror (a lone group turns on itself), Lock,
+  Delete, Copy, Cut, Paste and Duplicate taking the whole tree; what is made while a group is entered joins it; `(group "name" (uuid ..) (members ..))` is written as `saveGroup` writes it and read back (the writer names every item's uuid for it). 7 model, 23 ops, 8 kicad (one slow: kicad-cli loads nested groups, runs ERC, `sch upgrade` keeps them), 1 cli and 12 `node --test` cases;
+  `web/studio/e2e/sch-groups.check.js` (thirteen scenarios through `window.__eda`).
+- Missing: what the router commits is not made in the entered group (package P5); Create Array skips groups (item 22); no groups in the footprint editor. On the sheet: Reorganize into Module Sheets drops the groups of the sheets it takes items out of; a group of one member dissolves (KiCad keeps it); a lone group's turn point counts a text or a label by its anchor; Group Properties does not take the view to a row's item; the Align and Distribute verbs are not group-aware.
+- Port from: `common/tool/group_tool.cpp`, `pcbnew/tools/pcb_group_tool.cpp`, `eeschema/tools/sch_group_tool.cpp`.
 
 ### 18. Appearance and display options
 **Mostly done (2026-10-09, `6611ade`).** Hit: every session. Blocks: no.
@@ -522,10 +566,10 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   `eeschema/tools/assign_footprints.cpp`, `eeschema/tools/backannotate.cpp`, `pcbnew/tools/edit_tool_move_fct.cpp` (`SwapPadNets`).
 
 ### 27. Board outline leftovers
-**New, open.** Hit: boards with cutouts, slots or rounded corners. Blocks: no. Package P12, size M. From `PARITY-pcb.md` section 25 ("Not done") and `crates/zone-filler/PARITY.md`.
+**New, open.** Hit: boards with cutouts, slots or rounded corners. Blocks: no. Package P12, size M. From `PARITY-pcb.md` section 25 ("Not done") and what `crates/zone-filler/PARITY.md` (deleted 2026-10-13) said of the outline.
 - The autoplacer and the placement verbs (`crates/place`, `Cmd::PlaceAt` and the rest) still work from the outline's bounding box: a part can be placed inside a cutout's box.
 - The Freerouting DSN boundary (`eda_freeroute::design::to_dsn`) is the summary polygon, with no cutouts, and the autoroute works inside it.
-- NPTH holes are not cut out of the 3D slab (`aIncludeNPTHAsOutlines`); mask-only NPTH holes do not knock copper out of a zone (item 13).
+- NPTH holes are not cut out of the 3D slab (`aIncludeNPTHAsOutlines`); a mask-only NPTH hole is kept (`FootprintExtra::holes`) and written, so kicad-cli's fill keeps clear of it (item 13).
 - A rectangle's corner radius and the arcs of a `gr_poly` are not in the IR; there is no outline-specific editor (the generic shape tools draw and edit Edge.Cuts); "Fix discontinuities in board outlines" in
   Update PCB from Schematic has nothing behind it; the footprint pass of `BuildBoardPolygonOutlines` (`isCopperOutside`) is the ordinary nesting test here, and a footprint's Edge.Cuts do not follow it when it
   moves.
@@ -587,7 +631,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 - Done (`PARITY-pcb.md` section 27, `PARITY-fpedit.md` section 10): A pad keeps its real shape in the IR (`Pad::ext`, `LibraryPad::custom`); the `.kicad_pcb` and `.kicad_mod`
   readers and writers are `pcb_io_kicad_sexpr`'s (kicad-cli's plot of the original and of our export is identical, for a board and for a library footprint); and the DRC, the routing gate, the router, connectivity and the zone filler
   measure that copper (`eda_drc::pad_shape`, `PadPiece`), so the gap to a trapezoid's slanted side, a chamfered corner or a custom pad's arm is within 2 um of kicad-cli's DRC. Pad Properties, on the board and in the footprint editor,
-  takes KiCad's nine shape choices, a trapezoid's delta, a chamfer's ratio and corners and a custom pad's list of basic shapes (add, edit, delete: one undoable verb). Zone-fill parity (`crates/zone-filler/PARITY.md`): `stonehenge`
+  takes KiCad's nine shape choices, a trapezoid's delta, a chamfer's ratio and corners and a custom pad's list of basic shapes (add, edit, delete: one undoable verb). Zone-fill parity (`crates/zone-filler/PARITY.md`, deleted 2026-10-13 with the filler; `git show 43f6c09:crates/zone-filler/PARITY.md`): `stonehenge`
   GND 11.33% to 0.15% of the area, `issue5093`'s `/right/GND` 776.56% to 1.49%; 198 of the 208 fills of the 17 QA boards are within 1% of kicad-cli's area and 189 within 0.5%.
 - Left: Explode and Recombine (Edit Pad as Graphic Shapes, Finish Pad Edit), padstacks (a pad has one shape for all layers; no `remove_unused_layers`),
   a custom pad's proxy spokes, `gr_rect` corner radius and arcs inside `gr_poly`, the microwave arc stub and function shape, and the instant 3D scene (`eda_drc::pad_shape::pad_outline` and the state's `pads[].outline` are there for it).
@@ -636,7 +680,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 2 | DRC engine hangs | Out of scope | kicad-cli is the only engine (`docs/ARCHITECTURE.md`); the Rust copy is deleted. |
 | 3 | DRC precision | Out of scope | same |
 | 4 | ERC has no UI | **Closed** | `components/ErcDialog.tsx`, `GET /api/erc` to `crates/kicad-engine/src/lib.rs::erc`, exclusions `Cmd::AddErcExclusion`, pin map `SchematicSetupDialog.tsx`. Review workflow: item 11. |
-| 5 | Zone fill | Partial | `crates/zone-filler`, `crates/drc/src/fill.rs`, `ZoneDialog.tsx`, `ZoneManagerDialog.tsx`; 190 of 208 fills within 1% of kicad-cli's area; items 13 and 31. |
+| 5 | Zone fill | KiCad's own | `eda_kicad::zone_fills`, `eda_kicad_engine::refill_zones`, `crates/cli/src/fill_api.rs`, `ZoneDialog.tsx`, `ZoneManagerDialog.tsx`; the fill is kicad-cli's (no filler here); items 13 and 31. |
 | 6 | Hierarchical sheets | Partial | IR, import, export, panel, navigation, editing on every sheet, nets across sheets, Find, Annotate, Import Sheet, sheet copy and paste, lint and render over the hierarchy (`ir.rs`, `sch_import.rs`, `HierarchyPanel.tsx`, `sch_annotate.rs`, `sch_sheets.rs`); item 4 lists what is left. |
 | 7 | Routing | Partial | `crates/pns`; item 7. |
 | 8 | Footprint editor and pad tool | Partial | editor, pad tools, dialogs, import and export (`components/footprint/`, `crates/ops/src/library_editors.rs`); items 19, 30, 31. |
@@ -654,7 +698,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 | 20-24 | ERC bus and hierarchy, multi-unit, SI, library-sync, DFM checks | Out of scope | kicad-cli runs these. |
 | 25 | Align and distribute | **Closed** | PCB: every item kind, locks respected (`state/store.tsx`, `kicad-port/alignDistribute.ts`, `88c8c0a`); schematic Align and Align to Grid move each item's wires with it (`kicad-port/schAlign.ts`, `2a8bf8f`). |
 | 26 | Array tool | Partial | `Cmd::CreateArray` (`crates/ops/src/array.rs`), `CreateArrayDialog.tsx`: footprints and every other kind, since 2026-10-09 (`afcb91b`); the footprint editor's pad numbering is left (item 22). |
-| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic and the footprint editor have no groups; item 17. |
+| 27 | Grouping | Partial | board: done, nested (`Cmd::Group` family in `crates/ops/src/pcb_groups.rs`, `kicad-port/groupTree.ts`, `state/store.tsx::withGroupSubstitution`, the entered-group overlay in `painter.ts`, the `.kicad_pcb` file); the schematic sheet's groups are done on `task-sch-groups` (`SchCmd::Group` family in `crates/ops/src/sch_groups.rs`, `kicad-port/schGroups.ts`, `PARITY-sch.md` section 29); the footprint editor has no groups; item 17. |
 | 28 | Dimensions and measure | **Closed** | `crates/connectivity/src/dimension.rs`, `Cmd::AddDimension` family, `components/DimensionPropertiesDialog.tsx`, the measure tool. Left: the interactive height click, text border, manual text position, export (item 2). |
 | 29 | Pan | Partial | `kicad-port/viewControls.ts`, `Canvas.tsx` (PCB); item 20. |
 | 30 | Context menu | **Closed** | `kicad-port/pcbContextMenu.ts` (KiCad's `CONDITIONAL_MENU` and the entries of every tool's `Init()`), `pcbSelectionSummary.ts`, `components/canvas/pcbMenuBuilder.ts`, `Canvas.tsx`. Left: table cells, gate swap, generators, most of the router's via and posture entries (item 16, item 7). |
@@ -672,24 +716,22 @@ the plan: a gap that stops a workflow every project meets is above one that cost
   Viewer windows (5) are not planned; the editors' library trees browse.
 - **Internal events** (13 rows) have nothing to wire.
 
-## Appendix C. Zone filler against `pcbnew/zone_filler.cpp`
+## Appendix C. Zone filler: not ported, KiCad's is used
 
-Audited 2026-10-02 (`e45bf2a`), re-audited 2026-10-08 after the fidelity work (item 13). The functions that were already ported are not listed: `addHoleKnockout`,
-`buildDifferentNetZoneClearances`, `subtractHigherPriorityZones`, `postKnockoutMinWidthPrune`, the rule-area knockouts (`FillKeepout`) and the `fillSingleZone` structure.
-Each row below is measured against kicad-cli in `crates/zone-filler/PARITY.md` (before and after).
+From 2026-10-02 to 2026-10-13 this workspace held a port of `pcbnew/zone_filler.cpp` (`crates/zone-filler`, measured against kicad-cli in its `PARITY.md`). It is deleted: the zone fill is KiCad's, made by
+`kicad-cli pcb drc --refill-zones --save-board` on a copy of the derived board and kept beside `design.json` (item 13). Every function below is therefore KiCad's own run, and none is ours to keep in step; the
+table says what each did, and what the port had not reached when it went (all of it superseded).
 
-| KiCad function | `crates/zone-filler` |
+| KiCad function | where it is now |
 |---|---|
-| `Fill` | ported (`orchestrate.rs::fill_board`): zones fill from the highest priority down (`ZONE::HigherPriority`: teardrop, priority, then the id where KiCad uses the UUID) and each is knocked out by the filled copper of the zones above it, not their outlines; the iterative refill. Not ported: the dependency waves run in parallel (one sorted pass here) and a zone on several layers (one layer per zone) |
-| `FillIsolatedIslandsMap` (`islands.rs`) | ported: an island is a fragment whose same-net copper cluster, through pads, tracks, vias and the zones of other layers, holds no pad; `ISLAND_REMOVAL_MODE` always / never / below area; islands mostly outside the board are dropped last |
-| `refillZoneFromCache` | ported (`lib.rs::refill_zone_from_cache`): the pre-knockout fill is cached, and a zone that a higher-priority zone gave space back to is refilled from the cache against the fills as they now are |
-| `addKnockout` | ported (2026-10-10): a pad is knocked out as its shape (`PAD::GetEffectiveShape`: a trapezoid, a chamfered rectangle, a custom pad's anchor and primitives) and a custom pad with `(clearance convexhull)` as the hull of its shapes (`CUSTOM_SHAPE_ZONE_MODE::CONVEXHULL`) |
-| `knockoutThermalReliefs`, `buildThermalSpokes` (`spokes.rs`) | ported: `DRC_ENGINE::EvalZoneConnection` (a pad's own connection over its footprint's over the zone's; "PTH only" thermal-relieves plated holes), the pad's relief gap and spoke width over the zone's (the width at least the zone's minimum and at most the pad's smaller side), the spoke angle (90 degrees for oval and rectangular pads, 45 otherwise, or the pad's own), spokes turned with the pad, circles built at 0 degrees and turned, the spoke ends, the test point and the mutual overlap, so only spokes that reach copper stay; they start from the box of the pad's copper (`dummy_pad.GetBoundingBox`), a custom pad's too. Not ported: a custom pad's proxy spokes (`gr_vector`) |
-| `buildCopperItemClearances` | partial: no courtyard knockouts, no net-tie exemptions; **the board edge** (`copper_edge_clearance` from every Edge.Cuts item as `knockoutGraphicClearance` takes it: an arc's curve, a circle's ring, a cutout's rim, a solid shape's inside; `FillInput::edge_cuts`); a pad's or footprint's own clearance override replaces the net class's and zone's for that pad, floored at the board minimum (`DRC_ENGINE::EvalRules`) |
-| `ZONE::BuildSmoothedPoly` (`smoothed.rs`, `corner.rs`) | ported: same-net zones merged, the board outline (`GetBoardPolygonOutlines`: every outline with its cutouts, applied only when it is well-formed, `m_brdOutlinesValid`; `crates/drc/src/outline.rs`), the minimum-width apron, and the chamfer and fillet corner smoothing |
-| `connect_nearby_polys` | missing |
-| `fillNonCopperZone` | missing |
-| `buildHatchZoneThermalRings`, `addHatchFillTypeOnZone` (`hatch.rs`) | ported: thickness, gap, orientation, smoothing level and amount, minimum hole area, and the thermal rings round pads and vias that are connected to a hatched zone |
+| `Fill`, `fillSingleZone`, `FillIsolatedIslandsMap`, `refillZoneFromCache` | kicad-cli (`JobExportDrc` with `--refill-zones`); the port had them |
+| `addKnockout`, `addHoleKnockout`, `knockoutThermalReliefs`, `buildThermalSpokes`, `buildCopperItemClearances` | kicad-cli; the port lacked courtyard knockouts, net-tie exemptions and mask-only NPTH knockouts |
+| `ZONE::BuildSmoothedPoly`, `postKnockoutMinWidthPrune`, `subtractHigherPriorityZones`, `buildDifferentNetZoneClearances` | kicad-cli |
+| `connect_nearby_polys` | kicad-cli (the port lacked it) |
+| `fillNonCopperZone` | kicad-cli (non-copper zones are written to the derived board and read back like the rest) |
+| `buildHatchZoneThermalRings`, `addHatchFillTypeOnZone` | kicad-cli (the port was 0.6 to 0.9% XOR off on the rings) |
+| `ZONE::HigherPriority` (priority, then the uuid) | kicad-cli, on the zone's uuid: kept from an imported file (`Zone::uuid`) |
+| `AutoAssignZonePriorities` (`zone_utils.cpp`) | ported (`eda_ops::zone_priority`): it is not a fill, it works out priorities from the overlaps |
 
 ## Phase one: the six packages (history)
 
@@ -713,7 +755,7 @@ Hub files are the ones many packages edit. A collision in a hub is a merge, not 
   the `fold_*` functions, `reconcile_schematic`, `step`); `studio` = `crates/cli/src/studio.rs` (routes, `/api/state`); `kio` = `crates/kicad/src/{pcb,import,footprint_lib,lib}.rs` (writer, importer);
   `runner` = `web/studio/src/actions/useActionRunner.ts`; `store` = `state/store.tsx` and `api/{types,client}.ts`; `canvas` = `components/canvas/{Canvas.tsx,painter.ts}`; `schview` = `components/SchematicView.tsx`;
   `fpui` = `components/{FootprintPropertiesDialog,BoardPadPropertiesDialog}.tsx` and `components/footprint/`; `pns` = `crates/pns/` and `components/canvas/{routing,dragging,diffPairRouting}.ts`;
-  `zone` = `crates/zone-filler/` and `crates/drc/`; `libs` = `crates/cli/src/library_*.rs`, `body_api.rs` and the choosers; `docs` = `ui-parity-missing.json`, `UI-ACTIONS.md`, `GAPS.md`, `PARITY-*.md`.
+  `zone` = `crates/kicad/src/zone_fills.rs`, `crates/kicad-engine/` and `crates/drc/` (`crates/zone-filler/` was deleted 2026-10-13); `libs` = `crates/cli/src/library_*.rs`, `body_api.rs` and the choosers; `docs` = `ui-parity-missing.json`, `UI-ACTIONS.md`, `GAPS.md`, `PARITY-*.md`.
 
 Rules that keep them apart (each is how an earlier package did it):
 
@@ -736,7 +778,7 @@ Waves:
 - **P14** merged 2026-10-13 (the Extruded 3D Body, embedded files and the load-time migration are left: item 30). **P11** merged 2026-10-13 (Find by Properties, Clearance and Constraints Resolution, the Footprint Checker; what is left: items 21 and 29).
 - **P2** merged 2026-10-12 (Compare Footprint with Library included); Swap Pad Nets and Swap Gate Nets are left (item 26).
 - **Any time a slot is free**: P12, P15, P6, P9a, P20 (test files only). **P11** is done on `task-search-inspect` (2026-10-13, not merged).
-- **After P7**: P13, P17, and P19's arc stub and function shape.
+- **P13** is done on `task-zones` (2026-10-13, not merged): the zone fill is KiCad's through kicad-cli and `crates/zone-filler` is deleted (item 13). **After P7**: P17, and P19's arc stub and function shape.
 - **After P3 and P4**: P18. **P8's PCB half** is independent; its sheet half is P4's.
 - **Last**: P21.
 
@@ -774,7 +816,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - **P1 before P2, P14, P16, P17**: P2's stored definition, P14's model list on `FootprintEdit`, P16's painter hooks and P17's editor fields all want the footprint to have graphics first.
 - **P2 with P4**: `rename_symbol` and `annotate` in `ops/lib.rs` and `reconcile_schematic` in `board.rs` are both packages' ground. P2's rename step starts after P4's Annotate has merged.
 - **P2 with P14 and P7**: `crates/model/src/fp_edit.rs` and `crates/ops/src/fp_edit.rs` (P2 adds the assignment, P14 `models3d`, P7 pad shapes in the pad edit).
-- **P13 after P7**: both are `crates/zone-filler` (custom-pad knockouts and spokes, then the rest).
+- **P13 after P7**: both were `crates/zone-filler` (custom-pad knockouts and spokes, then the rest); P13 deleted it (the zone fill is KiCad's).
 - **P8 and P18 after P4** for Import Sheet: `crates/ops/src/sheets.rs`, `board.rs`.
 - **P5 with P6** only in `Canvas.tsx` handlers and `routing.ts`' entry points.
 
@@ -870,10 +912,10 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 ### P7. Custom-shape pads (item 31; also 13, 19). Size L. Rank 7. **Merged 2026-10-10 (`task-custom-pads`); item 31 lists what is left.**
 - Why: a custom pad imports as its anchor, a trapezoid or chamfered pad is a rectangle; zone fill is wrong around them (766% and 11% on two QA zones); four rows wait.
 - Files: `crates/model/src/{footprint.rs,ir.rs}` (`Pad` and `LibraryPad`: anchor, primitives, trapezoid and chamfer), `crates/kicad/src/{footprint_lib,footprint_import,import,pcb}.rs` (`(primitives ..)` both ways),
-  `crates/zone-filler` (`addKnockout` custom-pad mode, thermal proxy spokes), `crates/pns/src/from_ir.rs`, `crates/drc/src/board.rs` (`placed_pad_copper`), `components/BoardPadPropertiesDialog.tsx`,
+  `crates/zone-filler` (`addKnockout` custom-pad mode, thermal proxy spokes; deleted 2026-10-13), `crates/pns/src/from_ir.rs`, `crates/drc/src/board.rs` (`placed_pad_copper`), `components/BoardPadPropertiesDialog.tsx`,
   `components/footprint/PadPropertiesDialog.tsx`, `canvas/painter.ts`, `components/footprint/footprintPainter.ts`, `kicad-port/pad*.ts`, `actions/libraryEditorActions.ts` (explode and recombine).
 - KiCad: `pcbnew/pad.cpp`, `tools/pad_tool.cpp` (`EditPad`), `dialogs/dialog_pad_properties.cpp`, `zone_filler.cpp` (`addKnockout`), `microwave/microwave_polygon.cpp`.
-- Conflicts: P1 (footprint IR, writer, painter), P13 (`zone-filler`), P17 (pad dialogs), P19 (arc stub, function shape), P14 and P2 (`fp_edit.rs` pad edits).
+- Conflicts: P1 (footprint IR, writer, painter), P17 (pad dialogs), P19 (arc stub, function shape), P14 and P2 (`fp_edit.rs` pad edits).
 
 ### P8. Files in: Append Board, DXF and SVG, drops (item 28; SR1's PCB half). Size S for what is left. Rank 8. **Mostly done: `task-files-in` (2026-10-11); item 28 lists what is left.**
 - Done in the branch: **P8a** the drop host (`components/FileDropHost.tsx`, `kicad-port/fileDrops.ts`), Append Board and its drop (`crates/cli/src/append_api.rs`, `kicad-port/appendBoard.ts`, then `Cmd::PasteClipboard` with the carry) and the Footprint Editor's drop; **P8b** Import Graphics for the board, the schematic and the symbol editor:
@@ -894,11 +936,15 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   `common/dialogs/{panel_text_variables,panel_setup_netclasses}.cpp`, `common/project/component_class_settings.cpp`, `pcbnew/drc/rule_editor/` (82 files), `pcbnew/tools/drc_rule_editor_tool.cpp`.
 - Conflicts: P15 (the project writer in `kicad-engine`: a hunk); `ops`, `runner` hunks.
 
-### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged); schematic groups, a user-defined field's place and Pin Helpers are left.**
+### P10. Schematic details (items 1, 12, 15, 17, 20). Size M-L. Rank 10. **Mostly done on `task-sch-details` (2026-10-12, 15 commits, not merged) and, for the schematic's groups, on `task-sch-groups` (2026-10-13 to 15, P10b, not merged); a label's own fields are left.**
 - Done there: pin selection (`SCH_PIN_T`: Swap Pins, Swap Pin Labels, Swap Unit Labels, the pin-level highlight and Select Node), sheet pins one by one, the net-collision overlay of a drag, `AutoRotateItem` after a label lands, a power symbol's Properties dialog,
   text justification flipping on a mirror, pan with the middle and right button and auto-pan while drawing and moving, the Symbol Fields Table's attribute columns and Exclude DNP filter, Copy as Text, part of the item 15 schematic list. `PARITY-sch.md` sections 21 to 27;
   `web/studio/e2e/sch-details.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_details.rs`.
-- Left: schematic groups (`sch_group_tool.cpp`), a user-defined field's place on the sheet (`SchematicSection::field_layout`), Pin Helpers, a sheet pin's text look, a label's own fields.
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 29): schematic groups (`sch_group_tool.cpp`, `group_tool.cpp`; item 17): Group, Ungroup, Add and Remove Items, Group Properties, whole-group selection, enter and leave, the tree under move, turn, delete and the clipboard, `(group ...)` in the file; `web/studio/e2e/sch-groups.check.js`; the kicad-cli proof is `crates/kicad/tests/sch_groups.rs`.
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 30): a user-defined field's place on the sheet (item 12): the symbol's user fields listed, drawn, placed, moved, turned, edited, added, removed, written and read back; `crates/kicad/tests/sch_user_fields.rs` and the slow proof in `sch_groups.rs` (kicad-cli draws the field where we put it).
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 31): Pin Helpers and swapped pins through the file and the clipboard (items 1, 12); `crates/kicad/tests/sch_pin_swaps.rs`, `crates/ops/src/sch_pin_helpers_tests.rs`.
+- Done on `task-sch-groups` (P10b, `PARITY-sch.md` section 32): a sheet pin's text look (size, bold, italic: Sheet Pin Properties, the painter, the pin's box, `(effects (font ..))` written and read; `SchExtras::sheet_pin_looks`).
+- Left: a label's own fields (netclass, intersheet references), a sheet pin's font face and colour.
 - Files: `web/studio/src/components/SchematicView.tsx`, `components/schematic/{schItems,schHit,schSelectionSummary}.ts`, `kicad-port/{schMove,selection,schConnection}.ts`, `components/SymbolFieldsTableDialog.tsx`,
   `crates/ops/src/{sch_move,sch_edit,sch_props,sch_fields,fields_table}.rs`, `crates/model/src/sch_extras.rs`.
 - KiCad: `eeschema/tools/{sch_edit_tool,sch_selection_tool,sch_drag_net_collision,sch_group_tool,sch_move_tool}.cpp`, `sch_label.cpp`, `sch_pin.cpp`, `dialogs/dialog_symbol_fields_table.cpp`, `fields_data_model.cpp`, `common/view/wx_view_controls.cpp`.
@@ -920,14 +966,17 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
   (`to_dsn` boundary and cutouts as keep-outs), `web/studio/src/components/viewer3d/scene.ts` and `kicad-port/pcbOutline.ts` (NPTH holes through the slab), `crates/model/src/{ir,outline}.rs` (a rectangle's corner radius, `gr_poly` arcs),
   an outline editor on the generic shape tools, "Fix discontinuities in board outlines".
 - KiCad: `pcbnew/convert_shape_list_to_polygon.cpp`, `pcbnew/board.cpp` (`GetBoardPolygonOutlines`, `aIncludeNPTHAsOutlines`), `specctra_import_export/specctra_export.cpp`, `drc/drc_test_provider_misc.cpp`.
-- Conflicts: P19 (the DSN boundary), P1 and P7 (`ir`: a hunk each), P13 (mask-only NPTH knockout).
+- Conflicts: P19 (the DSN boundary), P1 and P7 (`ir`: a hunk each), P13 (mask-only NPTH holes are kept and written, done).
 
-### P13. Zone leftovers (item 13). Size L. Rank 13. After P7.
-- `connect_nearby_polys`, non-copper zones (`fillNonCopperZone`, `dialog_non_copper_zones_properties`), multi-layer zones, mask-only NPTH knockouts, courtyards and net ties as knockouts, the hatched zone's thermal rings, Auto-Assign
-  Priorities, a Zone Manager preview, a zone lock in Zone Properties, the speed of a fine hatch over a board.
-- Files: `crates/zone-filler/src/*`, `crates/drc/src/fill.rs`, `crates/model/src/ir.rs` (`Zone` layers), `crates/kicad/src/{pcb,import}.rs` (zone layers), `components/{ZoneDialog,ZoneManagerDialog}.tsx`.
-- KiCad: `pcbnew/zone_filler.cpp`, `zone.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`.
-- Conflicts: P7 (`zone-filler`), P12 (NPTH), `kio` hunk.
+### P13. Zone leftovers (item 13). Size L. Rank 13. **Done 2026-10-13 on `task-zones`, waiting for its merge; item 13 lists what is left.**
+- Non-copper and multi-layer zones (the IR's layer set, the reader, the writer, Zone Properties), then, by decision of 2026-10-13, **the zone fill is KiCad's through kicad-cli and the Rust filler is deleted**: Fill All Zones
+  on a copy of the derived board, the fills kept beside `design.json`, shown between fills as KiCad shows them, read by the writer, live connectivity and the 3D stand-in; Auto-Assign Priorities, the Zone Manager's preview,
+  a zone lock in Zone Properties. The planned fill-fidelity and speed steps for our own filler are superseded.
+- Files: `crates/kicad/src/{zone_fills,pcb,pcb_items,import}.rs`, `crates/kicad-engine/src/lib.rs` (`refill_zones`), `crates/drc/src/{zone_copper,shape_poly}.rs`, `crates/connectivity/src/*` (the zone copper),
+  `crates/ops/src/zone_priority.rs`, `crates/cli/src/{fill_api,studio,fab_api,board}.rs`, `crates/model/src/ir.rs` (`Zone::layers`, `Zone::uuid`, `FootprintExtra::holes`),
+  `components/{ZoneDialog,ZoneManagerDialog,ZonePreview,PlotDialog,StatusBar}.tsx`, `state/store.tsx`, `kicad-port/{zoneLayers,checkRevision}.ts`, `e2e/zones.check.js`.
+- KiCad: `pcbnew/zone.cpp`, `zone_utils.cpp`, `zone_manager/`, `dialogs/panel_zone_properties.cpp`, `dialogs/dialog_non_copper_zones_properties.cpp`, `pcbnew_jobs_handler.cpp` (`JobExportDrc`).
+- Conflicts: none left (`zone-filler` is gone); `kio` hunk.
 
 ### P14. The 3D models of a footprint (item 30; SR3). Size M. Rank 14. **Done 2026-10-13 on `task-fp-3d`, waiting for its merge; item 30 lists what is left.**
 - A model list on `FootprintEdit` (`models3d`) with its verb, a 3D Models tab in both Footprint Properties dialogs (`PANEL_FP_PROPERTIES_3D_MODEL`: list, offset, scale, rotation, opacity, show; path chooser through `model3d_api`; a preview that
@@ -937,7 +986,7 @@ Pairs that must be sequenced, not just rebased (the rest conflict in a hunk):
 - KiCad: `pcbnew/dialogs/panel_fp_properties_3d_model.cpp`, `dialog_footprint_properties.cpp`, `dialog_footprint_properties_fp_editor.cpp`, `dialog_migrate_3d_models.cpp`, `3d-viewer/3d_cache/`.
 - Conflicts: P2 and P7 (`fp_edit.rs`), P1 (the footprint), P17 (the editor dialog).
 
-### P15. Review workflow leftovers (item 11). Size S-M. Rank 15.
+### P15. Review workflow leftovers (item 11). Size S-M. Rank 15. **Done 2026-10-14 on `task-review`, waiting for its merge; item 11 lists what is left.**
 - ERC exclusions into the derived project (`erc.erc_exclusions`, `SCH_MARKER::SerializeToString`, positions guessed as `eda_kicad::drc_exclusions` does) with their comments; Delete Marker, Delete All Markers and Save report; "Exclude all violations of
   rule"; a marker selected by a left click; the Inspect / Fix entries; Edit connection grid spacing. The kicad-cli marker position stays upstream and unplanned.
 - Files: `crates/kicad-engine/src/lib.rs`, `crates/kicad/src/drc_exclusions.rs` and a new `erc_exclusions.rs`, `crates/ops` (`AddErcExclusion` gets a comment), `components/{ErcDialog,DrcDialog,SchematicSetupDialog}.tsx`.

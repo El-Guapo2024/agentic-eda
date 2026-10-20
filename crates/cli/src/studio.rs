@@ -344,7 +344,8 @@ pub(crate) fn build_glb(dir: &Path) -> Result<Vec<u8>, String> {
     ensure_routed_nets(&design, &mut model);
     let title = Path::new(&meta.intent).file_stem().and_then(|s| s.to_str()).unwrap_or("board").to_string();
     let date = eda::now_rfc3339();
-    let pcb_text = eda::export_kicad_pcb(&design, &model, &eda::ExportMeta { date: &date[..10], title: &title }).map_err(|e| board::reasons(&e))?;
+    let fills = crate::fill_api::cached(dir);
+    let pcb_text = eda_kicad::export_kicad_pcb_with(&design, &model, &eda::ExportMeta { date: &date[..10], title: &title }, fills.as_ref()).map_err(|e| board::reasons(&e))?;
 
     // Unique per call (not just per process, as the old synchronous
     // version had it): the single-export-at-a-time guard means two of
@@ -650,6 +651,9 @@ fn handle(
             offload(stream, lane, dir, job, &format!("{path} refill={refill} parity={parity}"), &[], move |dir, _| crate::kicad_engine::drc_with(dir, refill, parity).unwrap_or_else(|e| json!({ "error": board::reasons(&e) })))
         }
         ("GET", "/api/erc") => offload(stream, lane, dir, job, path, &[], |dir, _| crate::kicad_engine::erc(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }))),
+        // The dialogs' "Save...": kicad-cli's own report file (`ERC_REPORT`, `DRC_REPORT`), for the severities and units the dialog shows.
+        ("POST", "/api/erc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::erc_report),
+        ("POST", "/api/drc/report") => offload(stream, lane, dir, job, path, &body, crate::kicad_engine::drc_report),
         ("GET", "/api/lint") => {
             let v = crate::kicad_engine::lint(dir).unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
@@ -667,6 +671,7 @@ fn handle(
         ("POST", "/api/sch/sheet_file") => respond(stream, "200 OK", "application/json", crate::sch_hierarchy_api::sheet_file(dir, &body).to_string().as_bytes()),
         ("GET", "/api/sch/erc_pin_map") => respond(stream, "200 OK", "application/json", sch_api::erc_pin_map(dir).to_string().as_bytes()),
         ("GET", "/api/sch/erc_severities") => respond(stream, "200 OK", "application/json", sch_api::erc_severities(dir).to_string().as_bytes()),
+        ("GET", "/api/sch/formatting") => respond(stream, "200 OK", "application/json", sch_api::formatting(dir).to_string().as_bytes()),
         // The schematic clipboard (Cut / Copy / Paste / Paste Special / Duplicate): the selection as KiCad's clipboard text, and a clipboard text as a paste.
         ("POST", "/api/sch/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::copy(dir, &body).to_string().as_bytes()),
         ("POST", "/api/sch/clipboard/parse") => respond(stream, "200 OK", "application/json", crate::sch_clipboard_api::parse(dir, &body).to_string().as_bytes()),
@@ -776,9 +781,16 @@ fn handle(
             Err(e) => respond(stream, "404 Not Found", "text/plain", board::reasons(&e).as_bytes()),
         },
         ("GET", "/api/fill") => {
-            let v = fill_json(dir, query_value(target, "polys") == "1").unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
+            let v = crate::fill_api::report(dir, query_value(target, "polys") == "1").unwrap_or_else(|e| json!({ "error": board::reasons(&e) }));
             respond(stream, "200 OK", "application/json", v.to_string().as_bytes())
         }
+        // Fill All Zones (B) by KiCad's own filler -- the only one there is: `kicad-cli pcb drc --refill-zones --save-board` on a copy of the derived board, the fills kept
+        // beside design.json (`crate::fill_api`). `{"zones": [ids]}` fills the selected zones only (the others keep the fill they had). A kicad-cli route, so it runs off the
+        // loop like DRC. `/api/fill/clear` (Unfill All Zones / Unfill Selected Zones) only forgets fills, so it answers inline.
+        ("POST", "/api/fill/kicad") => offload(stream, lane, dir, job, path, &body, |dir, body| crate::fill_api::refill(dir, crate::fill_api::zones_asked(body))),
+        // The Zone Manager's Auto-Assign Priorities (`eda_ops::zone_priority`): the priorities KiCad would give the copper pours, worked out and not applied.
+        ("GET", "/api/zone_priorities/auto") => respond(stream, "200 OK", "application/json", crate::fill_api::auto_priorities(dir).to_string().as_bytes()),
+        ("POST", "/api/fill/clear") => respond(stream, "200 OK", "application/json", crate::fill_api::clear(dir, crate::fill_api::zones_asked(&body)).to_string().as_bytes()),
         // PCB Copy: the selection as KiCad's clipboard text (a read; the browser puts it on the system clipboard). Paste is `Cmd::PasteClipboard`.
         ("POST", "/api/clipboard/copy") => respond(stream, "200 OK", "application/json", crate::clipboard_api::copy(dir, &body).to_string().as_bytes()),
         // Import Graphics (DXF, SVG): what a file holds, for the dialog (a read; the import is `Cmd::ImportGraphics`).
@@ -994,7 +1006,8 @@ fn version_string(dir: &Path, job: &Job) -> String {
     // becomes its own `file` history step before the page reloads.
     board::sync_external_edits(dir);
     let j = job.lock().map(|j| j.clone()).unwrap_or_default();
-    format!("{}-{}-{}", stamp(dir.join("design.json")), stamp(dir.join("activity.jsonl")), j.len() + j.bytes().map(|b| b as usize).sum::<usize>())
+    // The fills kicad-cli made (Fill All Zones) are part of what the board shows: the 3D view is rebuilt from them and a DRC run before them is out of date.
+    format!("{}-{}-{}-{}", stamp(dir.join("design.json")), stamp(dir.join("activity.jsonl")), j.len() + j.bytes().map(|b| b as usize).sum::<usize>(), stamp(eda_kicad::zone_fills::cache_path(dir)))
 }
 
 fn version(dir: &Path, job: &Job) -> Value {
@@ -1134,6 +1147,8 @@ pub(crate) fn state(dir: &Path, job: &Job, clock: eda_model::text_vars::Clock) -
             })).collect::<Vec<_>>(),
             "zones": r.zones.iter().map(|z| json!({
                 "id": z.id, "net": z.net, "layer": z.layer,
+                // `ZONE::GetLayerSet()`: the zone's layers, `layer` first -- one for a zone on one layer.
+                "layers": z.layer_set(),
                 "outline": z.outline.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>(),
                 // Full `ZONE_SETTINGS` (crates/model/src/ir.rs's `Zone`),
                 // for ZoneDialog's edit mode (dialog_copper_zones.cpp) --
@@ -1667,6 +1682,8 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
     // Drawn shapes, text boxes, rule areas and directive labels (`SchGraphic`, serialized as stored) and the ids of locked items.
     let graphics: Value = serde_json::to_value(&sch.extras.graphics).unwrap_or(Value::Null);
     let locked: Vec<&String> = sch.extras.locked.iter().collect();
+    // The groups of the sheet (`SCH_GROUP`): `{id, name, member_ids}`, a member being an item's id or another group's.
+    let groups: Value = serde_json::to_value(&sch.extras.groups).unwrap_or(Value::Null);
     // GAPS.md #20: bus entries, for the bus/entry tool and for drawing the
     // diagonal stub on canvas.
     let bus_entries: Vec<Value> = sch.bus_entries.iter().map(|be| json!({ "id": be.id, "at": [be.at.x, be.at.y], "size": [be.size.x, be.size.y], "stroke": sch.extras.strokes.get(&be.id) })).collect();
@@ -1759,7 +1776,22 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
                 "fields": fields,
                 "fields_autoplaced": fields_autoplaced_json(&sch, &s.id),
                 "at": [s.at.x, s.at.y], "size": [s.size.0, s.size.1],
-                "pins": s.pins.iter().map(|p| json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] })).collect::<Vec<_>>(),
+                // a pin's text is set as Sheet Pin Properties set it (`SchExtras::sheet_pin_looks`): the size, bold and italic are sent when they are not the default's
+                "pins": s.pins.iter().map(|p| {
+                    let mut pin = json!({ "id": p.id, "name": p.name, "shape": label_shape_str(p.shape), "at": [p.at.x, p.at.y] });
+                    if let Some(look) = sch.extras.sheet_pin_looks.get(&p.id) {
+                        if look.size_um > 0 {
+                            pin["size_um"] = json!(look.size_um);
+                        }
+                        if look.bold {
+                            pin["bold"] = json!(true);
+                        }
+                        if look.italic {
+                            pin["italic"] = json!(true);
+                        }
+                    }
+                    pin
+                }).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -1784,6 +1816,7 @@ fn schematic_json_with(design: &eda_model::ir::Design, model: &eda_model::Constr
         "lines": lines,
         "graphics": graphics,
         "locked": locked,
+        "groups": groups,
         "title_block": title_block,
         "page": crate::page_json::page_json(&page),
         "lib_symbols": lib_symbols,
@@ -2127,7 +2160,8 @@ fn footprint_kicad_mod(dir: &Path, name: &str) -> Result<String, Vec<CheckResult
 /// only master; this is the same derived file every kicad-cli run is fed, just handed to the browser to save.
 fn kicad_pcb_text(dir: &Path) -> Result<String, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: "board" })
+    let fills = crate::fill_api::cached(dir);
+    eda_kicad::export_kicad_pcb_with(&design, &model, &eda_kicad::ExportMeta { date: &crate::kicad_engine::chrono_like_today(), title: "board" }, fills.as_ref())
 }
 
 /// `GET /api/schematic.kicad_sch` -- the schematic as derived `.kicad_sch` files (File > Save As... on the Schematic tab):
@@ -2245,7 +2279,9 @@ fn symbol_library_kicad_sym(dir: &Path) -> Result<String, Vec<CheckResult>> {
 /// read here.
 fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
     let (_, design, model) = board::load(dir)?;
-    let report = eda_connectivity::analyze(&design, &model);
+    // Live connectivity through the pours reads the fills KiCad made (a zone with none connects nothing), `crate::fill_api`.
+    let copper = crate::fill_api::cached(dir).map(|k| k.copper(&design)).unwrap_or_default();
+    let report = eda_connectivity::analyze(&design, &model, &copper);
     // `from_id`/`to_id` (a pad is `REF.NUMBER`) and `from_layers`/`to_layers` (inclusive, indexes into `board.layers`) name what each
     // end joins: the Local Ratsnest tool and the "visible layers" ratsnest mode decide per line from them, as RATSNEST_VIEW_ITEM does.
     let edges: Vec<Value> = report
@@ -2260,51 +2296,6 @@ fn ratsnest_json(dir: &Path) -> Result<Value, Vec<CheckResult>> {
         })
         .collect();
     Ok(json!({ "edges": edges }))
-}
-
-/// `GET /api/fill`: every zone's real computed fill (`eda_zone_filler`, via
-/// `eda_drc::fill::fill_all_zones`) as polygons, in the same raw-micrometre
-/// coordinate space `/api/ratsnest` already uses, for the UI to draw -- see
-/// the task's stage 4. Each zone's fill may be several disjoint fragments
-/// (islands); `outline` is always a single closed ring (post-`Fracture`,
-/// already slitted, never a separate holes list). `with_polys` (`?polys=1`) adds
-/// `polys`: the same fill unfractured, one `{ outline, holes }` per island --
-/// what the "Draw Zone Fill Triangulation" display triangulates
-/// (`kicad-port/polyTriangulate.ts`), as KiCad's `POLYGON_TRIANGULATION` does
-/// (it bridges the holes itself rather than reading the fractured ring).
-fn fill_json(dir: &Path, with_polys: bool) -> Result<Value, Vec<CheckResult>> {
-    let (_, design, model) = board::load(dir)?;
-    let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
-    let drc_board = eda_drc::board::build(&design, &model);
-    let results = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
-
-    let zones_json: Vec<Value> = zones
-        .iter()
-        .map(|z| {
-            let fill = results.get(&z.id);
-            let fragments: Vec<Value> = fill
-                .map(|f| f.polys.iter().map(|poly| json!(poly[0].iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())).collect())
-                .unwrap_or_default();
-            let mut zone = json!({
-                "id": z.id, "net": z.net, "layer": z.layer,
-                "area_um2": fill.map(|f| f.area()).unwrap_or(0.0),
-                "fragments": fragments,
-            });
-            if with_polys {
-                let ring = |chain: &Vec<eda_clipper2::Point64>| chain.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>();
-                let polys: Vec<Value> = fill
-                    .map(|f| {
-                        let mut whole = f.clone();
-                        whole.unfracture();
-                        whole.polys.iter().map(|poly| json!({ "outline": ring(&poly[0]), "holes": poly[1..].iter().map(ring).collect::<Vec<_>>() })).collect()
-                    })
-                    .unwrap_or_default();
-                zone["polys"] = Value::Array(polys);
-            }
-            zone
-        })
-        .collect();
-    Ok(json!({ "zones": zones_json }))
 }
 
 #[cfg(test)]
@@ -2329,6 +2320,26 @@ mod tests {
             sheet_contents: (!screens.is_empty()).then_some(screens),
             bus_aliases: vec![], symbol_library: None,
         }
+    }
+
+    /// The fills kicad-cli made (Fill All Zones) are part of what the board shows: the version changes when they are kept or forgotten, so the 3D view is rebuilt from them, a
+    /// DRC run before them is out of date and the page reads them again.
+    #[test]
+    fn the_version_changes_when_the_fills_are_kept_or_forgotten() {
+        let dir = std::env::temp_dir().join(format!("eda_studio_version_fills_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("design.json"), "{}").unwrap();
+        let job: Job = Arc::new(Mutex::new(String::new()));
+        let before = version_string(&dir, &job);
+        assert_eq!(version_string(&dir, &job), before, "nothing changed");
+        let fills = eda_kicad::zone_fills::KicadFills::new("kicad-cli".into(), String::new(), 1, Default::default());
+        eda_kicad::zone_fills::store(&dir, &fills).unwrap();
+        let kept = version_string(&dir, &job);
+        assert_ne!(kept, before, "the fills were kept");
+        eda_kicad::zone_fills::forget(&dir);
+        assert_ne!(version_string(&dir, &job), kept, "and forgotten");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The 3D export draws copper on a net the netlist no longer names (a net renamed after the board was routed) instead of refusing the board.

@@ -58,6 +58,8 @@ export function PlotDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [optionalKey]);
   const [useAuxOrigin, setUseAuxOrigin] = useState(false);
+  // `DIALOG_PLOT::m_zoneFillCheck`: on by default in KiCad.
+  const [checkZones, setCheckZones] = useState(true);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; files: string[] } | null>(null);
 
@@ -76,7 +78,7 @@ export function PlotDialog() {
     setBusy(true);
     setResult(null);
     try {
-      const reply = await postFabGerbers([...checked], useAuxOrigin);
+      const reply = await postFabGerbers([...checked], useAuxOrigin, checkZones);
       setResult({ ok: reply.ok, message: reply.message ?? (reply.ok ? "Plotted." : "Plot failed."), files: reply.files ?? [] });
     } finally {
       setBusy(false);
@@ -99,6 +101,10 @@ export function PlotDialog() {
               </label>
             ))}
           </div>
+          <label className="toggle" style={{ marginBottom: 10, display: "block" }} title="Run KiCad's zone filler first if some zone has no current fill (never filled, unfilled, or edited since)">
+            <input type="checkbox" checked={checkZones} onChange={(e) => setCheckZones(e.target.checked)} data-testid="plot-check-zones" />
+            Check zone fills before plotting
+          </label>
           <label className="toggle" style={{ marginBottom: 10 }} title="Use the drill/place file origin as the coordinate origin for plotted files">
             <input type="checkbox" checked={useAuxOrigin} onChange={(e) => setUseAuxOrigin(e.target.checked)} />
             Use drill/place file origin

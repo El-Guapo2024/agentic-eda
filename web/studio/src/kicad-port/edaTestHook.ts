@@ -150,6 +150,7 @@ export interface SchematicLike {
   sheets?: readonly { id?: string; fields?: IdItems; pins?: IdItems }[];
   graphics?: IdItems;
   bus_entries?: IdItems;
+  groups?: IdItems;
 }
 
 const ids = (items: IdItems): string[] => (items ?? []).flatMap((i) => (i.id ? [i.id] : []));
@@ -193,6 +194,7 @@ export function schematicLists(sch: SchematicLike | null | undefined): ItemLists
     sheet_pin: (sch?.sheets ?? []).flatMap((s) => ids(s.pins)),
     graphic: ids(sch?.graphics),
     bus_entry: ids(sch?.bus_entries),
+    group: ids(sch?.groups),
   };
 }
 

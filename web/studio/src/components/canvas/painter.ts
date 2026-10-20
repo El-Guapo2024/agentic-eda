@@ -31,6 +31,7 @@ import { isHighlighted } from "../../kicad-port/boardControl";
 import { triangulate, type Triangle } from "../../kicad-port/polyTriangulate";
 import { shapeEditPoints } from "../../kicad-port/pcbPointEdit";
 import { layerIsVisible, layerStateKey, isCopper } from "../../kicad-port/layerPresets";
+import { zoneCopperLayers, zoneIsOnCopper, zoneLayers } from "../../kicad-port/zoneLayers";
 import { drcMarkerObject } from "../../kicad-port/appearance";
 import { drawFootprintArt } from "./fpArtPaint";
 import { drawSelectedPatterns, drawTune, drawTuneHover } from "./tunePaint";
@@ -594,103 +595,150 @@ function fillTriangles(fill: { fragments: [number, number][][]; polys?: { outlin
   return tris;
 }
 
+/** The fill the last `GET /api/fill` made of zone `id` on `layer` (a zone on several layers has one under each). */
+function fillOf(opts: PaintOptions, id: string, layer: string) {
+  return opts.zoneFill?.zones.find((f) => f.id === id && (f.layer === undefined || f.layer === layer));
+}
+
+/**
+ * One zone on one of its layers, in `color`: its fill (solid, or only the fractured ring's edges or the triangles, per `zoneDisplayMode`) when it has one, else its outline,
+ * dashed -- and the selection's outline on top. A copper pour and a non-copper zone (silkscreen, mask, paste, a user layer) are drawn the same way.
+ */
+function paintZoneOnLayer(ctx: CanvasRenderingContext2D, view: ViewTransform, z: Zone, layerName: string, color: string, alpha: number, selected: boolean, opts: PaintOptions) {
+  const fill = fillOf(opts, z.id, layerName);
+  withAlpha(ctx, alpha, () => {
+    if (opts.zoneDisplayMode !== "outline" && fill && fill.fragments.length > 0) {
+      if (opts.zoneDisplayMode === "filled") {
+        // `fragments` are already "Fracture"d (pcb_painter.cpp paints the
+        // real ZONE_FILLER output the same way): each is one closed ring,
+        // holes slit into the outer boundary -- a plain nonzero-winding
+        // fill per fragment is exactly right, no separate even-odd pass.
+        ctx.fillStyle = color;
+        for (const frag of fill.fragments) {
+          if (frag.length < 3) continue;
+          ctx.beginPath();
+          frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+          ctx.closePath();
+          ctx.fill();
+        }
+      } else {
+        // SHOW_FRACTURE_BORDERS / SHOW_TRIANGULATION: `SetIsFill( false ); SetIsStroke( true ); SetLineWidth( 0 )` -- no fill, the
+        // fractured ring's own edges, or the triangles the fill is cut into.
+        ctx.strokeStyle = color;
+        ctx.lineWidth = hairlineUm(view, 1);
+        ctx.beginPath();
+        if (opts.zoneDisplayMode === "fractured") {
+          for (const frag of fill.fragments) {
+            if (frag.length < 3) continue;
+            frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+            ctx.closePath();
+          }
+        } else {
+          for (const [a, b, c] of fillTriangles(fill)) {
+            ctx.moveTo(a[0], a[1]);
+            ctx.lineTo(b[0], b[1]);
+            ctx.lineTo(c[0], c[1]);
+            ctx.closePath();
+          }
+        }
+        ctx.stroke();
+      }
+      if (selected) {
+        // Source's selection shadow is a separate highlight layer this
+        // app doesn't model; stroking the zone's own (unfractured)
+        // outline on top reads the same "this one's selected" cue
+        // outline mode already uses, without recoloring the copper.
+        ctx.beginPath();
+        z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+        ctx.closePath();
+        ctx.strokeStyle = layerColor("selection");
+        ctx.lineWidth = hairlineUm(view, 2.5);
+        ctx.stroke();
+      }
+      return;
+    }
+    ctx.beginPath();
+    z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
+    ctx.closePath();
+    ctx.strokeStyle = selected ? layerColor("selection") : color;
+    ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
+    ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+}
+
+/** Which of the painter's three copper passes a copper layer belongs to. */
+function copperBucket(layerName: string): "f_cu" | "b_cu" | "inner" {
+  const key = copperColorKey(layerName);
+  return key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
+}
+
 function drawZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions, wantLayer: "f_cu" | "b_cu" | "inner") {
   if (!board.routing || !on(opts.layerVisible, "zones")) return;
   const zoneAlpha = opacityOf(opts.appearance, "zones");
   const teardropAlpha = opacityOf(opts.appearance, "tracks"); // `IsTeardropArea()` takes the track opacity
   for (const z of board.routing.zones) {
-    const key = copperColorKey(z.layer);
-    const bucket = key === "f_cu" ? "f_cu" : key === "b_cu" ? "b_cu" : "inner";
-    if (bucket !== wantLayer) continue;
-    if (opts.layerVisible[z.layer] === false) continue;
     if (z.outline.length < 3) continue;
     const selected = opts.selection.has(z.id);
+    // A zone on several layers is drawn on each of its copper layers, in that layer's pass (`ZONE::ViewGetLayers`); the non-copper ones are `drawNonCopperZones`'.
+    const copperLayers = zoneCopperLayers(z);
     if (z.is_rule_area) {
-      drawRuleArea(ctx, view, z, selected);
+      // One picture for the whole set (hatched outline and label): in the pass of the first of its copper layers that is shown.
+      const first = copperLayers.find((l) => opts.layerVisible[l] !== false);
+      if (first !== undefined && copperBucket(first) === wantLayer) drawRuleArea(ctx, view, z, selected);
       continue;
     }
-    if (z.teardrop) {
-      // A teardrop's own outline already *is* its final filled shape
-      // (task item 4's generator computes the exact pentagon, no
-      // knockout/thermal-relief pipeline applies) -- draw it solid
-      // unconditionally, regardless of `zoneDisplayMode`, same as its
-      // anchor pad/via is never shown as an "outline only" shape either.
-      withAlpha(ctx, layerAlpha(opts, z.layer) * teardropAlpha, () => {
-        ctx.beginPath();
-        z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-        ctx.closePath();
-        ctx.fillStyle = copperPaint(layerColor(key), z.net, opts);
-        ctx.fill();
-        if (selected) {
-          ctx.strokeStyle = layerColor("selection");
-          ctx.lineWidth = hairlineUm(view, 2.5);
-          ctx.stroke();
-        }
-      });
-      continue;
-    }
-    const zoneColor = copperPaint(layerColor(key), z.net, opts);
-    const fill = opts.zoneFill?.zones.find((f) => f.id === z.id);
-    withAlpha(ctx, layerAlpha(opts, z.layer) * zoneAlpha, () => {
-      if (opts.zoneDisplayMode !== "outline" && fill && fill.fragments.length > 0) {
-        if (opts.zoneDisplayMode === "filled") {
-          // `fragments` are already "Fracture"d (pcb_painter.cpp paints the
-          // real ZONE_FILLER output the same way): each is one closed ring,
-          // holes slit into the outer boundary -- a plain nonzero-winding
-          // fill per fragment is exactly right, no separate even-odd pass.
-          ctx.fillStyle = zoneColor;
-          for (const frag of fill.fragments) {
-            if (frag.length < 3) continue;
-            ctx.beginPath();
-            frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-            ctx.closePath();
-            ctx.fill();
-          }
-        } else {
-          // SHOW_FRACTURE_BORDERS / SHOW_TRIANGULATION: `SetIsFill( false ); SetIsStroke( true ); SetLineWidth( 0 )` -- no fill, the
-          // fractured ring's own edges, or the triangles the fill is cut into.
-          ctx.strokeStyle = zoneColor;
-          ctx.lineWidth = hairlineUm(view, 1);
-          ctx.beginPath();
-          if (opts.zoneDisplayMode === "fractured") {
-            for (const frag of fill.fragments) {
-              if (frag.length < 3) continue;
-              frag.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-              ctx.closePath();
-            }
-          } else {
-            for (const [a, b, c] of fillTriangles(fill)) {
-              ctx.moveTo(a[0], a[1]);
-              ctx.lineTo(b[0], b[1]);
-              ctx.lineTo(c[0], c[1]);
-              ctx.closePath();
-            }
-          }
-          ctx.stroke();
-        }
-        if (selected) {
-          // Source's selection shadow is a separate highlight layer this
-          // app doesn't model; stroking the zone's own (unfractured)
-          // outline on top reads the same "this one's selected" cue
-          // outline mode already uses, without recoloring the copper.
+    for (const layerName of copperLayers) {
+      const key = copperColorKey(layerName);
+      if (copperBucket(layerName) !== wantLayer) continue;
+      if (opts.layerVisible[layerName] === false) continue;
+      if (z.teardrop) {
+        // A teardrop's own outline already *is* its final filled shape
+        // (task item 4's generator computes the exact pentagon, no
+        // knockout/thermal-relief pipeline applies) -- draw it solid
+        // unconditionally, regardless of `zoneDisplayMode`, same as its
+        // anchor pad/via is never shown as an "outline only" shape either.
+        withAlpha(ctx, layerAlpha(opts, layerName) * teardropAlpha, () => {
           ctx.beginPath();
           z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
           ctx.closePath();
-          ctx.strokeStyle = layerColor("selection");
-          ctx.lineWidth = hairlineUm(view, 2.5);
-          ctx.stroke();
-        }
-        return;
+          ctx.fillStyle = copperPaint(layerColor(key), z.net, opts);
+          ctx.fill();
+          if (selected) {
+            ctx.strokeStyle = layerColor("selection");
+            ctx.lineWidth = hairlineUm(view, 2.5);
+            ctx.stroke();
+          }
+        });
+        continue;
       }
-      ctx.beginPath();
-      z.outline.forEach(([x, y], i) => (i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)));
-      ctx.closePath();
-      ctx.strokeStyle = selected ? layerColor("selection") : zoneColor;
-      ctx.lineWidth = hairlineUm(view, selected ? 2.5 : 1.5);
-      ctx.setLineDash([hairlineUm(view, 5), hairlineUm(view, 3)]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    });
+      paintZoneOnLayer(ctx, view, z, layerName, copperPaint(layerColor(key), z.net, opts), layerAlpha(opts, layerName) * zoneAlpha, selected, opts);
+    }
+  }
+}
+
+/**
+ * The zones that are on no copper layer (`fillNonCopperZone`: silkscreen, mask, paste, a user layer) and a rule area drawn only on such layers: each on every
+ * one of its layers that is shown, in that layer's colour. They have no net.
+ */
+function drawNonCopperZones(ctx: CanvasRenderingContext2D, view: ViewTransform, board: BoardState, opts: PaintOptions) {
+  if (!board.routing || !on(opts.layerVisible, "zones")) return;
+  const zoneAlpha = opacityOf(opts.appearance, "zones");
+  for (const z of board.routing.zones) {
+    if (z.outline.length < 3 || z.teardrop) continue;
+    const selected = opts.selection.has(z.id);
+    const layers = zoneLayers(z).filter((l) => !isCopper(l) && layerIsVisible(opts.layerVisible, l));
+    if (layers.length === 0) continue;
+    if (z.is_rule_area) {
+      // A rule area with a copper layer is drawn with the copper passes.
+      if (zoneIsOnCopper(z)) continue;
+      drawRuleArea(ctx, view, z, selected);
+      continue;
+    }
+    // Copper layers of a mixed set are the copper passes' business.
+    if (zoneIsOnCopper(z)) continue;
+    for (const layerName of layers) paintZoneOnLayer(ctx, view, z, layerName, layerColor(realLayerKey(layerName)), zoneAlpha, selected, opts);
   }
 }
 
@@ -1266,6 +1314,8 @@ export function paintBoard(ctx: CanvasRenderingContext2D, view: ViewTransform, w
   for (const key of drawOrder()) byLayer[key]?.();
   for (const pass of passes) {
     withAlpha(ctx, pass.alpha, () => {
+      // Zones on technical and user layers (silkscreen, mask ..), under the footprints and graphics of those layers.
+      drawNonCopperZones(ctx, view, pass.b, opts);
       // Footprints (courtyard/pads/silk together, so a part's own layers stay coherent) after copper, before selection/cursor.
       for (const part of pass.b.parts) drawFootprint(ctx, view, part, opts);
       // Their fields (Reference, Value, user fields: `PCB_FIELD`), each on its own layer.

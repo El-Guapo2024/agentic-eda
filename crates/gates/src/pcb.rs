@@ -38,7 +38,7 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
 /// check (`eda_drc::outline::check_board_outline`): a gap wider than the chaining epsilon, a chain that crosses itself, a contour that crosses another,
 /// a line a few nanometres long. One finding per place, located at the Edge.Cuts items it names (or `outline`). A board whose outline is its polygon has
 /// nothing to check, and says nothing; one with other Edge.Cuts items passes once when they chain cleanly. This is not a second DRC -- kicad-cli's
-/// run on the exported file is the judge -- it is the outline the zone filler, the router and the 3D view are working from, reported while it is drawn.
+/// run on the exported file is the judge -- it is the outline the router and the 3D view are working from, reported while it is drawn.
 fn outline_malformed(design: &Design) -> Vec<CheckResult> {
     if !(eda_model::outline::has_edge_cuts_shapes(design) || eda_model::outline::outline_is_shapes(design)) {
         return Vec::new();
@@ -1096,12 +1096,12 @@ fn check_connectivity(rt: &eda_model::ir::RoutingSection, pads: &[PadItem], mode
         let zone_base = via_base + vias.len();
         for (zi, z) in zones.iter().enumerate() {
             for (pi, pad) in net_pads.iter().enumerate() {
-                if pad.layers.iter().any(|l| *l == z.layer) && point_in_polygon(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, &z.outline) {
+                if pad.layers.iter().any(|l| z.is_on_layer(l)) && point_in_polygon(Point { x: (pad.rect.0 + pad.rect.2) / 2, y: (pad.rect.1 + pad.rect.3) / 2 }, &z.outline) {
                     uf.union(pi, zone_base + zi);
                 }
             }
             for (vi, v) in vias.iter().enumerate() {
-                let spans = v.from_layer == z.layer || v.to_layer == z.layer;
+                let spans = z.is_on_layer(&v.from_layer) || z.is_on_layer(&v.to_layer);
                 if spans && point_in_polygon(v.at, &z.outline) {
                     uf.union(via_base + vi, zone_base + zi);
                 }

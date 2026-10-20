@@ -32,9 +32,14 @@
 // schematic live while the dialog is open; it never mixes into kicad-cli's
 // list.
 //
-// Exclusions are dialog_erc.cpp's: "Exclude this violation" / Remove (the row's button,
+// Delete Marker and Delete All Markers (`OnDeleteOneClick`, `OnDeleteAllClick`) take markers off the list and the sheet; an excluded marker that is deleted takes its
+// exclusion with it, as KiCad records the markers that are left (`RecordERCExclusions`). The marker menu has the Inspect and Fix entries of `InspectERCErrorMenuText` /
+// `FixERCErrorMenuText` and, for an endpoint off the grid, "Edit connection grid spacing...".
+//
+// Exclusions are dialog_erc.cpp's: "Exclude this violation" / "Exclude with comment..." / "Edit exclusion comment..." / Remove (the row's button,
 // the marker's menu, Exclude Marker) persist to `design.schematic.erc_exclusions` via
-// `add_erc_exclusion`/`delete_erc_exclusion`; the report on screen is patched in place
+// `add_erc_exclusion`/`delete_erc_exclusion`, with the comment and the marker (`kiapi.schematic.ErcMarker`) the report gave, which the
+// derived project lists in `erc.erc_exclusions` for kicad-cli (crates/kicad/src/erc_exclusions.rs); the report on screen is patched in place
 // (no new kicad-cli run for a waiver). "Change severity" and "Ignore all" in the menu write the
 // schematic's per-check severities (`set_erc_severities`, Schematic Setup > Violation
 // Severity), which go to kicad-cli in the derived project. "Ignored Tests" lists the
@@ -46,7 +51,7 @@ import { allShown, countKinds, ercKey, listedIndexes, markerPrefix, rcKind, rcMe
 import { setErcView, useCheckerView, type ErcTab } from "../state/checkerView";
 import { useStudioApi, useStudioDispatch, useStudioState } from "../state/store";
 import { askExclusionComment } from "../state/checkerView";
-import { ercSettingSeverity, ercTitle, excludeMarkerErc, frameErc, isPinMapCheck, openSeveritySetup, runMarkerMenu, selectErc, setErcExcluded, setErcSeverity, stepErc, toMenuEntries } from "../actions/checkerOps";
+import { saveReport, deleteAllMarkersErc, deleteMarkerErc, ercMenuContext, ercSettingSeverity, excludeMarkerErc, frameErc, openSeveritySetup, runMarkerMenu, selectErc, setErcExcluded, setErcSeverity, stepErc, toMenuEntries } from "../actions/checkerOps";
 import { ContextMenu, type MenuEntry } from "./canvas/ContextMenu";
 import { RcList, type RcRow } from "./RcList";
 
@@ -65,6 +70,8 @@ export function ErcDialog() {
   const view = useCheckerView().erc;
   const open = state.ercDialogOpen;
   const [menu, setMenu] = useState<{ x: number; y: number; entries: MenuEntry[] } | null>(null);
+  // Delete All Markers asks "Delete exclusions too?" when the report holds exclusions (`DIALOG_ERC::OnDeleteAllClick`).
+  const [askDeleteAll, setAskDeleteAll] = useState(false);
   const cctx = useMemo(() => ({ api, dispatch }), [api, dispatch]);
 
   const report = state.erc;
@@ -95,9 +102,26 @@ export function ErcDialog() {
   const openMenu = (index: number, x: number, y: number) => {
     const v = violations[index];
     if (!v) return;
-    const spec = rcMenu({ domain: "erc", title: ercTitle(v.check), excluded: v.severity === "excluded", severity: ercSettingSeverity(v), pinMap: isPinMapCheck(v.check), comments: false });
+    const spec = rcMenu(ercMenuContext(v));
     setMenu({ x, y, entries: toMenuEntries(spec, (id) => void runMarkerMenu(cctx, { domain: "erc", index }, id, askExclusionComment), ercKey(v) !== null) });
   };
+
+  /** `OnDeleteAllClick`: with no exclusions in the report the markers go at once; with some, the person says whether they go too. */
+  const deleteAll = () => {
+    if (counts.exclusions > 0) setAskDeleteAll(true);
+    else void deleteAllMarkersErc(cctx, false);
+  };
+  /** `OnSaveReport`'s file dialog: the two file types it offers ("Report file (*.rpt)", "JSON file (*.json)"). */
+  const saveMenu = (at: DOMRect) =>
+    setMenu({
+      x: at.left,
+      y: at.top,
+      entries: [
+        { label: "Report file (*.rpt)", onSelect: () => void saveReport(cctx, "erc", "report") },
+        { label: "JSON file (*.json)", onSelect: () => void saveReport(cctx, "erc", "json") },
+      ],
+    });
+  const emptyText = (clean: string) => (report?.markers_deleted ? "All markers were deleted. Run ERC to check the schematic again." : clean);
 
   const toggle = (index: number) => {
     const v = violations[index];
@@ -107,16 +131,17 @@ export function ErcDialog() {
   const rows: RcRow[] = listed.map((i) => {
     const v = violations[i]!;
     const kind = rcKind(v);
+    const aside = v.severity === "excluded" && v.kicad_matched === false ? " Waived in this report only: the derived project does not carry this exclusion to kicad-cli (its marker is not known to the letter), so kicad-cli's own report still lists it." : "";
     return {
       index: i,
       kind,
       prefix: markerPrefix(kind, ercSettingSeverity(v)),
       message: ercMessage(v),
       items: (v.items ?? []).map((it) => it.description).filter((d) => d !== ""),
-      comment: "",
+      comment: v.comment ?? "",
       selected: state.ercSelected === i,
       canToggle: ercKey(v) !== null,
-      title: v.check,
+      title: `${v.check}${aside}`,
     };
   });
 
@@ -229,7 +254,7 @@ export function ErcDialog() {
                 </div>
 
                 {!report && <div className="panel-empty">{running ? "Running ERC…" : "Run ERC to check the schematic."}</div>}
-                {report && violations.length === 0 && <div className="panel-empty">No violations.</div>}
+                {report && violations.length === 0 && <div className="panel-empty">{emptyText("No violations.")}</div>}
                 {report && violations.length > 0 && listed.length === 0 && <div className="panel-empty">Nothing matches the current filter.</div>}
                 <RcList rows={rows} onSelect={(i) => selectErc(cctx, i, true)} onMenu={openMenu} onToggle={toggle} />
               </>
@@ -279,9 +304,44 @@ export function ErcDialog() {
           </div>
         </div>
         <div className="dialog-footer">
-          <button className="primary" onClick={close}>
-            Close
-          </button>
+          {askDeleteAll ? (
+            <>
+              <span style={{ marginRight: "auto", fontSize: 12 }}>Delete exclusions too?</span>
+              <button
+                onClick={() => {
+                  setAskDeleteAll(false);
+                  void deleteAllMarkersErc(cctx, false);
+                }}
+              >
+                Errors and Warnings Only
+              </button>
+              <button
+                onClick={() => {
+                  setAskDeleteAll(false);
+                  void deleteAllMarkersErc(cctx, true);
+                }}
+              >
+                Errors, Warnings and Exclusions
+              </button>
+              <button onClick={() => setAskDeleteAll(false)}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <button title="Delete the selected marker from the list and the schematic. A finding is reported again by the next run; an excluded marker takes its exclusion with it" disabled={tab !== "erc" || state.ercSelected === null || running} onClick={() => void deleteMarkerErc(cctx)}>
+                Delete Marker
+              </button>
+              <button title="Delete the markers of the schematic" disabled={!report || running} onClick={deleteAll}>
+                Delete All Markers
+              </button>
+              <button title="Save a report file: kicad-cli writes it, for the severities the Show boxes list" disabled={!report || running || !(view.filter.errors || view.filter.warnings || view.filter.exclusions)} onClick={(e) => saveMenu(e.currentTarget.getBoundingClientRect())}>
+                Save...
+              </button>
+              <span style={{ flex: 1 }} />
+              <button className="primary" onClick={close}>
+                Close
+              </button>
+            </>
+          )}
         </div>
       </div>
       {/* The menu sits inside the backdrop, whose click closes the dialog: a click on an entry must stop here. */}

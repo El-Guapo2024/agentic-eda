@@ -246,6 +246,14 @@ pub fn local_placement_on_page(at: Point, rot: u32, mirrored: bool, width: f64, 
 
 // ------------------------------------------------------------------------------------------------------ specs
 
+/// The names of a symbol's four standard fields (`SCH_SYMBOL`'s mandatory ones, `FIELD_T::REFERENCE` to `DATASHEET`): a user-defined field cannot take one.
+pub const STANDARD_FIELDS: [&str; 4] = ["Reference", "Value", "Footprint", "Datasheet"];
+
+/// Is `name` the name of one of a symbol's four standard fields, whatever the case (`parseSchField` and `FindFieldCaseInsensitive` take `value` for the Value)?
+pub fn is_standard_field(name: &str) -> bool {
+    STANDARD_FIELDS.iter().any(|n| n.eq_ignore_ascii_case(name))
+}
+
 /// The four fields of a placed symbol, in KiCad's order, with the text each shows.
 pub fn symbol_specs(sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib: &str) -> Vec<FieldSpec> {
     let value = if !sym.value.is_empty() { sym.value.clone() } else { part.and_then(|p| p.value.clone()).unwrap_or_else(|| sym.id.clone()) };
@@ -257,6 +265,18 @@ pub fn symbol_specs(sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib:
         FieldSpec::new("Footprint", footprint, false),
         FieldSpec::new("Datasheet", datasheet, false),
     ]
+}
+
+/// The fields of a placed symbol as the sheet `sch` has them: the four of [`symbol_specs`], then the user-defined ones `sch` keeps for the symbol
+/// (`SchematicSection::user_fields`: by name, the text each shows), each hidden until a placement says otherwise
+/// (`FIELDS_EDITOR_GRID_DATA_MODEL::ApplyData` makes a field it adds with `SetVisible( false )`, as `DIALOG_SYMBOL_PROPERTIES::OnAddField` does). A user field named
+/// like a standard one is not a field of its own (the standard one has that name) and is left out.
+pub fn symbol_specs_in(sch: &SchematicSection, sym: &SymbolInstance, part: Option<&Part>, datasheet_of_lib: &str) -> Vec<FieldSpec> {
+    let mut specs = symbol_specs(sym, part, datasheet_of_lib);
+    if let Some(user) = sch.user_fields.get(&sym.id) {
+        specs.extend(user.iter().filter(|(name, _)| !is_standard_field(name)).map(|(name, text)| FieldSpec::new(name, text.clone(), false)));
+    }
+    specs
 }
 
 /// `specs` with the visibility and text setting the placements `stored` give each field (a field `stored` says nothing of keeps its default).
@@ -650,7 +670,7 @@ pub fn placement_candidates(sym: &SymbolInstance, geom: &SymbolGeom, specs: &[Fi
     out
 }
 
-/// The placements of a symbol's four fields, in the order of `specs`: the ones the section keeps for it, else Autoplace Fields'.
+/// The placements of a symbol's fields, in the order of `specs`: the ones the section keeps for it, else Autoplace Fields'.
 pub fn symbol_placements(sch: &SchematicSection, sym: &SymbolInstance, geom: &SymbolGeom, specs: &[FieldSpec]) -> Vec<FieldPlacement> {
     let stored = sch.field_layout.get(&field_key(&sym.id, sym.unit));
     let complete = stored.is_some_and(|s| specs.iter().all(|sp| s.iter().any(|p| p.name == sp.name)));
@@ -663,7 +683,7 @@ pub fn symbol_placements(sch: &SchematicSection, sym: &SymbolInstance, geom: &Sy
 
 /// The fields of a placed symbol on the sheet: the placements the section keeps for it, else Autoplace Fields', the specs' texts, in order.
 pub fn symbol_fields(sch: &SchematicSection, sym: &SymbolInstance, part: Option<&Part>, resolved: Option<&LibSymbol>, geom: &SymbolGeom) -> Vec<PageField> {
-    let specs = symbol_specs(sym, part, resolved.map(|r| r.datasheet.as_str()).unwrap_or(""));
+    let specs = symbol_specs_in(sch, sym, part, resolved.map(|r| r.datasheet.as_str()).unwrap_or(""));
     let placements = symbol_placements(sch, sym, geom, &specs);
     specs.iter().zip(placements.iter()).map(|(spec, p)| page_field(sym.at, sym.rot, sym.mirrored, geom.width, p, &spec.text)).collect()
 }
@@ -671,7 +691,9 @@ pub fn symbol_fields(sch: &SchematicSection, sym: &SymbolInstance, part: Option<
 /// The Reference and Value of a symbol (the fields that are shown) where the section keeps their placements; `None` for a symbol it keeps none
 /// for (a drawing from before fields had places of their own).
 pub fn stored_visible_fields(sch: &SchematicSection, sym: &SymbolInstance, part: &Part, resolved: Option<&LibSymbol>) -> Option<Vec<PageField>> {
-    if !sch.field_layout.contains_key(&field_key(&sym.id, sym.unit)) {
+    // A sheet read from a KiCad file keeps the places of its symbols' user-defined fields and no others (its symbols are placed by their own origin, which the
+    // field geometry here is not measured from): its Reference and Value are not where these would put them.
+    if sch.imported_from_kicad || !sch.field_layout.contains_key(&field_key(&sym.id, sym.unit)) {
         return None;
     }
     let mut sym = sym.clone();
@@ -829,7 +851,7 @@ pub fn fill_layout(sch: &mut SchematicSection, model: &eda_model::ConstraintMode
             }
             continue;
         }
-        let specs = symbol_specs(&sym, Some(part), resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
+        let specs = symbol_specs_in(sch, &sym, Some(part), resolved.as_ref().map(|r| r.datasheet.as_str()).unwrap_or(""));
         let candidates = placement_candidates(&sym, &geom, &specs);
         pending.push(Pending { key, sym, geom, specs, candidates, pick: 0 });
     }

@@ -437,10 +437,11 @@
     await clickAt(startX, pa0[0][1]);
     await waitReply("start", n2);
     t(E.state().tool === "tune", "a pattern is started");
-    await E.run("common.Interactive.cancel");
+    // The key itself, not `common.Interactive.cancel`: the Generators Manager (open and closed in an earlier scenario) stays mounted, and while it listened when closed it took every Escape.
+    key("Escape");
     await sleep(300);
     t(E.state().tool === "tune", "the first Escape drops the pattern and the tool goes on");
-    await E.run("common.Interactive.cancel");
+    key("Escape");
     await sleep(300);
     t(E.state().tool === "select", "the second leaves the tool");
     const gone = await post("/api/tune/move", { x: 1, y: 1 });

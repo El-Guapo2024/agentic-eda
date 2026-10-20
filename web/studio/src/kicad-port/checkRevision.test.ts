@@ -76,3 +76,12 @@ test("an out-of-date report is called out only on the tab its markers are on", (
 test("a run in progress wins over out of date: its result is on the way", () => {
   assert.deepEqual(statusNotes({ ...quiet, drcRunning: true, drcStale: true }), ["DRC running…"]);
 });
+
+test("the status bar says when KiCad's zone filler is running and how many zones are still outlines, on the PCB tab only", () => {
+  assert.deepEqual(statusNotes({ ...quiet, zoneFillRunning: true }), ["Filling zones…"]);
+  assert.deepEqual(statusNotes({ ...quiet, zonesUnfilled: 1 }), ["1 zone not filled (B)"]);
+  assert.deepEqual(statusNotes({ ...quiet, zonesUnfilled: 3 }), ["3 zones not filled (B)"]);
+  assert.deepEqual(statusNotes({ ...quiet, zoneFillRunning: true, zonesUnfilled: 3 }), ["Filling zones…"], "the run in progress wins");
+  assert.deepEqual(statusNotes({ ...quiet, tab: "schematic", zonesUnfilled: 3, zoneFillRunning: true }), []);
+  assert.deepEqual(statusNotes({ ...quiet, zonesUnfilled: 0 }), []);
+});

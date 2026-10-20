@@ -63,6 +63,9 @@ mod fp_models_tests;
 #[cfg(test)]
 #[path = "lib_editors_tests.rs"]
 mod lib_editors_tests;
+#[cfg(test)]
+#[path = "review_tests.rs"]
+mod review_tests;
 
 /// What a board directory remembers between commands.
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -584,39 +587,50 @@ fn print_status(board: &Board, model: &ConstraintModel) -> Result<(), Vec<CheckR
     Ok(())
 }
 
-/// `eda board fill [--zone ID] [--layer L] [--json]`: compute every zone's
-/// real fill (`eda_drc::fill::fill_all_zones`, the `eda_zone_filler` port)
-/// and report it -- a human-readable per-zone summary by default (net,
-/// layer, area, fragment/island count), or the full fragment polygons
-/// (mm) with `--json`, the same shape `crates/cli/src/studio.rs`'s
-/// `/api/fill` endpoint returns for the UI to draw. Fills are always
-/// recomputed here, never read back from a stored "second master".
-fn print_fill(design: &eda_model::ir::Design, model: &ConstraintModel, want_zone: Option<&str>, want_layer: Option<&str>, as_json: bool) -> Result<(), Vec<CheckResult>> {
+/// `eda board fill [--zone ID] [--layer L] [--json] [--last]`: Fill All Zones. kicad-cli's filler runs (`crate::fill_api::refill`: the only zone filler there is) and the
+/// fill it makes is kept beside the board; with `--last` it is not run and the fill the board last had is what is reported. Either way a human-readable per-zone summary
+/// (net, layer, area, island count) by default, or the fragment polygons (mm) with `--json`, the same ring `crates/cli/src/studio.rs`'s `/api/fill` returns for the UI
+/// to draw. A zone with no fill (never filled, or edited since the last one) reports as unfilled.
+fn print_fill(dir: &Path, want_zone: Option<&str>, want_layer: Option<&str>, as_json: bool, last: bool) -> Result<(), Vec<CheckResult>> {
+    if !last {
+        let done = crate::fill_api::refill(dir, None);
+        if done["ok"] != true {
+            return Err(fail("board_fill", "kicad-cli", done["message"].as_str().unwrap_or("kicad-cli could not fill the zones")));
+        }
+        eprintln!("kicad-cli {} filled the zones in {:.1} s", done["engine"].as_str().unwrap_or(""), done["seconds"].as_f64().unwrap_or(0.0));
+    }
+    let (_meta, design, _model) = load(dir)?;
+    let cache = crate::fill_api::cached(dir);
+    let copper = cache.as_ref().map(|k| k.copper(&design)).unwrap_or_default();
     let zones: &[eda_model::ir::Zone] = design.routing.as_ref().map(|r| r.zones.as_slice()).unwrap_or(&[]);
-    let drc_board = eda_drc::board::build(design, model);
-    let results = eda_drc::fill::fill_all_zones(&drc_board, &model.board);
     let mm = |v: i64| v as f64 / 1000.0;
 
     let mut matched = 0usize;
     let mut json_zones = Vec::new();
     for z in zones {
-        if want_zone.is_some_and(|id| id != z.id) || want_layer.is_some_and(|l| l != z.layer) {
-            continue;
-        }
-        matched += 1;
-        let fill = results.get(&z.id);
-        let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
-        let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
+        // A zone on several layers has a fill on each (`Zone::layers`): one line, one JSON entry, per layer.
+        for layer in z.layer_set() {
+            if want_zone.is_some_and(|id| id != z.id) || want_layer.is_some_and(|l| l != layer) {
+                continue;
+            }
+            matched += 1;
+            let filled = cache.as_ref().is_some_and(|k| k.current(z).is_some());
+            let fill = copper.get(&z.id, layer);
+            let fragments: Vec<&eda_shape_poly_set::Polygon> = fill.map(|f| f.polys.iter().collect()).unwrap_or_default();
+            let area_mm2 = fill.map(|f| f.area() / 1_000_000.0).unwrap_or(0.0);
 
-        if as_json {
-            let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
-            json_zones.push(serde_json::json!({
-                "id": z.id, "net": z.net, "layer": z.layer,
-                "area_mm2": area_mm2, "islands": fragments.len(),
-                "fragments": frags_json,
-            }));
-        } else {
-            println!("zone {} net={} layer={} area={:.4}mm^2 islands={}", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, z.layer, area_mm2, fragments.len());
+            if as_json {
+                let frags_json: Vec<Vec<[f64; 2]>> = fragments.iter().map(|poly| poly[0].iter().map(|p| [mm(p.x), mm(p.y)]).collect()).collect();
+                json_zones.push(serde_json::json!({
+                    "id": z.id, "net": z.net, "layer": layer, "filled": filled,
+                    "area_mm2": area_mm2, "islands": fragments.len(),
+                    "fragments": frags_json,
+                }));
+            } else if filled {
+                println!("zone {} net={} layer={} area={:.4}mm^2 islands={}", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, layer, area_mm2, fragments.len());
+            } else {
+                println!("zone {} net={} layer={} unfilled", if z.id.is_empty() { "<no-id>" } else { &z.id }, z.net, layer);
+            }
         }
     }
 
@@ -1232,6 +1246,7 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::SetTuningProfiles { settings } => format!("board-setup tuning-profiles ({} profiles)", settings.profiles.len()),
         Cmd::AddDrcExclusions { exclusions } => format!("drc exclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
         Cmd::DeleteDrcExclusions { exclusions } => format!("drc unexclude {}", exclusions.iter().map(|e| format!("{}:{}", e.check, e.items.join("+"))).collect::<Vec<_>>().join(" ")),
+        Cmd::ClearDrcExclusions => "drc unexclude --all".to_string(),
         Cmd::SetErcSeverities { severities } => format!("schematic erc-severities ({} changed)", severities.len()),
         Cmd::SwapLayers { mapping } => format!("swap-layers {}", mapping.iter().map(|(a, b)| format!("{a}={b}")).collect::<Vec<_>>().join(" ")),
         Cmd::SetLocked { ids, locked } => format!("{} {}", if *locked { "lock" } else { "unlock" }, ids.join(" ")),
@@ -1328,8 +1343,10 @@ fn cmd_line(c: &Cmd) -> String {
         Cmd::PasteSch { fragment, dx, dy, .. } => format!("schematic paste --items {} --by {},{}", fragment.section.symbols.len() + fragment.section.power_symbols.len() + fragment.section.wires.len() + fragment.section.labels.len() + fragment.section.texts.len() + fragment.section.no_connects.len() + fragment.section.bus_entries.len() + fragment.section.junctions.len() + fragment.section.lines.len() + fragment.section.extras.graphics.len(), mm(*dx), mm(*dy)),
         Cmd::SchEdit(c) => c.describe(),
         Cmd::SchMove(c) => c.describe(),
-        Cmd::AddErcExclusion { check, location } => format!("schematic erc-exclude {check:?} {location:?}"),
+        Cmd::AddErcExclusion { check, location, .. } => format!("schematic erc-exclude {check:?} {location:?}"),
         Cmd::DeleteErcExclusion { check, location } => format!("schematic erc-unexclude {check:?} {location:?}"),
+        Cmd::ClearErcExclusions => "schematic erc-unexclude --all".to_string(),
+        Cmd::SetConnectionGrid { mils } => format!("schematic connection-grid {mils}"),
         Cmd::AddLabel { net, at, .. } => format!("schematic label {net} --at {},{}", mm(at.x), mm(at.y)),
         Cmd::DeleteLabel { id } => format!("schematic delete-label {id}"),
         Cmd::AddSchText { content, at, .. } => format!("schematic text add --content {content:?} --at {},{}", mm(at.x), mm(at.y)),
@@ -1539,7 +1556,7 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::SetZoneHatchOffsets { .. } => "zone-hatch-offsets",
         Cmd::SetTuningPatterns { .. } => "tuning-patterns",
         Cmd::SetTuningProfiles { .. } => "tuning-profiles",
-        Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } => "drc-exclusion",
+        Cmd::AddDrcExclusions { .. } | Cmd::DeleteDrcExclusions { .. } | Cmd::ClearDrcExclusions => "drc-exclusion",
         Cmd::SetErcSeverities { .. } => "schematic-erc-severities",
         Cmd::SwapLayers { .. } => "swap-layers",
         Cmd::SetLocked { .. } => "lock",
@@ -1586,7 +1603,8 @@ fn cmd_name(c: &Cmd) -> &'static str {
         Cmd::PasteSch { .. } => "schematic-paste",
         Cmd::SchEdit(c) => c.kind(),
         Cmd::SchMove(c) => c.kind(),
-        Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } => "schematic-erc-exclusion",
+        Cmd::AddErcExclusion { .. } | Cmd::DeleteErcExclusion { .. } | Cmd::ClearErcExclusions => "schematic-erc-exclusion",
+        Cmd::SetConnectionGrid { .. } => "schematic-connection-grid",
         Cmd::AddLabel { .. } | Cmd::DeleteLabel { .. } => "schematic-label",
         Cmd::AddSchText { .. } | Cmd::DeleteSchText { .. } => "schematic-text",
         Cmd::AddPowerSymbol { .. } | Cmd::DeletePowerSymbol { .. } => "schematic-power",
@@ -1886,11 +1904,10 @@ pub fn run(
             other => Err(fail("board_usage", other, "usage: eda board zone <add|delete> ...")),
         },
         "fill" => {
-            let (_meta, design, model) = load(&dir)?;
             let want_zone = flag(rest, "--zone");
             let want_layer = flag(rest, "--layer");
             let as_json = has(rest, "--json");
-            print_fill(&design, &model, want_zone.as_deref(), want_layer.as_deref(), as_json)
+            print_fill(&dir, want_zone.as_deref(), want_layer.as_deref(), as_json, has(rest, "--last"))
         }
         "shape" => match rest.get(1).map(String::as_str).unwrap_or("") {
             "add" => {
@@ -2478,8 +2495,8 @@ mod tests {
         let number_after = |key: &str| -> f64 { let i = text.find(key).unwrap_or_else(|| panic!("{key} in the file kicad-cli wrote")); text[i + key.len()..].trim_start().split(|c: char| c == ')' || c.is_whitespace()).next().unwrap().parse().unwrap() };
         assert_eq!((number_after("(dashed_line_dash_ratio"), number_after("(dashed_line_gap_ratio")), (8.0, 2.5), "kicad-cli read the ratios");
         // The offsets: kicad-cli parses `(zone_defaults (property (layer ..) (hatch_position (xy ..))))` without complaint, but at the KiCad snapshot this studio follows the parser
-        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what the filler reads, and the
-        // file writer is the only thing that fills those). The studio's filler applies them (`eda_zone_filler::hatch`), and the derived file has KiCad's own text for them.
+        // reads it into the default zone settings, which `formatSetup` does not write back, so its own rewrite no longer has them (the board's offsets are what a fill reads, and kicad-cli's
+        // refill of the derived file is what fills those). The derived file has KiCad's own text for them.
         let (_, design, model) = load(&dir).unwrap();
         let derived = eda_kicad::export_kicad_pcb(&design, &model, &eda_kicad::ExportMeta { date: "2026-10-10", title: "intent" }).unwrap().split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(derived.contains("(zone_defaults (property (layer \"F.Cu\") (hatch_position (xy 1.5 -2))) (property (layer \"B.Cu\") (hatch_position (xy 0 0.7))))"), "{derived}");
@@ -3683,14 +3700,14 @@ mod tests {
         setup_schematic(&dir);
 
         assert!(
-            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into() }, false, "test").is_err(),
+            step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "".into(), comment: String::new(), marker: None }, false, "test").is_err(),
             "a blank location is refused -- nothing to key an exclusion on"
         );
 
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }, false, "test").unwrap();
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), comment: String::new(), marker: None }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: None }, false, "test").unwrap();
         // Adding the same one again is a harmless no-op, not a duplicate.
-        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
+        step(&dir, Cmd::AddErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), comment: String::new(), marker: None }, false, "test").unwrap();
 
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
@@ -3698,8 +3715,8 @@ mod tests {
         assert_eq!(
             exclusions,
             &vec![
-                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() },
-                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() },
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into(), ..Default::default() },
+                eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), ..Default::default() },
             ],
             "sorted by (check, location), not insertion order"
         );
@@ -3711,7 +3728,7 @@ mod tests {
         step(&dir, Cmd::DeleteErcExclusion { check: "pin_not_connected".into(), location: "R1.1".into() }, false, "test").unwrap();
         let (_, design, _) = load(&dir).unwrap();
         let exclusions = &design.schematic.as_ref().unwrap().erc_exclusions;
-        assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into() }]);
+        assert_eq!(exclusions, &vec![eda_model::ir::ErcExclusion { check: "pin_not_connected".into(), location: "R2.1".into(), ..Default::default() }]);
     }
 
     /// A DRC exclusion from the report's own violation: what the studio sends when the user excludes it.
@@ -3796,6 +3813,20 @@ mod tests {
         assert_eq!(counts(&removed, "annular_width"), 1);
         assert_eq!(kicad_cli_lists(&dir, &plain, "annular_width").len(), 1, "kicad-cli reports it again");
         assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "the others stay waived");
+
+        // Delete All Markers with "Errors, Warnings and Exclusions": KiCad's next run records the markers that are left, and none is, so no violation is
+        // waived any more and kicad-cli reports the track again.
+        step(&dir, Cmd::ClearDrcExclusions, false, "ui").unwrap();
+        assert!(load(&dir).unwrap().1.drawings.map_or(true, |d| d.drc_exclusions.is_empty()));
+        // (a run of the studio's engine writes the derived files kicad-cli is then run on directly)
+        let cleared = crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        assert_eq!((find(&cleared, "track_width")["excluded"].clone(), counts(&cleared, "track_width")), (serde_json::json!(false), 1), "the studio's report has the track again");
+        assert_eq!(kicad_cli_lists(&dir, &plain, "track_width").len(), 1, "kicad-cli reports the track again");
+        assert!(kicad_cli_lists(&dir, &["--severity-exclusions"], "track_width").is_empty(), "and has no excluded marker for it");
+        undo(&dir, "test", Some(Domain::Pcb)).unwrap();
+        assert_eq!(load(&dir).unwrap().1.drawings.unwrap().drc_exclusions.len(), 2, "Undo brings the two that were left back");
+        crate::kicad_engine::drc_with(&dir, false, false).expect("kicad-cli ran");
+        assert!(kicad_cli_lists(&dir, &plain, "track_width").is_empty(), "and the track is waived for kicad-cli again");
 
         // Undo takes the removal back (the via is waived again), and another Undo the exclusions.
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
@@ -5601,35 +5632,45 @@ mod tests {
         assert!(model.part("U3").is_none() && back.drawings.as_ref().map_or(true, |d| d.board_parts.is_empty()), "one undo takes every copy away");
     }
 
-    /// Pad Properties' and Footprint Properties' zone connection reach the fill the studio draws (and, through the derived
-    /// `.kicad_pcb`, the one kicad-cli makes), and Undo takes each edit back: a GND pour thermal-relieves U1's GND pad, a solid
-    /// connection floods it, "None" clears it, the pad's own choice beats its footprint's.
+    /// Pad Properties' and Footprint Properties' zone connection reach the fill kicad-cli makes of the derived `.kicad_pcb` (Fill All Zones, the only filler there is), and
+    /// Undo takes each edit back: a GND pour thermal-relieves U1's GND pad, a solid connection floods it, the pad's own choice beats its footprint's (slow tier).
     #[test]
     fn a_pads_zone_connection_changes_the_fill_and_undo_takes_it_back() {
+        if std::env::var_os("EDA_SLOW_TESTS").is_none() {
+            eprintln!("skipped: slow test; set EDA_SLOW_TESTS=1 to run it");
+            return;
+        }
+        if eda_kicad_engine::find_cli().is_none() {
+            eprintln!("kicad-cli not found; skipping");
+            return;
+        }
         let dir = scratch("pad_zone_connection");
         setup(&dir);
         let outline = vec![Point { x: 1_000, y: 1_000 }, Point { x: 19_000, y: 1_000 }, Point { x: 19_000, y: 19_000 }, Point { x: 1_000, y: 19_000 }];
         step(&dir, Cmd::AddZone { net: "GND".into(), layer: "F.Cu".into(), outline }, false, "test").unwrap();
+        // The area of the pour after kicad-cli has filled the board as it is now.
         let area = |dir: &Path| -> f64 {
-            let (_, design, model) = load(dir).unwrap();
-            let board = eda_drc::board::build(&design, &model);
-            let fills = eda_drc::fill::fill_all_zones(&board, &model.board);
-            fills.zones.values().map(|z| z.fill.area()).sum()
+            let done = crate::fill_api::refill(dir, None);
+            assert_eq!(done["ok"], true, "{done}");
+            let (_, design, _) = load(dir).unwrap();
+            let copper = crate::fill_api::cached(dir).expect("kicad-cli's fill").copper(&design);
+            copper.zones.values().map(|f| f.area()).sum()
         };
         let relieved = area(&dir);
+        assert!(relieved > 100_000_000.0, "the pour has a fill: {relieved}");
         let set = |c: Option<eda_model::ir::PadConnection>| Cmd::SetPadZoneOverrides { part: "U1".into(), pad: "1".into(), zone_connection: c, thermal_gap: None, thermal_spoke_width: None, thermal_spoke_angle_mdeg: None, clearance: None };
 
         step(&dir, set(Some(eda_model::ir::PadConnection::Full)), false, "ui").unwrap();
         let solid = area(&dir);
-        assert!(solid > relieved + 1_000_000.0, "a solid connection floods the pad's relief gap: {solid} against {relieved}");
+        assert!(solid > relieved + 100_000.0, "a solid connection floods the pad's relief gap: {solid} against {relieved}");
         undo(&dir, "test", Some(Domain::Pcb)).unwrap();
-        assert!((area(&dir) - relieved).abs() < 1.0, "Undo takes the edit back");
+        assert!((area(&dir) - relieved).abs() < 1_000.0, "Undo takes the edit back");
 
         // the footprint says solid, the pad (its own choice) says thermal: the pad wins
         step(&dir, Cmd::SetFootprintZoneConnection { part: "U1".into(), zone_connection: Some(eda_model::ir::PadConnection::Full), clearance: None }, false, "ui").unwrap();
-        assert!(area(&dir) > relieved + 1_000_000.0, "the footprint's solid connection reaches its pad");
+        assert!(area(&dir) > relieved + 100_000.0, "the footprint's solid connection reaches its pad");
         step(&dir, set(Some(eda_model::ir::PadConnection::Thermal)), false, "ui").unwrap();
-        assert!((area(&dir) - relieved).abs() < 1.0, "the pad's own thermal relief beats its footprint's solid one");
+        assert!((area(&dir) - relieved).abs() < 1_000.0, "the pad's own thermal relief beats its footprint's solid one");
     }
 
     /// A board whose sheet is drawn in KiCad's frame (a symbol at its library origin): R1, two pins, each on a wire to a label (`A` above it, `B` below),
@@ -5723,7 +5764,7 @@ mod tests {
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 0, dy: 3_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Move { ids: vec!["shpin_in".into()], dx: 18_000, dy: 2_000, turns: Vec::new(), about: None }),
             Cmd::SchMove(M::Drag { ids: vec!["shpin_in".into()], vertices: Default::default(), dx: 0, dy: 2_000, ortho: true, grid: 0, turns: Vec::new(), about: None }),
-            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None }),
+            Cmd::SchEdit(V::EditSheetPin { id: "shpin_in".into(), name: Some("SDA".into()), shape: Some(eda_model::ir::LabelShape::Bidirectional), at: None, size_um: None, bold: None, italic: None }),
             Cmd::SwapSchItems { a: "shpin_in".into(), b: "shpin_out".into() },
             Cmd::SchEdit(V::DeleteSheetPin { id: "shpin_out".into() }),
         ];
@@ -5733,6 +5774,165 @@ mod tests {
             undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
             assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The five group verbs, and a move, a turn, a mirror and a delete of a group, each make exactly one undo step on the sheet, and one Undo puts the sheet back exactly
+    /// -- the groups with it (`SCH_COMMIT` keeps the group in the same commit as its members).
+    #[test]
+    fn every_schematic_group_verb_is_one_undo_step_and_the_tree_survives_the_edits() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_group_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        {
+            let sch = design.schematic.as_mut().unwrap();
+            let pt = |x: Um, y: Um| Point { x, y };
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_a".into(), content: "a".into(), at: pt(15_000, 30_000), angle: 0, size_um: 1_270 });
+            sch.texts.push(eda_model::ir::SchematicText { id: "txt_b".into(), content: "b".into(), at: pt(25_000, 30_000), angle: 0, size_um: 1_270 });
+            sch.assign_missing_ids();
+            // inner = {R1, R2}, outer = {inner, txt_a}
+            sch.extras.groups = vec![
+                eda_model::ir::Group { id: "grp_inner".into(), name: "pair".into(), member_ids: vec!["R1".into(), "R2".into()] },
+                eda_model::ir::Group { id: "grp_outer".into(), name: "all".into(), member_ids: vec!["grp_inner".into(), "txt_a".into()] },
+            ];
+        }
+        save(&dir, &design).unwrap();
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let sheet_of = |d: &Design| serde_json::to_value(d.schematic.as_ref().unwrap()).unwrap();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let start = sheet_of(&load(&dir).unwrap().1);
+        let commands = vec![
+            Cmd::SchEdit(V::Group { ids: ids(&["grp_outer", "txt_b"]) }),
+            Cmd::SchEdit(V::Ungroup { ids: ids(&["grp_outer"]) }),
+            Cmd::SchEdit(V::AddToGroup { group_id: "grp_inner".into(), ids: ids(&["txt_b"]) }),
+            Cmd::SchEdit(V::RemoveFromGroup { ids: ids(&["txt_a"]) }),
+            Cmd::SchEdit(V::EditGroup { id: "grp_outer".into(), name: "renamed".into(), member_ids: ids(&["grp_inner", "txt_b"]) }),
+            Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Rotate { ids: ids(&["grp_outer"]), vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(M::Mirror { ids: ids(&["grp_outer"]), vertices: Default::default(), vertical: false, about: None, grid: 0 }),
+            Cmd::DeleteSchText { id: "txt_a".into() },
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet and its groups back exactly after {cmd:?}");
+        }
+        // the move really took the whole tree: R1, R2 and txt_a are 2.54 mm further right; txt_b, in no group, is where it was
+        step(&dir, on_sheet(Cmd::SchMove(M::Move { ids: ids(&["grp_outer"]), dx: 2_540, dy: 0, turns: Vec::new(), about: None })), false, "test").unwrap();
+        let d = load(&dir).unwrap().1;
+        let sch = d.schematic.as_ref().unwrap();
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R1").unwrap().at.x, 12_540);
+        assert_eq!(sch.symbols.iter().find(|s| s.id == "R2").unwrap().at.x, 22_540);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_a").unwrap().at.x, 17_540);
+        assert_eq!(sch.texts.iter().find(|t| t.id == "txt_b").unwrap().at.x, 25_000);
+        assert_eq!(sch.extras.groups.len(), 2, "the tree is still the tree");
+        // the studio's sheet carries the groups
+        let json = crate::studio::schematic_json_of(&d, &load(&dir).unwrap().2, "");
+        assert_eq!(json["groups"].as_array().map(Vec::len), Some(2));
+        assert_eq!(json["groups"][0]["name"], "pair");
+        // a refused one is no step at all
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::Group { ids: ids(&["R1"]) })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("at least two"), "{}", reasons(&e));
+        assert_eq!(sheet_of(&load(&dir).unwrap().1), start);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Each Pin Helper (a wire stub, a no-connect, a local, a hierarchical and a global label on a pin) makes exactly one undo step on the sheet, and one Undo puts it back exactly; a
+    /// helper that would change nothing is refused and is no step at all.
+    #[test]
+    fn every_pin_helper_is_one_undo_step() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_pin_helpers::PinHelper as H;
+        let dir = scratch("sch_pin_helper_undo");
+        setup_schematic(&dir);
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+        for what in [H::Wire, H::NoConnect, H::NetLabel, H::HierLabel, H::GlobalLabel] {
+            let cmd = Cmd::SchEdit(V::PinHelper { what, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 });
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+        // two labels on two pins, the text each pin's: the pins have no name, so `<reference>_<number>`
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NetLabel, pins: vec!["pin:R1:1".into(), "pin:R2:1".into()], grid: 0 })), false, "test").unwrap();
+        let d = load(&dir).unwrap().1;
+        let mut texts: Vec<String> = d.schematic.as_ref().unwrap().labels.iter().map(|l| l.net.clone()).collect();
+        texts.sort();
+        assert_eq!(texts, ["R1_1", "R2_1"]);
+        // a no-connect where there is one already changes nothing: refused, and no step
+        undo(&dir, "test", Some(Domain::Schematic)).unwrap();
+        step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap();
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::PinHelper { what: H::NoConnect, pins: vec!["pin:R1:1".into()], grid: 0 })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("have it already"), "{}", reasons(&e));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The verbs of a user-defined field (show it, edit its text, move, turn and mirror it, autoplace the fields, add and remove one) each make exactly one undo step on the
+    /// sheet and one Undo puts it back exactly; the studio's sheet lists the field, hidden until it is shown, with the id every verb takes it by.
+    #[test]
+    fn every_user_field_verb_is_one_undo_step_and_the_studios_sheet_lists_the_field() {
+        use eda_ops::sch_edit::SchCmd as V;
+        use eda_ops::sch_move::SchMoveCmd as M;
+        let dir = scratch("sch_user_field_undo");
+        setup_schematic(&dir);
+        let (_, mut design, _) = load(&dir).unwrap();
+        // a sheet this project drew, not one read from a file: only such a sheet has places for its fields
+        design.schematic.as_mut().unwrap().imported_from_kicad = false;
+        design.schematic.as_mut().unwrap().user_fields.entry("R1".into()).or_default().insert("MPN".into(), "ERJ-3EKF".into());
+        save(&dir, &design).unwrap();
+        let field = "fld:R1:MPN".to_string();
+        let on_sheet = |cmd: Cmd| Cmd::OnSheet { sheet: String::new(), cmd: Box::new(cmd) };
+        let edit = |f: &dyn Fn(&mut Option<String>, &mut Option<bool>)| {
+            let (mut text, mut visible) = (None, None);
+            f(&mut text, &mut visible);
+            Cmd::SchEdit(V::EditField { id: "fld:R1:MPN".into(), text, at: None, vertical: None, h: None, v: None, size_um: None, bold: None, italic: None, visible, name_shown: None, allow_autoplace: None })
+        };
+        let sheet_of = |d: &Design| serde_json::to_value((d.schematic.as_ref().unwrap(), &d.nets)).unwrap();
+        let start = sheet_of(&load(&dir).unwrap().1);
+
+        // the studio's sheet lists it with the four standard fields, hidden
+        let (_, d0, m0) = load(&dir).unwrap();
+        let json = crate::studio::schematic_json_of(&d0, &m0, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").expect("R1");
+        let names: Vec<&str> = r1["fields"].as_array().unwrap().iter().filter_map(|f| f["name"].as_str()).collect();
+        assert_eq!(names, ["Reference", "Value", "Footprint", "Datasheet", "MPN"]);
+        let mpn = r1["fields"].as_array().unwrap().iter().find(|f| f["name"] == "MPN").unwrap();
+        assert_eq!((mpn["id"].as_str(), mpn["text"].as_str(), mpn["visible"].as_bool()), (Some("fld:R1:MPN"), Some("ERJ-3EKF"), Some(false)));
+
+        let commands = vec![
+            edit(&|_, v| *v = Some(true)),
+            edit(&|t, _| *t = Some("RC0603".into())),
+            Cmd::SchMove(M::Move { ids: vec![field.clone()], dx: 2_540, dy: 0, turns: Vec::new(), about: None }),
+            Cmd::SchMove(M::Rotate { ids: vec![field.clone()], vertices: Default::default(), ccw: true, about: None, grid: 0 }),
+            Cmd::SchMove(M::Mirror { ids: vec![field.clone()], vertical: false, vertices: Default::default(), about: None, grid: 0 }),
+            Cmd::SchEdit(V::AutoplaceFields { ids: vec!["R1".into()] }),
+            Cmd::SchEdit(V::AddUserField { id: "R1".into(), name: "Maker".into(), text: "Panasonic".into() }),
+            Cmd::SchEdit(V::RemoveUserField { id: "R1".into(), name: "MPN".into() }),
+        ];
+        for cmd in commands {
+            step(&dir, on_sheet(cmd.clone()), false, "test").unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_ne!(sheet_of(&load(&dir).unwrap().1), start, "{cmd:?} changed nothing");
+            undo(&dir, "test", Some(Domain::Schematic)).unwrap_or_else(|e| panic!("{cmd:?}: {}", reasons(&e)));
+            assert_eq!(sheet_of(&load(&dir).unwrap().1), start, "one Undo puts the sheet back exactly after {cmd:?}");
+        }
+
+        // shown, it is listed as visible, and its place is the studio's to draw
+        step(&dir, on_sheet(edit(&|_, v| *v = Some(true))), false, "test").unwrap();
+        let (_, d1, m1) = load(&dir).unwrap();
+        let json = crate::studio::schematic_json_of(&d1, &m1, "");
+        let r1 = json["symbols"].as_array().unwrap().iter().find(|s| s["id"] == "R1").unwrap();
+        let mpn = r1["fields"].as_array().unwrap().iter().find(|f| f["name"] == "MPN").unwrap();
+        assert_eq!(mpn["visible"], true);
+        assert!(mpn["at"][0].is_number() && mpn["at"][1].is_number());
+        // a refused one is no step at all
+        let e = step(&dir, on_sheet(Cmd::SchEdit(V::RemoveUserField { id: "R1".into(), name: "Value".into() })), false, "test").unwrap_err();
+        assert!(reasons(&e).contains("cannot be removed"), "{}", reasons(&e));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

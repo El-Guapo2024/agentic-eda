@@ -18,6 +18,7 @@ import { useFpState } from "../state/footprintEditorStore";
 import { useSymState } from "../state/symbolEditorStore";
 import { useCommonDialogs } from "../state/commonDialogs";
 import { useActionRunner } from "./useActionRunner";
+import { setCheckerRunner } from "./checkerOps";
 import { picker } from "./pcbPicker";
 import { viewer3dProbe, type Viewer3dSnapshot } from "../components/viewer3d/viewer3dProbe";
 import { getGridOverrides } from "../state/gridOverrides";
@@ -59,7 +60,7 @@ export interface HookState {
   /** The prompt of the picker session running (the delete tool's "Delete: click an item to delete it"), or null. */
   picker: string | null;
   selection: SelectedItem[];
-  /** The group being worked in on the board (`PCB_SELECTION_TOOL::m_enteredGroup`), or null. */
+  /** The group being worked in on the board or the sheet (`PCB_SELECTION_TOOL::m_enteredGroup`, `SCH_SELECTION_TOOL::m_enteredGroup`), or null. */
   entered: string | null;
   counts: Counts;
   /** The display units of the editor (`mm`, `mil`, `in`) and the nets highlighted on the board (the first, then the rest of a multi-net highlight). */
@@ -235,7 +236,7 @@ function build(latest: { current: Latest }): EdaTestHook {
         tool,
         picker: picker.session()?.prompt ?? null,
         selection: selectionWithKinds(selection, kindIndex(lists)),
-        entered: studio.tab === "pcb" ? studio.enteredGroupId : null,
+        entered: studio.tab === "pcb" ? studio.enteredGroupId : studio.tab === "schematic" ? studio.schEnteredGroupId : null,
         counts: countsOf(studio.board, studio.schematic),
         units: studio.units,
         highlight: highlightedNets(studio.netHighlight, studio.bcx.netHighlightMore),
@@ -271,6 +272,11 @@ export function useEdaTestHook(): void {
   const common = useCommonDialogs();
   const latest = useRef<Latest>(null as unknown as Latest);
   latest.current = { runner, studio, fp, sym, common, getStudio: () => api.getState() };
+  // The Checker windows' Fix entries run actions by id from outside React (actions/checkerOps.ts): this is the one runner that is always mounted.
+  useEffect(() => {
+    setCheckerRunner(runner.run);
+    return () => setCheckerRunner(null);
+  }, [runner.run]);
 
   // The error toasts and the board error are errors the person sees: they go into the log, and the last toast of any kind is what a run reports.
   const noteToast = (toast: { message: string; kind: "error" | "info" } | null) => {

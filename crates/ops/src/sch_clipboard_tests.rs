@@ -278,3 +278,24 @@ fn two_generated_boxes_that_draw_the_same_share_one_library_symbol() {
     let sch = b.design().schematic.as_ref().unwrap();
     assert!(sch.symbols.iter().all(|s| s.lib_id == lib.symbols[0].lib_id));
 }
+
+#[test]
+fn a_pasted_symbol_keeps_the_places_swap_pins_gave_its_pins_under_its_new_reference() {
+    // R1 was copied with pins 1 and 2 traded; it is pasted beside an R1 that is there, so it is numbered anew (R2), and its swap goes with it
+    let m = ConstraintModel::default();
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    let mut f = fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(100_000, 50_000))));
+    f.section.extras.swap_pin_places("R1", "1", "2");
+    b.apply(&paste(&f, 0, 0, PasteMode::Unique)).unwrap();
+    b.apply(&paste(&f, 20_000, 0, PasteMode::Unique)).unwrap();
+    let sch = b.design().schematic.as_ref().unwrap();
+    assert_eq!(refs(sch), vec!["R1", "R2"]);
+    for key in ["R1", "R2"] {
+        let swaps = sch.extras.pin_swaps_of(key).unwrap_or_else(|| panic!("{key} lost its swap: {:?}", sch.extras.pin_swaps));
+        assert_eq!(swaps.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>(), [("1", "2"), ("2", "1")], "{key}");
+    }
+    // a symbol with its library pins pastes with none
+    let mut b = Board::new(empty_design(), &m, 100, 300);
+    b.apply(&paste(&fragment(|s| s.symbols.push(symbol("R1", "Device:R", "10k", p(100_000, 50_000)))), 0, 0, PasteMode::Unique)).unwrap();
+    assert!(b.design().schematic.as_ref().unwrap().extras.pin_swaps.is_empty());
+}

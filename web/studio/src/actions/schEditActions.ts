@@ -15,9 +15,11 @@ import { convertCmds, type ConvertSource, type ConvertTarget } from "../kicad-po
 import { lockCmd, type LockMode } from "../kicad-port/schLock";
 import { schematicActions, type ActionMap } from "./schActionRegistry";
 import { registerSchFieldActions } from "./schFieldActions";
+import { registerSchGroupActions } from "./schGroupActions";
 import { registerSchBodyStyleActions } from "./schBodyStyleActions";
 import { registerSchModuleSheetActions } from "./schModuleSheetActions";
 import { registerSchPinActions } from "./schPinActions";
+import { registerSchPinHelperActions } from "./schPinHelperActions";
 import { registerSchSheetPinActions } from "./schSheetPinActions";
 import { registerSchSymbolActions } from "./schSymbolActions";
 import { beginBreak } from "../components/schematic/schBreakTool";
@@ -191,7 +193,9 @@ export function registerSchEditActions(registry: ActionMap, ctx: SchEditContext)
   if (draw?.poly) m.set("eeschema.InteractiveDrawing.deleteLastPoint", schematicOnly(() => deleteLastPoint(draw, ctx.dispatch)));
 
   registerSchSheetPinActions(registry, ctx);
+  registerSchGroupActions(registry, ctx);
   registerSchPinActions(registry, ctx);
+  registerSchPinHelperActions(registry, ctx);
   registerSchFieldActions(registry, ctx);
   registerSchBodyStyleActions(registry, ctx);
   registerSchModuleSheetActions(registry, ctx);

@@ -98,6 +98,27 @@ export async function inspectConstraints(api: StudioApi, dispatch: Dispatch<Acti
   showInspectReport("constraints", reply);
 }
 
+/**
+ * `InspectDRCError` for the cases that are a Clearance or a Constraints Resolution report (`BOARD_INSPECTION_TOOL::InspectDRCErrorMenuText`): the DRC dialog's
+ * Inspect entry on a violation. The items are the violation's own (`GetMainItemID`, `GetAuxItemID`), not the selection's and not picked: a clearance report
+ * wants both, a constraints report the first.
+ */
+export async function inspectViolation(api: StudioApi, dispatch: Dispatch<Action>, kind: "clearance" | "constraints", v: { items: ReadonlyArray<{ id: string | null; pos: [number, number] }> }): Promise<void> {
+  const state = api.getState();
+  const [a, b] = v.items;
+  if (!a?.id) return error(dispatch, kind === "clearance" ? "Cannot generate the clearance report." : "Cannot generate the constraints report.");
+  if (kind === "constraints") {
+    const reply = await postConstraints({ item: a.id, at: a.pos, units: state.units });
+    if (!reply.ok) return error(dispatch, reply.message ?? "Cannot generate the constraints report.");
+    showInspectReport("constraints", reply);
+    return;
+  }
+  if (!b?.id) return error(dispatch, "Cannot generate the clearance report.");
+  const reply = await postClearance({ a: a.id, b: b.id, aAt: a.pos, bAt: b.pos, activeLayer: activeLayerName(state.activeLayer, "F.Cu"), units: state.units });
+  if (!reply.ok) return error(dispatch, reply.message ?? "Cannot generate the clearance report.");
+  showInspectReport("clearance", reply);
+}
+
 export function registerInspectActions(m: Map<string, (param?: unknown) => void>, ctx: SweepCtx): void {
   if (ctx.state.tab !== "pcb") return;
   const { api, dispatch } = ctx;

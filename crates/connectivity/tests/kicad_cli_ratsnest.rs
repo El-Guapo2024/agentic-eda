@@ -90,8 +90,28 @@ struct Counts {
     via_dangling: usize,
 }
 
+/// The copper of the zones as kicad-cli fills them (Fill All Zones: `eda_kicad_engine::refill_zones` on a copy of the derived board): what the connectivity is given, as
+/// the studio gives it the fills it has kept. kicad-cli's own DRC below refills the same board, so both sides see the same pours.
+fn kicad_copper(design: &Design, model: &ConstraintModel) -> eda_drc::zone_copper::ZoneCopper {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let work = std::env::temp_dir().join(format!("eda_conn_fill_{}_{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    let mut design = design.clone();
+    if let Some(r) = design.routing.as_mut() {
+        r.assign_missing_ids();
+    }
+    let copper = match eda_kicad_engine::refill_zones(&design, model, &work) {
+        Ok(fills) => fills.copper(&design),
+        Err(e) => {
+            eprintln!("  kicad-cli could not fill the zones ({e:?}): the pours have no copper");
+            Default::default()
+        }
+    };
+    let _ = std::fs::remove_dir_all(&work);
+    copper
+}
+
 fn our_counts(design: &Design, model: &ConstraintModel) -> Counts {
-    let report = analyze(design, model);
+    let report = analyze(design, model, &kicad_copper(design, model));
     let track_dangling = report.dangling.iter().filter(|d| d.kind == DanglingKind::Track).count();
     let via_dangling = report.dangling.iter().filter(|d| d.kind == DanglingKind::Via).count();
     Counts { unconnected: report.ratsnest.len(), track_dangling, via_dangling }

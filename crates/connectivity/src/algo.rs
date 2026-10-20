@@ -29,6 +29,7 @@ use eda_model::ConstraintModel;
 use crate::geom;
 use crate::grid::Grid;
 use crate::items::{self, layers_overlap, CnItem};
+use eda_drc::zone_copper::ZoneCopper;
 
 pub struct ConnGraph {
     pub items: Vec<CnItem>,
@@ -39,8 +40,8 @@ pub struct ConnGraph {
 /// have no incremental/dirty-item story (there is no live editing session
 /// here): every item is (re)built and every candidate pair is (re)tested
 /// on each call.
-pub fn build_graph(design: &Design, model: &ConstraintModel) -> ConnGraph {
-    let mut items = items::build_items(design, model);
+pub fn build_graph(design: &Design, model: &ConstraintModel, copper: &ZoneCopper) -> ConnGraph {
+    let mut items = items::build_items(design, model, copper);
     if items.len() < 2 {
         return ConnGraph { items };
     }
@@ -140,7 +141,7 @@ mod tests {
     #[test]
     fn two_pads_with_no_copper_are_two_separate_clusters() {
         let (design, model) = two_pad_model();
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 2);
         assert!(clusters.iter().all(|c| c.net == "N1"));
@@ -152,7 +153,7 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].items.len(), 3, "2 pads + 1 track segment");
@@ -168,7 +169,7 @@ mod tests {
         if let Some(pl) = design.placement.as_mut() {
             pl.footprints[1].at = pl.footprints[0].at;
         }
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let clusters = search_clusters(&graph);
         // Pads on different, fixed nets are never even shape-tested (see
         // `build_graph`), so no edge should have formed between them.

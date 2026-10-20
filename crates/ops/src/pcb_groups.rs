@@ -28,27 +28,20 @@
 //! that is left with fewer than two. A member the board never had (a group made over ids no item answers to) stays, as it did.
 
 use super::{Board, Cmd};
-use eda_model::ir::{Design, DrawingsSection, Group};
+use eda_model::groups::{GroupHost, GroupRefusal};
+use eda_model::ir::{Design, DrawingsSection};
 use eda_model::CheckResult;
 use std::collections::BTreeSet;
 
-fn bad_group(subject: &str, why: &str) -> Vec<CheckResult> {
-    vec![CheckResult::fail("ops_bad_group", subject, why)]
+/// A refusal of a group edit as the command's failure (`CheckResult`).
+pub(crate) fn refused(r: GroupRefusal) -> Vec<CheckResult> {
+    vec![CheckResult::fail(r.check, &r.subject, r.why)]
 }
 
 /// A group with fewer than two members is meaningless and dissolves (`GROUP_TOOL::RemoveFromGroup`'s
 /// `if( group->GetItems().size() < 2 )`); the group above it loses it as a member, and may fall under two in turn.
 pub(crate) fn prune_groups(dr: &mut DrawingsSection) {
-    loop {
-        let doomed: Vec<String> = dr.groups.iter().filter(|g| g.member_ids.len() < 2).map(|g| g.id.clone()).collect();
-        if doomed.is_empty() {
-            return;
-        }
-        dr.groups.retain(|g| !doomed.contains(&g.id));
-        for g in dr.groups.iter_mut() {
-            g.member_ids.retain(|m| !doomed.contains(m));
-        }
-    }
+    eda_model::groups::prune_groups(&mut dr.groups);
 }
 
 /// Every id an item of the board can be listed under: placed footprints, copper, graphics, dimensions and the groups themselves.
@@ -72,43 +65,16 @@ impl Board<'_> {
     /// `Cmd::Group` (Ctrl+G): a new group over `ids`. Groups among them become members of it (they nest). Each id leaves the group
     /// it was in. When every id shared one group, the new group takes their place in it -- what a group made while that group is
     /// entered does (`BOARD_COMMIT::Push` adds an item made with a group entered to that group, and the selection tool only
-    /// offers the entered group's own members then).
+    /// offers the entered group's own members then). The list edit is `GroupHost::make_group`, the sheet's as well.
     pub(crate) fn group_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let mut members: Vec<String> = Vec::new();
-        for id in ids {
-            if !members.contains(id) {
-                members.push(id.clone());
-            }
-        }
-        if members.len() < 2 {
-            return Err(bad_group("group", "a group needs at least two items"));
-        }
-        let dr = self.drawings_mut();
-        let shared: Option<String> = dr.parent_group(&members[0]).map(|p| p.id.clone()).filter(|first| members.iter().all(|m| dr.parent_group(m).is_some_and(|p| &p.id == first)));
-        for g in dr.groups.iter_mut() {
-            g.member_ids.retain(|m| !members.contains(m));
-        }
-        dr.groups.push(Group { id: String::new(), name: String::new(), member_ids: members });
-        dr.assign_missing_ids();
-        let new_id = dr.groups.last().map(|g| g.id.clone()).unwrap_or_default();
-        if let Some(above) = shared {
-            if let Some(g) = dr.groups.iter_mut().find(|g| g.id == above) {
-                g.member_ids.push(new_id);
-            }
-        }
-        prune_groups(dr);
-        Ok(())
+        self.drawings_mut().make_group(ids).map_err(refused)
     }
 
     /// `Cmd::Ungroup` (Ctrl+Shift+G): dissolve every named group. Its members are free of it -- also of the group above it, if
     /// any (`GROUP_TOOL::Ungroup`: `group->RemoveAll()`) -- and an id that names no group is skipped.
     pub(crate) fn ungroup_items(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
         if let Some(dr) = self.design.drawings.as_mut() {
-            dr.groups.retain(|g| !ids.contains(&g.id));
-            for g in dr.groups.iter_mut() {
-                g.member_ids.retain(|m| !ids.contains(m));
-            }
-            prune_groups(dr);
+            dr.dissolve_groups(ids);
         }
         Ok(())
     }
@@ -116,35 +82,14 @@ impl Board<'_> {
     /// `Cmd::AddToGroup` (`GROUP_TOOL::AddToGroup`): `ids` join `group_id`, each leaving the group it was in. A group cannot be
     /// added to itself or to a group below it.
     pub(crate) fn add_to_group(&mut self, group_id: &str, ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let dr = self.drawings_mut();
-        if !dr.is_group(group_id) {
-            return Err(vec![CheckResult::fail("ops_unknown_group", group_id, "no group with this id")]);
-        }
-        if let Some(outer) = ids.iter().find(|id| dr.is_group(id) && dr.group_holds(id, group_id)) {
-            return Err(bad_group(outer, "a group cannot hold itself or a group that holds it"));
-        }
-        for g in dr.groups.iter_mut().filter(|g| g.id != group_id) {
-            g.member_ids.retain(|m| !ids.contains(m));
-        }
-        if let Some(g) = dr.groups.iter_mut().find(|g| g.id == group_id) {
-            for id in ids {
-                if !g.member_ids.contains(id) {
-                    g.member_ids.push(id.clone());
-                }
-            }
-        }
-        prune_groups(dr);
-        Ok(())
+        self.drawings_mut().add_members(group_id, ids).map_err(refused)
     }
 
     /// `Cmd::RemoveFromGroup` (`GROUP_TOOL::RemoveFromGroup`): each id leaves the group it is in (a no-op for one that is in none),
     /// free of every group above it too.
     pub(crate) fn remove_from_group(&mut self, ids: &[String]) -> Result<(), Vec<CheckResult>> {
         if let Some(dr) = self.design.drawings.as_mut() {
-            for g in dr.groups.iter_mut() {
-                g.member_ids.retain(|m| !ids.contains(m));
-            }
-            prune_groups(dr);
+            dr.remove_members(ids);
         }
         Ok(())
     }
@@ -153,34 +98,17 @@ impl Board<'_> {
     /// `member_ids`, each pulled out of the group it was in, the previous members not listed released. A member may be a group, but
     /// not this one or one that holds it.
     pub(crate) fn edit_group(&mut self, id: &str, name: &str, member_ids: &[String]) -> Result<(), Vec<CheckResult>> {
-        let dr = self.drawings_mut();
-        if !dr.is_group(id) {
-            return Err(vec![CheckResult::fail("ops_unknown_group", id, "no group with this id")]);
-        }
-        if member_ids.iter().any(|m| m == id || (dr.is_group(m) && dr.group_holds(m, id))) {
-            return Err(bad_group(id, "a group cannot hold itself or a group that holds it"));
-        }
-        let mut members: Vec<String> = Vec::new();
-        for m in member_ids {
-            if !members.contains(m) {
-                members.push(m.clone());
-            }
-        }
-        for g in dr.groups.iter_mut().filter(|g| g.id != id) {
-            g.member_ids.retain(|m| !members.contains(m));
-        }
-        if let Some(g) = dr.groups.iter_mut().find(|g| g.id == id) {
-            g.name = name.to_string();
-            g.member_ids = members;
-        }
-        prune_groups(dr);
-        Ok(())
+        self.drawings_mut().set_group(id, name, member_ids).map_err(refused)
     }
 
     /// `Cmd::InGroup`: `cmd`, then every item it added that is in no group joins `group` -- the group the editor has entered
     /// (`BOARD_COMMIT::Push`'s `enteredGroup->AddItem( boardItem )`, `placeBoardItems`' earlier copy of it). The command is the editor's
     /// own, so it is all or nothing like it; a group that is no longer there (dissolved, deleted) is simply not joined.
     pub(crate) fn in_group(&mut self, group: &str, cmd: &Cmd) -> Result<(), Vec<CheckResult>> {
+        // a schematic command joins a group of the sheet (`sch_groups.rs`)
+        if cmd.domain() == super::Domain::Schematic {
+            return self.sch_in_group(group, cmd);
+        }
         let before = universe(&self.design);
         self.apply(cmd)?;
         self.join_group(group, &before);

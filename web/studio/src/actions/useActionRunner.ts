@@ -814,6 +814,8 @@ export function useActionRunner() {
       if (clearRouteQueue()) dispatch({ type: "SET_ACTIVE_TOOL", tool: "select" });
       // `EDIT_TOOL::Duplicate` / `PCB_CONTROL::Paste`: cancelling the move that carries the new items takes them away again.
       if ((state.tab === "pcb" || state.tab === "schematic") && state.activeTool === "move") void api.revertCarriedPlacement();
+      // Pin Helpers > Wire: the stubs were handed to the Drag tool, and cancelling it reverts the commit (`commit.Revert()`)
+      if (state.tab === "schematic" && state.activeTool === "drag") void api.revertCarriedPlacement();
       dispatch({ type: "ESCAPE" });
     });
 
@@ -909,19 +911,10 @@ export function useActionRunner() {
     m.set("pcbnew.Control.layerAlphaInc", pcbOnly(() => stepActiveLayerAlpha(ALPHA_STEP)));
     m.set("pcbnew.Control.layerAlphaDec", pcbOnly(() => stepActiveLayerAlpha(-ALPHA_STEP)));
 
-    // zone_filler_tool.cpp ZoneFillAll/ZoneUnfillAll (B/Ctrl+B): this
-    // app's /api/fill is always computed fresh (no per-zone fill cache to
-    // mutate), so "fill" is just "go fetch it", and "unfill" is just
-    // "stop showing what we fetched" -- see state.zoneFill's own doc.
-    // Fill All covers every zone, so it also forgets a draft fill of just some (`bcx.zoneFilled`, see ZoneFiller.zoneFill in boardControlActions.ts).
-    m.set(
-      "pcbnew.ZoneFiller.zoneFillAll",
-      pcbOnly(() => {
-        dispatch({ type: "BCX", patch: { zoneFilled: null } });
-        void api.fillZones();
-      })
-    );
-    m.set("pcbnew.ZoneFiller.zoneUnfillAll", pcbOnly(() => api.unfillZones()));
+    // zone_filler_tool.cpp ZoneFillAll/ZoneUnfillAll (B/Ctrl+B): the fill is KiCad's -- B runs kicad-cli's filler on a copy of the derived board (seconds, the board
+    // stays editable) and keeps the fills beside the design; Ctrl+B takes them away. See state.zoneFill's own doc.
+    m.set("pcbnew.ZoneFiller.zoneFillAll", pcbOnly(() => void api.fillZones()));
+    m.set("pcbnew.ZoneFiller.zoneUnfillAll", pcbOnly(() => void api.unfillZones()));
     // pcb_control.cpp ZoneDisplayMode: independent of whether a zone HAS
     // fill data at all (above) -- how one that does paints. Source's
     // other two modes (fracture-borders/triangulation) are developer

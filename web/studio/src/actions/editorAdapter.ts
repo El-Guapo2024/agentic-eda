@@ -16,6 +16,8 @@ import { pageOf } from "../components/schematic/drawingSheet";
 import { pickSelectionCandidates } from "../components/canvas/selectionCandidates";
 import { hitSymbol, hitWire } from "../components/schematic/schHit";
 import { allItems, hitItems, itemBounds } from "../components/schematic/schItems";
+import { describeGroup, groupsOf, substituteSchSelection } from "../kicad-port/schGroups";
+import { boxOfId } from "../components/schematic/schGroupBounds";
 import { schSelectable } from "../kicad-port/schSelectionFilter";
 import { deleteCmds as schDeleteCmds } from "../kicad-port/schDelete";
 import { boardDeleteCmds, tuningPatternIds } from "../kicad-port/deleteCmds";
@@ -95,6 +97,11 @@ function schematicItemBoxes(sch: Schematic): ItemBoxes {
     const b = itemBounds(sch, ref);
     if (b) out.set(ref.id, [b.minX, b.minY, b.maxX, b.maxY]);
   }
+  // a group is the box of what is below it (`SCH_GROUP::GetBoundingBox`)
+  for (const g of groupsOf(sch)) {
+    const b = boxOfId(sch, g.id);
+    if (b) out.set(g.id, [b.minX, b.minY, b.maxX, b.maxY]);
+  }
   return out;
 }
 
@@ -124,8 +131,10 @@ export function describeBoardItem(board: StudioState["board"], item: PickedItem)
 }
 
 /** `GetItemDescription` of a schematic item. */
-function describeSchematicItem(sch: Schematic | null, item: PickedItem): string {
+export function describeSchematicItem(sch: Schematic | null, item: PickedItem): string {
   if (!sch) return item.kind;
+  const group = groupsOf(sch).find((g) => g.id === item.id);
+  if (group) return describeGroup(group);
   const symbol = sch.symbols.find((s) => s.id === item.id);
   if (symbol) return `Symbol ${symbol.id}${symbol.value ? ` ${symbol.value}` : ""}`;
   const label = sch.labels.find((l) => l.id === item.id);
@@ -227,7 +236,13 @@ export function makeEditorAdapter(snap: EditorSnapshot): EditorAdapter | null {
           add(hitSymbol(sch, x, y), "symbol");
           for (const r of hitItems(sch, x, y, 6 / scale)) if (r.kind !== "symbol" && r.kind !== "wire") add(r.id, r.kind);
           add(hitWire(sch, x, y, 400 / scale), "wire");
-          return out;
+          // a member of a group that has not been entered is picked as the outermost group (`FilterCollectorForHierarchy`)
+          const promoted: PickedItem[] = [];
+          for (const c of out) {
+            const top = substituteSchSelection(sch, [c.id], studio.schEnteredGroupId).ids[0] ?? c.id;
+            if (!promoted.some((q) => q.id === top)) promoted.push(top === c.id ? c : { id: top, kind: "group" });
+          }
+          return promoted;
         },
         deleteIds: async (ids) => {
           if (!sch || !snap.api) return null;

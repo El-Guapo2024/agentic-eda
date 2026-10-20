@@ -281,6 +281,11 @@ pub(crate) struct Scene<'m> {
     pub model: &'m ConstraintModel,
     /// The fields the user picked on their own (`SCH_FIELD`), see `sch_fields.rs`.
     pub fields: Vec<crate::sch_fields::FieldSel>,
+    /// The items held through a group (`SCH_GROUP::Move` hands the move to each member): they move as they are, and a drag takes nothing attached to
+    /// them along, because a group has no connection points (`setupItemsForDrag` asks the group, not its members).
+    pub rigid: BTreeSet<Item>,
+    /// The selection is one group and nothing else: `SCH_EDIT_TOOL::Rotate` turns it on itself and `Mirror` mirrors it about its own centre.
+    pub lone_group: bool,
 }
 
 impl<'m> Scene<'m> {
@@ -299,7 +304,7 @@ impl<'m> Scene<'m> {
         }
         let shapes = sch.symbols.iter().map(|s| symbol_shape(model, &sch, s)).collect();
         let power_shapes = sch.power_symbols.iter().map(|p| power_shape(model, p)).collect();
-        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new() }
+        Scene { sch, segs, meta, shapes, power_shapes, selected: BTreeSet::new(), by_drag: BTreeSet::new(), model, fields: Vec::new(), rigid: BTreeSet::new(), lone_group: false }
     }
 
     // -------------------------------------------------------------------------------------------------------------- items
@@ -987,10 +992,12 @@ fn shape_box(shape: &SymbolShape, m: Matrix, at: Point) -> Option<(Point, Point)
 /// Where a placed symbol's pins sit in its own frame: what the studio draws (`lib_symbols` in `GET /api/schematic`) and what KiCad
 /// reads from the file the writer bakes. A sheet this project drew places a symbol by the corner of its box (`eda_engine::placed`), a
 /// sheet read from KiCad by the symbol's own origin.
-fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInstance) -> SymbolShape {
+/// The library symbol a placed symbol is drawn from as this sheet places it: the box-corner copy for a sheet this project drew, the library's own for one read from a
+/// KiCad file; `None` for a symbol with no library symbol to speak for it.
+pub(crate) fn placed_lib_symbol(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInstance) -> Option<LibSymbol> {
     let part = model.part(&s.id);
     let effective_id = if s.lib_id.is_empty() { format!("eda:{}", s.id) } else { s.lib_id.clone() };
-    let lib: Option<LibSymbol> = match (sch.imported_from_kicad, part) {
+    match (sch.imported_from_kicad, part) {
         (false, Some(p)) => {
             let resolved = model.real_symbol_of_instance(sch, s, p);
             Some(eda_engine::placed::corner_symbol(&effective_id, p, resolved.as_ref(), s.unit))
@@ -1003,7 +1010,11 @@ fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInsta
                 model.symbol_of(&effective_id).map(|l| if l.has_alternate_body() { l.in_style(sch.body_style_of(s)).into_owned() } else { l })
             }
         }
-    };
+    }
+}
+
+fn symbol_shape(model: &ConstraintModel, sch: &SchematicSection, s: &SymbolInstance) -> SymbolShape {
+    let lib = placed_lib_symbol(model, sch, s);
     let mut shape = match lib {
         Some(lib) => lib_shape(&lib, s.unit),
         None => SymbolShape::default(),

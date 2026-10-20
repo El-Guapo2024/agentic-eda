@@ -88,3 +88,21 @@ test("what the dialog sends: the name and the shape that changed, one verb", () 
   assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "bidirectional" }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", shape: "bidirectional" });
   assert.deepEqual(sheetPinEditCmd(pin, { name: "SCL", shape: "output" }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", name: "SCL", shape: "output" });
 });
+
+test("a pin's text look is set by Sheet Pin Properties: only what changed goes, and the pin's box grows with its size", () => {
+  const pin = { id: "shpin_l", name: "IN", shape: "input" as const };
+  // the size in micrometres, as the dialog parses it; the default is 50 mil, regular, upright
+  assert.equal(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 1270, bold: false, italic: false }), null, "the look it has is no change");
+  assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 2000, bold: false, italic: false }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_um: 2000 });
+  assert.deepEqual(sheetPinEditCmd(pin, { name: "IN", shape: "input", sizeUm: 1270, bold: true, italic: true }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", bold: true, italic: true });
+  const styled = { ...pin, size_um: 2000, bold: true };
+  assert.equal(sheetPinEditCmd(styled, { name: "IN", shape: "input", sizeUm: 2000, bold: true, italic: false }), null);
+  assert.deepEqual(sheetPinEditCmd(styled, { name: "IN", shape: "input", sizeUm: 1270, bold: false, italic: false }), { op: "sch_edit", verb: "edit_sheet_pin", id: "shpin_l", size_um: 1270, bold: false });
+  // a pin set in a bigger text has a bigger box
+  const big = { sheets: [{ ...sheet, pins: [{ id: "shpin_l", name: "IN", shape: "input", at: [100_000, 60_000], size_um: 2540 }, { id: "shpin_r", name: "OUT", shape: "output", at: [140_000, 70_000] }] }] } as unknown as Schematic;
+  const [l, r] = sheetPinItems(big);
+  assert.equal(l!.sizeUm, 2540);
+  assert.equal(r!.sizeUm, 1270, "the default is 50 mil");
+  const tall = (p: NonNullable<typeof l>) => { const b = sheetPinBox(p, measure); return b.maxY - b.minY; };
+  assert.ok(tall(l!) > tall(r!) * 1.5, `${tall(l!)} against ${tall(r!)}`);
+});

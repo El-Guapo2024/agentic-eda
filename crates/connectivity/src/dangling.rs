@@ -160,6 +160,7 @@ mod tests {
     use super::*;
     use crate::algo::build_graph;
     use crate::tests_support::{pad_center, two_pad_model};
+    use eda_drc::zone_copper::ZoneCopper;
     use eda_model::ir::{Point, Track, Via};
 
     #[test]
@@ -170,7 +171,7 @@ mod tests {
         let a = pad_center(&design, &model, "R1", "1");
         let free_end = Point { x: a.x, y: a.y + 10_000 };
         design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, free_end], arc_mid_offset: None });
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let out = dangling_tracks_and_vias(&graph);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].kind, DanglingKind::Track);
@@ -182,7 +183,7 @@ mod tests {
         let (mut design, model) = two_pad_model();
         let (a, b) = (pad_center(&design, &model, "R1", "1"), pad_center(&design, &model, "R2", "1"));
         design.routing.as_mut().unwrap().tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, b], arc_mid_offset: None });
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         assert!(dangling_tracks_and_vias(&graph).is_empty());
     }
 
@@ -194,7 +195,7 @@ mod tests {
         let rt = design.routing.as_mut().unwrap();
         rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at], arc_mid_offset: None });
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let out = dangling_tracks_and_vias(&graph);
         let via_dangle = out.iter().find(|d| d.kind == DanglingKind::Via);
         assert!(via_dangle.is_some(), "a via touching copper on only one layer must be reported dangling");
@@ -209,7 +210,7 @@ mod tests {
         rt.tracks.push(Track { id: "t1".into(), net: "N1".into(), pins: vec![], layer: "F.Cu".into(), width: 200, pts: vec![a, via_at], arc_mid_offset: None });
         rt.tracks.push(Track { id: "t2".into(), net: "N1".into(), pins: vec![], layer: "B.Cu".into(), width: 200, pts: vec![via_at, b], arc_mid_offset: None });
         rt.vias.push(Via { id: "v1".into(), net: "N1".into(), at: via_at, drill: 300, diameter: 600, from_layer: "F.Cu".into(), to_layer: "B.Cu".into() });
-        let graph = build_graph(&design, &model);
+        let graph = build_graph(&design, &model, &ZoneCopper::default());
         let out = dangling_tracks_and_vias(&graph);
         assert!(out.iter().all(|d| d.kind != DanglingKind::Via), "{:?}", out.iter().map(|d| &d.id).collect::<Vec<_>>());
     }

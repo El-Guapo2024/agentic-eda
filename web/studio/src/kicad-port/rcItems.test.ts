@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import type { DrcReport, DrcViolation, ErcReport, ErcViolation } from "../api/types";
 import {
@@ -7,14 +8,24 @@ import {
   canExclude,
   countKinds,
   drcExclusionSpec,
+  drcFixEntry,
+  drcInspectEntry,
   drcKey,
+  ercFixEntry,
+  ercInspectEntry,
   isListed,
   listedIndexes,
   markerPrefix,
   menuSeverity,
   ofCheck,
+  ofRule,
+  patchDrcDeleteAll,
+  patchDrcDeleteMarker,
   patchDrcExcluded,
   patchDrcSeverity,
+  patchErcDeleteAll,
+  patchErcDeleteMarker,
+  patchErcExcluded,
   patchErcSeverity,
   rcKind,
   rcMenu,
@@ -22,6 +33,7 @@ import {
   setShowAll,
   severitiesAfter,
   stepListed,
+  violatingRule,
 } from "./rcItems";
 
 const v = (type: string, uuids: string[], extra: Partial<DrcViolation> = {}): DrcViolation => ({
@@ -115,10 +127,11 @@ test("the pin-to-pin conflict check's severity is the pin map's: only Ignore is 
   assert.equal(menu.at(-1)!.label, "Edit pin-to-pin conflict map...");
 });
 
-test("the schematic's exclusions carry no comment, so its menu has no comment entries", () => {
-  const ids = (excluded: boolean) => rcMenu({ domain: "erc", title: "Pin not connected", excluded, severity: "error", comments: false }).map((e) => e.id);
-  assert.deepEqual(ids(false).slice(0, 2), ["exclude", "exclude_type"]);
-  assert.deepEqual(ids(true).slice(0, 2), ["remove_exclusion", "remove_exclusion_type"]);
+test("the schematic's exclusions carry a comment too (m_ErcExclusionComments), so its menu has the comment entries as the board's does", () => {
+  const ids = (excluded: boolean, comments?: boolean) => rcMenu({ domain: "erc", title: "Pin not connected", excluded, severity: "error", ...(comments === undefined ? {} : { comments }) }).map((e) => e.id);
+  assert.deepEqual(ids(false).slice(0, 3), ["exclude", "exclude_comment", "exclude_type"]);
+  assert.deepEqual(ids(true).slice(0, 3), ["remove_exclusion", "edit_comment", "remove_exclusion_type"]);
+  assert.deepEqual(ids(false, false).slice(0, 2), ["exclude", "exclude_type"], "a menu can still be asked for without them");
 });
 
 test("a menu entry maps to the severity it sets", () => {
@@ -223,6 +236,32 @@ test("the schematic report takes a severity change the same way and keeps its ex
   assert.deepEqual(off.ignored_checks, [{ key: "pin_not_connected", description: "Pin not connected" }]);
 });
 
+test("waiving a finding patches the schematic report on screen: severity, comment and counts, and restoring gives the severity back", () => {
+  const e = (check: string, severity: ErcViolation["severity"], location: string | null, extra: Partial<ErcViolation> = {}): ErcViolation => ({ check, severity, location, hint: null, base_severity: severity === "error" ? "error" : "warning", ...extra });
+  const report: ErcReport = {
+    violations: [e("footprint_link_issues", "warning", "U1", { kicad_matched: false }), e("footprint_link_issues", "warning", "U2"), e("wire_dangling", "error", null)],
+    counts: { footprint_link_issues: 2, wire_dangling: 1 },
+    ignored_checks: [],
+  };
+  const waived = patchErcExcluded(report, [{ check: "footprint_link_issues", location: "U1" }], true, "bare footprint on purpose");
+  assert.deepEqual(waived.violations.map((x) => x.severity), ["excluded", "warning", "error"]);
+  assert.equal(waived.violations[0]!.comment, "bare footprint on purpose");
+  assert.equal(waived.violations[0]!.kicad_matched, undefined, "whether kicad-cli matched the new exclusion is not known until the next run");
+  assert.deepEqual(waived.counts, { footprint_link_issues: 1, wire_dangling: 1 });
+  assert.equal(report.violations[0]!.severity, "warning", "the report it was given is not changed");
+  // A finding with no location is nothing's key: it cannot be matched.
+  assert.equal(patchErcExcluded(report, [{ check: "wire_dangling", location: "" }], true).violations[2]!.severity, "error");
+  const back = patchErcExcluded(waived, [{ check: "footprint_link_issues", location: "U1" }], false);
+  assert.deepEqual(back.violations.map((x) => x.severity), ["warning", "warning", "error"], "the severity it had when it was not excluded");
+  assert.equal(back.violations[0]!.comment, "");
+  assert.deepEqual(back.counts, { footprint_link_issues: 2, wire_dangling: 1 });
+  // Editing the comment of one already waived keeps it waived.
+  const edited = patchErcExcluded(waived, [{ check: "footprint_link_issues", location: "U1" }], true, "reviewed");
+  assert.equal(edited.violations[0]!.severity, "excluded");
+  assert.equal(edited.violations[0]!.comment, "reviewed");
+  assert.deepEqual(edited.counts, waived.counts);
+});
+
 test("when an excluded row leaves the list the selection moves on to the next one, or back to the one before the last", () => {
   const listed = [1, 3, 4];
   assert.equal(selectionAfterRowGone(listed, 1), 3);
@@ -230,4 +269,190 @@ test("when an excluded row leaves the list the selection moves on to the next on
   assert.equal(selectionAfterRowGone(listed, 4), 3, "it was the last");
   assert.equal(selectionAfterRowGone([7], 7), null, "it was the only one");
   assert.equal(selectionAfterRowGone(listed, 2), null, "not in the list");
+});
+
+// ------------------------------------------------------------------------------------------------------------ the rule a violation broke
+
+test("a custom rule is named in the violation's text, an implicit one is not a rule to exclude by", () => {
+  assert.equal(violatingRule("Clearance violation (rule 'fine pitch'; actual 0.1 mm)"), "fine pitch");
+  assert.equal(violatingRule("Track width (rule 'power tracks' min width 0.4 mm; actual 0.2 mm)"), "power tracks");
+  assert.equal(violatingRule("Clearance violation (board setup constraints clearance 0.2 mm; actual 0.1 mm)"), null, "an implicit rule's name stands bare");
+  assert.equal(violatingRule("Clearance violation (netclass 'Default' clearance 0.2 mm; actual 0.1 mm)"), null);
+  assert.equal(violatingRule("Via annular width (rule ''; x)"), "", "an empty name is still the rule");
+  assert.equal(violatingRule(""), null);
+});
+
+test("Exclude all violations of rule takes the violations of that rule on every page that are not waived yet, Remove all the ones that are", () => {
+  const a = v("clearance", ["a", "b"], { description: "Clearance violation (rule 'fine pitch'; actual 0.1 mm)" });
+  const b = v("track_width", ["t"], { description: "Track width (rule 'fine pitch' min width 0.4 mm; actual 0.2 mm)", excluded: true });
+  const c = v("clearance", ["c", "d"], { description: "Clearance violation (rule 'other'; actual 0.1 mm)" });
+  const d = v("clearance", ["e", "f"], { description: "Clearance violation (board setup constraints clearance 0.2 mm; actual 0.1 mm)" });
+  const list = [a, b, c, d];
+  assert.deepEqual(ofRule(list, "fine pitch", false), [a], "it is not the check that counts: the same check under another rule stays");
+  assert.deepEqual(ofRule(list, "fine pitch", true), [b]);
+  assert.deepEqual(ofRule(list, "other", false), [c]);
+  assert.deepEqual(ofRule([{ ...a, items: [] }], "fine pitch", false), [], "a violation that names no item cannot be keyed");
+});
+
+test("the menu offers the rule's entries only for a custom rule, and the same entries to remove the exclusions", () => {
+  const ids = (excluded: boolean, rule: string | null) => rcMenu({ domain: "drc", title: "Clearance violation", excluded, severity: "error", rule }).map((e) => e.id);
+  assert.deepEqual(ids(false, "fine pitch").slice(0, 4), ["exclude", "exclude_comment", "exclude_rule", "exclude_type"]);
+  assert.deepEqual(ids(true, "fine pitch").slice(0, 4), ["remove_exclusion", "edit_comment", "remove_exclusion_rule", "remove_exclusion_type"]);
+  assert.ok(!ids(false, null).includes("exclude_rule"), "an implicit rule has no such entry");
+  const entry = rcMenu({ domain: "drc", title: "x", excluded: false, severity: "error", rule: "fine pitch" }).find((e) => e.id === "exclude_rule")!;
+  assert.equal(entry.label, "Exclude all violations of rule 'fine pitch'...");
+  assert.equal(rcMenu({ domain: "drc", title: "x", excluded: true, severity: "warning", rule: "fine pitch" }).find((e) => e.id === "remove_exclusion_rule")!.label, "Remove all exclusions for violations of rule 'fine pitch'");
+});
+
+// ------------------------------------------------------------------------------------------------------------ Inspect and Fix
+
+test("a DRC marker's Inspect entry is the resolution report of its check (InspectDRCErrorMenuText)", () => {
+  for (const check of ["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal"]) {
+    assert.deepEqual(drcInspectEntry(check), { label: "Clearance Resolution", command: { kind: "inspect_clearance" } }, check);
+  }
+  for (const check of ["track_width", "via_diameter", "annular_width", "text_height", "connection_width", "assertion_failure", "diff_pair_uncoupled_length_too_long"]) {
+    assert.deepEqual(drcInspectEntry(check), { label: "Constraints Resolution", command: { kind: "inspect_constraints" } }, check);
+  }
+  assert.deepEqual(drcInspectEntry("lib_footprint_mismatch"), { label: "Compare Footprint with Library", command: { kind: "action", id: "pcbnew.InspectionTool.DiffFootprint", select: true } });
+  assert.equal(drcInspectEntry("silk_overlap"), null);
+  assert.equal(drcInspectEntry("unconnected_items"), null);
+});
+
+test("every check the Inspect and Fix tables name is one KiCad reports under that key", () => {
+  // The keys of `DRC_ITEM` / `ERC_ITEM` (`GetSettingsKey`): the pinned source's lists, plus the two kinds of finding that are always errors and so are not on the severity pages.
+  const keys = (file: string): Set<string> => new Set([...readFileSync(`src/kicad/${file}`, "utf8").matchAll(/"key":\s*"([^"]+)"/g)].map((m) => m[1]!));
+  const drc = keys("drc_checks.json");
+  for (const always of ["padstack_invalid", "generic-warning", "generic-error"]) drc.add(always);
+  const erc = keys("erc_checks.json");
+  const named = [
+    ...["clearance", "copper_edge_clearance", "hole_clearance", "hole_to_hole", "starved_thermal", "text_height", "text_thickness", "diff_pair_uncoupled_length_too_long", "track_width", "track_angle", "track_segment_length", "via_diameter", "annular_width", "drill_out_of_range", "microvia_drill_out_of_range", "connection_width", "assertion_failure", "lib_footprint_mismatch"],
+    ...["lib_footprint_issues", "footprint_filters_mismatch", "footprint_symbol_mismatch", "footprint_symbol_field_mismatch", "missing_footprint", "duplicate_footprints", "extra_footprint", "footprint_type_mismatch", "footprint", "padstack", "padstack_invalid"],
+    ...["mirrored_text_on_front_layer", "nonmirrored_text_on_back_layer", "track_dangling", "via_dangling"],
+  ];
+  for (const check of named) assert.ok(drc.has(check), `${check} is not a DRC check key`);
+  // ... and each of them has the entry the tables give it, so a mistyped key shows here and not as a menu that has no entry.
+  for (const check of named.slice(0, 18)) assert.ok(drcInspectEntry(check) !== null, `${check} has an Inspect entry`);
+  for (const check of named.slice(18)) assert.ok(drcFixEntry(check, "part") !== null, `${check} has a Fix entry`);
+  for (const check of ["simulation_model_issue", "footprint_filter", "footprint_link_issues", "lib_symbol_issues", "lib_symbol_mismatch", "unannotated", "duplicate_reference", "bus_to_net_conflict"]) {
+    assert.ok(erc.has(check), `${check} is not an ERC check key`);
+    assert.ok(ercFixEntry(check) !== null || ercInspectEntry(check) !== null, `${check} has an entry`);
+  }
+});
+
+test("a DRC marker's Fix entry is the action that puts its check right (FixDRCErrorMenuText)", () => {
+  assert.deepEqual(drcFixEntry("lib_footprint_issues", null), { label: "Manage Footprint Libraries...", command: { kind: "action", id: "common.SuiteControl.showFootprintLibTable", select: false } });
+  assert.deepEqual(drcFixEntry("lib_footprint_mismatch", null), { label: "Update Footprint...", command: { kind: "action", id: "pcbnew.GlobalEdit.updateFootprint", select: true } });
+  assert.deepEqual(drcFixEntry("footprint_filters_mismatch", null), { label: "Change Footprint...", command: { kind: "action", id: "pcbnew.GlobalEdit.changeFootprint", select: true } });
+  for (const check of ["footprint_symbol_mismatch", "footprint_symbol_field_mismatch", "missing_footprint", "duplicate_footprints", "extra_footprint"]) {
+    assert.deepEqual(drcFixEntry(check, null), { label: "Update PCB from Schematic...", command: { kind: "action", id: "common.Control.updatePcbFromSchematic", select: false } }, check);
+  }
+  assert.equal(drcFixEntry("footprint", "part")!.label, "Edit Footprint Properties...");
+  assert.equal(drcFixEntry("footprint_type_mismatch", "part")!.label, "Edit Footprint Properties...");
+  assert.equal(drcFixEntry("padstack", "pad")!.label, "Edit Pad Properties...");
+  assert.deepEqual(drcFixEntry("track_dangling", null)!.command, { kind: "action", id: "pcbnew.GlobalEdit.cleanupTracksAndVias", select: false });
+  assert.equal(drcFixEntry("via_dangling", null)!.label, "Cleanup Tracks & Vias...");
+  // A text check names what the text is: a dimension, a footprint field or a text.
+  assert.equal(drcFixEntry("text_height", "dimension")!.label, "Edit Dimension Properties...");
+  assert.equal(drcFixEntry("text_thickness", "field")!.label, "Edit Field Properties...");
+  assert.equal(drcFixEntry("mirrored_text_on_front_layer", "text")!.label, "Edit Text Properties...");
+  assert.equal(drcFixEntry("nonmirrored_text_on_back_layer", null)!.label, "Edit Text Properties...");
+  assert.deepEqual(drcFixEntry("text_height", "text")!.command, { kind: "properties" });
+  assert.equal(drcFixEntry("clearance", "part"), null);
+});
+
+test("an ERC marker's Inspect and Fix entries (InspectERCErrorMenuText, FixERCErrorMenuText)", () => {
+  assert.deepEqual(ercInspectEntry("bus_to_net_conflict"), { label: "Show Bus Syntax Help", command: { kind: "action", id: "eeschema.InspectionTool.showBusSyntaxHelp", select: false } });
+  assert.equal(ercInspectEntry("lib_symbol_mismatch")!.label, "Compare Symbol with Library");
+  assert.equal(ercInspectEntry("pin_not_connected"), null);
+  for (const check of ["simulation_model_issue", "footprint_filter", "footprint_link_issues"]) {
+    assert.deepEqual(ercFixEntry(check), { label: "Edit Symbol Properties...", command: { kind: "action", id: "eeschema.InteractiveEdit.properties", select: true } }, check);
+  }
+  assert.equal(ercFixEntry("lib_symbol_issues")!.label, "Manage Symbol Libraries...");
+  assert.equal(ercFixEntry("lib_symbol_mismatch")!.label, "Update Symbol...");
+  for (const check of ["unannotated", "duplicate_reference"]) assert.deepEqual(ercFixEntry(check)!.command, { kind: "action", id: "eeschema.EditorControl.annotate", select: false });
+  assert.equal(ercFixEntry("undefined_netclass"), null, "Net Classes is a page of Schematic Setup this app does not have");
+  assert.equal(ercFixEntry("wire_dangling"), null);
+});
+
+test("the marker menu puts Inspect and Fix between separators after the exclusions, and the connection grid after the severities", () => {
+  const menu = rcMenu({
+    domain: "drc",
+    title: "Clearance violation",
+    excluded: false,
+    severity: "error",
+    inspect: drcInspectEntry("clearance"),
+    fix: drcFixEntry("footprint", "part"),
+  });
+  assert.deepEqual(
+    menu.map((e) => e.id),
+    ["exclude", "exclude_comment", "exclude_type", "separator", "inspect", "fix", "separator", "severity_warning", "severity_ignore", "separator", "edit_severities"]
+  );
+  assert.equal(menu.find((e) => e.id === "inspect")!.label, "Clearance Resolution");
+  assert.ok(!rcMenu({ domain: "drc", title: "x", excluded: false, severity: "error" }).some((e) => e.id === "inspect" || e.id === "fix"), "no entries, no separator pair");
+  assert.deepEqual(
+    rcMenu({ domain: "drc", title: "x", excluded: false, severity: "error" }).filter((e) => e.id === "separator").length,
+    2
+  );
+  const off = rcMenu({ domain: "erc", title: "Symbol pin or wire end off connection grid", excluded: false, severity: "warning", connectionGrid: true });
+  assert.deepEqual(off.slice(-2).map((e) => e.id), ["edit_severities", "connection_grid"]);
+  assert.equal(off.at(-1)!.label, "Edit connection grid spacing...");
+  assert.ok(!rcMenu({ domain: "erc", title: "x", excluded: false, severity: "warning" }).some((e) => e.id === "connection_grid"));
+  assert.ok(rcMenu({ domain: "erc", title: "x", excluded: false, severity: "warning", connectionGrid: true, onCanvas: true }).at(-1)!.id === "show_in_dialog", "the canvas marker's own entry stays last");
+});
+
+// ------------------------------------------------------------------------------------------------------------ Delete Marker, Delete All Markers
+
+test("Delete Marker takes one marker off a page of the DRC report and the counts follow; nothing else changes", () => {
+  const report: DrcReport = {
+    violations: [v("clearance", ["a", "b"]), v("clearance", ["c", "d"], { excluded: true }), v("track_width", ["t"])],
+    unconnected_items: [v("unconnected_items", ["p", "q"]), v("unconnected_items", ["r", "s"])],
+    schematic_parity: [v("missing_footprint", ["m"])],
+    counts: { clearance: 1, track_width: 1, unconnected_items: 2, missing_footprint: 1 },
+    ignored_checks: [{ key: "silk_overlap", description: "Silkscreen overlap" }],
+  };
+  const gone = patchDrcDeleteMarker(report, "violations", 0);
+  assert.deepEqual(gone.violations.map((x) => x.items[0]!.uuid), ["c", "t"]);
+  assert.deepEqual(gone.counts, { track_width: 1, unconnected_items: 2, missing_footprint: 1 }, "the deleted one is not counted any more");
+  assert.equal(gone.unconnected_items!.length, 2, "the other pages are untouched");
+  assert.equal(gone.markers_deleted, undefined, "one marker is not Delete All");
+  assert.deepEqual(gone.ignored_checks, report.ignored_checks);
+  // An excluded marker can be deleted too: it leaves the list (its exclusion is the design's, and goes with it through `deleteMarkerDrc`'s `delete_drc_exclusions`, not here).
+  assert.deepEqual(patchDrcDeleteMarker(gone, "violations", 0).violations.map((x) => x.items[0]!.uuid), ["t"]);
+  const unconnected = patchDrcDeleteMarker(report, "unconnected", 1);
+  assert.deepEqual(unconnected.unconnected_items!.map((x) => x.items[0]!.uuid), ["p"]);
+  assert.deepEqual(unconnected.counts, { clearance: 1, track_width: 1, unconnected_items: 1, missing_footprint: 1 });
+  assert.equal(patchDrcDeleteMarker(report, "parity", 0).schematic_parity!.length, 0);
+  assert.equal(report.violations.length, 3, "the report it was given is not changed");
+});
+
+test("Delete All Markers empties every page of errors and warnings, and of exclusions when it is asked to, and leaves the report to be run again", () => {
+  const report: DrcReport = {
+    violations: [v("clearance", ["a", "b"]), v("clearance", ["c", "d"], { excluded: true })],
+    unconnected_items: [v("unconnected_items", ["p", "q"], { excluded: true }), v("unconnected_items", ["r", "s"])],
+    schematic_parity: [v("missing_footprint", ["m"])],
+    counts: { clearance: 1, unconnected_items: 1, missing_footprint: 1 },
+  };
+  const some = patchDrcDeleteAll(report, false);
+  assert.deepEqual(some.violations.map((x) => x.items[0]!.uuid), ["c"], "the exclusions stay");
+  assert.deepEqual(some.unconnected_items!.map((x) => x.items[0]!.uuid), ["p"]);
+  assert.equal(some.schematic_parity!.length, 0);
+  assert.deepEqual(some.counts, {});
+  assert.equal(some.markers_deleted, true);
+  const all = patchDrcDeleteAll(report, true);
+  assert.equal(all.violations.length + all.unconnected_items!.length + all.schematic_parity!.length, 0);
+  assert.equal(all.markers_deleted, true);
+});
+
+test("the ERC report loses a marker the same way, and the exclusions only when they are asked for", () => {
+  const e = (check: string, severity: ErcViolation["severity"], location: string): ErcViolation => ({ check, severity, location, hint: null });
+  const report: ErcReport = { violations: [e("pin_not_connected", "error", "U1.1"), e("pin_not_connected", "excluded", "U1.2"), e("label_dangling", "warning", "L1")], counts: { pin_not_connected: 1, label_dangling: 1 } };
+  const one = patchErcDeleteMarker(report, 1);
+  assert.deepEqual(one.violations.map((x) => x.location), ["U1.1", "L1"]);
+  assert.deepEqual(one.counts, { pin_not_connected: 1, label_dangling: 1 });
+  assert.deepEqual(patchErcDeleteMarker(report, 0).counts, { label_dangling: 1 });
+  const some = patchErcDeleteAll(report, false);
+  assert.deepEqual(some.violations.map((x) => x.location), ["U1.2"]);
+  assert.deepEqual(some.counts, {});
+  assert.equal(some.markers_deleted, true);
+  assert.equal(patchErcDeleteAll(report, true).violations.length, 0);
 });
