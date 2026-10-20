@@ -657,7 +657,7 @@ the plan: a gap that stops a workflow every project meets is above one that cost
 
 ### 33. Browser-check coverage
 **New, standing.** Package P20.
-- `web/studio/e2e/*.check.js` exist for the Appearance panel, the DRC and ERC review, footprint edit and arrays, the Properties panel, snap and grid, and the 3D viewer. `sch-details.check.js` (P10, 2026-10-12) covers the schematic's pins and Swap Pins, sheet pins, auto-rotating labels and
+- `web/studio/e2e/*.check.js` exist for the Appearance panel, the DRC and ERC review, footprint edit and arrays, the Properties panel, snap and grid, and the 3D viewer. `design-blocks.check.js` (P18, 2026-10-20) covers the Design Blocks panes of both editors: the library, the tree and its menu, placing, saving, updating, Properties, Delete and a group's library link. `sch-details.check.js` (P10, 2026-10-12) covers the schematic's pins and Swap Pins, sheet pins, auto-rotating labels and
   justified text, the net-collision overlay, the fields table's attribute columns, a power symbol's Properties, Copy as Text and the pan buttons and auto-pan. Not covered: the rest of schematic editing and the clipboard
   (items 1, 6, 12), the hierarchy (4), Board Setup (3), the library choosers (5), the router (7), PCB move, rotate, flip and clipboard (8), zones (13), groups (17), Find (21), the context menu (16). The rule in
   force: a fix counts when the C++ function is named in the code, the logic has a `kicad-port/*.test.ts`, one user action is one undo step, and a browser check ran.
