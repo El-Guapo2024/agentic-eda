@@ -807,12 +807,22 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
         key(a).cmp(&key(b))
     });
     let patterns = net_settings.get("netclass_patterns").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    // `netclass_assignments`: the nets the schematic's net class labels and directives put in classes (`NET_SETTINGS::m_netClassLabelAssignments`, net name -> class names), by exact
+    // name. `GetEffectiveNetClass` collects them with the pattern assignments, so a net is in every class either names; each is written as the pattern that matches that net and no
+    // other. A class they name that `classes` does not have is an implicit class: no parameters of its own, but a rule reads it (`A.hasNetclass('X')`).
+    let assigned: Vec<(String, String)> = net_settings
+        .get("netclass_assignments")
+        .and_then(|v| v.as_object())
+        .map(|m| m.iter().flat_map(|(net, cs)| cs.as_array().into_iter().flatten().filter_map(|c| c.as_str()).map(move |c| (c.to_string(), crate::pcb::exact_pattern(net)))).collect())
+        .unwrap_or_default();
 
     let num_mm = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_f64()).map(mm_to_um);
 
     let mut out = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
     for class in &classes {
         let Some(name) = class.get("name").and_then(|v| v.as_str()) else { continue };
+        seen.push(name.to_string());
         if name == "Default" {
             continue; // the board-default fields already cover this; see the doc comment above
         }
@@ -820,6 +830,7 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
             .iter()
             .filter(|p| p.get("netclass").and_then(|v| v.as_str()) == Some(name))
             .filter_map(|p| p.get("pattern").and_then(|v| v.as_str()).map(String::from))
+            .chain(assigned.iter().filter(|(class, _)| class == name).map(|(_, pattern)| pattern.clone()))
             .collect();
         if nets.is_empty() {
             continue; // an unused class matches nothing; not worth carrying (same rule import_board_rules uses)
@@ -836,6 +847,27 @@ pub fn parse_project_net_classes(project_json: &str) -> Vec<NetClass> {
             diff_pair_width: num_mm(class, "diff_pair_width"),
             diff_pair_gap: num_mm(class, "diff_pair_gap"),
             diff_pair_via_gap: num_mm(class, "diff_pair_via_gap"),
+            priority: out.len() as i32,
+        });
+    }
+    // The implicit classes, after the defined ones (`getOrAddImplicitNetcless`: a priority past every defined class).
+    for (class, _) in &assigned {
+        if class == "Default" || seen.contains(class) {
+            continue;
+        }
+        seen.push(class.clone());
+        out.push(NetClass {
+            name: class.clone(),
+            nets: assigned.iter().filter(|(c, _)| c == class).map(|(_, pattern)| pattern.clone()).collect(),
+            track_width: None,
+            clearance: None,
+            via_diameter: None,
+            via_drill: None,
+            microvia_diameter: None,
+            microvia_drill: None,
+            diff_pair_width: None,
+            diff_pair_gap: None,
+            diff_pair_via_gap: None,
             priority: out.len() as i32,
         });
     }
@@ -2483,6 +2515,33 @@ mod tests {
         assert_eq!(model.board.track_width, 250);
         assert_eq!(model.board.via_diameter, 600);
         assert_eq!(model.board.via_drill, 300);
+    }
+
+    /// The nets a schematic's net class labels assign are in the project as `netclass_assignments` (net name -> class names), beside the patterns: a net is in the classes of both
+    /// (`NET_SETTINGS::GetEffectiveNetClass`), and a class only a label names is a class a rule can read. Dropped, `time_calculations`' seven classes matched no net and its
+    /// skew rule judged nothing.
+    #[test]
+    fn the_nets_a_label_assigns_to_a_class_are_in_the_class() {
+        let project = r#"{"net_settings": {
+            "classes": [
+                {"name": "Default", "clearance": 0.2, "track_width": 0.25, "via_diameter": 0.8, "via_drill": 0.4},
+                {"name": "CLASS1", "priority": 1, "clearance": 0.3},
+                {"name": "CLASS2", "priority": 0},
+                {"name": "UNUSED", "priority": 2}
+            ],
+            "netclass_assignments": {"Net-(R1-Pad2)": ["CLASS1", "ONLYALABEL"], "/NET_P": ["CLASS2"], "/NET_N": ["CLASS2", "CLASS1"]},
+            "netclass_patterns": [{"netclass": "CLASS1", "pattern": "PWR*"}]
+        }}"#;
+        let classes = parse_project_net_classes(project);
+        let by = |name: &str| classes.iter().find(|c| c.name == name).unwrap_or_else(|| panic!("class {name} in {:?}", classes.iter().map(|c| &c.name).collect::<Vec<_>>()));
+        assert_eq!(classes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS2", "CLASS1", "ONLYALABEL"], "by priority, then the implicit classes; UNUSED names no net");
+        assert!(by("CLASS1").matches("PWR3") && by("CLASS1").matches("Net-(R1-Pad2)") && by("CLASS1").matches("/NET_N") && !by("CLASS1").matches("/NET_P"));
+        assert!(by("CLASS2").matches("/NET_P") && by("CLASS2").matches("/NET_N") && !by("CLASS2").matches("Net-R1-Pad2"), "a net named with a parenthesis matches only itself, not what the parentheses would group");
+        assert!(by("ONLYALABEL").matches("Net-(R1-Pad2)") && by("ONLYALABEL").clearance.is_none());
+        let mut model = eda_model::ConstraintModel::default();
+        merge_project_net_classes(&mut model, project);
+        assert_eq!(model.board.matching_classes("Net-(R1-Pad2)").iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["CLASS1", "ONLYALABEL"]);
+        assert_eq!(model.board.clearance, 200);
     }
 
     #[test]

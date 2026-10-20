@@ -776,7 +776,7 @@ fn project_net_settings(model: &ConstraintModel) -> serde_json::Value {
 
 /// A net name as a pattern that matches that name and no other, read as a regular expression (`NET_SETTINGS`' matchers read every pattern as a wildcard pattern and as a regular
 /// expression): each character a regular expression gives a meaning to is escaped.
-fn exact_pattern(net: &str) -> String {
+pub(crate) fn exact_pattern(net: &str) -> String {
     let mut out = String::with_capacity(net.len());
     for c in net.chars() {
         if ".+*?()[]{}|^$\\".contains(c) {
