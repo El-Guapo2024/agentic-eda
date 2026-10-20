@@ -1,15 +1,17 @@
-// New Library and Add Library of the Symbol Editor and the Footprint Editor: the file dialog of `SYMBOL_EDIT_FRAME::AddLibraryFile`
-// (eeschema/symbol_editor/symbol_edit_frame.cpp) and `PCB_BASE_EDIT_FRAME::CreateNewLibrary` / `AddLibrary` (pcbnew/footprint_libraries_utils.cpp).
+// New Library and Add Library of the Symbol Editor, the Footprint Editor and the Design Blocks panel: the file dialog of `SYMBOL_EDIT_FRAME::AddLibraryFile`
+// (eeschema/symbol_editor/symbol_edit_frame.cpp), `PCB_BASE_EDIT_FRAME::CreateNewLibrary` / `AddLibrary` (pcbnew/footprint_libraries_utils.cpp) and
+// `DESIGN_BLOCK_PANE::createNewDesignBlockLibrary` / `AddDesignBlockLibrary` (common/widgets/design_block_pane.cpp).
 //
-// New Library makes an empty `.kicad_sym` file (symbols) or `.pretty` folder (footprints) and a row for it in the library table; Add Library puts a library that exists in
+// New Library makes an empty `.kicad_sym` file (symbols), `.pretty` folder (footprints) or `.kicad_blocks` folder (design blocks) and a row for it in the library table; Add Library puts a library that exists in
 // the table. KiCad's file dialog has a "Add to global / project library table" choice; the global tables are KiCad's and are not written here, so the row goes into
-// the board's own table (`sym-lib-table`, `fp-lib-table`), which is said in the dialog. The path is written as a table writes one (`NormalizePath`: under a variable
+// the board's own table (`sym-lib-table`, `fp-lib-table`, `design-block-lib-table`), which is said in the dialog. The path is written as a table writes one (`NormalizePath`: under a variable
 // or `${KIPRJMOD}` where one holds it), the nickname is the file's name (`LIB_ID::FixIllegalChars`), and a nickname a library already has is refused ("Library '%s'
 // already exists.").
 import { useEffect, useState } from "react";
 import { addLibrary, fetchLibraryTables, type LibraryTablesView } from "../../api/libraryTablesClient";
 import { baseName, libraryExtension, nicknameForFile, tableFileName, type TableKind } from "../../kicad-port/libraryTable";
 import { closeLibraryFile, useLibraryTableDialogs } from "../../state/libraryTableDialogs";
+import { selectDesignBlockLibrary } from "../../state/designBlocks";
 import { selectLibraries, setLibraryOpen } from "../../state/libraryTree";
 import { useStudioDispatch } from "../../state/store";
 import { FolderBrowser, type BrowseWhat } from "./FolderBrowser";
@@ -33,7 +35,7 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
   const [busy, setBusy] = useState(false);
   const [browse, setBrowse] = useState<BrowseWhat | null>(null);
 
-  const noun = kind === "symbol" ? "Symbol" : "Footprint";
+  const noun = kind === "symbol" ? "Symbol" : kind === "footprint" ? "Footprint" : "Design Block";
   const title = `${create ? "New" : "Add"} ${noun} Library`;
   const ext = libraryExtension(kind);
 
@@ -73,9 +75,13 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
       if ("ok" in answer && answer.ok) {
         const lib = answer.added.nickname;
         dispatch({ type: "TOAST", message: `${answer.added.created ? "Created" : "Added"} library '${lib}' in the project's ${tableFileName(kind)}.`, kind: "info" });
-        // `FocusOnLibID`: the new library is the one selected in the tree
-        setLibraryOpen(kind, lib, true);
-        selectLibraries(kind, [lib]);
+        // `FocusOnLibID`: the new library is the one selected in the tree (`AddDesignBlockLibrary`: `SelectLibId( LIB_ID( libName, "" ) )`)
+        if (kind === "design_block") {
+          selectDesignBlockLibrary(lib);
+        } else {
+          setLibraryOpen(kind, lib, true);
+          selectLibraries(kind, [lib]);
+        }
         close();
       } else if ("error" in answer) {
         setError(answer.error);
@@ -128,7 +134,7 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
             <input id="lt-descr" type="text" value={descr} spellCheck={false} onChange={(e) => setDescr(e.target.value)} />
             <span />
           </div>
-          {create && <div className="lt-note" style={{ marginTop: 8 }}>{`Makes ${target}${kind === "symbol" ? ", an empty symbol library," : ", an empty footprint library,"} and adds it to the board's library table.`}</div>}
+          {create && <div className="lt-note" style={{ marginTop: 8 }}>{`Makes ${target}${kind === "symbol" ? ", an empty symbol library," : kind === "footprint" ? ", an empty footprint library," : ", an empty design block library,"} and adds it to the board's library table.`}</div>}
           <div className="lt-note" style={{ marginTop: 6 }}>
             {`The library goes in the project's ${tableFileName(kind)}${view ? ` (${view.tables[kind].project.path})` : ""}. KiCad's global table is read only here.`}
           </div>
@@ -144,7 +150,7 @@ function FileBody({ kind, create }: { kind: TableKind; create: boolean }) {
       {browse && (
         <div onClick={(e) => e.stopPropagation()}>
           <FolderBrowser
-            title={browse === "folder" ? "Select Folder" : `Select ${kind === "symbol" ? "Symbol" : "Footprint"} Library`}
+            title={browse === "folder" ? "Select Folder" : `Select ${noun} Library`}
             what={browse}
             start={browse === "folder" ? folder : path}
             onPick={(p) => {

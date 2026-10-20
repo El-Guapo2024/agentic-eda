@@ -1,10 +1,11 @@
 // The stand-in for the native file dialog the browse buttons of KiCad's library table dialogs open (`wxFileDialog`, `wxDirDialog`): a page cannot see the machine's
-// folders, the studio's server can. It lists the folders of a path and the files the caller asked for -- a `.kicad_sym` file, a `.pretty` footprint folder, a library
-// table, or a folder -- and hands back the absolute path of the one chosen (`GET /api/fs/list`, `crates/cli/src/library_tables.rs` `browse`).
+// folders, the studio's server can. It lists the folders of a path and the files the caller asked for -- a `.kicad_sym` file, a `.pretty` footprint folder, a
+// `.kicad_blocks` design block folder, a library table, or a folder -- and hands back the absolute path of the one chosen (`GET /api/fs/list`,
+// `crates/cli/src/library_tables.rs` `browse`).
 import { useEffect, useState } from "react";
 import { browseFolder, type FolderEntry, type FolderListing } from "../../api/libraryTablesClient";
 
-export type BrowseWhat = "symbol" | "footprint" | "table" | "folder";
+export type BrowseWhat = "symbol" | "footprint" | "design_block" | "table" | "folder";
 
 export interface FolderBrowserProps {
   title: string;
@@ -22,14 +23,15 @@ function join(folder: string, name: string): string {
 const HINT: Record<BrowseWhat, string> = {
   symbol: "Choose a .kicad_sym file.",
   footprint: "Choose a footprint library: a .pretty folder (any folder works; its whole name becomes the nickname).",
-  table: "Choose a library table file (sym-lib-table or fp-lib-table).",
+  design_block: "Choose a design block library: a .kicad_blocks folder (any folder works; its whole name becomes the nickname).",
+  table: "Choose a library table file (sym-lib-table, fp-lib-table or design-block-lib-table).",
   folder: "Choose the folder.",
 };
 
 /** Whether picking this entry makes sense for what is being chosen. */
 function pickable(what: BrowseWhat, e: FolderEntry): boolean {
   if (what === "folder") return false;
-  if (what === "footprint") return e.dir;
+  if (what === "footprint" || what === "design_block") return e.dir;
   return !e.dir;
 }
 
@@ -63,7 +65,7 @@ export function FolderBrowser({ title, what, start, onPick, onCancel }: FolderBr
 
   const open = (e: FolderEntry) => {
     if (!listing) return;
-    if (e.dir && !(what === "footprint" && e.library)) setAt(join(listing.path, e.name));
+    if (e.dir && !((what === "footprint" || what === "design_block") && e.library)) setAt(join(listing.path, e.name));
     else if (pickable(what, e)) onPick(join(listing.path, e.name));
   };
 

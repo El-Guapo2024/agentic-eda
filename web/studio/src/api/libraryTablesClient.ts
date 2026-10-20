@@ -23,9 +23,9 @@ export interface TableScopeView {
 
 export interface KindView {
   kind: TableKind;
-  /** `sym-lib-table` / `fp-lib-table`. */
+  /** `sym-lib-table` / `fp-lib-table` / `design-block-lib-table`. */
   file: string;
-  /** The symbol table has a Show column; the footprint table does not. */
+  /** The symbol table has a Show column; the footprint and design block tables do not. */
   supports_visibility: boolean;
   /** The library formats the Library Format column offers. */
   types: string[];
@@ -152,7 +152,7 @@ export async function savePathVariables(variables: readonly VariableValue[]): Pr
 export interface FolderEntry {
   name: string;
   dir: boolean;
-  /** A `.pretty` folder: it is the footprint library. */
+  /** A `.pretty` or `.kicad_blocks` folder: it is the library. */
   library: boolean;
 }
 
@@ -165,8 +165,8 @@ export interface FolderListing {
   truncated: boolean;
 }
 
-/** What the browse buttons list: the folders of `path` and the files `what` asks for (`symbol`: .kicad_sym, `table`: a library table; folders only for `footprint` and `folder`). */
-export async function browseFolder(path: string, what: "symbol" | "footprint" | "table" | "folder"): Promise<FolderListing> {
+/** What the browse buttons list: the folders of `path` and the files `what` asks for (`symbol`: .kicad_sym, `table`: a library table; folders only for `footprint`, `design_block` and `folder`). */
+export async function browseFolder(path: string, what: "symbol" | "footprint" | "design_block" | "table" | "folder"): Promise<FolderListing> {
   const r = await send<FolderListing & { error?: string }>(`/api/fs/list?path=${encodeURIComponent(path)}&what=${what}`);
   if (r.error) throw new ApiError(r.error);
   return r;

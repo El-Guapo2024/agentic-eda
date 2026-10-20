@@ -1,4 +1,4 @@
-// The library table actions: Manage Symbol Libraries, Manage Footprint Libraries, Configure Paths (`COMMON_CONTROL::ShowLibraryTable` and `ConfigurePaths`,
+// The library table actions: Manage Symbol Libraries, Manage Footprint Libraries, Manage Design Block Libraries, Configure Paths (`COMMON_CONTROL::ShowLibraryTable` and `ConfigurePaths`,
 // common/tool/common_control.cpp -- they run in every editor frame, each frame's menus offer the ones that belong) and the library editors' New Library and Add Library
 // (`SYMBOL_EDITOR_CONTROL::AddLibrary`, `PCB_CONTROL::AddLibrary`). The dialogs are components/libraryTables/*, which libraries they edit is `crates/cli/src/library_tables.rs`:
 // the board's own tables; KiCad's global ones are read only. `registerCommonActions` (commonActions.ts) calls `registerLibraryTableActions` once while the registry is built.
@@ -13,6 +13,8 @@ export function registerLibraryTableActions(m: Map<string, ActionHandler>, ctx: 
   // `DIALOG_PCB_LIBRARY_TABLE`), from whichever frame asks.
   m.set("common.SuiteControl.showSymbolLibTable", () => openLibraryTables("symbol"));
   m.set("common.SuiteControl.showFootprintLibTable", () => openLibraryTables("footprint"));
+  // ACTIONS::showDesignBlockLibTable ("Manage Design Block Libraries...", the name carries KiCad's capital L): `InvokeEditDesignBlockLibTable`, `PANEL_DESIGN_BLOCK_LIB_TABLE`.
+  m.set("common.SuiteControl.showDesignBLockLibTable", () => openLibraryTables("design_block"));
 
   // ACTIONS::configurePaths -- COMMON_CONTROL::ConfigurePaths: `DIALOG_CONFIGURE_PATHS`.
   m.set("common.SuiteControl.configurePaths", () => openConfigurePaths());
