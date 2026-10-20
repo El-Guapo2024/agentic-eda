@@ -272,6 +272,8 @@ impl Router {
     pub fn toggle_via(&mut self, enabled: bool, diameter: Um, drill: Um, to_layer: Option<i32>) {
         if let Some(s) = &mut self.session {
             s.placer.toggle_via(enabled, diameter, drill);
+            // the via spans from the layer being routed to the one the route goes on to (`makeVia`): the shove and the collision check see both
+            s.placer.via_to_layer = if enabled { to_layer } else { None };
             s.pending_via_layer = if enabled { to_layer } else { None };
         }
     }

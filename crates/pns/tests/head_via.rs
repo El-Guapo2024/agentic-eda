@@ -1,0 +1,114 @@
+//! A single track's head that ends in a via is shoved together with the via (`LINE_PLACER::rhShoveOnly`: `newHead.AppendVia( makeVia( newHead.CLastPoint() ) )`,
+//! then `m_shove->AddHeads( newHead )`; `SHOVE::Run` adds the head's via to the node with the head's rank): what the via sits on -- on every layer it spans --
+//! is pushed aside, as what the track meets is, and the committed route is clean. A pair's heads were shoved with their vias already (`Shove::run_heads`).
+
+use eda_model::ir::{Design, FootprintInstance, LabelSide, PlacementSection, Point, Provenance, RoutingSection, Side, Track, Um};
+use eda_model::{ConstraintModel, Net as IrNet, Part, Pin, PinKind};
+use eda_pns::from_ir::build_node;
+use eda_pns::item::ItemId;
+use eda_pns::router::{RouteCommit, Router};
+use eda_pns::settings::Mode;
+use std::collections::HashSet;
+
+fn p(x: Um, y: Um) -> Point {
+    Point { x, y }
+}
+
+fn part(r: &str) -> Part {
+    Part { reference: r.into(), mpn: None, lcsc: None, value: None, package: Some("0603".into()), footprint: Some("0603".into()), pins: vec![Pin { number: "1".into(), name: None, kind: PinKind::Passive }, Pin { number: "2".into(), name: None, kind: PinKind::Passive }], body_um: None, symbol: None, datasheet: None, edge: None }
+}
+
+fn track(id: &str, net: &str, layer: &str, pts: &[Point]) -> Track {
+    Track { id: id.into(), net: net.into(), pins: vec![], layer: layer.into(), width: 200, pts: pts.to_vec(), arc_mid_offset: None }
+}
+
+/// Two parts far from the action, a SIG stub on F.Cu ending at (-9000, 0), and the tracks given.
+fn board(tracks: Vec<Track>) -> (Design, ConstraintModel) {
+    let model = ConstraintModel { parts: vec![part("R1"), part("R2")], nets: vec![IrNet { name: "SIG".into(), pins: vec!["R1.1".into(), "R2.1".into()] }], ..Default::default() };
+    let mut all = vec![track("t_sig", "SIG", "F.Cu", &[p(-10_000, 0), p(-9000, 0)])];
+    all.extend(tracks);
+    let design = Design {
+        footprint_library: None,
+        sheet_contents: None,
+        bus_aliases: vec![],
+        symbol_library: None,
+        schema: 1,
+        provenance: Provenance { engine_version: "test".into(), intent_hash: String::new(), seed: 0, stage_hashes: vec![] },
+        schematic: None,
+        nets: None,
+        placement: Some(PlacementSection {
+            outline: vec![],
+            footprints: vec![FootprintInstance { id: "R1".into(), at: p(-9000, 30_000), rot: 0, side: Side::Top, label: LabelSide::Above }, FootprintInstance { id: "R2".into(), at: p(9000, 30_000), rot: 0, side: Side::Top, label: LabelSide::Above }],
+            modules: vec![],
+        }),
+        routing: Some(RoutingSection { tracks: all, vias: vec![], zones: vec![], track_width_presets: vec![], via_presets: vec![], teardrop_settings: Default::default() }),
+        drawings: None,
+    };
+    (design, model)
+}
+
+/// The design after a commit, as `Cmd::CommitRoute` applies it.
+fn committed(design: &Design, commit: &RouteCommit) -> Design {
+    let mut d = design.clone();
+    let rt = d.routing.as_mut().unwrap();
+    rt.tracks.retain(|t| !commit.remove_track_ids.contains(&t.id));
+    rt.vias.retain(|v| !commit.remove_via_ids.contains(&v.id));
+    rt.tracks.extend(commit.tracks.iter().cloned());
+    rt.vias.extend(commit.vias.iter().cloned());
+    d.assign_missing_ids();
+    d
+}
+
+/// Every pair of items the router's own collision test calls a violation.
+fn violations(design: &Design, model: &ConstraintModel) -> HashSet<(ItemId, ItemId)> {
+    let (node, _) = build_node(design, model);
+    let mut out = HashSet::new();
+    for (id, item) in node.iter() {
+        for o in node.all_colliding(&item.shape(item.layers().start()), item.net(), item.layers(), &model.board, &[id]) {
+            out.insert((id.min(o.id), id.max(o.id)));
+        }
+    }
+    out
+}
+
+/// `V` while routing on F.Cu: the route goes on on B.Cu from the via; a GND track on B.Cu runs 50 um inside the via's clearance ring.
+#[test]
+fn a_route_with_a_via_pushes_the_track_on_the_other_layer_the_via_sits_on() {
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3000, -4000), p(-3000, 4000)])]);
+    // the via at (-3000 - 300 - 100 - 50 - 300, 0) is 50 um short of the clearance ring of the GND track
+    let via_at = p(-3450, 0);
+    assert!(violations(&design, &model).is_empty(), "the board starts clean");
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Shove;
+    router.start(p(-9000, 0), "F.Cu", 200).expect("starts on the end of the SIG stub");
+    router.toggle_via(true, 600, 300, Some(1));
+    let pv = router.preview(via_at).expect("a route in progress");
+    assert!(!pv.colliding, "{pv:?}");
+    assert_eq!(pv.via, Some((via_at, 600, 300)), "the via is where the head ends");
+    assert_eq!(pv.head.last(), Some(via_at));
+    assert_eq!(pv.displaced_lines.len(), 1, "the track under the via is pushed: {:?}", pv.displaced_lines);
+
+    // `V` armed: the click fixes the head with its via and the route goes on on B.Cu; finishing it commits all of it as one
+    assert!(router.fix(via_at).is_some());
+    let commit = router.finish(p(-3450, 3000)).expect("the route goes on on the other layer");
+    assert_eq!(commit.vias.len(), 1);
+    assert_eq!((commit.vias[0].at, commit.vias[0].from_layer.as_str(), commit.vias[0].to_layer.as_str()), (via_at, "F.Cu", "B.Cu"));
+    assert!(commit.remove_track_ids.contains(&"t_gnd".to_string()), "{:?}", commit.remove_track_ids);
+    assert!(commit.tracks.iter().any(|t| t.layer == "F.Cu") && commit.tracks.iter().any(|t| t.layer == "B.Cu"), "tracks on both layers");
+    let after = committed(&design, &commit);
+    assert!(violations(&after, &model).is_empty(), "the committed board is clean: {:?}", violations(&after, &model));
+}
+
+/// The same board in Walk around: the via is pushed off the track instead (`VIA::PushoutForce` with every kind), nothing is displaced.
+#[test]
+fn the_same_via_in_walkaround_mode_moves_the_via_not_the_track() {
+    let (design, model) = board(vec![track("t_gnd", "GND", "B.Cu", &[p(-3000, -4000), p(-3000, 4000)])]);
+    let mut router = Router::new(&design, &model);
+    router.settings.mode = Mode::Walkaround;
+    router.start(p(-9000, 0), "F.Cu", 200).unwrap();
+    router.toggle_via(true, 600, 300, Some(1));
+    let pv = router.preview(p(-3450, 0)).expect("a route in progress");
+    assert!(!pv.colliding && pv.displaced_lines.is_empty(), "{pv:?}");
+    let (at, _, _) = pv.via.expect("a via");
+    assert_ne!(at, p(-3450, 0), "the via was pushed off the track");
+}
